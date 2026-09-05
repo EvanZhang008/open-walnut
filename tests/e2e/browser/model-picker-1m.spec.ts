@@ -21,6 +21,7 @@
 import { test, expect } from '@playwright/test'
 import path from 'node:path'
 import { presetPanelView } from './todo-panel-helpers'
+import { REAL_PANEL } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/test-and-verify'
 const SESSION_ID = 'pw-model-switch-session'
@@ -99,7 +100,11 @@ async function openSessionPanel(page: import('@playwright/test').Page) {
   await taskItem.click()
   await page.waitForTimeout(500)
 
-  const sessionPanelInput = page.locator('.session-panel .chat-input-textarea')
+  // Scoped to the session COLUMN (`REAL_PANEL`): the home page's chat spot is the
+  // Ask Walnut slot, which mounts a real `SessionPanel` of its own for the selected
+  // ask, so a bare `.session-panel .chat-input-textarea` resolves to TWO elements
+  // and every expect() below it dies of a strict-mode violation.
+  const sessionPanelInput = page.locator(`${REAL_PANEL} .chat-input-textarea`)
   await expect(sessionPanelInput).toBeVisible({ timeout: 5000 })
 
   return sessionPanelInput
@@ -110,7 +115,7 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
   await input.fill('/m')
   await page.waitForTimeout(300)
 
-  const palette = page.locator('.session-panel .command-palette')
+  const palette = page.locator(`${REAL_PANEL} .command-palette`)
   await expect(palette).toBeVisible({ timeout: 3000 })
 
   const modelItem = palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' })
@@ -118,7 +123,7 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
   await modelItem.dispatchEvent('mousedown')
   await page.waitForTimeout(300)
 
-  const modelPicker = page.locator('.session-panel .model-picker')
+  const modelPicker = page.locator(`${REAL_PANEL} .model-picker`)
   await expect(modelPicker).toBeVisible({ timeout: 3000 })
 
   return modelPicker

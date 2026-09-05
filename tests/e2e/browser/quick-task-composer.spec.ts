@@ -11,7 +11,10 @@ interface ApiTask {
 async function openComposer(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.quick-access-pill').first().click()
+  // "+ Task" moved from the chat composer's QuickAccessBar to the Ask Walnut
+  // slot's header when the chat spot became a session view. Addressed by its
+  // title so it can't collide with the top bar's "+ New task".
+  await page.getByTitle('Create a task without starting a session').click()
   await expect(page.locator('.quick-task-composer')).toBeVisible()
 }
 

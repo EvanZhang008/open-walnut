@@ -192,3 +192,80 @@ describe('GET /api/context', () => {
     expect(role).toContain('Standing memory (injected by Walnut)');
   });
 });
+
+/**
+ * `?sessionId=` — the form the home page's Ask Walnut slot uses.
+ *
+ * The claim under test is HONESTY: the panel describes THAT session or says it
+ * cannot. Three ways it used to lie, one case each below: an unknown id fell
+ * through to some other conversation's config (now a 404); a record with no
+ * recorded profile got the CURRENT Personal AI persona synthesized and labelled
+ * "what this session was launched with"; and a session on another engine was
+ * reported as `claude-code`, which badges the panel "Claude Code engine".
+ *
+ * The records are written straight to the session store — a real spawn would need
+ * a CLI, and what the route reads is the persisted record either way.
+ */
+describe('GET /api/context?sessionId=', () => {
+  const SYSTEM_PROMPT = 'You are Walnut, the personal AI. ## Walnut operating contract — recorded at launch.';
+
+  /**
+   * A persisted session row, under an id UNIQUE to the calling test.
+   *
+   * Per-test ids are load-bearing: the tracker keeps its SQLite handle open across
+   * the `beforeEach` wipe (the file is unlinked, the inode is not), so rows outlive
+   * it — and `createSessionRecord` returns the EXISTING row for an id it already
+   * knows instead of rewriting it. Sharing one id silently gave test 2's profile to
+   * test 3.
+   */
+  async function seedSession(id: string, extra: Record<string, unknown>): Promise<string> {
+    const { createSessionRecord } = await import('../../../src/core/session-tracker.js');
+    await createSessionRecord(id, `task-${id}`, 'Ask Walnut', '/tmp', {
+      provider: 'cli',
+      ...extra,
+    } as never);
+    return id;
+  }
+
+  it('404s on a session id the store does not know', async () => {
+    const res = await request(createApp()).get('/api/context').query({ sessionId: 'no-such-session' });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain('no-such-session');
+  });
+
+  it('shows the RECORDED launch profile for a session that has one', async () => {
+    const id = await seedSession('sess-with-profile', { profile: { systemPrompt: SYSTEM_PROMPT } });
+
+    const res = await request(createApp()).get('/api/context').query({ sessionId: id });
+    expect(res.status).toBe(200);
+    expect(res.body.engine).toBe('claude-code');
+    const role = res.body.sections.roleAndRules.content as string;
+    expect(role).toContain('Claude Code session');
+    expect(role).toContain(SYSTEM_PROMPT);
+    // The in-process assembly is NOT what this engine feeds.
+    expect(res.body.sections.tools.count).toBe(0);
+    expect(res.body.sections.apiMessages.count).toBe(0);
+  });
+
+  it('says so instead of synthesizing a prompt when the record has no profile', async () => {
+    const id = await seedSession('sess-without-profile', {});
+
+    const res = await request(createApp()).get('/api/context').query({ sessionId: id });
+    expect(res.status).toBe(200);
+    const role = res.body.sections.roleAndRules.content as string;
+    expect(role).toContain('No launch profile was recorded for this session');
+    // The giveaway of the old synthesized answer: a persona this session never saw.
+    expect(role).not.toContain('## Walnut operating contract');
+  });
+
+  it('reports a non-claude engine from the record rather than claiming claude-code', async () => {
+    const id = await seedSession('sess-on-codex', { engine: 'codex', profile: { systemPrompt: SYSTEM_PROMPT } });
+
+    const res = await request(createApp()).get('/api/context').query({ sessionId: id });
+    expect(res.status).toBe(200);
+    expect(res.body.engine).toBe('codex');
+    const role = res.body.sections.roleAndRules.content as string;
+    expect(role).toContain('NOT Claude Code');
+    expect(role).toContain('codex');
+  });
+});

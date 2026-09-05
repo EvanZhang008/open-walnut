@@ -24,8 +24,14 @@ export interface ApiMessage {
 }
 
 export interface ContextInspectorResponse {
-  /** Which engine this context belongs to. Absent = in-process loop (legacy). */
-  engine?: 'claude-code' | 'walnut-agent';
+  /**
+   * Which engine this context belongs to. Absent = in-process loop (legacy).
+   *
+   * Open-ended string, not a two-value union: a named session reports the engine
+   * off its OWN record, so any registered coding-agent engine ('codex', …) can
+   * appear here. Only 'claude-code' unlocks the Claude Code readings.
+   */
+  engine?: string;
   sections: {
     modelConfig: ContextSection<ModelConfig>;
     roleAndRules: ContextSection;
@@ -49,9 +55,19 @@ export interface ContextInspectorResponse {
   totalTokens: number;
 }
 
-export async function fetchAgentContext(agentId?: string, conversationId?: string): Promise<ContextInspectorResponse> {
+/**
+ * Read the launch context of one conversation.
+ *
+ * `sessionId` names a claude-code session directly — what an Ask Walnut
+ * conversation IS. `agentId`/`conversationId` is the legacy console-agent form;
+ * with neither, the server answers for the configured default.
+ */
+export async function fetchAgentContext(
+  agentId?: string, conversationId?: string, sessionId?: string,
+): Promise<ContextInspectorResponse> {
   const params: Record<string, string> = {};
   if (agentId) params.agentId = agentId;
   if (conversationId) params.conversationId = conversationId;
+  if (sessionId) params.sessionId = sessionId;
   return apiGet<ContextInspectorResponse>('/api/context', params);
 }

@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
-import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
+import { REAL_PANEL_IN_COLUMN, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-ui-final'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -123,7 +123,7 @@ for (const viewport of [
     const { taskId } = await quickStart.json() as { taskId: string }
 
     const realPanel = page.locator(
-      `.main-page-session-column.is-mobile-active ${REAL_PANEL}`,
+      `.main-page-session-column.is-mobile-active ${REAL_PANEL_IN_COLUMN}`,
     )
     await expect(realPanel).toBeVisible({ timeout: 15_000 })
     await expectFullWidth(page, '.main-page.has-mobile-session .main-page-sessions-area')
@@ -177,7 +177,7 @@ test('mobile creates, queues, reloads, and interrupts a real Codex session', asy
   expect(quickStart.status()).toBe(200)
   const { taskId } = await quickStart.json() as { taskId: string }
 
-  const panel = page.locator(`.main-page-session-column.is-mobile-active ${REAL_PANEL}`)
+  const panel = page.locator(`.main-page-session-column.is-mobile-active ${REAL_PANEL_IN_COLUMN}`)
   await expect(panel).toBeVisible({ timeout: 15_000 })
   await expect(panel.getByText(`hello from mock-acp (you said: ${initialPrompt})`, { exact: true }))
     .toHaveCount(1, { timeout: 15_000 })

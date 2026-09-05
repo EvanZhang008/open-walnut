@@ -18,7 +18,7 @@
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { draftPanel, openDraft } from './draft-helpers'
+import { draftPanel, draftPanels, openDraft } from './draft-helpers'
 
 /**
  * Open a FRESH launcher: "+" grows a draft session column, and its cwd pill opens
@@ -62,7 +62,7 @@ async function closeLauncher(page: Page) {
     await expect(page.locator('.session-path-selector')).toHaveCount(0, { timeout: 500 })
   }).toPass({ timeout: 10_000 })
   await draftPanel(page).locator('.session-panel-close').click()
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0)
+  await expect(draftPanels(page)).toHaveCount(0)
 }
 
 test('launcher defaults to Satellite, and a pick lasts exactly one launch', async ({ page }) => {

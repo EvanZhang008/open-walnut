@@ -30,6 +30,7 @@ import fs from 'node:fs'
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftChipPaths, draftComposer, draftCwdPill, draftPanel,
+  draftPanels,
   draftProjectPill, draftQuickChips, draftQuickKey, expectedChips, loadHome, openDraft, openDraftOnCwd,
   watchForbiddenRequests, type WorkingDir,
 } from './draft-helpers'
@@ -95,7 +96,7 @@ test('the chip row is top-2-by-use then 2-most-recent — a different answer fro
   await launch
   // The spawn is what records the directory, so wait for the column to really become
   // a session before reading the store back.
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0, { timeout: 30_000 })
+  await expect(draftPanels(page)).toHaveCount(0, { timeout: 30_000 })
 
   // Reload so the module cache is refilled from a FRESH response that includes the
   // launch (the cache is invalidated + re-warmed in-page too, but a reload makes the

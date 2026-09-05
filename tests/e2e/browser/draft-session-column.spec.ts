@@ -1,7 +1,7 @@
 /**
  * The draft session column — one verb "New".
  *
- * Every "+" in the app (todo toolbar, project header, pin-tier header, the chat "+ Session" pill,
+ * Every "+" in the app (todo toolbar, project header, pin-tier header, the Ask Walnut slot's "+ Session" chip,
  * `/session`, ⌘⇧Enter) now grows an EMPTY session column instead of opening a
  * launcher popover. The column is pure client state until the user commits:
  * "Start ↵" morphs it `draft:` → `pending:` → a real session, "◌ Create task for
@@ -22,7 +22,7 @@
  * lives inside `.session-panel-input`, directly above the composer), the model
  * select AND the Claude|Codex toggle left the bar's meta row for the composer's
  * model picker (one control, one question), and the body lost its quick-action chips (and the "Fix Walnut" chip with them — the repair
- * entry point is the chat pill only). The pills kept their `.draft-composer-bar`
+ * entry point is the Ask Walnut slot's header chip only). The pills kept their `.draft-composer-bar`
  * container marker through both moves, so the ~12 specs that reach the folder
  * picker through a draft are untouched.
  *
@@ -51,6 +51,7 @@
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftLaunchBar, draftPanel,
+  draftPanels,
   draftProjectPill, expectV4Stack, homeColumns, loadHome, lockLeftmostPanel, openDraft,
   openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests,
 } from './draft-helpers'
@@ -132,11 +133,15 @@ test('"+" opens a focused draft column with no network in the open path', async 
   await expect(meta.locator('.sps-meta-model-select')).toHaveCount(0)
   await expect(meta.locator('.sps-engine-toggle')).toHaveCount(0)
 
-  // The caret is in THIS draft's composer, not the main chat's — a "+" you then
-  // have to click into is not the "instant open" being shipped.
+  // The caret is in THIS draft COLUMN's composer — a "+" you then have to click
+  // into is not the "instant open" being shipped. Scoped through
+  // `.main-page-session-column`: the Ask Walnut slot renders a draft panel of its
+  // own (also autoFocus), so a bare `.draft-session-panel` closest() would accept
+  // the caret sitting in the slot instead.
   const focusedInDraft = await page.evaluate(() => {
     const el = document.activeElement
-    return !!el?.classList.contains('chat-input-textarea') && !!el.closest('.draft-session-panel')
+    return !!el?.classList.contains('chat-input-textarea')
+      && !!el.closest('.main-page-session-column .draft-session-panel')
   })
   expect(focusedInDraft, 'the draft composer holds the caret').toBe(true)
 
@@ -171,20 +176,21 @@ test('Start with no folder picked says so and opens the picker — no request, t
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01b-start-needs-folder.png`, fullPage: false })
 })
 
-test('the chat "+ Session" pill opens the same draft column (no launcher popover)', async ({ page }) => {
+test('the Ask Walnut slot\'s "+ Session" chip opens the same draft column (no launcher popover)', async ({ page }) => {
   await loadHome(page)
 
   const seen = watchForbiddenRequests(page)
 
-  // Disambiguate by the pill's own title — the todo toolbar has a "+" too.
-  await page.getByTitle(/start a Claude Code session there directly/).click()
+  // "+ Session" moved from the chat composer's QuickAccessBar to the Ask Walnut
+  // slot's header. Disambiguated by its own title — the todo toolbar has a "+" too.
+  await page.getByTitle('Open a new coding session draft').click()
 
   await expect(draftPanel(page)).toBeVisible({ timeout: 10_000 })
-  // The chat-anchored picker must NOT open: this pill was the last entry point
-  // still routing through it. (The component stays mounted for fix-walnut and the
-  // model chip — what changed is only the route in.)
-  await expect(page.locator('.chat-composer-overlay .session-path-selector')).toHaveCount(0)
-  expect(seen, 'the pill open path must be network-free').toEqual([])
+  // The launcher popover must NOT open: this chip was the last entry point still
+  // routing through it. Unscoped now — the home page does not mount
+  // SessionPathSelector at all any more, so ANY hit here is the regression.
+  await expect(page.locator('.session-path-selector')).toHaveCount(0)
+  expect(seen, 'the chip open path must be network-free').toEqual([])
 })
 
 // ── 2. Locked + at max: "+" still adds ──────────────────────────────────────
@@ -255,7 +261,7 @@ test('Start launches with the picked cwd and NO taskId, becomes a real panel, an
   // The column morphs IN PLACE: no draft panel left anywhere, and the new id is
   // mounted as a real SessionPanel (`data-session-id` exists only there — the
   // draft carries `data-draft-id` and the pending placeholder carries neither).
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0)
+  await expect(draftPanels(page)).toHaveCount(0)
   const newPanel = page.locator(`.session-panel[data-session-id="${payload.sessionId}"]`)
   await expect(newPanel).toBeVisible({ timeout: 30_000 })
 
@@ -280,7 +286,7 @@ test('closing a draft leaves no trace: no task, no persisted column, no draft ke
   // Type something, so the close discards REAL content rather than a blank.
   await draftComposer(page).fill(`${stamp}\nthis text must not be persisted anywhere`)
   await panel.locator('.session-panel-close').click()
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0)
+  await expect(draftPanels(page)).toHaveCount(0)
 
   // No task was created — a draft is 0 bytes server-side until it is committed.
   // Scoped to the stamp so a concurrent spec's task can't fail this.
@@ -321,7 +327,7 @@ test('Create task for later turns the draft into a task: first line = title, res
   await later.click()
 
   // The column goes immediately (the close is optimistic, ahead of the POST).
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0, { timeout: 10_000 })
+  await expect(draftPanels(page)).toHaveCount(0, { timeout: 10_000 })
 
   // Toast FIRST, and as ONE locator: the 'sort' kind auto-dismisses after 3s, so
   // the API round-trips below would outlive it, and two sequential expects could
@@ -374,7 +380,7 @@ test('project header "+" pre-fills the project pill, and Create task for later f
   const title = `project seeded capture ${Date.now()}`
   await draftComposer(page).fill(title)
   await panel.locator('.draft-later-btn').click()
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0, { timeout: 10_000 })
+  await expect(draftPanels(page)).toHaveCount(0, { timeout: 10_000 })
 
   // The seed reached the CREATE, not just the pill: the task lands in Walnut,
   // never the Inbox.
@@ -508,7 +514,7 @@ test('title-only task ▶ Start opens a bound draft (no launch), and its Start r
   expect(payload.message).toBe(message)
   expect(payload.cwd).toBe(cwd)
 
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0)
+  await expect(draftPanels(page)).toHaveCount(0)
   await expect(page.locator(`.session-panel[data-session-id="${payload.sessionId}"]`))
     .toBeVisible({ timeout: 30_000 })
 

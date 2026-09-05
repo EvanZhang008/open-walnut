@@ -32,9 +32,16 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-/** The session-finder pill ("⌕ Sessions") — distinct from the "+ Session" launcher pill. */
+/**
+ * The session-finder button ("⌕ Sessions") in the Ask Walnut slot's header —
+ * distinct from the "+ Session" launcher chip beside it.
+ *
+ * It was a `.quick-access-pill` above the old chat composer; that composer went
+ * away with the main agent (P1), so the finder moved into the slot header and is
+ * addressed by its test id (the labels of the two chips share the word "Session").
+ */
 function finderPill(page: Page) {
-  return page.locator('.quick-access-pill', { hasText: 'Sessions' })
+  return page.locator('[data-testid="ask-walnut-sessions"]')
 }
 
 async function openHome(page: Page) {

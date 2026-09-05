@@ -152,14 +152,21 @@ Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project �
 
 ### Key Rules for Implementation
 
+- **Parse harness-owned data the harness's official way — never invent Walnut-side bookkeeping on top of a file Walnut doesn't own.** If the CLI/agent already defines the format's semantics (e.g. transcript JSONL is a `parentUuid` tree and the CLI chain-walks to the active leaf), port that exact logic. Offsets/fingerprints/side records reinterpreting someone else's file go stale the moment the owner writes in a way Walnut didn't initiate. Walnut-invented logic belongs only in Walnut-owned formats (stream capture, ACP journal).
 - `task_create` takes an optional `project`; an unknown name auto-creates the registry row (`task_projects`, source `'local'`). Inbox (`''`) has no registry row and can never be claimed by a sync provider
-- Phase: `TODO` → … → `AGENT_COMPLETE` → … → `COMPLETE` (agent sets AGENT_COMPLETE, human marks COMPLETE)
+- Phase: `TODO` → … → `NEED_ACTION` → … → `COMPLETE` (agent sets NEED_ACTION, human marks COMPLETE)
 - **NEVER force-kill Claude Code processes** — bypasses on-stop hook
-- **Sessions have ONE surface: the Homepage (`/`) session columns (`SessionPanel`).** The
-  dedicated `/sessions` page was removed (2026-07-25); the route is now a redirect shim that
-  reroutes `/sessions?id=…` deep links to the home session columns. Tasks still have two
-  surfaces — the Homepage `TodoPanel` (primary) and `/tasks` →
-  `DashboardPage`/`TaskList`/`TaskCard` (secondary). Default to the Homepage panel for any
+- **Sessions render in TWO surfaces, both on the Homepage (`/`): the session columns
+  (`SessionPanel`) and the chat slot.** The dedicated `/sessions` page was removed (2026-07-25);
+  the route is now a redirect shim that reroutes `/sessions?id=…` deep links to the home session
+  columns. The chat spot is the Ask Walnut slot (`AskWalnutSlot`): it hosts an embedded
+  `SessionPanel` for the selected ask, and a `DraftSessionPanel` in its New state. Consequence
+  for tests: a Playwright locator for `.session-panel` or `.draft-session-panel` on `/` must be
+  scoped to `.main-page-session-column` (see `REAL_PANEL` / `DRAFT_PANEL` in
+  `tests/e2e/browser/draft-helpers.ts`) or pinned by `data-session-id`. The slot's panel sits
+  earlier in the DOM, so an unscoped `.first()` grabs the wrong one. Tasks also have two
+  surfaces: the Homepage `TodoPanel` (primary) and `/tasks` →
+  `DashboardPage`/`TaskList`/`TaskCard` (secondary). Default to the Homepage panels for any
   Task/Session work, demos, and recordings.
 - Concurrency: `tasks.json`/`sessions.json` use in-process + cross-process file locks
 - **Skill discovery has TWO scopes — don't collapse them** (`src/core/skill-loader.ts`). The

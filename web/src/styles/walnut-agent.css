@@ -197,3 +197,263 @@
 .session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header.session-panel-header-needs-action {
   background: rgba(255, 59, 48, 0.08);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   The Ask Walnut SLOT — the home page's chat spot (P1 of "remove the main
+   agent"). It holds one of three bodies (composer / pending / a real
+   SessionPanel), so the shape here is a header + ONE flex:1 body that owns the
+   remaining height. `.session-panel` is height:100% with an absolutely
+   positioned glass header and composer, so its wrapper must have a DEFINITE
+   height — every body wrapper below therefore carries `flex:1; min-height:0`.
+   ══════════════════════════════════════════════════════════════════════════ */
+.ask-walnut-slot {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Anything between the header and the body (the setup banner, the context
+   inspector) is an INSERT: fixed height, and inset from the edges the embedded
+   session panel deliberately runs into. */
+.ask-walnut-slot > *:not(.ask-walnut-header):not(.ask-walnut-slot-body) {
+  flex: 0 0 auto;
+  margin: 8px 12px 0;
+}
+
+.ask-walnut-header {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ask-walnut-header-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Wraps rather than overflows: at 390px the action chips drop to their own
+     line instead of pushing themselves off the right edge. */
+  flex-wrap: wrap;
+}
+.ask-walnut-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--walnut-accent);
+  white-space: nowrap;
+}
+.ask-walnut-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+/* The chips reuse the session header's grammar (globals .session-action-chip);
+   only the hover tint is walnut's. */
+.ask-walnut-chip:hover {
+  color: var(--walnut-accent);
+  border-color: var(--walnut-accent);
+}
+.ask-walnut-close {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* ── Tab strip: ONE row that scrolls. Never wraps (a wall of pills would eat
+   the conversation) and never widens the column. ── */
+.ask-walnut-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  /* Keeps the row measurable (Playwright asserts it is visible at 390px) even
+     with a single short tab. */
+  min-height: 22px;
+}
+.ask-walnut-tabs::-webkit-scrollbar { display: none; }
+/* 128px: six tabs plus the ⋯ button fit the slot at a 1280px window with the
+   sidebar and todo panel open, so the strip does not need to scroll to show the
+   selected tab half-clipped at its left edge. */
+.ask-walnut-tab {
+  flex: 0 0 auto;
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.ask-walnut-tab:hover {
+  color: var(--walnut-accent);
+  border-color: var(--walnut-accent);
+}
+.ask-walnut-tab.is-active {
+  color: var(--walnut-accent);
+  border-color: var(--walnut-accent);
+  font-weight: 600;
+}
+.ask-walnut-tab-more { max-width: none; }
+
+/* The "⋯" flyout is PORTALLED to <body> and placed by useMenuPlacement, so it
+   only needs its own box here (position/left/top arrive as inline style). */
+.ask-walnut-more-menu {
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow-hover);
+  z-index: 1000;
+}
+.ask-walnut-more-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.ask-walnut-more-item:hover { background: var(--hover-bg); }
+
+/* The "+ Task" popover: a position:fixed card portalled to <body> and placed by
+   useMenuPlacement (see AskWalnutSlotHeader). It carries the card chrome; the
+   height cap the hook hands back only works because of the overflow-y here.
+   Position/top/right/maxHeight arrive as inline style. */
+.ask-walnut-task-popover {
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow-hover);
+  overflow-y: auto;
+  /* Never a horizontal bar: with classic (space-taking) scrollbars even a 2px
+     x-overflow spawns one, which eats height and then forces the V-bar too. */
+  overflow-x: hidden;
+}
+/* The composer renders as a STATIC child inside that card: its own rule
+   (globals .quick-task-composer) is an absolutely-positioned bottom:100% box
+   written for a composer at the BOTTOM of a column. Two classes so this wins on
+   specificity regardless of bundle order (including over the glass @supports
+   block at the end of globals.css, which would otherwise double-blur). */
+.ask-walnut-task-popover .quick-task-composer {
+  position: static;
+  width: 100%;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  animation: none;
+}
+
+/* ── Bodies ── */
+.ask-walnut-slot-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ask-walnut-draft,
+.ask-walnut-session {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* A whole session transcript lives in here, so give WebKit a paint boundary: the
+   Mac app is a WKWebView, and without containment it rasterizes the entire
+   subtree whenever anything on the page changes size (measured 2130ms → 85ms on
+   the Files panel, same shape). Safe because the panel already clips itself. */
+.ask-walnut-session {
+  contain: paint;
+}
+/* The panel itself must FILL its wrapper: its glass header and composer are
+   absolutely positioned against it, so a panel sized by content would put the
+   composer at the top of the column. `flex: 1` (basis 0) is what makes this hold
+   even where the wrapper's own height is percentage-derived. */
+.ask-walnut-draft > .session-panel,
+.ask-walnut-session > .session-panel {
+  flex: 1;
+  min-height: 0;
+}
+.ask-walnut-pending,
+.ask-walnut-loading,
+.ask-walnut-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.ask-walnut-pending-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.ask-walnut-pending-spinner {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+.ask-walnut-pending-error {
+  margin: 0;
+  color: var(--color-error, #ff3b30);
+}
+.ask-walnut-pending-actions {
+  display: flex;
+  gap: 8px;
+}
+.ask-walnut-pending-echo {
+  margin: 0;
+  max-width: 420px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  opacity: 0.8;
+}
+
+/* Phones: the header is the only thing that needs to give, and it gives by
+   wrapping (above) — the tab strip stays on screen and keeps scrolling. */
+@media (max-width: 640px) {
+  .ask-walnut-header { padding: 8px 10px 6px; }
+  .ask-walnut-slot > *:not(.ask-walnut-header):not(.ask-walnut-slot-body) {
+    margin: 6px 8px 0;
+  }
+  .ask-walnut-tab { max-width: 110px; }
+}

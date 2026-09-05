@@ -125,7 +125,7 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
       <div className="context-inspector-header">
         <span className="context-inspector-title">Agent Context Inspector</span>
         {isLane && (
-          <span className="context-token-badge" title="Main-AI turns run in a Claude Code session; this shows the session's launch config.">
+          <span className="context-token-badge" title="Ask Walnut sessions run in a Claude Code session; this shows the selected session's launch config.">
             Claude Code engine
           </span>
         )}

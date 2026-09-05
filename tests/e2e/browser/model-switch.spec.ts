@@ -13,6 +13,7 @@
  */
 import { test, expect } from '@playwright/test'
 import { presetPanelView } from './todo-panel-helpers'
+import { REAL_PANEL } from './draft-helpers'
 
 /**
  * Opens the SessionPanel for the model-switch test task.
@@ -33,8 +34,13 @@ async function openSessionPanel(page: import('@playwright/test').Page) {
   await taskItem.click()
   await page.waitForTimeout(500)
 
-  // Verify the SessionPanel is open with its chat input
-  const sessionPanelInput = page.locator('.session-panel .chat-input-textarea')
+  // Verify the SessionPanel is open with its chat input.
+  //
+  // Scoped to the session COLUMN (`REAL_PANEL`): the home page's chat spot is the
+  // Ask Walnut slot, which mounts a real `SessionPanel` of its own for the selected
+  // ask, so a bare `.session-panel .chat-input-textarea` resolves to TWO elements
+  // and every expect() below it dies of a strict-mode violation.
+  const sessionPanelInput = page.locator(`${REAL_PANEL} .chat-input-textarea`)
   await expect(sessionPanelInput).toBeVisible({ timeout: 5000 })
 
   return sessionPanelInput
@@ -51,7 +57,7 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
   await page.waitForTimeout(300)
 
   // Wait for command palette to appear (scoped to session panel)
-  const palette = page.locator('.session-panel .command-palette')
+  const palette = page.locator(`${REAL_PANEL} .command-palette`)
   await expect(palette).toBeVisible({ timeout: 3000 })
 
   // Find the /model palette item (use control class to avoid matching commands with "model" in description)
@@ -62,7 +68,7 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
   await page.waitForTimeout(300)
 
   // Verify ModelPicker is visible
-  const modelPicker = page.locator('.session-panel .model-picker')
+  const modelPicker = page.locator(`${REAL_PANEL} .model-picker`)
   await expect(modelPicker).toBeVisible({ timeout: 3000 })
 
   return modelPicker
@@ -80,7 +86,7 @@ test.describe('Model Switch UI', () => {
     await page.waitForTimeout(300)
 
     // Command palette should appear (scoped to session panel)
-    const palette = page.locator('.session-panel .command-palette')
+    const palette = page.locator(`${REAL_PANEL} .command-palette`)
     await expect(palette).toBeVisible({ timeout: 3000 })
 
     // Verify /model entry exists with correct description (use control class to disambiguate)
@@ -99,7 +105,7 @@ test.describe('Model Switch UI', () => {
     await page.waitForTimeout(300)
 
     // ModelPicker should be visible
-    const modelPicker = page.locator('.session-panel .model-picker')
+    const modelPicker = page.locator(`${REAL_PANEL} .model-picker`)
     await expect(modelPicker).toBeVisible({ timeout: 3000 })
 
     // Input should be cleared (control command resets input)
@@ -151,7 +157,7 @@ test.describe('Model Switch UI', () => {
     await input.fill('/m')
     await page.waitForTimeout(300)
 
-    const palette = page.locator('.session-panel .command-palette')
+    const palette = page.locator(`${REAL_PANEL} .command-palette`)
     await expect(palette).toBeVisible({ timeout: 3000 })
 
     // Find the /model item (use control class to disambiguate)

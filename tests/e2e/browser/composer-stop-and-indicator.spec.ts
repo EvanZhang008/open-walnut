@@ -126,8 +126,10 @@ test.describe('Composer stop/send swap + working indicator', () => {
     await page.waitForSelector('.session-msg', { timeout: 8000 });
 
     // Idle + empty input → the (disabled) SEND button, no stop.
-    // Scope to the SESSION panel — the main-chat composer also renders these classes.
-    const panel = page.locator('.session-panel');
+    // Scope to THIS session's panel by id: the home page's chat spot is the Ask
+    // Walnut slot, which mounts a `.session-panel` of its own for the selected ask,
+    // so a bare `.session-panel` can match two elements (strict-mode violation).
+    const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`);
     const sendBtn = panel.locator('.chat-send-btn-icon:not(.chat-stop-btn-icon)');
     const stopBtn = panel.locator('.chat-stop-btn-icon');
     await expect(sendBtn).toBeVisible();

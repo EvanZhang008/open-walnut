@@ -46,12 +46,44 @@ import { expect, type Locator, type Page } from '@playwright/test'
  * resolve is caught by the acceptance suite
  * (tests/e2e/browser/draft-session-column.spec.ts asserts
  * `.draft-session-panel` reaches count 0 after Start).
+ *
+ * The filter WITHOUT the strip scope, for the callers that supply their own column
+ * scope (codex-mobile pins the mobile-active column).
  */
-export const REAL_PANEL = '.session-panel:not(.pending-session-panel):not(.draft-session-panel)'
+export const REAL_PANEL_IN_COLUMN = '.session-panel:not(.pending-session-panel):not(.draft-session-panel)'
+
+/**
+ * The same panel, scoped to the session strip — the form specs should use.
+ *
+ * The scope is load bearing for exactly the reason `DRAFT_PANEL`'s is: the home
+ * page's chat spot is the Ask Walnut slot, and that slot mounts a REAL
+ * `SessionPanel` of its own for the selected ask, EARLIER in the DOM. An unscoped
+ * `.first()` therefore grabbed the slot's panel instead of the column under test,
+ * and an unscoped count assertion counted it too.
+ */
+export const REAL_PANEL = `.main-page-session-column ${REAL_PANEL_IN_COLUMN}`
+
+/**
+ * Every draft COLUMN, scoped to the session strip.
+ *
+ * The strip scope is load bearing since the home page's chat spot became the Ask
+ * Walnut slot (P1 of "remove the main agent"): that slot renders a
+ * `.draft-session-panel` of its OWN whenever it has no conversation to show, and
+ * it sits earlier in the DOM — so an unscoped `.draft-session-panel` matched the
+ * slot's composer instead of the column under test, and an unscoped
+ * `toHaveCount(0)` ("the draft resolved into a real panel") failed on a page where
+ * the slot happened to be showing its composer.
+ */
+export const DRAFT_PANEL = '.main-page-session-column .draft-session-panel'
+
+/** Every draft column in the strip — the count locator ("the draft is gone"). */
+export function draftPanels(page: Page): Locator {
+  return page.locator(DRAFT_PANEL)
+}
 
 /** The draft column's root. `.first()` = leftmost: drafts insert at the strip head. */
 export function draftPanel(page: Page): Locator {
-  return page.locator('.draft-session-panel').first()
+  return draftPanels(page).first()
 }
 
 /** The draft's composer textarea (NOT the main chat's — hence the panel scope). */

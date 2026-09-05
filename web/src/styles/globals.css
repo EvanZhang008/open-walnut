@@ -4704,33 +4704,6 @@ select {
   height: calc(100vh - 48px);
 }
 
-/* Compact single-line chat header (replaces bulky page-header on main page) */
-.chat-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 0;
-  margin-bottom: 4px;
-  flex-shrink: 0;
-}
-
-.chat-header-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-
-.chat-header-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* Engine badge — which engine answers Personal AI turns (see EngineBadge.tsx). */
 .chat-engine-badge {
   display: inline-flex;
@@ -4980,70 +4953,6 @@ select {
   background: var(--accent-subtle);
   border-color: var(--accent);
   color: var(--accent);
-}
-
-/* ── Chat header dropdown menu ── */
-
-.chat-header-menu-wrap {
-  position: relative;
-  flex-shrink: 0;
-}
-
-.chat-header-menu-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  color: var(--fg-muted);
-  transition: background 0.15s, color 0.15s;
-  cursor: pointer;
-}
-
-.chat-header-menu-btn:hover {
-  background: var(--bg-secondary);
-  color: var(--fg);
-}
-
-.chat-header-dropdown {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--card-shadow-hover);
-  min-width: 140px;
-  z-index: 50;
-  padding: 4px;
-  animation: contextBarSlideIn 0.12s ease-out;
-}
-
-.chat-header-dropdown-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 6px 10px;
-  font-size: 13px;
-  color: var(--fg);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.chat-header-dropdown-item:hover {
-  background: var(--bg-secondary);
-}
-
-.chat-header-dropdown-danger {
-  color: var(--error);
-}
-
-.chat-header-dropdown-danger:hover {
-  background: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
 .chat-panel {
@@ -8723,9 +8632,14 @@ img[data-lightbox-src],
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 24px;
+  /* Edge-to-edge: the Ask Walnut slot embeds a real SessionPanel, which owns its
+     own header/composer insets exactly like a session column. The old 24px was
+     the in-process chat page's page padding. */
+  padding: 0;
   height: 100%;
-  transition: flex 0.25s ease, padding 0.25s ease, opacity 0.2s ease;
+  /* No padding leg: it is 0 in BOTH states now (the embedded session panel owns
+     its own insets), so animating it only cost a transition slot. */
+  transition: flex 0.25s ease, opacity 0.2s ease;
 }
 
 .main-page-chat.collapsed {
@@ -8742,9 +8656,6 @@ img[data-lightbox-src],
   min-width: 0;
 }
 
-.main-page-chat .chat-page {
-  height: 100%;
-}
 
 .main-page-todo {
   flex-shrink: 0;
@@ -16623,6 +16534,17 @@ a.task-kebab-info:hover {
     border-bottom: 1px solid var(--border);
   }
 
+  /* The content row is a COLUMN here, so a collapsed sessions area has to give
+     up its HEIGHT — the desktop rules only zero its width, and `height: 100%` +
+     `flex-shrink: 0` then claimed the whole column and left the chat spot (the
+     Ask Walnut slot) zero pixels tall, i.e. mounted but unreachable on a phone.
+     Scoped through the row so the FIXED mobile session overlay above (which is
+     out of flow) is untouched. */
+  .main-page-content-row > .main-page-sessions-area.collapsed {
+    height: 0;
+    flex: 0 0 0px;
+  }
+
 }
 
 /* ===== Command Palette ===== */
@@ -17802,97 +17724,6 @@ a.task-kebab-info:hover {
   font-weight: 600;
 }
 .sps-engine-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-/* ===== Quick Start Bar (context pill above chat input) ===== */
-
-.quick-start-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  background: var(--accent-subtle);
-  animation: taskContextSlideDown 0.15s ease-out;
-}
-
-.qsb-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;   /* narrow view: chip/close wrap below the label instead of overflowing */
-}
-
-.qsb-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.qsb-path {
-  font-size: 12px;
-  font-family: 'SF Mono', Menlo, monospace;
-  color: var(--fg);
-  word-break: break-all;
-  min-width: 0;
-}
-
-.qsb-host {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* Persistent compose guidance (fix-walnut) — placeholder text vanishes on the
-   first keystroke; this line stays visible through the whole compose. */
-.qsb-hint {
-  display: block;
-  font-size: 11px;
-  color: var(--fg-muted);
-  line-height: 1.35;
-  margin-top: 2px;
-}
-
-/* Compact read-only model chip — click to re-open the picker and edit all settings. */
-.qsb-model-chip {
-  margin-left: auto;
-  flex-shrink: 0;
-  padding: 1px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  font-size: 10px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.qsb-model-chip:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.qsb-close {
-  background: none;
-  border: none;
-  font-size: 16px;
-  cursor: pointer;
-  color: var(--fg-muted);
-  padding: 0 2px;
-  line-height: 1;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-.qsb-close:hover {
-  color: var(--error);
-  background: var(--error-subtle, rgba(255, 59, 48, 0.1));
-}
 
 /* ===== Model Picker ===== */
 
@@ -28692,7 +28523,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
       iOS-soft shadow (low alpha, large blur). */
 .chat-plus-menu,
 .chat-send-menu,
-.chat-header-dropdown,
 .todo-launcher-popover,
 .command-palette-wrap,
 .phase-picker-menu,
@@ -28717,8 +28547,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   /* Popovers & menus — iOS "menu" material. */
   .chat-plus-menu,
   .chat-send-menu,
-  .chat-header-dropdown,
-  .todo-launcher-popover,
+    .todo-launcher-popover,
   .command-palette-wrap,
   .phase-picker-menu,
   .priority-picker-menu,
@@ -28906,20 +28735,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
      still passes under the glass mid-scroll — this only fixes the rest state. */
   padding-bottom: calc(var(--chat-composer-h, 120px) + 24px);
 }
-/* Thin-layer lane chat: the session timeline (.session-history) is its own
-   scroll container, so the outer .chat-panel must NOT also scroll (nested
-   scrollbars) or pad (that would end the scroll area above the composer glass —
-   content is supposed to pass under it). Clearance moves to the inner scroller. */
-.chat-page .chat-panel.chat-lane-history {
-  overflow: hidden;
-  padding: 0;
-  gap: 0;
-}
-.chat-lane-history .session-history {
-  flex: 1;
-  min-height: 0;
-  padding-bottom: calc(var(--chat-composer-h, 120px) + 24px);
-}
 /* Same floating-card treatment as the session composer (radius + shadow always). */
 .chat-composer-overlay .chat-input-box {
   border-radius: 20px;
@@ -28943,21 +28758,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .chat-composer-overlay .mode-toggle-pill-label {
   font-weight: 500;
 }
-/* Quick Start bar: the tinted 8%-alpha panel is nearly invisible over content —
-   give it its own readable surface (opaque-ish tint + hairline) and darken the
-   monospace path, which is the longest text in the row. */
-.chat-composer-overlay .quick-start-bar {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
-  border: 0.5px solid color-mix(in srgb, var(--accent) 22%, transparent);
-}
-.chat-composer-overlay .qsb-path {
-  color: var(--fg);
-  font-weight: 500;
-}
-.chat-composer-overlay .qsb-hint {
-  color: var(--fg-secondary);
-}
-
 /* ── Todo panel: toolbar overlay (stable height → fixed padding) ── */
 .todo-panel {
   position: relative;

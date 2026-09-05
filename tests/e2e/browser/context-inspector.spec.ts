@@ -1,243 +1,220 @@
 /**
- * Playwright browser tests for the Context Inspector panel.
+ * The Context Inspector, as it exists after the main agent was removed (P1).
  *
- * Tests the full user-facing workflow:
- * - Context button is visible in the chat header
- * - Clicking it opens the inspector panel with all sections
- * - Each section is collapsible/expandable
- * - Token counts are displayed
- * - Tools are listed with expandable schemas
- * - Panel closes when clicking the button again
- * - Chat remains usable while inspector is open
+ * WHAT CHANGED, and therefore what this spec now pins: the inspector's subject is
+ * the Ask Walnut SESSION the slot is showing, so the panel describes THAT
+ * session's launch config (`GET /api/context?sessionId=…`). With no ask selected
+ * there is nothing to describe and the panel says so, instead of asking for the
+ * configured default lane: that parameterless answer is the in-process prompt
+ * assembly (role, skills index, 50-odd tool schemas), and the panel rendered it as
+ * if it were the launch config of the conversation on screen. Every "11 sections /
+ * tool cards / Total: ~N tokens" DOM assertion this file used to carry depended on
+ * exactly that answer, which is why they are gone.
+ *
+ * The panel MECHANICS worth keeping are all still here: the header button opens and
+ * closes it, a section collapses and expands, Refresh re-reads the same subject,
+ * and the slot below stays usable while it is open.
  */
-import { test, expect } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+import { loadHome } from './draft-helpers'
 
-// ── Context button exists ──
+/** Unique per run: the fixture server is shared and survives across runs. */
+const STAMP = Date.now().toString(36)
 
-test('Context button is visible in the chat header', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+const inspectorBtn = (page: Page) => page.locator('[data-testid="ask-walnut-inspector"]')
+const inspector = (page: Page) => page.locator('.context-inspector')
 
-  const contextBtn = page.locator('button', { hasText: 'Context' })
-  await expect(contextBtn).toBeVisible()
+const isContextRequest = (url: string): boolean => new URL(url).pathname === '/api/context'
+
+/**
+ * Hide EVERY Ask Walnut task from this page's task store, so the slot genuinely
+ * has no subject to inspect.
+ *
+ * The fixture server is SHARED and other specs launch asks into it, so "no ask
+ * selected" has to be produced rather than assumed. The socket is dead-ended for
+ * the same reason: `task:created` is a global broadcast, so a parallel spec's
+ * launch would be inserted straight into this page's store (same reasoning as
+ * ask-walnut-slot.spec.ts).
+ */
+async function hideAllAsks(page: Page): Promise<void> {
+  await page.routeWebSocket('**/ws*', () => {})
+  await page.route('**/api/tasks*', async (route) => {
+    const request = route.request()
+    if (request.method() !== 'GET' || new URL(request.url()).pathname !== '/api/tasks') {
+      await route.fallback()
+      return
+    }
+    const response = await route.fetch()
+    let body: { tasks?: Array<{ walnut_agent?: boolean }> }
+    try {
+      body = (await response.json()) as typeof body
+    } catch {
+      await route.fulfill({ response })
+      return
+    }
+    if (!Array.isArray(body.tasks)) {
+      await route.fulfill({ response })
+      return
+    }
+    body.tasks = body.tasks.filter((task) => task?.walnut_agent !== true)
+    // The body is re-serialized here, so the upstream framing no longer describes it.
+    const headers = { ...response.headers() }
+    delete headers['content-length']
+    delete headers['content-encoding']
+    await route.fulfill({
+      status: response.status(),
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  })
+}
+
+/** Launch one Ask Walnut session from the slot and return its session id. */
+async function launchAsk(page: Page, prompt: string): Promise<string> {
+  await page.locator('[data-testid="ask-walnut-new"]').click()
+  const composer = page.locator('[data-testid="ask-walnut-draft"] .chat-input-textarea')
+  await expect(composer).toBeVisible({ timeout: 30_000 })
+  const quickStart = page.waitForResponse(
+    (response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/sessions/quick-start',
+  )
+  await composer.fill(prompt)
+  await composer.press('Enter')
+  const response = await quickStart
+  expect(response.status(), await response.text()).toBe(200)
+  const payload = (await response.json()) as { sessionId?: string }
+  expect(payload.sessionId, 'the launch response carried no sessionId').toBeTruthy()
+  // The slot IS the session view now, bound to the id the launch minted.
+  await expect(page.locator('[data-testid="ask-walnut-session"]'))
+    .toHaveAttribute('data-session-id', payload.sessionId!, { timeout: 60_000 })
+  return payload.sessionId!
+}
+
+test.setTimeout(120_000)
+
+// ── Open and close ───────────────────────────────────────────────────────────
+
+test('the Context button is in the Ask Walnut header', async ({ page }) => {
+  await loadHome(page)
+  await expect(inspectorBtn(page)).toBeVisible({ timeout: 30_000 })
 })
 
-// ── Open and close ──
+test('Context opens the inspector, and clicking it again closes it', async ({ page }) => {
+  await loadHome(page)
+  await expect(inspector(page)).toBeHidden()
 
-test('clicking Context button opens the inspector panel', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+  await inspectorBtn(page).click()
+  await expect(inspector(page)).toBeVisible({ timeout: 20_000 })
+  await expect(inspector(page).locator('.context-inspector-title')).toContainText('Agent Context Inspector')
 
-  // Panel should not be visible initially
-  await expect(page.locator('.context-inspector')).toBeHidden()
-
-  // Click Context button
-  await page.locator('button', { hasText: 'Context' }).click()
-
-  // Panel should appear
-  const inspector = page.locator('.context-inspector')
-  await expect(inspector).toBeVisible({ timeout: 5000 })
-
-  // Should show the title
-  await expect(inspector.locator('.context-inspector-title')).toContainText('Agent Context Inspector')
+  await inspectorBtn(page).click()
+  await expect(inspector(page)).toBeHidden()
 })
 
-test('clicking Context button again closes the panel', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+// ── No subject ───────────────────────────────────────────────────────────────
 
-  const contextBtn = page.locator('button', { hasText: 'Context' })
+test('with no ask selected the panel says so and asks the server nothing', async ({ page }) => {
+  await hideAllAsks(page)
+  await loadHome(page)
 
-  // Open
-  await contextBtn.click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
+  // Armed BEFORE the click, so the observation window is exactly the interaction
+  // (a request started earlier can never land in this array).
+  const contextRequests: string[] = []
+  page.on('request', (request) => {
+    if (isContextRequest(request.url())) contextRequests.push(request.url())
+  })
 
-  // Close
-  await contextBtn.click()
-  await expect(page.locator('.context-inspector')).toBeHidden()
+  await inspectorBtn(page).click()
+  await expect(inspector(page)).toBeVisible({ timeout: 20_000 })
+  await expect(inspector(page)).toContainText('Select an ask to inspect its launch context')
+
+  // THE ASSERTION THIS TEST EXISTS FOR: no subject ⇒ no request. A parameterless
+  // GET answers for the configured DEFAULT lane, and the panel then presented
+  // that assembly as the launch config of whatever the slot was showing.
+  await page.waitForTimeout(1500)
+  expect(contextRequests, 'the inspector asked /api/context with no subject').toEqual([])
+  // No section chrome is invented for it either.
+  await expect(inspector(page).locator('.context-section')).toHaveCount(0)
 })
 
-// ── Sections ──
+// ── A selected ask ───────────────────────────────────────────────────────────
 
-test('inspector shows all 11 sections', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+test('with an ask selected the panel describes THAT session, and Refresh re-reads it', async ({ page }) => {
+  await loadHome(page)
+  const sessionId = await launchAsk(page, `context inspector subject ${STAMP}`)
 
-  await page.locator('button', { hasText: 'Context' }).click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
+  const firstRead = page.waitForRequest((request) => isContextRequest(request.url()))
+  await inspectorBtn(page).click()
+  expect(new URL((await firstRead).url()).searchParams.get('sessionId'),
+    'the inspector read a different conversation than the one on screen').toBe(sessionId)
 
-  // modelConfig, roleAndRules, skills, compactionSummary, taskProjects,
-  // userProfile, globalMemory, notesContext, dailyLogs, tools, apiMessages
-  const sections = page.locator('.context-section')
-  await expect(sections).toHaveCount(11)
+  const panel = inspector(page)
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+  // The engine reading. An ask runs in a `claude` CLI session, so the number in
+  // the header is a SYSTEM PROMPT size and the tool/transcript sections the
+  // in-process loop used to fill are absent — the CLI owns those.
+  await expect(panel.locator('.context-token-badge', { hasText: 'Claude Code engine' }))
+    .toBeVisible({ timeout: 20_000 })
+  await expect(panel.locator('.context-token-badge-total')).toContainText('System prompt')
+  await expect(panel.locator('.context-section-title', { hasText: 'Tools' })).toHaveCount(0)
+
+  // A section still collapses and expands, and this one carries the launch config
+  // the session was actually spawned with.
+  const personaSection = panel.locator('.context-section').filter({
+    has: page.locator('.context-section-title', { hasText: 'Persona Prompt' }),
+  })
+  await expect(personaSection).toHaveCount(1)
+  const personaContent = personaSection.locator('.context-section-content')
+  await expect(personaContent).toBeHidden()
+  await personaSection.locator('.context-section-header').click()
+  await expect(personaContent).toBeVisible()
+  await expect(personaContent).toContainText('Claude Code session')
+  await personaSection.locator('.context-section-header').click()
+  await expect(personaContent).toBeHidden()
+
+  // Refresh re-reads the SAME subject. It is the only refresh path on this engine:
+  // a launch config is fixed for the session's life, so an `agent:response` no
+  // longer re-fetches it.
+  const refresh = page.waitForRequest((request) => isContextRequest(request.url()))
+  await panel.locator('.context-inspector-header .btn', { hasText: 'Refresh' }).click()
+  expect(new URL((await refresh).url()).searchParams.get('sessionId')).toBe(sessionId)
+  await expect(panel.locator('.context-token-badge-total')).toBeVisible()
 })
 
-test('sections show token badges', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+// ── The slot stays usable ────────────────────────────────────────────────────
 
-  await page.locator('button', { hasText: 'Context' }).click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
+test('the slot composer stays usable with the inspector open', async ({ page }) => {
+  await loadHome(page)
+  await inspectorBtn(page).click()
+  await expect(inspector(page)).toBeVisible({ timeout: 20_000 })
 
-  // Every section header should have a token badge
-  const badges = page.locator('.context-token-badge')
-  const count = await badges.count()
-  // 11 section badges + 1 total badge in the header = at least 12
-  expect(count).toBeGreaterThanOrEqual(12)
-
-  // Total token badge should be visible
-  const totalBadge = page.locator('.context-token-badge-total')
-  await expect(totalBadge).toBeVisible()
-  const totalText = await totalBadge.textContent()
-  expect(totalText).toMatch(/Total: ~[\d,]+ tokens/)
+  const composer = page.locator('[data-testid="ask-walnut-slot"] .chat-input-textarea').first()
+  await expect(composer).toBeVisible({ timeout: 30_000 })
+  await expect(composer).toBeEnabled()
+  await composer.fill(`inspector open ${STAMP}`)
+  await expect(composer).toHaveValue(`inspector open ${STAMP}`)
 })
 
-// ── Collapsible sections ──
+// ── The route itself ─────────────────────────────────────────────────────────
 
-test('section expands and collapses on click', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-
-  await page.locator('button', { hasText: 'Context' }).click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
-
-  // Find "Role & Rules" section header
-  const roleHeader = page.locator('.context-section-header', { hasText: 'Role & Rules' })
-  await expect(roleHeader).toBeVisible()
-
-  // Initially collapsed — content should not be visible
-  const roleContent = roleHeader.locator('..').locator('.context-section-content')
-  await expect(roleContent).toBeHidden()
-
-  // Click to expand
-  await roleHeader.click()
-  await expect(roleContent).toBeVisible()
-
-  // Should contain the Walnut identity text
-  await expect(roleContent).toContainText('Walnut')
-
-  // Click again to collapse
-  await roleHeader.click()
-  await expect(roleContent).toBeHidden()
-})
-
-// ── Tools section ──
-
-test('tools section shows tool cards with names', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-
-  await page.locator('button', { hasText: 'Context' }).click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
-
-  // Expand the Tools section
-  const toolsHeader = page.locator('.context-section-header', { hasText: 'Tools' })
-  await toolsHeader.click()
-
-  // Should show tool cards
-  const toolCards = page.locator('.context-tool-card')
-  const count = await toolCards.count()
-  expect(count).toBeGreaterThan(0)
-
-  // Known tools should be present
-  await expect(page.locator('.context-tool-name', { hasText: 'task_query' })).toBeVisible()
-  await expect(page.locator('.context-tool-name', { hasText: 'task_search' })).toBeVisible()
-  await expect(page.locator('.context-tool-name', { hasText: 'memory' })).toBeVisible()
-})
-
-test('tool card expands to show JSON schema', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-
-  await page.locator('button', { hasText: 'Context' }).click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
-
-  // Expand Tools section
-  await page.locator('.context-section-header', { hasText: 'Tools' }).click()
-
-  // Click on the first tool card to expand its schema
-  const firstTool = page.locator('.context-tool-header').first()
-  await firstTool.click()
-
-  // JSON schema pre block should appear
-  const schemaPre = page.locator('.context-tool-card .context-pre').first()
-  await expect(schemaPre).toBeVisible()
-})
-
-// ── Model config ──
-
-test('model config section shows model name', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-
-  await page.locator('button', { hasText: 'Context' }).click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
-
-  // Expand Model Config
-  await page.locator('.context-section-header', { hasText: 'Model Config' }).click()
-
-  // Should show a model name (exact model depends on config)
-  await expect(page.locator('.context-section-content').first()).toContainText('model:')
-})
-
-// ── Chat remains usable ──
-
-test('chat input remains usable with inspector open', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-
-  // Open inspector
-  await page.locator('button', { hasText: 'Context' }).click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
-
-  // Chat input should still be visible and enabled
-  const chatInput = page.locator('.chat-input-textarea')
-  await expect(chatInput).toBeVisible()
-  await expect(chatInput).toBeEnabled()
-
-  // Should be able to type in the chat input
-  await chatInput.fill('Test message while inspector is open')
-  await expect(chatInput).toHaveValue('Test message while inspector is open')
-})
-
-// ── Refresh button ──
-
-test('refresh button re-fetches context data', async ({ page }) => {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-
-  await page.locator('button', { hasText: 'Context' }).click()
-  await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
-
-  // Click Refresh
-  const refreshBtn = page.locator('.context-inspector-header .btn', { hasText: 'Refresh' })
-  await expect(refreshBtn).toBeVisible()
-  await refreshBtn.click()
-
-  // Panel should still be visible with data after refresh
-  await expect(page.locator('.context-inspector-title')).toContainText('Agent Context Inspector')
-  // Token count should still be visible
-  await expect(page.locator('.context-token-badge-total')).toBeVisible()
-})
-
-// ── API verification ──
-
-test('GET /api/context returns valid data', async ({ request }) => {
+test('GET /api/context with no params still answers for the configured default', async ({ request }) => {
   const res = await request.get('/api/context')
   expect(res.ok()).toBeTruthy()
 
   const body = await res.json()
   expect(body).toHaveProperty('sections')
-  expect(body).toHaveProperty('totalTokens')
   expect(body.totalTokens).toBeGreaterThan(0)
 
-  // Verify all 11 sections
-  const sectionNames = Object.keys(body.sections)
-  expect(sectionNames).toHaveLength(11)
-  expect(sectionNames).toContain('modelConfig')
-  expect(sectionNames).toContain('roleAndRules')
-  expect(sectionNames).toContain('userProfile')
-  expect(sectionNames).toContain('globalMemory')
-  expect(sectionNames).toContain('tools')
-  expect(sectionNames).toContain('apiMessages')
+  // Sections NAMED, not counted: the list grows (a `recentTasks` ledger joined it,
+  // and the old `toHaveLength(11)` had been silently stale ever since).
+  const names = Object.keys(body.sections)
+  for (const name of ['modelConfig', 'roleAndRules', 'skills', 'userProfile', 'globalMemory', 'tools', 'apiMessages']) {
+    expect(names, `section "${name}" is missing`).toContain(name)
+  }
+})
+
+test('GET /api/context?sessionId= 404s on a session the store does not know', async ({ request }) => {
+  const res = await request.get('/api/context?sessionId=no-such-session-at-all')
+  expect(res.status()).toBe(404)
+  expect((await res.json()).error).toContain('no-such-session-at-all')
 })

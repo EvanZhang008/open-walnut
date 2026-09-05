@@ -28,7 +28,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import {
-  draftComposer, draftMetaAiSlot, draftProjectPill, draftTierBtn, loadHome, openDraft,
+  draftComposer, draftMetaAiSlot, draftPanels, draftProjectPill, draftTierBtn, loadHome, openDraft,
 } from './draft-helpers'
 
 const SCREENSHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-suggest-accuracy'
@@ -127,7 +127,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   expect(JSON.stringify(payload)).not.toContain('Ship the accuracy ledger')
 
   // The draft is gone (the task exit closes the column optimistically).
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0, { timeout: 30_000 })
+  await expect(draftPanels(page)).toHaveCount(0, { timeout: 30_000 })
 
   // CLAIM 2 — the reader, reached the way a user reaches it.
   const table = await openAccuracyCard(page)
@@ -176,6 +176,6 @@ test('a commit the parse had no opinion about records nothing', async ({ page })
   await expect(draftMetaAiSlot(panel)).toHaveText('')
 
   await panel.locator('.draft-later-btn').click()
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0, { timeout: 30_000 })
+  await expect(draftPanels(page)).toHaveCount(0, { timeout: 30_000 })
   expect(posted, 'nothing suggested → nothing recorded').toBe(false)
 })

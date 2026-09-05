@@ -37,7 +37,9 @@ test('Undo on the "Task created" toast drops the board row before the DELETE is 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  await page.locator('.quick-access-pill').first().click()
+  // "+ Task" now lives in the Ask Walnut slot's header (the chat composer's
+  // QuickAccessBar went with the old chat implementation).
+  await page.getByTitle('Create a task without starting a session').click()
   const composer = page.locator('.quick-task-composer')
   await expect(composer).toBeVisible()
   await page.locator('.qtc-input').fill(title)

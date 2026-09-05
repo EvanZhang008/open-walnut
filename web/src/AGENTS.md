@@ -22,9 +22,14 @@ still live on the client.
 - Optimistic bubble dedup is two-tier (`optimistic-dedup.ts`): non-committed messages only dedup
   against history since the turn watermark; committed against all. Id-first
   (`walnutMessageId`), then count-based multiset text matching.
-- Sessions render in ONE surface — the home session columns (`SessionPanel.tsx`). The dedicated
-  `/sessions` page was removed; `/sessions?id=…` deep links reroute to the home columns
-  (`SessionsRedirect` in `App.tsx` + `utils/open-session.ts`).
+- Sessions render in TWO home surfaces: the session columns (`SessionPanel.tsx`) and the chat
+  slot. The dedicated `/sessions` page was removed; `/sessions?id=…` deep links reroute to the
+  home columns (`SessionsRedirect` in `App.tsx` + `utils/open-session.ts`). The chat spot is
+  `AskWalnutSlot`, which hosts an embedded `SessionPanel` for the selected ask, and a
+  `DraftSessionPanel` in its New state. So scope every Playwright locator for `.session-panel`
+  or `.draft-session-panel` on `/` to `.main-page-session-column` (`REAL_PANEL` / `DRAFT_PANEL`
+  in `tests/e2e/browser/draft-helpers.ts`), or pin it by `data-session-id`: the slot's panel
+  sits earlier in the DOM, so an unscoped `.first()` grabs it instead of the column under test.
 - **One browser, one task store.** `TasksContext` (`useTasks`) is the only in-browser truth for
   a task row. A surface that shows a task reads it from there (`useStoreTask(id)`) and writes
   through the store's optimistic mutators (`update` / `setPhase` / `moveTask`), so the board

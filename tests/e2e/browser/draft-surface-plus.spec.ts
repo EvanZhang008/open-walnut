@@ -42,6 +42,7 @@
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftCwdPill, draftMetaAiSlot, draftPanel, draftProjectPill,
+  draftPanels,
   draftTierBtn, loadHome, watchForbiddenRequests,
 } from './draft-helpers'
 import {
@@ -427,7 +428,7 @@ test('the toolbar says "New task" until the panel is genuinely narrow', async ({
   // Responsive presentation must not change the established one-click behavior.
   await btn.click()
   await expect(draftPanel(page)).toBeVisible({ timeout: 10_000 })
-  await expect(page.locator('.draft-session-panel')).toHaveCount(1)
+  await expect(draftPanels(page)).toHaveCount(1)
 })
 
 // ── 6. Every "+" is visible BEFORE you hover it (GAP-6) ────────────────────

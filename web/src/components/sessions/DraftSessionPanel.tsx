@@ -61,6 +61,13 @@ const BOUND_HINT = 'Start a session on this task — type the first instruction,
 const FORK_HINT = 'Forks the source conversation into a sibling session — type where it should go next (or Start to just branch).';
 const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
 const WALNUT_PLACEHOLDER = 'Ask Walnut anything…';
+/** "Fix Walnut": the guidance the old chat-anchored repair bar carried. The draft
+ *  otherwise looks exactly like an ordinary new session, so nothing would tell the
+ *  user their sentence is about to be read as a bug report. */
+const REPAIR_PLACEHOLDER =
+  'Describe what’s wrong — e.g. "sessions panel keeps spinning". Paste a screenshot (⌘V) to help.';
+const REPAIR_HINT =
+  'Opens a session in Walnut’s own checkout to fix it — paste a screenshot (⌘V) if you have one.';
 
 /** The Ask Walnut tab's one-tap composer seeds — prefill only, never auto-send:
  *  the user finishes the sentence (or edits it) and presses Ask themselves.
@@ -275,7 +282,12 @@ export function DraftSessionPanel({
   // is nothing for the AI backfill to fill. Tabs render only on a PLAIN draft —
   // bound and fork drafts are already committed to a shape.
   const isWalnut = !!draft.walnut;
-  const showTabs = !isBound && !isFork && !!onWalnutToggle;
+  // "Fix Walnut": a draft pre-armed on Walnut's own checkout, carrying the repair
+  // intent. Committed to a shape like a bound or fork draft, so it shows NO mode
+  // fork — the "Ask Walnut" card would flip it to a walnut launch, whose payload
+  // has no cwd and therefore silently drops the repair the user just asked for.
+  const isRepair = draft.intent === 'fix-walnut';
+  const showTabs = !isBound && !isFork && !isRepair && !!onWalnutToggle;
 
   const focusComposer = useCallback(() => {
     rootRef.current?.querySelector<HTMLTextAreaElement>('.chat-input-textarea')?.focus();
@@ -412,7 +424,9 @@ export function DraftSessionPanel({
       <div className="session-panel-header">
         <div className="session-panel-header-top">
           <div className="session-panel-title-area">
-            <span className="session-panel-title">{isFork ? 'Fork Session' : isWalnut ? 'Ask Walnut' : 'New Session'}</span>
+            <span className="session-panel-title">
+              {isFork ? 'Fork Session' : isRepair ? '\u{1F527} Fix Walnut' : isWalnut ? 'Ask Walnut' : 'New Session'}
+            </span>
             <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Draft</span>
             {isBound && (
               <span className="draft-bound-task" title={`This session will attach to the existing task "${draft.boundTaskTitle}" — no second task is created`}>
@@ -443,30 +457,36 @@ export function DraftSessionPanel({
           into the Personal-AI session. Bound/fork drafts are already committed
           to a shape and keep the one-line hint instead. */}
       <div className="draft-session-body">
-        {showTabs ? (
+        {showTabs || isWalnut ? (
           <div className="draft-intent-stack">
-            <div className="draft-intent-cards" role="group" aria-label="Draft mode">
-              <button
-                type="button"
-                aria-pressed={!isWalnut}
-                className={`draft-intent-card${!isWalnut ? ' is-active' : ''}`}
-                onClick={() => { if (isWalnut) { onWalnutToggle?.(draft.id, false); focusComposer(); } }}
-              >
-                <span className="draft-intent-ic" aria-hidden="true">🛠</span>
-                <span className="draft-intent-t">Start Task</span>
-                <span className="draft-intent-d">A coding session in any folder, with any agent: Claude, Codex, and more.</span>
-              </button>
-              <button
-                type="button"
-                aria-pressed={isWalnut}
-                className={`draft-intent-card draft-intent-card-walnut${isWalnut ? ' is-active' : ''}`}
-                onClick={() => { if (!isWalnut) { onWalnutToggle?.(draft.id, true); focusComposer(); } }}
-              >
-                <span className="draft-intent-ic" aria-hidden="true">🥜</span>
-                <span className="draft-intent-t">Ask Walnut</span>
-                <span className="draft-intent-d">A quick session with Walnut: organize tasks, plan your day, configure Walnut, ask or search anything.</span>
-              </button>
-            </div>
+            {/* The fork itself only renders where there is a choice to make. A
+                draft that IS walnut mode with no toggle (the home page's Ask
+                Walnut slot, which is that mode by definition) keeps the seeds
+                below and skips the cards. */}
+            {showTabs && (
+              <div className="draft-intent-cards" role="group" aria-label="Draft mode">
+                <button
+                  type="button"
+                  aria-pressed={!isWalnut}
+                  className={`draft-intent-card${!isWalnut ? ' is-active' : ''}`}
+                  onClick={() => { if (isWalnut) { onWalnutToggle?.(draft.id, false); focusComposer(); } }}
+                >
+                  <span className="draft-intent-ic" aria-hidden="true">🛠</span>
+                  <span className="draft-intent-t">Start Task</span>
+                  <span className="draft-intent-d">A coding session in any folder, with any agent: Claude, Codex, and more.</span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={isWalnut}
+                  className={`draft-intent-card draft-intent-card-walnut${isWalnut ? ' is-active' : ''}`}
+                  onClick={() => { if (!isWalnut) { onWalnutToggle?.(draft.id, true); focusComposer(); } }}
+                >
+                  <span className="draft-intent-ic" aria-hidden="true">🥜</span>
+                  <span className="draft-intent-t">Ask Walnut</span>
+                  <span className="draft-intent-d">A quick session with Walnut: organize tasks, plan your day, configure Walnut, ask or search anything.</span>
+                </button>
+              </div>
+            )}
             {/* Composer seeds — prefill, never send. Only while the composer is
                 EMPTY: prefill is replace-only (ChatInput contract), so a visible
                 chip next to typed text is an invitation to silently destroy it. */}
@@ -486,7 +506,9 @@ export function DraftSessionPanel({
             )}
           </div>
         ) : (
-          <div className="draft-quick-hint">{isFork ? FORK_HINT : isBound ? BOUND_HINT : HINT}</div>
+          <div className="draft-quick-hint">
+            {isFork ? FORK_HINT : isRepair ? REPAIR_HINT : isBound ? BOUND_HINT : HINT}
+          </div>
         )}
       </div>
 
@@ -513,7 +535,9 @@ export function DraftSessionPanel({
           onSend={(body, images) => startWith(body, images)}
           onValueChange={setText}
           draftKey={draftComposerKey(draft.id)}
-          placeholder={isFork ? FORK_PLACEHOLDER : isWalnut ? WALNUT_PLACEHOLDER : PLACEHOLDER}
+          placeholder={isFork ? FORK_PLACEHOLDER
+            : isRepair ? REPAIR_PLACEHOLDER
+              : isWalnut ? WALNUT_PLACEHOLDER : PLACEHOLDER}
           prefillText={prefill.text}
           prefillNonce={prefill.nonce}
           showCommands={false}

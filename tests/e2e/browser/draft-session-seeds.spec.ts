@@ -30,6 +30,7 @@
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftMetaAiSlot, draftPanel,
+  draftPanels,
   draftProjectPill, draftTierBtn, loadHome, openDraft, openDraftOnCwd,
   seedColumns, tasksTitled, watchForbiddenRequests,
 } from './draft-helpers'
@@ -137,7 +138,7 @@ test('project header "+" opens a draft in one click with the project AND its def
   expect(payload.cwd, 'the seeded default_cwd is what actually launches').toBe(seedCwd)
   // The launch column really became a session (a 4xx would leave a pending
   // placeholder holding an error instead) — so the cwd above wasn't merely sent.
-  await expect(page.locator('.draft-session-panel')).toHaveCount(0, { timeout: 15_000 })
+  await expect(draftPanels(page)).toHaveCount(0, { timeout: 15_000 })
 })
 
 // ── 2. Pin-tier header "+" → a draft with that tier preset (R8) ─────────────

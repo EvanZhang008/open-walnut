@@ -1,16 +1,10 @@
 import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
-import type { SessionEngine, Task } from '@open-walnut/core';
-import { SESSION_MODELS } from '@open-walnut/core';
-import { getHostCatalog } from '@/hooks/useModelCatalog';
-import { getEngineCatalog, useEngineCatalog } from '@/hooks/useEngineCatalog';
-import { engineDisplayName, launchEngineForHost, normalizeEngine } from '@/utils/engines';
-import { useChat, mergeAdjacentErrors, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
-import { useAgentConsole } from '@/hooks/useAgentConsole';
-import { useConversations, ACTIVE_CONV_KEY } from '@/hooks/useConversations';
-import { createConversation, forkConversation, promoteConversationToTask } from '@/api/conversations';
-import { FileViewer } from '@/components/common/FileViewer';
-import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
+import type { Task } from '@open-walnut/core';
+import { getEngineCatalog } from '@/hooks/useEngineCatalog';
+import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
+import type { ImageAttachment } from '@/api/chat';
+import { useEvent } from '@/hooks/useWebSocket';
 import { useStoreTask, useTasksContext } from '@/contexts/TasksContext';
 import { useNotifications } from '@/contexts/notifications';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -19,10 +13,6 @@ import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
-import { ChatPanel } from '@/components/chat/ChatPanel';
-import { useOverlayHeightVar } from '@/hooks/useHeightVar';
-import { ChatMessage, type RouteInfo } from '@/components/chat/ChatMessage';
-import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
 import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
@@ -37,42 +27,28 @@ import {
   withDirLaunchMemory, launchDivergesFromDirMemory, projectForFolderPick, suggestDiff,
   type DraftColumn,
 } from '@/components/sessions/draft-column';
-import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
+import type { QuickStartPath, QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
 import {
   DEFAULT_META, LEGACY_LAUNCHER_PIN_TIER_KEY, freshLauncherMeta, readLastLaunchPath, rememberLaunchPath,
 } from '@/components/sessions/task-meta-constants';
-import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
-import { PromoteTaskPopover, type PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
 import { fetchTask, recordSuggestFeedback, type QuickTaskParse } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
-import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
-import { AgentTabBar, slugifyAgentId } from '@/components/chat/AgentTabBar';
-import { useChatEngine } from '@/components/chat/EngineBadge';
-import { LaneComposerControls } from '@/components/chat/LaneComposerControls';
-import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
-import { useSessionSend } from '@/hooks/useSessionSend';
-import { useLaneSession } from '@/hooks/useLaneSession';
-import { createAgentDef, updateAgentDef } from '@/api/agents';
+import { AskWalnutSlot } from '@/components/chat/AskWalnutSlot';
 import { log } from '@/utils/log';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { visibleInterval } from '@/utils/page-visibility';
 import { useContextInspector } from '@/hooks/useContextInspector';
 import { useUrlSync } from '@/hooks/useUrlSync';
 import { useSessionPanelMode } from '@/hooks/useSessionPanelMode';
-import { useSlashCommands } from '@/hooks/useSlashCommands';
-import { shouldHideUiOnlyMessage } from '@/hooks/useDeveloperSettings';
-import { useUiOnlySettings } from '@/hooks/useDeveloperSettings';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { SetupBanner } from '@/components/common/SetupBanner';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
-import type { SlashCommand } from '@/commands/types';
-import type { CommandContext } from '@/commands/types';
 import {
   type SessionSlot,
   trimUnlockedToMax,
@@ -86,117 +62,6 @@ import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PR
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
-
-// ── Compact chat header with dropdown menu ──
-
-// Prefill template for "Create by chat" (R2). This is PREFILLED into the chat input
-// (visible + editable), NOT auto-sent — the user fills in the purpose/name then presses
-// Send. Walnut then designs the agent conversationally and calls the agent_create tool.
-const AGENT_BUILDER_PREFILL = `Create an interactive agent that shows up in my console. Help me design it, then create it with the agent_create tool (runner: embedded, console: true).
-
-Purpose:
-Name (optional): `;
-
-function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspector, hasMessages, onClear, onOpenFiles, onFork, onPromoteToTask, promoteDefaultTitle, onCloseChat, agentSwitcher }: {
-  title: string;
-  connectionState: string;
-  inspectorOpen: boolean;
-  onToggleInspector: () => void;
-  hasMessages: boolean;
-  onClear: () => void;
-  /** Lane engine only: browse the main AI's working directory (Files split). */
-  onOpenFiles?: () => void;
-  /** Lane engine only: fork this conversation (history rides --fork-session). */
-  onFork?: () => void;
-  /** Lane engine only: turn this WHOLE conversation into a task (creates the
-   *  task + links the lane session; the chat stays right here). */
-  onPromoteToTask?: (input: PromoteToTaskInput) => Promise<unknown>;
-  /** Prefill for the promote form — the conversation's auto title. */
-  promoteDefaultTitle?: string;
-  /** Collapse the chat column — same affordance a session panel's × has. */
-  onCloseChat?: () => void;
-  agentSwitcher?: React.ReactNode;
-}) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [promoteOpen, setPromoteOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Close menu on outside click
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menuOpen]);
-
-  return (
-    <div className="chat-header-row">
-      <div className="chat-header-meta">
-        {agentSwitcher || <span className="chat-header-title">{title}</span>}
-        {connectionState !== 'connected' && (
-          <span className="text-xs" style={{ color: 'var(--warning)' }}>({connectionState})</span>
-        )}
-      </div>
-      <div className="chat-header-menu-wrap" ref={menuRef}>
-        <button
-          className="chat-header-menu-btn"
-          onClick={() => setMenuOpen(v => !v)}
-          aria-label="Chat options"
-        >
-          &#x22EF;{/* ⋯ horizontal ellipsis */}
-        </button>
-        {menuOpen && (
-          <div className="chat-header-dropdown">
-            {onOpenFiles && (
-              <button className="chat-header-dropdown-item" onClick={() => { onOpenFiles(); setMenuOpen(false); }}>
-                Files
-              </button>
-            )}
-            {onFork && (
-              <button className="chat-header-dropdown-item" onClick={() => { onFork(); setMenuOpen(false); }}>
-                Fork conversation
-              </button>
-            )}
-            {onPromoteToTask && hasMessages && (
-              <button className="chat-header-dropdown-item" onClick={() => { setPromoteOpen(true); setMenuOpen(false); }}>
-                Create task from chat
-              </button>
-            )}
-            <button className="chat-header-dropdown-item" onClick={() => { onToggleInspector(); setMenuOpen(false); }}>
-              {inspectorOpen ? 'Hide context' : 'Show context'}
-            </button>
-            {hasMessages && (
-              <button className="chat-header-dropdown-item chat-header-dropdown-danger" onClick={() => { onClear(); setMenuOpen(false); }}>
-                Clear chat
-              </button>
-            )}
-          </div>
-        )}
-        {onPromoteToTask && (
-          <PromoteTaskPopover
-            open={promoteOpen}
-            anchorRef={menuRef}
-            defaultTitle={promoteDefaultTitle ?? ''}
-            onClose={() => setPromoteOpen(false)}
-            onSubmit={onPromoteToTask}
-          />
-        )}
-      </div>
-      {onCloseChat && (
-        <button
-          className="chat-header-menu-btn"
-          onClick={onCloseChat}
-          title="Hide chat"
-          aria-label="Hide chat"
-        >
-          &#x2715;
-        </button>
-      )}
-    </div>
-  );
-}
 
 const SS_TASK_KEY = 'open-walnut-home-focused-task';
 const SS_SUPPRESS_DETAIL_KEY = 'open-walnut-home-suppress-detail';
@@ -284,6 +149,10 @@ interface DraftSeed {
   /** Preselect this model (fork: the source session's). Applied like pinTier —
    *  WITHOUT metaTouched, so it reads as a default, not a user edit. */
   model?: string;
+  /** Launch intent ("Fix Walnut"): forwarded to quick-start on Start, where it
+   *  turns the launch into a repair (server-side briefing + task title/project).
+   *  Only ever set together with a pinned `cwd`. */
+  intent?: 'fix-walnut';
 }
 
 /** The one Quick Start failure notification shape — used by both the retry
@@ -321,32 +190,7 @@ interface MainPageProps {
 }
 
 export function MainPage({ visible = true, navigateRef }: MainPageProps) {
-  const agentConsole = useAgentConsole();
-  const conversations = useConversations(agentConsole.activeAgentId);
-  const chat = useChat(agentConsole.activeAgentId, conversations.activeConversationId);
-
-  // ── Thin-layer lane chat (config.agent.provider='claude-code') ──
-  // The main AI IS a Claude Code session: the chat panel mounts the session
-  // timeline (SessionChatHistory — tool cards, collapse, diffs, the works)
-  // directly on the conversation's lane session, and sends ride the ordinary
-  // session queue. The old chat framework (useChat streaming + ChatMessage)
-  // stays byte-identical for the in-process engine and non-general agents.
-  const chatEngine = useChatEngine();
-  const [laneResetNonce, setLaneResetNonce] = useState(0);
-  // Every console agent runs on the lane engine — same session timeline, same
-  // composer, per-agent persona (consoleAgentProfile server-side).
-  const laneActive = chatEngine === 'claude-code';
-  const lane = useLaneSession(
-    laneActive, agentConsole.activeAgentId, conversations.activeConversationId, laneResetNonce,
-  );
-  const laneSend = useSessionSend(laneActive ? lane.sessionId : null);
-  const [laneStreaming, setLaneStreaming] = useState(false);
   const { health, loading: healthLoading } = useSystemHealth();
-  // Which engines exist + are installed. Subscribed here (not read imperatively)
-  // so the quick-start bar's engine chip relabels when the catalog hydrates; the
-  // launch payload still reads it imperatively, inside its callback.
-  const engineCatalog = useEngineCatalog();
-  const { connectionState } = useWebSocket();
   const { notify } = useNotifications();
   const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, moveFolderToProject } = useTasksContext();
   const favorites = useFavorites();
@@ -426,81 +270,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // "Personal", filtering the whole task list down to 1 — read as "all my tasks
   // disappeared".
   const [focusScope, setFocusScope] = useState<'all' | 'pinned'>('all');
-  const inspector = useContextInspector(agentConsole.activeAgentId, conversations.activeConversationId ?? undefined);
-  // Force re-render when UI Only settings change (hook subscribes to localStorage)
-  useUiOnlySettings();
+  // Which task + session the Ask Walnut slot is showing. The slot owns the
+  // selection; MainPage only mirrors it, because the context inspector has to
+  // describe the session actually on screen.
+  const [askSlotSelection, setAskSlotSelection] = useState<{ taskId: string | null; sessionId: string | null }>(
+    { taskId: null, sessionId: null },
+  );
+  // Context inspector, pointed at the selected Ask Walnut session (the legacy
+  // agentId/conversationId form stays on the route for other callers).
+  const inspector = useContextInspector(undefined, undefined, askSlotSelection.sessionId ?? undefined);
 
   const handleNavigateSettings = useCallback((hash?: string) => {
     navigateRef?.current?.(`/settings${hash ?? ''}`);
   }, [navigateRef]);
-
-  // Create a new console agent from the dropdown's inline form, then refresh the
-  // agent list (so it appears without reload) and switch to it.
-  const handleCreateAgent = useCallback(async (name: string, description: string, systemPrompt?: string) => {
-    const id = slugifyAgentId(name);
-    const topic = description.trim() || name;
-    const autoPrompt = `You are ${name}. ${description || ''}\n\nHelp the user with ${topic}. Be concise and proactive.`;
-    // Explicit prompt wins; blank textarea (→ undefined) falls back to the auto-prompt.
-    const prompt = systemPrompt?.trim() || autoPrompt;
-    try {
-      await createAgentDef({ id, name, description: description || undefined, runner: 'embedded', console: true, system_prompt: prompt });
-      agentConsole.refresh();
-      agentConsole.switchAgent(id);
-    } catch (err) {
-      console.error('MainPage: failed to create agent', err);
-    }
-  }, [agentConsole]);
-
-  // Agent dropdown's per-row ＋: open a NEW conversation under that agent. For the
-  // active agent this is just create(); for another agent, create server-side first
-  // (the server marks it active), then switch — useConversations' remount fetch
-  // picks the fresh conversation up as active.
-  const handleNewConversationForAgent = useCallback(async (agentId: string) => {
-    try {
-      if (agentId === agentConsole.activeAgentId) {
-        await conversations.create();
-        return;
-      }
-      const meta = await createConversation(agentId);
-      try { localStorage.setItem(ACTIVE_CONV_KEY(agentId), meta.id); } catch { /* hint only */ }
-      agentConsole.switchAgent(agentId);
-    } catch (err) {
-      log.warn('frontend', 'MainPage: new conversation for agent failed', { agentId, error: String(err) });
-    }
-  }, [agentConsole, conversations]);
-
-  // ── "Create by chat" (R2) ──
-  // Routes the user into Walnut's own chat with a fresh, isolated conversation seeded
-  // with a guide prompt. The agent walks the user through designing + calling agent_create.
-  // We seed via an EFFECT (not setTimeout): switching agent/conversation re-mounts useChat
-  // with a new conversationId, and its internal sendRpc ref lags one render. Firing into a
-  // stale conversationId would land the seed in the wrong (old) conversation. So we stash the
-  // seed + target id in a ref and wait for activeConversationId to actually settle.
-  // "Create by chat": switch to Walnut and PREFILL the agent-builder template into the
-  // input (visible + editable, NOT auto-sent). The user fills in purpose/name and sends.
-  // A monotonic nonce drives the prefill so ChatInput re-applies it each time.
-  const [agentBuilderPrefillNonce, setAgentBuilderPrefillNonce] = useState(0);
-  const handleCreateAgentByChat = useCallback(() => {
-    agentConsole.switchAgent('general');
-    setAgentBuilderPrefillNonce((n) => n + 1);
-  }, [agentConsole]);
-
-  // After the agent calls agent_create, refresh the console list so the new agent
-  // appears in the switcher without a reload.
-  useEvent('agent:tool-result', (data: unknown) => {
-    const toolName = (data as { toolName?: string })?.toolName;
-    if (toolName === 'agent_create') agentConsole.refresh();
-  });
-
-  // Toggle whether an agent appears in the console (eye toggle in the dropdown).
-  const handleToggleAgentVisibility = useCallback(async (agentId: string, visible: boolean) => {
-    try {
-      await updateAgentDef(agentId, { console: visible });
-      agentConsole.refresh();
-    } catch (err) {
-      console.error('MainPage: failed to toggle agent visibility', err);
-    }
-  }, [agentConsole]);
 
   // Chat panel visibility — toggle via Focus Dock "Chat" button or Sidebar toggle
   const [chatVisible, setChatVisible] = useState<boolean>(
@@ -607,11 +389,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Task ID for filtered triage panel (null = show all)
   const [triageTaskId, setTriageTaskId] = useState<string | null>(null);
 
-  // G4 glass: track the chat composer overlay's height into --chat-composer-h
-  // on .chat-page so the message scroller pads itself (content scrolls under
-  // the glass). Height is dynamic: quick-start bar, pills wrap, textarea grow.
-  const chatComposerRef = useOverlayHeightVar('--chat-composer-h', '.chat-panel');
-
   // Measure session area container width for auto mode (ResizeObserver)
   const contentRowRef = useRef<HTMLDivElement>(null);
   const [sessionAreaWidth, setSessionAreaWidth] = useState(0);
@@ -671,15 +448,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     });
   }, [effectiveMaxPanels, panelModeLoaded, placeholderCount]);
 
-  // Session/task quick-entry popovers above the chat input. There is only ONE
-  // anchor left (the chat composer): the todo-panel launcher popover and its
-  // `launcherAnchor` discriminator were replaced by draft session columns.
-  const [pathSelectorOpen, setPathSelectorOpen] = useState(false);
+  // Quick task capture — anchored under the Ask Walnut slot's "+ Task".
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   // Session finder — search existing sessions by title/task/cwd/host and open
-  // one as a column. Toggled by the QuickAccessBar pill or ⌘⇧O.
+  // one as a column. Toggled by ⌘⇧O.
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
-  const [quickStartPath, setQuickStartPath] = useState<QuickStartPath | null>(null);
   // Walnut's own source checkout (null on npm installs / cloud) — drives the
   // fix-walnut pill. Fetched once; the API layer caches for the page lifetime.
   const [walnutInstallDir, setWalnutInstallDir] = useState<string | null>(null);
@@ -697,25 +470,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // per-host SSH fan-out that `prewarmWorkingDirs` still keeps behind a real open.
   // Fire-and-forget; the API layer dedupes and caches for the page lifetime.
   useEffect(() => { void fetchWorkingDirs().catch(() => { /* offline → chips stay hidden */ }); }, []);
-  // Task metadata picked in the launcher footer; applied to the new task on quick-start.
-  // Using a ref (not state) for two reasons — same pattern as `quickStartPathRef` above:
-  //   (1) Avoid re-renders on every keystroke/toggle inside the popover. Meta lives in
-  //       SessionPathSelector's local state; the parent only needs the final snapshot
-  //       at send-time.
-  //   (2) Avoid stale-closure bugs in the async `handleSendMessage` — a ref always
-  //       reads the latest value without needing to be in the effect's dep array.
-  const quickStartMetaRef = useRef<QuickStartTaskMeta | null>(null);
-  // Display mirror of the chosen model so the collapsed Quick Start bar can show &
-  // edit it after the picker closes. The ref above stays the send-time source of
-  // truth (read in handleSendMessage); this state only drives the visible <select>.
-  const [quickStartModel, setQuickStartModel] = useState<string | undefined>(undefined);
-
-  // Quick-start mode: the chat input behaves like a session (skills/commands for
-  // the chosen cwd, and "@" file mentions rooted at that cwd + host).
-  const { items: quickStartCommands, search: searchQuickStartCommands } = useSlashCommands(
-    quickStartPath?.cwd,
-    quickStartPath?.host ?? undefined,
-  );
 
   // Set of session IDs currently open in columns — for active pill indicators
   const openSessionIdSet = useMemo(() => new Set(sessionColumns.map(c => c.id)), [sessionColumns]);
@@ -736,20 +490,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
     return ids;
   }, [tasks, openSessionIdSet]);
-
-  // Detect pending ask_question tool call from chat messages
-  const pendingQuestion = useMemo(() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const msg = chat.messages[i]
-      if (msg.role !== 'assistant' || !msg.blocks) continue
-      for (const block of msg.blocks) {
-        if (block.type === 'tool_call' && block.name === 'user_ask' && block.status === 'calling') {
-          return parseAskQuestionInput((block as { input?: Record<string, unknown> }).input)
-        }
-      }
-    }
-    return null
-  }, [chat.messages])
 
   // Task lookup map for resolving task IDs to names in tool call UI
   const taskMap = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks]);
@@ -1012,10 +752,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (project) openLauncherForProjectRef.current(project);
       else openDraftColumnRef.current();
     };
-    const handleTaskComposer = () => {
-      setQuickTaskOpen(true);
-      setPathSelectorOpen(false);
-    };
+    const handleTaskComposer = () => { setQuickTaskOpen(true); };
     const handleToggleTodo = () => setTodoVisible(prev => !prev);
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
     const handleToggleCalendar = () => setCalendarVisible(prev => !prev);
@@ -1172,17 +909,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               // Rebinding as a fork drops any previous task binding (and vice
               // versa via the assignments above) — the two are exclusive exits.
               if (seed.forkOf) { next.forkOf = seed.forkOf; delete next.taskId; delete next.boundTaskTitle; }
-              if (seed.cwd) {
-                next.cwd = seed.cwd;
-                next.host = seed.host ?? null;
-                next.hostLabel = seed.hostLabel;
-                // Only a TASK's/fork-source's own folder is a pin. A ▶ that fell
-                // back to the launch memory hands the folder over as a mere
-                // starting point, so a project default may still refine it.
-                next.cwdPinned = seed.cwdPinned === true;
-                if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
-              }
             }
+            // The launch TARGET (folder + intent) rides on any seed that carries
+            // one, not just a task/fork rebind. "Fix Walnut" is the seed with a
+            // folder and no binding: while this branch skipped it, clicking Fix
+            // Walnut with a pristine draft leftmost reused that draft and left it a
+            // plain "New Session" pointing nowhere — the repair briefing never
+            // reached quick-start, and the caller's engine/model reset then hit an
+            // ordinary draft. Only a TASK's/fork-source's own folder is a pin; a ▶
+            // that fell back to the launch memory hands the folder over as a mere
+            // starting point, so a project default may still refine it.
+            if (seed.cwd) {
+              next.cwd = seed.cwd;
+              next.host = seed.host ?? null;
+              next.hostLabel = seed.hostLabel;
+              next.cwdPinned = seed.cwdPinned === true;
+              if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
+            }
+            // A seeded rebind rewrites the intent too, in both directions: reusing
+            // a pristine repair draft for a project "+" must not keep launching a
+            // repair.
+            if (seed.intent) next.intent = seed.intent; else delete next.intent;
             return next;
           }));
         }
@@ -1215,6 +962,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(seed?.project ? { project: seed.project, projectSource: 'seed' as const } : {}),
         ...(seed?.taskId ? { taskId: seed.taskId, boundTaskTitle: seed.boundTaskTitle } : {}),
         ...(seed?.forkOf ? { forkOf: seed.forkOf } : {}),
+        ...(seed?.intent ? { intent: seed.intent } : {}),
         ...(pinnedSeed ? { cwdPinned: true } : {}),
         // Per-directory launch memory, applied at OPEN time: the bar shows the
         // model/engine this folder actually launches with, instead of "Auto" that
@@ -1524,9 +1272,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;
         e.preventDefault();
-        // Mirror the QuickAccessBar pill handler: close the launcher popovers
-        // so the finder overlay can't stack on an open path-selector/quick-task.
-        setPathSelectorOpen(false);
+        // Close the task composer so the finder overlay can't stack on it.
         setQuickTaskOpen(false);
         setSessionSearchOpen(prev => !prev);
       }
@@ -1706,17 +1452,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     log.info('session', 'promoted pending column to real session', { sessionId, taskId });
   }, []);
 
-  // Path selector → select handler
-  const handlePathSelect = useCallback((path: QuickStartPath, taskMeta: QuickStartTaskMeta) => {
-    // Re-editing a fix-walnut launch (e.g. via the model chip) must not silently
-    // drop the repair intent — keep it as long as the target stays the checkout.
-    setQuickStartPath(prev =>
-      prev?.intent === 'fix-walnut' && path.cwd === prev.cwd ? { ...path, intent: prev.intent } : path);
-    quickStartMetaRef.current = taskMeta;
-    setQuickStartModel(taskMeta.model);   // mirror for the collapsed bar's <select>
-    setPathSelectorOpen(false);
-  }, []);
-
   // TodoPanel toolbar "+" — one verb "New": grow an empty draft session column.
   // No popover, no tabs, no network; the draft's own composer row covers what the
   // old Session|Task tab pair did ("◌ Create task for later" is the Task half).
@@ -1759,53 +1494,41 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     openDraftColumn({ pinTier: tier });
   }, [openDraftColumn]);
 
-  // fix-walnut pill → skip the path picker entirely: the target is Walnut's own
-  // checkout (server-authoritative), the user only describes what's broken.
+  // "Fix Walnut" → a DRAFT COLUMN pre-armed on Walnut's own checkout
+  // (server-authoritative), carrying the repair intent. The user only describes
+  // what's broken; `handleDraftStart` forwards `intent` to quick-start, which is
+  // what makes the server wrap the message in its repair briefing.
+  //
+  // A draft column rather than the old chat-anchored Quick Start bar: the chat
+  // spot now belongs to the Ask Walnut slot, and openDraftColumn already borrows
+  // that spot (chatBorrowedByDraftRef) so the repair composer gets the room a
+  // launcher needs and hands it back on close.
   const walnutInstallDirRef = useRef(walnutInstallDir);
   walnutInstallDirRef.current = walnutInstallDir;
   const handleFixWalnut = useCallback(() => {
     const dir = walnutInstallDirRef.current;
-    if (!dir) return; // pill is hidden when null; belt-and-braces
-    setPathSelectorOpen(false);
-    setQuickTaskOpen(false); // launcher popovers are mutually exclusive
-    setQuickStartPath({ cwd: dir, host: null, intent: 'fix-walnut' });
-    // The pill skips the path picker, so nothing else ever produces the launcher's
-    // task meta — seed it explicitly with the SAME settings a regular quick session
-    // would get: the sticky pin tier (freshLauncherMeta; a hardcoded 'focus' here
-    // used to override the user's remembered tier on every repair), then the
-    // checkout dir's remembered model/engine merged in below once working-dirs
-    // resolve (usually instant — the API layer caches for the page lifetime).
-    const seeded = freshLauncherMeta();
-    quickStartMetaRef.current = seeded;
-    setQuickStartModel(undefined);
-    fetchWorkingDirs().then(({ dirs }) => {
-      // Stale guard: only merge while THIS fix-walnut compose is still the active
-      // meta (user may have cancelled, re-edited via the picker, or re-clicked).
-      // Fail-safe trade-off: if the user re-opens the picker or fires the send
-      // before this (page-lifetime-cached, usually instant) fetch resolves, the
-      // dir's model memory loses and the launch goes out as Auto — never the
-      // other way around (memory must not clobber an explicit user edit).
-      if (quickStartMetaRef.current !== seeded) return;
-      const launch = dirs.find(d => d.cwd === dir && (d.host ?? null) === null)?.lastLaunch;
-      // The repair briefing is written for the native CLI, so a memory carrying
-      // ANY explicitly-picked engine (they are all ACP-backed) is not inherited,
-      // model included — a set `engine` is by definition non-default.
-      if (!launch || launch.engine) return;
-      quickStartMetaRef.current = { ...seeded, model: launch.model };
-      setQuickStartModel(launch.model);
-    }).catch(() => { /* no memory → keep Auto/Claude, same as the launcher */ });
-    // Land the cursor in the input — the bar + hint + focused caret form one visual path.
-    setTimeout(() => {
-      document.querySelector<HTMLTextAreaElement>('.chat-input-textarea')?.focus();
-    }, 50);
-  }, []);
-
-  // NOTE: there is deliberately no draft-column "Fix Walnut" chip. The repair
-  // entry point is the CHAT pill (handleFixWalnut above) only — inside a draft the
-  // chip was one more thing between the user and the folder they actually wanted,
-  // and a quick-access chip for Walnut's own checkout does the same job. The
-  // DraftColumn.intent plumbing (handleDraftStart forwards it to quick-start)
-  // stays wired but no draft UI sets it any more.
+    if (!dir) return; // the button is hidden when null; belt-and-braces
+    setQuickTaskOpen(false);   // the task composer and a launcher don't co-exist
+    // `cwdPinned`: the checkout is the target, not a suggestion — no async seed
+    // (a project default) may move it.
+    const draftId = openDraftColumn({ cwd: dir, host: null, cwdPinned: true, intent: 'fix-walnut' });
+    // openDraftColumn applies the directory's launch MEMORY to the row (a fresh
+    // column, or a pristine leftmost draft it reused). The repair briefing is
+    // written for the native CLI, so a memory carrying ANY explicitly-picked
+    // engine (they are all ACP-backed) must not be inherited — model included,
+    // since a set `engine` is by definition non-default. Cleared right after the
+    // open rather than special-cased inside it: this is the one caller with that
+    // rule. `metaTouched` is false here by construction (a seed never latches it),
+    // so there is no user pick to overwrite.
+    //
+    // Gated on `intent` as well as the id: the row must be the one that ACTUALLY
+    // became the repair draft. A refused reuse (a hand-edited draft leftmost) hands
+    // back a different id, and wiping a bystander's engine/model would be a silent
+    // edit of a draft the user configured.
+    setDraftColumns(prev => prev.map(d => (d.id === draftId && d.intent === 'fix-walnut' && d.meta.engine
+      ? { ...d, meta: { ...d.meta, engine: undefined, model: undefined } }
+      : d)));
+  }, [openDraftColumn]);
 
   // Auto-open session panel when a quick-start or fork session resolves.
   // Strategy: listen to task:updated events (fires after linkSession persists the
@@ -2150,12 +1873,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     update(id, updates);
   }, [update]);
 
-  // Ref to hold quickStartPath for the async callback (avoids stale closure)
-  const quickStartPathRef = useRef(quickStartPath);
-  quickStartPathRef.current = quickStartPath;
-
-  // Shared QuickTaskComposer create handler (chat-anchored AND todo-anchored
-  // composer instances): create → locate the new row → success toast w/ Undo.
+  // Shared QuickTaskComposer create handler (the Ask Walnut slot's "+ Task" AND
+  // the todo-anchored instance): create → locate the new row → success toast w/ Undo.
   const handleQuickTaskCreate = useCallback(async (input: Parameters<typeof handleCreate>[0]) => {
     const created = await handleCreate(input);
     // LOCATE the new task: open the todo panel if hidden and select+scroll
@@ -2191,32 +1910,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     });
     return created;
   }, [handleCreate, handleFocusTask, notify, tierLabel, deleteTask]);
-
-  // "Create task from chat" — promotes the WHOLE active conversation. The server
-  // creates the task and links the conversation's lane session to it; the chat
-  // stays right here in Main Chat, and the task's session circle routes back to
-  // this same transcript (dual visibility, deliberately). Locate + toast + Undo
-  // mirror handleQuickTaskCreate; Undo deletes with force (the task holds a live
-  // session slot, which a plain delete correctly 409s on).
-  const handlePromoteChatToTask = useCallback(async (input: PromoteToTaskInput) => {
-    const cid = conversations.activeConversationId;
-    if (!cid) throw new Error('No active conversation');
-    const { task } = await promoteConversationToTask(agentConsole.activeAgentId, cid, input);
-    setTodoVisible(true);
-    const known = taskMapRef.current.get(task.id);
-    handleFocusTask(known ?? task, { openDetail: false });
-    notify({
-      kind: 'sort',
-      severity: 'success',
-      title: `Task created: ${task.title}`,
-      body: `${input.project?.trim() || 'Inbox'} · linked to this chat`,
-      dedupKey: task.id,
-      persistent: false,
-      action: { label: 'Undo', kind: 'callback' },
-      onAction: () => { void deleteTask(task.id, { force: true }); },
-    });
-    return task;
-  }, [agentConsole.activeAgentId, conversations.activeConversationId, handleFocusTask, notify, deleteTask]);
 
   // Core quick-start launcher — creates the pending session column and fires the
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
@@ -2646,196 +2339,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
   }, [launchQuickStart, openDraftColumn, openSessionOrToast]);
 
-  // Lane stop: interrupt the CLI turn through the session path (chat:stop's
-  // AbortController means nothing to a lane turn).
-  const handleLaneStop = useCallback(() => {
-    if (lane.sessionId) void laneSend.stopTurn(lane.sessionId);
-  }, [lane.sessionId, laneSend]);
-
-  // Lane clear: the existing clear endpoint archives the lane server-side
-  // (archiveLaneForConversation), so afterwards force a re-resolve — the next
-  // resolve mints a fresh session.
-  const handleClearChat = useCallback(() => {
-    chat.clearMessages();
-    if (laneActive) setLaneResetNonce((n) => n + 1);
-  }, [chat, laneActive]);
-
-  // Lane file viewing — a clicked file path in the timeline, or the ⋯ menu's
-  // "Files" (browse the main AI's working directory). One overlay serves both:
-  // the chat column has no split-view chrome, so the full-screen FileViewer
-  // (explorer + preview) is the right surface here.
-  const [laneFileView, setLaneFileView] = useState<{ path: string; line?: number } | null>(null);
-  const handleLaneFileOpen = useCallback((path: string, line?: number) => {
-    setLaneFileView({ path, line });
-  }, []);
-  const handleLaneOpenFiles = useCallback(() => {
-    // Root at the lane's cwd (~/.open-walnut — memory, notes, config all live there).
-    if (lane.cwd) setLaneFileView({ path: lane.cwd });
-  }, [lane.cwd]);
-
-  // Lane fork: server creates the conversation + forked session (history rides
-  // --fork-session) and sets the new conversation active; refresh + switch to it.
-  const handleLaneFork = useCallback(() => {
-    const cid = conversations.activeConversationId;
-    if (!cid) return;
-    forkConversation(agentConsole.activeAgentId, cid)
-      .then((r) => { conversations.switchTo(r.conversation.id); conversations.refresh(); })
-      .catch((err) => {
-        notify({
-          kind: 'operation-error', severity: 'error', title: 'Fork failed',
-          body: String(err instanceof Error ? err.message : err), persistent: true,
-          dedupKey: `lane-fork:${cid}`,
-        });
-      });
-  }, [agentConsole.activeAgentId, conversations, notify]);
-
-  // Provider switch (any engine → any engine) — legal only while the
-  // conversation is EMPTY (no messages yet): the server archives the just-minted
-  // lane session and re-mints one on the requested engine. The pill's picker only
-  // offers this while `laneConversationEmpty` below, so the 409 path is a race guard.
-  const laneConversationEmpty = (conversations.conversations.find(
-    (c) => c.id === conversations.activeConversationId,
-  )?.messageCount ?? 0) === 0;
-  const handleLaneProviderSwitch = useCallback((provider: SessionEngine) => {
-    lane.swapEngine(provider).catch((err) => {
-      notify({
-        kind: 'operation-error', severity: 'error', title: 'Provider switch failed',
-        body: String(err instanceof Error ? err.message : err), persistent: true,
-        dedupKey: `lane-engine:${conversations.activeConversationId ?? 'unknown'}`,
-      });
-    });
-  }, [lane, notify, conversations.activeConversationId]);
-
-  // Lane send: through the ordinary session queue (session:send), exactly like
-  // any session composer. ensure() covers the send-before-resolve window (the
-  // eager resolve usually wins). No task-context / plan-mode prefixes here —
-  // the lane persona carries its own instructions; those extras stay with the
-  // in-process engine.
-  const handleLaneSend = useCallback((text: string, images?: ImageAttachment[]) => {
-    const trimmed = text.trim();
-    if (!trimmed && !(images?.length)) return;
-    if (lane.sessionId) {
-      void laneSend.send(lane.sessionId, trimmed, images);
-    } else {
-      lane.ensure()
-        .then((sid) => laneSend.send(sid, trimmed, images))
-        .catch((err) => {
-          notify({
-            kind: 'operation-error', severity: 'error', title: 'Main AI unavailable',
-            body: String(err instanceof Error ? err.message : err), persistent: true,
-            dedupKey: `lane-resolve:${conversations.activeConversationId ?? 'unknown'}`,
-          });
-        });
-    }
-  }, [lane, laneSend, notify, conversations.activeConversationId]);
-
-  const handleSendMessage = useCallback((text: string, images?: ImageAttachment[]) => {
-    const qsp = quickStartPathRef.current;
-
-    // Quick-start interception: when a path is selected, create task + start session
-    if (qsp) {
-      setQuickStartPath(null);
-      setQuickStartModel(undefined);   // clear the collapsed-bar model mirror
-      // Local echo as a collapsible bubble — auto-collapses to "⚡ Quick Start on <cwd>"
-      // with a chevron the user can click to see the full pasted prompt. This echo
-      // is the single visual confirmation (no Personal AI message is sent anymore —
-      // titling and project placement both happen server-side).
-      chat.addLocalMessage(
-        `${qsp.intent === 'fix-walnut' ? 'Fix Walnut' : 'Quick Start'} on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`,
-        'quick-start-echo',
-      );
-      // Snapshot + clear meta ref BEFORE the async call so a subsequent /session
-      // doesn't pick up the stale meta while this one is in flight.
-      const metaSnapshot = quickStartMetaRef.current;
-      quickStartMetaRef.current = null;
-      launchQuickStart(qsp, metaSnapshot, text, images);
-      return;
-    }
-
-    // Lane engine: the session queue is the send path. A focused task rides as
-    // a task-ref tag (renders as a clickable pill in the bubble, and the lane
-    // persona reads the id from it) — never a raw bracketed text dump.
-    if (laneActive) {
-      // Same attr contract as server taskRefTag: escape ONLY `"` — the
-      // renderer's decodeRefAttr undoes only &quot;, so escaping & here
-      // would double-render as a literal &amp; in the pill.
-      const esc = (s: string) => s.replace(/"/g, '&quot;');
-      const laneText = focusedTask
-        ? `Re: <task-ref id="${esc(focusedTask.id)}" label="${esc(focusedTask.title)}"/>\n${text}`
-        : text;
-      handleLaneSend(laneText, images);
-      if (focusedTask) setFocusedTask(null);
-      return;
-    }
-
-    if (focusedTask) {
-      // Truncate large text fields before sending over WebSocket to avoid
-      // serializing multi-KB payloads — backend truncates too, but this saves wire bytes.
-      const truncate = (s: string | undefined, max: number) =>
-        s && s.length > max ? s.slice(0, max) : s;
-
-      const taskContext: TaskContext = {
-        id: focusedTask.id,
-        title: focusedTask.title,
-        project: focusedTask.project || '',
-        status: focusedTask.status,
-        phase: focusedTask.phase,
-        priority: focusedTask.priority,
-        due_date: focusedTask.due_date,
-        source: focusedTask.source,
-        description: truncate(focusedTask.description, 350) ?? focusedTask.description,
-        summary: truncate(focusedTask.summary, 250) ?? focusedTask.summary,
-        note: truncate(focusedTask.note, 550) ?? focusedTask.note,
-        conversation_log: focusedTask.conversation_log && focusedTask.conversation_log.length > 500
-          ? focusedTask.conversation_log.slice(-500)
-          : focusedTask.conversation_log,
-        created_at: focusedTask.created_at,
-        plan_session_id: focusedTask.plan_session_id,
-        plan_session_status: focusedTask.plan_session_status,
-        exec_session_id: focusedTask.exec_session_id,
-        exec_session_status: focusedTask.exec_session_status,
-        subtasks: tasks
-          .filter((candidate) => candidate.parent_task_id && focusedTask.id.startsWith(candidate.parent_task_id))
-          .map((child) => ({
-            id: child.id,
-            title: child.title,
-            done: child.status === 'done' || child.phase === 'COMPLETE',
-          })),
-      };
-      chat.sendMessage(text, taskContext, images);
-      // Clear task quote after sending — quote is bound to the message, not persistent
-      setFocusedTask(null);
-    } else {
-      chat.sendMessage(text, undefined, images);
-    }
-  }, [chat, focusedTask, launchQuickStart, tasks, laneActive, handleLaneSend]);
-
-  const handleCommand = useCallback((cmd: SlashCommand, args?: string) => {
-    const ctx: CommandContext = {
-      sendMessage: (text: string) => handleSendMessage(text),
-      clearMessages: () => handleClearChat(),
-      addLocalMessage: (content: string) => chat.addLocalMessage(content),
-      navigate: navigateRef?.current ?? (() => {}),
-      args,
-      agentId: agentConsole.activeAgentId,
-      conversationId: conversations.activeConversationId ?? undefined,
-    };
-    cmd.execute(ctx);
-  }, [handleSendMessage, handleClearChat, chat, navigateRef, agentConsole.activeAgentId, conversations.activeConversationId]);
-
-  const chatTitle = focusedTask
-    ? `Chat — ${focusedTask.title}`
-    : 'Chat';
-
-  // The active conversation's auto title — prefill for "Create task from chat".
-  // 'New Conversation' is the placeholder before auto-titling; an empty prefill
-  // reads better in the form than that.
-  const activeConversationTitle = (() => {
-    const meta = conversations.conversations.find((c) => c.id === conversations.activeConversationId);
-    const t = meta?.title?.trim() ?? '';
-    return t === 'New Conversation' ? '' : t;
-  })();
-
   return (
     <div
       className={`main-page${sessionColumns.length > 0 ? ' has-mobile-session' : ''}`}
@@ -2952,295 +2455,93 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       <div className="main-page-right">
       <div className="main-page-content-row" ref={contentRowRef}>
 
-      {/* Chat Panel — collapsible via Sidebar / Focus Dock toggle */}
+      {/* THE CHAT SPOT IS AN ASK WALNUT SESSION VIEW (P1 of "remove the main
+          agent"): no lane conversation, no in-process chat engine — a tab strip
+          over the `walnut_agent` tasks plus a real SessionPanel for the selected
+          one. Still collapsible via the Sidebar / Focus Dock toggle, and still
+          lent to a draft column while one is open (chatBorrowedByDraftRef). */}
+      {/* The wrapper stays mounted in BOTH states (borrow/mobile CSS and the Focus
+          Dock spec measure `.main-page-chat`'s width), but the SLOT only mounts
+          while the chat is open: collapsed means flex:0 + opacity:0, not
+          display:none, so an always-mounted slot kept a whole live SessionPanel
+          (its history fetch, its WS subscriptions, its streaming re-renders)
+          running behind a zero-width invisible box. The selection lives in
+          sessionStorage, so the remount restores the same tab. */}
       <div className={`main-page-chat${chatVisible ? '' : ' collapsed'}`}>
-        <div className="chat-page">
-          <ChatHeaderRow
-            title={chatTitle}
-            connectionState={connectionState}
-            inspectorOpen={inspector.isOpen}
-            onToggleInspector={inspector.toggle}
-            hasMessages={laneActive ? !!lane.sessionId : chat.messages.length > 0}
-            onClear={handleClearChat}
-            onOpenFiles={laneActive && lane.cwd ? handleLaneOpenFiles : undefined}
-            onFork={laneActive && lane.sessionId ? handleLaneFork : undefined}
-            onPromoteToTask={laneActive && lane.sessionId ? handlePromoteChatToTask : undefined}
-            promoteDefaultTitle={activeConversationTitle}
-            onCloseChat={() => setChatVisible(false)}
-            agentSwitcher={(
-              <AgentTabBar
-                agents={agentConsole.agents}
-                activeAgentId={agentConsole.activeAgentId}
-                onSwitchAgent={agentConsole.switchAgent}
-                conversations={conversations.conversations}
-                activeConversationId={conversations.activeConversationId}
-                onSwitchConversation={conversations.switchTo}
-                onNewConversation={() => { void conversations.create(); }}
-                onNewConversationForAgent={handleNewConversationForAgent}
-                onDeleteConversation={(cid) => { void conversations.remove(cid); }}
-                onRenameConversation={(cid, title) => { void conversations.rename(cid, title); }}
-                onTogglePin={(cid) => { void conversations.togglePin(cid); }}
-                onCreateAgent={handleCreateAgent}
-                onCreateAgentByChat={handleCreateAgentByChat}
-                onToggleAgentVisibility={handleToggleAgentVisibility}
-              />
-            )}
-          />
-
-          {inspector.isOpen && (
-            <ContextInspectorPanel
-              data={inspector.data}
-              loading={inspector.loading}
-              error={inspector.error}
-              onRefresh={inspector.refresh}
+        {chatVisible && (
+        <AskWalnutSlot
+          tasks={tasks}
+          // First-load flag, so the slot doesn't read the store's empty starting
+          // list as "no asks yet" and flash its composer on every page load.
+          tasksLoading={loading}
+          inspectorOpen={inspector.isOpen}
+          onToggleInspector={inspector.toggle}
+          onOpenTaskComposer={() => setQuickTaskOpen(true)}
+          // "+ Session" — one verb "New": grow a draft column in the strip. It
+          // borrows this spot for its lifetime, so close the task composer too
+          // (the two launchers stay mutually exclusive).
+          onOpenDraftColumn={() => { setQuickTaskOpen(false); openDraftColumn(); }}
+          // "⌕ Sessions" — the finder overlay that used to be a QuickAccessBar
+          // pill above the old chat composer. ⌘⇧O opens the same panel.
+          onOpenSessionFinder={() => setSessionSearchOpen(true)}
+          {...(walnutInstallDir ? { onFixWalnut: handleFixWalnut } : {})}
+          // Collapsing takes the task popover with it — it is placed against a
+          // button that is about to unmount.
+          onCloseChat={() => { setQuickTaskOpen(false); setChatVisible(false); }}
+          // The inspector describes the session actually on screen.
+          onSelectionChange={setAskSlotSelection}
+          onTaskClick={handleFocusTaskById}
+          onOpenTaskDetail={handleOpenTaskDetailById}
+          onSessionClick={handleSessionClick}
+          onSessionReplaced={handleSessionReplaced}
+          onOpenForkDraft={handleOpenForkDraft}
+          banner={(
+            /* SetupBanner decides internally what to show: full onboarding when no
+               provider, a small "auto-detected" note when a non-config source was
+               used, or nothing when fully configured. So mount it unconditionally
+               rather than gating on setupComplete (which is true once auto-detected
+               and would hide the auto-detect note). */
+            <SetupBanner
+              health={health}
+              loading={healthLoading}
+              onNavigateSettings={handleNavigateSettings}
+              onStartSession={() => { setQuickTaskOpen(false); openDraftColumn(); }}
             />
           )}
-
-          {/* SetupBanner decides internally what to show: full onboarding when no provider,
-              a small "auto-detected" note when a non-config source was used, or nothing when
-              fully configured. So mount it unconditionally rather than gating on setupComplete
-              (which is true once auto-detected and would hide the auto-detect note). */}
-          <SetupBanner
-            health={health}
-            loading={healthLoading}
-            onNavigateSettings={handleNavigateSettings}
-            onStartSession={() => setPathSelectorOpen(true)}
-          />
-
-          {laneActive && lane.sessionId ? (
-            /* Thin layer: the conversation IS a Claude Code session — render its
-               JSONL timeline with the full session component set (tool cards,
-               collapse, diffs). Keyed by session id so a conversation switch or
-               clear (new lane) remounts cleanly. The composer overlay below is
-               shared; .chat-panel supplies the same scroll + bottom padding. */
-            <div className="chat-panel chat-lane-history">
-              <SessionChatHistory
-                key={lane.sessionId}
-                sessionId={lane.sessionId}
-                sessionCwd={lane.cwd}
-                optimisticMessages={laneSend.optimisticMsgs}
-                onMessagesDelivered={laneSend.handleMessagesDelivered}
-                onBatchCompleted={laneSend.handleBatchCompleted}
-                onBatchFailed={laneSend.handleBatchFailed}
-                onEditQueued={(queueId, newText) => { if (lane.sessionId) laneSend.handleEditQueued(lane.sessionId, queueId, newText); }}
-                onDeleteQueued={(queueId) => { if (lane.sessionId) laneSend.handleDeleteQueued(lane.sessionId, queueId); }}
-                onRetryFailed={(queueId) => { if (lane.sessionId) laneSend.retryFailed(queueId, lane.sessionId); }}
-                onDismissFailed={laneSend.dismissFailed}
-                onAgentQueued={laneSend.addExternalQueued}
-                onStreamingChange={setLaneStreaming}
-                onTaskClick={handleFocusTaskById}
-                onSessionClick={handleSessionClick}
-                onFileOpen={handleLaneFileOpen}
-              />
-              {laneFileView && (
-                <FileViewer
-                  path={laneFileView.path}
-                  line={laneFileView.line}
-                  onClose={() => setLaneFileView(null)}
-                />
-              )}
-            </div>
-          ) : laneActive ? (
-            <div className="chat-panel chat-lane-history">
-              {lane.error ? (
-                <div className="empty-state">
-                  <p style={{ color: 'var(--color-error, #ff3b30)' }}>Main AI session unavailable: {lane.error}</p>
+          inspectorPanel={inspector.isOpen ? (
+            /* No ask selected = nothing to describe. The inspector used to GET
+               /api/context with no params here, which answered for the configured
+               default lane — a different conversation's launch config presented as
+               this slot's. */
+            inspector.noSubject ? (
+              <div className="context-inspector context-inspector-empty">
+                <div className="context-inspector-header">
+                  <span className="context-inspector-title">Agent Context Inspector</span>
                 </div>
-              ) : (
-                <div className="empty-state">
-                  <p>
-                    <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, display: 'inline-block', marginRight: 8, verticalAlign: '-2px' }} />
-                    Connecting to the main AI session…
-                  </p>
+                <div className="text-sm" style={{ color: 'var(--fg-muted)', padding: '12px 16px' }}>
+                  Select an ask to inspect its launch context.
                 </div>
-              )}
-            </div>
-          ) : (
-          <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
-            {chat.hasMore && (
-              <div className="chat-load-more">
-                <button
-                  className="btn btn-sm"
-                  onClick={chat.loadOlderMessages}
-                  disabled={chat.isLoadingOlder}
-                >
-                  {chat.isLoadingOlder ? 'Loading...' : 'Load older messages'}
-                </button>
               </div>
-            )}
-            {chat.messages.length === 0 && !chat.isStreaming && (
-              <div className="empty-state">
-                <p>{focusedTask
-                  ? `Chatting about "${focusedTask.title}". The agent can see this task's details and take actions on it.`
-                  : 'Start a conversation with Walnut. Ask about your tasks, get help with planning, or just chat.'
-                }</p>
-              </div>
-            )}
-            {mergeAdjacentErrors(chat.messages
-              .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification, msg.content)))
-              .map((msg) => (
-              <ChatMessage
-                key={msg.key}
-                role={msg.role}
-                content={msg.content}
-                errorCount={msg.errorCount}
-                blocks={'blocks' in msg ? msg.blocks : undefined}
-                images={'images' in msg ? msg.images : undefined}
-                taskContext={'taskContext' in msg ? msg.taskContext : undefined}
-                routeInfo={'routeInfo' in msg ? msg.routeInfo as RouteInfo : undefined}
-                timestamp={'timestamp' in msg ? msg.timestamp : undefined}
-                source={'source' in msg ? msg.source : undefined}
-                cronJobName={'cronJobName' in msg ? msg.cronJobName : undefined}
-                notification={'notification' in msg ? msg.notification : undefined}
-                queued={'queued' in msg ? msg.queued : undefined}
-                cardScope={'turnId' in msg ? msg.turnId : undefined}
-                onCancel={msg.queued && msg.queueId != null ? () => chat.cancelQueuedMessage(msg.queueId!) : undefined}
-                taskLookup={taskMap}
-                onTaskClick={handleFocusTaskById}
-                onSessionClick={handleSessionClick}
+            ) : (
+              <ContextInspectorPanel
+                data={inspector.data}
+                loading={inspector.loading}
+                error={inspector.error}
+                onRefresh={inspector.refresh}
               />
-            ))}
-            {chat.toolActivity && (
-              <div className="chat-tool-activity text-sm text-muted">
-                <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2, display: 'inline-block', verticalAlign: 'middle', marginRight: 8 }} />
-                {chat.toolActivity.name}...
-              </div>
-            )}
-          </ChatPanel>
-          )}
-
-          {/* G4 glass composer overlay — QuickAccessBar pills + quick-start bar +
-              ChatInput ride together on one glass surface floating over the chat
-              scroll area (.chat-panel pads by the tracked --chat-composer-h).
-              Also the positioned ancestor for the launcher/question popovers. */}
-          <div className="chat-composer-overlay" ref={chatComposerRef}>
-
-          {/* Quick Start Bar — context pill when path is selected */}
-          {quickStartPath && (
-            <div className="quick-start-bar">
-              <div className="qsb-top">
-                <span className="qsb-label">{quickStartPath.intent === 'fix-walnut' ? '\u{1F527} Fix Walnut' : 'Quick Start'}</span>
-                {quickStartPath.host && <span className="qsb-host">{quickStartPath.hostLabel ?? quickStartPath.host}</span>}
-                {/* Compact, read-only model chip. Click it (or /session) to re-open the
-                    picker and edit ALL launch settings (model / pin / priority) —
-                    the picker restores the prior choice via initialMeta. Keeping the
-                    collapsed bar chip-only (no inline <select>) fixes the narrow-view
-                    overflow and saves a row of controls. */}
-                <button
-                  className="qsb-model-chip"
-                  onClick={() => { setPathSelectorOpen(true); setQuickTaskOpen(false); }}
-                  title="Edit launch settings (engine, model, pin, priority)"
-                >
-                  {/* Chip label: an explicitly picked engine → its display name (ACP
-                      models are discovered at session start, no pre-start pick);
-                      legacy alias → static label; catalog value (full provider ID) →
-                      the catalog row's displayName. */}
-                  {quickStartMetaRef.current?.engine
-                    ? engineDisplayName(engineCatalog, quickStartMetaRef.current.engine)
-                    : SESSION_MODELS.find(sm => sm.id === quickStartModel)?.label
-                      ?? getHostCatalog(quickStartPath.host)?.models.find(m => m.value === quickStartModel)?.displayName
-                      ?? (quickStartModel || 'Auto')}
-                </button>
-                <button className="qsb-close" onClick={() => { setQuickStartPath(null); quickStartMetaRef.current = null; setQuickStartModel(undefined); }} aria-label="Cancel quick start">&times;</button>
-              </div>
-              <span className="qsb-path" title={quickStartPath.cwd}>{quickStartPath.cwd}</span>
-              {/* Persistent guidance — the input placeholder vanishes on first keystroke,
-                  this line stays visible for the whole compose. */}
-              {quickStartPath.intent === 'fix-walnut' && (
-                <span className="qsb-hint">
-                  Tell me what's broken — paste a screenshot (⌘V) if you have one, and I'll open a session to fix it.
-                </span>
-              )}
-            </div>
-          )}
-
-          <div style={{ position: 'relative' }}>
-            {/* Session path selector popover (above the input) */}
-            <SessionPathSelector
-              open={pathSelectorOpen && !pendingQuestion}
-              onClose={() => setPathSelectorOpen(false)}
-              onSelect={handlePathSelect}
-              // Re-opening to edit an already-confirmed Quick Start keeps the prior
-              // footer choices (incl. model) instead of resetting to Auto/defaults,
-              // and pre-fills the path so it opens as an "edit this selection" view.
-              initialMeta={quickStartPath ? quickStartMetaRef.current ?? undefined : undefined}
-              initialPath={quickStartPath ? { cwd: quickStartPath.cwd, host: quickStartPath.host } : undefined}
-            />
-
+            )
+          ) : null}
+          taskComposerOpen={quickTaskOpen}
+          taskComposer={(
             <QuickTaskComposer
-              open={quickTaskOpen && !pendingQuestion}
+              open={quickTaskOpen}
               onClose={() => setQuickTaskOpen(false)}
               projectOptions={quickTaskProjectOptions}
               onCreate={handleQuickTaskCreate}
             />
-
-            {/* Ask Question popover (above the input, mutually exclusive with path selector) */}
-            <QuestionPopover
-              open={!!pendingQuestion}
-              questions={pendingQuestion ?? []}
-              onClose={() => {/* closed automatically when tool result arrives */}}
-            />
-
-            <QuickAccessBar
-              onTaskClick={() => {
-                setQuickTaskOpen(true);
-                setPathSelectorOpen(false);
-              }}
-              // "+ Session" — the LAST entry point to switch to one verb "New":
-              // grow a draft column instead of opening the chat-anchored picker.
-              // That picker stays mounted (fix-walnut and the model chip re-open
-              // it), so this only changes the route in, not the plumbing.
-              // Quick-task still closes: the two pills remain mutually exclusive.
-              onSessionClick={() => {
-                openDraftColumn();
-                setQuickTaskOpen(false);
-              }}
-              onFixWalnutClick={walnutInstallDir ? handleFixWalnut : undefined}
-              // Lane engine: chat.stats reads the OLD chat-history store, which
-              // lane turns never touch — its % is a frozen lie (reported: stuck
-              // 3% next to the model pill's real 18%). The composer's model pill
-              // shows the session's true context %; hide this one.
-              stats={laneActive ? null : chat.stats}
-            />
-
-            <ChatInput
-              onSend={handleSendMessage}
-              onCommand={handleCommand}
-              onStop={laneActive ? handleLaneStop : chat.stopGeneration}
-              onClearQueue={chat.clearQueue}
-              disabled={connectionState !== 'connected'}
-              isStreaming={laneActive ? laneStreaming : chat.isStreaming}
-              placeholder={quickStartPath?.intent === 'fix-walnut'
-                ? 'Describe what’s wrong — e.g. "sessions panel keeps spinning". Paste a screenshot (⌘V) to help.'
-                : undefined}
-              focusedTaskTitle={quickStartPath ? `Session on ${quickStartPath.cwd.split('/').pop()}` : focusedTask?.title}
-              focusedTask={quickStartPath ? null : focusedTask}
-              onClearFocus={handleClearFocus}
-              queueCount={chat.queueCount}
-              draftKey="draft:main-chat"
-              prefillText={AGENT_BUILDER_PREFILL}
-              prefillNonce={agentBuilderPrefillNonce}
-              sessionCommands={quickStartPath ? quickStartCommands : undefined}
-              searchSessionCommands={quickStartPath ? searchQuickStartCommands : undefined}
-              // Lane engine: same controls row a session composer has — mode
-              // pill + model pill (NO btw / notes, deliberately minimal).
-              // Provider switching unlocks ONLY while the conversation is empty.
-              controlsSlot={laneActive && lane.sessionId
-                ? <LaneComposerControls
-                    sessionId={lane.sessionId}
-                    engine={lane.engine}
-                    onProviderSwitch={laneConversationEmpty ? handleLaneProviderSwitch : undefined}
-                  />
-                : undefined}
-              // Quick-start: "@" roots at the chosen cwd + host (like a session).
-              // Plain main chat has no cwd, so "@" roots at "~" — backend expands it.
-              // (?? undefined: QuickStartPath.host is string|null; coerce null→undefined.)
-              mentionCwd={quickStartPath?.cwd ?? '~'}
-              mentionHost={quickStartPath?.host ?? undefined}
-            />
-          </div>
-          </div>{/* .chat-composer-overlay */}
-        </div>
+          )}
+        />
+        )}
       </div>
 
       {/* Sessions Area Resize Handle — only when chat is visible: with chat

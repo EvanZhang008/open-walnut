@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
-import { resolveTaskSessionId } from '@/utils/session-status';
+import { PHASE_LABELS, resolveTaskSessionId } from '@/utils/session-status';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
@@ -25,13 +25,6 @@ function emitDockActivateTask(taskId: string, sessionId?: string) {
 function emitDockActivateChat() {
   window.dispatchEvent(new CustomEvent('dock:activate-chat'));
 }
-
-// ── Human-readable status labels ──
-
-const PHASE_LABELS: Record<string, string> = {
-  TODO: 'To Do', IN_PROGRESS: 'In Progress', BLOCKED: 'Blocked',
-  AGENT_COMPLETE: 'Agent Complete',  COMPLETE: 'Complete',
-};
 
 // ── Dock height constants ──
 
@@ -126,7 +119,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
         <div className="dock-task-header-top">
           <span className={`dock-task-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>
           <span className={`dock-task-phase-badge${unread ? ' dock-task-phase-unread' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
-            {PHASE_LABELS[task.phase ?? ''] ?? task.phase ?? 'To Do'}
+            {/* A row still carrying a retired phase (BLOCKED) has no label — show
+                the raw value rather than inventing one here. */}
+            {PHASE_LABELS[task.phase] ?? task.phase ?? 'To Do'}
           </span>
           {sessionId && (
             <button
@@ -207,10 +202,12 @@ const ChatDockItem = memo(function ChatDockItem({ isActive }: ChatDockItemProps)
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); emitDockActivateChat(); } }}
-      title="Main Chat"
+      title="Ask Walnut"
     >
       <span className="dock-chat-icon">{ICON_CHAT}</span>
-      <span className="dock-chat-label">Chat</span>
+      {/* The dock cell is 56px wide, so the label is the short form; the title
+          attribute carries the full name. */}
+      <span className="dock-chat-label">Walnut</span>
       {isActive && <span className="dock-chat-active-dot" />}
     </div>
   );

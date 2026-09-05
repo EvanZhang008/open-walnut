@@ -98,7 +98,9 @@ const CODE_VIEW_HIDDEN_TTL_MS = 10 * 60_000;
 
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
-  onClose: (sessionId: string) => void;
+  /** Absent for an embedded panel — there is no column to close, and the recovery
+   *  button below must not be offered when it cannot do anything. */
+  onClose?: (sessionId: string) => void;
   children: ReactNode;
 }
 
@@ -128,18 +130,24 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
 
   render() {
     if (this.state.hasError) {
+      const { onClose } = this.props;
       return (
         <div className="session-panel" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '24px' }}>
           <p style={{ color: 'var(--fg-muted)', margin: 0 }}>Something went wrong loading this session.</p>
-          <button
-            className="btn btn-sm btn-primary"
-            onClick={() => {
-              sessionStorage.removeItem('open-walnut-home-session-columns');
-              this.props.onClose(this.props.sessionId);
-            }}
-          >
-            Close panel
-          </button>
+          {/* Only where there IS a column to close. Embedded (the Ask Walnut slot)
+              has none, and offering the button there would clear the user's
+              UNRELATED session columns from sessionStorage and then do nothing. */}
+          {onClose && (
+            <button
+              className="btn btn-sm btn-primary"
+              onClick={() => {
+                sessionStorage.removeItem('open-walnut-home-session-columns');
+                onClose(this.props.sessionId);
+              }}
+            >
+              Close panel
+            </button>
+          )}
         </div>
       );
     }
@@ -188,8 +196,17 @@ function claimRecheckSlot(sessionId: string): boolean {
 
 interface SessionPanelProps {
   sessionId: string;
-  /** Stable close handler — receives the sessionId so parent can identify which panel to close. */
-  onClose: (sessionId: string) => void;
+  /** Stable close handler — receives the sessionId so parent can identify which
+   *  panel to close. Optional: an `embedded` panel has no column to close. */
+  onClose?: (sessionId: string) => void;
+  /**
+   * Rendered INSIDE another surface (the home page's Ask Walnut slot) rather than
+   * as a session column. The panel is the whole surface there, so the window
+   * controls that act on a column are hidden: lock (no rotation to pin to),
+   * popout (the slot is not a column to pop out) and close (the slot's own header
+   * owns that). Locate-task and fullscreen stay — both are about the SESSION.
+   */
+  embedded?: boolean;
   /** Whether this panel is locked — pinned to the rightmost region, not evicted by new sessions. */
   locked?: boolean;
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
@@ -209,7 +226,11 @@ interface SessionPanelProps {
   }) => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
+  // One place decides what "close this panel" means, so every exit (the header
+  // button, the error boundary, the missing-session card) degrades the same way
+  // when the panel is embedded: nothing to close.
+  const closePanel = useCallback((id: string) => { onClose?.(id); }, [onClose]);
   const navigate = useNavigate();
   const { notify } = useNotifications();
   const confirmDialog = useConfirm();
@@ -810,9 +831,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // puts the injected block in front of it. The summary variant takes a model turn
   // to arrive and the user is free to keep typing while it runs, so a replace would
   // eat both their sentence and its saved draft. Reveal must happen in this batch —
-  // a collapsed chat column is
-  // `display:none`, so ChatInput's focus() would land on <body> and eat the
-  // user's next keystrokes (same trap as handleSelectCode).
+  // a collapsed chat column is `display:none`, so ChatInput's focus() would land on
+  // <body> and eat the user's next keystrokes (same trap as handleSelectCode).
   const handleInjectFromThread = useCallback((text: string) => {
     setPrefillText(text);
     setPrefillMode('keep-draft');
@@ -1398,9 +1418,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             No session matches <code>{sessionId}</code>. It may have been deleted, or the
             link used a partial id that no longer resolves.
           </p>
-          <button className="btn btn-sm btn-primary" onClick={() => onClose(sessionId)}>
-            Close panel
-          </button>
+          {/* Embedded panels have no column to close, so the button would be a
+              dead end — the surrounding surface owns the exit there. */}
+          {onClose && (
+            <button className="btn btn-sm btn-primary" onClick={() => closePanel(sessionId)}>
+              Close panel
+            </button>
+          )}
         </div>
       </div>
     );
@@ -1411,7 +1435,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     <SessionPinsContext.Provider value={pinsApi}>
     <SessionThreadsContext.Provider value={threadsApi}>
     <SessionRewindContext.Provider value={rewindApi}>
-    <SessionPanelErrorBoundary sessionId={sessionId} onClose={onClose}>
+    <SessionPanelErrorBoundary sessionId={sessionId} {...(onClose ? { onClose: closePanel } : {})}>
       {FullscreenBackdrop}
       {rewindTarget && (
         <SessionRewindDialog
@@ -1751,7 +1775,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   {ICON_LOCATE}
                 </button>
               )}
-              {onToggleLock && (
+              {/* Embedded (the Ask Walnut slot): lock and popout act on a COLUMN
+                  this panel does not have, and the slot's own header owns the
+                  close. Fullscreen and locate stay — both are about the session. */}
+              {!embedded && onToggleLock && (
                 <button
                   className={`task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
                   onClick={() => onToggleLock(sessionId)}
@@ -1762,14 +1789,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   {locked ? ICON_LOCK : ICON_UNLOCK}
                 </button>
               )}
-              <button
-                className="task-action-btn session-panel-popout"
-                onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
-                title="Open in new tab"
-                aria-label="Open session in new tab"
-              >
-                {ICON_NEW_TAB}
-              </button>
+              {!embedded && (
+                <button
+                  className="task-action-btn session-panel-popout"
+                  onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
+                  title="Open in new tab"
+                  aria-label="Open session in new tab"
+                >
+                  {ICON_NEW_TAB}
+                </button>
+              )}
               <button
                 className="task-action-btn session-panel-expand"
                 onClick={isFullscreen ? exitFullscreen : enterFullscreen}
@@ -1780,15 +1809,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               </button>
               {/* In fullscreen the panel reads as an overlay, so its X dismisses the
                   overlay (same path as Escape / backdrop click) and never destroys
-                  the column underneath. Closing the column needs the normal view. */}
-              <button
-                className="task-action-btn session-panel-close"
-                onClick={isFullscreen ? exitFullscreen : () => onClose(sessionId)}
-                title={isFullscreen ? 'Exit full screen' : 'Close session panel'}
-                aria-label={isFullscreen ? 'Exit full screen' : 'Close session panel'}
-              >
-                {ICON_CLOSE}
-              </button>
+                  the column underneath. Closing the column needs the normal view.
+                  Embedded keeps ONLY the fullscreen-exit role. */}
+              {(!embedded || isFullscreen) && (
+                <button
+                  className="task-action-btn session-panel-close"
+                  onClick={isFullscreen ? exitFullscreen : () => closePanel(sessionId)}
+                  title={isFullscreen ? 'Exit full screen' : 'Close session panel'}
+                  aria-label={isFullscreen ? 'Exit full screen' : 'Close session panel'}
+                >
+                  {ICON_CLOSE}
+                </button>
+              )}
             </div>
           </div>{/* .session-meta-row-2 */}
 
