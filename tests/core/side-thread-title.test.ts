@@ -28,7 +28,10 @@ vi.mock('../../src/core/session-title-backend.js', () => backend);
 import { WALNUT_HOME } from '../../src/constants.js';
 import { addSideThread, getSideQuestion } from '../../src/core/side-questions.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
-import { refineSideThreadTitle } from '../../src/core/sessions/side-thread-title.js';
+import {
+  refineSideThreadTitle, backfillSideThreadTitles, isDerivedLabel,
+  _resetBackfillCooldownForTesting,
+} from '../../src/core/sessions/side-thread-title.js';
 
 const PARENT = 'parent-1';
 const PLACEHOLDER = 'Throttling。 我去压缩前的记录里…';
@@ -134,6 +137,74 @@ describe('side-thread auto title', () => {
   it('skips an empty question outright (nothing to name)', async () => {
     const id = await seedThread();
     await refineSideThreadTitle(PARENT, id, '   ', PLACEHOLDER);
+    expect(backend.titleViaBackendModel).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The chips that were already there. Auto-titling fires on create, so every thread from
+ * before it shipped — and every one whose model call failed — keeps the truncated
+ * question forever. "Auto title still not here" was mostly THIS: a drawer full of old
+ * chips that nothing would ever rename.
+ */
+describe('back-filling the chips that never got a title', () => {
+  beforeEach(() => { _resetBackfillCooldownForTesting(); });
+
+  it('identifies a client-truncated label without needing a marker field', () => {
+    const q = 'Throttling. I went back through the pre-compaction notes for the quota';
+    expect(isDerivedLabel('Throttling. I went back through…', q)).toBe(true);
+    expect(isDerivedLabel(undefined, q)).toBe(true);
+    expect(isDerivedLabel(q, q)).toBe(true);
+    // A real title is not a prefix of the question, even when it starts the same way.
+    expect(isDerivedLabel('Throttling quota facts', q)).toBe(false);
+    expect(isDerivedLabel('Step function quota throttling', q)).toBe(false);
+  });
+
+  it('names only the derived labels, and leaves real titles alone', async () => {
+    backend.titleViaBackendModel.mockResolvedValue('Quota throttling facts');
+    await addSideThread(PARENT, { id: 'a', question: QUESTION, threadSessionId: 'f1', title: PLACEHOLDER });
+    await addSideThread(PARENT, { id: 'b', question: QUESTION, threadSessionId: 'f2', title: 'Already named well' });
+
+    await backfillSideThreadTitles(PARENT, [
+      { id: 'a', title: PLACEHOLDER, question: QUESTION },
+      { id: 'b', title: 'Already named well', question: QUESTION },
+    ]);
+
+    expect((await getSideQuestion(PARENT, 'a'))?.title).toBe('Quota throttling facts');
+    expect((await getSideQuestion(PARENT, 'b'))?.title).toBe('Already named well');
+    expect(backend.titleViaBackendModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps how many chips one drawer open may name', async () => {
+    backend.titleViaBackendModel.mockResolvedValue('Named');
+    const rows = Array.from({ length: 7 }, (_, i) => ({ id: `t${i}`, title: PLACEHOLDER, question: QUESTION }));
+    for (const r of rows) {
+      await addSideThread(PARENT, { id: r.id, question: QUESTION, threadSessionId: `f-${r.id}`, title: PLACEHOLDER });
+    }
+
+    await backfillSideThreadTitles(PARENT, rows);
+    // Each one is a fast-model call sharing a small concurrency pool with the rest of
+    // Walnut's background work — a drawer with 30 asides must not fire 30 calls.
+    expect(backend.titleViaBackendModel).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not re-ask a row that just failed (cooldown), and re-asks after a reset', async () => {
+    backend.titleViaBackendModel.mockResolvedValue(null);
+    await addSideThread(PARENT, { id: 'a', question: QUESTION, threadSessionId: 'f1', title: PLACEHOLDER });
+    const rows = [{ id: 'a', title: PLACEHOLDER, question: QUESTION }];
+
+    await backfillSideThreadTitles(PARENT, rows);
+    await backfillSideThreadTitles(PARENT, rows);
+    expect(backend.titleViaBackendModel).toHaveBeenCalledTimes(1);
+
+    _resetBackfillCooldownForTesting();
+    await backfillSideThreadTitles(PARENT, rows);
+    expect(backend.titleViaBackendModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('makes no model call when unprompted background calls are off', async () => {
+    backend.backendTitleAvailable.mockReturnValue(false);
+    await backfillSideThreadTitles(PARENT, [{ id: 'a', title: PLACEHOLDER, question: QUESTION }]);
     expect(backend.titleViaBackendModel).not.toHaveBeenCalled();
   });
 });

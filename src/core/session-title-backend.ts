@@ -16,6 +16,7 @@
 
 import { log } from '../logging/index.js';
 import { backgroundAiDisabled, fastModelFor } from './cheap-model.js';
+import type { Config } from './types.js';
 
 /** The shared "hidden main-model prompt" question. One prompt for every
  *  channel — session-delivered (side_question / ACP) and backend alike. */
@@ -47,9 +48,11 @@ const REFUSAL_RE = /^(i can(?:no|')t|i cannot|i'm sorry|i am sorry|sorry[,!]|as 
 export function cleanTitleAnswer(answer: string): string | null {
   const firstLine = answer.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
   const cleaned = firstLine
-    .replace(/^(?:title\s*:\s*)/i, '')      // "Title: ..." label echo
+    // Wrappers come off FIRST: a model that answers `**Title: X**` hides the label
+    // behind the bold markers, so a label-first pass leaves "Title:" in the title.
     .replace(/^[#>*`_\s]+|[*`_\s]+$/g, '')   // markdown heading/bold/code wrappers
     .replace(/^["'“”]+|["'“”]+$/g, '')       // quote wrappers
+    .replace(/^(?:title\s*:\s*)/i, '')      // "Title: ..." label echo
     .replace(/\s+/g, ' ')
     .trim();
   if (cleaned.length < 2) return null;
@@ -68,6 +71,20 @@ export function backendTitleAvailable(): boolean {
  * (gate closed, no credentials, timeout, empty answer) — callers keep the
  * placeholder and a later trigger retries.
  */
+/**
+ * How long one title call may take. The deadline has to fit the CHANNEL, not just the
+ * model: a direct API call answers in a second or two, but the default provider is now
+ * the `claude` CLI, where one turn is a process spawn (measured 5-9s warm on an idle
+ * Mac) that can also QUEUE behind up to MAX_CONCURRENT_CLI other background calls. At
+ * a flat 15s that budget expired mid-spawn often enough that side-thread chips kept
+ * their truncated label roughly half the time (observed on prod, 2026-09-04).
+ */
+export async function titleBudgetMs(config: Config): Promise<number> {
+  const { resolveMainProviderName, CLAUDE_CLI_PROVIDER } =
+    await import('../agent/providers/default-provider.js');
+  return resolveMainProviderName(config) === CLAUDE_CLI_PROVIDER ? 60_000 : 15_000;
+}
+
 /** Pause before the single in-call retry. Mutable so tests don't sleep. */
 let backendRetryDelayMs = 2_000;
 
@@ -84,10 +101,12 @@ export async function titleViaBackendModel(
   const askOnce = async (): Promise<string | null> => {
     const { sendMessage } = await import('../agent/model.js');
     const { getConfig } = await import('./config-manager.js');
-    const model = fastModelFor(await getConfig());
+    const config = await getConfig();
+    const model = fastModelFor(config);
+    const budgetMs = await titleBudgetMs(config);
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
+    const timer = setTimeout(() => controller.abort(), budgetMs);
     let result;
     try {
       // maxTokens stays small: Haiku catalog default (64K) trips the SDK's
@@ -102,16 +121,31 @@ export async function titleViaBackendModel(
       clearTimeout(timer);
     }
 
+    // An ABORTED turn is a failure, not an answer. The CLI adapter resolves an
+    // aborted spawn with whatever text it had (usually none) rather than throwing, so
+    // treating this as "the model declined" is what made the deadline above silent:
+    // no log, and the retry below never engaged because nothing was thrown.
+    if (result.aborted) throw new Error(`title call aborted after ${budgetMs}ms`);
     const text = (result.content ?? [])
       .map((block) => (block.type === 'text' && 'text' in block ? (block as { text: string }).text : ''))
       .join('')
       .trim();
-    return cleanTitleAnswer(text);
+    const cleaned = cleanTitleAnswer(text);
+    // Empty output is also a failure worth ONE retry — a fast model that returns no
+    // text at all is a transport hiccup, not a considered refusal (a refusal arrives
+    // as prose and is rejected by cleanTitleAnswer below, with the raw text logged).
+    if (!text) throw new Error('model returned no text');
+    if (!cleaned) {
+      log.session.warn('session-auto-title: answer unusable as a title (keeping placeholder)', {
+        answer: text.slice(0, 120),
+      });
+    }
+    return cleaned;
   };
 
-  // Two tries: throttles and transient network drops are the common failure on
-  // a fast-model call, and the callers (hook/sweep) pace in minutes — one cheap
-  // in-call retry saves a whole outer backoff cycle. Never throws.
+  // Two tries: throttles, transient network drops and an expired CLI spawn budget are
+  // the common failures on a fast-model call, and the callers (hook/sweep) pace in
+  // minutes — one cheap in-call retry saves a whole outer backoff cycle. Never throws.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       return await askOnce();

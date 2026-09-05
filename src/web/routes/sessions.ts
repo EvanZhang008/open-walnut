@@ -1972,7 +1972,18 @@ function sendSideThreadError(err: unknown, res: Response, next: NextFunction): v
 sessionsRouter.get('/:sessionId/side-threads', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
-    res.json(await sideThreadManager.listThreads(String(req.params.sessionId)))
+    const sessionId = String(req.params.sessionId)
+    const view = await sideThreadManager.listThreads(sessionId)
+    res.json(view)
+    // Auto-titling fires on create, so every thread from before it shipped keeps the
+    // truncated question as its label. Opening the drawer is when those chips are
+    // actually read, so name a few then — after the response, never in it.
+    void import('../../core/sessions/side-thread-title.js')
+      .then(({ backfillSideThreadTitles }) => backfillSideThreadTitles(
+        sessionId,
+        view.threads.map((t) => ({ id: t.id, title: t.title, question: t.question })),
+      ))
+      .catch(() => {})
   } catch (err) {
     sendSideThreadError(err, res, next)
   }
