@@ -143,7 +143,7 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
 /** Only spread direct-value task fields for optimistic update (not instruction fields like add_tags). */
 const OPTIMISTIC_FIELDS = new Set([
   'title', 'status', 'phase', 'priority', 'project',
-  'due_date', 'start_date', 'unread', 'parent_task_id',
+  'due_date', 'start_date', 'end_date', 'unread', 'parent_task_id',
 ]);
 
 /** Tag INSTRUCTION fields: they carry no value to spread, so the resulting
