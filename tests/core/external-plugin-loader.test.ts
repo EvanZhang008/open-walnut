@@ -61,7 +61,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
-import { clearPluginQuarantine, disableLoadedPlugin, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
 import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js';
 import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
 
@@ -139,11 +139,23 @@ beforeEach(async () => {
   } as any);
 });
 
+/**
+ * Every registry this file loads, so `afterEach` can take the plugins DOWN before their home
+ * is removed. The builtins really activate here (mail opens its cache from a host timer), and
+ * deleting a live plugin's data dir under it is an ENOTEMPTY race, not a test of anything.
+ */
+const loadedRegistries: IntegrationRegistry[] = [];
+async function load(registry: IntegrationRegistry): Promise<void> {
+  if (!loadedRegistries.includes(registry)) loadedRegistries.push(registry);
+  await loadPlugins(registry);
+}
+
 afterEach(async () => {
   delete (globalThis as any).__walnutLiveSyncRegistration;
   esbuildControl.delayMs = 0;
   versionControl.known = true;
   setPluginCodeTimeoutForTesting(null);
+  for (const one of loadedRegistries.splice(0)) await disposeLoadedPlugins(one);
   await fsp.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -164,7 +176,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('test-ext')).toBe(true);
     const plugin = registry.get('test-ext');
@@ -184,7 +196,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('../escape')).toBe(false);
     await expect(fsp.access(path.join(tmpDir, 'escape'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -213,7 +225,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('import-test')).toBe(true);
     const plugin = registry.get('import-test');
@@ -232,7 +244,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('no-manifest')).toBe(false);
   });
@@ -260,7 +272,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     // 'local' should be registered (from built-in), not from our external override
     expect(registry.has('local')).toBe(true);
@@ -293,7 +305,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('no-sync')).toBe(false);
   });
@@ -319,7 +331,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     // Not loaded — required room_id absent from config
     expect(registry.has('needs-config')).toBe(false);
@@ -352,7 +364,7 @@ export default function register(api) {
 
     // First load: missing config → unconfigured
     const registry1 = new IntegrationRegistry();
-    await loadPlugins(registry1);
+    await load(registry1);
     expect(getUnconfiguredPlugins().some(p => p.id === 'now-configured')).toBe(true);
 
     // Provide the required field and reload
@@ -365,7 +377,7 @@ export default function register(api) {
     } as any);
 
     const registry2 = new IntegrationRegistry();
-    await loadPlugins(registry2);
+    await load(registry2);
     expect(registry2.has('now-configured')).toBe(true);
     expect(getUnconfiguredPlugins().some(p => p.id === 'now-configured')).toBe(false);
     // Loaded plugin carries its manifest schema for the settings form
@@ -389,7 +401,7 @@ export default function register(api) {
 }
 `);
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     await reloadLoadedPlugin(registry, 'target-configured');
     await reloadLoadedPlugin(registry, 'target-configured');
@@ -414,7 +426,7 @@ export default function register(api) {
   it('keeps the current Plugin registered when reload manifest preflight fails', async () => {
     await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'preflight'), 'preflight');
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     await fsp.writeFile(path.join(tmpDir, 'plugins', 'preflight', 'manifest.json'), '{bad json');
 
     await expect(reloadLoadedPlugin(registry, 'preflight')).rejects.toThrow('manifest cannot be read');
@@ -444,7 +456,7 @@ export default function register(api) {
     await fsp.writeFile(serverFile, 'export function activate() { throw new Error("broken"); }\n');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'quarantined', state: 'failed' }),
     ]));
@@ -481,7 +493,7 @@ export function activate(walnut) {
 }
 `);
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     const plugin = registry.get('live-singleton')!;
     expect(plugin.hasSync).toBe(true);
 
@@ -515,7 +527,7 @@ export async function activate(walnut) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     const plugin = registry.get('unified-plugin');
     expect(plugin).toMatchObject({ apiVersion: 1, serverEntry: 'dist/server.mjs', hasSync: false });
@@ -540,7 +552,7 @@ export function activate() {}
     setPluginCodeTimeoutForTesting(10);
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({
       id: 'module-timeout',
@@ -568,7 +580,7 @@ export function activate() { return new Promise(() => {}); }
     setPluginCodeTimeoutForTesting(1_000);
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({
       id: 'activation-timeout',
@@ -591,7 +603,7 @@ export function activate() { return new Promise(() => {}); }
     esbuildControl.delayMs = 600;
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('slow-bundle')).toBe(true);
     expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({
@@ -623,7 +635,7 @@ export default {
 };
 `);
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     const stateFile = path.join(tmpDir, 'plugin-data', 'object-plugin', 'state.json');
     expect(JSON.parse(await fsp.readFile(stateFile, 'utf8'))).toEqual({ active: true });
 
@@ -653,7 +665,7 @@ export async function activate(walnut) {
 }
 `);
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     const plugin = registry.get('late-plugin')!;
     const app = express();
     app.use('/api/plugins', createPluginRouteDispatcher(registry));
@@ -670,7 +682,7 @@ export async function activate(walnut) {
   it('additive discovery activates only newly installed Plugins', async () => {
     await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'existing-plugin'), 'existing-plugin');
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(await readActivationCount('existing-plugin')).toBe(1);
 
     await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'new-plugin'), 'new-plugin');
@@ -691,11 +703,11 @@ export default function register(api) {
 }
 `);
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.get('reloadable')?.name).toBe('Before');
 
     await writeManifest(pluginDir, { id: 'reloadable', name: 'After' });
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.get('reloadable')?.name).toBe('After');
     expect(registry.getAll().filter((plugin) => plugin.id === 'reloadable')).toHaveLength(1);
@@ -709,7 +721,7 @@ export default function register(api) {
     await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'plugin-a'), 'plugin-a');
     await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'plugin-b'), 'plugin-b');
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     await reloadLoadedPlugin(registry, 'plugin-a');
 
@@ -722,7 +734,7 @@ export default function register(api) {
   it('persists disable before a later global reload', async () => {
     await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'persistent-disable'), 'persistent-disable');
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     await disableLoadedPlugin(registry, 'persistent-disable');
     expect(vi.mocked(updatePluginConfig)).toHaveBeenCalledWith('persistent-disable', { enabled: false });
@@ -734,7 +746,7 @@ export default function register(api) {
       provider: { type: 'bedrock' },
       plugins: { 'persistent-disable': { enabled: false } },
     } as any);
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('persistent-disable')).toBe(false);
     expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
@@ -747,7 +759,7 @@ export default function register(api) {
     await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'serialized'), 'serialized');
     const registry = new IntegrationRegistry();
 
-    await Promise.all([loadPlugins(registry), loadPlugins(registry)]);
+    await Promise.all([load(registry), load(registry)]);
 
     expect(registry.getAll().filter((plugin) => plugin.id === 'serialized')).toHaveLength(1);
     expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
@@ -769,7 +781,7 @@ export default function register(api) {
     await fsp.symlink(target, path.join(externalDir, 'linked-plugin'), 'dir');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.get('linked-plugin')?.pluginDir).toBe(await fsp.realpath(target));
   });
@@ -790,7 +802,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.has('cap-sync')).toBe(true);
   });
 
@@ -807,7 +819,7 @@ export default function register(api) {
     await writePluginTs(pluginDir, 'this is not valid typescript {{{');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('future-only')).toBe(false);
     const entry = getUnsupportedPlugins().find(p => p.id === 'future-only');
@@ -828,7 +840,7 @@ export default function register(api) {
     await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), 'throw new Error("must not import")');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('future-api')).toBe(false);
     expect(getUnsupportedPlugins()).toEqual(expect.arrayContaining([
@@ -852,7 +864,7 @@ export default function register(api) {
     await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), 'throw new Error("must not import")');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('newer-walnut')).toBe(false);
     expect(getUnsupportedPlugins()).toEqual(expect.arrayContaining([
@@ -874,7 +886,7 @@ export default function register(api) {
     versionControl.known = false;
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(registry.has('unknown-host')).toBe(false);
     const entry = getUnsupportedPlugins().find((plugin) => plugin.id === 'unknown-host');
@@ -913,7 +925,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.has('mixed-caps')).toBe(true);
     expect(getUnsupportedPlugins().some(p => p.id === 'mixed-caps')).toBe(false);
   });
@@ -941,7 +953,7 @@ describe('plugin load order', () => {
     }
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     // Discovery order is readdir order, which is not alphabetical on every
     // filesystem, so the expectation is derived from the same reads the loader

@@ -48,6 +48,7 @@ import {
   disableLoadedPlugin,
   loadNewPlugins,
   loadPlugins,
+  disposeLoadedPlugins,
   reloadLoadedPlugin,
   getPluginLifecycleRecords,
   getUnmetDependencyPlugins,
@@ -136,9 +137,21 @@ beforeEach(async () => {
   }, { global: true });
 });
 
+/**
+ * Every registry this file loads, so `afterEach` can take the plugins DOWN before their home
+ * is removed. The builtins really activate here (mail opens its cache from a host timer), and
+ * deleting a live plugin's data dir under it is an ENOTEMPTY race, not a test of anything.
+ */
+const loadedRegistries: IntegrationRegistry[] = [];
+async function load(registry: IntegrationRegistry): Promise<void> {
+  if (!loadedRegistries.includes(registry)) loadedRegistries.push(registry);
+  await loadPlugins(registry);
+}
+
 afterEach(async () => {
   bus.unsubscribe('p01-observer');
   delete (globalThis as unknown as { __p01?: Markers }).__p01;
+  for (const one of loadedRegistries.splice(0)) await disposeLoadedPlugins(one);
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -158,7 +171,7 @@ describe('dependency-ordered loading', () => {
     await writeMixedFixture();
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(record(registry, 'alpha')?.state).toBe('active');
     expect(record(registry, 'beta')?.state).toBe('active');
@@ -176,7 +189,7 @@ describe('dependency-ordered loading', () => {
     await writeMixedFixture();
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     const gamma = record(registry, 'gamma')!;
     expect(gamma.state).toBe('needs-dependency');
@@ -191,7 +204,7 @@ describe('dependency-ordered loading', () => {
     await writeMixedFixture();
     const registry = new IntegrationRegistry();
 
-    await expect(loadPlugins(registry)).resolves.toBeUndefined();
+    await expect(load(registry)).resolves.toBeUndefined();
 
     for (const id of ['ring-a', 'ring-b']) {
       expect(record(registry, id)?.state).toBe('needs-dependency');
@@ -207,7 +220,7 @@ describe('dependency-ordered loading', () => {
     await writeMixedFixture();
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     const unmet = getUnmetDependencyPlugins();
     expect(unmet.map((entry) => entry.id).sort()).toEqual(['gamma', 'ring-a', 'ring-b']);
@@ -234,7 +247,7 @@ describe('dependency-ordered loading', () => {
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.0' });
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(record(registry, 'beta')?.missingDependencies).toEqual([{
       id: 'alpha',
@@ -252,7 +265,7 @@ describe('dependency-ordered loading', () => {
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha' });
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     // alpha itself is fine — the requirement only bites where somebody depends on it.
     expect(record(registry, 'alpha')?.state).toBe('active');
@@ -275,7 +288,7 @@ describe('dependency-ordered loading', () => {
     await writeConfig(plugins as Record<string, Record<string, unknown>>);
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(record(registry, 'alpha')?.state).toBe(state);
     const beta = record(registry, 'beta')!;
@@ -301,7 +314,7 @@ describe('dependency-ordered loading', () => {
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '2.0.0-beta.1' });
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(record(registry, 'alpha')?.state).toBe('active');
     for (const id of ['beta', 'gamma']) {
@@ -319,7 +332,7 @@ describe('dependency-ordered loading', () => {
     // the dependency would look like it did nothing until a restart.
     await writePlugin('a-beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^1' } });
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(record(registry, 'beta')?.missingDependencies?.[0]).toMatchObject({ id: 'alpha', reason: 'absent' });
 
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.2.0' });
@@ -339,7 +352,7 @@ describe('dependency-ordered loading', () => {
     // the row saying "not installed" while the thing is installed and active.
     await writePlugin('a-beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^2' } });
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(record(registry, 'beta')?.missingDependencies?.[0]).toMatchObject({ id: 'alpha', reason: 'absent' });
 
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.0.0' });
@@ -373,7 +386,7 @@ describe('dependency-ordered loading', () => {
     await writePlugin('local', { id: 'local', name: 'Local Override', version: '9.9.9', dependencies: { alpha: '^1' } });
     const registry = new IntegrationRegistry();
 
-    await loadPlugins(registry);
+    await load(registry);
 
     expect(captured.warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -392,7 +405,7 @@ describe('lifecycle cascade', () => {
     await writePlugin('a-beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^1' } });
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.2.0' });
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(record(registry, 'beta')?.state).toBe('active');
     return registry;
   }
@@ -531,7 +544,7 @@ describe('lifecycle cascade', () => {
     await writePlugin('b-beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^1' } });
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.2.0' });
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(marks().activated.slice(0, 3)).toEqual(['alpha', 'beta', 'gamma']);
 
     await disableLoadedPlugin(registry, 'alpha', { cascade: true });
