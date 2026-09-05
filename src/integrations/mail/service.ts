@@ -181,6 +181,18 @@ export class MailService {
   }
 
   /**
+   * A thread, oldest first, capped. One indexed query rather than a scan over recent mail.
+   *
+   * `limit + 1` is not fetched and no "there is more" flag comes back: the caller states its cap
+   * and compares, which keeps the honesty about a truncated thread in the one place that renders
+   * it. See `mailThread`.
+   */
+  async threadMessages(accountId: string, threadId: string, limit: number): Promise<MailMessageDto[]> {
+    const rows = await this.deps.store.threadMessages(accountId, threadId, limit)
+    return rows.map((row) => this.toDto(row))
+  }
+
+  /**
    * One message plus its body, fetching the body on first read.
    *
    * A body failure is reported as `bodyError` next to the row, never as an error status: the

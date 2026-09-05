@@ -235,6 +235,30 @@ Every local id is validated and namespaced by the host. Register a Tool with a l
 
 A plugin can also ship a conventional `skills/` directory with no `registry.skill` call at all. Those skills join discovery below workspace, user, and shipped Walnut skills, so a local copy of the same name still wins.
 
+That directory is found when the plugin is **loaded**, from the manifest and a `stat` of the directory, so it is indexed even when the plugin registered no Tools this run (no account connected, a missing dependency, a replica). Convenient, and the right default for a skill that always applies; wrong for a skill that describes tools which may not be there, because a skills index entry rides every turn of every user's prompt.
+
+**Gate it with `registry.skill` when the capability is conditional.** Put the directory somewhere the convention does not look (the Mail base uses `agent-skills/`, not `skills/`), and register it from the same branch that registers the Tools, so it appears and disappears with them:
+
+```ts compile=skills
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+// path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent-skills')
+//
+// Resolved from THIS module's own location, because both layouts are real: the plugin source tree
+// when the server runs from source, and the built output when it does not. A path built from cwd
+// or from the manifest is right in only one of them.
+declare const SKILL_DIR: string
+
+export function activate(walnut: WalnutServerApi) {
+  const live = true // whatever makes the capability real: an account, a credential, a dependency
+  if (!live) return
+  const skill = walnut.registry.skill({ id: 'my-skill', directory: SKILL_DIR })
+  return { dispose: () => skill.dispose() }
+}
+```
+
+Either way the skill text is read before the model knows whether the tools exist (the management UI lists it regardless), so name the condition the tools depend on rather than assuming they are there. If you ship the directory outside `<pluginDir>/skills`, make sure your build copies it: the manifest-copy step only knows the names it is told.
+
 ### Ops
 
 An op is a named operation in the host's one catalogue, the same catalogue `walnut.ops.call` reads. Register one when another plugin, your own web App, or an HTTP client should be able to invoke a capability by name; register a Tool instead when the audience is the Personal AI's tool list. Ops are named `<normalized_plugin_id>_<local_name>` with an underscore, not a colon, and a final name that already belongs to a built-in op is refused rather than allowed to shadow it.

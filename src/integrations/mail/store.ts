@@ -357,6 +357,21 @@ export class MailStore {
     )
   }
 
+  /**
+   * Every cached message in one thread, oldest first.
+   *
+   * Bounded because a mailing-list thread can be thousands of rows and every caller is showing a
+   * summary of it, but the bound applies to the THREAD rather than to how far back the scan was
+   * willing to look, so a reply months old is still found (see the v5 index in db.ts).
+   */
+  threadMessages(accountId: string, threadId: string, limit: number): Promise<MessageRow[]> {
+    return this.db.all<MessageRow>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE account_id = ? AND thread_id = ?`
+      + ' ORDER BY sent_at ASC, message_id ASC LIMIT ?',
+      [accountId, threadId, limit],
+    )
+  }
+
   getMessage(accountId: string, messageId: string): Promise<MessageRow | undefined> {
     return this.db.get<MessageRow>(
       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE account_id = ? AND message_id = ?`,

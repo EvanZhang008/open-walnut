@@ -43,6 +43,7 @@ import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry, registry as globalRegistry } from '../../src/core/integration-registry.js';
 import {
   loadPlugins,
+  disposeLoadedPlugins,
   getUnsupportedPlugins,
   validatePluginAssetPath,
   validatePluginEntryPath,
@@ -86,6 +87,21 @@ function pluginPath(...parts: string[]): string {
   return path.join(tmpDir, 'plugins', ...parts);
 }
 
+/**
+ * Load, and REMEMBER to unload.
+ *
+ * Every `loadPlugins` here activates the built-in plugins too, and a built-in that owns a
+ * resource (the Mail base opens a worker-thread SQLite database under `plugin-data/`) keeps it
+ * until its `dispose` runs. Without this the afterEach deleted the tree under a live plugin and
+ * the next test failed on `ENOTEMPTY`, blaming whichever file happened to run alongside.
+ */
+const loadedRegistries: IntegrationRegistry[] = [];
+
+async function load(registry: IntegrationRegistry): Promise<void> {
+  if (!loadedRegistries.includes(registry)) loadedRegistries.push(registry);
+  await loadPlugins(registry);
+}
+
 beforeEach(async () => {
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
@@ -95,6 +111,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Plugins DOWN before their files go away: see `load` above.
+  for (const one of loadedRegistries.splice(0)) await disposeLoadedPlugins(one);
   await fsp.rm(tmpDir, { recursive: true, force: true });
   // The apps route + skill loader read the module-level singleton registry, so
   // every test that registers into it must hand it back clean.
@@ -116,7 +134,7 @@ describe('capability-gated registerSync', () => {
     await fsp.writeFile(path.join(dir, 'app', 'index.html'), '<h1>hi</h1>');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     const plugin = registry.get('ui-only');
     expect(plugin).toBeDefined();
@@ -151,7 +169,7 @@ export default function register(api) {
 
     const registry = new IntegrationRegistry();
     registry.ensureLocalFallback();
-    await loadPlugins(registry);
+    await load(registry);
 
     const plugin = registry.get('tools-only');
     expect(plugin).toBeDefined();
@@ -170,7 +188,7 @@ export default function register(api) {
     await writePluginTs(dir, 'export default function register(_api) {}\n');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.has('implied-sync')).toBe(false);
   });
 
@@ -184,7 +202,7 @@ export default function register(api) {
     await writePluginTs(dir, 'export default function register(_api) {}\n');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.has('sync-and-ui')).toBe(false);
   });
 
@@ -199,7 +217,7 @@ export default function register(api) {
     await writePluginTs(dir, 'this is not typescript {{{');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.has('reserved-only')).toBe(false);
     expect(getUnsupportedPlugins().find(p => p.id === 'reserved-only')?.capabilities.sort())
       .toEqual(['hooks', 'routines']);
@@ -234,7 +252,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     const tools = registry.get('toolbox')!.tools!;
     expect(tools.map(t => t.name)).toEqual(['toolbox_echo']);
@@ -260,7 +278,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     // registerTool throws → registration threw → plugin is not registered.
     expect(registry.has('dup-tools')).toBe(false);
   });
@@ -280,7 +298,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.has('bad-tool-name')).toBe(false);
   });
 
@@ -303,7 +321,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.get('undeclared-tools')!.tools).toBeUndefined();
   });
 });
@@ -333,7 +351,7 @@ export default function register(api) {
     // Nothing registered yet ⇒ the prompt-cached prefix is EXACTLY the static list.
     expect(before.length).toBe(builtinTools.length);
 
-    await loadPlugins(globalRegistry);
+    await load(globalRegistry);
     expect(globalRegistry.has('agent-tool')).toBe(true);
 
     const after = getToolSchemas();
@@ -433,7 +451,7 @@ export default function register(api) {
 `);
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     const plugin = registry.get('bad-entry');
     expect(plugin).toBeDefined();          // not unloaded over one bad field
@@ -452,7 +470,7 @@ export default function register(api) {
     }
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
 
     // Still loaded (ui is a supported capability, so it is not "unsupported"),
     // just without an app.
@@ -471,7 +489,7 @@ export default function register(api) {
     await writePluginTs(dir, 'export default function register(_api) {}\n');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.get('bad-icon')!.uiApp).toEqual({ title: 'Fine', entry: 'app/index.html' });
   });
 
@@ -485,7 +503,7 @@ export default function register(api) {
     await writePluginTs(dir, 'export default function register(_api) {}\n');
 
     const registry = new IntegrationRegistry();
-    await loadPlugins(registry);
+    await load(registry);
     expect(registry.get('normalized')!.uiApp).toEqual({
       title: 'N', entry: 'app/main.html', icon: 'app/icon.svg',
     });
@@ -573,7 +591,7 @@ describe('GET /api/apps and /plugin-apps', () => {
     await fsp.writeFile(path.join(dir, 'app', 'index.html'), '<h1>appy</h1>');
     await fsp.writeFile(path.join(dir, 'app', 'icon.svg'), '<svg/>');
     await fsp.writeFile(path.join(dir, 'private.txt'), 'secret');
-    await loadPlugins(globalRegistry);
+    await load(globalRegistry);
   });
 
   it('lists the app with server-owned urls', async () => {
@@ -681,7 +699,7 @@ describe('plugin skills discovery', () => {
     const beforeAll = getSearchDirs();
     expect(getPluginSkillDirs()).toEqual([]);
 
-    await loadPlugins(globalRegistry);
+    await load(globalRegistry);
     expect(globalRegistry.get('skilled')!.hasSkills).toBe(true);
 
     const expected = await fsp.realpath(path.join(dir, 'skills'));
@@ -702,7 +720,7 @@ describe('plugin skills discovery', () => {
     await writeManifest(dir, { id: 'skill-less', name: 'Skill Less', capabilities: { skills: {} } });
     await writePluginTs(dir, 'export default function register(_api) {}\n');
 
-    await loadPlugins(globalRegistry);
+    await load(globalRegistry);
     expect(globalRegistry.get('skill-less')!.hasSkills).toBe(false);
     expect(getPluginSkillDirs()).toEqual([]);
   });

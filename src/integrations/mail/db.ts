@@ -165,11 +165,26 @@ CREATE INDEX IF NOT EXISTS sends_by_draft_state ON sends (draft_id, state);
 CREATE INDEX IF NOT EXISTS drafts_by_account_state ON drafts (account_id, state, updated_at DESC);
 `
 
+/**
+ * v5 makes "what else is in this thread" one query instead of a scan.
+ *
+ * `thread_id` has been written since v1 but nothing ever selected on it, so the only way to
+ * collect a thread was to walk the account's newest rows and filter. That is bounded work by
+ * construction (a 50k-row account cannot be read to answer one question), which means a reply
+ * three months back was simply reported missing. The index is `(account_id, thread_id, sent_at)`
+ * so the collect and the sort are the same index scan, and the answer is complete regardless of
+ * how far back the thread reaches.
+ */
+const SCHEMA_V5 = `
+CREATE INDEX IF NOT EXISTS messages_by_thread ON messages (account_id, thread_id, sent_at);
+`
+
 const MIGRATIONS: Array<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
   { version: 3, sql: SCHEMA_V3 },
   { version: 4, sql: SCHEMA_V4 },
+  { version: 5, sql: SCHEMA_V5 },
 ]
 
 /** One budget per call, shared by the open and the statement. */
