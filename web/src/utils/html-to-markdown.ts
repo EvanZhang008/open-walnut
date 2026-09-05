@@ -197,6 +197,53 @@ function restore(text: string, r: Render): string {
     .replace(new RegExp(INDENT, 'g'), ' ');
 }
 
+/**
+ * Microsoft Office (Excel, Word, PowerPoint) puts a PICTURE of the selection on
+ * the clipboard next to the real HTML/text. Any paste handler that looks at
+ * `clipboardData.files` first therefore attaches a screenshot of the cells
+ * instead of pasting the cells, so those handlers ask here and prefer the text.
+ * Kept to Office's own markers: a copied screenshot or a real image from a web
+ * page has no such HTML flavour and still pastes as an image.
+ */
+const OFFICE_MARKERS = [
+  'urn:schemas-microsoft-com:office',
+  'content="microsoft excel',
+  'content=microsoft excel',
+  'content="microsoft word',
+  'content=microsoft word',
+  'content="microsoft powerpoint',
+  'content=microsoft powerpoint',
+  'progid="excel.sheet"',
+  'progid=excel.sheet',
+  'progid="word.document"',
+  'progid=word.document',
+  'mso-',
+];
+
+/** Text left once tags, comments and entities are stripped. */
+function strippedText(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&[a-z#0-9]+;/gi, '')
+    .trim();
+}
+
+/**
+ * Whether this `text/html` flavour came from Office AND carries text worth
+ * pasting. The text check matters for the one case where Office's picture IS
+ * the point: copying an image out of a Word doc puts image-only HTML on the
+ * clipboard, and that should still paste as an image.
+ */
+export function isOfficeClipboardHtml(html: string | null | undefined): boolean {
+  if (!html) return false;
+  const lower = html.toLowerCase();
+  if (!OFFICE_MARKERS.some((m) => lower.includes(m))) return false;
+  return strippedText(html).length > 0;
+}
+
 /** Whether this HTML carries structure that a plain-text paste would lose. */
 export function hasBlockStructure(root: ParentNode): boolean {
   return root.querySelector(STRUCTURAL_SELECTOR) !== null;

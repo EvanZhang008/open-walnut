@@ -49,16 +49,18 @@ const EXPECTED_MD = [
  * synthetic paste has no default action, which is also why the plain-text
  * control below asserts the handler left the event alone.)
  */
-async function paste(page: Page, selector: string, flavours: Record<string, string>) {
-  return page.evaluate(({ selector, flavours }) => {
+async function paste(page: Page, selector: string, flavours: Record<string, string>, withImageFile = false) {
+  return page.evaluate(({ selector, flavours, withImageFile }) => {
     const el = document.querySelector(selector) as HTMLTextAreaElement;
     el.focus();
     const dt = new DataTransfer();
     for (const [type, data] of Object.entries(flavours)) dt.setData(type, data);
+    // Office also puts a rendered picture of the selection on the clipboard.
+    if (withImageFile) dt.items.add(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'image.png', { type: 'image/png' }));
     const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
     el.dispatchEvent(ev);
     return { defaultPrevented: ev.defaultPrevented, value: el.value };
-  }, { selector, flavours });
+  }, { selector, flavours, withImageFile });
 }
 
 test.describe('Composer: rich paste keeps list structure', () => {
@@ -102,5 +104,44 @@ test.describe('Composer: rich paste keeps list structure', () => {
     await expect(textarea).toHaveValue('- one\n- two');
     await page.keyboard.type(' three');
     await expect(textarea).toHaveValue('- one\n- two three');
+  });
+});
+
+/**
+ * Copying cells out of Excel pasted a SCREENSHOT of the cells: Office puts a
+ * rendered picture on the clipboard next to the real HTML, and the composer's
+ * image branch ran first (2026-09-04). The sniff for Office HTML now wins.
+ */
+test.describe('Composer: Excel cells paste as text, not a picture', () => {
+  const EXCEL_HTML = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta name=Generator content="Microsoft Excel 15">`
+    + `<style>.xl65 { mso-number-format:General; }</style></head><body><table>`
+    + `<tr><td class=xl65>Region</td><td class=xl65>Cost</td></tr><tr><td>us-west-2</td><td>412</td></tr></table></body></html>`;
+
+  test('an Excel range becomes a markdown table and attaches no image', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const textarea = page.locator('.chat-input-textarea').first();
+    await expect(textarea).toBeVisible();
+    await textarea.click();
+
+    const result = await paste(page, '.chat-input-textarea', {
+      'text/html': EXCEL_HTML,
+      'text/plain': 'Region\tCost\nus-west-2\t412',
+    }, true);
+    expect(result.defaultPrevented).toBe(true);
+    await expect(textarea).toHaveValue('| Region | Cost |\n| --- | --- |\n| us-west-2 | 412 |');
+    await expect(page.locator('.chat-image-preview')).toHaveCount(0);
+    await page.screenshot({ path: '/tmp/composer-rich-paste/excel-as-table.png', clip: { x: 0, y: 0, width: 1280, height: 900 } });
+  });
+
+  test('a plain screenshot (image only, no Office HTML) still attaches as an image', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const textarea = page.locator('.chat-input-textarea').first();
+    await textarea.click();
+
+    await paste(page, '.chat-input-textarea', {}, true);
+    await expect(page.locator('.chat-image-preview')).toHaveCount(1);
+    await expect(textarea).toHaveValue('');
   });
 });

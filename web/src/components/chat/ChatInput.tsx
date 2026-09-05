@@ -19,7 +19,7 @@ import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
-import { pasteRichTextAsMarkdown } from '@/utils/html-to-markdown';
+import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 5;
@@ -1007,7 +1007,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const handlePaste = (e: ClipboardEvent) => {
-    const items = e.clipboardData?.files;
+    // Excel/Word/PowerPoint ship a picture of the selection ALONGSIDE the real
+    // HTML, so the image branch below used to win and attach a screenshot of
+    // the cells. For an Office clipboard the text is what was copied.
+    const fromOffice = isOfficeClipboardHtml(e.clipboardData?.getData('text/html'));
+    const items = fromOffice ? null : e.clipboardData?.files;
     if (items && items.length > 0) {
       const imageFiles = Array.from(items).filter(f => ALLOWED_TYPES.has(f.type));
       if (imageFiles.length > 0) {

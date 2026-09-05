@@ -19,6 +19,7 @@ import { Markdown } from 'tiptap-markdown';
 import { uploadNoteImage } from '@/api/notes';
 import { uploadNoteAttachment } from '@/api/notes-v2';
 import { entityRefsToMarkdownLinks } from '@/utils/markdown';
+import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { log } from '@/utils/log';
 import { SlashCommandExtension } from './slash-commands/SlashCommandExtension';
 import { SlashCommandPortal } from './slash-commands/SlashCommandPortal';
@@ -521,8 +522,12 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         return false;
       },
       handlePaste: (_view, event) => {
+        // Excel/Word/PowerPoint put a picture of the selection on the clipboard
+        // next to the real HTML, so the image branch below would upload a
+        // screenshot of the cells. Let ProseMirror take the HTML instead.
+        const fromOffice = isOfficeClipboardHtml(event.clipboardData?.getData('text/html'));
         // Image paste (takes priority over URL detection)
-        const items = event.clipboardData?.items;
+        const items = fromOffice ? null : event.clipboardData?.items;
         if (items) {
           for (const item of items) {
             if (item.type.startsWith('image/')) {

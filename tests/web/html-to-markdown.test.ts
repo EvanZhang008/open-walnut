@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { parseHTML } from 'linkedom';
-import { pastedHtmlToMarkdown, domToMarkdown } from '../../web/src/utils/html-to-markdown';
+import { pastedHtmlToMarkdown, domToMarkdown, isOfficeClipboardHtml } from '../../web/src/utils/html-to-markdown';
 
 const parse = (html: string) => parseHTML(`<!doctype html><html><body>${html}</body></html>`).document.body as unknown as ParentNode;
 const md = (html: string) => pastedHtmlToMarkdown(html, parse);
@@ -163,5 +163,44 @@ describe('blocks', () => {
 
   it('skips scripts, styles and hidden nodes', () => {
     expect(md('<style>p{}</style><script>x()</script><ul><li>keep</li><li style="display:none">hide</li></ul>')).toBe('- keep');
+  });
+});
+
+/**
+ * Excel/Word/PowerPoint put a PICTURE of the selection on the clipboard next to
+ * the real HTML, and the composer's image branch ran first, so copying cells
+ * pasted a screenshot instead of the cells (2026-09-04). These pin the sniff
+ * that makes the text win, and the cases that must still paste as an image.
+ */
+describe('isOfficeClipboardHtml', () => {
+  // The shape Excel for Mac actually puts on the clipboard, trimmed.
+  const excel = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head><meta name=Generator content="Microsoft Excel 15"><style>.xl65 { mso-number-format:General; }</style></head>
+<body><table><tr><td class=xl65>Region</td><td class=xl65>Cost</td></tr><tr><td>us-west-2</td><td>412</td></tr></table></body></html>`;
+
+  const word = `<html xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta name=ProgId content=Word.Document>
+<meta name=Generator content="Microsoft Word 15"></head><body><p class=MsoNormal>A sentence from Word.</p></body></html>`;
+
+  it('recognises an Excel and a Word clipboard', () => {
+    expect(isOfficeClipboardHtml(excel)).toBe(true);
+    expect(isOfficeClipboardHtml(word)).toBe(true);
+  });
+
+  it('leaves every other clipboard alone, so screenshots still paste as images', () => {
+    expect(isOfficeClipboardHtml(null)).toBe(false);
+    expect(isOfficeClipboardHtml('')).toBe(false);
+    expect(isOfficeClipboardHtml('<meta charset="utf-8"><p>From a web page.</p>')).toBe(false);
+    // A Google Sheets range: no Office markers, and its plain flavour is fine.
+    expect(isOfficeClipboardHtml('<google-sheets-html-origin><table><tr><td>a</td></tr></table>')).toBe(false);
+  });
+
+  it('an image copied OUT of a Word doc stays an image (Office HTML with no text)', () => {
+    const picture = `<html xmlns:o="urn:schemas-microsoft-com:office:office"><body><!--StartFragment-->`
+      + `<img width=320 height=200 src="file:///image001.png">&nbsp;<!--EndFragment--></body></html>`;
+    expect(isOfficeClipboardHtml(picture)).toBe(false);
+  });
+
+  it('an Excel range becomes a markdown table, not a screenshot', () => {
+    expect(md(excel)).toBe('| Region | Cost |\n| --- | --- |\n| us-west-2 | 412 |');
   });
 });
