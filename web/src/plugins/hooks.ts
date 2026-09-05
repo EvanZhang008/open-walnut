@@ -1,8 +1,4 @@
 import { useSyncExternalStore } from 'react'
-import {
-  getWebPluginRuntimeSnapshot,
-  subscribeWebPluginRuntime,
-} from './loader'
 import { pluginUiRegistry } from './registry'
 
 export function usePluginUi() {
@@ -13,10 +9,6 @@ export function usePluginUi() {
   )
 }
 
-export function useWebPluginRuntime() {
-  return useSyncExternalStore(
-    subscribeWebPluginRuntime,
-    getWebPluginRuntimeSnapshot,
-    getWebPluginRuntimeSnapshot,
-  )
-}
+// Defined on the leaf store, so a consumer can gate on the runtime without importing this
+// module (which pulls the plugin UI registry, and through it the loader's view graph).
+export { useWebPluginRuntime } from './runtime-store'

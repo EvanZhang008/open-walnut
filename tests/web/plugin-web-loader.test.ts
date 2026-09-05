@@ -287,6 +287,32 @@ describe('native Web Plugin loader', () => {
     })
   })
 
+  it('keeps the previous plugins list when a refresh fails', async () => {
+    // A failed fetch is NOT "no plugins are installed". Consumers gate on this list (a core app
+    // can be shown only while its plugin is active), so publishing an empty list on a 15 s
+    // timeout or a WS reconnect blip would hide a working app and evict whoever was standing on
+    // its route. The last authoritative answer survives, and the failure rides `errors`.
+    vi.mocked(apiGet).mockResolvedValue(response('hash-one'))
+    setWebPluginImporterForTesting(async () => ({
+      activate(api: WalnutWebApiHost) {
+        api.ui.app({ id: 'main', title: 'Sample', component: Component })
+      },
+    }))
+    await refreshWebPlugins()
+    expect(getWebPluginRuntimeSnapshot().plugins).toEqual([{ id: 'sample', state: 'active' }])
+
+    vi.mocked(apiGet).mockRejectedValue(new Error('FAILED after 15000ms'))
+    await refreshWebPlugins()
+
+    const snapshot = getWebPluginRuntimeSnapshot()
+    expect(snapshot.plugins).toEqual([{ id: 'sample', state: 'active' }])
+    expect(snapshot.modules.map((module) => module.id)).toEqual(['sample'])
+    expect(snapshot).toMatchObject({ ready: true, loading: false })
+    expect(snapshot.errors).toEqual([{ id: 'runtime', error: 'FAILED after 15000ms' }])
+    // And the loaded plugin was never torn down, so its App is still there.
+    expect(appRegistry.getSnapshot().apps.map((entry) => entry.key)).toEqual(['sample:main'])
+  })
+
   it('continues a reload after the old Plugin cleanup throws', async () => {
     let imports = 0
     vi.mocked(apiGet).mockResolvedValue(response('hash-one'))

@@ -1,0 +1,42 @@
+{
+  "id": "mail",
+  "name": "Mail",
+  "description": "The mail base: domain model, local cache and routes that every mail provider plugin attaches to",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.4.5"
+  },
+  "server": "index.js",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "retention_days": {
+        "type": "integer",
+        "default": 180,
+        "description": "How long a cached message is kept before the retention sweep drops it"
+      },
+      "max_rows_per_account": {
+        "type": "integer",
+        "default": 50000,
+        "description": "Upper bound on cached messages per account"
+      },
+      "body_cache_mb": {
+        "type": "integer",
+        "default": 512,
+        "description": "Size cap for cached message bodies on disk, least recently used first"
+      },
+      "poll_interval_seconds": {
+        "type": "integer",
+        "default": 120,
+        "description": "Seconds between poll ticks; a provider watch hint can kick a tick sooner"
+      }
+    }
+  },
+  "uiHints": {
+    "retention_days": { "label": "Retention (days)", "help": "Cached mail older than this is dropped" },
+    "max_rows_per_account": { "label": "Max messages per account", "help": "Cache size ceiling per account" },
+    "body_cache_mb": { "label": "Body cache (MB)", "help": "Disk budget for cached message bodies" },
+    "poll_interval_seconds": { "label": "Poll interval (seconds)", "help": "How often accounts are polled" }
+  }
+}

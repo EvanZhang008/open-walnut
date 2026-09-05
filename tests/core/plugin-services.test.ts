@@ -92,6 +92,27 @@ function record(registry: IntegrationRegistry, id: string): PluginLifecycleRecor
   return getPluginLifecycleRecords(registry).find((entry) => entry.id === id);
 }
 
+/**
+ * The service keys this file is actually about: the fixtures' own, plus the host's `core:`
+ * ones.
+ *
+ * `listServiceKeys()` is global and every BUILT-IN capability plugin publishes into the same
+ * registry (the mail base publishes `mail:base` as soon as it activates). Asserting the raw
+ * list would make this file red whenever an unrelated builtin gains a service, so builtins are
+ * dropped by OWNER, with the owner ids read from the registry rather than hardcoded here.
+ */
+function fixtureServiceKeys(registry: IntegrationRegistry): string[] {
+  const builtins = new Set(
+    getPluginLifecycleRecords(registry).filter((entry) => entry.builtin).map((entry) => entry.id),
+  );
+  return listServiceKeys().filter((key) => !builtins.has(key.slice(0, key.indexOf(':'))));
+}
+
+/** Same reason as `fixtureServiceKeys`, for the bus payloads. */
+function fixtureChanges(): ServiceChange[] {
+  return busChanges.filter((change) => change.pluginId === 'alpha' || change.pluginId === 'beta');
+}
+
 const busChanges: ServiceChange[] = [];
 const loadedRegistries: IntegrationRegistry[] = [];
 
@@ -156,7 +177,7 @@ describe('publish and require across a declared dependency', () => {
     // Asserted from beta's side: the call happened inside beta's activate, with the value
     // alpha's function returned.
     expect(marks().log).toEqual(['hi beta']);
-    expect(listServiceKeys()).toEqual(['alpha:greeter']);
+    expect(fixtureServiceKeys(registry)).toEqual(['alpha:greeter']);
   });
 
   it('refuses a plugin that never declared the publisher, naming the rule', async () => {
@@ -234,7 +255,7 @@ describe('the handle is per key, not per instance', () => {
     expect(() => stale.greet('x')).toThrow(/Service "alpha:greeter" is unavailable/);
     expect(() => stale.greet('x')).toThrow(/"alpha" is disabled/);
     // The publisher's teardown withdrew the entry, so nothing answers for that key.
-    expect(listServiceKeys()).toEqual([]);
+    expect(fixtureServiceKeys(registry)).toEqual([]);
     // And the server is untouched: task source up, loader lane still accepting work.
     expect(record(registry, 'local')?.state).toBe('active');
     await expect(loadNewPlugins(registry)).resolves.toBeUndefined();
@@ -250,7 +271,7 @@ describe('plugin:service-changed', () => {
     const registry = newRegistry();
     await loadPlugins(registry);
 
-    expect(busChanges).toEqual([
+    expect(fixtureChanges()).toEqual([
       { key: 'alpha:greeter', pluginId: 'alpha', action: 'published' },
       { key: 'alpha:greeter', pluginId: 'alpha', action: 'replaced' },
     ]);
@@ -260,7 +281,7 @@ describe('plugin:service-changed', () => {
     busChanges.length = 0;
     await disableLoadedPlugin(registry, 'alpha', { cascade: true });
 
-    expect(busChanges).toEqual([
+    expect(fixtureChanges()).toEqual([
       { key: 'alpha:greeter', pluginId: 'alpha', action: 'removed' },
     ]);
   });
@@ -291,9 +312,9 @@ describe('plugin:service-changed', () => {
 
 describe('core services', () => {
   it('are readable by any plugin with no declared dependency', async () => {
-    publishCoreService('calendar-source', { list: () => ['one', 'two'] });
+    publishCoreService('test-fixture', { list: () => ['one', 'two'] });
     await writePlugin('a-delta', { id: 'delta', name: 'delta', version: '1.0.0' }, `
-      all().log.push(walnut.services.require('core:calendar-source').list().join(','));
+      all().log.push(walnut.services.require('core:test-fixture').list().join(','));
     `);
     const registry = newRegistry();
 
@@ -301,17 +322,17 @@ describe('core services', () => {
 
     expect(record(registry, 'delta')?.state).toBe('active');
     expect(marks().log).toEqual(['one,two']);
-    expect(listServiceKeys()).toEqual(['core:calendar-source']);
+    expect(fixtureServiceKeys(registry)).toEqual(['core:test-fixture']);
 
     // Shutdown withdraws them, and a plugin still holding a handle finds out honestly.
     expect(disposeCoreServices()).toBe(1);
-    expect(listServiceKeys()).toEqual([]);
+    expect(fixtureServiceKeys(registry)).toEqual([]);
   });
 
   it('are the only keys exempt: a plugin service still needs the declaration', async () => {
-    publishCoreService('calendar-source', { list: () => [] });
+    publishCoreService('test-fixture', { list: () => [] });
     await writePlugin('a-delta', { id: 'delta', name: 'delta', version: '1.0.0' }, `
-      walnut.services.require('core:calendar-source');
+      walnut.services.require('core:test-fixture');
       walnut.services.require('alpha:greeter');
     `);
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.2.0' }, ALPHA_PUBLISH);
@@ -327,7 +348,7 @@ describe('core services', () => {
   it('reserves the id, so no plugin can ever be the core owner', async () => {
     // A plugin holding `core` would publish keys every other plugin trusts without
     // declaring anything, and its teardown sweep would withdraw the host's own services.
-    publishCoreService('calendar-source', { list: () => [] });
+    publishCoreService('test-fixture', { list: () => [] });
     await writePlugin('a-core', { id: 'core', name: 'Core', version: '9.9.9' }, ALPHA_PUBLISH);
     const registry = newRegistry();
 
@@ -337,22 +358,22 @@ describe('core services', () => {
     expect(registry.has('core')).toBe(false);
     // Its module was never imported, so it published nothing.
     expect(marks().activated).toEqual([]);
-    expect(listServiceKeys()).toEqual(['core:calendar-source']);
+    expect(fixtureServiceKeys(registry)).toEqual(['core:test-fixture']);
   });
 });
 
 describe('teardown', () => {
   it('withdraws every plugin service on dispose and leaves the host\'s alone', async () => {
-    publishCoreService('calendar-source', { list: () => [] });
+    publishCoreService('test-fixture', { list: () => [] });
     await writePair();
     const registry = newRegistry();
     await loadPlugins(registry);
-    expect(listServiceKeys()).toEqual(['alpha:greeter', 'core:calendar-source']);
+    expect(fixtureServiceKeys(registry)).toEqual(['alpha:greeter', 'core:test-fixture']);
 
     await disposeLoadedPlugins(registry);
 
     // The per-plugin sweep in the dispose path cannot reach the `core` owner.
-    expect(listServiceKeys()).toEqual(['core:calendar-source']);
+    expect(fixtureServiceKeys(registry)).toEqual(['core:test-fixture']);
   });
 
   it('withdraws a service published by an activate that then threw', async () => {
@@ -367,7 +388,7 @@ describe('teardown', () => {
     await loadPlugins(registry);
 
     expect(record(registry, 'solo')?.state).toBe('failed');
-    expect(listServiceKeys()).toEqual([]);
+    expect(fixtureServiceKeys(registry)).toEqual([]);
   });
 });
 

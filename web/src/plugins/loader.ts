@@ -7,12 +7,24 @@ import { refreshAppsCatalogue } from '@/hooks/useApps'
 import { createWebPluginApi } from './host-api'
 import { WebPluginContext, disposable } from './disposable'
 import { pluginUiRegistry } from './registry'
+import {
+  getWebPluginRuntimeSnapshot,
+  publishWebPluginRuntime as publish,
+  resetWebPluginRuntime,
+  subscribeWebPluginRuntime,
+} from './runtime-store'
 import type {
   Disposable,
   PluginRuntimeResponse,
   PluginWebModuleDescriptor,
   WalnutWebApiHost,
 } from './types'
+
+// The snapshot itself lives in the leaf store so a consumer that only needs "which plugins are
+// active" is not forced to import this module's whole view graph. Re-exported here because the
+// loader was the original home and every existing caller (and test) imports it from here.
+export { getWebPluginRuntimeSnapshot, subscribeWebPluginRuntime }
+export type { WebPluginRuntimeSnapshot } from './runtime-store'
 
 interface WebPluginModule {
   activate?: (api: WalnutWebApiHost) => void | Disposable | Promise<void | Disposable>
@@ -30,32 +42,12 @@ interface LoadedPlugin {
   context: WebPluginContext
 }
 
-export interface WebPluginRuntimeSnapshot {
-  ready: boolean
-  loading: boolean
-  plugins: Array<{ id: string; state: string }>
-  tombstones: Array<{ id: string; reason: string }>
-  modules: PluginWebModuleDescriptor[]
-  errors: Array<{ id: string; error: string }>
-  version: number
-}
-
 type ModuleImporter = (
   source: string,
   descriptor: PluginWebModuleDescriptor,
 ) => Promise<WebPluginModule>
 
 const loaded = new Map<string, LoadedPlugin>()
-const listeners = new Set<() => void>()
-let snapshot: WebPluginRuntimeSnapshot = {
-  ready: false,
-  loading: false,
-  plugins: [],
-  tombstones: [],
-  modules: [],
-  errors: [],
-  version: 0,
-}
 let initialized = false
 let operationTail: Promise<void> = Promise.resolve()
 let activationTimeoutMs = 10_000
@@ -74,11 +66,6 @@ const browserImporter: ModuleImporter = async (source, descriptor) => {
 }
 
 let moduleImporter: ModuleImporter = browserImporter
-
-function publish(patch: Partial<WebPluginRuntimeSnapshot>): void {
-  snapshot = { ...snapshot, ...patch, version: snapshot.version + 1 }
-  for (const listener of listeners) listener()
-}
 
 function functionsFrom(module: WebPluginModule): {
   activate: ((api: WalnutWebApiHost) => void | Disposable | Promise<void | Disposable>) | null
@@ -164,11 +151,17 @@ async function load(descriptor: PluginWebModuleDescriptor): Promise<void> {
 }
 
 async function refreshNow(): Promise<void> {
+  const previous = getWebPluginRuntimeSnapshot()
   publish({ loading: true })
   const errors: Array<{ id: string; error: string }> = []
-  let plugins: Array<{ id: string; state: string }> = []
-  let tombstones: Array<{ id: string; reason: string }> = []
-  let modules: PluginWebModuleDescriptor[] = []
+  // Seeded from the LAST AUTHORITATIVE answer, not from empty. A failed fetch (a 15 s timeout,
+  // a WS reconnect blip) must not read as "no plugins are installed": consumers gate on this
+  // list, so an empty publish hides a plugin-gated app and can evict someone standing on its
+  // route. Everything that mutates these three is inside the try, after the response replaced
+  // them, so a failure leaves the snapshot exactly as the last good refresh left it.
+  let plugins: Array<{ id: string; state: string }> = previous.plugins
+  let tombstones: Array<{ id: string; reason: string }> = previous.tombstones
+  let modules: PluginWebModuleDescriptor[] = previous.modules
   try {
     const response = await apiGet<PluginRuntimeResponse>('/api/plugin-runtime', undefined, { timeoutMs: 15_000 })
     plugins = response.plugins ?? []
@@ -270,29 +263,12 @@ export function initWebPlugins(): Promise<void> {
   return refreshWebPluginsWithCommands()
 }
 
-export function getWebPluginRuntimeSnapshot(): WebPluginRuntimeSnapshot {
-  return snapshot
-}
-
-export function subscribeWebPluginRuntime(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => { listeners.delete(listener) }
-}
-
 export async function disposeWebPluginsForTesting(): Promise<void> {
   for (const pluginId of [...loaded.keys()]) await unload(pluginId)
   initialized = false
   moduleImporter = browserImporter
   activationTimeoutMs = 10_000
-  snapshot = {
-    ready: false,
-    loading: false,
-    plugins: [],
-    tombstones: [],
-    modules: [],
-    errors: [],
-    version: snapshot.version + 1,
-  }
+  resetWebPluginRuntime()
 }
 
 export function setWebPluginImporterForTesting(importer: ModuleImporter): void {

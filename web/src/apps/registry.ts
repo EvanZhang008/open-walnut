@@ -45,6 +45,14 @@ export interface CoreAppContribution {
   fullBleed?: boolean
   persistent?: boolean
   lockVisibility?: boolean
+  /**
+   * Show this app only while the named PLUGIN is active.
+   *
+   * For a console whose data lives entirely in a capability plugin (Mail): the screen is core
+   * code, because it needs host components a plugin bundle cannot import, but it has nothing
+   * to show while the plugin that owns its routes is off. See `filterAppsByPlugin`.
+   */
+  requiresPlugin?: string
 }
 
 export interface RegisteredApp {
@@ -70,6 +78,8 @@ export interface RegisteredApp {
   persistent: boolean
   lockVisibility: boolean
   generation: number
+  /** Set only by `registerCore`; see `CoreAppContribution.requiresPlugin`. */
+  requiresPlugin?: string
   pluginId?: string
   pluginName?: string
   webview?: PluginApp
@@ -145,6 +155,7 @@ export class AppRegistry {
       placement: 'sidebar',
       persistent: contribution.persistent ?? false,
       lockVisibility: contribution.lockVisibility ?? false,
+      ...(contribution.requiresPlugin ? { requiresPlugin: contribution.requiresPlugin } : {}),
     })
   }
 
@@ -253,6 +264,50 @@ export class AppRegistry {
     }
     for (const listener of this.listeners) listener()
   }
+}
+
+/** The part of the web plugin runtime snapshot the gate reads. */
+export interface PluginRuntimeGate {
+  ready: boolean
+  plugins: Array<{ id: string; state: string }>
+}
+
+/**
+ * The gate's whole input, as one primitive: the sorted ids of the ACTIVE plugins.
+ *
+ * A primitive because the runtime store publishes twice per refresh (loading, then the
+ * result) and again on every unrelated plugin change, while the catalogue only cares about
+ * this. Comparing a string keeps the catalogue memo from re-resolving for changes the gate
+ * cannot see.
+ *
+ * NOT READY means the empty key, which means HIDDEN. The snapshot is empty until its first
+ * fetch lands, so trusting it early would paint the row and then take it away; a row that
+ * arrives a beat late is a delay, a row that flashes and vanishes reads as a bug. Only
+ * `active` passes: every other state (disabled, needs-dependency, failed, absent) means the
+ * plugin's routes are not answering, so the console could only render an error.
+ */
+export function activePluginKey(runtime: PluginRuntimeGate): string {
+  if (!runtime.ready) return ''
+  return runtime.plugins
+    .filter((plugin) => plugin.state === 'active')
+    .map((plugin) => plugin.id)
+    .sort()
+    .join(',')
+}
+
+/**
+ * Drop every app whose `requiresPlugin` is not in `activeKey` (see `activePluginKey`).
+ *
+ * Applied where the catalogue is resolved, so the Sidebar, the Settings "Manage" group and
+ * the Command Palette cannot disagree: they all read the resolved list.
+ *
+ * Returns the input array untouched when nothing is gated, so the catalogue's memo does not
+ * see a new identity on every publish.
+ */
+export function filterAppsByPlugin(apps: RegisteredApp[], activeKey: string): RegisteredApp[] {
+  if (!apps.some((app) => app.requiresPlugin)) return apps
+  const active = new Set(activeKey ? activeKey.split(',') : [])
+  return apps.filter((app) => !app.requiresPlugin || active.has(app.requiresPlugin))
 }
 
 export function findHostedAppByRouteId(

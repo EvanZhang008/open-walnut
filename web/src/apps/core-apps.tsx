@@ -1,5 +1,6 @@
 import { appRegistry, type AppComponentProps, type CoreAppContribution } from './registry'
-import { HomeIcon, TasksIcon, NotesIcon, CalendarIcon, ScheduleIcon, SettingsIcon } from './icons'
+import { HomeIcon, TasksIcon, NotesIcon, CalendarIcon, MailIcon, ScheduleIcon, SettingsIcon } from './icons'
+import { MailApp } from './MailApp'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { NotesPage } from '@/pages/NotesPage'
 import { CalendarPage } from '@/pages/CalendarPage'
@@ -31,6 +32,12 @@ export const CORE_APPS: CoreAppContribution[] = [
   },
   { id: 'notes', title: 'Notes', path: '/notes', icon: NotesIcon, component: NotesApp, order: 20, fullBleed: true },
   { id: 'calendar', title: 'Calendar', path: '/calendar', icon: CalendarIcon, component: CalendarApp, order: 30 },
+  // The Mail console is core code (it needs host components a plugin bundle cannot import)
+  // gated on the mail PLUGIN, which owns the model, the cache and every route it reads.
+  {
+    id: 'mail', title: 'Mail', path: '/mail', icon: MailIcon, component: MailApp,
+    order: 35, requiresPlugin: 'mail',
+  },
   { id: 'tasks', title: 'Tasks', path: '/tasks', icon: TasksIcon, component: TasksApp, order: 40 },
   { id: 'routines', title: 'Routines', path: '/routines', icon: ScheduleIcon, component: RoutinesApp, order: 50 },
   {

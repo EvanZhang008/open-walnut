@@ -1,6 +1,6 @@
 # Mail base and Chat base
 
-Walnut gets two new first-class domains: a Mail base and a Chat base. Each base lives in core and owns the domain model, the local cache, the console UI, the agent tools, the approval flow, and every cross-cutting feature (message to task, digests, watch, events, notifications). Concrete services attach as plugin providers behind a narrow, transport-free contract: the default mail provider speaks IMAP/SMTP with an app password, the default chat provider wraps a Slack MCP client, and anyone can write a provider using whatever transport they like (an API SDK, a CLI, AppleScript, another MCP server). Every send requires human approval, and in v1 the approval object is a human-inbox letter rendered by the base from the stored draft, so the human approves exactly what will be sent, on the web console or on the phone. The bases are a primary-box feature: cloud replicas skip them, and the phone's v1 surface is the approval letter plus the digest letter.
+Walnut gets two new first-class domains: a Mail base and a Chat base. Each base is a capability plugin (`src/integrations/mail`, `src/integrations/messaging`) that owns the domain model, the local cache, its own routes, the agent tools, the approval flow, and every cross-cutting feature (message to task, digests, watch, events, notifications); the kernel keeps only the plugin loader, the event bus, the storage primitives, the App Registry, letters, auth and the server itself. Concrete services attach as plugin providers behind a narrow, transport-free contract: the default mail provider speaks IMAP/SMTP with an app password, the default chat provider wraps a Slack MCP client, and anyone can write a provider using whatever transport they like (an API SDK, a CLI, AppleScript, another MCP server). Every send requires human approval, and in v1 the approval object is a human-inbox letter rendered by the base from the stored draft, so the human approves exactly what will be sent, on the web console or on the phone. The bases are a primary-box feature: cloud replicas skip them, and the phone's v1 surface is the approval letter plus the digest letter.
 
 This is the same shape the task integration layer already proved: the base owns the model and the UI once, providers stay small, and every provider inherits the whole feature set.
 
@@ -8,10 +8,13 @@ This is the same shape the task integration layer already proved: the base owns 
 
 | Decision | Choice | Why |
 |---|---|---|
+| Where the base lives | A capability plugin, not core | The platform's dependency and service layers exist precisely so a whole domain can be adopted, replaced or left uninstalled. A base that lives in core is a domain every install pays for. |
+| Provider attachment | `services.require('mail:base').registerProvider(spec)` | `walnut.registry.*` is the kernel's slot list, and mail is not kernel. The service registry is the seam built for one plugin standing on another. |
+| Cache location | The plugin's own `plugin.sqlite`, through `walnut.storage.database` | Worker thread by construction, versioned migrations for free, and uninstalling the plugin deletes the cache. |
 | One abstraction or two | Two separate bases | Mail has folders, subjects, cc, drafts; chat has channels, mentions, reactions. A unified message model would be premature and leaky. |
 | Embedding provider websites | Rejected | Major services block framing, and an embedded page gives the agent no structured data. |
 | Code namespace for chat | `messaging` (product name "Chat") | `/api/chat`, the `chat:*` bus prefix, and `chat-history.ts` already mean the assistant conversation, and bus interest matching is prefix-based, so a `chat:mention` event would land inside that existing family. |
-| Console UI | Core apps, not shipped web plugins | The standard Playwright harness boots from source and cannot see dist-only builtin plugins, and UI changes must be Playwright-verified. |
+| Console UI | Core apps, not shipped web plugins | A mail reader needs host components a plugin bundle cannot import (sanitized HTML, menu placement, task-ref pills), and the loader has no dev-time esbuild for a plugin's web entry, so every UI change would need a committed bundle. The console is gated with `requiresPlugin`, so it vanishes when the plugin is off. The microkernel goal is the server: a first-party console is the plugin API's first-party client, the way the iOS app is the client of `/api/v1`. |
 | Default mail provider | IMAP/SMTP + app password | Two config fields, no OAuth project, no third party, works for Gmail, iCloud, Fastmail. |
 | Default chat provider | Plugin embedding a Slack MCP client | Demonstrates that a provider is free to implement any way it likes; the MCP server is swappable config. |
 | Send gating | Draft, then approval, then send | The send op refuses without a consumed approval token; tool output can never reach the transport. |
@@ -30,14 +33,23 @@ Layering. The console and the agent only ever talk to the base; the base only ev
 +------------------------------+--------------------------------+
                                |
 +------------------------------v--------------------------------+
-|  Base (src/core/mail, src/core/messaging)                     |
-|  service | cache (sqlite) | sync | approvals | events         |
+|  Base plugin (src/integrations/mail,                          |
+|               src/integrations/messaging)                     |
+|  service | cache (plugin.sqlite) | sync | approvals | events  |
 +------------------------------+--------------------------------+
-                               |  provider contract (narrow, transport-free)
+                               |  mail:base service, then the
+                               |  provider contract (transport-free)
         +----------------------+----------------------+
         |                      |                      |
   mail-imap plugin      chat-slack plugin       any community or
   (IMAP/SMTP lib)       (MCP client)            local-only provider
+
+  every box above stands on the kernel, and on nothing else:
+
++---------------------------------------------------------------+
+|  Kernel: plugin loader | event bus | storage | App Registry   |
+|          letters | auth | http server                         |
++---------------------------------------------------------------+
 ```
 
 Read path. Push only changes when a fetch happens, never how.
@@ -72,20 +84,21 @@ agent mail_draft --> drafts row --> mail_request_send
 ### Module layout
 
 ```
-src/core/mail/          types.ts, provider-registry.ts, db.ts, bodies.ts,
-                        service.ts, sync.ts, approvals.ts, index.ts
-src/core/messaging/     the same eight files, plus mentions.ts
-src/web/routes/         mail.ts, messaging.ts (shaped after the calendar route)
-src/ops/                mail.ts, chat.ts (one import line each in the ops index)
-src/agent/tools/        mail-tools.ts, chat-tools.ts (the calendar-tools pattern)
-src/integrations/mail/, messaging/       builtin plugins that only register the
-                                         agent tools, gated on an account existing
-src/integrations/mail-imap/, chat-slack/ the first-party provider plugins
-src/data/skills/walnut-mail/, walnut-chat/  shipped skills with the usage guidance
-web/src/pages/          MailPage.tsx, ChatPage.tsx, plus two core-app registry rows
+src/integrations/mail/  manifest.json, index.ts, api.ts (the published service
+                        plus the provider contract types: what a provider imports),
+                        types.ts, provider-registry.ts, db.ts, bodies.ts,
+                        service.ts, sync.ts, approvals.ts, routes.ts, tools.ts,
+                        ops.ts (registered through walnut.registry.op),
+                        skills/walnut-mail/
+src/integrations/messaging/              the same files, plus mentions.ts
+src/integrations/mail-imap/, chat-slack/ the first-party provider plugins, each
+                        with manifest.dependencies { "mail": "^1.0.0" } (or
+                        "messaging") so the loader orders and gates them
+web/src/apps/           MailApp.tsx, ChatApp.tsx, plus two core-app registry rows
+                        carrying requiresPlugin
 ```
 
-Each core file stays under the repo's ~500-line guidance, which is why sync, bodies, and approvals are separate files instead of one large service. Note the split inside `src/integrations/`: `mail/` is the tool-registering plugin (so a zero-account install keeps its agent prompt unchanged), while `mail-imap/` is a provider like any community provider would be.
+Each file stays under the repo's ~500-line guidance, which is why sync, bodies, and approvals are separate files instead of one large service. The base registers its own agent tools, still gated on an account existing, so a zero-account install keeps its prompt-cache prefix byte-identical.
 
 ## Why two bases and not one message abstraction
 
@@ -93,7 +106,7 @@ Mail and chat look alike from a distance (threads, messages, send) but their rea
 
 ## Provider contract
 
-One provider instance serves many accounts. Registration follows the owned-registry pattern used by skills and agents: `walnut.registry.mailProvider(spec)` and `walnut.registry.chatProvider(spec)` return a Disposable owned by the plugin context, keyed `<pluginId>:<spec.id>`. Account ids are `<providerId>:<providerAccountId>`. The base mirrors accounts into its cache so the UI and foreign keys stay stable while a provider is detached.
+One provider instance serves many accounts. Registration goes through the base's own service, not through the kernel: a provider plugin declares `dependencies: { "mail": "^1.0.0" }` and calls `walnut.services.require('mail:base').registerProvider(spec)` (or `messaging:base`) inside its activate, which returns a Disposable the PROVIDER plugin owns. Ownership matters because the service handle carries no caller identity, so returning that Disposable from activate (the loader disposes whatever activate returns) is what makes "turn the provider off and its accounts detach" true. The contract types arrive as `import type` from the base plugin's `api.ts`, by relative path while both live in this repo and from a sibling types package once the contract is published. Keys are `<spec.id>` within the base's registry and account ids are `<providerId>:<providerAccountId>`, which is why a provider id must be unique across every provider plugin. The base mirrors accounts into its cache so the UI and foreign keys stay stable while a provider is detached.
 
 ```
 MailCapabilities {
@@ -144,22 +157,28 @@ Contract rules that matter:
 
 ## Data model
 
-One SQLite file per base (`mail.sqlite`, `messaging.sqlite`) under the Walnut data directory (`~/.open-walnut/`), WAL, `PRAGMA user_version` migrations, and the payload-blob rule from the task store: columns exist only for queried fields, everything else rides a JSON blob so new optional fields need no migration.
+Each base stores its cache in its OWN `plugin.sqlite`, opened through `walnut.storage.database`, which gives it WAL, a versioned `migrate()` the host records, and a file that disappears when the plugin is uninstalled. The payload-blob rule from the task store still holds: columns exist only for queried fields, everything else rides a JSON blob so new optional fields need no migration. FTS5 is present in the driver the host bundles, verified against a contentless table through the real worker thread rather than assumed.
+
+Three consequences follow from the plugin database, and they shape the code:
+
+- **The whole data api is async.** The database runs in a worker thread, so MIME parsing and body extraction leave the event loop by construction. That is the same rule the server has always had, now enforced by the transport instead of by review.
+- **There is no JS-side multi-statement transaction.** Exactly-once send therefore rests entirely on the single `UPDATE ... WHERE state='approved'` that mints and consumes the approval, which is already what this design specifies.
+- **Uninstalling the plugin deletes the cache**, which is exactly what "the cache is disposable" was promising all along.
 
 ```
-mail.sqlite
+plugin.sqlite (mail)
   accounts(account_id PK, provider_id, display_name, address, state, health_json, payload)
   mailboxes(account_id, mailbox_id, name, role, unread, total, cursor, last_sync_at)
   messages(account_id, message_id, rfc_message_id, mailbox_id, thread_id,
            from_addr, subject, snippet, sent_at, received_at, flags_json,
            attachments_json, body_ref, body_bytes, payload)
-  messages_fts  FTS5(subject, from_addr, snippet, body_text)   // contentless
+  messages_fts  FTS5(subject, from_addr, snippet, body_text)   // contentless, deletable
   drafts(draft_id PK, account_id, in_reply_to, to_json, subject, body_md,
          revision, state, origin, created_by_session, payload)
   sends(send_id PK, draft_id, account_id, idempotency_key UNIQUE,
         approval_kind, approval_ref, state, provider_message_id, error)
 
-messaging.sqlite
+plugin.sqlite (messaging)
   accounts, channels(cursor, followed, last_read_ts), members(is_me)
   messages(account_id, channel_id, message_id, thread_id, author_id, text, ts,
            mentions_me, reactions_json, payload)
@@ -167,8 +186,8 @@ messaging.sqlite
   drafts, sends (same shape as mail)
 ```
 
-- **Bodies**: mail bodies are files (under the data directory, `mail/bodies/<accountHash>/<yyyymm>/<hash>.{html,txt}`) referenced by `body_ref`; the row keeps a ~2 KB snippet so lists and most agent reads never touch disk. Chat messages are small and stay inline; attachments are metadata plus on-demand fetch, never cached in v1.
-- **FTS covers full body text**: the mail FTS index is contentless (tokens only, no duplicate storage) and is fed the extracted plain text of the whole body at ingest, so cache search finds words deep in a message even when the provider has no search capability.
+- **Bodies**: mail bodies are files under the plugin's own storage directory (`walnut.storage.dataDir`, laid out as `bodies/<accountHash>/<yyyymm>/<hash>.{html,txt}`) referenced by `body_ref`; the row keeps a ~2 KB snippet so lists and most agent reads never touch disk. Chat messages are small and stay inline; attachments are metadata plus on-demand fetch, never cached in v1.
+- **FTS covers full body text**: the mail FTS index is contentless (tokens only, no duplicate storage) and is fed the extracted plain text of the whole body at ingest, so cache search finds words deep in a message even when the provider has no search capability. It is declared `content='', contentless_delete=1`: a plain contentless table REFUSES `DELETE`, and retention has to prune this index alongside the messages it indexes.
 - **Retention, config-driven**: mail keeps 180 days and at most 50k rows per account, with a body LRU cap (default 512 MB); chat keeps 60 days, 20k rows, followed channels plus all DMs. A body referenced by a task link or an in-flight draft is never evicted. Eviction runs inside the poller tick under its budget and respects the disk watermark.
 - **Dates**: store epoch milliseconds plus the original header string. Mail dates are true instants; do not copy the calendar module's timezone-less wall-time convention.
 - **The cache is disposable**: it is rebuildable from the provider and is excluded from backup and data sync. Mail bodies never ride the sync channel to another machine.
@@ -179,7 +198,7 @@ Each base owns one `runPeriodic` loop (mail: 120 s interval; chat: 60 s; both wi
 
 Providers with `watch` get subscribed at boot; a hint marks the container dirty and kicks the loop. Consecutive failures back the interval off (up to 30 minutes). An `auth` error stops polling that account, sets health to `auth-required`, and raises a recoverable error notification that retires on the next good poll.
 
-Cloud replicas skip the bases entirely and their routes answer 503 `primary_only`. The phone still gets the two letters (approval and digest), which already travel off-box.
+Cloud replicas skip the bases entirely because the base PLUGIN itself answers 503 `primary_only` when it finds it is running on a replica. That is a plugin-level decision, not a core route rule: the kernel has no opinion about mail, and a domain that genuinely wants to run on both boxes stays free to. The phone still gets the two letters (approval and digest), which already travel off-box.
 
 ## Write path and approval
 
@@ -196,21 +215,21 @@ composing --> pending_approval --> approved --> sending --> sent
 2. `mail_request_send(draft_id)` validates the draft, freezes it (`pending_approval`, revision bumped), renders a letter body **from the stored row**, and sends an `action_required` letter with actions send, edit, discard. The letter, not a card, is the approval object: what the human reads is exactly what will be sent, and letters render on the phone and relay answers back to the primary.
 3. The letter's single-answer guard (a second answer gets 409) anchors exactly-once. The base mints and consumes the approval in one `UPDATE ... WHERE state='approved'`, and `sends.idempotency_key` is unique per `draft_id:revision`, so a duplicate approval returns the existing send record.
 4. `provider.send` is attempted at most once per send id. **Never auto-retry after the transport has accepted data**: SMTP has no dedupe, so an ambiguous failure lands in `unknown` and the letter thread asks the human to check the Sent folder. `failed` means the transport rejected the message before accepting any data, so a manual retry is safe; `unknown` means the outcome is genuinely unknowable and only the human can resolve it. A reaper moves rows stuck in `sending` to `unknown` and says so in the thread.
-5. Manual path: the console draft view's Send button posts `/api/mail/drafts/:id/send { revision }` under the device credential, runs the same service call with `approval_kind='console'`, and resolves any outstanding letter so the phone shows it answered.
+5. Manual path: the console draft view's Send button posts `/api/plugins/mail/drafts/:id/send { revision }` under the device credential, runs the same service call with `approval_kind='console'`, and resolves any outstanding letter so the phone shows it answered.
 6. Suggest cards may **raise** an approval (`mail_request_send` is a non-destructive op) but never send.
 
 A draft edited after an approval was requested invalidates that approval (revision mismatch) and the flow starts over. The base also supersedes the outstanding letter when this happens (answers it server-side with a "draft was edited" note and sends a fresh letter for the new revision), so the phone never shows a tappable Send over stale content. This closes the "approve then swap" hole.
 
 ## Agent surface
 
-Tools (read and draft; registered by a small builtin plugin that registers nothing until at least one account exists, so a zero-account install keeps its prompt-cache prefix byte-identical and pays one cache miss when the first account is added):
+Tools (read and draft; registered by the base plugin itself, which registers nothing until at least one account exists, so a zero-account install keeps its prompt-cache prefix byte-identical and pays one cache miss when the first account is added):
 
 ```
 mail_search / mail_list / mail_read / mail_thread / mail_draft / mail_request_send
 chat_channels / chat_search / chat_read / chat_mentions / chat_draft / chat_request_send
 ```
 
-Ops (shared by the CLI, MCP, and suggest cards) are defined in core alongside the existing op modules; only the agent tools come from the builtin plugin, because the plugin API does not expose op registration today (a known limitation, recorded here so nobody hunts for a plugin-side op path). The read ops are `readonly`; `*_draft` and `*_request_send` are writes but not destructive (asking is reversible); `mail_send { draft_id, revision, approval_id }` and `chat_send { ... }` are destructive, primary-only, and **refuse unless `approval_id` names a minted, unconsumed approval**. Ops are reachable from any shell via the CLI, so the approval token is the gate, not the destructive tag.
+Ops (shared by the CLI, MCP, and suggest cards) are declared by the base plugin with `walnut.registry.op` and land in the core op registry under the plugin's prefix, which for the id `mail` means the names stay exactly `mail_search`, `mail_send` and the rest. The real limitation is where those ops are visible: `walnut tools` inside a managed session sees them, while a standalone CLI process or a stdio MCP server does not, until the out-of-process op slice lands. That is a reach problem, not a security hole, because the approval ledger lives server-side and a caller who cannot reach the op cannot reach the ledger either. The read ops are `readonly`; `*_draft` and `*_request_send` are writes but not destructive (asking is reversible); `mail_send { draft_id, revision, approval_id }` and `chat_send { ... }` are destructive, primary-only, and **refuse unless `approval_id` names a minted, unconsumed approval**. Ops are reachable from any shell via the CLI, so the approval token is the gate, not the destructive tag.
 
 Known v1 limitation: named subagents cannot see plugin-registered tools (their tool sets are built from the static core tool list), so mail and chat tools are main-agent-only for now. The fix is a separate change that lets subagent tool sets include plugin tools, which the calendar tools would benefit from equally; moving the mail tools into the static list is the wrong fix, because every install would pay for them in the prompt whether or not an account exists.
 
@@ -230,7 +249,7 @@ The wrapper rides the tool result (so history compaction cannot drop it), but th
 
 ## Console UX scenarios
 
-Both consoles are core apps rather than shipped web plugins for two practical reasons beyond testability: a mail reader needs host components a standalone plugin bundle cannot import (sanitized HTML rendering, menu placement, task-ref pills), and hand-copied API types drift at this surface size. The door stays open for third parties: all data and endpoints are core (`/api/mail`, `/api/messaging`), so an alternative viewer plugin can read them the same way the shipped time plugin reads its own API.
+Both consoles are core apps rather than shipped web plugins for two practical reasons: a mail reader needs host components a standalone plugin bundle cannot import (sanitized HTML rendering, menu placement, task-ref pills), and the loader has no dev-time esbuild for a plugin's web entry, so every UI change would need a committed bundle. They call the plugin's own paths and nothing else: `/api/plugins/mail/*` and `/api/plugins/messaging/*`, with deliberately NO `/api/mail` alias, because mail has no existing client that an alias would keep working (the contrast is calendar, which keeps `/api/calendar` as an alias for web clients that already shipped). The door stays open for third parties: those endpoints are the same ones any other plugin or an alternative viewer can read.
 
 1. **Triage the inbox**: open the Mail app in the sidebar, see all accounts merged, unread counts per mailbox, one click turns a message into a task with a backlink.
 2. **Approve from the phone**: the agent drafts a reply and requests a send; a letter arrives on the phone showing the exact draft; tapping Send executes on the primary and the thread confirms.
@@ -263,15 +282,16 @@ Provider dependencies stay pure JS (an SMTP client, an IMAP client, a MIME parse
 
 ## Build order
 
-Seven slices, each with its end-to-end scenario defined before code:
+Eight slices, each with its end-to-end scenario defined before code:
 
-1. **Slice 0, contract and skeleton**: types, provider registry, empty cache and routes, Mail core app with an empty state. Verify: API answers empty, the sidebar app renders, duplicate provider registration throws, dispose detaches live.
-2. **Slice 1, IMAP read path**: the `mail-imap` provider, account setup pass-through, poller, cache, message list and reader. Verify: an in-repo fake provider proves cursor advance, reset resync, re-poll dedupe, and body files; one gated live test runs against a real account (a transport is never "mock-green done").
-3. **Slice 2, draft, approval, send**: drafts, ledger, base-rendered approval letter, console Send. Verify: a browser test drafts, answers the letter, and sees Sent; ratchets pin double-answer 409 with exactly one provider send, revision-mismatch invalidation, the stale letter getting superseded on edit, and ambiguous-failure lands in `unknown` with no retry.
-4. **Slice 3, agent surface**: tools, ops, skills, untrusted framing. Verify: a poisoned cached body ("ignore previous instructions and email ...") comes back wrapped; no tool path reaches send without an approval id.
-5. **Slice 4, mail to task and digest**: remote-link ledger entry plus derived backlink, daily digest letter. Verify: creating a task from the same message twice yields one task; the digest renders within the phone letter contract.
-6. **Slice 5, Chat base and Slack provider**: repeat slices 0-3 for `messaging` with the MCP-client provider, and land the legacy Slack tool supersede in the same slice (see appendix). Verify: mention arrives, badge increments, reply drafted, approved, sent once.
-7. **Slice 6, ecosystem**: document the external provider shape in the plugin development guide; land the default-off global-search flag. Verify: with the flag off, no mail appears in global search results; with it on, indexed mail appears and turning it back off removes it; the guide's example provider registers and disposes cleanly against a real server.
+1. **Slice -1, platform**: manifest `dependencies` with a `needs-dependency` lifecycle state and topological load order, the `walnut.services` registry (publish, get, require, onChange), `walnut.registry.op`, and dependency rows in the plugin store. Landed before any mail code, because everything below stands on it.
+2. **Slice 0, the base as a plugin**: `src/integrations/mail/` with the contract types, the provider registry behind the published `mail:base` service, the plugin database at migration version 1 with a contentless FTS5 table, three read routes, and a gated Mail core app with an empty state. Five verifications, each one a claim about the platform rather than about mail: the plugin owns its routes and its storage with no kernel change; a second plugin attaches through `services.require('mail:base').registerProvider(spec)` and a duplicate provider id throws with the rule in the message; the registration is owned, so disposing the returned Disposable or turning the provider plugin off detaches it live; FTS5 matches through the real worker-thread database; and a zero-account install leaves the agent's whole sorted tool-name list byte-identical to a boot with the plugin disabled.
+3. **Slice 1, IMAP read path**: the `mail-imap` provider, account setup pass-through, poller, cache, message list and reader. Verify: an in-repo fake provider proves cursor advance, reset resync, re-poll dedupe, and body files; one gated live test runs against a real account (a transport is never "mock-green done").
+4. **Slice 2, draft, approval, send**: drafts, ledger, base-rendered approval letter, console Send. Verify: a browser test drafts, answers the letter, and sees Sent; ratchets pin double-answer 409 with exactly one provider send, revision-mismatch invalidation, the stale letter getting superseded on edit, and ambiguous-failure lands in `unknown` with no retry.
+5. **Slice 3, agent surface**: tools, ops, skills, untrusted framing. Verify: a poisoned cached body ("ignore previous instructions and email ...") comes back wrapped; no tool path reaches send without an approval id.
+6. **Slice 4, mail to task and digest**: remote-link ledger entry plus derived backlink, daily digest letter. Verify: creating a task from the same message twice yields one task; the digest renders within the phone letter contract.
+7. **Slice 5, Chat base and Slack provider**: repeat slices 0-3 for `messaging` with the MCP-client provider, and land the legacy Slack tool supersede in the same slice (see appendix). Verify: mention arrives, badge increments, reply drafted, approved, sent once.
+8. **Slice 6, ecosystem**: document the external provider shape in the plugin development guide; land the default-off global-search flag. Verify: with the flag off, no mail appears in global search results; with it on, indexed mail appears and turning it back off removes it; the guide's example provider registers and disposes cleanly against a real server.
 
 ## Risks and hard rules
 
@@ -280,10 +300,14 @@ Seven slices, each with its end-to-end scenario defined before code:
 - **HTML mail is hostile.** Sanitize, render sandboxed with no script, and block remote images by default (a tracking pixel leaks the read the moment a body renders); loading images is a per-message opt-in.
 - **Mail dates are instants.** Store epoch milliseconds plus the original header string; do not reuse the calendar module's timezone-less wall-time convention.
 - **Attachments are a scope trap.** v1 is metadata plus on-demand fetch: never cached, never placed into agent context.
+- **Activation has a 20 second deadline.** A plugin's `activate` registers and returns: it publishes the service, mounts the routes, and gets out of the way. The database is not opened there at all: it opens on the FIRST REQUEST that needs it, so a slow migration delays that one read instead of failing the whole plugin, and a process that never asks about mail (a CLI invocation, a loader unit test) never pays for a worker thread or a cache file. Every read carries its own deadline, a stuck worker answers 503 `db_unavailable` rather than hanging, and a failed open is retried after a short cooldown instead of being remembered as broken for the life of the process.
+- **The plugin database costs a worker thread.** Each open is a thread with its own SQLite handle and page cache, so measure resident memory with a realistic mailbox before choosing the retention and body-cache defaults, rather than picking round numbers now.
+- **Ops are invisible out of process, and that is documented, not a gap.** A standalone CLI or stdio MCP server cannot see plugin-declared ops until the out-of-process slice lands. Nothing about the send gate depends on that reach, because the approval ledger is server-side.
+- **A provider registration cannot be swept by its owner's failure.** The service handle carries no caller identity, so if a provider plugin's `activate` throws AFTER `registerProvider` returned, the base is left with a phantom row it has no way to attribute, and every retry then hits the duplicate-id refusal. The fix is host-side, not a workaround in the base: the service proxy needs to expose the CURRENT CALLER synchronously, so the base can key its rows by owner and drop them when that owner goes away. Scheduled for P2-1; until then a provider must return its Disposable from `activate` and do nothing after that line that can throw.
 
 ## Non-goals and open questions
 
-Non-goals for v1: a unified message abstraction; embedding provider web UIs; attachment caching or attachments in agent context; OAuth flows in the base (a provider may implement its own); per-message push notifications; replica-side polling.
+Non-goals for v1: a unified message abstraction; embedding provider web UIs; attachment caching or attachments in agent context; OAuth flows in the base (a provider may implement its own); per-message push notifications; replica-side polling. Also explicitly not in v1: capability-keyed dependencies. A provider declares the plugin it needs by id (`dependencies: { "mail": "^1.0.0" }`), not by the capability it wants (`dependencies: { "capability:mail-base": "^1" }`), so two competing mail bases cannot yet be interchangeable to the same provider. The keyed form is the natural next step once a second implementation of any base actually exists.
 
 Open questions: the IMAP client library (slice 1, written comparison); a dedicated notification kind for mentions (deliberate v2 decision, not a side effect).
 
@@ -291,4 +315,4 @@ Open questions: the IMAP client library (slice 1, written comparison); a dedicat
 
 **Superseding the legacy Slack tool.** The agent currently has a Slack tool that posts messages with no confirmation. A gated `chat_send` cannot coexist with an ungated writer for even one release, so in the same slice that lands `chat_send`, the legacy tool loses its write actions and keeps read-only behavior with a deprecation note; the following slice removes it, migrates its bot token into the Slack provider's secret store, and keeps a tool-name alias so existing agent definitions do not break.
 
-**Small core additions this design requires**: a letter-answered bus event (the approval flow's return path; both the HTTP and relay answer paths converge on one function, so one emit covers both); keeping the core-app registration handle so the Mail and Chat apps can set sidebar badges; and a pass-through route for provider account setup, since no HTTP path writes plugin secrets today.
+**Small core additions this design requires**: a letter-answered bus event (the approval flow's return path; both the HTTP and relay answer paths converge on one function, so one emit covers both); and two App Registry additions, namely `registerCore` returning a handle that carries `setBadge` alongside `dispose` so the Mail and Chat apps can drive their sidebar badge, plus `requiresPlugin` on a core app so a console can be gated on the plugin that owns its routes. Account setup needs nothing from core: the base plugin owns its own accounts routes and hands the values straight to the provider, which writes its own secrets.

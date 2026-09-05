@@ -1,0 +1,261 @@
+import type { PluginDatabaseClient } from '../../core/plugins/plugin-storage.js'
+import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
+
+/**
+ * The mail cache: the plugin's OWN `plugin.sqlite`, reached through
+ * `walnut.storage.database`, which runs it on a worker thread.
+ *
+ * Three consequences of living there, all of them wanted:
+ *
+ * - The API is async by construction, so MIME parsing and body decoding leave the server's
+ *   single event loop without anyone having to remember to make them.
+ * - Migrations are versioned by the host (`_walnut_plugin_migrations`), so this file only
+ *   declares SQL.
+ * - Uninstalling the plugin deletes the file, which is what "the cache is disposable" means.
+ *
+ * What it costs, and what this file does about it:
+ *
+ * - Opening it spawns a worker thread. So it opens on FIRST USE, never at activate: a
+ *   `walnut` CLI process, a loader unit test and a server that nobody has asked about mail
+ *   all load this plugin, and none of them should pay a thread and a SQLite file for a
+ *   mailbox that does not exist yet.
+ * - A worker can wedge. Every call carries one shared deadline covering the open AND the
+ *   statement, so a route answers `db_unavailable` instead of pinning a connection: one
+ *   pinned response starves the browser's six-connection pool.
+ */
+
+const SCHEMA_V1 = `
+CREATE TABLE IF NOT EXISTS accounts (
+  account_id   TEXT PRIMARY KEY,
+  provider_id  TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  address      TEXT NOT NULL DEFAULT '',
+  state        TEXT NOT NULL DEFAULT 'active',
+  health_json  TEXT,
+  payload      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mailboxes (
+  account_id   TEXT NOT NULL,
+  mailbox_id   TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  role         TEXT NOT NULL DEFAULT 'other',
+  unread       INTEGER NOT NULL DEFAULT 0,
+  total        INTEGER NOT NULL DEFAULT 0,
+  cursor       TEXT,
+  last_sync_at INTEGER,
+  payload      TEXT,
+  PRIMARY KEY (account_id, mailbox_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  account_id       TEXT NOT NULL,
+  message_id       TEXT NOT NULL,
+  rfc_message_id   TEXT NOT NULL DEFAULT '',
+  mailbox_id       TEXT NOT NULL,
+  thread_id        TEXT,
+  from_addr        TEXT NOT NULL DEFAULT '',
+  subject          TEXT NOT NULL DEFAULT '',
+  snippet          TEXT NOT NULL DEFAULT '',
+  sent_at          INTEGER NOT NULL DEFAULT 0,
+  received_at      INTEGER,
+  flags_json       TEXT,
+  attachments_json TEXT,
+  body_ref         TEXT,
+  body_bytes       INTEGER,
+  payload          TEXT,
+  PRIMARY KEY (account_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS messages_by_mailbox ON messages (account_id, mailbox_id, sent_at DESC);
+CREATE INDEX IF NOT EXISTS messages_by_rfc_id ON messages (rfc_message_id);
+
+-- Contentless (content=''): tokens only, no second copy of the body. Reads return no column
+-- values by design, so every query against it selects rowid and joins back to messages.
+-- contentless_delete=1 is NOT optional here: a plain contentless table refuses DELETE
+-- ("cannot DELETE from contentless fts5 table"), and retention has to prune this index with
+-- the messages it indexes. Adding it later would mean a DROP, a CREATE and a full re-tokenize.
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+  USING fts5(subject, from_addr, snippet, body_text, content='', contentless_delete=1);
+
+CREATE TABLE IF NOT EXISTS drafts (
+  draft_id           TEXT PRIMARY KEY,
+  account_id         TEXT NOT NULL,
+  in_reply_to        TEXT,
+  to_json            TEXT NOT NULL DEFAULT '[]',
+  subject            TEXT NOT NULL DEFAULT '',
+  body_md            TEXT NOT NULL DEFAULT '',
+  revision           INTEGER NOT NULL DEFAULT 1,
+  state              TEXT NOT NULL DEFAULT 'composing',
+  origin             TEXT,
+  created_by_session TEXT,
+  payload            TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sends (
+  send_id             TEXT PRIMARY KEY,
+  draft_id            TEXT NOT NULL,
+  account_id          TEXT NOT NULL,
+  idempotency_key     TEXT NOT NULL UNIQUE,
+  approval_kind       TEXT,
+  approval_ref        TEXT,
+  state               TEXT NOT NULL DEFAULT 'pending',
+  provider_message_id TEXT,
+  error               TEXT
+);
+`
+
+const MIGRATIONS: Array<{ version: number; sql: string }> = [{ version: 1, sql: SCHEMA_V1 }]
+
+/** One budget per call, shared by the open and the statement. */
+const CALL_DEADLINE_MS = 5_000
+
+/**
+ * How long a failed open is remembered before the next call tries again.
+ *
+ * A failure must not be permanent for the life of the process (a full disk that gets cleared, a
+ * worker that lost a race at boot), but a hot route must not spawn a worker thread per request
+ * either, so the retry is rate limited rather than immediate.
+ */
+const OPEN_RETRY_COOLDOWN_MS = 5_000
+
+export type MailDbStatus = 'migrating' | 'ready' | 'failed'
+
+export class MailDatabaseUnavailableError extends Error {
+  readonly code = 'db_unavailable'
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'MailDatabaseUnavailableError'
+  }
+}
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new MailDatabaseUnavailableError(`the mail database did not ${what} within ${ms}ms`)),
+      Math.max(1, ms),
+    )
+    timer.unref?.()
+    work.then(
+      (value) => { clearTimeout(timer); resolve(value) },
+      (error) => { clearTimeout(timer); reject(error) },
+    )
+  })
+}
+
+export class MailDatabase {
+  private client: PluginDatabaseClient | null = null
+  private opening: Promise<void> | null = null
+  private state: MailDbStatus = 'migrating'
+  private closed = false
+  private lastFailureAt = 0
+
+  constructor(
+    private readonly walnut: WalnutServerPluginApi,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  get status(): MailDbStatus {
+    return this.state
+  }
+
+  run(sql: string, params?: unknown): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
+    return this.call((client) => client.run(sql, params))
+  }
+
+  get<T extends Record<string, unknown>>(sql: string, params?: unknown): Promise<T | undefined> {
+    return this.call((client) => client.get<T>(sql, params))
+  }
+
+  all<T extends Record<string, unknown>>(sql: string, params?: unknown): Promise<T[]> {
+    return this.call((client) => client.all<T>(sql, params))
+  }
+
+  /**
+   * `undefined` when the cache is not readable, so the health answer never needs a try.
+   *
+   * It DOES wait for the open (under the same deadline as any other call): health is the
+   * route someone asks when they suspect the cache is broken, so it must report the settled
+   * answer rather than the sampling accident of "migrating" on every first request.
+   */
+  async countOrNull(sql: string): Promise<number | undefined> {
+    try {
+      return (await this.get<{ n: number }>(sql))?.n ?? 0
+    } catch {
+      return undefined
+    }
+  }
+
+  async dispose(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    if (activeDatabase === this) activeDatabase = null
+    const client = this.client
+    this.client = null
+    this.opening = null
+    if (client) await client.dispose().catch(() => undefined)
+  }
+
+  private ensureOpen(): Promise<void> {
+    if (this.closed) {
+      return Promise.reject(new MailDatabaseUnavailableError('the mail database is closed'))
+    }
+    if (this.opening) return this.opening
+    if (this.state === 'failed' && this.now() - this.lastFailureAt < OPEN_RETRY_COOLDOWN_MS) {
+      return Promise.reject(new MailDatabaseUnavailableError(
+        'the mail cache failed to open and is waiting out its retry cooldown',
+      ))
+    }
+    this.state = 'migrating'
+    const attempt = (async () => {
+      const client = this.walnut.storage.database
+      this.client = client
+      await client.migrate(MIGRATIONS)
+      this.state = 'ready'
+    })().catch((error) => {
+      // A failure is remembered, not final: the next call after the cooldown opens a fresh
+      // attempt. Clearing `opening` is the whole point, since a rejected promise cached here
+      // would make one bad boot permanent for the life of the process.
+      this.state = 'failed'
+      this.lastFailureAt = this.now()
+      this.client = null
+      if (this.opening === attempt) this.opening = null
+      throw new MailDatabaseUnavailableError(`the mail cache could not be opened: ${reason(error)}`)
+    })
+    this.opening = attempt
+    // Nothing awaits this until the first call, and an unhandled rejection would take the
+    // whole process down. `state` is what carries the failure to /health.
+    attempt.catch(() => undefined)
+    return attempt
+  }
+
+  private async call<T>(work: (client: PluginDatabaseClient) => Promise<T>): Promise<T> {
+    const started = Date.now()
+    await withDeadline(this.ensureOpen(), CALL_DEADLINE_MS, 'open')
+    const client = this.client
+    if (!client) throw new MailDatabaseUnavailableError('the mail database is closed')
+    const remaining = CALL_DEADLINE_MS - (Date.now() - started)
+    return withDeadline(work(client), remaining, 'answer')
+  }
+}
+
+/**
+ * One mail plugin instance per process, so the open database is reachable by module scope.
+ * A reload replaces it; a dispose clears it.
+ */
+let activeDatabase: MailDatabase | null = null
+
+export function openMailDatabase(walnut: WalnutServerPluginApi): MailDatabase {
+  activeDatabase = new MailDatabase(walnut)
+  return activeDatabase
+}
+
+/** Test-only: lets a test prove FTS5 works through the real worker-thread database. */
+export function mailDatabaseForTesting(): MailDatabase | null {
+  return activeDatabase
+}
