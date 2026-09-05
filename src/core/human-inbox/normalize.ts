@@ -87,6 +87,10 @@ export function normalizeSender(raw: unknown): LetterSender {
     ...(typeof s.taskId === 'string' ? { taskId: s.taskId } : {}),
     ...(typeof s.taskTitle === 'string' ? { taskTitle: s.taskTitle } : {}),
     ...(typeof s.project === 'string' ? { project: s.project } : {}),
+    // A plugin-sent letter keeps its owner through a normalize round trip. Dropping it here
+    // would leave `walnut.letters.onAnswered` unable to tell its own letters from any other
+    // `external` sender's, which is the whole reason the field exists.
+    ...(typeof s.pluginId === 'string' ? { pluginId: s.pluginId } : {}),
   };
 }
 

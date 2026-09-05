@@ -7,9 +7,9 @@
  * whether `n:*` really does hand back the newest message, what a folder called "Projects/2026"
  * does to a SELECT, and whether the `headers` slice comes back as a Buffer.
  *
- * READ ONLY, on purpose. It never sets a flag, never deletes, never sends, and never writes to
- * the plugin's config or secret store: it builds its store in memory from the environment. Point
- * it at your own account and nothing about that account changes.
+ * READ ONLY by default, on purpose. The IMAP half never sets a flag, never deletes, never sends,
+ * and never writes to the plugin's config or secret store: it builds its store in memory from the
+ * environment. Point it at your own account and nothing about that account changes.
  *
  *   WALNUT_LIVE_IMAP_HOST=imap.example.com \
  *   WALNUT_LIVE_IMAP_ADDRESS=you@example.com \
@@ -21,11 +21,21 @@
  *
  * `PORT` defaults to 993 (143 for `starttls`), `TLS` to `tls`, `MAILBOX` to INBOX. With
  * `WALNUT_LIVE_IMAP_HOST` unset the whole file SKIPS, so it costs a normal run nothing.
+ *
+ * The SMTP block at the bottom is the one part that WRITES, because there is no way to prove a
+ * send without sending. Adding `WALNUT_LIVE_SMTP_HOST` turns it on, and it then puts exactly one
+ * message in your own INBOX (plus the Sent copy the provider files over IMAP, which is the half a
+ * fake transporter can never grade). Leave the variable unset and none of that happens.
+ *
+ *   WALNUT_LIVE_SMTP_HOST=smtp.example.com \
+ *   WALNUT_LIVE_SMTP_PORT=587 \
+ *   WALNUT_LIVE_SMTP_TLS=starttls \
+ *   npm run test:focus tests/integrations/mail-imap-live.test.ts
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { ImapPool } from '../../src/integrations/mail-imap/client.js';
 import { accountIdFor, ImapAccountStore, localIdFor } from '../../src/integrations/mail-imap/config.js';
-import { decodeMessageId } from '../../src/integrations/mail-imap/coords.js';
+import { decodeMessageId, encodeCursor } from '../../src/integrations/mail-imap/coords.js';
 import { createImapProvider } from '../../src/integrations/mail-imap/provider.js';
 
 const HOST = process.env.WALNUT_LIVE_IMAP_HOST ?? '';
@@ -34,17 +44,26 @@ const PASSWORD = process.env.WALNUT_LIVE_IMAP_PASSWORD ?? '';
 const TLS = process.env.WALNUT_LIVE_IMAP_TLS === 'starttls' ? 'starttls' : 'tls';
 const PORT = Number(process.env.WALNUT_LIVE_IMAP_PORT) || (TLS === 'starttls' ? 143 : 993);
 const MAILBOX = process.env.WALNUT_LIVE_IMAP_MAILBOX ?? 'INBOX';
+const SMTP_HOST = process.env.WALNUT_LIVE_SMTP_HOST ?? '';
+const SMTP_TLS = process.env.WALNUT_LIVE_SMTP_TLS === 'tls'
+  ? 'tls'
+  : process.env.WALNUT_LIVE_SMTP_TLS === 'none' ? 'none' : 'starttls';
+const SMTP_PORT = Number(process.env.WALNUT_LIVE_SMTP_PORT) || (SMTP_TLS === 'tls' ? 465 : 587);
 
 const configured = !!HOST && !!ADDRESS && !!PASSWORD;
 
 /** In memory only: a live run must not leave an account behind on the developer's box. */
-function memoryStore(): ImapAccountStore {
+function memoryStore(smtp = false): ImapAccountStore {
   const config: Record<string, unknown> = {
     accounts: {
       [localIdFor(ADDRESS)]: {
         address: ADDRESS, imap_host: HOST, imap_port: PORT, imap_tls: TLS, display_name: ADDRESS,
+        ...(smtp ? { smtp_host: SMTP_HOST, smtp_port: SMTP_PORT, smtp_tls: SMTP_TLS } : {}),
       },
     },
+    // The Sent copy is part of what a live send has to prove: SMTP tells the mailbox nothing, so
+    // without the APPEND the message the user just sent is missing from their own Sent folder.
+    ...(smtp ? { append_sent: true, server_saves_sent: false } : {}),
   };
   const secrets = new Map([[`password.${localIdFor(ADDRESS)}`, PASSWORD]]);
   return new ImapAccountStore({
@@ -80,8 +99,19 @@ const pool = configured
   })
   : null;
 
+const sendConfigured = configured && !!SMTP_HOST;
+const sendStore = sendConfigured ? memoryStore(true) : null;
+const sendPool = sendConfigured
+  ? new ImapPool({
+    settings: (accountId) => sendStore!.settings(accountId),
+    password: (accountId) => sendStore!.password(accountId),
+    log: quiet,
+  })
+  : null;
+
 afterAll(async () => {
   await pool?.disposeAll();
+  await sendPool?.disposeAll();
 });
 
 describe.skipIf(!configured)('a real IMAP account', () => {
@@ -168,4 +198,76 @@ describe.skipIf(!configured)('a real IMAP account', () => {
       await wrongPool.disposeAll();
     }
   }, 60_000);
+});
+
+/**
+ * A real send, to your own address. The only check that grades SMTP end to end.
+ *
+ * A fake transporter answers whatever this repo believes nodemailer does, which leaves the two
+ * things that actually go wrong on a real server unproven: whether the outgoing server accepts the
+ * message at all under these TLS settings, and whether the composed MIME is something a mail
+ * client will show. Sending it to the account's own address makes the delivery observable over the
+ * same IMAP connection the rest of this file uses.
+ */
+describe.skipIf(!sendConfigured)('a real SMTP server', () => {
+  const provider = () => createImapProvider({ store: sendStore!, pool: sendPool!, log: quiet });
+  const accountId = () => accountIdFor(ADDRESS);
+
+  it('reports this account as able to send, and refuses to guess about the read-only one', async () => {
+    expect((await provider().accountCapabilities!(accountId())).send).toBe(true);
+    // The same address through the store WITHOUT outgoing settings: the capability is per account
+    // and answered from config, so a read-only mailbox never gets a Send button.
+    const readOnly = createImapProvider({ store: store!, pool: pool!, log: quiet });
+    expect((await readOnly.accountCapabilities!(accountId())).send).toBe(false);
+  }, 60_000);
+
+  it('sends one message and finds it in the inbox', async () => {
+    const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const subject = `Walnut live send ${nonce}`;
+
+    // The newest UID BEFORE the send becomes the cursor, so the poll below only ever sees messages
+    // that arrived after this line. A cursorless poll reads from the oldest UID and would have to
+    // page through the whole mailbox to reach today.
+    const before = await (await sendPool!.for(accountId())).run('the newest uid', async (client) => {
+      const box = await client.mailboxOpen(MAILBOX);
+      let top = 0;
+      for await (const one of client.fetch('*:*', { uid: true }, { uid: true })) {
+        if (one.uid > top) top = one.uid;
+      }
+      return encodeCursor(String(box.uidValidity), top);
+    });
+
+    const result = await provider().send(
+      accountId(),
+      {
+        to: [{ address: ADDRESS }],
+        subject,
+        bodyMarkdown: `A live check from the Walnut test suite. Nonce ${nonce}.`,
+        bodyHtml: `<p>A live check from the Walnut test suite. Nonce <code>${nonce}</code>.</p>`,
+      },
+      { idempotencyKey: `live-${nonce}:1` },
+    );
+    expect(result.acceptedAt).toBeGreaterThan(0);
+    // Derived from the ledger key, so a duplicate would be recognisable as one.
+    expect(result.providerMessageId).toContain('walnut-');
+    console.log(`[mail-imap-live] sent ${result.providerMessageId} to ${ADDRESS}`);
+
+    // Delivery to your own mailbox is usually seconds, but it goes through a real queue, so this
+    // waits rather than asserting once.
+    const deadline = Date.now() + 60_000;
+    let found: string | undefined;
+    while (!found && Date.now() < deadline) {
+      const page = await provider().poll(accountId(), { mailbox: MAILBOX, limit: 20, cursor: before });
+      found = page.messages.find((one) => one.subject === subject)?.messageId;
+      if (!found) await new Promise((resolve) => setTimeout(resolve, 3_000));
+    }
+    expect(found, `the sent message never arrived in ${MAILBOX} within 60s`).toBeTruthy();
+
+    const body = await provider().getBody(accountId(), found!);
+    // Both alternatives went out, which is what makes the message readable in a plain-text client
+    // and in a rich one. A provider that dropped one half would still pass every mocked check.
+    expect(body.format).toBe('both');
+    expect(body.text).toContain(nonce);
+    expect(body.html).toContain(nonce);
+  }, 180_000);
 });

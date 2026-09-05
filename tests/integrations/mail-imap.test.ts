@@ -20,8 +20,10 @@
  * - The password reaches the transport and nothing else, least of all a log line.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import type { Transform } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import {
   ImapPool,
@@ -49,6 +51,7 @@ import {
   setMimeParserForTesting,
 } from '../../src/integrations/mail-imap/mime.js';
 import { createImapProvider } from '../../src/integrations/mail-imap/provider.js';
+import { classify, messageIdFor, setSmtpTransportFactory } from '../../src/integrations/mail-imap/smtp.js';
 import type { MailProviderSpec } from '../../src/integrations/mail/types.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'mail');
@@ -86,6 +89,9 @@ interface Wire {
   failListWith: unknown;
   hangOn: string | null;
   flagOps: Array<{ range: string; flags: string[]; add: boolean; uid: boolean }>;
+  /** Every IMAP APPEND, which is how a Sent copy is filed. */
+  appends: Array<{ mailbox: string; bytes: string; flags: string[]; hasDate: boolean }>;
+  failAppendWith: unknown;
   gate: Promise<void> | null;
   fireExists: (() => void) | null;
   /** Simulate the socket going away: the connection sees `close` and builds a new client. */
@@ -184,6 +190,18 @@ class FakeImap implements ImapClient {
     };
   }
 
+  async append(mailbox: string, content: Buffer | string, flags?: string[], date?: Date): Promise<unknown> {
+    await this.step(`append ${mailbox}`);
+    wire.appends.push({
+      mailbox,
+      bytes: Buffer.isBuffer(content) ? content.toString('utf8') : content,
+      flags: flags ?? [],
+      hasDate: date instanceof Date,
+    });
+    if (wire.failAppendWith) throw wire.failAppendWith;
+    return true;
+  }
+
   async messageFlagsAdd(range: string, flags: string[], options?: unknown): Promise<boolean> {
     await this.step('flagsAdd');
     wire.flagOps.push({ range, flags, add: true, uid: (options as { uid?: boolean } | undefined)?.uid === true });
@@ -212,6 +230,113 @@ class FakeImap implements ImapClient {
     if (!event || event === 'exists') wire.fireExists = null;
     return this;
   }
+}
+
+/** One `sendMail` call, as nodemailer would have received it. */
+interface SentRecord {
+  from?: { name?: string; address?: string };
+  to?: Array<{ name?: string; address: string }>;
+  cc?: Array<{ name?: string; address: string }>;
+  bcc?: Array<{ name?: string; address: string }>;
+  subject?: string;
+  text?: string;
+  html?: string;
+  inReplyTo?: string;
+  references?: string[];
+  messageId?: string;
+  date?: Date;
+}
+
+/** The options the transporter was built with. Only the fields worth grading. */
+interface FakeTransportOptions {
+  host?: string;
+  port?: number;
+  secure?: boolean;
+  requireTLS?: boolean;
+  ignoreTLS?: boolean;
+  pool?: boolean;
+  logger?: boolean;
+  auth?: { user?: string; pass?: string };
+}
+
+interface SmtpWire {
+  options: FakeTransportOptions[];
+  sent: SentRecord[];
+  verifies: number;
+  closes: number;
+  failWith: unknown;
+  failVerifyWith: unknown;
+  /** Write the message bytes BEFORE failing, which is what makes an outcome ambiguous. */
+  streamBeforeFailure: boolean;
+}
+
+let smtp: SmtpWire;
+
+function freshSmtp(): SmtpWire {
+  return {
+    options: [],
+    sent: [],
+    verifies: 0,
+    closes: 0,
+    failWith: null,
+    failVerifyWith: null,
+    streamBeforeFailure: false,
+  };
+}
+
+/** The exact bytes the fake writes down DATA, which is what a Sent copy has to match. */
+const RAW_MIME = 'MIME-Version: 1.0\r\nSubject: Lunch on Thursday\r\n\r\nDoes **noon** work?\r\n';
+
+const sha1 = (value: string) => crypto.createHash('sha1').update(value).digest('hex');
+
+/**
+ * A transporter that behaves like nodemailer at the two boundaries the send path depends on.
+ *
+ * The `stream` plugin's transform is the only honest "DATA has begun" signal, so the fake really
+ * writes the message through it rather than pretending: a fake that skipped it would let a wrong
+ * `stage` pass unnoticed, which is the one bug in this file worth a duplicated mail.
+ */
+function fakeTransporter(options: FakeTransportOptions) {
+  smtp.options.push(options);
+  let makeTransform: (() => Transform) | null = null;
+  return {
+    use(
+      name: string,
+      plugin: (
+        mail: { message: { transform: (factory: () => Transform) => void } },
+        callback: () => void,
+      ) => void,
+    ) {
+      if (name !== 'stream') return;
+      plugin({ message: { transform: (factory) => { makeTransform = factory } } }, () => undefined);
+    },
+    async verify() {
+      smtp.verifies += 1;
+      if (smtp.failVerifyWith) throw smtp.failVerifyWith;
+      return true;
+    },
+    async sendMail(mail: SentRecord) {
+      smtp.sent.push(mail);
+      // Failing with no byte written is the provably harmless case; the flag is what turns the
+      // same error into the one nobody can resolve.
+      if (smtp.failWith && !smtp.streamBeforeFailure) throw smtp.failWith;
+      const factory = makeTransform;
+      if (factory) {
+        const stream = factory();
+        const drained = new Promise<void>((resolve) => { stream.on('end', () => resolve()) });
+        stream.end(Buffer.from(RAW_MIME, 'utf8'));
+        await drained;
+      }
+      if (smtp.failWith) throw smtp.failWith;
+      return {
+        messageId: mail.messageId,
+        accepted: [...(mail.to ?? []), ...(mail.cc ?? [])].map((one) => one.address),
+        rejected: [],
+        response: '250 2.0.0 OK',
+      };
+    },
+    close() { smtp.closes += 1 },
+  };
 }
 
 function message(uid: number, subject: string, extra: Partial<FakeMessage> = {}): FakeMessage {
@@ -260,6 +385,8 @@ function freshWire(): Wire {
     failListWith: null,
     hangOn: null,
     flagOps: [],
+    appends: [],
+    failAppendWith: null,
     gate: null,
     fireExists: null,
     dropClient: null,
@@ -282,7 +409,12 @@ function makeStore() {
       list: async () => [...secrets.keys()],
     },
   };
-  return { store: new ImapAccountStore(host as never), config: () => config, secrets };
+  return {
+    store: new ImapAccountStore(host as never),
+    config: () => config,
+    patch: (values: Record<string, unknown>) => host.config.patch(values),
+    secrets,
+  };
 }
 
 interface Wired {
@@ -290,6 +422,7 @@ interface Wired {
   pool: ImapPool;
   store: ImapAccountStore;
   config: () => Record<string, unknown>;
+  patch: (values: Record<string, unknown>) => Promise<unknown>;
   secrets: Map<string, string>;
 }
 
@@ -307,16 +440,22 @@ function buildProvider(commandTimeoutMs?: number): Wired {
     pool,
     store: made.store,
     config: made.config,
+    patch: made.patch,
     secrets: made.secrets,
   };
 }
 
 /** The same provider with the account already saved, exactly as `submit` would have saved it. */
-async function withAccount(commandTimeoutMs?: number): Promise<Wired> {
+async function withAccount(
+  commandTimeoutMs?: number,
+  /** Give the account an outgoing server too, which is what makes it able to send. */
+  smtp = false,
+): Promise<Wired> {
   const wired = buildProvider(commandTimeoutMs);
   await wired.store.save({
     address: ADDRESS, host: 'imap.example.invalid', port: 993, tls: 'tls',
     password: PASSWORD, displayName: 'Alice',
+    ...(smtp ? { smtpHost: 'smtp.example.invalid', smtpPort: 587, smtpSecurity: 'starttls' as const } : {}),
   });
   wire.commands.length = 0;
   wire.connects = 0;
@@ -328,10 +467,12 @@ let live: Wired;
 
 beforeAll(() => {
   setImapClientFactory(async (options) => new FakeImap(options));
+  setSmtpTransportFactory(async (options) => fakeTransporter(options as FakeTransportOptions) as never);
 });
 
 afterAll(async () => {
   setImapClientFactory(null);
+  setSmtpTransportFactory(null);
   setMimeParserForTesting(null);
   await live?.pool.disposeAll();
 });
@@ -339,6 +480,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await live?.pool.disposeAll();
   wire = freshWire();
+  smtp = freshSmtp();
   logLines.length = 0;
   live = await withAccount();
 });
@@ -846,10 +988,285 @@ describe('the IDLE watch', () => {
   });
 });
 
+/**
+ * Sending, against a fake transporter rather than a real SMTP server.
+ *
+ * The one thing worth grading here is `stage`, because it is the field the base uses to decide
+ * whether a human may retry, and getting it wrong in the safe-looking direction means sending
+ * somebody's mail twice. SMTP has no dedupe and no way to ask "did you already get this?", so
+ * every ambiguous case has to resolve to `after-data`.
+ */
 describe('sending', () => {
-  it('refuses rather than looking like it worked', async () => {
-    await expect(live.provider.send!(ACCOUNT_ID, { to: [], subject: '', text: '' } as never))
+  const OUTGOING = {
+    to: [{ name: 'Bob', address: 'bob@example.invalid' }],
+    cc: [{ address: 'carol@example.invalid' }],
+    subject: 'Lunch on Thursday',
+    bodyMarkdown: 'Does **noon** work?',
+    bodyHtml: '<p>Does <strong>noon</strong> work?</p>',
+    inReplyTo: '<original@example.invalid>',
+    references: ['<root@example.invalid>', '<original@example.invalid>'],
+  };
+
+  it('refuses an account with no outgoing server, and says so per account', async () => {
+    // The account `live` holds has IMAP settings only, which is a perfectly good read-only
+    // account. The capability answer and the refusal have to agree, or the console offers a Send
+    // button that always fails.
+    expect((await live.provider.accountCapabilities!(ACCOUNT_ID)).send).toBe(false);
+    await expect(live.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-1:1' }))
       .rejects.toMatchObject({ code: 'unsupported' });
+    expect(smtp.sent).toEqual([]);
+
+    const sending = await withAccount(undefined, true);
+    expect((await sending.provider.accountCapabilities!(ACCOUNT_ID)).send).toBe(true);
+    await sending.pool.disposeAll();
+  });
+
+  it('sends both alternatives with the reply headers and a Message-ID derived from the key', async () => {
+    const sending = await withAccount(undefined, true);
+    const result = await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-7:3' });
+
+    expect(smtp.sent).toHaveLength(1);
+    const sent = smtp.sent[0]!;
+    expect(sent.to).toEqual([{ name: 'Bob', address: 'bob@example.invalid' }]);
+    expect(sent.cc).toEqual([{ address: 'carol@example.invalid' }]);
+    expect(sent.subject).toBe('Lunch on Thursday');
+    // The markdown source IS the text alternative, and the html half is the base's rendering
+    // passed straight through: a provider that re-rendered it would be the second sanitizer in a
+    // pipeline that only has room for one.
+    expect(sent.text).toBe('Does **noon** work?');
+    expect(sent.html).toBe('<p>Does <strong>noon</strong> work?</p>');
+    expect(sent.inReplyTo).toBe('<original@example.invalid>');
+    expect(sent.references).toEqual(['<root@example.invalid>', '<original@example.invalid>']);
+    expect(sent.date instanceof Date).toBe(true);
+
+    // Derived from the ledger key, so the same approved revision always produces the same id: if
+    // a human ever does retry after checking the Sent folder, the duplicate is recognisable.
+    expect(sent.messageId).toBe(messageIdFor('dr-7:3', ADDRESS));
+    expect(sent.messageId).toBe(`<walnut-${sha1('dr-7:3')}@example.invalid>`);
+    expect(messageIdFor('dr-7:3', ADDRESS)).toBe(messageIdFor('dr-7:3', ADDRESS));
+    expect(messageIdFor('dr-7:4', ADDRESS)).not.toBe(messageIdFor('dr-7:3', ADDRESS));
+    expect(result.providerMessageId).toBe(sent.messageId);
+
+    // Per send, never pooled, and closed afterwards: an authenticated socket to the user's
+    // provider must not stay open between messages.
+    expect(smtp.options).toHaveLength(1);
+    expect(smtp.options[0]).toMatchObject({
+      host: 'smtp.example.invalid', port: 587, secure: false, requireTLS: true, pool: false, logger: false,
+    });
+    expect(smtp.closes).toBe(1);
+    await sending.pool.disposeAll();
+  });
+
+  /**
+   * The stage table, and why it is a table over `command` rather than over `code`.
+   *
+   * `dataStarted` (did anything read the composed message) is NOT the signal it looks like:
+   * nodemailer pipes the whole message into a throwaway stream on the envelope-error path, so a
+   * refused recipient drains the body without DATA ever beginning. `mail-smtp-live-server.test.ts`
+   * proves that against a real scripted socket; this table pins the mapping the code derives.
+   *
+   * `bytes` means "something pulled the message out of the composer", which is deliberately NOT the
+   * same claim as "the server received it". It matters for exactly one row group: the transient codes
+   * reported at `command: 'CONN'` by both the socket-timeout handler and the closed-connection
+   * handler, where only "nothing was ever read" can prove the message was not in flight.
+   */
+  const stages: Array<{
+    code?: string
+    command?: string
+    bytes: boolean
+    stage: 'before-data' | 'after-data'
+    mapped: string
+  }> = [
+    // Provable from the code alone, whatever the byte signal says. EENVELOPE is the fix for the
+    // real bug: a mistyped recipient used to become an unretriable `unknown`.
+    { code: 'EENVELOPE', command: 'RCPT TO', bytes: true, stage: 'before-data', mapped: 'invalid' },
+    { code: 'EENVELOPE', command: 'DATA', bytes: true, stage: 'before-data', mapped: 'invalid' },
+    { code: 'EAUTH', command: 'AUTH PLAIN', bytes: false, stage: 'before-data', mapped: 'auth' },
+    { code: 'EDNS', command: 'CONN', bytes: false, stage: 'before-data', mapped: 'unreachable' },
+    // Provable from the position, when nothing was transmitted. Each of these used to be an
+    // `unknown` a human could never resolve, for a wrong port or a firewall.
+    { code: 'ECONNECTION', command: 'CONN', bytes: false, stage: 'before-data', mapped: 'unreachable' },
+    { code: 'ESOCKET', command: 'CONN', bytes: false, stage: 'before-data', mapped: 'unreachable' },
+    { code: 'ETIMEDOUT', command: 'CONN', bytes: false, stage: 'before-data', mapped: 'unreachable' },
+    { code: 'ETLS', command: 'STARTTLS', bytes: false, stage: 'before-data', mapped: 'unreachable' },
+    { code: 'EPROTOCOL', command: 'CONN', bytes: false, stage: 'before-data', mapped: 'unreachable' },
+    { code: 'EMESSAGE', command: 'MAIL FROM', bytes: false, stage: 'before-data', mapped: 'invalid' },
+    // The same transient codes with bytes gone: a socket that died mid-body reports exactly what
+    // one that never connected does, so this is the half that has to stay unsafe.
+    { code: 'ESOCKET', command: 'CONN', bytes: true, stage: 'after-data', mapped: 'unreachable' },
+    { code: 'ETIMEDOUT', command: 'CONN', bytes: true, stage: 'after-data', mapped: 'unreachable' },
+    // The server received the whole body and then refused it at end-of-data. Nothing about that
+    // proves it did not queue a copy first.
+    { code: 'EMESSAGE', command: 'DATA', bytes: true, stage: 'after-data', mapped: 'invalid' },
+    { code: 'ESTREAM', command: 'API', bytes: true, stage: 'after-data', mapped: 'unreachable' },
+    // Nothing to reason from reads as unsafe, deliberately: the cost of guessing the other way is a
+    // duplicate mail, and the cost of guessing this way is one extra question in the inbox.
+    { bytes: false, stage: 'after-data', mapped: 'unreachable' },
+    { code: 'ESOCKET', bytes: false, stage: 'after-data', mapped: 'unreachable' },
+  ];
+
+  it.each(stages)('classifies $code at $command with bytes=$bytes as $stage', (row) => {
+    const error = new Error('the transport said no') as Error & { code?: string; command?: string };
+    if (row.code) error.code = row.code;
+    if (row.command) error.command = row.command;
+    expect(classify(error, row.bytes)).toMatchObject({ stage: row.stage, code: row.mapped });
+  });
+
+  it('reports a rejected login before data, so the base may let a human retry', async () => {
+    const sending = await withAccount(undefined, true);
+    const refused = new Error('535 authentication failed') as Error & { code: string };
+    refused.code = 'EAUTH';
+    smtp.failWith = refused;
+
+    await expect(sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-8:1' }))
+      .rejects.toMatchObject({ code: 'auth', stage: 'before-data' });
+    expect(smtp.closes).toBe(1);
+    await sending.pool.disposeAll();
+  });
+
+  it('reports a socket that died mid-message as after-data, and files no Sent copy', async () => {
+    const sending = await withAccount(undefined, true);
+    wire.listing = [...wire.listing, { path: 'Sent', specialUse: '\\Sent', status: { messages: 0, unseen: 0 } }];
+    const dropped = new Error('socket hang up') as Error & { code: string };
+    dropped.code = 'ESOCKET';
+    smtp.failWith = dropped;
+    smtp.streamBeforeFailure = true;
+
+    await expect(sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-9:1' }))
+      .rejects.toMatchObject({ code: 'unreachable', stage: 'after-data' });
+    // Nothing is filed for a send whose outcome is unknown: a Sent copy is a claim that the
+    // message went, and that is exactly what nobody can say here.
+    expect(wire.appends).toEqual([]);
+    await sending.pool.disposeAll();
+  });
+
+  it('files the SAME bytes in the Sent folder, and only when configured to', async () => {
+    const sending = await withAccount(undefined, true);
+    wire.listing = [...wire.listing, { path: 'Sent', specialUse: '\\Sent', status: { messages: 0, unseen: 0 } }];
+
+    await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-10:1' });
+    // SMTP tells the mailbox nothing, so without the APPEND the user's own reply is missing from
+    // the thread they read on their phone. The bytes are the ones that went over DATA, not a
+    // re-compose: two composes of one mail differ, and a Sent copy that does not match what the
+    // recipient got is a small lie in the one place a user checks.
+    //
+    // POLLED, not asserted straight away: the copy is deliberately detached from the send, because
+    // awaiting it can push an accepted message past the base's 30s deadline and report it as
+    // `unknown`. See the "does not wait for the Sent copy" test below.
+    await expect.poll(() => wire.appends, { timeout: 5_000 }).toEqual([
+      { mailbox: 'Sent', bytes: RAW_MIME, flags: ['\\Seen'], hasDate: true },
+    ]);
+
+    // Gmail files its own copy, and two copies of every message in Sent is the bug that flag
+    // exists to prevent.
+    wire.appends.length = 0;
+    await sending.patch({ server_saves_sent: true });
+    await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-10:2' });
+    expect(wire.appends).toEqual([]);
+
+    wire.appends.length = 0;
+    await sending.patch({ server_saves_sent: false, append_sent: false });
+    await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-10:3' });
+    expect(wire.appends).toEqual([]);
+    await sending.pool.disposeAll();
+  });
+
+  it('still reports a successful send when the Sent copy fails', async () => {
+    const sending = await withAccount(undefined, true);
+    wire.listing = [...wire.listing, { path: 'Sent', specialUse: '\\Sent', status: { messages: 0, unseen: 0 } }];
+    wire.failAppendWith = new Error('the server refused the APPEND');
+
+    // The message is already delivered by the time the copy is attempted. Reporting this as a
+    // failed send would invite a retry that delivers it twice, for a missing copy.
+    const result = await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-11:1' });
+    expect(result.acceptedAt).toBeGreaterThan(0);
+    await expect.poll(() => wire.appends.length, { timeout: 5_000 }).toBe(1);
+    await expect.poll(() => logLines.join(' '), { timeout: 5_000 })
+      .toContain('could not file a copy in Sent');
+    await sending.pool.disposeAll();
+  });
+
+  it('does not wait for the Sent copy, so a wedged mailbox cannot manufacture an unknown', async () => {
+    const sending = await withAccount(undefined, true);
+    wire.listing = [...wire.listing, { path: 'Sent', specialUse: '\\Sent', status: { messages: 0, unseen: 0 } }];
+    // The APPEND never answers. Awaited, this is 25s of SMTP plus two 12s IMAP commands, which is
+    // past the base's own 30s send deadline: a slow mailbox would turn a delivered message into
+    // "Walnut cannot tell whether it went", and `unknown` is the one outcome nobody can resolve.
+    wire.hangOn = 'append Sent';
+
+    const startedAt = Date.now();
+    const result = await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-13:1' });
+
+    expect(result.acceptedAt).toBeGreaterThan(0);
+    expect(result.providerMessageId).toBe(messageIdFor('dr-13:1', ADDRESS));
+    // Well inside the base's deadline, with the copy still hanging behind it.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    // The copy really was attempted, it is just still sitting there. Polled, because the whole
+    // point is that the send did not wait for this.
+    await expect.poll(() => wire.commands, { timeout: 5_000 }).toContain('append Sent');
+    // Left hanging on purpose: `disposeAll` would wait for the connection this command is holding,
+    // and the detached copy is exactly what nothing is allowed to wait for.
+    wire.hangOn = null;
+  });
+
+  it('never puts the password in a log line, however the send ends', async () => {
+    const sending = await withAccount(undefined, true);
+    const refused = new Error('535 nope') as Error & { code: string };
+    refused.code = 'EAUTH';
+    smtp.failWith = refused;
+    await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-12:1' }).catch(() => undefined);
+
+    smtp.failWith = null;
+    await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-12:2' });
+    expect(logLines.join(' ')).not.toContain(PASSWORD);
+    // It reaches the transport and nowhere else, which is the same rule the IMAP half keeps.
+    expect(smtp.options.every((one) => one.auth?.pass === PASSWORD)).toBe(true);
+    await sending.pool.disposeAll();
+  });
+});
+
+describe('the setup probe', () => {
+  it('verifies SMTP only when the outgoing fields are given', async () => {
+    const readOnly = buildProvider();
+    await readOnly.provider.setup.submit({
+      address: ADDRESS, password: PASSWORD, imap_host: 'imap.example.invalid', imap_tls: 'tls',
+    });
+    // No outgoing fields, so no outgoing probe and no stored SMTP block: the account reads mail.
+    expect(smtp.verifies).toBe(0);
+    const stored = (readOnly.config().accounts as Record<string, Record<string, unknown>>)[localIdFor(ADDRESS)]!;
+    expect(stored.smtp_host).toBeUndefined();
+    await readOnly.pool.disposeAll();
+
+    const sending = buildProvider();
+    await sending.provider.setup.submit({
+      address: ADDRESS, password: PASSWORD, imap_host: 'imap.example.invalid', imap_tls: 'tls',
+      smtp_host: 'smtp.example.invalid', smtp_tls: 'starttls',
+    });
+    // Proved while the human is still looking at the form, rather than in a letter whose Send
+    // button is guaranteed to fail.
+    expect(smtp.verifies).toBe(1);
+    expect(smtp.closes).toBeGreaterThan(0);
+    const savedSmtp = (sending.config().accounts as Record<string, Record<string, unknown>>)[localIdFor(ADDRESS)]!;
+    expect(savedSmtp).toMatchObject({ smtp_host: 'smtp.example.invalid', smtp_port: 587, smtp_tls: 'starttls' });
+    await sending.pool.disposeAll();
+  });
+
+  it('stores nothing when the outgoing server refuses the credential', async () => {
+    const failed = new Error('535 authentication failed') as Error & { code: string };
+    failed.code = 'EAUTH';
+    smtp.failVerifyWith = failed;
+    const wired = buildProvider();
+
+    await expect(wired.provider.setup.submit({
+      address: ADDRESS, password: PASSWORD, imap_host: 'imap.example.invalid', imap_tls: 'tls',
+      smtp_host: 'smtp.example.invalid', smtp_tls: 'starttls',
+    })).rejects.toMatchObject({ code: 'auth' });
+
+    // A half-configured account is worse than none: it would fail every send with a credential
+    // the user believes they have already fixed.
+    expect(wired.config()).toEqual({});
+    expect([...wired.secrets.keys()]).toEqual([]);
+    await wired.pool.disposeAll();
   });
 });
 

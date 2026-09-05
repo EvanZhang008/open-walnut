@@ -1,12 +1,15 @@
 import type { MailDatabase, MailDbStatus } from './db.js'
+import { MailWriteStore } from './store-write.js'
 
 /**
- * Every statement the mail base runs, in one place, plus the row shapes they answer with.
+ * Every statement the mail base runs over accounts, mailboxes, messages and the FTS index, plus
+ * the row shapes they answer with. The `drafts` and `sends` tables live in store-write.ts and are
+ * reachable as `store.write`.
  *
  * Split out of `db.ts` only for size: that file owns the schema, the migrations and the
- * deadline machinery, this one owns the queries. Together they are the ONLY two modules in
- * `src/integrations/mail/` that write SQL, which is what keeps a schema change to one place
- * and stops a query being smuggled into a route handler.
+ * deadline machinery, this one owns the queries. Together with store-write.ts they are the ONLY
+ * modules in `src/integrations/mail/` that write SQL, which is what keeps a schema change to one
+ * place and stops a query being smuggled into a route handler.
  */
 
 // ── Rows, exactly as the tables spell them ──
@@ -84,6 +87,42 @@ export interface MessageWrite {
   envelopeHash: string
 }
 
+export interface DraftRow extends Record<string, unknown> {
+  draft_id: string
+  account_id: string
+  in_reply_to: string | null
+  to_json: string
+  subject: string
+  body_md: string
+  revision: number
+  state: string
+  origin: string | null
+  created_by_session: string | null
+  payload: string | null
+  letter_id: string | null
+  created_at: number
+  updated_at: number
+  approved_at: number | null
+  discarded_at: number | null
+  error: string | null
+}
+
+export interface SendRow extends Record<string, unknown> {
+  send_id: string
+  draft_id: string
+  account_id: string
+  idempotency_key: string
+  approval_kind: string | null
+  approval_ref: string | null
+  state: string
+  provider_message_id: string | null
+  error: string | null
+  revision: number
+  created_at: number
+  attempted_at: number | null
+  settled_at: number | null
+}
+
 export interface EvictableRow extends Record<string, unknown> {
   rowid: number
   rfc_message_id: string
@@ -109,7 +148,17 @@ function placeholders(count: number): string {
 
 /** `service.ts` composes these calls; nothing above it ever writes SQL. */
 export class MailStore {
-  constructor(private readonly db: MailDatabase) {}
+  /**
+   * The drafts and sends tables, in store-write.ts.
+   *
+   * Hung off the same object rather than threaded as a second dependency: one `store` reaches
+   * everything, and the ledger's statements still live in exactly one file.
+   */
+  readonly write: MailWriteStore
+
+  constructor(private readonly db: MailDatabase) {
+    this.write = new MailWriteStore(db)
+  }
 
   get status(): MailDbStatus {
     return this.db.status
@@ -206,12 +255,19 @@ export class MailStore {
     )
   }
 
-  /** Unread per account in ONE query: the accounts list used to run this once per account. */
-  async unreadByAccount(): Promise<Map<string, number>> {
-    const rows = await this.db.all<{ account_id: string; n: number | null }>(
-      'SELECT account_id, SUM(unread) AS n FROM mailboxes GROUP BY account_id',
+  /**
+   * Unread per account in ONE query, both totals: every mailbox, and the inbox-role ones.
+   *
+   * Two SUMs in one pass rather than two queries, because the accounts list is a route the
+   * console polls and each extra statement is another worker round trip on it.
+   */
+  async unreadByAccount(): Promise<Map<string, { total: number; inbox: number }>> {
+    const rows = await this.db.all<{ account_id: string; n: number | null; inbox: number | null }>(
+      'SELECT account_id, SUM(unread) AS n,'
+      + ' SUM(CASE WHEN role = \'inbox\' THEN unread ELSE 0 END) AS inbox'
+      + ' FROM mailboxes GROUP BY account_id',
     )
-    return new Map(rows.map((row) => [row.account_id, row.n ?? 0]))
+    return new Map(rows.map((row) => [row.account_id, { total: row.n ?? 0, inbox: row.inbox ?? 0 }]))
   }
 
   async deleteMailboxes(accountId: string): Promise<void> {
@@ -268,22 +324,35 @@ export class MailStore {
     )
   }
 
+  /**
+   * One page, KEYSET paged on `(sent_at, message_id)`.
+   *
+   * `sent_at < ?` alone loses messages. The sort key is not unique (a batch delivered in the
+   * same second, a mailing list burst, anything whose `Date` header has second resolution), so
+   * a page that ended in the middle of a group of equal timestamps asked for everything strictly
+   * older than that timestamp and skipped the rest of the group forever. The tie is broken by
+   * `message_id`, which is unique per account and is what the ORDER BY sorts on too, so the
+   * comparison and the order agree.
+   */
   listMessages(query: {
     accountId?: string
     mailboxId?: string
     limit: number
-    before?: number
+    before?: { sentAt: number; messageId: string }
   }): Promise<MessageRow[]> {
     const where: string[] = []
     const params: unknown[] = []
     if (query.accountId) { where.push('account_id = ?'); params.push(query.accountId) }
     if (query.mailboxId) { where.push('mailbox_id = ?'); params.push(query.mailboxId) }
-    if (query.before !== undefined) { where.push('sent_at < ?'); params.push(query.before) }
+    if (query.before) {
+      where.push('(sent_at < ? OR (sent_at = ? AND message_id < ?))')
+      params.push(query.before.sentAt, query.before.sentAt, query.before.messageId)
+    }
     params.push(query.limit)
     return this.db.all<MessageRow>(
       `SELECT ${MESSAGE_COLUMNS} FROM messages`
       + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
-      + ' ORDER BY sent_at DESC, rowid DESC LIMIT ?',
+      + ' ORDER BY sent_at DESC, message_id DESC LIMIT ?',
       params,
     )
   }

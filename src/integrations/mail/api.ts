@@ -63,8 +63,13 @@ export type {
  * 1.1.0 in slice 1: `listAccounts`, `refresh` and `onAccountsChanged` were added and nothing
  * existing changed shape, which is exactly what a minor bump means. It has to MOVE when methods
  * arrive, or `version()` is a number no provider can gate on.
+ *
+ * 1.2.0 is the send path. No METHOD changed, but three things a provider can gate on did, all
+ * additive: `MailProviderSpec.accountCapabilities` (per-account `send`), `OutgoingMail.bodyHtml`
+ * (the base renders the html half now, so a provider must not), and `ProviderError.stage` (how far
+ * a failed send got, which is the field that decides whether a retry is allowed).
  */
-export const MAIL_BASE_API_VERSION = '1.1.0'
+export const MAIL_BASE_API_VERSION = '1.2.0'
 
 /**
  * The method bag published as `mail:base`.

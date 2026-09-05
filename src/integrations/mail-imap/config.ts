@@ -19,6 +19,7 @@
 import crypto from 'node:crypto'
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
 import type { ImapAccountSettings } from './client.js'
+import type { SmtpSecurity, SmtpSettings } from './smtp.js'
 
 export const PROVIDER_ID = 'imap'
 
@@ -27,6 +28,17 @@ export interface ImapStoredAccount extends Record<string, unknown> {
   imap_host: string
   imap_port: number
   imap_tls: 'tls' | 'starttls'
+  /**
+   * The outgoing half, and it is OPTIONAL on purpose.
+   *
+   * Reading needs a host and a password; sending needs a second server the human may not know or
+   * may not want to give. An account with no `smtp_host` reports `send: false` from
+   * `accountCapabilities`, so the console hides the button and the base refuses the approval
+   * letter rather than offering a Send that is certain to fail.
+   */
+  smtp_host?: string
+  smtp_port?: number
+  smtp_tls?: 'tls' | 'starttls' | 'none'
   display_name?: string
   /** Mailbox path to role, for a server whose folder names this code cannot guess. */
   roles?: Record<string, string>
@@ -34,6 +46,22 @@ export interface ImapStoredAccount extends Record<string, unknown> {
 
 interface ImapPluginConfig extends Record<string, unknown> {
   accounts?: Record<string, ImapStoredAccount>
+  /** Put a copy of every sent message in the Sent folder over IMAP. Default true. */
+  append_sent?: boolean
+  /**
+   * The outgoing server files its own Sent copy, so Walnut must NOT add a second one.
+   *
+   * Default false, because most SMTP servers do nothing of the kind. Gmail is the exception every
+   * user runs into: it saves a copy of anything sent through its own SMTP, so leaving this false
+   * on a Gmail account puts two copies of every message in Sent.
+   */
+  server_saves_sent?: boolean
+}
+
+/** What to do about the Sent folder, read from the plugin's config. */
+export interface SentCopyPolicy {
+  appendSent: boolean
+  serverSavesSent: boolean
 }
 
 export function localIdFor(address: string): string {
@@ -57,13 +85,32 @@ function secretKeyFor(accountId: string): string {
 export interface ImapAccountEntry {
   accountId: string
   settings: ImapAccountSettings
+  /** Present only when this account has outgoing mail configured. Absent means it cannot send. */
+  smtp?: SmtpSettings
   displayName: string
   roles: Record<string, string>
+}
+
+function toSmtp(stored: ImapStoredAccount): SmtpSettings | undefined {
+  const host = stored.smtp_host?.trim()
+  if (!host) return undefined
+  const security: SmtpSecurity = stored.smtp_tls === 'tls'
+    ? 'tls'
+    : stored.smtp_tls === 'none' ? 'none' : 'starttls'
+  const port = Number(stored.smtp_port)
+  return {
+    host,
+    // 587 with STARTTLS is what nearly every provider documents, and it is the default the setup
+    // form suggests. 465 is implicit TLS; 25 is for a server that asked for no encryption.
+    port: Number.isFinite(port) && port > 0 ? Math.floor(port) : security === 'tls' ? 465 : 587,
+    security,
+  }
 }
 
 function toEntry(localId: string, stored: ImapStoredAccount): ImapAccountEntry | undefined {
   if (!stored?.address || !stored.imap_host) return undefined
   const port = Number(stored.imap_port)
+  const smtp = toSmtp(stored)
   return {
     accountId: `${PROVIDER_ID}:${localId}`,
     settings: {
@@ -72,6 +119,7 @@ function toEntry(localId: string, stored: ImapStoredAccount): ImapAccountEntry |
       port: Number.isFinite(port) && port > 0 ? Math.floor(port) : 993,
       tls: stored.imap_tls === 'starttls' ? 'starttls' : 'tls',
     },
+    ...(smtp ? { smtp } : {}),
     displayName: stored.display_name?.trim() || stored.address,
     roles: stored.roles ?? {},
   }
@@ -105,6 +153,22 @@ export class ImapAccountStore {
   }
 
   /**
+   * The Sent-folder policy. Plugin wide, not per account, and that is a deliberate limit.
+   *
+   * One flag for the box keeps the setup form to the three SMTP fields the human already has to
+   * find. The case it gets wrong is a box with both a Gmail account and a self-hosted one, where
+   * one server files its own copy and the other does not; a per-account override belongs with the
+   * console screen that could actually explain it.
+   */
+  async sentCopyPolicy(): Promise<SentCopyPolicy> {
+    const config = await this.walnut.config.get<ImapPluginConfig>()
+    return {
+      appendSent: config.append_sent !== false,
+      serverSavesSent: config.server_saves_sent === true,
+    }
+  }
+
+  /**
    * Persist one account and its password.
    *
    * Read-modify-write over the accounts map, because the host's config patch is a SHALLOW merge
@@ -119,6 +183,9 @@ export class ImapAccountStore {
     tls: 'tls' | 'starttls'
     password: string
     displayName?: string
+    smtpHost?: string
+    smtpPort?: number
+    smtpSecurity?: SmtpSecurity
   }): Promise<ImapAccountEntry> {
     const localId = localIdFor(input.address)
     const accountId = `${PROVIDER_ID}:${localId}`
@@ -128,6 +195,15 @@ export class ImapAccountStore {
       imap_host: input.host,
       imap_port: input.port,
       imap_tls: input.tls,
+      // Written only when the human gave them. An absent `smtp_host` is what makes this account
+      // read-only, and re-saving without the fields is how they take sending away again.
+      ...(input.smtpHost
+        ? {
+          smtp_host: input.smtpHost,
+          smtp_port: input.smtpPort ?? (input.smtpSecurity === 'tls' ? 465 : 587),
+          smtp_tls: input.smtpSecurity ?? 'starttls',
+        }
+        : {}),
       ...(input.displayName ? { display_name: input.displayName } : {}),
       ...(config.accounts?.[localId]?.roles ? { roles: config.accounts[localId].roles! } : {}),
     }

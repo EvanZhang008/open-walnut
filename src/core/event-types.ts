@@ -797,6 +797,30 @@ export interface HumanInboxLetterEvent {
   kind: 'new' | 'reply';
 }
 
+/**
+ * An `action_required` letter was answered. The RETURN PATH of every approval flow.
+ *
+ * A letter whose sender is a plugin has no origin session to deliver the choice to, so the
+ * bus is how that plugin learns the answer at all: `walnut.letters.onAnswered` is this event,
+ * filtered to the plugin that sent the letter. Both human answer paths converge on
+ * `answerLetterAndDeliver`, so one emit covers the console, the phone and the replica relay.
+ *
+ * `source` says which edge recorded it, including `'plugin'` for a sender that withdrew its
+ * own question. Carries no body and no free-text beyond the human's note, which is already
+ * bounded by the store.
+ */
+export interface HumanInboxAnsweredEvent {
+  letterId: string;
+  actionId: string;
+  /** The button's label, or `'Withdrawn'` for a sender-side withdrawal. */
+  label: string;
+  freeText?: string;
+  answeredAt: number;
+  source: 'web' | 'phone' | 'relay' | 'plugin';
+  /** The plugin that sent the letter, when one did. Absent for a session's letter. */
+  pluginId?: string;
+}
+
 // ── Plugin lifecycle ──
 
 /**
@@ -1031,6 +1055,7 @@ export interface EventPayloadMap {
   'client:incident': ClientIncidentEvent;
 
   'human-inbox:letter': HumanInboxLetterEvent;
+  'human-inbox:answered': HumanInboxAnsweredEvent;
 
   'plugin:lifecycle-changed': PluginLifecycleChangedEvent;
 

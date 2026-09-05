@@ -106,6 +106,80 @@ export interface NotificationService {
   recover(): Promise<void>
 }
 
+/** One tappable decision on a letter. Buttons are what make a letter a question. */
+export interface LetterActionInput {
+  id: string
+  label: string
+  description?: string
+}
+
+export interface LetterSendInput {
+  subject: string
+  /** The document. Exactly one of `markdown` or `html`. */
+  markdown?: string
+  html?: string
+  /** A short plain preview for the envelope row and the phone push. Derived when absent. */
+  text?: string
+  /** Present makes this a decision the human must answer; absent makes it a document. */
+  actions?: LetterActionInput[]
+  taskRefs?: string[]
+  pin?: boolean
+}
+
+export interface LetterAnswerRecord {
+  actionId: string
+  label: string
+  freeText?: string
+  at: number
+}
+
+export interface LetterState {
+  letterId: string
+  subject: string
+  actions: LetterActionInput[]
+  /** Present once the letter has been answered, which can happen exactly once. */
+  answered?: LetterAnswerRecord
+}
+
+export interface LetterAnsweredEvent {
+  letterId: string
+  actionId: string
+  label: string
+  freeText?: string
+  answeredAt: number
+  /** Which edge recorded it. `'plugin'` is your own `withdraw`. */
+  source: 'web' | 'phone' | 'relay' | 'plugin'
+  pluginId?: string
+}
+
+/**
+ * Letters: ask the one human a question, wherever they are, and hear the answer back.
+ *
+ * A letter is a document in the human inbox with optional one-tap actions, rendered by the
+ * console and by the phone. It is the host's approval object: a plugin that must not act
+ * without a human decision sends a letter with actions and does nothing until `onAnswered`
+ * fires. There is no origin session behind a plugin letter, so that event is the return path.
+ *
+ * At most 30 letters per plugin per minute; over that, `send` rejects with a plain-words
+ * error. A letter badges the bell and pushes to the phone, so roll a batch into one letter.
+ */
+export interface LettersService {
+  send(input: LetterSendInput): Promise<{ letterId: string }>
+  /** Add a turn to the letter's thread, so the human sees what happened after they answered. */
+  reply(letterId: string, input: { markdown?: string; html?: string; text?: string }): Promise<void>
+  /**
+   * Take the question back: the letter is answered server-side with the action id
+   * `withdrawn` and your note, and nothing is delivered. Use it the moment the thing the
+   * letter asked about changes, so a stale approval can never be tapped. Idempotent on a
+   * letter the human already answered.
+   */
+  withdraw(letterId: string, input: { note: string }): Promise<void>
+  /** The letter's current state, with no document read. `null` when the id is unknown. */
+  get(letterId: string): Promise<LetterState | null>
+  /** Answers to letters THIS plugin sent, and nothing else. */
+  onAnswered(handler: (event: LetterAnsweredEvent) => void | Promise<void>): Disposable
+}
+
 export type OpResult<T = unknown> =
   | { ok: true; result: T }
   | { ok: false; message: string }
@@ -610,6 +684,7 @@ export interface WalnutServerApi {
   readonly tasks: TaskService
   readonly config: ConfigService
   readonly notifications: NotificationService
+  readonly letters: LettersService
   readonly ops: OpsService
   readonly services: ServicesService
   readonly events: EventApi

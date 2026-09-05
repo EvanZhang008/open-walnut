@@ -133,10 +133,43 @@ const SCHEMA_V3 = `
 ALTER TABLE messages ADD COLUMN body_error TEXT;
 `
 
+/**
+ * v4 is the send path: the columns the draft state machine and the approval ledger need.
+ *
+ * The v1 shape had the two tables but only the fields a draft LIST wants. What the ledger
+ * needs on top of that is timestamps at every transition, because the honest answer to "did
+ * this send?" is reconstructed from them: `attempted_at` is what the reaper reads to decide a
+ * row has been `sending` too long to still be running, and `settled_at` is what proves an
+ * outcome was actually recorded rather than inferred. `revision` rides its own column even
+ * though `idempotency_key` already spells it, so the reaper and the ledger can filter on it
+ * without parsing a key.
+ *
+ * The index is on `(draft_id, state)` because every question the ledger asks is "what has this
+ * draft got in flight", and without it that is a table scan on the one path where a scan means
+ * a second `provider.send`.
+ */
+const SCHEMA_V4 = `
+ALTER TABLE drafts ADD COLUMN letter_id TEXT;
+ALTER TABLE drafts ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE drafts ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE drafts ADD COLUMN approved_at INTEGER;
+ALTER TABLE drafts ADD COLUMN discarded_at INTEGER;
+ALTER TABLE drafts ADD COLUMN error TEXT;
+
+ALTER TABLE sends ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sends ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sends ADD COLUMN attempted_at INTEGER;
+ALTER TABLE sends ADD COLUMN settled_at INTEGER;
+
+CREATE INDEX IF NOT EXISTS sends_by_draft_state ON sends (draft_id, state);
+CREATE INDEX IF NOT EXISTS drafts_by_account_state ON drafts (account_id, state, updated_at DESC);
+`
+
 const MIGRATIONS: Array<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
   { version: 3, sql: SCHEMA_V3 },
+  { version: 4, sql: SCHEMA_V4 },
 ]
 
 /** One budget per call, shared by the open and the statement. */

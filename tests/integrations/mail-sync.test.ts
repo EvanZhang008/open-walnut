@@ -31,6 +31,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('mail-sync-test'));
 import { WALNUT_HOME, CONFIG_FILE, TASKS_FILE } from '../../src/constants.js';
 import { bus } from '../../src/core/event-bus.js';
 import { listNotifications } from '../../src/core/notifications/store.js';
+import { decodeMessageCursor, encodeMessageCursor, withBudget } from '../../src/integrations/mail/contract.js';
 import { mailDatabaseForTesting } from '../../src/integrations/mail/db.js';
 import { registerMailRoutes } from '../../src/integrations/mail/routes.js';
 import { MailSync, type MailSyncHost } from '../../src/integrations/mail/sync.js';
@@ -492,16 +493,145 @@ describe('new mail', () => {
   });
 
   it('pages with before, and offers a cursor only when the page filled', async () => {
-    const first = await getJson<{ messages: Array<{ sentAt: number; subject: string }>; nextBefore?: number }>(
-      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=INBOX&limit=3`,
-    );
+    const first = await getJson<{
+      messages: Array<{ sentAt: number; subject: string; messageId: string }>;
+      nextBefore?: string;
+    }>(`/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=INBOX&limit=3`);
     expect(first.body.messages.map((one) => one.subject)).toEqual(['Update 8', 'Update 7', 'Update 6']);
-    expect(first.body.nextBefore).toBe(first.body.messages[2]!.sentAt);
+    // The cursor is OPAQUE to a client now. It is decoded here, once, only to state what it
+    // carries: the whole sort key rather than just a timestamp, which is what lets the next page
+    // resume exactly where this one stopped even when several messages share a second.
+    expect(typeof first.body.nextBefore).toBe('string');
+    expect(Buffer.from(first.body.nextBefore!, 'base64url').toString('utf8')).toBe(
+      [first.body.messages[2]!.sentAt, first.body.messages[2]!.messageId].join('\u0000'),
+    );
 
     const second = await getJson<{ messages: Array<{ subject: string }> }>(
       `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=INBOX&limit=3&before=${first.body.nextBefore}`,
     );
     expect(second.body.messages.map((one) => one.subject)).toEqual(['Update 5', 'Update 4', 'Update 3']);
+  });
+
+  it('pages past messages that share a timestamp, and still honours a bare-number cursor', async () => {
+    // Three messages at the SAME instant, which is not exotic: a newsletter blast and anything
+    // filed by a rule all land on one second. A cursor holding only `sent_at` cannot express
+    // "after the second of these", so the old `sent_at < ?` paging skipped the rest of the tie
+    // outright and the message was simply missing from the list forever.
+    const tie = Date.UTC(2026, 5, 1, 12, 0, 0);
+    for (const uid of [1, 2, 3]) {
+      await mailDatabaseForTesting()!.run(
+        'INSERT INTO messages (account_id, message_id, rfc_message_id, mailbox_id, from_addr,'
+        + ' subject, snippet, sent_at, flags_json, attachments_json, updated_at, envelope_hash)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          ACCOUNT_ID, `Ties:1:${uid}`, `<tie${uid}@example.invalid>`, 'Ties',
+          'alice@example.invalid', `Tie ${uid}`, '', tie, '[]', '[]', tie, `hash-tie-${uid}`,
+        ],
+      );
+    }
+
+    const first = await getJson<{ messages: Array<{ subject: string }>; nextBefore?: string }>(
+      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=Ties&limit=2`,
+    );
+    expect(first.body.messages.map((one) => one.subject)).toEqual(['Tie 3', 'Tie 2']);
+    const second = await getJson<{ messages: Array<{ subject: string }>; nextBefore?: string }>(
+      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=Ties&limit=2&before=${first.body.nextBefore}`,
+    );
+    expect(second.body.messages.map((one) => one.subject)).toEqual(['Tie 1']);
+
+    // A console tab that was open across the deploy still holds a bare number, and answering that
+    // with a 400 would break paging in the one window nobody can redeploy. It pages the way it
+    // always did: strictly older, ties included.
+    const legacy = await getJson<{ messages: Array<{ subject: string }> }>(
+      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=Ties&limit=5&before=${tie + 1}`,
+    );
+    expect(legacy.body.messages.map((one) => one.subject)).toEqual(['Tie 3', 'Tie 2', 'Tie 1']);
+
+    // And a legacy cursor sitting exactly ON the tie returns NOTHING from it, which is what "the
+    // page I already have ended here" has always meant. The obvious implementation (decode the bare
+    // number to a high sentinel message id, so the tie half of the predicate is always true) turns
+    // this into "at or before" and re-serves the three rows the caller was just given, forever.
+    const onTheTie = await getJson<{ messages: Array<{ subject: string }> }>(
+      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=Ties&limit=5&before=${tie}`,
+    );
+    expect(onTheTie.body.messages).toEqual([]);
+
+    await mailDatabaseForTesting()!.run("DELETE FROM messages WHERE mailbox_id = 'Ties'");
+  });
+});
+
+describe('the page cursor', () => {
+  it('round-trips the whole sort key, and decodes a legacy number to the empty id', () => {
+    expect(decodeMessageCursor(encodeMessageCursor({ sentAt: 17, messageId: 'INBOX:9:2' })))
+      .toEqual({ sentAt: 17, messageId: 'INBOX:9:2' });
+
+    // The EMPTY id, not a high sentinel. `message_id < ''` is never true, so the predicate reduces
+    // to exactly `sent_at < ?`: the legacy form keeps its old meaning. A `\uFFFF` sentinel is wrong
+    // twice over, and the second reason is the one that bites: SQLite compares TEXT as UTF-8 bytes,
+    // so an id starting with an astral character sorts ABOVE char(65535).
+    expect(decodeMessageCursor('1768554000000')).toEqual({ sentAt: 1768554000000, messageId: '' });
+    expect(Buffer.from('\u{1F600}', 'utf8').compare(Buffer.from('\uFFFF', 'utf8'))).toBe(1);
+
+    // Anything the server did not issue is no cursor at all, so a page starts at the top rather
+    // than at a position a caller invented.
+    for (const junk of [undefined, '', '0', '-4', 'not base64url', Buffer.from('99', 'utf8').toString('base64url')]) {
+      expect(decodeMessageCursor(junk), `cursor ${JSON.stringify(junk)}`).toBeUndefined();
+    }
+  });
+});
+
+describe('a route budget', () => {
+  it('answers on time and still handles the loser, so a late failure is not an unhandled rejection', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (error: unknown) => rejections.push(error);
+    process.on('unhandledRejection', onRejection);
+    try {
+      const late: unknown[] = [];
+      // A write that fails AFTER the route already answered. Nothing is left waiting on this
+      // promise, and an unhandled rejection here would be a process-level warning (with a strict
+      // runtime flag, an exit) for something that was merely slow.
+      const slowFailure = new Promise<string>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('the provider gave up long after the 202')), 30);
+      });
+      expect(await withBudget(slowFailure, 5, (outcome) => late.push(outcome))).toBeUndefined();
+
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(late).toHaveLength(1);
+      expect((late[0] as { error?: Error }).error?.message).toContain('long after the 202');
+      expect(rejections).toEqual([]);
+
+      // A late SUCCESS is reported the same way: the work still happened, and the log line is the
+      // only place anyone will ever see it.
+      const slowValue = new Promise<string>((resolve) => { setTimeout(() => resolve('done'), 20); });
+      expect(await withBudget(slowValue, 5, (outcome) => late.push(outcome))).toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(late[1]).toEqual({ value: 'done' });
+
+      // And work that finishes inside the budget is returned, with nothing reported late.
+      expect(await withBudget(Promise.resolve('fast'), 5_000, (outcome) => late.push(outcome))).toBe('fast');
+      expect(late).toHaveLength(2);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
+  });
+});
+
+describe('the numbers an account reports', () => {
+  it('keeps `unread` as every mailbox summed and adds `unreadInbox` for the badge', async () => {
+    // A badge built from the total tells the human they have 43 unread mails when 40 of them are
+    // filed somewhere they will never look. Both numbers are kept: the total is still the honest
+    // cache statistic, and the badge is what a sidebar means.
+    await mailDatabaseForTesting()!.run(
+      "UPDATE mailboxes SET unread = 3 WHERE account_id = ? AND mailbox_id = 'INBOX'", [ACCOUNT_ID],
+    );
+    await mailDatabaseForTesting()!.run(
+      "UPDATE mailboxes SET unread = 40 WHERE account_id = ? AND role = 'archive'", [ACCOUNT_ID],
+    );
+
+    const listed = await getJson<{ accounts: Array<{ unread: number; unreadInbox: number }> }>('/accounts');
+    expect(listed.body.accounts[0]).toMatchObject({ unread: 43, unreadInbox: 3 });
+
+    await mailDatabaseForTesting()!.run('UPDATE mailboxes SET unread = 0 WHERE account_id = ?', [ACCOUNT_ID]);
   });
 });
 
@@ -577,6 +707,50 @@ describe('bodies', () => {
 
     const accounts = await getJson<{ accounts: Array<{ state: string }> }>('/accounts');
     expect(accounts.body.accounts[0]!.state).toBe('active');
+  });
+
+  it('drop a first line that only repeats the subject before cutting the snippet', async () => {
+    // Almost every HTML newsletter opens with an `<h1>` holding its own subject, so the extracted
+    // text began with it and the list read "Weekly digest. Weekly digest, and then the actual...".
+    // Half the preview was spent on a string already rendered two pixels away.
+    const sentAt = Date.UTC(2026, 2, 3, 8, 0, 0);
+    const filesBefore = new Set(await bodyFiles());
+    marks().messages.Digest = [{
+      uid: 1,
+      from: 'alice@example.invalid',
+      subject: 'Weekly digest',
+      text: '',
+      html: '<h1>Weekly digest</h1><p>Real content starts here.</p>',
+      sentAt,
+    }];
+    await mailDatabaseForTesting()!.run(
+      'INSERT INTO messages (account_id, message_id, rfc_message_id, mailbox_id, from_addr,'
+      + ' subject, snippet, sent_at, flags_json, attachments_json, updated_at, envelope_hash)'
+      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        ACCOUNT_ID, 'Digest:100:1', '<digest@example.invalid>', 'Digest', 'alice@example.invalid',
+        'Weekly digest', '', sentAt, '[]', '[]', sentAt, 'hash-digest',
+      ],
+    );
+
+    const read = await getJson<{ message: { snippet: string }; body: { html?: string } | null }>(
+      `/messages/${encodeURIComponent(ACCOUNT_ID)}/${encodeURIComponent('Digest:100:1')}`,
+    );
+    expect(read.status).toBe(200);
+    expect(read.body.message.snippet).toBe('Real content starts here.');
+    expect(read.body.message.snippet).not.toContain('Weekly digest');
+    // Only the SNIPPET changes. The stored body keeps every byte, so the heading is still
+    // findable and still rendered.
+    expect(read.body.body?.html).toContain('<h1>Weekly digest</h1>');
+
+    // Take the body FILE with the row. A raw row delete skips the plugin's own cleanup, and the
+    // orphan it leaves behind fails the two "nothing survives an account delete" checks later in
+    // this file, which is a real assertion about real bookkeeping and must not be blunted here.
+    await mailDatabaseForTesting()!.run("DELETE FROM messages WHERE mailbox_id = 'Digest'");
+    for (const file of await bodyFiles()) {
+      if (!filesBefore.has(file)) await fsp.rm(path.join(BODY_DIR(), file), { force: true });
+    }
+    delete marks().messages.Digest;
   });
 });
 
@@ -1066,9 +1240,20 @@ describe('on a replica', () => {
       accounts: { setup: explode('setup'), remove: explode('a purge') } as never,
       providers: { list: explode('the registry'), size: 0 } as never,
       sync: { refresh: explode('the poll loop'), polling: false, lastTick: 0 } as never,
+      // The write path matters more here than the read path, not less: a replica that composed a
+      // draft or minted an approval would be a SECOND box able to send the user's mail.
+      drafts: {
+        create: explode('a draft write'), get: explode('a draft read'), list: explode('a draft list'),
+        patch: explode('a draft edit'), discard: explode('a draft discard'),
+      } as never,
+      approvals: {
+        requestSend: explode('an approval letter'), consoleSend: explode('a send'),
+        retry: explode('a retry'), withdrawFor: explode('a withdrawal'),
+      } as never,
+      sends: { list: explode('the send ledger'), require: explode('the send ledger') } as never,
     });
 
-    expect(handlers.length).toBeGreaterThanOrEqual(11);
+    expect(handlers.length).toBeGreaterThanOrEqual(20);
     for (const { method, path: routePath, handler } of handlers) {
       const answer = await handler({
         path: `/api/plugins/mail${routePath}`,

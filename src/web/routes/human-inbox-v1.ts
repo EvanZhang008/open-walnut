@@ -359,7 +359,10 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
     res.json(await answerLetterAndDeliver(id, {
       actionId: typeof b.actionId === 'string' ? b.actionId : '',
       ...(typeof b.freeText === 'string' ? { freeText: b.freeText } : {}),
-    }))
+      // A request that presented a device token came from a paired device (the phone); the
+      // console reaches this over the LAN bypass and has no device name. That is the only
+      // device signal this route has, so it is the one the event reports.
+    }, (req as Request & { deviceName?: string }).deviceName ? 'phone' : 'web'))
   })
 })
 

@@ -101,10 +101,12 @@ export async function handleHumanInboxRelayAction(
     case 'archive':
       return { letter: await setArchived(requireId(p), requireBool(p, 'archived')) };
     case 'answer':
+      // `'relay'`: this ran on the PRIMARY on behalf of a replica, so neither the console nor
+      // the phone touched this box directly and claiming either would be a guess.
       return await answerLetterAndDeliver(requireId(p), {
         actionId: str(p.actionId),
         ...(typeof p.freeText === 'string' ? { freeText: p.freeText } : {}),
-      }) as unknown as Record<string, unknown>;
+      }, 'relay') as unknown as Record<string, unknown>;
     case 'human-reply':
       return await humanReplyAndDeliver(requireId(p), { text: str(p.text) }) as unknown as Record<string, unknown>;
     default:

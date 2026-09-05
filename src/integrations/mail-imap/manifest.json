@@ -24,6 +24,9 @@
             "imap_host": { "type": "string", "description": "IMAP server hostname" },
             "imap_port": { "type": "integer", "default": 993, "description": "IMAP port (993 for TLS, 143 for STARTTLS)" },
             "imap_tls": { "type": "string", "enum": ["tls", "starttls"], "default": "tls", "description": "TLS from the first byte, or an upgrade after connecting" },
+            "smtp_host": { "type": "string", "description": "Outgoing server hostname. Absent means this account can read but not send" },
+            "smtp_port": { "type": "integer", "default": 587, "description": "Outgoing port (587 for STARTTLS, 465 for TLS)" },
+            "smtp_tls": { "type": "string", "enum": ["starttls", "tls", "none"], "default": "starttls", "description": "How the outgoing connection is encrypted" },
             "display_name": { "type": "string", "description": "What the console shows for this account" },
             "roles": {
               "type": "object",
@@ -35,6 +38,16 @@
             }
           }
         }
+      },
+      "append_sent": {
+        "type": "boolean",
+        "default": true,
+        "description": "Put a copy of every sent message in the Sent folder over IMAP. SMTP tells the mailbox nothing, so without this the Sent folder stays empty"
+      },
+      "server_saves_sent": {
+        "type": "boolean",
+        "default": false,
+        "description": "The outgoing server files its own Sent copy, so Walnut must not add a second one. Gmail does this; most other servers do not"
       }
     }
   },
@@ -42,6 +55,14 @@
     "accounts": {
       "label": "IMAP accounts",
       "help": "Add an account from the Mail app rather than by hand: the setup form proves the credential before storing it"
+    },
+    "append_sent": {
+      "label": "Save sent mail to the Sent folder",
+      "help": "Turn this off only if your provider already files its own copy"
+    },
+    "server_saves_sent": {
+      "label": "My outgoing server saves sent mail itself",
+      "help": "Turn this on for Gmail: it already saves anything sent through its own SMTP, so Walnut adding a copy would give you two"
     }
   }
 }

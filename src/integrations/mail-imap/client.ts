@@ -99,6 +99,14 @@ export interface ImapClient {
   fetchOne(range: string, query: unknown, options?: unknown): Promise<ImapFetchedMessage | false>
   messageFlagsAdd(range: string, flags: string[], options?: unknown): Promise<boolean>
   messageFlagsRemove(range: string, flags: string[], options?: unknown): Promise<boolean>
+  /**
+   * Put a message INTO a mailbox. The only write this provider makes that is not a flag.
+   *
+   * Used for the Sent copy: SMTP delivers the message and says nothing to IMAP, so unless the
+   * outgoing server files its own copy, the Sent folder stays empty until someone APPENDs the
+   * bytes. `date` is the message's own Date header, so the copy sorts where the human expects.
+   */
+  append(path: string, content: Buffer | string, flags?: string[], date?: Date): Promise<unknown>
   on(event: string, listener: (payload: unknown) => void): unknown
   removeAllListeners?(event?: string): unknown
 }

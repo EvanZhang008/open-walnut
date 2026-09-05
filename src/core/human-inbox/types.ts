@@ -30,6 +30,13 @@ export interface LetterSender {
   taskTitle?: string;
   project?: string;
   host: string;
+  /**
+   * The plugin that sent this letter, when a plugin did (`walnut.letters.send`).
+   * Stamped host-side alongside `sessionId: 'external'`, never written by the
+   * caller. It exists so a plugin's own `onAnswered` filter is EXACT rather than
+   * "every external letter", and so a reader can say who the letter came from.
+   */
+  pluginId?: string;
 }
 
 /** The human's answer to an `action_required` letter. */

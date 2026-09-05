@@ -2,12 +2,15 @@ import type { PluginLifecycleChangedEvent } from '../../core/event-types.js'
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
 import { MailAccounts } from './accounts.js'
 import { createMailBaseApi } from './api.js'
+import { MailApprovals } from './approvals.js'
 import { MailBodyStore } from './bodies.js'
 import { openMailDatabase } from './db.js'
+import { MailDrafts } from './drafts.js'
 import { MailEvents } from './events.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
 import { MailRetention } from './retention.js'
 import { registerMailRoutes } from './routes.js'
+import { MailSends } from './sends.js'
 import { MailService } from './service.js'
 import { MailStore } from './store.js'
 import { MailSync, mailSyncForTesting, setActiveMailSync } from './sync.js'
@@ -52,6 +55,14 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const store = new MailStore(db)
   const bodies = new MailBodyStore(walnut.storage.dataDir)
   const service = new MailService({ store, bodies, providers })
+  // The write path. `letters` is the host's, and it is the ONLY way this plugin asks the human
+  // for anything: a letter renders on the console and on the phone, and its answer comes back
+  // through the bus filtered to this plugin's own letters.
+  const drafts = new MailDrafts({ store, events })
+  const sends = new MailSends({ store, service, drafts, letters: walnut.letters, events, log: walnut.log })
+  const approvals = new MailApprovals({
+    store, service, drafts, sends, letters: walnut.letters, events, log: walnut.log,
+  })
   // Everything that deletes, in one place, so a read path cannot reach a delete by accident.
   const retention = new MailRetention({ store, bodies, events })
   // One direction only: `accounts` reaches the loop (setup kicks a poll, a delete forgets the
@@ -67,8 +78,21 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     kick: (accountId) => { void sync.refresh(accountId).catch(() => undefined) },
     forget: (accountId) => sync.forget(accountId),
   })
-  sync = new MailSync({ walnut, store, service, retention, events })
+  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals })
   setActiveMailSync(sync)
+
+  // The letter answers. Owned by the loader through `walnut.letters`, and filtered host-side to
+  // this plugin's own letters, so the ledger can never be handed a letter id it did not issue.
+  walnut.letters.onAnswered((event) => approvals.onLetterAnswered(event))
+
+  // One sweep at activate, before the first tick's interval elapses. A restart is exactly when a
+  // draft left frozen by the process that just died has to be put right, and waiting two minutes
+  // for the poll timer would leave the console showing a send that nobody is running.
+  void approvals.reconcile().catch((error: unknown) => {
+    walnut.log.warn('mail could not reconcile frozen drafts at activate', {
+      error: String(error).slice(0, 200),
+    })
+  })
 
   walnut.services.publish('base', createMailBaseApi({
     providers,
@@ -77,7 +101,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     accounts: () => service.listAccounts(),
     caller: () => walnut.services.caller(),
   }))
-  registerMailRoutes(walnut, { store, service, accounts, providers, sync })
+  registerMailRoutes(walnut, { store, service, accounts, providers, sync, drafts, approvals, sends })
 
   // The phantom-provider sweep. A provider plugin normally disposes its own registration, and
   // the case this exists for is the one where it cannot: an `activate` that threw after

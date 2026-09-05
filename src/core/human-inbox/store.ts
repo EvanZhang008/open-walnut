@@ -804,6 +804,52 @@ export async function answerLetter(
   return record;
 }
 
+/** The action id a withdrawal records. Not a button: no reader ever offers it. */
+export const WITHDRAWN_ACTION_ID = 'withdrawn';
+
+/**
+ * Answer a letter on the SENDER's behalf, so a stale decision can never be tapped.
+ *
+ * `answerLetter` validates the action id against the letter's own buttons, which is right for
+ * a human's answer and wrong for this: the sender is retiring its own question, and the id it
+ * records (`withdrawn`) is deliberately one no reader offers. Everything else matches an
+ * ordinary answer, so every surface already knows how to render it: the letter reads answered,
+ * the thread carries the note, and the buttons stop being live.
+ *
+ * IDEMPOTENT on an already-answered letter, and that is the point rather than a convenience.
+ * The caller withdraws because the thing the letter asked about moved on, and a human who
+ * tapped a button half a second earlier must not turn that into a 409 the caller has to
+ * special-case; the record they made stays exactly as it is and this returns it unchanged.
+ */
+export async function withdrawLetter(
+  id: string,
+  input: { note: string },
+): Promise<{ letter: LetterRecord; alreadyAnswered: boolean }> {
+  requireValidId(id);
+  const note = str(input?.note).trim();
+  if (!note) throw invalid('note is required: a withdrawn letter has to say why');
+  assertBodySize(note, 'note');
+
+  const record = await withWriteLock(() => withStore((store) => {
+    const letter = find(store, id);
+    if (letter.answered) return { ...letter, alreadyAnswered: true };
+    const at = Date.now();
+    const bounded = boundThreadText(note);
+    letter.answered = { actionId: WITHDRAWN_ACTION_ID, label: 'Withdrawn', at, freeText: bounded };
+    letter.thread.push({ from: 'agent', text: `Withdrawn: ${bounded}`, at });
+    return { ...letter, alreadyAnswered: false };
+  }));
+  const { alreadyAnswered, ...letter } = record as LetterRecord & { alreadyAnswered: boolean };
+  if (alreadyAnswered) return { letter, alreadyAnswered };
+  // Read state is deliberately NOT touched: nobody looked at this letter, the sender took the
+  // question back, and marking it read would hide a letter the human never saw.
+  void mirrorLetterReadState(letter.id, letter.archived ? true : letter.read);
+  log.notif.info('human-inbox: letter withdrawn by its sender', {
+    letterId: id, pluginId: letter.sender.pluginId,
+  });
+  return { letter, alreadyAnswered };
+}
+
 /** Append the human's free-text reply. Same un-archive + mark-read reasoning. */
 export async function humanReply(id: string, input: { text: string }): Promise<LetterRecord> {
   requireValidId(id);

@@ -19,6 +19,7 @@ import type { MailBodyStore, StoredBodyFormat } from './bodies.js'
 import { MailBodyTooLargeError, MAX_BODY_BYTES, snippetOf } from './bodies.js'
 import {
   callProvider,
+  encodeMessageCursor,
   envelopeHashOf,
   ftsMatchFor,
   MailServiceError,
@@ -30,6 +31,7 @@ import {
   type MailBodyDto,
   type MailMessageDto,
   type MailboxDto,
+  type MessagePageCursor,
 } from './contract.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import type { MailStore, MessageRow, MessageWrite } from './store.js'
@@ -38,6 +40,7 @@ import type {
   MailAddress,
   MailAttachmentMeta,
   MailBody,
+  MailCapabilities,
   MailEnvelope,
   MailProviderSpec,
   MailboxRole,
@@ -113,6 +116,7 @@ export class MailService {
     const unread = await this.deps.store.unreadByAccount()
     const out: MailAccountDto[] = []
     for (const row of rows) {
+      const counts = unread.get(row.account_id)
       out.push({
         ...parseJson<Partial<MailAccount>>(row.payload, {}),
         accountId: row.account_id,
@@ -121,10 +125,27 @@ export class MailService {
         address: row.address,
         state: row.state as MailAccount['state'],
         ...(row.health_json ? { health: parseJson<MailAccount['health']>(row.health_json, undefined) } : {}),
-        unread: unread.get(row.account_id) ?? 0,
+        unread: counts?.total ?? 0,
+        unreadInbox: counts?.inbox ?? 0,
       })
     }
     return out
+  }
+
+  /**
+   * The capabilities that apply to ONE account, which is not always the provider's.
+   *
+   * IMAP is the case: sending needs SMTP settings the human may not have filled in, so two
+   * accounts behind the same provider genuinely differ on `send`. A provider that answers
+   * `accountCapabilities` wins over its static block; one that does not is unchanged.
+   */
+  async capabilitiesFor(accountId: string): Promise<MailCapabilities> {
+    const spec = this.provider(accountId)
+    if (!spec.accountCapabilities) return spec.capabilities
+    return callProvider(
+      `capabilities for ${accountId}`,
+      async () => spec.accountCapabilities!(accountId),
+    )
   }
 
   async listMailboxes(accountId: string): Promise<MailboxDto[]> {
@@ -144,14 +165,19 @@ export class MailService {
     accountId?: string
     mailboxId?: string
     limit: number
-    before?: number
-  }): Promise<{ messages: MailMessageDto[]; nextBefore?: number }> {
+    before?: MessagePageCursor
+  }): Promise<{ messages: MailMessageDto[]; nextBefore?: string }> {
     const rows = await this.deps.store.listMessages(query)
     const messages = rows.map((row) => this.toDto(row))
     // `nextBefore` is only offered when the page filled: handing one back on a short page
-    // makes a console ask for an empty page every time it reaches the end.
-    const nextBefore = rows.length === query.limit ? rows[rows.length - 1]!.sent_at : undefined
-    return { messages, ...(nextBefore !== undefined ? { nextBefore } : {}) }
+    // makes a console ask for an empty page every time it reaches the end. It carries the
+    // whole sort key, so the next page resumes exactly where this one stopped even when
+    // several messages share a timestamp.
+    const last = rows.length === query.limit ? rows[rows.length - 1]! : undefined
+    return {
+      messages,
+      ...(last ? { nextBefore: encodeMessageCursor({ sentAt: last.sent_at, messageId: last.message_id }) } : {}),
+    }
   }
 
   /**
@@ -203,6 +229,33 @@ export class MailService {
   /** The cached envelope alone, with no provider call. What a timed-out read degrades to. */
   async readEnvelope(accountId: string, messageId: string): Promise<MailMessageDto> {
     return this.toDto(await this.requireMessage(accountId, messageId))
+  }
+
+  /**
+   * The headers a reply draft copies, read from the CACHED message.
+   *
+   * `references` and `inReplyTo` live in the payload blob and never reach `MailMessageDto`, which
+   * is why this is its own method rather than a field on the DTO: they are threading mechanics,
+   * not something a console renders, and the ONE caller is the draft that is about to quote them.
+   * Taking them from a request body instead would let a caller aim a reply into a thread it never
+   * read, and the cache already holds exactly what the poll stored.
+   */
+  async replyTarget(accountId: string, messageId: string): Promise<{
+    rfcMessageId: string
+    references: string[]
+    subject: string
+    from: MailAddress
+  }> {
+    const row = await this.requireMessage(accountId, messageId)
+    const payload = parseJson<MessagePayload>(row.payload, {})
+    const references = [...(payload.references ?? [])]
+    if (payload.inReplyTo && !references.includes(payload.inReplyTo)) references.push(payload.inReplyTo)
+    return {
+      rfcMessageId: row.rfc_message_id,
+      references,
+      subject: row.subject,
+      from: payload.from ?? { address: row.from_addr },
+    }
   }
 
   async search(query: { accountId?: string; q: string; limit: number }): Promise<{
@@ -330,7 +383,7 @@ export class MailService {
     const stored = await this.deps.bodies.write(row.account_id, row.message_id, row.sent_at, {
       ...body,
       bytes: declared,
-    })
+    }, row.subject)
     const payload: MessagePayload = {
       ...parseJson<MessagePayload>(row.payload, {}),
       bodyFormat: stored.format,

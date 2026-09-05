@@ -160,6 +160,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.tasks` | Read, query, create, update, complete, and delete tasks. |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
 | `walnut.notifications` | Raise notices, report plugin errors, and recover from them. |
+| `walnut.letters` | Send a letter to the human, hear the answer, reply in its thread, withdraw a stale one. |
 | `walnut.ops` | Call stable host operations that no typed service covers yet. |
 | `walnut.services` | Publish a capability for other plugins, and use the ones you declared as dependencies. |
 | `walnut.events` | Subscribe to host events and emit namespaced plugin events. |
@@ -173,6 +174,48 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.unsafe` | Unstable raw host objects, for when no stable API exists. First access logs a warning. |
 
 There is no supported way to import Walnut's private `src/**` modules. Those paths change without notice. Use a typed service, `ops`, events, HTTP, a registry, or `unsafe`.
+
+#### Letters
+
+A letter is a document Walnut delivers to the one human who reads it: a subject, a markdown or HTML body, and optionally a few one-tap actions. It shows up in the human inbox on the console and on the phone, so it is how a plugin asks a question when the person is not sitting in front of the app. Use it as your approval object whenever your plugin must not act without a human decision (sending a message on their behalf, spending money, deleting something that is not yours): send the letter with actions, do nothing, and act only when the answer arrives.
+
+Answers arrive as EVENTS, not as a return value. `walnut.letters.send` resolves as soon as the letter exists, and `onAnswered` fires whenever the human taps an action, whichever surface they tapped it on. Your handler only ever sees answers to letters your own plugin sent. A letter can be answered exactly once, which is what makes "one approval, one action" enforceable; if the thing you asked about changes before they answer, call `withdraw` with a short note and send a fresh letter, so a stale decision is never tappable.
+
+Subscribe ONCE, at activate, and dispatch by letter id. A subscription per letter looks tidier and is a leak: every letter you send adds a handler that outlives the answer, they all run for every answer, and the host cannot tell you which one mattered. Record what a letter was for (a row in your own database is better than a Map, because an answer can arrive after a restart), and look it up when the answer comes in.
+
+```ts compile=letters
+import type { Disposable, WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+/** What each outstanding letter was about. A real plugin stores this in its own database. */
+const pending = new Map<string, { summary: string }>()
+
+export function watchAnswers(walnut: WalnutServerApi): Disposable {
+  // ONE subscription for the whole plugin, owned by the Disposable your activate returns.
+  return walnut.letters.onAnswered(async (event) => {
+    const what = pending.get(event.letterId)
+    if (!what) return
+    pending.delete(event.letterId)
+    if (event.actionId === 'send') await walnut.letters.reply(event.letterId, { text: 'Sent.' })
+  })
+}
+
+export async function askBeforeSending(walnut: WalnutServerApi, summary: string): Promise<string> {
+  const { letterId } = await walnut.letters.send({
+    subject: 'Approve this before it goes out',
+    markdown: summary,
+    actions: [
+      { id: 'send', label: 'Send' },
+      { id: 'discard', label: 'Discard' },
+    ],
+  })
+  pending.set(letterId, { summary })
+  return letterId
+}
+```
+
+One more thing the example cannot show: an answer can be RECORDED without your handler ever running, because the event bus does not wait for its subscribers and the process can die in between. If acting on an answer matters (it does, for anything that spends money or sends mail), give yourself a periodic sweep that looks for work you froze and never finished, and use `letters.get(letterId)` to find out whether it was answered while you were gone.
+
+Limits worth knowing before you write the loop: at most 30 letters per plugin per minute, and over that `send` rejects with a message saying so. A letter badges the bell and pushes to the phone, so per-item letters bury the human even under the limit: roll a batch up into one letter with one decision.
 
 ### Registrations
 

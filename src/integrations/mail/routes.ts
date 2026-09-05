@@ -1,8 +1,20 @@
-import type { PluginRouteRequest } from '../../core/plugins/plugin-route-adapter.js'
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
 import type { MailAccounts } from './accounts.js'
-import { MailServiceError, providerErrorCode, reasonOf } from './contract.js'
+import type { MailApprovals } from './approvals.js'
+import {
+  decodeMessageCursor,
+  errorReply,
+  firstQuery,
+  intQuery,
+  PRIMARY_ONLY,
+  readBody,
+  segmentsAfter,
+  withBudget,
+} from './contract.js'
+import type { MailDrafts } from './drafts.js'
 import type { MailProviderRegistry } from './provider-registry.js'
+import { registerMailWriteRoutes } from './routes-write.js'
+import type { MailSends } from './sends.js'
 import type { MailService } from './service.js'
 import type { MailStore } from './store.js'
 import type { MailSync } from './sync.js'
@@ -42,15 +54,10 @@ import type { MailSync } from './sync.js'
  * GET    /search?account=&q=&limit=                    -> { messages, source: 'provider'|'cache' }
  * POST   /refresh         { accountId? }               -> { ok: true, completed, ...counts }
  * GET    /health                                       -> { ok, providers, accounts, db, polling, lastTickAt, replica }
+ *
+ * The write path (drafts, the approval ledger, sending) is in routes-write.ts and is registered
+ * from here, so the mount point and the ordering rules stay in one place.
  */
-
-const PRIMARY_ONLY = {
-  status: 503,
-  json: {
-    error: 'primary_only',
-    message: 'Mail runs on the primary box only: a replica polling the same mailbox would double every fetch and every write.',
-  },
-} as const
 
 /** A refresh is a user action, so it answers fast rather than truthfully-but-eventually. */
 const REFRESH_DEADLINE_MS = 8_000
@@ -66,85 +73,20 @@ const REFRESH_DEADLINE_MS = 8_000
 const READ_DEADLINE_MS = 8_000
 const PURGE_DEADLINE_MS = 8_000
 
-/**
- * Race `work` against a clock, without letting the loser leak.
- *
- * The abandoned promise is deliberately NOT cancelled: a body fetch that arrives late still
- * writes itself to disk, so the next read is served locally. It just does not hold the response.
- */
-function withBudget<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
-  return Promise.race([
-    work,
-    new Promise<undefined>((resolve) => {
-      const timer = setTimeout(() => resolve(undefined), ms)
-      timer.unref?.()
-    }),
-  ])
-}
-
 const DEFAULT_PAGE = 50
 const MAX_PAGE = 200
 
-function errorReply(walnut: WalnutServerPluginApi, error: unknown) {
-  if (error instanceof MailServiceError) {
-    return { status: error.status, json: { error: error.code, message: error.message } }
-  }
-  const code = providerErrorCode(error)
-  if (code) {
-    // The provider said what went wrong in its own words, and those words are what the console
-    // shows the user, so they travel unedited.
-    const status = code === 'auth' ? 401
-      : code === 'not-found' ? 404
-        : code === 'unsupported' ? 409
-          : code === 'invalid' ? 400
-            : code === 'rate-limit' ? 429
-              : code === 'too-large' ? 413
-                : 502
-    return { status, json: { error: code, message: reasonOf(error) } }
-  }
-  if ((error as { code?: string } | null)?.code === 'db_unavailable') {
-    return { status: 503, json: { error: 'db_unavailable', message: reasonOf(error) } }
-  }
-  walnut.log.error('mail route failed', { error: reasonOf(error).slice(0, 300) })
-  return { status: 500, json: { error: 'internal', message: 'internal mail error' } }
-}
-
-function firstQuery(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value
-}
-
-function intQuery(value: string | string[] | undefined, fallback: number, max: number): number {
-  const raw = Number(firstQuery(value))
-  if (!Number.isFinite(raw) || raw <= 0) return fallback
-  return Math.min(Math.floor(raw), max)
-}
-
 /**
- * Path segments after `marker`, decoded.
+ * How long a console Send waits for the transport before it answers with what it knows.
  *
- * A plugin route handler is handed the path, not Express's `req.params`, and a mail message
- * handle is `<mailbox>:<uidvalidity>:<uid>` where the mailbox name may itself contain a colon
- * or a slash. So the caller percent-encodes each segment and this decodes it back; anything
- * that guessed at the separators would break on a mailbox called "Projects/2026".
+ * The ATTEMPT keeps the full 30s send deadline and settles its own row whatever happens here;
+ * this only bounds the RESPONSE. A route that waited out a slow SMTP handshake would hold one of
+ * the browser's six connections for half a minute, and the console learns the outcome from the
+ * `send-settled` event or from `GET /sends` either way.
  */
-function segmentsAfter(request: PluginRouteRequest, marker: string): string[] {
-  const pathname = request.path.split('?')[0] ?? ''
-  const at = pathname.indexOf(marker)
-  if (at < 0) return []
-  return pathname.slice(at + marker.length).split('/').filter(Boolean).map((segment) => {
-    try { return decodeURIComponent(segment) }
-    catch { return segment }
-  })
-}
+const CONSOLE_SEND_DEADLINE_MS = 10_000
 
-async function readBody(request: PluginRouteRequest): Promise<Record<string, unknown> | null> {
-  try {
-    const body = await request.json<Record<string, unknown> | null>()
-    return body && typeof body === 'object' ? body : {}
-  } catch {
-    return null
-  }
-}
+const DRAFT_LIST_LIMIT = 200
 
 export function registerMailRoutes(
   walnut: WalnutServerPluginApi,
@@ -154,9 +96,12 @@ export function registerMailRoutes(
     accounts: MailAccounts
     providers: MailProviderRegistry
     sync: MailSync
+    drafts: MailDrafts
+    approvals: MailApprovals
+    sends: MailSends
   },
 ): void {
-  const { store, service, accounts, providers, sync } = deps
+  const { store, service, accounts, providers, sync, drafts, approvals, sends } = deps
   const primaryOnly = (): boolean => walnut.replica
 
   walnut.http.route('get', '/providers', () => {
@@ -274,14 +219,17 @@ export function registerMailRoutes(
 
   walnut.http.route('get', '/messages', async (request) => {
     if (primaryOnly()) return PRIMARY_ONLY
-    const before = Number(firstQuery(request.query.before))
+    // `before` is now the opaque token the previous page handed back, and it carries the WHOLE
+    // sort key. The query name is unchanged, and a bare number (a console tab that was open
+    // across the deploy) still pages the way it used to rather than answering with a 400.
+    const before = decodeMessageCursor(firstQuery(request.query.before))
     try {
       return {
         json: await service.listMessages({
           ...(firstQuery(request.query.account) ? { accountId: firstQuery(request.query.account)! } : {}),
           ...(firstQuery(request.query.mailbox) ? { mailboxId: firstQuery(request.query.mailbox)! } : {}),
           limit: intQuery(request.query.limit, DEFAULT_PAGE, MAX_PAGE),
-          ...(Number.isFinite(before) && before > 0 ? { before } : {}),
+          ...(before ? { before } : {}),
         }),
       }
     } catch (error) {
@@ -323,6 +271,8 @@ export function registerMailRoutes(
       return errorReply(walnut, error)
     }
   })
+
+  registerMailWriteRoutes(walnut, { service, drafts, approvals, sends })
 
   walnut.http.route('get', '/health', async () => {
     if (primaryOnly()) return PRIMARY_ONLY

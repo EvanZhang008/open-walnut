@@ -119,7 +119,16 @@ export interface OutgoingMail {
   cc?: MailAddress[]
   bcc?: MailAddress[]
   subject: string
+  /** The markdown source, which is ALSO the `text/plain` alternative the transport sends. */
   bodyMarkdown: string
+  /**
+   * The `text/html` alternative, already rendered and already sanitized by the base.
+   *
+   * A provider sends it as-is and must not re-render or re-clean it: the base is the one layer
+   * that knows what the markdown meant, and two sanitizers disagreeing is how a mail loses half
+   * its formatting. Absent means send text only.
+   */
+  bodyHtml?: string
   inReplyTo?: string
   references?: string[]
 }
@@ -150,6 +159,20 @@ export interface ProviderError {
   code: ProviderErrorCode
   message: string
   retryAfterMs?: number
+  /**
+   * For a SEND only: how far the transport got before it failed. The single most important
+   * field a mail provider reports, because it decides whether a retry is safe.
+   *
+   * - `'before-data'`: the message was refused before any of it was accepted (a rejected
+   *   login, a refused connection, every recipient rejected in the envelope). Nothing was
+   *   sent, so the base marks the send `failed` and a human may retry it.
+   * - `'after-data'`: the transport had begun accepting the message when it failed, or our
+   *   own deadline fired with the outcome unknown. SMTP has no dedupe, so the base marks the
+   *   send `unknown` and NEVER retries: only the human, looking at the Sent folder, can say.
+   * - `'unknown'` or absent: treated as `'after-data'`. The unsafe reading is the correct
+   *   default, because the cost of guessing wrong the other way is a duplicate mail.
+   */
+  stage?: 'before-data' | 'after-data' | 'unknown'
 }
 
 export interface MailPollRequest {
@@ -202,6 +225,18 @@ export interface MailProviderSpec {
   id: string
   label: string
   capabilities: MailCapabilities
+  /**
+   * The capabilities of ONE account, when they differ from the provider's own.
+   *
+   * Optional, and the base prefers it whenever it exists. IMAP is why it does: reading needs
+   * a host and a password, sending needs SMTP settings the human may never have filled in, so
+   * two accounts behind the same provider genuinely disagree about `send`. A static block
+   * would have to claim the union (and offer a Send button that always fails) or the
+   * intersection (and hide it from the account that can).
+   *
+   * Keep it CHEAP: the base calls it on the send path, so it must not open a connection.
+   */
+  accountCapabilities?(accountId: string): Promise<MailCapabilities> | MailCapabilities
   setup: AccountSetupSpec
   listAccounts(): Promise<MailAccount[]>
   health(accountId: string): Promise<ProviderHealth>

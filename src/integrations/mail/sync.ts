@@ -94,6 +94,19 @@ export class MailSync {
     service: MailService
     retention: MailRetention
     events: MailEvents
+    /**
+     * The send ledger's reaper. Optional so a test can drive a poll loop without the write path.
+     *
+     * It rides the tick because a row stuck in `sending` only happens when the process died
+     * mid-attempt, so the thing that has to notice is whatever runs next, and the tick is the one
+     * timer this plugin owns. It goes FIRST: it is a bounded batch against a handful of rows, and
+     * a draft that is stuck showing "sending" is the most alarming thing a mail console can show.
+     * Both of these run INSIDE the tick's deadline; before they did not, and between them they
+     * could spend the whole budget on letter writes and starve the poll they share it with.
+     */
+    sends?: { reap(deadlineAt?: number): Promise<number> }
+    /** The frozen-draft reconciler: crashes in the approval window, and lost answers. */
+    approvals?: { reconcile(deadlineAt?: number): Promise<{ unfrozen: number; resumed: number }> }
   }) {}
 
   get polling(): boolean {
@@ -227,6 +240,24 @@ export class MailSync {
     const startedAt = Date.now()
     this.lastTickAt = startedAt
     const deadlineAt = startedAt + TICK_BUDGET_MS
+
+    if (this.deps.sends) {
+      try {
+        const reaped = await this.deps.sends.reap(deadlineAt)
+        if (reaped > 0) this.deps.walnut.log.warn('mail sends reaped as unknown', { reaped })
+      } catch (error) {
+        this.deps.walnut.log.warn('mail send reaper failed', { error: reasonOf(error).slice(0, 200) })
+      }
+    }
+    if (this.deps.approvals) {
+      try {
+        await this.deps.approvals.reconcile(deadlineAt)
+      } catch (error) {
+        this.deps.walnut.log.warn('mail approval reconciler failed', {
+          error: reasonOf(error).slice(0, 200),
+        })
+      }
+    }
 
     let accounts = (await this.deps.store.listAccounts()).filter((row) => row.state !== 'disabled')
     if (options.only) accounts = accounts.filter((row) => row.account_id === options.only)

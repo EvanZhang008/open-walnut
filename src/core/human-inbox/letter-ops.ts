@@ -17,14 +17,19 @@
 
 import { createHash } from 'node:crypto';
 import { log } from '../../logging/index.js';
+import { bus } from '../event-bus.js';
 import {
   answerLetter,
   getLetter,
   humanReply,
   sendLetter,
+  withdrawLetter,
   LetterError,
 } from './store.js';
 import type { LetterDetail, LetterRecord, LetterSender, NewLetter } from './types.js';
+
+/** Which edge recorded the answer. `'plugin'` is a sender taking its own question back. */
+export type LetterAnswerSource = 'web' | 'phone' | 'relay' | 'plugin';
 
 /** Sender for a caller we can't identify (hand-started agent, curl, tests). */
 const EXTERNAL_SENDER: LetterSender = { sessionId: 'external', host: 'local' };
@@ -289,17 +294,61 @@ async function withBodies(record: LetterRecord): Promise<LetterRecord | LetterDe
   }
 }
 
+/**
+ * Announce an answer on the bus.
+ *
+ * The one emit for every answer path, which is why it lives beside the delivery it accompanies
+ * rather than in the store: `deliverLetterToOrigin` SKIPS a sender with no origin session, and
+ * a plugin's letter is exactly that case, so without this event a plugin would never learn the
+ * human's decision at all. Destination `web-ui` because that is the lane every console feed
+ * already listens on; in-process plugin subscribers are global and see it regardless.
+ */
+function emitLetterAnswered(record: LetterRecord, source: LetterAnswerSource): void {
+  const answered = record.answered;
+  if (!answered) return;
+  bus.emit('human-inbox:answered', {
+    letterId: record.id,
+    actionId: answered.actionId,
+    label: answered.label,
+    ...(answered.freeText ? { freeText: answered.freeText } : {}),
+    answeredAt: answered.at,
+    source,
+    ...(record.sender.pluginId ? { pluginId: record.sender.pluginId } : {}),
+  }, ['web-ui'], { source: 'human-inbox' });
+}
+
 /** Human clicked an action: record it first, then deliver the choice. */
 export async function answerLetterAndDeliver(
   id: string,
   input: { actionId: string; freeText?: string },
+  source: LetterAnswerSource = 'web',
 ): Promise<AnsweredLetter> {
   const record = await answerLetter(id, input);
+  // BEFORE the delivery await, deliberately: delivery reaches the session tracker and the
+  // message queue and can take seconds, and a plugin waiting on this event to run its own
+  // approval ledger must not be behind an unrelated session's revival.
+  emitLetterAnswered(record, source);
   const delivery = await deliverLetterToOrigin(record, {
     choice: record.answered?.label ?? input.actionId,
     text: record.answered?.freeText,
   });
   return { letter: await withBodies(record), delivery };
+}
+
+/**
+ * The SENDER retires its own question: answered server-side, announced, never delivered.
+ *
+ * No delivery on purpose. Nobody decided anything, so there is no human turn to hand to an
+ * origin session; the event is what tells the sender its withdrawal landed. Idempotent through
+ * the store, and the event is emitted only when this call is the one that answered the letter.
+ */
+export async function withdrawLetterAndAnnounce(
+  id: string,
+  input: { note: string },
+): Promise<LetterRecord> {
+  const { letter, alreadyAnswered } = await withdrawLetter(id, input);
+  if (!alreadyAnswered) emitLetterAnswered(letter, 'plugin');
+  return letter;
 }
 
 /** Human wrote a free-text reply: record first, then deliver. */

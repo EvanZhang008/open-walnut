@@ -21,6 +21,7 @@ import type {
   Disposable,
   MailAccount,
   MailBody,
+  MailCapabilities,
   MailEnvelope,
   MailPollRequest,
   MailPollResult,
@@ -47,6 +48,8 @@ import {
   parseHeaders,
   parseMime,
 } from './mime.js'
+import { createImapSender } from './provider-send.js'
+import { verifySmtp, type SmtpSecurity } from './smtp.js'
 
 /** Headers the ENVELOPE does not carry, or carries in a lossy form. */
 const WANTED_HEADERS = ['message-id', 'references', 'in-reply-to', 'date']
@@ -111,6 +114,31 @@ function toEnvelope(mailbox: string, uidValidity: string, message: ImapFetchedMe
   }
 }
 
+/**
+ * The whole capability block, in one place so the per-account answer can narrow it.
+ *
+ * `send: true` is a statement about the PROVIDER, not about any one account: this code can send
+ * when an account has SMTP settings. `accountCapabilities` is what tells the truth per account,
+ * and the base prefers it everywhere a decision is actually made.
+ */
+const CAPABILITIES: MailCapabilities = {
+  // Cache search in v1: IMAP SEARCH is per mailbox, unsorted, and slow on a big folder, and
+  // the base's FTS index already covers full body text.
+  search: false,
+  // Declared true, enforced at watch time. A capability is data the base reads before any
+  // connection exists, so IDLE cannot be probed here; `watch` returns a no-op handle and
+  // logs when the server turns out not to advertise it, which degrades to poll-only.
+  watch: true,
+  drafts: false,
+  markRead: true,
+  flags: false,
+  threads: false,
+  send: true,
+  sendAsReply: true,
+  bodies: 'both',
+  attachments: 'metadata',
+}
+
 export function createImapProvider(deps: {
   store: ImapAccountStore
   pool: ImapPool
@@ -124,6 +152,8 @@ export function createImapProvider(deps: {
     return entry
   }
 
+  const sender = createImapSender({ store, pool, log, accountOf })
+
   const toAccount = (entry: { accountId: string; settings: { address: string }; displayName: string }): MailAccount => ({
     accountId: entry.accountId,
     providerId: PROVIDER_ID,
@@ -136,23 +166,20 @@ export function createImapProvider(deps: {
   return {
     id: PROVIDER_ID,
     label: 'IMAP',
-    capabilities: {
-      // Cache search in v1: IMAP SEARCH is per mailbox, unsorted, and slow on a big folder, and
-      // the base's FTS index already covers full body text.
-      search: false,
-      // Declared true, enforced at watch time. A capability is data the base reads before any
-      // connection exists, so IDLE cannot be probed here; `watch` returns a no-op handle and
-      // logs when the server turns out not to advertise it, which degrades to poll-only.
-      watch: true,
-      drafts: false,
-      markRead: true,
-      flags: false,
-      threads: false,
-      // Sending is P2-2. `send` below refuses rather than silently doing nothing.
-      send: false,
-      sendAsReply: false,
-      bodies: 'both',
-      attachments: 'metadata',
+    capabilities: CAPABILITIES,
+
+    /**
+     * What THIS account can do, which is not always what the provider can.
+     *
+     * Reading needs a host and a password; sending needs a second server the human may never have
+     * filled in. So `send` is per account, and it is answered from config alone: the base calls
+     * this on the send path, and opening a connection here would put a network round trip in front
+     * of every draft the console lists.
+     */
+    async accountCapabilities(accountId: string): Promise<MailCapabilities> {
+      const entry = await store.entry(accountId)
+      const canSend = !!entry?.smtp
+      return { ...CAPABILITIES, send: canSend, sendAsReply: canSend }
     },
 
     setup: {
@@ -176,6 +203,27 @@ export function createImapProvider(deps: {
             { value: 'starttls', label: 'STARTTLS (port 143)' },
           ],
         },
+        // The outgoing half, and every field is OPTIONAL. An account added without them reads
+        // mail and reports `send: false`, which is the honest answer and a working account; making
+        // them required would mean nobody can add a mailbox they only want to read.
+        {
+          name: 'smtp_host',
+          label: 'Outgoing (SMTP) server',
+          kind: 'text',
+          placeholder: 'smtp.example.com',
+          help: 'Leave blank to add this account for reading only. Walnut hides Send until it is set.',
+        },
+        { name: 'smtp_port', label: 'Outgoing port', kind: 'text', placeholder: '587' },
+        {
+          name: 'smtp_tls',
+          label: 'Outgoing encryption',
+          kind: 'select',
+          options: [
+            { value: 'starttls', label: 'STARTTLS (port 587)' },
+            { value: 'tls', label: 'TLS (port 465)' },
+            { value: 'none', label: 'None' },
+          ],
+        },
       ],
 
       /**
@@ -185,6 +233,10 @@ export function createImapProvider(deps: {
        * a wrong password never lands on disk and a failed setup leaves nothing behind. The LIST
        * is what proves authentication: a server can accept a TCP connection and a greeting from
        * anyone, and only a real command proves the login went through.
+       *
+       * SMTP is probed in the SAME budget, and only when the fields were given. An outgoing server
+       * that refuses the password is worth finding out about here, while the human is still looking
+       * at the form, rather than in a letter whose Send button is guaranteed to fail.
        */
       async submit(values: Record<string, string>): Promise<MailAccount> {
         const address = (values.address ?? '').trim()
@@ -195,7 +247,13 @@ export function createImapProvider(deps: {
         if (!address || !password || !host) {
           throw providerError('invalid', 'An email address, a password and an IMAP server are all required.')
         }
+        const smtpHost = (values.smtp_host ?? '').trim()
+        const smtpSecurity: SmtpSecurity = values.smtp_tls === 'tls'
+          ? 'tls'
+          : values.smtp_tls === 'none' ? 'none' : 'starttls'
+        const smtpPort = Number(values.smtp_port) || (smtpSecurity === 'tls' ? 465 : 587)
 
+        const startedAt = Date.now()
         const probe = new ImapConnection({
           accountId: accountIdFor(address),
           settings: { address, host, port, tls },
@@ -208,13 +266,26 @@ export function createImapProvider(deps: {
         } finally {
           await probe.dispose().catch(() => undefined)
         }
+        if (smtpHost) {
+          // ONE budget across both probes, so a setup cannot take 30 seconds by doing two 15s
+          // waits. The floor keeps the error legible when IMAP has eaten nearly all of it.
+          await verifySmtp({
+            settings: { host: smtpHost, port: smtpPort, security: smtpSecurity },
+            user: address,
+            password,
+            timeoutMs: Math.max(2_000, CONNECT_TIMEOUT_MS - (Date.now() - startedAt)),
+          })
+        }
 
         const entry = await store.save({
           address, host, port, tls,
           password,
           displayName: address,
+          ...(smtpHost ? { smtpHost, smtpPort, smtpSecurity } : {}),
         })
-        log.info('imap account configured', { accountId: entry.accountId, host, port, tls })
+        log.info('imap account configured', {
+          accountId: entry.accountId, host, port, tls, canSend: !!smtpHost,
+        })
         return {
           accountId: entry.accountId,
           providerId: PROVIDER_ID,
@@ -405,10 +476,20 @@ export function createImapProvider(deps: {
       }
     },
 
-    /** P2-2. Declared `send: false`, and this refuses rather than looking like it worked. */
-    async send(): Promise<never> {
-      throw providerError('unsupported', 'Sending mail arrives in a later slice; this provider reads only.')
-    },
+    /**
+     * One SMTP attempt, and an honest `stage` on the way out.
+     *
+     * Everything about whether this may be retried is decided in `smtp.ts`; this function's job is
+     * to refuse early when the account cannot send at all, hand over the message the base composed,
+     * and then file the Sent copy without letting that step touch the outcome.
+     */
+    /**
+     * Send one message. The outgoing half lives in provider-send.ts.
+     *
+     * Everything interesting about it is a deadline argument, so it is written out where it can be
+     * read next to the numbers it depends on rather than in the middle of the read path.
+     */
+    send: sender.send,
 
     async removeAccount(accountId: string): Promise<void> {
       await pool.forget(accountId)
