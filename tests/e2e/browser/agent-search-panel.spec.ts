@@ -81,7 +81,13 @@ test('auto-triggers once after settle: skeleton, then clickable rows above the r
   const row = panel.locator(`.agent-search-row[data-task-id="${TARGET_TASK_ID}"]`);
   await expect(row).toBeVisible({ timeout: 10_000 });
   await expect(row.locator('.agent-search-row-title')).toHaveText('Playwright test task');
-  await expect(row.locator('.agent-search-row-evidence')).toContainText('docx');
+  // Board-row shape (2026-09-05): ONE line per result — circle, ellipsized
+  // title, muted project; the evidence phrase lives in the hover tooltip only.
+  await expect(row.locator('.agent-search-row-project')).toHaveText('pw-fixtures');
+  await expect(row).toHaveAttribute('title', /docx-preview/);
+  await expect(row.locator('.agent-search-row-evidence')).toHaveCount(0);
+  const rowBox = await row.boundingBox();
+  expect(rowBox!.height).toBeLessThanOrEqual(30);
   await expect(panel.locator('.agent-search-model')).toBeVisible();
 
   // Exactly one request despite per-keystroke fills (fill = one input event,

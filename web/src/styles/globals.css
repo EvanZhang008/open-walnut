@@ -31830,7 +31830,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* ── Agent task search (✦ AI section pinned atop the task panel) ─────────── */
 .agent-search-panel {
   margin: 6px 8px 8px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 5%, transparent);
@@ -31915,30 +31915,47 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   line-height: 1.4;
 }
 .agent-search-results { list-style: none; margin: 4px 0 0; padding: 0; max-height: 40vh; overflow-y: auto; }
+/* Result rows mirror .todo-pinned-card (the tier cards right below the panel):
+   one 28px line, circle + ellipsized title + muted project, the same
+   needs-action tint and done strike-through — so AI results read as more
+   board rows, not as a card stack. Evidence is in the row's title tooltip. */
 .agent-search-row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 6px;
   width: 100%;
+  min-height: 28px;
   text-align: left;
   border: none;
   background: none;
   cursor: pointer;
-  padding: 6px 6px;
+  padding: 4px 6px;
   border-radius: 6px;
   color: var(--fg);
+  transition: background 0.12s;
 }
-.agent-search-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.agent-search-row-title { font-size: 12.5px; font-weight: 500; }
-.agent-search-row-meta { font-size: 10.5px; color: var(--fg-muted); }
-.agent-search-row-evidence {
-  font-size: 11px;
-  color: var(--fg-muted);
-  opacity: 0.85;
+.agent-search-row:hover { background: var(--hover-bg, rgba(0,0,0,0.04)); }
+.agent-search-row.is-needs-action { background: rgba(255, 59, 48, 0.08); }
+.agent-search-row.is-needs-action:hover { background: rgba(255, 59, 48, 0.14); }
+/* The circle is a span inside the row button (a button can't nest a button);
+   it borrows .task-phase-icon-btn for colour, without its own hover. */
+.agent-search-row-circle { pointer-events: none; }
+.agent-search-row-circle svg { width: 12px; height: 12px; }
+.agent-search-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  text-overflow: ellipsis;
+}
+.agent-search-row.is-done .agent-search-row-title { text-decoration: line-through; color: var(--fg-muted); }
+.agent-search-row-project {
+  font-size: 10px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .agent-search-error { padding: 6px 0 2px; color: var(--fg-muted); font-size: 12px; }
 .agent-search-retry {
