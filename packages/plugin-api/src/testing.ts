@@ -1,5 +1,12 @@
 import type { Disposable, PluginLogger, WalnutTask, WalnutTaskSummary } from './shared.js'
-import type { PluginEvent, PluginNotice, PluginOpDefinition, WalnutServerApi } from './server.js'
+import type {
+  PluginEvent,
+  PluginNotice,
+  PluginOpDefinition,
+  ServiceApi,
+  ServiceChange,
+  WalnutServerApi,
+} from './server.js'
 
 function disposable(dispose: () => void = () => undefined): Disposable {
   let active = true
@@ -51,6 +58,12 @@ export interface FakeWalnutResult {
   emitted: PluginEvent[]
   /** Ops the plugin registered and has not disposed, in registration order. */
   registeredOps: PluginOpDefinition[]
+  /**
+   * Every live service, keyed `<pluginId>:<name>`. Seed a dependency's api here BEFORE
+   * calling `activate` to stand in for the plugin you depend on, and read it after to
+   * assert what your own plugin published.
+   */
+  services: Map<string, ServiceApi>
 }
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
@@ -59,12 +72,68 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const errors: PluginNotice[] = []
   const emitted: PluginEvent[] = []
   const registeredOps: PluginOpDefinition[] = []
+  const services = new Map<string, ServiceApi>()
+  const serviceWatchers = new Set<(change: ServiceChange) => void | Promise<void>>()
   const subscriptions = new Set<{ names: string[]; handler: (event: PluginEvent) => void | Promise<void> }>()
   const files = new Map<string, unknown>()
   const secrets = new Map<string, string>()
   let config = structuredClone(options.config ?? {})
   const controller = new AbortController()
   let nextTask = 1
+
+  function notifyServices(change: ServiceChange): void {
+    for (const watcher of serviceWatchers) void watcher(change)
+  }
+
+  /** The host's method-bag rule, restated so a plugin test fails the same way the host does. */
+  function assertMethodBag(key: string, api: ServiceApi): void {
+    const rule = 'a service api must be a plain object whose own enumerable properties are all functions'
+    const prototype = Object.getPrototypeOf(api)
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`Service "${key}" cannot be published: ${rule}`)
+    }
+    for (const [name, value] of Object.entries(api)) {
+      if (typeof value !== 'function') {
+        throw new Error(`Service "${key}" cannot be published: ${rule}, but "${name}" is ${typeof value}`)
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(api, 'then')) {
+      throw new Error(`Service "${key}" cannot be published: a service api may not have a method named "then"`)
+    }
+  }
+
+  function requireService(key: string): ServiceApi {
+    const api = services.get(key)
+    if (!api) throw new Error(`No fake service published: ${key}`)
+    return api
+  }
+
+  /** Resolved from the map at CALL time, like the host's handle. */
+  function serviceHandle<T>(key: string): T {
+    return new Proxy({} as ServiceApi, {
+      get(_target, property) {
+        if (typeof property === 'symbol') return undefined
+        const value = requireService(key)[property]
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          const api = requireService(key)
+          return api[property].apply(api, args)
+        }
+      },
+      has(_target, property) { return typeof property === 'string' && property in (services.get(key) ?? {}) },
+      ownKeys() { return Object.keys(services.get(key) ?? {}) },
+      getOwnPropertyDescriptor(_target, property) {
+        const api = services.get(key)
+        if (typeof property === 'symbol' || !api || !Object.prototype.hasOwnProperty.call(api, property)) return undefined
+        return { value: api[property], writable: false, enumerable: true, configurable: true }
+      },
+      set() { return false },
+      deleteProperty() { return false },
+      defineProperty() { return false },
+      preventExtensions() { return false },
+      setPrototypeOf() { return false },
+    }) as T
+  }
 
   const events = {
     on(names: string | string[], handler: (event: PluginEvent) => void | Promise<void>) {
@@ -157,6 +226,30 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       unwrap(result) { if (!result.ok) throw new Error(result.message); return result.result },
       async list() { return [] },
     },
+    // Backed by the in-memory map above: a plugin test stands in for a dependency by
+    // putting an api in it. The rules that make a real service safe are enforced here too
+    // (method bag, replace-then-stale-dispose, lazy `get` vs eager `require`), so a test
+    // that passes against the fake is not passing against a laxer contract.
+    services: {
+      publish(name, api) {
+        const key = `${options.pluginId ?? 'test-plugin'}:${name}`
+        assertMethodBag(key, api as ServiceApi)
+        const action = services.has(key) ? 'replaced' : 'published'
+        services.set(key, api as ServiceApi)
+        notifyServices({ key, pluginId: options.pluginId ?? 'test-plugin', action })
+        return disposable(() => {
+          if (services.get(key) !== api) return
+          services.delete(key)
+          notifyServices({ key, pluginId: options.pluginId ?? 'test-plugin', action: 'removed' })
+        })
+      },
+      get(key) { return serviceHandle(key) },
+      require(key) { requireService(key); return serviceHandle(key) },
+      onChange(handler) {
+        serviceWatchers.add(handler)
+        return disposable(() => serviceWatchers.delete(handler))
+      },
+    },
     events,
     http: {
       route: () => disposable(),
@@ -226,5 +319,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps }
+  return { api, notices, errors, emitted, registeredOps, services }
 }

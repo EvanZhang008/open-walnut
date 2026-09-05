@@ -45,3 +45,60 @@ describe('createFakeWalnut registry.op', () => {
     expect(fake.registeredOps).toEqual([])
   })
 })
+
+describe('createFakeWalnut services', () => {
+  it('lets a test stand in for the plugin this one depends on', () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+    fake.services.set('greeter-plugin:greeter', { greet: (who: string) => `hi ${who}` })
+
+    // What the plugin under test would write in its own activate.
+    const greeter = fake.api.services.require<{ greet(who: string): string }>('greeter-plugin:greeter')
+
+    expect(greeter.greet('ada')).toBe('hi ada')
+    // Seeding a replacement is enough: the fake resolves at call time, like the host.
+    fake.services.set('greeter-plugin:greeter', { greet: (who: string) => `hello ${who}` })
+    expect(greeter.greet('ada')).toBe('hello ada')
+  })
+
+  it('splits eager require from lazy get, the way the host does', () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+
+    expect(() => fake.api.services.require('absent:thing')).toThrow(/No fake service published/)
+    const lazy = fake.api.services.get<{ ping(): string }>('absent:thing')
+    fake.services.set('absent:thing', { ping: () => 'pong' })
+
+    expect(lazy.ping()).toBe('pong')
+  })
+
+  it('applies the host\'s method-bag rule, so a test cannot pass against a laxer contract', () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+    class Clock { now() { return 1 } }
+
+    expect(() => fake.api.services.publish('clock', new Clock()))
+      .toThrow(/plain object whose own enumerable properties are all functions/)
+    expect(() => fake.api.services.publish('clock', { now: () => 1, tz: 'utc' } as never))
+      .toThrow(/"tz" is string/)
+    expect(() => fake.api.services.publish('clock', { then: () => undefined }))
+      .toThrow(/may not have a method named "then"/)
+    expect([...fake.services.keys()]).toEqual([])
+  })
+
+  it('records what the plugin published, keyed by its own id, and tells onChange', () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+    const changes: Array<{ key: string; action: string }> = []
+    fake.api.services.onChange((change) => { changes.push({ key: change.key, action: change.action }) })
+
+    const registration = fake.api.services.publish('clock', { now: () => 1 })
+    expect([...fake.services.keys()]).toEqual(['sample:clock'])
+
+    fake.api.services.publish('clock', { now: () => 2 })
+    registration.dispose()
+
+    // The replaced registration's Disposable is a no-op, same as the host's.
+    expect(fake.services.get('sample:clock')?.now()).toBe(2)
+    expect(changes).toEqual([
+      { key: 'sample:clock', action: 'published' },
+      { key: 'sample:clock', action: 'replaced' },
+    ])
+  })
+})

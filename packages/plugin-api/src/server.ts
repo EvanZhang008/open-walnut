@@ -128,6 +128,66 @@ export interface OpsService {
   list(): Promise<OpSummary[]>
 }
 
+/**
+ * A capability another plugin can call: a plain object whose own properties are all
+ * functions. Not a class instance, an EventEmitter or a Promise — a consumer's handle is
+ * resolved per key, per access, so anything carrying identity or internal state would go
+ * stale the moment you republished it. Close over your state in the functions instead.
+ */
+export type ServiceApi = Record<string, (...args: any[]) => unknown>
+
+export interface ServiceChange {
+  /** `<publisherPluginId>:<name>`, or `core:<name>` for a host capability. */
+  key: string
+  pluginId: string
+  action: 'published' | 'replaced' | 'removed'
+}
+
+/**
+ * Services are how a plugin builds on another plugin. The publisher exports the api's TYPE
+ * from its own `api.ts` and the consumer takes it as an `import type`, so the shape travels
+ * at build time only and never through this package: Walnut's kernel does not know what a
+ * mail or a calendar looks like, and it must stay that way.
+ *
+ * Everything here is SYNCHRONOUS, deliberately. A plugin that declared `dependencies` in
+ * its manifest is loaded after those plugins activated, so a declared service is already
+ * there when your `activate` runs; an awaitable `get` could only ever wait for something
+ * that is never coming.
+ *
+ * `get` returns a live handle, not a snapshot: hold it for the plugin's lifetime, and it
+ * follows the publisher through a republish or a reload. Once the publisher is gone, every
+ * property access throws instead of answering `undefined`.
+ */
+export interface ServicesService {
+  /**
+   * Publish `api` as `<yourPluginId>:<name>`. `name` matches `/^[a-z0-9][a-z0-9_-]*$/` and
+   * may not contain `:`; the host owns the prefix, so two plugins can never collide.
+   * Publishing the same name twice replaces the earlier value. Publish synchronously inside
+   * `activate`, so a plugin that depends on you can call the service during its own.
+   *
+   * The constraint says "every property of `api` is a function", which an `interface` and a
+   * `type` alias both satisfy. The class-instance and thenable cases it cannot express are
+   * refused at runtime.
+   */
+  publish<T extends Record<keyof T, (...args: any[]) => unknown>>(name: string, api: T): Disposable
+  /**
+   * A LAZY live handle to `key`: nothing is resolved until you call a method, so you may
+   * take one for a key a peer publishes later in its own `activate`. Throws when your
+   * manifest does not declare the publishing plugin in `dependencies`, because a declared
+   * dependency is what makes the load order a guarantee. `core:` keys are exempt: those are
+   * gated by `engines.walnut`.
+   */
+  get<T = ServiceApi>(key: string): T
+  /**
+   * Like `get`, and it additionally asserts that a publisher exists right now, so a typo'd
+   * key throws inside your `activate` instead of at the first call. The name to use when the
+   * point is "I declared this dependency, hand it over".
+   */
+  require<T = ServiceApi>(key: string): T
+  /** Told when any service is published, replaced or removed, including your own. */
+  onChange(handler: (change: ServiceChange) => void | Promise<void>): Disposable
+}
+
 export interface PluginEvent<T = unknown> {
   name: string
   data: T
@@ -528,6 +588,7 @@ export interface WalnutServerApi {
   readonly config: ConfigService
   readonly notifications: NotificationService
   readonly ops: OpsService
+  readonly services: ServicesService
   readonly events: EventApi
   readonly http: HttpService
   readonly storage: StorageService

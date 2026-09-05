@@ -15,6 +15,15 @@ import { createPluginHttpRoute, type PluginRouteHandler } from './plugin-route-a
 import { namespacePluginId, pluginOpName } from './ids.js'
 import { registerOwnedCommand, type PluginCommandDefinition } from './command-registry.js'
 import { registerOwnedSkillDir, type PluginSkillDefinition } from './skill-registry.js'
+import {
+  assertServiceAvailable,
+  createServiceHandle,
+  publishService,
+  resolveServiceAccess,
+  SERVICE_CHANGED_EVENT,
+  type ServiceApi,
+  type ServiceChange,
+} from './service-registry.js'
 import { clearSkillsCache } from '../skill-loader.js'
 import { toDisposable, type Disposable } from './disposable.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
@@ -63,6 +72,11 @@ export interface CreateServerPluginApiOptions {
   legacyApi: PluginApi
   contributions: ContributionCollector
   integrationRegistry: IntegrationRegistry
+  /** This plugin's manifest `dependencies`. `services.get` refuses a key published by a
+   *  plugin that is not in here, because only a declared dependency is ordered before us. */
+  dependencies?: Record<string, string>
+  /** Another plugin's current lifecycle state, so an unavailable service says why. */
+  lookupPluginState?: (pluginId: string) => string | undefined
 }
 
 interface PluginAgentSpec extends Omit<AgentDefinition, 'id' | 'source' | 'overrides_builtin'> {
@@ -274,6 +288,18 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
 
   const own = <T extends Disposable>(registration: T): T => context.own(registration)
 
+  // Declared as consts, not methods on the bag: a plugin may destructure
+  // `const { require } = walnut.services`, which would strip `this`.
+  const serviceHandle = <T>(key: string, assertNow: boolean): T => {
+    const publisherId = resolveServiceAccess(pluginId, key, options.dependencies)
+    if (assertNow) assertServiceAvailable(key, publisherId, options.lookupPluginState)
+    return createServiceHandle<T>({
+      key,
+      publisherId,
+      ...(options.lookupPluginState ? { lookupState: options.lookupPluginState } : {}),
+    })
+  }
+
   const notifyError = async (message: string, detail?: unknown): Promise<void> => {
     try {
       const { upsertNotification } = await import('../notifications/store.js')
@@ -454,6 +480,36 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
       async list() {
         return listPluginOps()
+      },
+    },
+
+    services: {
+      publish(name: string, api: ServiceApi) {
+        return own(publishService(pluginId, name, api))
+      },
+      // Lazy: nothing is resolved until the first call, so a plugin may take a handle to a
+      // key that is not published yet (a peer that publishes later in its own activate).
+      get<T = ServiceApi>(key: string): T {
+        return serviceHandle<T>(key, false)
+      },
+      // Eager: asserts a publisher exists RIGHT NOW, so a typo'd key fails inside the
+      // caller's activate where the stack still names it, not at some later call.
+      require<T = ServiceApi>(key: string): T {
+        return serviceHandle<T>(key, true)
+      },
+      onChange(handler: (change: ServiceChange) => void | Promise<void>) {
+        const subscriber = `plugin:${pluginId}:services:${++subscriberSequence}`
+        bus.subscribe(subscriber, async (event) => {
+          // A subscriber that throws must not reach the emitter: publish and teardown
+          // both emit synchronously from inside a lifecycle step.
+          try { await handler(event.data as ServiceChange) }
+          catch (error) {
+            context.logger.error('Plugin service change handler failed', {
+              error: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }, { global: true, interest: [SERVICE_CHANGED_EVENT] })
+        return own(toDisposable(() => bus.unsubscribe(subscriber)))
       },
     },
 

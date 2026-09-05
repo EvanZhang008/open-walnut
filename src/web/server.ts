@@ -75,6 +75,7 @@ import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, getPluginLifecycleRecords, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
+import { disposeCoreServices } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { syncReconciler } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
@@ -5025,6 +5026,7 @@ export async function stopServer(): Promise<void> {
   await pluginMutationTail.catch(() => undefined)
   await stopPluginSyncPolling()
   try { await disposeLoadedPlugins(registry) } catch { /* best-effort shutdown */ }
+  disposeCoreServices() // after the plugins, so a deactivate may still use a core service
   pluginSoftReload = async () => {}
   pluginMutationTail = Promise.resolve()
   registry.clear()

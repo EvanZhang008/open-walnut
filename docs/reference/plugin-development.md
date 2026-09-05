@@ -32,7 +32,7 @@ The complete executable example is [examples/plugins/walnut-demo](../../examples
 
 ## What a plugin can add
 
-One plugin can contribute any mix of: a native React App in the console, Settings sections, owner-scoped CSS, Tools for the Personal AI, Skills, slash Commands, Hooks, Cron actions, Agents, model Providers, HTTP routes, WebSocket methods, task sync with its display metadata, and its own storage, secrets, and timers.
+One plugin can contribute any mix of: a native React App in the console, Settings sections, owner-scoped CSS, Tools for the Personal AI, Skills, slash Commands, Hooks, Cron actions, Agents, model Providers, HTTP routes, WebSocket methods, Services other plugins build on, task sync with its display metadata, and its own storage, secrets, and timers.
 
 There is no fixed dashboard, no dashboard page, and no panel grid. The unit of plugin UI is an App.
 
@@ -115,6 +115,7 @@ Walnut loads built files, never your TypeScript sources. A published plugin pack
 - **`server`**: optional built ESM server entry.
 - **`web`**: optional single-file ESM native web entry.
 - **`webview`**: optional iframe entry (`{ "title": "...", "entry": "app/index.html" }`). This is a compatibility path, not the default UI.
+- **`dependencies`**: optional `{ "<pluginId>": "<semver range>" }` matched against the other plugin's manifest `version`. Walnut activates a declared dependency first, and holds this plugin back while one is missing, wrong-version or not running. It is also what permits `walnut.services.get` on that plugin's services.
 - **`build`**: the source entries `walnut-plugin build` compiles, plus an optional `external` list for the server bundle.
 - **`configSchema`** and **`uiHints`**: optional generated Settings form for `plugins.<id>`.
 - **`taskFields`**: optional task fields for a sync integration.
@@ -160,6 +161,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
 | `walnut.notifications` | Raise notices, report plugin errors, and recover from them. |
 | `walnut.ops` | Call stable host operations that no typed service covers yet. |
+| `walnut.services` | Publish a capability for other plugins, and use the ones you declared as dependencies. |
 | `walnut.events` | Subscribe to host events and emit namespaced plugin events. |
 | `walnut.http` | Register plugin routes and make outbound requests with a deadline. |
 | `walnut.storage` | Files in the plugin data directory, plus a private SQLite database. |
@@ -219,6 +221,83 @@ export function activate(walnut: WalnutServerApi) {
 **Know how far an op reaches before you declare one.** A read-only op defaults to `remote: 'allow'`, and `'allow'` means `walnut tools call <op>` inside **every** Walnut-managed session, on every host, can invoke it the moment the plugin activates: those calls arrive through the gateway, which resolves against this server process's own catalogue. `remote: 'deny'` (the default for a write op) keeps the op to in-process callers: `walnut.ops.call`, `GET /api/plugin-runtime/<pluginId>/ops`, `POST /api/plugin-runtime/<pluginId>/ops/<opName>`, and action cards. Set `remote` explicitly whenever the default is not what you want.
 
 Two surfaces are still blind to plugin ops, because they are separate processes with their own registry: a standalone `walnut …` command, and the stdio MCP server. `docs/reference/ops.md` is generated from the repo's core ops only, for the same reason.
+
+### Services: plugins on top of plugins
+
+A service is how one plugin builds on another. The publisher hands out a bag of methods under `<pluginId>:<name>`, and a plugin that declared the publisher in its manifest `dependencies` calls those methods directly, in the same process, with no HTTP and no serialization. This is the seam a capability plugin stands on: a base plugin publishes, and its provider plugins depend on it.
+
+The manifest line is what makes it safe, because Walnut activates a declared dependency before the plugin that declared it:
+
+```json
+{
+  "id": "greeting-desk",
+  "version": "1.0.0",
+  "dependencies": { "greeter-plugin": "^1" }
+}
+```
+
+The publisher exports the api's type from its own file, and publishes an object of that type:
+
+```ts compile=services-publish
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+/** Export this from the plugin's own `api.ts` so a dependent can `import type` it. */
+export interface GreeterApi {
+  greet(who: string): string
+}
+
+export function activate(walnut: WalnutServerApi) {
+  let greeted = 0
+  const api: GreeterApi = {
+    greet(who) {
+      greeted++
+      walnut.log.info('greeted someone', { who, greeted })
+      return `hi ${who}`
+    },
+  }
+  walnut.services.publish('greeter', api)
+}
+```
+
+The dependent takes the handle once, in `activate`, and keeps it:
+
+```ts compile=services-require
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+// In a real plugin this type comes from the publisher's own file, by relative path:
+//   import type { GreeterApi } from '../../greeter-plugin/src/api.js'
+interface GreeterApi {
+  greet(who: string): string
+}
+
+export function activate(walnut: WalnutServerApi) {
+  // Declared as dependencies["greeter-plugin"], so it is already active right here.
+  const greeter = walnut.services.require<GreeterApi>('greeter-plugin:greeter')
+
+  walnut.registry.tool({
+    name: 'greet',
+    description: 'Greet someone through the greeter plugin.',
+    inputSchema: {
+      type: 'object',
+      properties: { who: { type: 'string' } },
+      required: ['who'],
+    },
+    execute: (input) => greeter.greet(String(input.who)),
+  })
+}
+```
+
+Rules to know before you design a service:
+
+- **A capability's type travels as an `import type` from the publisher's own file, never through `@open-walnut/plugin-api`.** Walnut's kernel does not know what a mail or a calendar is, and it must not learn: the shape belongs to the plugin that owns it. Publish an `api.ts` next to your server entry and export the type from there. It is a build-time reference only, so nothing is bundled twice.
+- **Publish synchronously inside `activate`.** A plugin that depends on you is activated after you are, and it may call your service during its own `activate`, so a service that only appears after an `await` is a service that is not there when it is first needed.
+- **The handle is keyed by the service and resolved at call time.** Take it once and keep it: every call reaches whatever the publisher has published at that moment, so a republish or a reload needs nothing from you. That holds for a method you destructured or stored in a field as well, so `const { greet } = greeter` is safe.
+- **Everything is synchronous, on purpose.** There is no awaitable `get`: your declared dependency is already active when your `activate` runs, so waiting could only ever wait for something that is not coming.
+- **A published api is a plain bag of methods.** `publish` refuses a class instance, an `EventEmitter`, a `Promise`, or any object with a non-function property, because those carry identity a consumer's handle cannot re-resolve. It also refuses a method named `then`, which would make the handle a thenable and turn `await handle` into a resolution attempt. Close over your state inside the functions instead.
+- **`get` is lazy, `require` is eager.** `get` resolves nothing until the first call, so you may hold a handle for a key a peer publishes later. `require` additionally checks that a publisher exists right now, so a mistyped key throws inside your `activate` where the stack still points at it.
+- **Gone is loud.** Once the publisher is disabled, uninstalled or broken, every call through the handle throws an error naming the key and the publisher's state. Describing the handle stays safe: `Object.keys(handle)` and `'greet' in handle` answer instead of throwing. Walnut also parks your plugin while a declared dependency is down, so you normally never see this: it is what a handle kept across your own reactivation does.
+- **Ask only for what you declared.** `get` on a plugin absent from your `dependencies` throws and names the manifest line you are missing. The exception is `core:<name>`, a capability the host itself publishes (`walnut.services.require('core:calendar-source')`): a plugin cannot declare a dependency on the host, so those keys are gated by `engines.walnut` instead. Never list `core` in `dependencies`: the id is reserved for the host, no plugin may use it, and your plugin would wait forever for something that can never be installed.
+- **`onChange`** reports every publish, replace and removal, including your own, and the subscription is owned by your plugin.
 
 ### Hooks
 

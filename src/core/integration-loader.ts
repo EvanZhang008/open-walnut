@@ -53,6 +53,7 @@ import {
   type DependencyRestore,
 } from './plugins/dependency-gate.js';
 import { validatePluginId } from './plugins/ids.js';
+import { CORE_SERVICE_OWNER, removeServicesOf } from './plugins/service-registry.js';
 import { createServerPluginApi } from './plugins/server-api.js';
 import type {
   PluginManifest,
@@ -193,10 +194,13 @@ export function disposeLoadedPlugins(registry: IntegrationRegistry): Promise<voi
     pluginManifests.delete(registry);
     const ids = manager.list().map(record => record.id);
     await manager.dispose();
-    // Every plugin op is registered through context.own(), so a clean dispose already
-    // withdrew it. A dispose that threw partway did not, and a surviving op would answer
-    // with a handler whose plugin is gone.
-    for (const id of ids) removePluginOps(id);
+    // Every plugin op and service is registered through context.own(), so a clean dispose
+    // already withdrew them. A dispose that threw partway did not, and a survivor would
+    // answer with a handler whose plugin is gone.
+    for (const id of ids) {
+      removePluginOps(id);
+      removeServicesOf(id);
+    }
     await refreshPluginDerivedState(registry);
   });
 }
@@ -902,6 +906,13 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     log.warn('Invalid manifest: unsafe "id"', { filePath });
     return null;
   }
+  // `core` is the owner of the host's own services, which every plugin may use without
+  // declaring a dependency. A plugin holding that id could publish a key others trust
+  // unconditionally, and its teardown sweep would withdraw the host's services.
+  if (obj.id.toLowerCase() === CORE_SERVICE_OWNER) {
+    log.warn('Invalid manifest: the plugin id "core" is reserved for the host', { filePath });
+    return null;
+  }
   if (typeof obj.name !== 'string' || !obj.name) {
     log.warn('Invalid manifest: missing or empty "name"', { filePath });
     return null;
@@ -1394,6 +1405,10 @@ async function loadPlugin(
             legacyApi: builder.api,
             contributions: builder.collected,
             integrationRegistry: registry,
+            // The service seam: what this plugin declared decides which other plugins'
+            // services it may ask for, and the manager answers why one is unavailable.
+            dependencies: manifest.dependencies,
+            lookupPluginState: (id) => manager.get(id)?.state,
           })
         : builder.api;
       const activation = Promise.resolve()
