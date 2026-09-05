@@ -470,3 +470,43 @@ describe('PUT /api/file-content — an automatic write must carry a lock', () =>
     expect(await fs.readFile(target, 'utf-8')).toBe('mine\n')
   })
 })
+
+describe('a refused write is attributable', () => {
+  // The refusal above is only as useful as the record it leaves. `reason` is what
+  // separates "the guard is doing its job, two writers raced" (stale-lock, healthy,
+  // the editor merges) from "a client bug reached the server" (unlocked-machine-write,
+  // which should be ZERO and whose count is the only regression signal for the
+  // client-side text/token pairing rule). It is also the field the log line prints.
+  let tmpDir: string
+  beforeEach(async () => { tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-fc-reason-')) })
+  afterEach(async () => { await fs.rm(tmpDir, { recursive: true, force: true }) })
+
+  it('names the reason: no lock at all vs a lock that no longer matches', async () => {
+    const { writeFileContentPayload, FileConflictError } = await import('../../../src/web/routes/file-content.js')
+    const target = path.join(tmpDir, 'doc.md')
+    await fs.writeFile(target, 'on disk\n')
+
+    const unlocked = await writeFileContentPayload(target, undefined, 'stale\n', undefined, {}, 'live')
+      .then(() => null, (e: unknown) => e)
+    expect(unlocked).toBeInstanceOf(FileConflictError)
+    expect((unlocked as InstanceType<typeof FileConflictError>).reason).toBe('unlocked-machine-write')
+
+    const stale = await writeFileContentPayload(target, undefined, 'stale\n', 'deadbeefdead', {}, 'live')
+      .then(() => null, (e: unknown) => e)
+    expect(stale).toBeInstanceOf(FileConflictError)
+    expect((stale as InstanceType<typeof FileConflictError>).reason).toBe('stale-lock')
+  })
+
+  it('fills the before-bytes meta even when the write is REFUSED', async () => {
+    // Without this the log line for a refusal could not say what it protected —
+    // and "the guard saved a 21-byte shrink" is the whole value of the record.
+    const { writeFileContentPayload } = await import('../../../src/web/routes/file-content.js')
+    const target = path.join(tmpDir, 'big.md')
+    const onDisk = 'a much longer file that somebody else grew\n'
+    await fs.writeFile(target, onDisk)
+    const meta: { previousHash?: string | null; previousSize?: number } = {}
+    await expect(writeFileContentPayload(target, undefined, 'tiny\n', undefined, meta, 'live')).rejects.toThrow()
+    expect(meta.previousSize).toBe(Buffer.byteLength(onDisk, 'utf-8'))
+    expect(meta.previousHash).toMatch(/^[0-9a-f]{12}$/)
+  })
+})

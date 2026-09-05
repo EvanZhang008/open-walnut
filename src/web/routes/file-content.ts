@@ -492,9 +492,89 @@ export interface FileWriteMeta {
   previousSize?: number
 }
 
+/**
+ * Why a write was refused. Worth distinguishing in the log because the two mean
+ * opposite things about who is at fault: `stale-lock` is the guard working as
+ * designed (someone else edited the file first, and the editor will merge or ask),
+ * while `unlocked-machine-write` is a CLIENT BUG reaching the server — an
+ * automatic write that never presented a token at all.
+ */
+export type FileConflictReason = 'stale-lock' | 'unlocked-machine-write'
+
+/**
+ * ONE line per write, and one per refusal, shared by BOTH write edges (the
+ * console's PUT and /api/v1's, which the iOS app uses). Both edges log through
+ * here on purpose: "who overwrote my file?" is unanswerable if one of the two
+ * writers in the system is invisible.
+ *
+ * Never the content itself: hashes, sizes and who asked.
+ */
+export function logFileWrite(a: {
+  path: unknown
+  host: string | undefined
+  writer: SnapshotWriter
+  origin?: string
+  expectedHash: unknown
+  meta: FileWriteMeta
+  result: FileWriteResult
+}): void {
+  log.web.info('file write', {
+    path: typeof a.path === 'string' ? a.path : '(invalid)',
+    host: a.host,
+    writer: a.writer,
+    origin: a.origin,
+    hashBefore: a.meta.previousHash === null ? '(new file)' : a.meta.previousHash,
+    hashAfter: a.result.contentHash,
+    expectedHash: typeof a.expectedHash === 'string' ? a.expectedHash : '(none)',
+    sizeBefore: a.meta.previousSize,
+    sizeAfter: a.result.size,
+    // The tell of the 2026-09-05 incident, and cheap to spot: a write whose token
+    // matched the file it replaced but whose bytes are SMALLER than what was there
+    // is a candidate stale-copy write-back.
+    shrankBy: a.meta.previousSize != null && a.meta.previousSize > a.result.size
+      ? a.meta.previousSize - a.result.size
+      : undefined,
+  })
+}
+
+/** Counterpart of logFileWrite for a 409. See FileConflictReason for why `reason` matters. */
+export function logFileWriteRefused(a: {
+  path: unknown
+  host: string | undefined
+  writer: SnapshotWriter
+  origin?: string
+  expectedHash: unknown
+  content: unknown
+  meta: FileWriteMeta
+  err: FileConflictError
+}): void {
+  const attemptedSize = typeof a.content === 'string' ? Buffer.byteLength(a.content, 'utf-8') : undefined
+  log.web.warn('file write refused', {
+    path: typeof a.path === 'string' ? a.path : '(invalid)',
+    host: a.host,
+    writer: a.writer,
+    origin: a.origin,
+    reason: a.err.reason,
+    expectedHash: typeof a.expectedHash === 'string' ? a.expectedHash : '(none)',
+    currentHash: a.err.currentHash,
+    hashBefore: a.meta.previousHash === null ? '(new file)' : a.meta.previousHash,
+    sizeBefore: a.meta.previousSize,
+    attemptedSize,
+    // What the refusal saved. A large positive number is the incident this guard
+    // exists for, caught instead of shipped.
+    wouldHaveShrunkBy: a.meta.previousSize != null && attemptedSize != null
+      && a.meta.previousSize > attemptedSize
+      ? a.meta.previousSize - attemptedSize
+      : undefined,
+  })
+}
+
 /** A save rejected because the file changed under the editor (HTTP 409). */
 export class FileConflictError extends Error {
-  constructor(public currentHash: string) {
+  constructor(
+    public currentHash: string,
+    public reason: FileConflictReason = 'stale-lock',
+  ) {
     super('File was modified externally')
     this.name = 'FileConflictError'
   }
@@ -573,13 +653,16 @@ export async function writeFileContentPayload(
     const current = await reader.readFile(filePath)
     if (current !== null) {
       assertOverwritable(current, filePath)
-      if (unlockedMachineWrite) throw new FileConflictError(computeContentHash(current))
+      // Fill `meta` BEFORE either refusal, so a refused write can still be logged
+      // with the bytes it would have replaced. A guard nobody can see firing is
+      // one nobody can tell has regressed.
       if (meta) {
         meta.previousHash = computeContentHash(current)
         meta.previousSize = Buffer.byteLength(current, 'utf-8')
       }
+      if (unlockedMachineWrite) throw new FileConflictError(computeContentHash(current), 'unlocked-machine-write')
       if (expectedHash && computeContentHash(current) !== expectedHash) {
-        throw new FileConflictError(computeContentHash(current))
+        throw new FileConflictError(computeContentHash(current), 'stale-lock')
       }
     } else {
       if (meta) meta.previousHash = null
@@ -641,13 +724,16 @@ export async function writeFileContentPayload(
       }
       const current = await fsp.readFile(filePath, 'utf-8')
       assertOverwritable(current, filePath)
-      if (unlockedMachineWrite) return computeContentHash(current)
+      // Fill `meta` BEFORE either refusal — see the remote branch.
       if (meta) {
         meta.previousHash = computeContentHash(current)
         meta.previousSize = stat.size
       }
+      if (unlockedMachineWrite) {
+        return { hash: computeContentHash(current), reason: 'unlocked-machine-write' as const }
+      }
       if (expectedHash && computeContentHash(current) !== expectedHash) {
-        return computeContentHash(current)
+        return { hash: computeContentHash(current), reason: 'stale-lock' as const }
       }
     } else if (meta) {
       meta.previousHash = null
@@ -655,7 +741,7 @@ export async function writeFileContentPayload(
     await fsp.writeFile(filePath, content, 'utf-8')
     return null
   })
-  if (conflict) throw new FileConflictError(conflict)
+  if (conflict) throw new FileConflictError(conflict.hash, conflict.reason)
 
   log.web.info('file saved', { path: filePath, size: Buffer.byteLength(content, 'utf-8') })
   return { ok: true, size: Buffer.byteLength(content, 'utf-8'), contentHash: nextHash }
@@ -822,7 +908,48 @@ async function trackedRecordWouldBeNoop(
   return entries.length > 0 && entries[entries.length - 1].hash === hash
 }
 
+/**
+ * ONE line per viewer read, the counterpart of `file write`.
+ *
+ * Why it exists: after the 2026-09-05 stale-write-back incident the writes were
+ * attributable but the READS were not, and the bug was precisely a mismatch
+ * between what a read taught the client and what the client then wrote. The only
+ * record of a read was the `?track=` history entry, which exists for opens and
+ * nothing else — so a refocus/reconnect re-read (the one that moved the lock) was
+ * invisible. Pair these by `path` + time with the browser's `file-editor` lines
+ * and the write lines: read → lock advance → write, all in one grep.
+ *
+ * `hash` is what the client now holds as its lock token; `inm` is the token it
+ * quoted. Never any content.
+ */
+export function logFileRead(a: {
+  filePath: string
+  host: string | undefined
+  status: 200 | 304
+  hash: string | null | undefined
+  inm: string | string[] | undefined
+  track: string | undefined
+  startedAt: number
+  size?: number
+  truncated?: boolean
+  binary?: boolean
+}): void {
+  log.web.info('file read', {
+    path: a.filePath,
+    host: a.host,
+    status: a.status,
+    hash: a.hash ?? undefined,
+    inm: typeof a.inm === 'string' ? a.inm : a.inm ? a.inm.join(',') : '(none)',
+    track: a.track,
+    size: a.size,
+    truncated: a.truncated || undefined,
+    binary: a.binary || undefined,
+    ms: Math.round(performance.now() - a.startedAt),
+  })
+}
+
 fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
+  const startedAt = performance.now()
   try {
     const rawPath = req.query.path
     const host = typeof req.query.host === 'string' ? req.query.host : undefined
@@ -862,12 +989,17 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
     // normal 200 below: a malformed header, an unknown file, a changed file, a
     // read that would have been truncated or binary (those never got an ETag to
     // quote back), or a `?track=` recording we can't prove is a no-op.
+    // Kept for the log line: the block below DELETES this header on a fall-through
+    // (see the note there), and "the client revalidated and we still had to send
+    // bytes" is one of the more interesting things a read can say.
+    const inmHeader = req.headers['if-none-match']
     if (req.headers['if-none-match'] !== undefined) {
       const cond = parseIfNoneMatch(req.headers['if-none-match'])
       if (cond) {
         const hit = await conditionalFileHit({ filePath, host: validatorHost, cond })
         if (hit && (!track || await trackedRecordWouldBeNoop(host, filePath, hit.hash))) {
           res.set({ ETag: `"${hit.hash}"`, 'Cache-Control': 'no-cache' })
+          logFileRead({ filePath, host, status: 304, hash: hit.hash, inm: inmHeader, track, startedAt })
           res.status(304).end()
           return
         }
@@ -915,6 +1047,12 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
         })
       }
     }
+    logFileRead({
+      filePath, host, status: 200, hash: payload.contentHash,
+      inm: inmHeader, track, startedAt,
+      size: payload.content != null ? Buffer.byteLength(payload.content, 'utf-8') : meta.size,
+      truncated: payload.truncated, binary: payload.binary,
+    })
     res.json(payload)
   } catch (err) {
     if (err instanceof FileContentError) {
@@ -937,33 +1075,22 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
  * log or browser history alongside its bytes.
  */
 fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
+  // Read the body and the attribution fields OUTSIDE the try: the catch below logs
+  // a refused write with the same detail as a successful one, which it can only do
+  // if these are in its scope.
+  const { path: rawPath, host, content, expectedHash, writer, origin } = req.body ?? {}
+  const hostArg = typeof host === 'string' && host.length > 0 ? host : undefined
+  const meta: FileWriteMeta = {}
+  const writerArg: SnapshotWriter = writer === 'live' || writer === 'merge' ? writer : 'user'
   try {
-    const { path: rawPath, host, content, expectedHash, writer, origin } = req.body ?? {}
-    const hostArg = typeof host === 'string' && host.length > 0 ? host : undefined
-    const meta: FileWriteMeta = {}
-    const writerArg: SnapshotWriter = writer === 'live' || writer === 'merge' ? writer : 'user'
     const result = await writeFileContentPayload(rawPath, hostArg, content, expectedHash, meta, writerArg)
-    // ONE line per write with everything needed to attribute it: which bytes it
-    // replaced, which bytes it left, the lock token it presented, and who armed
-    // it. `writer` is the trigger (user save / live auto-write / merge) and
-    // `origin` the view that fired it, so a write nobody remembers making can be
-    // traced to a surface in one grep. Never the content itself.
-    log.web.info('file write', {
-      path: typeof rawPath === 'string' ? rawPath : '(invalid)',
-      host: hostArg,
-      writer: writer === 'live' || writer === 'merge' ? writer : 'user',
+    // `writer` is the trigger (user save / live auto-write / merge) and `origin` the
+    // view that fired it, so a write nobody remembers making can be traced to a
+    // surface in one grep.
+    logFileWrite({
+      path: rawPath, host: hostArg, writer: writerArg,
       origin: typeof origin === 'string' ? origin : undefined,
-      hashBefore: meta.previousHash === null ? '(new file)' : meta.previousHash,
-      hashAfter: result.contentHash,
-      expectedHash: typeof expectedHash === 'string' ? expectedHash : '(none)',
-      sizeBefore: meta.previousSize,
-      sizeAfter: result.size,
-      // The tell of the 2026-09-05 incident, and cheap to spot: a write whose
-      // token matched the file it replaced but whose bytes are SMALLER than what
-      // was there is a candidate stale-copy write-back.
-      shrankBy: meta.previousSize != null && meta.previousSize > result.size
-        ? meta.previousSize - result.size
-        : undefined,
+      expectedHash, meta, result,
     })
     // History: record what was just saved. `writer` says WHO saved it so the
     // timeline can label it — an explicit allowlist, because an unknown value
@@ -984,6 +1111,15 @@ fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunctio
     res.json(result)
   } catch (err) {
     if (err instanceof FileConflictError) {
+      // A refusal is as worth logging as a write: `stale-lock` firing often is
+      // healthy (two writers, and the editor merges), while `unlocked-machine-write`
+      // firing AT ALL means a client bug reached the server, and its count is the
+      // only signal that the client-side pairing rule has regressed.
+      logFileWriteRefused({
+        path: rawPath, host: hostArg, writer: writerArg,
+        origin: typeof origin === 'string' ? origin : undefined,
+        expectedHash, content, meta, err,
+      })
       res.status(409).json({ error: err.message, code: 'conflict', currentHash: err.currentHash })
       return
     }

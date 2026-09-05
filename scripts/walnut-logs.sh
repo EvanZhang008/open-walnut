@@ -25,6 +25,7 @@
 #   scripts/walnut-logs.sh bundle <sid> [mins]  freeze an all-layer evidence bundle for a sid (mirrors the in-process captureBundle)
 #   scripts/walnut-logs.sh metrics [pfx] [mins] windowed latency histograms (http/llm/tool/search/eventloop; prefix filter, default 60min; live: GET /api/metrics)
 #   scripts/walnut-logs.sh ttft [sid] [mins]    ⭐ time-to-first-text per turn: turn wide-event firstThinking/Text/Tool + per-layer first-emit/arrival lines — attributes "text shows late" to model vs pipeline
+#   scripts/walnut-logs.sh file <substr> [mins] ⭐ ONE timeline for ONE file: reads + writes + refusals + the editor's own decisions, interleaved — "who overwrote my file?" starts here
 #   scripts/walnut-logs.sh errors [n]           last n ERR/WARN lines (default 40)
 #   scripts/walnut-logs.sh desktop [mins]       ⭐ Mac app page-process memory curve + recycles/crashes (default 24h) — "Mac app laggy?" starts here
 #   scripts/walnut-logs.sh grep <pattern>       raw grep across today's JSON log
@@ -438,6 +439,102 @@ PY
     [[ ${#missing[@]} -gt 0 ]] && printf '  missing: %s\n' "${missing[@]}"
     ;;
 
+  file)
+    # ⭐ ONE timeline for ONE file: every read, every write, every refusal, and the
+    # editor's own decisions, interleaved in time order across both dated logs.
+    #
+    # Why this exists: on 2026-09-05 the Files panel wrote a stale copy of a remote
+    # doc back four times, and reconstructing it meant hand-grepping three different
+    # message shapes in two files. The causal chain is always the same shape —
+    # a READ teaches the editor a hash, the editor's LOCK advances, then a WRITE
+    # goes out under that lock — so it belongs in one command.
+    #
+    # Reads the substring against the server lines' `.path` AND the browser lines'
+    # serialized `.args`, so `file final-design` catches both halves.
+    # Usage: file <path-substring> [mins]   (mins default 0 = all)
+    sub="${1:?usage: file <path-substring> [mins]}"; mins="${2:-0}"
+    echo "── timeline for files matching '$sub' (last ${mins}min; 0=all) ──"
+    # shellcheck disable=SC2046
+    python3 - "$sub" "$mins" $(recent_logs) <<'PY'
+import sys, json
+from datetime import datetime, timezone
+sub = sys.argv[1]; mins = float(sys.argv[2]); files = sys.argv[3:]
+cutoff = (datetime.now(timezone.utc).timestamp() * 1000 - mins * 60000) if mins > 0 else 0
+def ms(t):
+    try: return datetime.strptime(t[:23], '%Y-%m-%dT%H:%M:%S.%f').replace(tzinfo=timezone.utc).timestamp() * 1000
+    except Exception: return None
+# The server messages that touch a file's bytes, plus anything the editor says.
+SERVER = ('file read', 'file write', 'file write refused', 'file saved', 'file saved (remote)')
+rows = []
+for f in files:
+    for line in open(f, errors='ignore'):
+        if 'file read' not in line and 'file write' not in line \
+           and 'file saved' not in line and 'file-editor' not in line:
+            continue
+        if sub not in line:
+            continue
+        try: d = json.loads(line)
+        except Exception: continue
+        t = ms(d.get('time', ''))
+        if cutoff and (t or 0) < cutoff: continue
+        msg = d.get('message', '')
+        if d.get('subsystem') == 'browser':
+            # Browser lines carry their fields as a JSON STRING in .args.
+            try: a = json.loads(d.get('args') or '{}')
+            except Exception: a = {}
+            if sub not in json.dumps(a): continue
+            rows.append((t, 'browser', msg.replace('[file-editor] ', ''), a))
+        elif msg in SERVER:
+            rows.append((t, 'server', msg, d))
+rows.sort(key=lambda r: r[0] or 0)
+def hm(t): return datetime.fromtimestamp(t / 1000, timezone.utc).strftime('%H:%M:%S.%f')[:-3] if t else '??'
+def g(d, *keys):
+    out = []
+    for k in keys:
+        v = d.get(k)
+        if v is not None and v != '': out.append(f'{k}={v}')
+    return ' '.join(out)
+reads = writes = refused = 0
+shrinks = []
+for t, src, msg, d in rows:
+    if msg == 'file read':
+        reads += 1
+        arrow = '  <-- read '
+        detail = g(d, 'status', 'hash', 'inm', 'track', 'size', 'ms')
+    elif msg == 'file write':
+        writes += 1
+        arrow = '  --> WRITE'
+        detail = g(d, 'writer', 'origin', 'hashBefore', 'hashAfter', 'expectedHash',
+                   'sizeBefore', 'sizeAfter', 'shrankBy')
+        if d.get('shrankBy'): shrinks.append((hm(t), d))
+    elif msg == 'file write refused':
+        refused += 1
+        arrow = '  xxx REFUSED'
+        detail = g(d, 'reason', 'writer', 'origin', 'expectedHash', 'currentHash',
+                   'sizeBefore', 'attemptedSize', 'wouldHaveShrunkBy')
+    elif src == 'browser':
+        arrow = '  ..  editor'
+        detail = g(d, 'source', 'gen', 'lockBefore', 'lockAfter', 'armedMs',
+                   'armedGen', 'currentGen', 'expectedHash', 'textLen',
+                   'armedTextLen', 'reason', 'attempt', 'version', 'size', 'error')
+        detail = f'{msg}: {detail}' if detail else msg
+    else:
+        arrow = '  ..  server'
+        detail = g(d, 'size', 'host')
+        detail = f'{msg}: {detail}' if detail else msg
+    print(f'{hm(t)} {arrow} {detail}')
+print(f'\n── {len(rows)} events: {reads} reads, {writes} writes, {refused} refused ──')
+if shrinks:
+    print('\n!! WRITES THAT SHRANK THE FILE (the 2026-09-05 incident\'s signature) !!')
+    for at, d in shrinks:
+        print(f'   {at}  writer={d.get("writer")} shrankBy={d.get("shrankBy")} '
+              f'{d.get("sizeBefore")} -> {d.get("sizeAfter")} bytes  path={d.get("path")}')
+    print('   A `user` write shrinking a file is someone deleting text. A `live` or')
+    print('   `merge` write shrinking it by a lot is the stale-write-back bug: check the')
+    print('   `editor buffer installed` line just before it for a lock/gen mismatch.')
+PY
+    ;;
+
   errors)
     need_log; n="${1:-40}"
     echo "── last $n WARN/ERR lines ──"
@@ -525,7 +622,10 @@ PY
     ;;
 
   *)
-    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+    # Print the header comment block, however long it grows. (It was a hardcoded
+    # line range, which silently started printing `set -uo pipefail` as if it were
+    # documentation the first time a command was added.)
+    awk 'NR>1 { if (/^#/) { sub(/^# ?/, ""); print } else exit }' "$0"
     exit 1
     ;;
 esac

@@ -126,14 +126,30 @@ filesV1Router.get('/file-content', async (req: Request, res: Response, next: Nex
       await serveCloudFileContent(req, res)
       return
     }
-    const { readFileContentPayload, serveRawFileContent, FileContentError } = await import('./file-content.js')
+    const {
+      readFileContentPayload, serveRawFileContent, FileContentError, logFileRead,
+    } = await import('./file-content.js')
+    const startedAt = performance.now()
     try {
       if (req.query.raw === '1' || req.query.raw === 'true') {
         const download = req.query.download === '1' || req.query.download === 'true'
         await serveRawFileContent(req, res, req.query.path, host, download)
         return
       }
-      res.json(await readFileContentPayload(req.query.path, host))
+      const payload = await readFileContentPayload(req.query.path, host)
+      // Logged like the console's read for the same reason its WRITE is: the phone
+      // learns a lock token here, and a timeline that omits how it learned it can't
+      // explain what it later wrote. This edge has no conditional GET, so status is
+      // always 200.
+      if (typeof req.query.path === 'string') {
+        logFileRead({
+          filePath: req.query.path, host, status: 200, hash: payload.contentHash,
+          inm: undefined, track: undefined, startedAt,
+          size: payload.content != null ? Buffer.byteLength(payload.content, 'utf-8') : undefined,
+          truncated: payload.truncated, binary: payload.binary,
+        })
+      }
+      res.json(payload)
     } catch (err) {
       if (err instanceof FileContentError) {
         sendError(res, err.statusCode, err.statusCode === 403 ? 'not_supported_cloud' : 'bad_request', err.message)
@@ -159,11 +175,24 @@ filesV1Router.put('/file-content', async (req: Request, res: Response, next: Nex
       sendError(res, 501, 'not_supported_cloud', 'Remote file writes are not available through the cloud companion (the bridge has no arbitrary-write channel)')
       return
     }
-    const { writeFileContentPayload, FileContentError, FileConflictError } = await import('./file-content.js')
+    const {
+      writeFileContentPayload, FileContentError, FileConflictError,
+      logFileWrite, logFileWriteRefused,
+    } = await import('./file-content.js')
+    // Attributed exactly like the console's write edge. The phone is a REAL second
+    // writer of the same files, so leaving it out of the log would make the "who
+    // overwrote my file?" timeline quietly incomplete — the worst kind of gap,
+    // because it reads as "nobody wrote it".
+    const meta: import('./file-content.js').FileWriteMeta = {}
     try {
-      res.json(await writeFileContentPayload(rawPath, host, content, expectedHash))
+      const result = await writeFileContentPayload(rawPath, host, content, expectedHash, meta)
+      logFileWrite({ path: rawPath, host, writer: 'user', origin: 'api-v1', expectedHash, meta, result })
+      res.json(result)
     } catch (err) {
       if (err instanceof FileConflictError) {
+        logFileWriteRefused({
+          path: rawPath, host, writer: 'user', origin: 'api-v1', expectedHash, content, meta, err,
+        })
         res.status(409).json({
           error: { code: 'conflict', message: err.message },
           currentHash: err.currentHash,

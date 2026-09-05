@@ -347,8 +347,26 @@ export function FileContentView({
    * buffer are in step; this counter is what makes a divergence detectable.
    */
   const bufferGenRef = useRef(0);
-  /** Call whenever the buffer's bytes (or the lock describing them) are replaced. */
-  const noteBufferInstalled = useCallback(() => { bufferGenRef.current += 1; }, []);
+  /**
+   * Call whenever the buffer's bytes (or the lock describing them) are replaced.
+   *
+   * `source` names the path that did it, and is logged: this is the OTHER HALF of
+   * the write log. A write line alone cannot say why its token was newer than its
+   * text; paired with these lines (same path, seconds apart) the sequence reads
+   * straight off the log as read → lock advance → write decision. The 2026-09-05
+   * incident took a day of archaeology for want of exactly this line.
+   */
+  const noteBufferInstalled = useCallback((source: string, nextLockHash?: string | null) => {
+    bufferGenRef.current += 1;
+    log.info('file-editor', 'buffer installed', {
+      path: filePath, host, source, gen: bufferGenRef.current,
+      // Before/after, because the whole bug was the two drifting apart. A caller
+      // that sets the lock itself right after this call passes the new value in;
+      // otherwise the lock is not moving and both read the same.
+      lockBefore: lockHashRef.current,
+      lockAfter: nextLockHash === undefined ? lockHashRef.current : nextLockHash,
+    });
+  }, [filePath, host]);
   // True for the duration of a programmatic setValue. A merge/pull applies text
   // through the same editor callbacks a keystroke does, and without this the
   // pull would immediately auto-write back exactly what it just read.
@@ -376,7 +394,7 @@ export function FileContentView({
   const applyEditorText = useCallback((text: string) => {
     // A different buffer from here on: any write armed against the previous one
     // must not go out under the lock this apply belongs to.
-    noteBufferInstalled();
+    noteBufferInstalled('apply-editor-text');
     applyingRef.current = true;
     try {
       editorRef.current?.setValue(text);
@@ -535,7 +553,7 @@ export function FileContentView({
       conflictHashRef.current = undefined;
       // The lock is about to describe DIFFERENT bytes than whatever is in the
       // editor right now, so anything armed against the old buffer is void.
-      noteBufferInstalled();
+      noteBufferInstalled(draft ? 'read+draft-replay' : 'read', plan.lockHash);
       lockHashRef.current = plan.lockHash;
       // The lock follows the seed, and the merge base follows the LOCK — which
       // for a replayed draft is still the disk bytes (its baseHash matched), so
@@ -885,7 +903,7 @@ export function FileContentView({
     // every ⌘S mid-document a jump-to-line-1. markClean re-baselines dirty
     // tracking in place instead.
     conflictHashRef.current = undefined;
-    noteBufferInstalled();
+    noteBufferInstalled(opts.live ? 'our-live-write' : 'our-save', res.contentHash);
     lockHashRef.current = res.contentHash;
     baseContentRef.current = text;
     // Before the early return below: whatever the buffer does next, `text` IS
@@ -1092,7 +1110,7 @@ export function FileContentView({
   const restoreStaleDraft = useCallback(() => {
     if (staleDraft == null) return;
     const { seed, lockHash } = planStaleDraftRestore(staleDraft);
-    noteBufferInstalled();
+    noteBufferInstalled('stale-draft-restore', lockHash);
     draftRef.current = seed;
     lockHashRef.current = lockHash;
     // The lock now points at bytes we no longer hold, so there is no trustworthy
@@ -1723,7 +1741,7 @@ export function FileContentView({
     // Clean, and the writer handed us the exact bytes: converge in this tick.
     // ORDER: seed the editor first, then applySaved-style bookkeeping — the
     // second half drops the draft record the first half re-armed.
-    noteBufferInstalled();
+    noteBufferInstalled('adopt-other-writer', sig.contentHash);
     lockHashRef.current = sig.contentHash;
     baseContentRef.current = sig.content;
     applyEditorText(sig.content);

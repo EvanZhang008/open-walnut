@@ -564,6 +564,22 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         }
         text = plan.text;
       }
+      // One line per automatic write, immediately before it goes out. The server's
+      // own `file write` line has the hashes and the sizes; what only the client
+      // knows is HOW OLD the text is (`armedMs`) and whether the buffer moved
+      // between the keystroke and the send (`armedGen` vs `currentGen`). Those
+      // three numbers are what the 2026-09-05 incident had to be reconstructed
+      // from, and a write with a big `armedMs` and a gen gap is the shape to look
+      // for if it ever comes back.
+      log.info('file-editor', 'live write sending', {
+        path: rec.path, host: rec.host, writer, live,
+        armedMs: Date.now() - rec.capturedAt,
+        armedGen: rec.bufferGen,
+        currentGen: optsRef.current.bufferGenRef.current,
+        expectedHash,
+        textLen: text.length,
+        armedTextLen: rec.text.length,
+      });
       const res = await saveFileContent(rec.path, text, {
         host: rec.host, expectedHash, writer, origin: optsRef.current.origin,
       });

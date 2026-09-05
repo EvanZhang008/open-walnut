@@ -436,8 +436,22 @@ scripts/walnut-logs.sh delivery [sid]    # message enqueue→delivered latency (
 scripts/walnut-logs.sh slow [ms]         # deliveries slower than ms (default 3000) — find lag
 scripts/walnut-logs.sh daemon <sid>      # which daemon-d-*.log serves a sid
 scripts/walnut-logs.sh jsonl <sid>       # tail the session's CLI .jsonl stream
+scripts/walnut-logs.sh file <substr>     # ⭐ ONE timeline for ONE file: reads + writes + refusals + the editor's decisions
 scripts/walnut-logs.sh req <id> | task <id> | errors [n] | tail [n]
 ```
+
+**"Who overwrote my file?" starts with `file <path-substring>`.** Every read logs `file read`
+(status 200/304, the hash the client now holds, the token it quoted, `track`, size, ms), every
+write logs `file write` (writer user/live/merge, origin, hash before/after, the token presented,
+size before/after, `shrankBy`), and every refusal logs `file write refused` with a `reason` that
+matters: `stale-lock` is the guard working (two writers raced, the editor will merge), while
+`unlocked-machine-write` means a client bug reached the server and should be ZERO. The browser side
+logs `[file-editor] buffer installed` (which path replaced the buffer, the generation, the lock
+before and after) and `[file-editor] live write sending` (`armedMs`, `armedGen` vs `currentGen`), so
+the causal chain reads in order: a read teaches the editor a hash, the lock advances, a write goes
+out under it. That chain is exactly what the 2026-09-05 stale-write-back incident had to be
+reconstructed by hand from three message shapes across two files. A `live`/`merge` write with a
+large `shrankBy` is that bug's signature.
 
 **When a user reports "message send is slow", run `diagnose <sid>` first.** It pairs each message's enqueue→route→delivered by `messageId` and prints a labelled cause per message + p50/p90, so you don't hand-grep. Labels it distinguishes (these are the known distinct root causes — don't conflate them):
 - **BUG D: mid-turn stall** — `injectMidTurn` on a stale `hasPipe=False` (remote sessions). The felt 30–50s QUEUED. Fixed by delegating to processNext; if this label reappears, the fix regressed.

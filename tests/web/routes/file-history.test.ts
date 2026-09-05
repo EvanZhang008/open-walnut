@@ -52,9 +52,23 @@ let app: express.Express
 
 const at = (rel: string) => path.join(work, rel)
 
-/** Save through the editor's own route, which is what records a snapshot. */
-const save = (filePath: string, content: string, writer?: string) =>
-  request(app).put('/api/file-content').send({ path: filePath, content, ...(writer ? { writer } : {}) })
+/**
+ * Save through the editor's own route, which is what records a snapshot.
+ *
+ * A `live`/`merge` writer MUST present a lock (the route refuses an automatic
+ * write that carries none — see the stale-write-back guard in file-content.ts), so
+ * this helper reads the current hash for those and passes it. A `user` save is
+ * still allowed without one, which is the behaviour the other cases rely on.
+ */
+const save = async (filePath: string, content: string, writer?: string) => {
+  let expectedHash: string | undefined
+  if (writer === 'live' || writer === 'merge') {
+    const read = await request(app).get('/api/file-content').query({ path: filePath })
+    expectedHash = read.body?.contentHash ?? undefined
+  }
+  return request(app).put('/api/file-content')
+    .send({ path: filePath, content, ...(writer ? { writer } : {}), ...(expectedHash ? { expectedHash } : {}) })
+}
 
 const history = (filePath: string, extra: Record<string, string> = {}) =>
   request(app).get('/api/file-history').query({ path: filePath, ...extra })
