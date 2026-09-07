@@ -25,6 +25,7 @@ struct TimelineHarnessView: View {
                 liveText: store.liveText,
                 liveTextTruncated: false,
                 activity: store.activity,
+                scope: "harness",
                 scrollToBottomSignal: store.scrollToBottomSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },

@@ -118,7 +118,53 @@ final class TimelineCollectionController: UIViewController {
             lastReportedWidth = width
             onWidthChange(width)
         }
+        repinAfterGeometryChange()
     }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        // The insets are consumed in the layout pass this schedules; the check
+        // itself runs from viewDidLayoutSubviews, where adjustedContentInset is
+        // already the new one.
+        view.setNeedsLayout()
+    }
+
+    /// A PINNED timeline must stay pinned when the geometry moves underneath it.
+    ///
+    /// Field bug: reopening the same conversation from the drawer landed ~50pt
+    /// (one tab-bar height) short of the bottom. The drawer hides the tab bar and
+    /// restores it on dismiss, which moves the bottom safe-area inset, and the
+    /// bottom pin is an OFFSET, not a constraint — nothing recomputed it because
+    /// no snapshot was applied (same conversation, same rows) and the store's
+    /// select() early-returns on the same id, so no scroll signal fired either.
+    /// The scroll position is this controller's own business, so the repin
+    /// belongs here rather than in a store that has to guess when geometry moved.
+    ///
+    /// Only reacts to an actual change, and yields to the two owners that
+    /// outrank it: a live gesture, and a frozen (keyboard-driven) geometry, whose
+    /// own repin machine drives the pin through the transition.
+    private func repinAfterGeometryChange() {
+        guard isViewLoaded, let cv = collectionView else { return }
+        let geometry = PinGeometry(bottomInset: cv.adjustedContentInset.bottom,
+                                   topInset: cv.adjustedContentInset.top,
+                                   height: cv.bounds.height)
+        defer { lastPinGeometry = geometry }
+        guard let previous = lastPinGeometry, geometry != previous else { return }
+        guard !rows.isEmpty, isPinned(), !userScrollActive, !geometryFrozen() else { return }
+        pinToBottom(animated: false)
+    }
+
+    /// Everything the pinned offset is computed from, except contentSize (which
+    /// only ever moves through `apply`, and that path pins already).
+    private struct PinGeometry: Equatable {
+        let bottomInset: CGFloat
+        let topInset: CGFloat
+        let height: CGFloat
+    }
+
+    /// The geometry the pin was last evaluated against. nil until the first
+    /// layout, so the first pass only records — first paint pins through apply.
+    private var lastPinGeometry: PinGeometry?
 
     // MARK: - Snapshot application
 

@@ -33,6 +33,11 @@ struct ChatTimelineBody: View {
                 liveText: chat.streamText,
                 liveTextTruncated: chat.streamTextTruncated,
                 activity: chat.activity,
+                // Reading activeID here is what makes a conversation switch
+                // visible to the timeline at all: the host outlives the switch,
+                // and the server's positional message ids ("m0"…) are identical
+                // between two conversations of the same length.
+                scope: TimelineScope.sanitize(chat.activeID),
                 showLoadEarlier: chat.hasOlder,
                 scrollToBottomSignal: chat.scrollToBottomSignal + repinSignal,
                 isPinned: { chat.bottomPinned },

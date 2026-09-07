@@ -97,28 +97,37 @@ final class TimelineRowBuilder {
 
     /// Rows for one message. `expandedRowIDs` selects the pre-measured
     /// expanded height for expandable rows (tool chips, notification cards).
+    ///
+    /// `scope` is the conversation the message belongs to and rides in every row
+    /// id it produces — the server numbers messages positionally, so the message
+    /// id alone is NOT unique across conversations (see `TimelineScope`).
     func rows(for message: ChatMessage, width: CGFloat,
-              expandedRowIDs: Set<String>) -> [TimelineRow] {
+              expandedRowIDs: Set<String>,
+              scope: String = TimelineScope.unscoped) -> [TimelineRow] {
+        let namespace = TimelineScope.namespace(scope, message.id)
         switch message.kind {
         case .tool:
-            return [toolChipRow(message, width: width, expandedRowIDs: expandedRowIDs)]
+            return [toolChipRow(message, namespace: namespace, width: width,
+                                expandedRowIDs: expandedRowIDs)]
         case .thinking:
-            return [chipRow(id: "\(message.id)#0", icon: "sparkles", text: message.text, width: width)]
+            return [chipRow(id: "\(namespace)#0", icon: "sparkles", text: message.text, width: width)]
         case .notification:
-            return [notificationRow(message, width: width, expandedRowIDs: expandedRowIDs)]
+            return [notificationRow(message, namespace: namespace, width: width,
+                                    expandedRowIDs: expandedRowIDs)]
         case nil:
             return message.isUser
-                ? userRows(message, width: width)
-                : assistantRows(message, width: width)
+                ? userRows(message, namespace: namespace, width: width)
+                : assistantRows(message, width: width, idPrefix: namespace)
         }
     }
 
     // MARK: - User bubble
 
-    private func userRows(_ message: ChatMessage, width: CGFloat) -> [TimelineRow] {
+    private func userRows(_ message: ChatMessage, namespace: String,
+                          width: CGFloat) -> [TimelineRow] {
         var rows: [TimelineRow] = []
         var index = 0
-        func nextID() -> String { defer { index += 1 }; return "\(message.id)#\(index)" }
+        func nextID() -> String { defer { index += 1 }; return "\(namespace)#\(index)" }
 
         if let images = message.localImages, !images.isEmpty {
             rows.append(TimelineRow(
@@ -169,6 +178,10 @@ final class TimelineRowBuilder {
 
     /// `cache` routing mirrors ChatMarkdownBody: history rows go through the
     /// shared parse cache; the live tail must skip it.
+    ///
+    /// `idPrefix` is the row-id namespace, already scoped to the conversation by
+    /// the caller (`TimelineScope.namespace`); omitting it falls back to the bare
+    /// message id, which is the unscoped id space direct callers use.
     func assistantRows(
         _ message: ChatMessage, width: CGFloat,
         idPrefix: String? = nil, cache: MarkdownParser.CacheMode = .shared,
@@ -427,17 +440,23 @@ final class TimelineRowBuilder {
     ///
     /// A RICH window is the one exception: it is rendered whole (see below), so
     /// there is no head to memoize while the model is writing markup.
+    ///
+    /// The live rows are scoped like every other row: a live turn belongs to ONE
+    /// conversation, and an unscoped "live-tail#0" would diff clean against the
+    /// previous conversation's live tail.
     func liveRows(
         liveText: String, storeTruncated: Bool, activity: String?,
         width: CGFloat, tailRevision: Int,
-        cachedHead: (key: String, rows: [TimelineRow])?
+        cachedHead: (key: String, rows: [TimelineRow])?,
+        scope: String = TimelineScope.unscoped
     ) -> (rows: [TimelineRow], headCache: (key: String, rows: [TimelineRow])?) {
         var rows: [TimelineRow] = []
         var headCache = cachedHead
         if !liveText.isEmpty {
             let seg = LiveMarkdownWindow.segments(liveText)
             if seg.omittedPrefix || storeTruncated {
-                rows.append(TimelineRow(id: "live-truncated", revision: 0,
+                rows.append(TimelineRow(id: TimelineScope.namespace(scope, "live-truncated"),
+                                        revision: 0,
                                         content: .truncationChip, height: 26))
             }
             // The text LiveMarkdownWindow decided to render, as one string. The
@@ -476,7 +495,8 @@ final class TimelineRowBuilder {
                 // head boundary advanced a quantum.
                 headCache = nil
                 rows.append(contentsOf: richRows(
-                    window, width: width, idPrefix: "live", cache: .skip,
+                    window, width: width,
+                    idPrefix: TimelineScope.namespace(scope, "live"), cache: .skip,
                     clipOversized: false, revision: tailRevision
                 ))
             } else {
@@ -487,8 +507,9 @@ final class TimelineRowBuilder {
                         let headRows = assistantRows(
                             ChatMessage(id: "live-head", role: "assistant", text: seg.head,
                                         createdAt: "", kind: nil),
-                            width: width, idPrefix: "live-head", cache: .shared,
-                            clipOversized: false
+                            width: width,
+                            idPrefix: TimelineScope.namespace(scope, "live-head"),
+                            cache: .shared, clipOversized: false
                         )
                         headCache = (seg.head, headRows)
                         rows.append(contentsOf: headRows)
@@ -500,8 +521,9 @@ final class TimelineRowBuilder {
                     rows.append(contentsOf: assistantRows(
                         ChatMessage(id: "live-tail", role: "assistant", text: seg.tail,
                                     createdAt: "", kind: nil),
-                        width: width, idPrefix: "live-tail", cache: .skip,
-                        clipOversized: false, revision: tailRevision
+                        width: width,
+                        idPrefix: TimelineScope.namespace(scope, "live-tail"),
+                        cache: .skip, clipOversized: false, revision: tailRevision
                     ))
                 }
             }
@@ -509,7 +531,8 @@ final class TimelineRowBuilder {
             headCache = nil
         }
         rows.append(TimelineRow(
-            id: "live-activity", revision: (activity ?? "").hashValue,
+            id: TimelineScope.namespace(scope, "live-activity"),
+            revision: (activity ?? "").hashValue,
             content: .activity(activity), height: TimelineMetrics.activityHeight
         ))
         return (rows, headCache)
@@ -537,9 +560,9 @@ final class TimelineRowBuilder {
             + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
     }
 
-    private func toolChipRow(_ message: ChatMessage, width: CGFloat,
+    private func toolChipRow(_ message: ChatMessage, namespace: String, width: CGFloat,
                              expandedRowIDs: Set<String>) -> TimelineRow {
-        let id = "\(message.id)#0"
+        let id = "\(namespace)#0"
         let expanded = expandedRowIDs.contains(id)
             && message.resultPreview?.isEmpty == false
         let capsuleHeight = Self.capsuleRowHeight(badged: message.agent?.isEmpty == false)
@@ -558,9 +581,9 @@ final class TimelineRowBuilder {
         )
     }
 
-    private func notificationRow(_ message: ChatMessage, width: CGFloat,
+    private func notificationRow(_ message: ChatMessage, namespace: String, width: CGFloat,
                                  expandedRowIDs: Set<String>) -> TimelineRow {
-        let id = "\(message.id)#0"
+        let id = "\(namespace)#0"
         let styled = NotificationStyling(message: message)
         let collapsible = styled.isCollapsible
         let expanded = !collapsible || expandedRowIDs.contains(id)
@@ -618,9 +641,9 @@ final class TimelineRowBuilder {
     }
 
     /// Utility row (load-earlier button).
-    func loadEarlierRow() -> TimelineRow {
-        TimelineRow(id: "load-earlier", revision: 0, content: .loadEarlier,
-                    height: TimelineMetrics.loadEarlierHeight)
+    func loadEarlierRow(scope: String = TimelineScope.unscoped) -> TimelineRow {
+        TimelineRow(id: TimelineScope.namespace(scope, "load-earlier"), revision: 0,
+                    content: .loadEarlier, height: TimelineMetrics.loadEarlierHeight)
     }
 }
 

@@ -33,6 +33,11 @@ actor TimelineLayoutActor {
 
     /// Live-head memo (see TimelineRowBuilder.liveRows).
     private var headCache: (key: String, rows: [TimelineRow])?
+    /// Conversation the memo was filled for. The rows it holds carry SCOPED ids,
+    /// so a head string that repeats across a switch must not replay the
+    /// previous conversation's rows (the row cache is safe by key, but the head
+    /// memo is keyed on the head TEXT alone).
+    private var cacheScope: String = TimelineScope.unscoped
     private var tailRevision = 0
 
     /// Memo entries whose rows hold a rich-HTML document → the height-cache
@@ -76,19 +81,28 @@ actor TimelineLayoutActor {
             richEntryIdentities.removeAll(keepingCapacity: true)
             cacheWidth = input.width
         }
+        if input.scope != cacheScope {
+            // The row cache SURVIVES a switch (its keys are scoped, so it can
+            // only ever hand back rows built for this conversation — and keeping
+            // it is what makes switching back instant). The head memo cannot:
+            // it is keyed on the live text alone.
+            headCache = nil
+            cacheScope = input.scope
+        }
         applyRichHeightChanges()
         var rows: [TimelineRow] = []
         rows.reserveCapacity(input.messages.count * 2 + 4)
         if input.showLoadEarlier {
-            rows.append(builder.loadEarlierRow())
+            rows.append(builder.loadEarlierRow(scope: input.scope))
         }
         for message in input.messages {
-            let key = cacheKey(message, expandedRowIDs: input.expandedRowIDs)
+            let key = cacheKey(message, expandedRowIDs: input.expandedRowIDs, scope: input.scope)
             if let cached = rowCache[key] {
                 rows.append(contentsOf: cached)
             } else {
                 let built = builder.rows(for: message, width: input.width,
-                                         expandedRowIDs: input.expandedRowIDs)
+                                         expandedRowIDs: input.expandedRowIDs,
+                                         scope: input.scope)
                 rowCache[key] = built
                 let identities = TimelineRowBuilder.richIdentities(in: built)
                 if !identities.isEmpty { richEntryIdentities[key] = identities }
@@ -106,7 +120,7 @@ actor TimelineLayoutActor {
             let live = builder.liveRows(
                 liveText: input.liveText, storeTruncated: input.liveTextTruncated,
                 activity: input.activity, width: input.width,
-                tailRevision: tailRevision, cachedHead: headCache
+                tailRevision: tailRevision, cachedHead: headCache, scope: input.scope
             )
             headCache = live.headCache
             rows.append(contentsOf: live.rows)
@@ -163,12 +177,20 @@ actor TimelineLayoutActor {
     /// Message ids are content-derived (role|timestamp|kind|text-hash), so
     /// text/kind changes already produce a new id; the optimistic-bubble
     /// mutable flags and expansion state ride explicitly.
-    private func cacheKey(_ m: ChatMessage, expandedRowIDs: Set<String>) -> String {
-        var key = m.id
+    ///
+    /// THE SCOPE IS PART OF THE KEY, not decoration. `/api/v1` numbers a
+    /// conversation's messages positionally ("m0"…), so the message id alone
+    /// made this memo answer conversation Q's "m0" with conversation P's rows —
+    /// which is why the stale transcript survived even a full reload: the
+    /// snapshot itself carried the previous conversation's content.
+    private func cacheKey(_ m: ChatMessage, expandedRowIDs: Set<String>,
+                          scope: String) -> String {
+        let namespace = TimelineScope.namespace(scope, m.id)
+        var key = namespace
         if m.pending == true { key += "|p" }
         if m.failed == true { key += "|f" }
         if let images = m.localImages, !images.isEmpty { key += "|i\(images.count)" }
-        if expandedRowIDs.contains("\(m.id)#0") { key += "|x" }
+        if expandedRowIDs.contains("\(namespace)#0") { key += "|x" }
         return key
     }
 }

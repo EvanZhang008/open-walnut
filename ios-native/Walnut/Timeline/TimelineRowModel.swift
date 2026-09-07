@@ -1,5 +1,52 @@
 import UIKit
 
+/// Which conversation a row belongs to, folded into every row id.
+///
+/// WHY THIS EXISTS (field bug): `/api/v1/conversations/:id/messages` numbers a
+/// conversation's messages POSITIONALLY — "m0", "m1", … — so two different
+/// conversations of the same length hand the builder byte-identical message
+/// ids. Row ids were "<messageID>#<block>", so P's rows and Q's rows were
+/// identical strings; the diff found a full common prefix, reported no changes,
+/// and the controller's `if diff.isEmpty { return }` fast path bailed BEFORE
+/// swapping its data source. The previous conversation stayed on screen under
+/// the new one's title until the app was relaunched.
+///
+/// Scoping the id makes a conversation switch a full delete+insert, which is
+/// what it always was semantically. It also un-collides three other things that
+/// were keyed on the row id and shared one host across conversations: the
+/// expanded-row set, the rich-document height cache's per-row fallback, and the
+/// unpinned reader's viewport anchor.
+enum TimelineScope {
+    /// Scope/message-id separator. `sanitize` guarantees a scope never contains
+    /// one, so the message id is always recoverable by cutting at the FIRST.
+    static let separator: Character = "|"
+    /// Stable token for "no conversation yet" (New chat / draft). A sentinel
+    /// rather than "unscoped": a draft's own rows must still diff against
+    /// themselves while the user types.
+    static let draft = "draft"
+    /// Direct builder use (unit tests, the DEBUG harness) — ids come out
+    /// exactly as they did before scoping existed.
+    static let unscoped = ""
+
+    static func sanitize(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return draft }
+        guard raw.contains(separator) else { return raw }
+        return raw.replacingOccurrences(of: String(separator), with: "_")
+    }
+
+    /// The id namespace one message's rows live in: "<scope>|<messageID>",
+    /// or the bare message id when unscoped.
+    static func namespace(_ scope: String, _ messageID: String) -> String {
+        scope.isEmpty ? messageID : "\(scope)\(separator)\(messageID)"
+    }
+
+    /// Drop the leading scope from a row id (no-op on an unscoped id).
+    static func stripScope(_ rowID: String) -> String {
+        guard let cut = rowID.firstIndex(of: separator) else { return rowID }
+        return String(rowID[rowID.index(after: cut)...])
+    }
+}
+
 /// Immutable, pre-laid-out row of the chat timeline. Produced on the
 /// background TimelineLayoutActor (parse + attribution + height measurement
 /// all happen there); the main thread only ever ATTACHES these to cells —
@@ -9,9 +56,10 @@ import UIKit
 /// block groups (text run / code / image / table) so each heavy construct gets
 /// a purpose-built cell and an exact height.
 struct TimelineRow {
-    /// Stable identity across rebuilds: "<message stable id>#<block index>"
-    /// (store ids are content-derived, so an unchanged message diffs to a
-    /// no-op). Live rows use fixed ids ("live-head", "live-tail", …).
+    /// Stable identity across rebuilds: "<scope>|<message stable id>#<block
+    /// index>" (see `TimelineScope`; store ids are content-derived, so an
+    /// unchanged message diffs to a no-op). Live rows use fixed message ids
+    /// ("live-head", "live-tail", …) inside the same scope.
     let id: String
     /// Cheap content-change detector for same-id rows (live tail, expanded
     /// tool chips): differing revision ⇒ reload the cell.
@@ -20,13 +68,35 @@ struct TimelineRow {
     /// Full cell height at the build width, including the row's own vertical
     /// padding. The layout NEVER self-sizes.
     let height: CGFloat
+    /// Digest of what this row actually RENDERS, computed once at build time
+    /// (never per diff tick) so the diff can catch a row whose id, revision and
+    /// height all match but whose content is different text.
+    ///
+    /// Two situations produce exactly that: an id space shared by two
+    /// conversations (see `TimelineScope`) and a server-side transcript re-cut,
+    /// after which a positional id points at a different message. Height is a
+    /// line-count product, so equal-length text gives an equal height and the
+    /// row would never be handed to its cell.
+    let contentKey: Int
 
-    /// Row ids are "<messageID>#<block>"; actions carry the MESSAGE id. Shared
-    /// so every action site (bubble context menu, hosted failed-notice button)
-    /// strips the suffix the same way — a raw row id would never match a store
-    /// message and the retry would silently no-op.
+    /// Same signature the memberwise init had — the key is derived, never
+    /// passed, so no construction site can forget it or get it wrong.
+    init(id: String, revision: Int, content: TimelineRowContent, height: CGFloat) {
+        self.id = id
+        self.revision = revision
+        self.content = content
+        self.height = height
+        self.contentKey = content.contentKey
+    }
+
+    /// Row ids are "<scope>|<messageID>#<block>"; actions carry the MESSAGE id.
+    /// Shared so every action site (bubble context menu, hosted failed-notice
+    /// button) strips scope and suffix the same way — a raw row id would never
+    /// match a store message and the retry would silently no-op.
     static func messageID(fromRowID id: String) -> String {
-        id.range(of: "#", options: .backwards).map { String(id[..<$0.lowerBound]) } ?? id
+        let unscoped = TimelineScope.stripScope(id)
+        return unscoped.range(of: "#", options: .backwards)
+            .map { String(unscoped[..<$0.lowerBound]) } ?? unscoped
     }
 }
 
@@ -102,6 +172,71 @@ extension TimelineRowContent {
         }
     }
 
+    /// Digest of everything this row DRAWS (see `TimelineRow.contentKey`).
+    ///
+    /// Computed once per built row, on the layout actor — a memoized row carries
+    /// its key along in the struct, so the diff never pays for this. Deliberately
+    /// cheap where the payload is unbounded: a rich document hashes its `key`
+    /// (already a digest of its markup) and image rows hash byte COUNTS, never
+    /// bytes. Attributed text hashes its plain string: styling is derived from
+    /// that text, so an attributes-only change with identical characters and an
+    /// identical height cannot exist.
+    var contentKey: Int {
+        var hasher = Hasher()
+        hasher.combine(reuseKind)
+        switch self {
+        case .text(let attributed):
+            hasher.combine(attributed.string)
+        case .userBubble(let text, _, let failed, let pending):
+            hasher.combine(text.string)
+            hasher.combine(failed)
+            hasher.combine(pending)
+        case .failedNotice(let notice):
+            hasher.combine(notice)
+        case .code(let text, _):
+            hasher.combine(text)
+        case .image(let raw, let alt):
+            hasher.combine(raw)
+            hasher.combine(alt)
+        case .localImages(let datas, let dimmed):
+            hasher.combine(datas.count)
+            for data in datas { hasher.combine(data.count) }
+            hasher.combine(dimmed)
+        case .table(let header, let rows):
+            hasher.combine(header)
+            hasher.combine(rows)
+        case .toolChip(let name, let detail, let resultPreview, let agent, let expanded):
+            hasher.combine(name)
+            hasher.combine(detail)
+            hasher.combine(resultPreview)
+            hasher.combine(agent)
+            hasher.combine(expanded)
+        case .chip(let icon, let text):
+            hasher.combine(icon)
+            hasher.combine(text)
+        case .notification(let badge, let icon, let isError, let body,
+                           let collapsedLine, let collapsible, let expanded):
+            hasher.combine(badge)
+            hasher.combine(icon)
+            hasher.combine(isError)
+            hasher.combine(body.string)
+            hasher.combine(collapsedLine)
+            hasher.combine(collapsible)
+            hasher.combine(expanded)
+        case .richHTML(_, let key, let streaming):
+            hasher.combine(key)
+            hasher.combine(streaming)
+        case .richIsland(_, let key, let complete):
+            hasher.combine(key)
+            hasher.combine(complete)
+        case .truncationChip, .loadEarlier:
+            break // constant content
+        case .activity(let label):
+            hasher.combine(label)
+        }
+        return hasher.finalize()
+    }
+
     /// Does this row's height come from a WKWebView measurement rather than
     /// from the actor's own arithmetic? The layout actor memoizes rows per
     /// message, and only these rows can have their height revised after the
@@ -130,6 +265,10 @@ struct TimelineInput {
     /// Row ids whose expandable content is currently open (tool chips,
     /// notification cards) — owned by the controller, echoed through builds.
     var expandedRowIDs: Set<String>
+    /// Which conversation these messages belong to (see `TimelineScope`). Every
+    /// UI surface passes one; the default is the unscoped id space, for direct
+    /// builder/actor use in tests and the DEBUG harness.
+    var scope: String = TimelineScope.unscoped
 }
 
 /// The actor's output: a complete row array (never a delta — latest wins).

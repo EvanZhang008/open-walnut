@@ -1,6 +1,7 @@
 import Foundation
 
-/// Minimal-edit diff between two row arrays, computed by id + revision.
+/// Minimal-edit diff between two row arrays: identity by id, "reload me" by
+/// revision / height / content digest (see `changed`).
 /// Chat timelines mutate almost exclusively at the TAIL (append rows, reload
 /// the live tail, occasionally trim the head when the render cap bites), so
 /// the algorithm is anchor-based rather than a general LCS: find the common
@@ -9,10 +10,22 @@ import Foundation
 struct TimelineDiff {
     var deletes: [Int] = []           // old indices, ascending
     var inserts: [(Int, TimelineRow)] = [] // new indices, ascending
-    var reloads: [(Int, TimelineRow)] = [] // NEW index + new row (same id, changed revision)
+    var reloads: [(Int, TimelineRow)] = [] // NEW index + new row (same id, changed content)
 
     var isEmpty: Bool { deletes.isEmpty && inserts.isEmpty && reloads.isEmpty }
     var changeCount: Int { deletes.count + inserts.count + reloads.count }
+
+    /// Must this row be handed to its cell again? Revision and height are the
+    /// declared change signals, but neither is sufficient on its own: a
+    /// same-id row can carry DIFFERENT TEXT at the same revision and the same
+    /// height (equal line counts measure equal), which is how a conversation
+    /// switch used to leave the previous conversation on screen. `contentKey`
+    /// closes that hole and is a single Int compare, so the walk stays O(n).
+    private static func changed(_ old: TimelineRow, _ new: TimelineRow) -> Bool {
+        old.revision != new.revision
+            || old.height != new.height
+            || old.contentKey != new.contentKey
+    }
 
     static func compute(old: [TimelineRow], new: [TimelineRow]) -> TimelineDiff {
         var diff = TimelineDiff()
@@ -20,8 +33,7 @@ struct TimelineDiff {
         // Common prefix by id.
         var prefix = 0
         while prefix < old.count, prefix < new.count, old[prefix].id == new[prefix].id {
-            if old[prefix].revision != new[prefix].revision
-                || old[prefix].height != new[prefix].height {
+            if changed(old[prefix], new[prefix]) {
                 diff.reloads.append((prefix, new[prefix]))
             }
             prefix += 1
@@ -45,7 +57,7 @@ struct TimelineDiff {
         for k in 0..<suffixLen {
             let oldRow = old[oldEnd + k]
             let newRow = new[newEnd + k]
-            if oldRow.revision != newRow.revision || oldRow.height != newRow.height {
+            if changed(oldRow, newRow) {
                 diff.reloads.append((newEnd + k, newRow))
             }
         }

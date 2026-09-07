@@ -46,6 +46,9 @@ struct SessionTimelineBody: View {
                 liveText: store.liveText,
                 liveTextTruncated: store.liveTextTruncated,
                 activity: store.activity,
+                // Session transcripts are numbered per session, so a session's
+                // rows must live in that session's id space (see TimelineScope).
+                scope: TimelineScope.sanitize(previewSessionID),
                 scrollToBottomSignal: store.scrollToBottomSignal + repinSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },

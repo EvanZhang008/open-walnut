@@ -19,6 +19,13 @@ struct TimelineHost: UIViewControllerRepresentable {
     var liveText: String
     var liveTextTruncated: Bool
     var activity: String?
+    /// Which conversation these messages belong to. NOT optional and NOT
+    /// defaulted on purpose: one host instance serves every conversation the
+    /// user switches between (nothing keys it by conversation), so the scope is
+    /// the only thing that makes two conversations' rows distinguishable — see
+    /// `TimelineScope`. Pass `TimelineScope.draft` when there is no conversation
+    /// yet.
+    var scope: String
     var showLoadEarlier: Bool = false
     /// Bumped by the store when a layout-shifting mutation should re-assert
     /// the pinned bottom (send, turn-end, streaming re-assert).
@@ -69,7 +76,8 @@ struct TimelineHost: UIViewControllerRepresentable {
             activity: activity,
             showLoadEarlier: showLoadEarlier,
             width: 0, // stamped in resubmit()
-            expandedRowIDs: coordinator.expandedRowIDs
+            expandedRowIDs: coordinator.expandedRowIDs,
+            scope: TimelineScope.sanitize(scope)
         )
         coordinator.resubmit()
         if scrollToBottomSignal != coordinator.lastScrollSignal {
