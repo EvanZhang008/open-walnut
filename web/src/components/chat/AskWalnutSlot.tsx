@@ -3,8 +3,10 @@
  *
  * There is no "main agent" any more: talking to Walnut IS an ordinary
  * claude-code session bound to a task flagged `walnut_agent`, filed under the
- * `Ask Walnut` project. So this slot is a VIEW over the task store — a tab strip
- * of those tasks (newest first) and a real `SessionPanel` for the selected one.
+ * `Ask Walnut` project. So this slot is a VIEW over the task store: the REGULAR
+ * `SessionPanel` for the selected task, exactly as a session column renders it,
+ * plus ONE addition — a ≡ button at the top-left of its header that opens a
+ * drawer of the recent asks to switch between (the Claude app's sidebar shape).
  * Nothing here owns conversation state; the session panel and the session queue
  * do, exactly as they do in a session column.
  *
@@ -34,7 +36,7 @@ import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import type { QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { AskWalnutSlotHeader, type SlotTab } from './AskWalnutSlotHeader';
+import { AskWalnutDrawer, AskWalnutMenuButton, AskWalnutTaskPopover, type DrawerRow } from './AskWalnutDrawer';
 import { resolveSelection, selectAskWalnutTasks } from './ask-walnut-slot-model';
 import '@/styles/walnut-agent.css';
 
@@ -48,14 +50,11 @@ const SS_SELECTED_KEY = 'walnut:ask-slot:selected';
  *  composer). */
 const SLOT_DRAFT_ID = 'ask-walnut-slot';
 
-/** Tabs rendered inline; everything past this goes behind the "⋯" menu. */
-const MAX_VISIBLE_TABS = 6;
-
 /**
  * How long the launch response may cover for the task store.
  *
  * `launched` exists to bridge the WS echo (normally <1s). A task that never
- * arrives is a phantom tab — a row the user can click but nothing can ever
+ * arrives is a phantom row — one the user can click but nothing can ever
  * resolve — so the placeholder expires instead of surviving until reload.
  */
 const LAUNCHED_GRACE_MS = 60_000;
@@ -77,16 +76,19 @@ export interface AskWalnutSlotProps {
   tasksLoading?: boolean;
   /** Rendered above the body (the setup banner). */
   banner?: ReactNode;
-  /** Rendered under the header while the inspector is open. */
+  /** Rendered above the body while the inspector is open. */
   inspectorPanel?: ReactNode;
-  /** The task composer popover, placed against the header's "+ Task" button. */
+  /** The task composer popover, placed against the ≡ button. */
   taskComposer?: ReactNode;
-  /** Whether that composer is open — the header needs it to place the popover. */
+  /** Whether that composer is open — the popover needs it to know when to measure. */
   taskComposerOpen?: boolean;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
   /** "+ Task" — opens the task composer the owner passed in. */
   onOpenTaskComposer: () => void;
+  /** Closes it again when its anchor (the ≡) leaves the DOM — the panel went
+   *  fullscreen with the form open. */
+  onCloseTaskComposer: () => void;
   /** "+ Session" — the ordinary draft session column. */
   onOpenDraftColumn: () => void;
   /** "Sessions" — the session finder overlay (the old QuickAccessBar pill). */
@@ -94,7 +96,8 @@ export interface AskWalnutSlotProps {
   /** "Fix Walnut" — a draft column pre-armed on Walnut's own checkout. Absent
    *  (npm install / cloud) hides the button. */
   onFixWalnut?: () => void;
-  /** Collapse the slot — the same affordance the old chat header's ✕ had. */
+  /** Collapse the slot — the drawer's "Hide Ask Walnut" row (the Focus Dock
+   *  brings it back). */
   onCloseChat: () => void;
   /** Reported on every selection change, so the owner can point the context
    *  inspector at the session actually on screen. */
@@ -118,7 +121,7 @@ function initialDraftMeta(): QuickStartTaskMeta {
 
 export function AskWalnutSlot({
   tasks, tasksLoading, banner, inspectorPanel, taskComposer, taskComposerOpen,
-  inspectorOpen, onToggleInspector, onOpenTaskComposer, onOpenDraftColumn, onOpenSessionFinder,
+  inspectorOpen, onToggleInspector, onOpenTaskComposer, onCloseTaskComposer, onOpenDraftColumn, onOpenSessionFinder,
   onFixWalnut, onCloseChat, onSelectionChange,
   onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
@@ -134,6 +137,10 @@ export function AskWalnutSlot({
    *  only refresh over WS a beat later: without it the panel could not mount, and
    *  the selection would bounce back to the previous task in the meantime. */
   const [launched, setLaunched] = useState<{ taskId: string; sessionId?: string; title: string } | null>(null);
+  /** The ≡ drawer. Closed on every pick; not persisted (it is a gesture, not a view). */
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  /** The ≡ button, wherever the current body renders it — the "+ Task" popover's anchor. */
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     try {
@@ -143,7 +150,7 @@ export function AskWalnutSlot({
   }, [selectedTaskId]);
 
   // Ref mirrors for the []-dep callbacks below (they must not be re-created on
-  // every selection change — DraftSessionPanel and the header take them as props).
+  // every selection change — DraftSessionPanel and the drawer take them as props).
   const selectedTaskIdRef = useRef(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
   const askTasksRef = useRef(askTasks);
@@ -163,7 +170,7 @@ export function AskWalnutSlot({
 
   // Once the store carries the launched task WITH its session slot, the launch
   // response has nothing left to cover — drop it, so a later delete of that ask
-  // is not shadowed by a phantom tab until reload.
+  // is not shadowed by a phantom row until reload.
   useEffect(() => {
     if (!launched) return;
     const own = askTasks.find((t) => t.id === launched.taskId);
@@ -172,7 +179,7 @@ export function AskWalnutSlot({
 
   // Second exit, for the launch whose task NEVER arrives (created under a
   // different flag, deleted right after, a lost WS echo): after the grace window
-  // the placeholder is a tab that can never resolve, so drop it. A task that IS
+  // the placeholder is a row that can never resolve, so drop it. A task that IS
   // in the store keeps its bridge — the effect above owns that case, and pulling
   // the launch response out from under a task whose session slot has not landed
   // yet would blank the panel.
@@ -182,7 +189,7 @@ export function AskWalnutSlot({
       // The store check reads the ref OUTSIDE the updater: a state updater must
       // stay pure (React can call it twice), and the log below is a side effect.
       if (askTasksRef.current.some((t) => t.id === launched.taskId)) return;
-      log.warn('ask-walnut-slot', 'the launched Ask Walnut task never reached the task store — dropping its placeholder tab', {
+      log.warn('ask-walnut-slot', 'the launched Ask Walnut task never reached the task store — dropping its placeholder row', {
         taskId: launched.taskId, sessionId: launched.sessionId ?? null,
       });
       setLaunched((prev) => (prev && prev.taskId === launched.taskId ? null : prev));
@@ -190,28 +197,15 @@ export function AskWalnutSlot({
     return () => clearTimeout(timer);
   }, [launched]);
 
-  const tabs = useMemo<SlotTab[]>(() => {
-    const rows = askTasks.map((t) => ({ id: t.id, title: t.title || 'Ask Walnut' }));
+  // The drawer's recents: every Ask Walnut task, newest first, with the
+  // just-launched one on top until the store carries it.
+  const rows = useMemo<DrawerRow[]>(() => {
+    const list = askTasks.map((t) => ({ id: t.id, title: t.title || 'Ask Walnut', task: t }));
     if (launched && !askTasks.some((t) => t.id === launched.taskId)) {
-      return [{ id: launched.taskId, title: launched.title }, ...rows];
+      return [{ id: launched.taskId, title: launched.title }, ...list];
     }
-    return rows;
+    return list;
   }, [askTasks, launched]);
-
-  // Up to MAX_VISIBLE_TABS inline. The SELECTED tab is always one of them — a
-  // tab strip whose active row hides behind a "⋯" reads as nothing selected.
-  const { visibleTabs, overflowTabs } = useMemo(() => {
-    if (tabs.length <= MAX_VISIBLE_TABS) return { visibleTabs: tabs, overflowTabs: [] as SlotTab[] };
-    const visible = tabs.slice(0, MAX_VISIBLE_TABS);
-    const overflow = tabs.slice(MAX_VISIBLE_TABS);
-    const hiddenIdx = overflow.findIndex((t) => t.id === selectedTaskId);
-    if (hiddenIdx < 0) return { visibleTabs: visible, overflowTabs: overflow };
-    const swapped = [...visible.slice(0, MAX_VISIBLE_TABS - 1), overflow[hiddenIdx]];
-    return {
-      visibleTabs: swapped,
-      overflowTabs: [visible[MAX_VISIBLE_TABS - 1], ...overflow.filter((_, i) => i !== hiddenIdx)],
-    };
-  }, [tabs, selectedTaskId]);
 
   const selectedTask = useMemo(
     () => askTasks.find((t) => t.id === selectedTaskId) ?? null,
@@ -263,7 +257,7 @@ export function AskWalnutSlot({
   const view: 'new' | 'pending' | 'session' | 'loading' = pending
     ? 'pending'
     : newMode ? 'new'
-      : tabs.length > 0 ? 'session'
+      : rows.length > 0 ? 'session'
         : tasksLoading ? 'loading' : 'new';
 
   const onSelectionChangeRef = useRef(onSelectionChange);
@@ -294,10 +288,10 @@ export function AskWalnutSlot({
   /**
    * Which launch the slot is still listening to.
    *
-   * Any navigation (New, a tab click) bumps it, so a POST that resolves AFTER the
+   * Any navigation (New, a drawer pick) bumps it, so a POST that resolves AFTER the
    * user moved on lands under a stale generation and touches neither the
    * selection nor the pending state. Without this, a launch that took 20s yanked
-   * the user off the tab they had switched to — and a FAILED one replaced the
+   * the user off the ask they had switched to — and a FAILED one replaced the
    * conversation they were reading with a Retry screen for a message they had
    * already left behind.
    */
@@ -318,13 +312,16 @@ export function AskWalnutSlot({
     setNewMode(true);
   }, [dropLaunchedUnless]);
 
-  const selectTab = useCallback((taskId: string) => {
+  const selectAsk = useCallback((taskId: string) => {
     launchGenRef.current++;
     dropLaunchedUnless(taskId);
     setPending(null);
     setNewMode(false);
     setSelectedTaskId(taskId);
   }, [dropLaunchedUnless]);
+
+  const toggleDrawer = useCallback(() => setDrawerOpen((v) => !v), []);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
   // ── The launch ──
 
@@ -419,32 +416,25 @@ export function AskWalnutSlot({
   const noopDraftEdit = useCallback(() => { /* walnut mode renders no folder/project pill */ }, []);
   const alwaysKnownProject = useCallback(() => true, []);
 
+  // The ONE thing this slot adds to the regular panels: the ≡ session switcher,
+  // rendered by whichever body is on screen so it always sits at the top-left.
+  // Memoized because it is a PROP of the memo'd SessionPanel: a fresh element on
+  // every slot render (and the slot re-renders on every task-store tick) would
+  // defeat that memo and re-render the whole transcript each time.
+  const menuButton = useMemo(
+    () => <AskWalnutMenuButton ref={menuBtnRef} open={drawerOpen} onToggle={toggleDrawer} />,
+    [drawerOpen, toggleDrawer],
+  );
+
   return (
     <div className="ask-walnut-slot" data-testid="ask-walnut-slot">
-      <AskWalnutSlotHeader
-        visibleTabs={visibleTabs}
-        overflowTabs={overflowTabs}
-        hasTabs={tabs.length > 0}
-        activeTabId={view === 'session' ? selectedTaskId : null}
-        onPickTab={selectTab}
-        onNew={startNew}
-        onOpenTaskComposer={onOpenTaskComposer}
-        onOpenDraftColumn={onOpenDraftColumn}
-        {...(onOpenSessionFinder ? { onOpenSessionFinder } : {})}
-        {...(onFixWalnut ? { onFixWalnut } : {})}
-        inspectorOpen={inspectorOpen}
-        onToggleInspector={onToggleInspector}
-        onCloseChat={onCloseChat}
-        {...(taskComposer ? { taskComposer } : {})}
-        taskComposerOpen={taskComposerOpen === true}
-      />
-
       {banner}
       {inspectorPanel}
 
       <div className="ask-walnut-slot-body">
         {view === 'loading' ? (
           <div className="ask-walnut-loading" data-testid="ask-walnut-loading">
+            <div className="ask-walnut-bare-header">{menuButton}</div>
             <p className="ask-walnut-pending-status">
               <span className="spinner ask-walnut-pending-spinner" />
               Loading your asks…
@@ -454,6 +444,7 @@ export function AskWalnutSlot({
           <div className="ask-walnut-draft" data-testid="ask-walnut-draft">
             <DraftSessionPanel
               draft={draft}
+              headerLeading={menuButton}
               // ONLY an explicit New click takes the caret. `view` is also 'new'
               // for the DERIVED empty state (no asks yet), which is what the slot
               // shows on a plain page load — autofocusing there stole the caret
@@ -471,6 +462,7 @@ export function AskWalnutSlot({
           </div>
         ) : view === 'pending' && pending ? (
           <div className="ask-walnut-pending" data-testid="ask-walnut-pending">
+            <div className="ask-walnut-bare-header">{menuButton}</div>
             {pending.error ? (
               <>
                 <p className="ask-walnut-pending-error">Ask Walnut couldn&apos;t start: {pending.error}</p>
@@ -500,6 +492,7 @@ export function AskWalnutSlot({
               key={sessionId}
               sessionId={sessionId}
               embedded
+              headerLeading={menuButton}
               {...(onTaskClick ? { onTaskClick } : {})}
               {...(onOpenTaskDetail ? { onOpenTaskDetail } : {})}
               {...(onSessionClick ? { onSessionClick } : {})}
@@ -509,11 +502,35 @@ export function AskWalnutSlot({
           </div>
         ) : (
           <div className="ask-walnut-empty">
+            <div className="ask-walnut-bare-header">{menuButton}</div>
             <p>This ask has no session yet.</p>
             <button className="btn btn-sm btn-primary" onClick={startNew}>New</button>
           </div>
         )}
       </div>
+
+      <AskWalnutDrawer
+        open={drawerOpen}
+        onClose={closeDrawer}
+        returnFocusRef={menuBtnRef}
+        rows={rows}
+        selectedTaskId={view === 'session' ? selectedTaskId : null}
+        onPick={selectAsk}
+        onNew={startNew}
+        onOpenTaskComposer={onOpenTaskComposer}
+        onOpenDraftColumn={onOpenDraftColumn}
+        {...(onOpenSessionFinder ? { onOpenSessionFinder } : {})}
+        {...(onFixWalnut ? { onFixWalnut } : {})}
+        inspectorOpen={inspectorOpen}
+        onToggleInspector={onToggleInspector}
+        onCloseChat={onCloseChat}
+      />
+
+      {taskComposer && (
+        <AskWalnutTaskPopover open={taskComposerOpen === true} anchorRef={menuBtnRef} onAnchorLost={onCloseTaskComposer}>
+          {taskComposer}
+        </AskWalnutTaskPopover>
+      )}
     </div>
   );
 }

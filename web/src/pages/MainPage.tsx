@@ -2456,9 +2456,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       <div className="main-page-content-row" ref={contentRowRef}>
 
       {/* THE CHAT SPOT IS AN ASK WALNUT SESSION VIEW (P1 of "remove the main
-          agent"): no lane conversation, no in-process chat engine — a tab strip
-          over the `walnut_agent` tasks plus a real SessionPanel for the selected
-          one. Still collapsible via the Sidebar / Focus Dock toggle, and still
+          agent"): no lane conversation, no in-process chat engine — the regular
+          SessionPanel for the selected `walnut_agent` task, plus a ≡ drawer at
+          its top-left to switch asks. Still collapsible via the Sidebar / Focus Dock toggle, and still
           lent to a draft column while one is open (chatBorrowedByDraftRef). */}
       {/* The wrapper stays mounted in BOTH states (borrow/mobile CSS and the Focus
           Dock spec measure `.main-page-chat`'s width), but the SLOT only mounts
@@ -2466,7 +2466,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           display:none, so an always-mounted slot kept a whole live SessionPanel
           (its history fetch, its WS subscriptions, its streaming re-renders)
           running behind a zero-width invisible box. The selection lives in
-          sessionStorage, so the remount restores the same tab. */}
+          sessionStorage, so the remount restores the same ask. */}
       <div className={`main-page-chat${chatVisible ? '' : ' collapsed'}`}>
         {chatVisible && (
         <AskWalnutSlot
@@ -2477,6 +2477,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           inspectorOpen={inspector.isOpen}
           onToggleInspector={inspector.toggle}
           onOpenTaskComposer={() => setQuickTaskOpen(true)}
+          onCloseTaskComposer={() => setQuickTaskOpen(false)}
           // "+ Session" — one verb "New": grow a draft column in the strip. It
           // borrows this spot for its lifetime, so close the task composer too
           // (the two launchers stay mutually exclusive).

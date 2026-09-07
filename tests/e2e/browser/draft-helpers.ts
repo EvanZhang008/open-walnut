@@ -76,6 +76,27 @@ export const REAL_PANEL = `.main-page-session-column ${REAL_PANEL_IN_COLUMN}`
  */
 export const DRAFT_PANEL = '.main-page-session-column .draft-session-panel'
 
+/**
+ * Open the Ask Walnut slot's ≡ drawer and return it.
+ *
+ * The slot renders the REGULAR session panel; its only addition is the ≡ button
+ * at the top-left of that header, which slides in a drawer holding the quick
+ * actions ("+ Task", "+ Session", "Find sessions", "Fix Walnut", "Context",
+ * "Hide Ask Walnut"), the recent asks, and "New chat". Every action a spec used
+ * to click in the old slot header now lives in this drawer, so the route in is:
+ * open the drawer, click the row (the rows keep the old `title` texts).
+ */
+export async function openAskWalnutDrawer(page: Page): Promise<Locator> {
+  const drawer = page.locator('[data-testid="ask-walnut-drawer"]')
+  if ((await drawer.count()) === 0) {
+    const menu = page.locator('[data-testid="ask-walnut-menu"]')
+    await expect(menu).toBeVisible({ timeout: 30_000 })
+    await menu.click()
+  }
+  await expect(drawer).toBeVisible({ timeout: 10_000 })
+  return drawer
+}
+
 /** Every draft column in the strip — the count locator ("the draft is gone"). */
 export function draftPanels(page: Page): Locator {
   return page.locator(DRAFT_PANEL)

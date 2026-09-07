@@ -160,7 +160,11 @@ Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project �
   (`SessionPanel`) and the chat slot.** The dedicated `/sessions` page was removed (2026-07-25);
   the route is now a redirect shim that reroutes `/sessions?id=…` deep links to the home session
   columns. The chat spot is the Ask Walnut slot (`AskWalnutSlot`): it hosts an embedded
-  `SessionPanel` for the selected ask, and a `DraftSessionPanel` in its New state. Consequence
+  `SessionPanel` for the selected ask, and a `DraftSessionPanel` in its New state. The slot adds
+  ONE control to the regular panel: a ≡ button at the top-left of the header (`headerLeading`)
+  that opens a drawer of the recent asks plus the quick actions (`+ Task`, `+ Session`,
+  `Find sessions`, `Fix Walnut`, `Context`, `Hide`) and `New chat`; tests reach those through
+  `openAskWalnutDrawer(page)` in `tests/e2e/browser/draft-helpers.ts`. Consequence
   for tests: a Playwright locator for `.session-panel` or `.draft-session-panel` on `/` must be
   scoped to `.main-page-session-column` (see `REAL_PANEL` / `DRAFT_PANEL` in
   `tests/e2e/browser/draft-helpers.ts`) or pinned by `data-session-id`. The slot's panel sits

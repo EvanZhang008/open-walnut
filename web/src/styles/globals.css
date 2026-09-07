@@ -19695,6 +19695,14 @@ td.usage-share-col {
   flex-wrap: wrap;
 }
 
+/* The host surface's one control at the very start of row 1 (SessionPanel and
+   DraftSessionPanel `headerLeading`): the Ask Walnut slot's ≡ session switcher. */
+.session-panel-header-leading {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 .session-panel-window-controls {
   display: flex;
   align-items: center;

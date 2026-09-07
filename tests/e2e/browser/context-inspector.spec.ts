@@ -16,12 +16,18 @@
  * and the slot below stays usable while it is open.
  */
 import { expect, test, type Page } from '@playwright/test'
-import { loadHome } from './draft-helpers'
+import { loadHome, openAskWalnutDrawer } from './draft-helpers'
 
 /** Unique per run: the fixture server is shared and survives across runs. */
 const STAMP = Date.now().toString(36)
 
+/** The Context toggle is a row in the slot's ≡ drawer; opening the drawer first
+ *  is part of the gesture (the drawer closes itself on the click). */
 const inspectorBtn = (page: Page) => page.locator('[data-testid="ask-walnut-inspector"]')
+async function clickInspector(page: Page): Promise<void> {
+  await openAskWalnutDrawer(page)
+  await inspectorBtn(page).click()
+}
 const inspector = (page: Page) => page.locator('.context-inspector')
 
 const isContextRequest = (url: string): boolean => new URL(url).pathname === '/api/context'
@@ -71,6 +77,7 @@ async function hideAllAsks(page: Page): Promise<void> {
 
 /** Launch one Ask Walnut session from the slot and return its session id. */
 async function launchAsk(page: Page, prompt: string): Promise<string> {
+  await openAskWalnutDrawer(page)
   await page.locator('[data-testid="ask-walnut-new"]').click()
   const composer = page.locator('[data-testid="ask-walnut-draft"] .chat-input-textarea')
   await expect(composer).toBeVisible({ timeout: 30_000 })
@@ -94,20 +101,22 @@ test.setTimeout(120_000)
 
 // ── Open and close ───────────────────────────────────────────────────────────
 
-test('the Context button is in the Ask Walnut header', async ({ page }) => {
+test('the Context row is in the Ask Walnut drawer', async ({ page }) => {
   await loadHome(page)
+  await openAskWalnutDrawer(page)
   await expect(inspectorBtn(page)).toBeVisible({ timeout: 30_000 })
+  await page.keyboard.press('Escape')
 })
 
 test('Context opens the inspector, and clicking it again closes it', async ({ page }) => {
   await loadHome(page)
   await expect(inspector(page)).toBeHidden()
 
-  await inspectorBtn(page).click()
+  await clickInspector(page)
   await expect(inspector(page)).toBeVisible({ timeout: 20_000 })
   await expect(inspector(page).locator('.context-inspector-title')).toContainText('Agent Context Inspector')
 
-  await inspectorBtn(page).click()
+  await clickInspector(page)
   await expect(inspector(page)).toBeHidden()
 })
 
@@ -124,7 +133,7 @@ test('with no ask selected the panel says so and asks the server nothing', async
     if (isContextRequest(request.url())) contextRequests.push(request.url())
   })
 
-  await inspectorBtn(page).click()
+  await clickInspector(page)
   await expect(inspector(page)).toBeVisible({ timeout: 20_000 })
   await expect(inspector(page)).toContainText('Select an ask to inspect its launch context')
 
@@ -144,7 +153,7 @@ test('with an ask selected the panel describes THAT session, and Refresh re-read
   const sessionId = await launchAsk(page, `context inspector subject ${STAMP}`)
 
   const firstRead = page.waitForRequest((request) => isContextRequest(request.url()))
-  await inspectorBtn(page).click()
+  await clickInspector(page)
   expect(new URL((await firstRead).url()).searchParams.get('sessionId'),
     'the inspector read a different conversation than the one on screen').toBe(sessionId)
 
@@ -185,7 +194,7 @@ test('with an ask selected the panel describes THAT session, and Refresh re-read
 
 test('the slot composer stays usable with the inspector open', async ({ page }) => {
   await loadHome(page)
-  await inspectorBtn(page).click()
+  await clickInspector(page)
   await expect(inspector(page)).toBeVisible({ timeout: 20_000 })
 
   const composer = page.locator('[data-testid="ask-walnut-slot"] .chat-input-textarea').first()

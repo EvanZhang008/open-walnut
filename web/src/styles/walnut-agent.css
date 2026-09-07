@@ -201,12 +201,14 @@
 /* ══════════════════════════════════════════════════════════════════════════
    The Ask Walnut SLOT — the home page's chat spot (P1 of "remove the main
    agent"). It holds one of three bodies (composer / pending / a real
-   SessionPanel), so the shape here is a header + ONE flex:1 body that owns the
-   remaining height. `.session-panel` is height:100% with an absolutely
-   positioned glass header and composer, so its wrapper must have a DEFINITE
-   height — every body wrapper below therefore carries `flex:1; min-height:0`.
+   SessionPanel), each the REGULAR panel with its own header; the slot adds only
+   the ≡ session switcher and the drawer it opens. `.session-panel` is
+   height:100% with an absolutely positioned glass header and composer, so its
+   wrapper must have a DEFINITE height — every body wrapper below therefore
+   carries `flex:1; min-height:0`. `position: relative` is the drawer's frame.
    ══════════════════════════════════════════════════════════════════════════ */
 .ask-walnut-slot {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -215,133 +217,203 @@
   overflow: hidden;
 }
 
-/* Anything between the header and the body (the setup banner, the context
-   inspector) is an INSERT: fixed height, and inset from the edges the embedded
-   session panel deliberately runs into. */
-.ask-walnut-slot > *:not(.ask-walnut-header):not(.ask-walnut-slot-body) {
+/* Anything above the body (the setup banner, the context inspector) is an
+   INSERT: fixed height, and inset from the edges the embedded session panel
+   deliberately runs into. The drawer layer is an overlay, not an insert. */
+.ask-walnut-slot > *:not(.ask-walnut-slot-body):not(.ask-walnut-drawer-layer) {
   flex: 0 0 auto;
   margin: 8px 12px 0;
 }
 
-.ask-walnut-header {
-  flex: 0 0 auto;
+/* ── The ≡ button: the first thing on the panel header's row 1 (the slot itself,
+   `.session-panel-header-leading`, is laid out in globals.css next to the row). ── */
+.ask-walnut-menu-btn {
+  color: var(--fg-muted);
+}
+.ask-walnut-menu-btn:hover,
+.ask-walnut-menu-btn.is-open {
+  color: var(--walnut-accent);
+}
+/* The pending / loading / empty bodies have no panel header, so the button gets
+   the same top-left spot by hand. */
+.ask-walnut-bare-header {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+}
+
+/* ── The drawer: slides in from the left over the panel, inside the slot. ── */
+.ask-walnut-drawer-layer {
+  position: absolute;
+  inset: 0;
+  /* Above the panel's glass header (z 10) and its composer. */
+  z-index: 40;
+}
+.ask-walnut-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  animation: ask-walnut-fade-in 0.15s ease-out;
+}
+.ask-walnut-drawer {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: min(300px, 85%);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px 8px;
+  background: var(--card-bg);
+  border-right: 1px solid var(--border-strong);
+  box-shadow: 8px 0 28px rgba(0, 0, 0, 0.18);
+  outline: none;
+  animation: ask-walnut-slide-in 0.16s ease-out;
+}
+@keyframes ask-walnut-slide-in {
+  from { transform: translateX(-24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes ask-walnut-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ask-walnut-drawer, .ask-walnut-scrim { animation: none; }
+}
+.ask-walnut-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px 8px 14px;
+}
+.ask-walnut-drawer-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--walnut-accent);
+}
+.ask-walnut-drawer-close {
+  font-size: 16px;
+  line-height: 1;
+}
+/* Quick actions: the nav rows at the top of the Claude sidebar. */
+.ask-walnut-drawer-actions {
+  display: flex;
+  flex-direction: column;
+  padding: 0 6px 6px;
   border-bottom: 1px solid var(--border);
 }
-.ask-walnut-header-top {
+.ask-walnut-drawer-action {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* Wraps rather than overflows: at 390px the action chips drop to their own
-     line instead of pushing themselves off the right edge. */
-  flex-wrap: wrap;
-}
-.ask-walnut-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--walnut-accent);
-  white-space: nowrap;
-}
-.ask-walnut-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  flex-wrap: wrap;
-}
-/* The chips reuse the session header's grammar (globals .session-action-chip);
-   only the hover tint is walnut's. */
-.ask-walnut-chip:hover {
-  color: var(--walnut-accent);
-  border-color: var(--walnut-accent);
-}
-.ask-walnut-close {
-  font-size: 15px;
-  line-height: 1;
-}
-
-/* ── Tab strip: ONE row that scrolls. Never wraps (a wall of pills would eat
-   the conversation) and never widens the column. ── */
-.ask-walnut-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  /* Keeps the row measurable (Playwright asserts it is visible at 390px) even
-     with a single short tab. */
-  min-height: 22px;
-}
-.ask-walnut-tabs::-webkit-scrollbar { display: none; }
-/* 128px: six tabs plus the ⋯ button fit the slot at a 1280px window with the
-   sidebar and todo panel open, so the strip does not need to scroll to show the
-   selected tab half-clipped at its left edge. */
-.ask-walnut-tab {
-  flex: 0 0 auto;
-  max-width: 128px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 2px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: none;
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-.ask-walnut-tab:hover {
-  color: var(--walnut-accent);
-  border-color: var(--walnut-accent);
-}
-.ask-walnut-tab.is-active {
-  color: var(--walnut-accent);
-  border-color: var(--walnut-accent);
-  font-weight: 600;
-}
-.ask-walnut-tab-more { max-width: none; }
-
-/* The "⋯" flyout is PORTALLED to <body> and placed by useMenuPlacement, so it
-   only needs its own box here (position/left/top arrive as inline style). */
-.ask-walnut-more-menu {
-  min-width: 200px;
-  max-width: 320px;
-  max-height: 320px;
-  overflow-y: auto;
-  padding: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
-  z-index: 1000;
-}
-.ask-walnut-more-item {
-  display: block;
   width: 100%;
-  padding: 6px 8px;
+  padding: 7px 8px;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   background: none;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--fg);
   text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   cursor: pointer;
 }
-.ask-walnut-more-item:hover { background: var(--hover-bg); }
+.ask-walnut-drawer-action:hover { background: var(--hover-bg); }
+.ask-walnut-drawer-action.is-active { color: var(--walnut-accent); }
+.ask-walnut-drawer-ic {
+  display: inline-flex;
+  justify-content: center;
+  width: 18px;
+  font-size: 14px;
+  color: var(--fg-muted);
+}
+.ask-walnut-drawer-section {
+  padding: 10px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+/* The recents list owns whatever height is left and scrolls inside. */
+.ask-walnut-drawer-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px;
+}
+.ask-walnut-drawer-empty {
+  margin: 8px 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.ask-walnut-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.ask-walnut-drawer-item:hover { background: var(--hover-bg); }
+.ask-walnut-drawer-item.is-selected {
+  background: color-mix(in srgb, var(--walnut-accent) 10%, transparent);
+  color: var(--walnut-accent);
+  font-weight: 600;
+}
+.ask-walnut-drawer-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Status dot: the board's task-circle colours (globals), as a 7px disc. */
+.ask-walnut-drawer-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  color: var(--fg-muted);
+}
+.ask-walnut-drawer-dot.task-circle-session { color: var(--accent); }
+.ask-walnut-drawer-dot.task-circle-running { color: var(--accent); animation: ask-walnut-pulse 1.4s ease-in-out infinite; }
+.ask-walnut-drawer-dot.task-circle-done { color: var(--success); }
+.ask-walnut-drawer-dot.task-circle-todo { color: var(--fg-muted); }
+@keyframes ask-walnut-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+/* "New chat": the pinned pill at the bottom, like the Claude sidebar's. */
+.ask-walnut-drawer-foot {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+.ask-walnut-drawer-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--walnut-accent);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ask-walnut-drawer-new:hover { background: var(--walnut-accent-strong); }
 
 /* The "+ Task" popover: a position:fixed card portalled to <body> and placed by
-   useMenuPlacement (see AskWalnutSlotHeader). It carries the card chrome; the
+   useMenuPlacement (see AskWalnutDrawer). It carries the card chrome; the
    height cap the hook hands back only works because of the overflow-y here.
    Position/top/right/maxHeight arrive as inline style. */
 .ask-walnut-task-popover {
@@ -409,6 +481,8 @@
 .ask-walnut-pending,
 .ask-walnut-loading,
 .ask-walnut-empty {
+  /* The frame for .ask-walnut-bare-header's top-left ≡. */
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -448,12 +522,10 @@
   opacity: 0.8;
 }
 
-/* Phones: the header is the only thing that needs to give, and it gives by
-   wrapping (above) — the tab strip stays on screen and keeps scrolling. */
+/* Phones: the inserts hug the edges a little tighter; the drawer already sizes
+   itself to 85% of the slot. */
 @media (max-width: 640px) {
-  .ask-walnut-header { padding: 8px 10px 6px; }
-  .ask-walnut-slot > *:not(.ask-walnut-header):not(.ask-walnut-slot-body) {
+  .ask-walnut-slot > *:not(.ask-walnut-slot-body):not(.ask-walnut-drawer-layer) {
     margin: 6px 8px 0;
   }
-  .ask-walnut-tab { max-width: 110px; }
 }

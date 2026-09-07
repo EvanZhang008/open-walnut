@@ -207,6 +207,13 @@ interface SessionPanelProps {
    * owns that). Locate-task and fullscreen stay — both are about the SESSION.
    */
   embedded?: boolean;
+  /**
+   * Rendered at the very start of header row 1, before the tool chips: the one
+   * spot the host surface may put its own control (the Ask Walnut slot's session
+   * switcher). Hidden in fullscreen, where the panel is an overlay and a drawer
+   * opened from it would land behind the overlay.
+   */
+  headerLeading?: ReactNode;
   /** Whether this panel is locked — pinned to the rightmost region, not evicted by new sessions. */
   locked?: boolean;
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
@@ -226,7 +233,7 @@ interface SessionPanelProps {
   }) => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, headerLeading, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) degrades the same way
   // when the panel is embedded: nothing to close.
@@ -1520,6 +1527,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           {/* ROW 1 — tool chips + time on the left, window controls pinned right.
               Session id / SSH host / Open-in-VS-Code all live in the ⋮ kebab. */}
           <div className="session-meta-row-2">
+            {headerLeading && !isFullscreen && (
+              <div className="session-panel-header-leading">{headerLeading}</div>
+            )}
             <div className="session-meta-row-2-chips">
             {/* Plan & Execute \u2014 shown whenever a plan actually exists (regardless
                 of mode), or there's something executable. */}

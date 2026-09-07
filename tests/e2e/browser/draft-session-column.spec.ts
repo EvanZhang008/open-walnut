@@ -53,7 +53,7 @@ import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftLaunchBar, draftPanel,
   draftPanels,
   draftProjectPill, expectV4Stack, homeColumns, loadHome, lockLeftmostPanel, openDraft,
-  openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests,
+  openAskWalnutDrawer, openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests,
 } from './draft-helpers'
 import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -176,13 +176,14 @@ test('Start with no folder picked says so and opens the picker — no request, t
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01b-start-needs-folder.png`, fullPage: false })
 })
 
-test('the Ask Walnut slot\'s "+ Session" chip opens the same draft column (no launcher popover)', async ({ page }) => {
+test('the Ask Walnut slot\'s "+ Session" row opens the same draft column (no launcher popover)', async ({ page }) => {
   await loadHome(page)
 
   const seen = watchForbiddenRequests(page)
 
   // "+ Session" moved from the chat composer's QuickAccessBar to the Ask Walnut
-  // slot's header. Disambiguated by its own title — the todo toolbar has a "+" too.
+  // slot's ≡ drawer. Disambiguated by its own title — the todo toolbar has a "+" too.
+  await openAskWalnutDrawer(page)
   await page.getByTitle('Open a new coding session draft').click()
 
   await expect(draftPanel(page)).toBeVisible({ timeout: 10_000 })

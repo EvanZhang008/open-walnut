@@ -10,6 +10,7 @@
  * long before the server is even asked.
  */
 import { expect, test, type APIRequestContext } from '@playwright/test'
+import { openAskWalnutDrawer } from './draft-helpers'
 
 const HOLD_MS = 3000
 const INSTANT_MS = 700
@@ -37,8 +38,9 @@ test('Undo on the "Task created" toast drops the board row before the DELETE is 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // "+ Task" now lives in the Ask Walnut slot's header (the chat composer's
+  // "+ Task" now lives in the Ask Walnut slot's ≡ drawer (the chat composer's
   // QuickAccessBar went with the old chat implementation).
+  await openAskWalnutDrawer(page)
   await page.getByTitle('Create a task without starting a session').click()
   const composer = page.locator('.quick-task-composer')
   await expect(composer).toBeVisible()

@@ -18,6 +18,7 @@
  */
 import fs from 'node:fs/promises'
 import { test, expect, type Page } from '@playwright/test'
+import { openAskWalnutDrawer } from './draft-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = '/tmp/t29-campaign/shots'
@@ -33,14 +34,16 @@ test.beforeAll(async () => {
 })
 
 /**
- * The session-finder button ("⌕ Sessions") in the Ask Walnut slot's header —
- * distinct from the "+ Session" launcher chip beside it.
+ * The session-finder row ("Find sessions") in the Ask Walnut slot's ≡ drawer —
+ * distinct from the "+ Session" launcher row beside it.
  *
  * It was a `.quick-access-pill` above the old chat composer; that composer went
- * away with the main agent (P1), so the finder moved into the slot header and is
- * addressed by its test id (the labels of the two chips share the word "Session").
+ * away with the main agent (P1), so the finder moved into the slot's drawer and
+ * is addressed by its test id (the labels of the two rows share the word
+ * "session"). Opening the drawer is part of the gesture; it closes on the click.
  */
-function finderPill(page: Page) {
+async function finderPill(page: Page) {
+  await openAskWalnutDrawer(page)
   return page.locator('[data-testid="ask-walnut-sessions"]')
 }
 
@@ -52,7 +55,7 @@ async function openHome(page: Page) {
 test('session finder: pill opens, query filters results, Escape clears then closes', async ({ page }) => {
   await openHome(page)
 
-  await finderPill(page).click()
+  await (await finderPill(page)).click()
   const panel = page.locator('.session-search-panel')
   await expect(panel).toBeVisible()
   const input = panel.locator('.session-search-input')
@@ -173,7 +176,7 @@ test('demo: session finder then quick add (continuous recording)', async ({ page
   await openHome(page)
 
   // Flow 1 — session finder.
-  await finderPill(page).click()
+  await (await finderPill(page)).click()
   const panel = page.locator('.session-search-panel')
   await expect(panel).toBeVisible()
   const input = panel.locator('.session-search-input')

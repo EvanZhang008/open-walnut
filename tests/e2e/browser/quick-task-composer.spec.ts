@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { openAskWalnutDrawer } from './draft-helpers'
 
 interface ApiTask {
   id: string
@@ -12,8 +13,9 @@ async function openComposer(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   // "+ Task" moved from the chat composer's QuickAccessBar to the Ask Walnut
-  // slot's header when the chat spot became a session view. Addressed by its
+  // slot's ≡ drawer when the chat spot became a session view. Addressed by its
   // title so it can't collide with the top bar's "+ New task".
+  await openAskWalnutDrawer(page)
   await page.getByTitle('Create a task without starting a session').click()
   await expect(page.locator('.quick-task-composer')).toBeVisible()
 }

@@ -35,7 +35,7 @@
  * ever touched on open.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
@@ -225,6 +225,10 @@ interface Props {
    *  async; the owner handles its own success/failure UI. */
   onSaveAsTask: (draftId: string, text: string) => void | Promise<void>;
   onClose: (draftId: string) => void;
+  /** Rendered before the title — the host surface's own control (the Ask Walnut
+   *  slot's session switcher), so the draft header reads like the session header
+   *  it is about to become. */
+  headerLeading?: ReactNode;
   onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta) => void;
   onProjectChange: (draftId: string, project: string) => void;
   /** Launch-meta edit from the bar. Takes an UPDATER (not a value) so rapid
@@ -244,7 +248,7 @@ interface Props {
 }
 
 export function DraftSessionPanel({
-  draft, autoFocus, onStart, onSaveAsTask, onClose,
+  draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -423,6 +427,7 @@ export function DraftSessionPanel({
     <div className={`session-panel draft-session-panel${isWalnut ? ' draft-session-panel-walnut' : ''}`} ref={rootRef} data-draft-id={draft.id}>
       <div className="session-panel-header">
         <div className="session-panel-header-top">
+          {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
           <div className="session-panel-title-area">
             <span className="session-panel-title">
               {isFork ? 'Fork Session' : isRepair ? '\u{1F527} Fix Walnut' : isWalnut ? 'Ask Walnut' : 'New Session'}

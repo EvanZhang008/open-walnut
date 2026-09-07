@@ -10,16 +10,17 @@
  * to Focus unconditionally — user direction.
  *
  * The SURFACE moved (P1 of "remove the main agent"): the chat spot is now the Ask
- * Walnut slot, so "Fix Walnut" is a chip in that slot's header and it opens a
+ * Walnut slot, so "Fix Walnut" is a row in that slot's ≡ drawer and it opens a
  * pre-armed DRAFT COLUMN instead of the old chat-anchored `.quick-start-bar`.
  * Everything this spec pins is unchanged — the payload (intent + launcher tier)
  * and where the task lands — so only the two chrome locators moved.
  *
- * Drives the real UI (chip click → type → Enter) and asserts on the quick-start
- * payload + the focus API (the same source the tiers render from).
+ * Drives the real UI (≡ → row click → type → Enter) and asserts on the
+ * quick-start payload + the focus API (the same source the tiers render from).
  */
 
 import { test, expect } from '@playwright/test'
+import { openAskWalnutDrawer } from './draft-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -29,7 +30,8 @@ test('fix walnut inherits the launcher tier instead of forcing Focus', async ({ 
   // produced, so 'satellite' vs 'focus' is still the discriminating assertion.
   await page.goto('/')
 
-  const chip = page.getByRole('button', { name: /fix walnut/i })
+  const drawer = await openAskWalnutDrawer(page)
+  const chip = drawer.getByRole('button', { name: /fix walnut/i })
   await expect(chip).toBeVisible({ timeout: 15_000 })
   await chip.click()
 
