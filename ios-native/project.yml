@@ -103,6 +103,14 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios.tests
         GENERATE_INFOPLIST_FILE: "YES"
+        # Re-asserts, before any test case runs, that this process is cut off
+        # from every real server: a hosted bundle inherits the app container's
+        # pairing, so untouched, the mutating tests write to whatever server the
+        # device is dogfooding. The guarantee itself is armed earlier, in
+        # AppConfig (this hook loads only after the app has launched). See
+        # WalnutTests/TestProcessNetworkBlackhole.swift. INFOPLIST_KEY_ is how a
+        # key reaches a GENERATED Info.plist.
+        INFOPLIST_KEY_NSPrincipalClass: WalnutTestsPrincipal
   # UI tests (XCUITest) — the layer that drives REAL taps. Exists because the
   # calendar's interaction contract (the view-switch menu, month day → Day view
   # drill-in, the Today button) can only be proven by tapping, and driving the

@@ -17,7 +17,68 @@ struct AppConfig {
     /// `.none` = not yet read; `.some(nil)` = read, no token stored.
     private static let cachedToken = OSAllocatedUnfairLock<String??>(initialState: .none)
 
+    #if DEBUG
+    /// Where a test process is pointed instead: the discard port (RFC 863) with
+    /// nothing bound to it, so a loopback connect is REFUSED in microseconds.
+    /// Fail-fast is the requirement — a blackhole that hangs would trade live
+    /// writes for a 30s URLSession timeout per call and an unrunnable suite.
+    static let testBlackholeURL = URL(string: "http://127.0.0.1:9")!
+
+    /// True when this process is a HOSTED UNIT-TEST host (`xcodebuild test` for
+    /// `WalnutTests`). xcodebuild puts `XCTestConfigurationFilePath` in the test
+    /// host's environment before `main()`; the app under XCUITest does NOT get
+    /// it (it gets a session identifier instead), which is the distinction we
+    /// want: the UI-test layer pairs itself deliberately and must keep working.
+    private static let isHostedUnitTestProcess =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
+    /// Process-local connection override — IN MEMORY ONLY, never persisted.
+    ///
+    /// Exists for the hosted unit-test bundle. `WalnutTests` runs INSIDE the
+    /// installed app, so it inherits the app container's pairing: a test that
+    /// builds a real store and calls a mutating method fires live writes at
+    /// whatever server the human is dogfooding against. Re-pointing the
+    /// container (writing `walnut.serverUrl`) would fix the tests and break the
+    /// human's app, so the redirect has to be process-local: nothing here reads
+    /// the container for the URL, and nothing here writes to it at all.
+    ///
+    /// WHY THE DEFAULT DOES THE WORK, not the test bundle. The obvious place to
+    /// install this is the test bundle's principal class, and that IS where the
+    /// explicit install lives (`WalnutTests/TestProcessNetworkBlackhole.swift`)
+    /// — but measured, it is too late: XCTest loads a hosted bundle only after
+    /// `applicationDidFinishLaunching`, so the app's OWN startup traffic (a
+    /// client-log POST, the events SSE subscribe, status/inbox/engine reads) had
+    /// already gone out to the live server before any test code ran. These locks
+    /// are `static let`s, so Swift initializes them at the FIRST read of
+    /// `serverURL`/`token` in the process, which is upstream of every request the
+    /// app can make. The principal class then re-asserts the same values.
+    private static let processURL = OSAllocatedUnfairLock<URL?>(
+        initialState: isHostedUnitTestProcess ? testBlackholeURL : nil
+    )
+    /// `""` keeps `isConfigured` true (stores keep their normal paired shape)
+    /// while carrying no credential to send anywhere.
+    private static let processToken = OSAllocatedUnfairLock<String?>(
+        initialState: isHostedUnitTestProcess ? "" : nil
+    )
+
+    static var processServerURLOverride: URL? {
+        get { processURL.withLock { $0 } }
+        set { processURL.withLock { $0 = newValue } }
+    }
+
+    /// Companion to `processServerURLOverride`.
+    static var processTokenOverride: String? {
+        get { processToken.withLock { $0 } }
+        set { processToken.withLock { $0 = newValue } }
+    }
+    #endif
+
     static var serverURL: URL? {
+        #if DEBUG
+        // Before UserDefaults on purpose: the override must beat the container's
+        // real pairing, and reading it has no side effect worth preserving.
+        if let pinned = processURL.withLock({ $0 }) { return pinned }
+        #endif
         guard let raw = UserDefaults.standard.string(forKey: urlKey) else { return nil }
         return URL(string: raw)
     }
@@ -27,6 +88,20 @@ struct AppConfig {
     }
 
     static var token: String? {
+        // The real chain runs FIRST, then a process override replaces the value
+        // it produced. Ordering is deliberate and the opposite of `serverURL`:
+        // the chain's one-Keychain-read-per-process is itself a measured
+        // invariant (audit IO-6, LifecycleHygieneTests counts the reads), so a
+        // test process has to keep exercising it. The override only changes what
+        // callers are handed, and adds no Keychain traffic of its own.
+        let resolved = storedToken
+        #if DEBUG
+        if let pinned = processToken.withLock({ $0 }) { return pinned }
+        #endif
+        return resolved
+    }
+
+    private static var storedToken: String? {
         #if DEBUG
         // Diagnostics harness (DEBUG only): `-walnut.deviceToken <tok>` on the
         // launch command line pairs the app against a throwaway server with no

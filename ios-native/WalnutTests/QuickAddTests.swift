@@ -119,8 +119,10 @@ final class QuickAddTests: XCTestCase {
     /// backfill checks). Guard the wiring, not just the flag primitive.
     func testUserMutationsMarkTouched() async {
         let store = TasksStore()
-        // updateTask on an id NOT in the list throws (no network in tests),
-        // but must have marked the id touched BEFORE the request.
+        // updateTask on an id NOT in the list throws (the request goes out, but
+        // the test process is pinned to an unreachable server — see
+        // TestProcessNetworkBlackhole.swift), and must have marked the id touched
+        // BEFORE the request.
         _ = try? await store.updateTask(id: "t-7", edit: .init(status: "done"))
         XCTAssertTrue(store.isUserTouched("t-7"))
 
