@@ -23,6 +23,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { MessageParam } from '../../agent/model.js'
+import type { ProjectedTranscriptMessage } from '../../core/session-projection.js'
 import { VALID_PRIORITIES, type ChatEntry, type TaskPhase, type TaskPriority } from '../../core/types.js'
 import { focusTierMatches } from '../../core/task-query.js'
 import { VALID_PHASES } from '../../core/phase.js'
@@ -69,8 +70,12 @@ function requestAgentId(req: Request): string | null {
   const raw = (typeof req.query.agentId === 'string' && req.query.agentId)
     || (typeof req.body?.agentId === 'string' && req.body.agentId)
     || DEFAULT_AGENT_ID
-  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(raw) ? raw : null
+  return AGENT_ID_RE.test(raw) ? raw : null
 }
+
+/** The agent-id shape this router accepts. Shared with the relay handler, which
+ *  must not accept an input the direct route would refuse. */
+const AGENT_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 /** 404-checked console-agent lookup — non-console agents are invisible to v1. */
 async function consoleAgentExists(agentId: string): Promise<boolean> {
@@ -435,6 +440,589 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
   return out
 }
 
+/**
+ * The window one /messages read answers with: cut everything at/after the
+ * `before` cursor, then keep the most recent `limit` messages, oldest-first.
+ * The client pages back by passing the first message's id as `before`.
+ *
+ * Positional ids ("m<index>") make this the cursor space, so BOTH sources this
+ * route can serve (chat history, lane transcript) must go through this one
+ * function — the iOS ChatStore derives `hasOlder` from `count >= pageSize` and
+ * would double or skip a page if the two branches paged differently.
+ */
+function pageApiV1Messages(
+  all: ApiV1Message[],
+  limit: number,
+  before: string | undefined,
+): ApiV1Message[] {
+  let windowed = all
+  if (before) {
+    const idx = Number(before.replace(/^m/, ''))
+    if (Number.isFinite(idx)) windowed = windowed.slice(0, Math.max(0, idx))
+  }
+  return windowed.slice(-limit)
+}
+
+// ── Lane-bound conversations: the CLI sessions own the transcript ──
+//
+// A Personal AI turn sent from the WEB console runs inside a lane-bound `claude`
+// CLI session, and that session's JSONL — not Walnut's chat-history store — is
+// where the FULL transcript lands (tools, thinking, every assistant block). The
+// store is not empty for such a conversation, though: both lane senders write a
+// COMPAT COPY of each turn into it — the eager user row before the turn starts
+// (chat.ts:894, api-v1.ts:1521) and the final answer after it ends (chat.ts:1058,
+// runApiV1LaneTurn). So the real invariant is:
+//
+//   chat-history holds a compat COPY of lane turns; the prefix cutoff and the
+//   leading-row dedupe below exist to render each turn exactly ONCE.
+//
+// The index's `messageCount` is a send counter bumped by touchLaneConversation,
+// not a row count: the phone opened one of these and got `[]` next to "11
+// messages" (measured on a live box: 24 of 64 non-empty conversations) until this
+// route learned to read the lane.
+//
+// The conversation is assembled APPEND-ONLY, in this exact order:
+//
+//   [chat-history rows older than where lane content BEGINS] ++ [lane #1 transcript]
+//   ++ [lane #2 transcript] ++ …          (lane sessions ordered by started_at)
+//
+// Three things this shape buys, each of which a simpler design lost:
+//
+//  1. STABLE POSITIONAL IDS. `m<n>` is an index, and the iOS client pages back
+//     with `before=<the oldest id it holds>` and inserts the reply WITHOUT
+//     deduping (ChatStore.loadOlder). Every segment above is closed and ordered,
+//     and new content can only be appended at the END, so `m<n>` keeps meaning
+//     the same message across builds. The earlier version read only the newest
+//     lane and only its last 100 rows — a sliding window, in which one new turn
+//     re-pointed every id and "load older" handed the phone rows it was already
+//     showing. That is also why the lane transcript is read with `full: true`.
+//  2. THE HISTORY BEFORE THE FIRST LANE. A conversation that predates the lane
+//     engine has real chat-history rows; they are included by TIME, not merged,
+//     so no row can ever appear twice.
+//  3. THE HISTORY BEFORE A LANE BREAK. A `--resume` that fails with "No
+//     conversation found" auto-archives the record (claude-code-session.ts) and
+//     the next turn mints a fresh lane, so reading only the live lane silently
+//     dropped every turn before the break. ALL lane sessions are read, archived
+//     included (session-tracker.listSessionsByLane).
+//
+// Why the two sources cannot simply be merged by timestamp: a phone turn runs in
+// the lane too and ALSO persists a copy to chat-history (runApiV1LaneTurn), so an
+// interleave would render those turns twice; and a row that lands late would
+// insert in the middle, shifting every id after it. The time gate at the start of
+// the first CONTRIBUTING lane segment is the one cut that both de-duplicates and
+// stays append-only (why "contributing": see the cutoff note in the assembly).
+//
+// A time gate alone is NOT enough, which is what `dropLeadingOverlap` is for: the
+// eager user row is persisted BEFORE createSessionRecord stamps the lane's
+// startedAt, so the very first message of every lane conversation is older than
+// the cutoff, is kept in the prefix, AND is the first row of the CLI's own
+// transcript — it rendered twice on every lane conversation, on both surfaces.
+// The fix is in the assembler rather than at the two write sites because weeks of
+// such rows are already on disk.
+//
+// ── Residuals (known, declared, not engineered around) ──
+// All three are id shifts, and an id shift only reaches the user when it happens
+// BETWEEN an open and a scroll-up: `before=<oldest id held>` is resolved against
+// whatever the list is at that moment, so a shift makes "load older" re-serve or
+// skip rows. A shift between two full opens is invisible.
+//  R1. A segment that threw in the read below is skipped; when it later becomes
+//      readable it both re-cuts the prefix and prepends rows, so every id moves.
+//      The "+∞ when nothing contributed" rule is itself such a discontinuity: the
+//      first transcript row to land flips the cutoff from +∞ to finite, which can
+//      drop prefix rows and renumber from m0.
+//  R2. An in-place rewind (getInPlaceRewinds, core/session-history.ts) deletes
+//      rows out of the MIDDLE of a segment, so everything after the rewind point
+//      shifts down. Nothing positional can survive that.
+//  R3. A JSONL over the reader's 4 MB ceiling degrades to a bounded sliding
+//      window, so the oldest rows of a whale lane are not addressable at all.
+// Fixing any of them properly means a content-addressed cursor, i.e. a change to
+// the frozen v1 contract.
+
+/** Budget for the whole assembly — it can touch daemon-owned JSONLs. */
+const LANE_TRANSCRIPT_DEADLINE_MS = 5_000
+
+/** A cancellable timeout — Promise.race never cancels its loser on its own. */
+function deadline(ms: number): { promise: Promise<'timeout'>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const promise = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), ms) })
+  return { promise, cancel: () => { if (timer) clearTimeout(timer) } }
+}
+
+/**
+ * Degradation warns on this route are per-POLL, and the phone re-reads the open
+ * conversation every 15s (its turn watchdog) — so an unthrottled warn turns one
+ * unreachable lane into ~5,700 identical log lines a day. Throttled per
+ * (reason, agent, conversation) with the same 10-minute cooldown the conversation
+ * index's duplicate warn uses: a cooldown rather than a latch, so a condition
+ * that is still broken an hour later still says so.
+ */
+const DEGRADE_WARN_COOLDOWN_MS = 10 * 60 * 1000
+const lastDegradeWarn = new Map<string, number>()
+
+function warnOncePerConversation(
+  reason: string,
+  agentId: string,
+  conversationId: string,
+  emit: () => void,
+): void {
+  const key = `${reason}|${agentId}|${conversationId}`
+  const at = lastDegradeWarn.get(key)
+  if (at !== undefined && Date.now() - at < DEGRADE_WARN_COOLDOWN_MS) return
+  lastDegradeWarn.set(key, Date.now())
+  emit()
+}
+
+/** Spawn-grace window for a just-seeded record — see isPreSpawnSession. */
+const SPAWN_GRACE_MS = 2 * 60 * 1000
+
+/**
+ * "The record exists but the CLI was never up, so there is nothing to read yet."
+ *
+ * Why ALL THREE record conditions: a successful spawn writes pid/outputFile but
+ * NEVER rewrites status_reason — 'awaiting_spawn' lingers on the record until the
+ * first turn completes. Gating on status_reason alone would keep reporting
+ * "nothing yet" over a live, growing transcript for the whole first turn;
+ * pid==null && !outputFile is the earliest visible spawn signal and the real
+ * disengage latch.
+ *
+ * Why the grace window: the persist that records pid/outputFile can fail (logged
+ * as CRITICAL in claude-code-session) with the CLI alive and writing JSONL — an
+ * unbounded short-circuit would mask that real transcript forever. After the
+ * window callers fall through to the real read paths; the health monitor's orphan
+ * sweep also flips a truly dead pid-less row to 'stopped' on the same clock
+ * (ORPHAN_GRACE_MS), so a wedged record stops matching either way.
+ */
+function isPreSpawnSession(record: {
+  status_reason?: string
+  pid?: number | null
+  outputFile?: string
+  process_status?: string
+  last_status_change?: string
+  startedAt?: string
+}): boolean {
+  return record.status_reason === 'awaiting_spawn'
+    && record.pid == null
+    && !record.outputFile
+    && record.process_status === 'idle' // seed value; a died-before-spawn record is 'stopped'
+    && Date.now() - new Date(record.last_status_change ?? record.startedAt ?? 0).getTime() < SPAWN_GRACE_MS
+}
+
+/**
+ * Map lane transcript rows onto the frozen mobile shape, WITHOUT ids (the
+ * assembly stamps those once, over the whole list — see assembleLaneConversation).
+ *
+ * Content policy matches the chat-history branch (normalizeEntries) so the two
+ * sources look the same to the client: entity refs resolve to their labels,
+ * machine banners come off user turns, and the CLI's abort marker renders as a
+ * card rather than a user bubble that misattributes an idle reap to the human.
+ * What it does NOT do is clip or cap: the rows arrive from
+ * buildSessionTranscript(…, { full: true }), so a long answer reaches the phone
+ * whole, exactly as the chat-history branch delivers one.
+ */
+function laneTranscriptToApiV1(rows: ProjectedTranscriptMessage[]): Array<Omit<ApiV1Message, 'id'>> {
+  const out: Array<Omit<ApiV1Message, 'id'>> = []
+  for (const row of rows) {
+    const role: 'user' | 'assistant' = row.role === 'user' ? 'user' : 'assistant'
+    const createdAt = row.timestamp
+    const raw = row.text ?? ''
+    // kind rows carry a tool name / a thinking excerpt, not prose — pass through.
+    if (row.kind) {
+      out.push({
+        role, text: raw, ...(createdAt ? { createdAt } : {}),
+        kind: row.kind,
+        ...(row.detail ? { detail: row.detail } : {}),
+        ...(row.resultPreview ? { resultPreview: row.resultPreview } : {}),
+      })
+      continue
+    }
+    // The CLI writes this marker on any AbortController fire (incl. idle reaps) —
+    // a user bubble would misattribute it. Card, like the chat-history branch.
+    if (role === 'user' && raw.trim() === '[Request interrupted by user]') {
+      out.push({
+        role: 'user', text: 'Turn interrupted',
+        ...(createdAt ? { createdAt } : {}), kind: 'notification', source: 'interrupt',
+      })
+      continue
+    }
+    const text = stripEntityRefs(role === 'user' ? stripLeadingBanners(raw) : raw)
+    if (!text) continue
+    out.push({ role, text, ...(createdAt ? { createdAt } : {}) })
+  }
+  return out
+}
+
+/**
+ * Stamp positional ids and guarantee every row carries `createdAt`.
+ *
+ * `createdAt` is NON-OPTIONAL in the iOS model (Models.swift `ChatMessage`), and
+ * the response is decoded as one array — so a single row missing the key fails
+ * the whole decode and the conversation renders EMPTY. A transcript row can
+ * legitimately have no usable timestamp (a hand-written or truncated JSONL line),
+ * so the value is carried forward from the previous row, falling back to the
+ * assembly time. Never omitted.
+ */
+function stampApiV1Ids(rows: Array<Omit<ApiV1Message, 'id'>>, fallbackAt: string): ApiV1Message[] {
+  let last = fallbackAt
+  return rows.map((row, i) => {
+    const createdAt = row.createdAt || last
+    last = createdAt
+    return { ...row, id: `m${i}`, createdAt }
+  })
+}
+
+/**
+ * The whole lane-bound conversation, oldest first, or null when this box cannot
+ * answer (no lane session at all, or the read blew its budget) — in which case
+ * the caller serves chat history as it always did.
+ *
+ * An EMPTY array is a real answer, not a fallback signal: a conversation whose
+ * lane exists but has not spawned yet genuinely has nothing after its pre-lane
+ * prefix, and returning null there would serve chat-history rows that the lane
+ * will render again the moment it comes up (the duplicate-render bug).
+ *
+ * Assembly order and why it is append-only: see the block comment above.
+ */
+async function laneMessagesForConversation(
+  agentId: string,
+  conversationId: string,
+): Promise<ApiV1Message[] | null> {
+  // A REPLICA has no registry of the primary's lane sessions (session records are
+  // machine-local) and no way to reach the JSONL, so it must never try to answer
+  // this question locally — it relays the whole read instead
+  // (relayMessagesToPrimary). Structural guard, not just a caller convention: a
+  // replica answering here would report "no lane" for every web-sent
+  // conversation, which is exactly the empty-history bug.
+  if (CLOUD_MODE) return null
+  const bail = deadline(LANE_TRANSCRIPT_DEADLINE_MS)
+  try {
+    const { personalAiLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
+    const { listSessionsByLane } = await import('../../core/session-tracker.js')
+    // Archived rows INCLUDED and oldest-first: a lane that lost its CLI
+    // conversation is archived, and its turns are the older half of this chat.
+    const records = await listSessionsByLane(personalAiLaneKey(agentId, conversationId))
+    if (records.length === 0) return null
+    const outcome = await Promise.race([
+      assembleLaneConversation(agentId, conversationId, records),
+      bail.promise,
+    ])
+    if (outcome === 'timeout') {
+      warnOncePerConversation('lane-timeout', agentId, conversationId, () => {
+        log.web.warn('api-v1 messages: lane assembly timed out — serving chat history', {
+          agentId, conversationId, lanes: records.length, budgetMs: LANE_TRANSCRIPT_DEADLINE_MS,
+        })
+      })
+      return null
+    }
+    return outcome
+  } catch (err) {
+    warnOncePerConversation('lane-unavailable', agentId, conversationId, () => {
+      log.web.warn('api-v1 messages: lane transcript unavailable — serving chat history', {
+        agentId, conversationId, error: err instanceof Error ? err.message : String(err),
+      })
+    })
+    return null
+  } finally {
+    bail.cancel()
+  }
+}
+
+/**
+ * Rows of `entries` inside (`floor`, `cutoff`) — the conversation's pre-lane prefix.
+ * `floor` is the "Clear conversation" boundary (0 when the chat was never cleared).
+ */
+function chatHistoryPrefix(
+  entries: ChatEntry[],
+  cutoff: number,
+  floor: number,
+): Array<Omit<ApiV1Message, 'id'>> {
+  return normalizeEntries(entries)
+    .filter((m) => {
+      const at = m.createdAt ? Date.parse(m.createdAt) : NaN
+      if (!Number.isFinite(at)) {
+        // No parseable timestamp = legacy row with nothing to place it by. Keep it
+        // as pre-lane (dropping it loses real conversation, and every writer since
+        // the store's v2 shape stamps a timestamp, so this is the migration tail)
+        // — UNLESS the chat was cleared, in which case an unplaceable row cannot
+        // be shown to have survived the clear, and "forget this" wins over "show
+        // everything".
+        return floor === 0
+      }
+      return at > floor && at < cutoff
+    })
+    .map(({ id: _id, ...rest }) => rest)
+}
+
+/** True when two rows are the same message seen through two writers. */
+function sameRow(a: Omit<ApiV1Message, 'id'>, b: Omit<ApiV1Message, 'id'>): boolean {
+  // Timestamps deliberately ignored: the two copies are minted seconds apart by
+  // different writers, which is the whole reason a time-based cut cannot see them.
+  // `kind` rows (tool/thinking) exist only in the transcript, so they can never be
+  // half of a duplicate pair.
+  if (a.kind || b.kind) return false
+  return a.role === b.role && a.text.trim() === b.text.trim()
+}
+
+/**
+ * Drop the prefix rows that the first lane segment repeats verbatim at its head.
+ *
+ * Why this exists: the eager `chatHistory.addUserMessage` on both lane senders
+ * (api-v1.ts:1521, chat.ts:894) runs BEFORE createSessionRecord stamps the lane's
+ * startedAt, so the first user message of every lane conversation lands on the
+ * pre-lane side of the cutoff — and the CLI, spawned WITH that same text, writes
+ * it as the first row of its transcript. Result before this: the opening message
+ * of every lane conversation rendered twice, on the phone and in the console.
+ *
+ * Matched on (role, trimmed text), longest run first, so a genuine multi-row
+ * overlap collapses too; in production the run is exactly one row.
+ */
+function dropLeadingOverlap(
+  prefix: Array<Omit<ApiV1Message, 'id'>>,
+  laneRows: Array<Omit<ApiV1Message, 'id'>>,
+): Array<Omit<ApiV1Message, 'id'>> {
+  for (let m = Math.min(prefix.length, laneRows.length); m > 0; m--) {
+    const tail = prefix.slice(-m)
+    if (tail.every((row, i) => sameRow(row, laneRows[i]))) return prefix.slice(0, prefix.length - m)
+  }
+  return prefix
+}
+
+/**
+ * "Clear conversation" wipes chat-history and archives the lane with
+ * `archive_reason: 'chat_cleared'` — but never touches the CLI's JSONL, so a
+ * reader that takes every lane record serves the cleared transcript straight back.
+ * Everything at or before the NEWEST cleared record is dropped here.
+ *
+ * Only this one reason is honoured, and that is deliberate:
+ *  - `chat_cleared` (personal-ai-lane.archiveLaneForConversation, both clear
+ *    routes) is the user saying "forget this". Drop it.
+ *  - `remote_conversation_lost` (claude-code-session.ts) is a `--resume` that
+ *    failed and re-minted the lane. Those turns really happened and the user never
+ *    asked to lose them — this is exactly the history the old single-lane read was
+ *    dropping, so it MUST stay included.
+ *  - every other reason on a lane record ('retry', a rewind's message, a manual
+ *    session_archive) means "this session continues elsewhere", not "forget it".
+ * deleteConversation is not a hazard of this kind: it removes the conversation
+ * file and its index row, so there is no id left to open.
+ */
+const LANE_CLEARED_REASON = 'chat_cleared'
+
+interface LaneSegmentRecord {
+  claudeSessionId: string
+  startedAt: string
+  lastActiveAt?: string
+  archived?: boolean
+  archive_reason?: string
+}
+
+function afterLastClear(records: LaneSegmentRecord[]): { records: LaneSegmentRecord[]; floor: number } {
+  let cut = -1
+  for (let i = records.length - 1; i >= 0; i--) {
+    if (records[i].archive_reason === LANE_CLEARED_REASON) { cut = i; break }
+  }
+  if (cut < 0) return { records, floor: 0 }
+  // The archive stamps NO timestamp of its own (updateSessionRecord writes only
+  // archived/archive_reason), so the clear's instant is not recorded anywhere. The
+  // latest instant the dropped records can vouch for is the best available floor,
+  // and it is sound in the normal case because `chatHistory.clear` empties the
+  // store synchronously before the archive — a row after this floor can only be
+  // post-clear content.
+  let floor = 0
+  for (const dropped of records.slice(0, cut + 1)) {
+    for (const stamp of [dropped.startedAt, dropped.lastActiveAt]) {
+      const at = stamp ? Date.parse(stamp) : NaN
+      if (Number.isFinite(at) && at > floor) floor = at
+    }
+  }
+  return { records: records.slice(cut + 1), floor }
+}
+
+/** The assembly itself (see the block comment). Ordered, append-only, renumbered once. */
+async function assembleLaneConversation(
+  agentId: string,
+  conversationId: string,
+  allRecords: LaneSegmentRecord[],
+): Promise<ApiV1Message[]> {
+  const { buildSessionTranscript } = await import('../../core/session-projection.js')
+
+  // Anything the user cleared is gone, JSONL or not (see afterLastClear).
+  const { records, floor } = afterLastClear(allRecords)
+
+  // ── Lane segments first, oldest session first ──
+  // Read before the prefix because WHERE the prefix ends is decided by where lane
+  // content actually begins (see the cutoff note below), not by which records exist.
+  const laneRows: Array<Omit<ApiV1Message, 'id'>> = []
+  let cutoff = Number.POSITIVE_INFINITY
+  for (const record of records) {
+    // Same short-circuit GET /sessions/:id/transcript takes, for the same reason:
+    // the phone polls this route, and a scan for a JSONL that cannot exist yet
+    // costs a daemon round trip per poll.
+    if (isPreSpawnSession(record as Parameters<typeof isPreSpawnSession>[0])) continue
+    try {
+      // full: no 100-row tail and no text clipping — this consumer pages to the
+      // conversation's start and must not lose the tail of a long answer.
+      const transcript = await buildSessionTranscript(record.claudeSessionId, { full: true })
+      const mapped = laneTranscriptToApiV1(transcript.messages)
+      if (mapped.length === 0) continue
+      // The record's creation time is strictly before any row its CLI can write,
+      // so it is the safe cut. If it is unreadable, fall back to this segment's
+      // own earliest row — derived from the same bytes, so it cannot drift.
+      let at = Date.parse(record.startedAt)
+      if (!Number.isFinite(at)) {
+        at = Math.min(...mapped.map((m) => (m.createdAt ? Date.parse(m.createdAt) : NaN))
+          .filter((n) => Number.isFinite(n)))
+      }
+      if (Number.isFinite(at) && at < cutoff) cutoff = at
+      laneRows.push(...mapped)
+    } catch (err) {
+      // One unreadable segment (purged JSONL, host unreachable) must not blank the
+      // rest of the conversation. It leaves a HOLE, which shifts the ids after it
+      // — unavoidable, and far better than serving nothing.
+      warnOncePerConversation('lane-segment', agentId, conversationId, () => {
+        log.web.warn('api-v1 messages: a lane segment could not be read — serving the rest', {
+          agentId, conversationId, sessionId: record.claudeSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }
+  }
+
+  // ── Then the prefix: chat history from BEFORE lane content begins ──
+  // The cutoff is the start of the first lane session that actually CONTRIBUTED
+  // rows, not merely the first record that exists. Two cases it has to get right,
+  // and both are about not losing real conversation:
+  //  - a lane minted seconds ago whose CLI has not written a transcript yet: no
+  //    lane content exists, so nothing can be duplicated, so the phone's own
+  //    chat-history copies ARE the conversation (cutoff stays +∞);
+  //  - an archived segment whose JSONL is gone: its era's chat-history copies fill
+  //    part of the hole instead of being cut away with it.
+  // A cutoff of +∞ is NOT "throw the assembly away and serve chat history" — that
+  // switch discarded a non-empty assembly's ids on the strength of one failed read.
+  // Here there is simply no lane content, and one rule ("history before lane
+  // content, then lane content") produces both answers.
+  const { messages: entries } = await chatHistory.getDisplayEntries(
+    1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
+  )
+  // …minus the rows the first segment repeats verbatim (the eager user message).
+  const rows = dropLeadingOverlap(chatHistoryPrefix(entries, cutoff, floor), laneRows)
+  rows.push(...laneRows)
+  return stampApiV1Ids(rows, new Date().toISOString())
+}
+
+// ── The REPLICA's half: relay the whole read to the primary ──
+//
+// The phone is paired to the cloud companion, so "serve chat history locally"
+// meant every web-sent conversation opened empty THERE too — the box the user's
+// phone actually talks to. This is the same box-level control action shape the
+// push registry and the human inbox use (`server.*`, host '__local__',
+// sessionId '__server__', see core/push/relay.ts): the primary answers with the
+// SAME handler code its own route runs, already paged, and this box hands the
+// body back untouched. Deliberately NOT a lane-aware bridge lookup — a replica
+// cannot resolve a lane session's host at all (the projection excludes lane
+// records), so the only honest owner of the answer is the primary.
+//
+// Nothing is persisted here: this is a read, and the primary stays the single
+// writer for a relayed conversation.
+
+/**
+ * Relay budget. It must exceed the primary's OWN transcript bound
+ * (LANE_TRANSCRIPT_DEADLINE_MS) or this timer wins the race and the phone gets
+ * chat history for a conversation whose lane the primary was about to read
+ * successfully — the inner deadline is the one that should degrade, not this one.
+ */
+const MESSAGES_RELAY_TIMEOUT_MS = LANE_TRANSCRIPT_DEADLINE_MS + 3_000
+
+/**
+ * One page of this conversation's messages as the PRIMARY sees it, or null when
+ * this box has to answer for itself (bridge down/timeout, a primary that predates
+ * the action, a malformed reply, or a conversation the primary has never heard of
+ * — a phone-created one that has not been relayed yet, whose history really is
+ * local here).
+ */
+async function relayMessagesToPrimary(
+  agentId: string,
+  conversationId: string,
+  limit: number,
+  before: string | undefined,
+): Promise<ApiV1Message[] | null> {
+  const { callPrimaryControl } = await import('./v1-control-relay.js')
+  const outcome = await callPrimaryControl(
+    'server.chat.messages',
+    '__server__',
+    { agentId, conversationId, limit, ...(before !== undefined ? { before } : {}) },
+    MESSAGES_RELAY_TIMEOUT_MS,
+  )
+  if (!outcome.ok) {
+    // git-sync mirrors the conversation files here, so the local read is a real
+    // (if possibly stale, and empty for a lane conversation) answer — better than
+    // an error on the surface the phone opens first. When it turns out to be empty
+    // for a conversation the index says has messages, the route answers 503
+    // instead of a false empty (see the handler).
+    warnOncePerConversation('relay-failed', agentId, conversationId, () => {
+      log.web.warn('api-v1 messages: relay to the primary failed — serving this box\'s chat history', {
+        agentId, conversationId, failureKind: outcome.failure.kind, reason: outcome.failure.message,
+      })
+    })
+    return null
+  }
+  const result = outcome.result
+  if (!Array.isArray(result.messages)) {
+    warnOncePerConversation('relay-malformed', agentId, conversationId, () => {
+      log.web.warn('api-v1 messages: malformed relay reply — serving this box\'s chat history', {
+        agentId, conversationId,
+      })
+    })
+    return null
+  }
+  if (result.known === false) {
+    // The primary has no lane AND no index row for this conversation, so its
+    // empty answer describes nothing. Local history is the real one.
+    warnOncePerConversation('relay-unknown-conv', agentId, conversationId, () => {
+      log.web.info('api-v1 messages: the primary does not know this conversation — serving local chat history', {
+        agentId, conversationId,
+      })
+    })
+    return null
+  }
+  return result.messages as ApiV1Message[]
+}
+
+/**
+ * PRIMARY side of `server.chat.messages` — the same read the local route does,
+ * paged, plus the two facts the replica needs to decide whether this answer is
+ * meaningful: which source it came from, and whether this box knows the
+ * conversation at all.
+ *
+ * Both ids are validated with the ROUTE's own patterns: the relay must not accept
+ * inputs the direct route would refuse (same rule as `server.search` in
+ * session-controls.ts). A rejected id answers `known: false`, which sends the
+ * replica back to its own history rather than reporting an empty conversation.
+ */
+export async function handlePrimaryChatMessagesRelay(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const agentId = typeof params.agentId === 'string' && params.agentId ? params.agentId : DEFAULT_AGENT_ID
+  const conversationId = typeof params.conversationId === 'string' ? params.conversationId : ''
+  const limit = Math.max(1, Math.min(200, Number(params.limit) || 50))
+  const before = typeof params.before === 'string' ? params.before : undefined
+  if (!AGENT_ID_RE.test(agentId) || !/^conv-[A-Za-z0-9-]+$/.test(conversationId)) {
+    return { messages: [], source: 'chat-history', known: false }
+  }
+  const laneMessages = await laneMessagesForConversation(agentId, conversationId)
+  if (laneMessages) {
+    return { messages: pageApiV1Messages(laneMessages, limit, before), source: 'lane', known: true }
+  }
+  const known = (await listConversations(agentId)).some((c) => c.id === conversationId)
+  if (!known) return { messages: [], source: 'chat-history', known: false }
+  const { messages: entries } = await chatHistory.getDisplayEntries(
+    1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
+  )
+  return {
+    messages: pageApiV1Messages(normalizeEntries(entries), limit, before),
+    source: 'chat-history',
+    known: true,
+  }
+}
+
 // GET /api/v1/conversations/:id/messages?limit=50&before=<cursor>&agentId=
 apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -449,18 +1037,47 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
       return
     }
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
+    const before = typeof req.query.before === 'string' ? req.query.before : undefined
+    let relayFailed = false
+    if (CLOUD_MODE) {
+      // The reply is ALREADY a page — do not re-page it here; the cursor space
+      // belongs to the primary, which is the box that read the source.
+      const relayed = await relayMessagesToPrimary(agentId, conversationId, limit, before)
+      if (relayed) {
+        res.json(relayed)
+        return
+      }
+      relayFailed = true
+      // else: fall through to this box's chat history (git-synced mirror).
+    } else {
+      // A lane-bound conversation's transcript belongs to its CLI sessions, so its
+      // chat-history file is empty by design — read the lane, not [].
+      const laneMessages = await laneMessagesForConversation(agentId, conversationId)
+      if (laneMessages) {
+        res.json(pageApiV1Messages(laneMessages, limit, before))
+        return
+      }
+    }
     const { messages: entries } = await chatHistory.getDisplayEntries(
       1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
     )
-    let all = normalizeEntries(entries)
-    const before = typeof req.query.before === 'string' ? req.query.before : undefined
-    if (before) {
-      const idx = Number(before.replace(/^m/, ''))
-      if (Number.isFinite(idx)) all = all.slice(0, Math.max(0, idx))
+    const local = pageApiV1Messages(normalizeEntries(entries), limit, before)
+    // A replica whose relay failed and whose own copy is EMPTY for a conversation
+    // the index says has messages must not answer 200-[]: the iOS client REPLACES
+    // its rows with a 200 body (ChatStore.loadMessages), so a false empty wipes a
+    // conversation the phone was correctly showing a second ago. On a thrown error
+    // it keeps what it has and reports reachability instead, which is the truthful
+    // outcome here — the history exists, this box just cannot reach it yet.
+    if (relayFailed && local.length === 0 && !before) {
+      const meta = (await listConversations(agentId)).find((c) => c.id === conversationId)
+      if ((meta?.messageCount ?? 0) > 0) {
+        sendError(res, 503, 'primary_unreachable',
+          'Your primary box is unreachable, so this conversation could not be loaded yet',
+          { retry: true })
+        return
+      }
     }
-    // Tail window: the most recent `limit` messages, oldest-first. Client pages
-    // back by passing the first message's id as `before`.
-    res.json(all.slice(-limit))
+    res.json(local)
   } catch (err) {
     next(err)
   }
@@ -1725,31 +2342,14 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     // Without this, the non-fresh read 404s AND triggers a pointless full
     // transcript sweep (~350ms), and fresh=1 burns ~400ms scanning for a JSONL
     // that doesn't exist — the mobile app polls this exact window right after
-    // POST /sessions.
-    //
-    // Why ALL THREE record conditions: a successful spawn writes pid/outputFile
-    // but NEVER rewrites status_reason — 'awaiting_spawn' lingers on the record
-    // until the first turn completes. Gating on status_reason alone would keep
-    // serving 200-empty over a live, growing transcript for the whole first
-    // turn; pid==null && !outputFile is the earliest visible spawn signal and
-    // the real disengage latch.
-    //
-    // Why the grace window: the persist that records pid/outputFile can fail
-    // (logged as CRITICAL in claude-code-session) with the CLI alive and
-    // writing JSONL — an unbounded short-circuit would mask that real
-    // transcript forever. After the window we fall through to the real read
-    // paths; the health monitor's orphan sweep also flips a truly dead pid-less
-    // row to 'stopped' on the same clock (ORPHAN_GRACE_MS), so a wedged record
-    // stops matching either way. NOT gated to primary-only by accident:
-    // CLOUD_MODE replicas have no session DB to consult and can't create
-    // sessions, so the pre-spawn window doesn't exist there.
+    // POST /sessions. The predicate (and the reasoning behind each of its
+    // conditions) lives in isPreSpawnSession, shared with the lane read above.
+    // NOT gated to primary-only by accident: CLOUD_MODE replicas have no session
+    // DB to consult and can't create sessions, so the window doesn't exist there.
     if (!CLOUD_MODE && safeId) {
-      const SPAWN_GRACE_MS = 2 * 60 * 1000
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
       const record = await getSessionByClaudeId(sessionId)
-      if (record && record.status_reason === 'awaiting_spawn' && record.pid == null && !record.outputFile
-          && record.process_status === 'idle' // seed value; a died-before-spawn record is 'stopped'
-          && Date.now() - new Date(record.last_status_change ?? record.startedAt ?? 0).getTime() < SPAWN_GRACE_MS) {
+      if (record && isPreSpawnSession(record)) {
         // Keep this shape in sync with buildSessionTranscript's SessionTranscript
         // output — the iOS client decodes it strictly.
         res.json({ version: 1, sessionId, exportedAt: new Date().toISOString(), truncated: false, messages: [] })

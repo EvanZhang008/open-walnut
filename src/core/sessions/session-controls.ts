@@ -784,6 +784,14 @@ export type SessionControlAction =
   // (claude-code) instead of the replica's in-process fallback loop.
   // Accept-only + reverse-lane streaming: routes/chat-turn-relay.ts.
   | 'server.chat.turn'
+  // Read ONE page of a conversation's messages from the primary. Same reason as
+  // the two actions below: a Personal AI turn sent from the web console runs in a
+  // lane-bound CLI session, so the transcript lives in that session's JSONL on the
+  // PRIMARY's disk. A replica has no record for that lane and no way to reach the
+  // JSONL (the bridge transcript lane resolves a host through the session
+  // projection, which excludes lane records), so it relays the read — otherwise a
+  // phone paired to the replica opens every web-sent conversation empty.
+  | 'server.chat.messages'
   // Which engine ANSWERS a relayed chat turn, and the lane session behind it.
   // The companion to server.chat.turn: since the turn runs on the primary, the
   // engine and model belong to the primary too — a replica answering from its
@@ -1245,6 +1253,16 @@ export async function handleSessionControlRelay(
       case 'server.chat.turn': {
         const { handlePrimaryChatTurnRelay } = await import('../../web/routes/chat-turn-relay.js');
         result = await handlePrimaryChatTurnRelay(p) as unknown as Record<string, unknown>;
+        break;
+      }
+      // One page of a conversation's messages, read on the box that owns the
+      // lane session's transcript. Read-only, and deliberately the SAME code the
+      // primary's own GET /api/v1/conversations/:id/messages runs — a second
+      // implementation of "which source does this conversation read from" is how
+      // the two boxes would drift into showing different histories.
+      case 'server.chat.messages': {
+        const { handlePrimaryChatMessagesRelay } = await import('../../web/routes/api-v1.js');
+        result = await handlePrimaryChatMessagesRelay(p);
         break;
       }
       // Report (and optionally mint) the lane behind a relayed conversation, so

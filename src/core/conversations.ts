@@ -235,12 +235,133 @@ export async function migrateIfNeeded(agentId: string): Promise<void> {
   });
 }
 
+/**
+ * Re-warn window for a duplicated id. The list is read on every conversation
+ * request (and twice per message fetch), so a warn per call would be a log storm
+ * on an index that stays broken until a human fixes it — but a warn-once would
+ * hide a recurrence, hence a cooldown rather than a latch.
+ */
+const DUPLICATE_WARN_COOLDOWN_MS = 10 * 60 * 1000;
+/** agentId → the duplicate set last warned about, and when. */
+const lastDuplicateWarn = new Map<string, { signature: string; at: number }>();
+
+/**
+ * THE row for `id` when the index holds more than one: the latest lastMessageAt
+ * wins, ties keep the earlier row (list order).
+ *
+ * ONE definition of "which twin is real", used by the read path AND by every
+ * writer below. When the writers used a plain `find()` (raw-first row) while the
+ * read used the newest, a rename could land on the loser and the title then
+ * oscillated with every send — whichever row `touchLaneConversation` happened to
+ * bump last became the visible one.
+ */
+export function pickConversationRow(
+  list: ConversationMeta[],
+  id: string,
+): ConversationMeta | undefined {
+  let winner: ConversationMeta | undefined;
+  for (const c of list) {
+    if (c.id !== id) continue;
+    if (!winner || (c.lastMessageAt ?? '') > (winner.lastMessageAt ?? '')) winner = c;
+  }
+  return winner;
+}
+
+/**
+ * Drop twin rows in a write that is ALREADY rewriting the index under the lock:
+ * keep the picked winner, discard the rest. Returns the surviving winner (or
+ * undefined when the id isn't there at all) so a writer can mutate it in place.
+ *
+ * Self-healing rather than read-only repair is safe HERE and only here: the
+ * caller holds the index lock and is about to persist the file anyway, so there
+ * is no separate write to race. The read path deliberately does not do this (see
+ * dedupeConversations).
+ */
+function collapseTwinsForWrite(
+  index: ConversationIndex,
+  id: string,
+): ConversationMeta | undefined {
+  const winner = pickConversationRow(index.conversations, id);
+  if (!winner) return undefined;
+  const losers = index.conversations.filter((c) => c.id === id && c !== winner);
+  // isMain and pinned are STICKY facts about the conversation, not about the row
+  // that happens to be newest. Deleting a loser that carried isMain would retire
+  // the agent's main conversation (nothing can recreate that flag) and a lost
+  // `pinned` silently un-pins the chat, so both are OR-ed into the survivor.
+  for (const loser of losers) {
+    if (loser.isMain) winner.isMain = true;
+    if (loser.pinned) winner.pinned = true;
+  }
+  if (losers.length > 0) {
+    index.conversations = index.conversations.filter((c) => c.id !== id || c === winner);
+    log.agent.warn('conversation index: dropped duplicate rows during a write', {
+      agentId: winner.agentId, conversationId: id, dropped: losers.length,
+      ...(winner.isMain ? { keptIsMain: true } : {}),
+      ...(winner.pinned ? { keptPinned: true } : {}),
+    });
+  }
+  return winner;
+}
+
+/**
+ * Collapse rows that share an id, keeping the one with the latest lastMessageAt.
+ *
+ * `_index.json` is a materialized view synced whole-file with last-writer-wins,
+ * and both the LWW merge and adoptOrphanedConversationFiles can leave TWO rows
+ * for one id with different titles and counts (measured on a live box: 86 rows
+ * for 84 ids). Every consumer treats the id as the identity — the iOS list is a
+ * SwiftUI ForEach over Identifiable, which is undefined behaviour on duplicates —
+ * so the collapse belongs here, at the single read path, not in one caller.
+ *
+ * The index file is deliberately NOT rewritten from a READ: a write would race
+ * the very sync that produces the duplicates. The writers below repair it inside
+ * their own locked write instead, so the two paths agree on the winner
+ * (pickConversationRow) and disk converges on its own.
+ */
+function dedupeConversations(agentId: string, list: ConversationMeta[]): ConversationMeta[] {
+  const winners = new Map<string, ConversationMeta>();
+  const duplicated = new Set<string>();
+  for (const c of list) {
+    const prev = winners.get(c.id);
+    if (!prev) { winners.set(c.id, c); continue; }
+    duplicated.add(c.id);
+    // Latest lastMessageAt wins; a tie keeps the earlier row (list order).
+    if ((c.lastMessageAt ?? '') > (prev.lastMessageAt ?? '')) winners.set(c.id, c);
+  }
+  if (duplicated.size === 0) return list;
+
+  const ids = [...duplicated].sort();
+  const signature = ids.join(',');
+  const seen = lastDuplicateWarn.get(agentId);
+  if (!seen || seen.signature !== signature || Date.now() - seen.at > DUPLICATE_WARN_COOLDOWN_MS) {
+    lastDuplicateWarn.set(agentId, { signature, at: Date.now() });
+    log.agent.warn('conversation index holds duplicate ids — serving the newest row per id', {
+      agentId, duplicateIds: ids, rows: list.length, ids: winners.size,
+    });
+  }
+  // Identity comparison, so exactly one row per id survives and the incoming
+  // order is preserved. Sticky flags are OR-ed in on a COPY (never mutate a row
+  // from a READ) so the list agrees with what collapseTwinsForWrite will persist —
+  // `pinned` decides sort position, so disagreeing here moves rows around.
+  return list.filter((c) => winners.get(c.id) === c).map((winner) => {
+    if (!duplicated.has(winner.id)) return winner;
+    const losers = list.filter((c) => c.id === winner.id && c !== winner);
+    const isMain = winner.isMain || losers.some((l) => l.isMain);
+    const pinned = winner.pinned || losers.some((l) => l.pinned);
+    if (isMain === !!winner.isMain && pinned === !!winner.pinned) return winner;
+    return { ...winner, isMain, pinned };
+  });
+}
+
 /** List conversations for an agent (pinned first, then lastMessageAt desc). */
 export async function listConversations(agentId: string): Promise<ConversationMeta[]> {
   await migrateIfNeeded(agentId);
   await adoptOrphanedConversationFiles(agentId);
   const index = await readIndex(agentId);
-  return sortConversations(index.conversations);
+  // Dedupe BEFORE sorting: the tie-break is "keep the earlier row in list order",
+  // and pickConversationRow (the writers' half of the same rule) sees the raw file
+  // order. Deduping a sorted list would let the two paths pick different winners.
+  return sortConversations(dedupeConversations(agentId, index.conversations));
 }
 
 /**
@@ -502,7 +623,9 @@ export async function deleteConversation(agentId: string, conversationId: string
   await migrateIfNeeded(agentId);
   await withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
-    const target = index.conversations.find((c) => c.id === conversationId);
+    // Winner row for the isMain guard: reading a twin could answer "not main" for
+    // a conversation whose real row IS main (or the reverse).
+    const target = pickConversationRow(index.conversations, conversationId);
     // Guard: the main conversation can never be deleted via the UI.
     if (target?.isMain) {
       throw new Error('Cannot delete the main conversation');
@@ -580,7 +703,9 @@ export async function renameConversation(
   await migrateIfNeeded(agentId);
   return withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
-    const meta = index.conversations.find((c) => c.id === conversationId);
+    // The WINNER row (and drop its twins) — a rename that landed on the loser was
+    // invisible, and the next lane send re-bumped the other row's title back.
+    const meta = collapseTwinsForWrite(index, conversationId);
     if (!meta) throw new Error(`Conversation not found: ${conversationId}`);
     meta.title = title.trim().slice(0, MAX_TITLE_LEN) || meta.title;
     meta.titleAutoGenerated = true;
@@ -595,7 +720,7 @@ export async function setPinned(agentId: string, conversationId: string, pinned:
   await migrateIfNeeded(agentId);
   return withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
-    const meta = index.conversations.find((c) => c.id === conversationId);
+    const meta = collapseTwinsForWrite(index, conversationId);
     if (!meta) throw new Error(`Conversation not found: ${conversationId}`);
     meta.pinned = pinned;
     await writeIndex(agentId, index);
@@ -620,7 +745,7 @@ export async function touchLaneConversation(
     await migrateIfNeeded(agentId);
     await withIndexLock(agentId, async () => {
       const index = await readIndex(agentId);
-      const meta = index.conversations.find((c) => c.id === conversationId);
+      const meta = collapseTwinsForWrite(index, conversationId);
       if (!meta) return;
       meta.lastMessageAt = new Date().toISOString();
       meta.messageCount += 1;
@@ -650,7 +775,10 @@ export async function touchConversation(
     validateConversationId(conversationId);
     await withIndexLock(agentId, async () => {
       const index = await readIndex(agentId);
-      const meta = index.conversations.find((c) => c.id === conversationId);
+      // Same winner rule as every other writer (see pickConversationRow): this one
+      // fires on every persisted turn, so a loser-row bump here is what made a
+      // duplicated conversation's title flip back and forth.
+      const meta = collapseTwinsForWrite(index, conversationId);
       if (!meta) return; // pre-migration / race — ignore
       meta.lastMessageAt = new Date().toISOString();
       meta.messageCount = opts.messageCount;

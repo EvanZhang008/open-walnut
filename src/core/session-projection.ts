@@ -375,12 +375,39 @@ let lastTranscriptSweep = 0
 let transcriptSweepRunning = false
 
 /**
+ * Options for {@link buildSessionTranscript}. Additive: absent = the slim tail
+ * every existing caller gets (last TRANSCRIPT_TAIL rows, text clipped).
+ */
+export interface BuildTranscriptOptions {
+  /**
+   * Serve the WHOLE conversation, unclipped: no TRANSCRIPT_TAIL slice and no
+   * clipTranscriptText.
+   *
+   * For the one consumer that must be able to page a conversation to its start
+   * (GET /api/v1/conversations/:id/messages — a lane-bound conversation's
+   * transcript IS this file, and its message ids are positional, so a sliding
+   * 100-row tail made every id mean a different message after each turn).
+   *
+   * NOT a new read cost: the underlying reader already parses the whole JSONL
+   * and caches it by mtime (session-history.ts readSessionHistoryInner) — the
+   * tail and the clip are applied AFTER that parse, purely to shrink what the
+   * sweep ships. The reader's own 4 MB byte ceiling still applies (a whale JSONL
+   * degrades to a bounded sliding window), so `full` removes the ROW cap, not
+   * every bound.
+   */
+  full?: boolean
+}
+
+/**
  * Build the slim transcript tail for one session by reading its history NOW
  * (local disk or SSH). Throws when the session is unreachable. Used by the
  * sweep below and by the api-v1 live view (?fresh=1), which needs sub-sweep
  * freshness for a single session without paying for a full sweep.
  */
-export async function buildSessionTranscript(sessionId: string): Promise<SessionTranscript> {
+export async function buildSessionTranscript(
+  sessionId: string,
+  opts?: BuildTranscriptOptions,
+): Promise<SessionTranscript> {
   const { readSessionHistoryTail } = await import('./session-history.js')
   const { getSessionByClaudeId } = await import('./session-tracker.js')
   const { toolDetail, toolResultPreview } = await import('./tool-summary.js')
@@ -401,7 +428,7 @@ export async function buildSessionTranscript(sessionId: string): Promise<Session
     // full-read every alive session — dominant share of 167 GB/day of reads).
     history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile) ?? []
   }
-  const tail = history.slice(-TRANSCRIPT_TAIL)
+  const tail = opts?.full ? history : history.slice(-TRANSCRIPT_TAIL)
   const messages: ProjectedTranscriptMessage[] = []
   for (const m of tail) {
     if (m.role === 'system') continue
@@ -435,7 +462,7 @@ export async function buildSessionTranscript(sessionId: string): Promise<Session
     if (text) {
       messages.push({
         role: m.role,
-        text: clipTranscriptText(text),
+        text: opts?.full ? text : clipTranscriptText(text),
         timestamp: m.timestamp,
       })
     }
@@ -444,7 +471,7 @@ export async function buildSessionTranscript(sessionId: string): Promise<Session
     version: 1,
     sessionId,
     exportedAt: new Date().toISOString(),
-    truncated: history.length > TRANSCRIPT_TAIL,
+    truncated: !opts?.full && history.length > TRANSCRIPT_TAIL,
     messages,
   }
 }

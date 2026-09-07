@@ -819,6 +819,37 @@ export async function getSessionByLane(lane: string): Promise<SessionRecord | nu
 }
 
 /**
+ * EVERY session ever bound to `lane`, archived included, OLDEST FIRST.
+ *
+ * The companion to {@link getSessionByLane}, which deliberately answers "the one
+ * live session to send to" and therefore hides archived rows. A reader of the
+ * conversation's HISTORY needs the opposite: when a `--resume` fails with "No
+ * conversation found" the record is auto-archived (claude-code-session.ts,
+ * `remote_conversation_lost`) and the next turn mints a fresh lane, so the live
+ * row holds only the turns since that break — everything the user said before it
+ * lives in the archived session's transcript.
+ *
+ * started_at ASC is the ordering that makes an append-only assembly possible:
+ * each lane's transcript is a closed segment, and a new segment can only ever be
+ * appended after the ones before it.
+ */
+export async function listSessionsByLane(lane: string): Promise<SessionRecord[]> {
+  if (!lane) return [];
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return [];
+  // Same json_valid guard as getSessionByLane: SQLite RAISES on malformed JSON,
+  // so one corrupt payload row would break every lane lookup.
+  const rows = db.prepare(`
+    SELECT * FROM sessions
+    WHERE payload IS NOT NULL AND payload != '' AND json_valid(payload)
+      AND json_extract(payload, '$.lane') = ?
+    ORDER BY started_at ASC
+  `).all(lane) as Array<Record<string, any>>;
+  return rows.map(rowToSession);
+}
+
+/**
  * Minimum prefix length accepted by {@link resolveSessionByIdOrPrefix}. 8 hex
  * chars (32 bits) is what the UI renders in its session-id chips and in
  * "Session <id> finished" notifications, so it is the shortest string a user can
