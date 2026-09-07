@@ -1,0 +1,114 @@
+# Closing the drawer by DRAGGING OFF A ROW must not also select that row.
+#
+# The rows are full-width buttons and the close drag starts inside one, so the
+# finger never leaves the button's bounds and SwiftUI fires it on release: the
+# drawer closed AND switched conversation. `stress-rapid-nav.yaml` cannot catch
+# this because it closes from x=85%, the sliver of chat, where there is no row.
+#
+# The check is the title in the bar: it names the open conversation, so if a drag
+# selected the row under the finger the title changes. The first step makes the
+# TOP recent active on purpose, so every row further down is provably not the one
+# already open and an accidental selection cannot pass unnoticed.
+appId: dev.openwalnut.ios
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+        id: "chat.composer"
+    timeout: 25000
+- tapOn:
+    id: "chat.menu"
+- extendedWaitUntil:
+    visible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- tapOn:
+    point: "40%, 35%"
+# NOT `visible: chat.composer`: the composer is full width, so its right sliver
+# stays visible beside an open drawer and would pass while the drawer is still up.
+- extendedWaitUntil:
+    notVisible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- copyTextFrom:
+    id: "chat.title"
+# 1. Slow drag (1.2s) starting on a lower row. It has to cross the drawer's
+#    midpoint or a slow release legitimately settles back open, so it starts
+#    near the drawer's trailing edge and still well inside the row.
+- tapOn:
+    id: "chat.menu"
+- extendedWaitUntil:
+    visible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- swipe:
+    start: "60%, 46%"
+    end: "2%, 46%"
+    duration: 1200
+- extendedWaitUntil:
+    notVisible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- assertVisible:
+    id: "chat.title"
+    text: "${maestro.copiedText}"
+# 2. Same thing as a fling, on a different row.
+- tapOn:
+    id: "chat.menu"
+- extendedWaitUntil:
+    visible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- swipe:
+    start: "60%, 52%"
+    end: "2%, 52%"
+    duration: 90
+- extendedWaitUntil:
+    notVisible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- assertVisible:
+    id: "chat.title"
+    text: "${maestro.copiedText}"
+# 3. A vertical drag inside the list scrolls it and selects nothing. The title
+#    can only be read once the drawer is out of the way: an open drawer plus its
+#    scrim OBSCURE the bar, and an obscured element is dropped from the
+#    accessibility tree, so `chat.title` does not exist to assert on until then.
+- tapOn:
+    id: "chat.menu"
+- extendedWaitUntil:
+    visible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- swipe:
+    start: "40%, 60%"
+    end: "40%, 30%"
+    duration: 600
+- assertVisible:
+    id: "chat.drawer.newChat"
+- tapOn:
+    id: "chat.drawer.scrim"
+- extendedWaitUntil:
+    notVisible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- assertVisible:
+    id: "chat.title"
+    text: "${maestro.copiedText}"
+# 4. A PLAIN TAP on a row still selects it — the lock must be the drag's, not the
+#    row's. The title has to move off the one copied above.
+- tapOn:
+    id: "chat.menu"
+- extendedWaitUntil:
+    visible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- tapOn:
+    point: "40%, 46%"
+- extendedWaitUntil:
+    notVisible:
+        id: "chat.drawer.newChat"
+    timeout: 8000
+- assertNotVisible:
+    id: "chat.title"
+    text: "${maestro.copiedText}"

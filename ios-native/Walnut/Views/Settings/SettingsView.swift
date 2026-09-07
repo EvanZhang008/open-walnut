@@ -80,7 +80,7 @@ struct SettingsView: View {
             if let status = connection.status {
                 LabeledContent("Server version", value: "v\(status.version)")
                 if let lastSync = status.lastSyncAt {
-                    LabeledContent("Last sync", value: ConversationListView.relativeTime(lastSync))
+                    LabeledContent("Last sync", value: RelativeTime.short(lastSync))
                 }
             }
         }

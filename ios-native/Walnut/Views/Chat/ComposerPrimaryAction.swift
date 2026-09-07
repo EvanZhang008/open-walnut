@@ -1,0 +1,35 @@
+/// What the composer's trailing button does right now.
+///
+/// ONE seat, never two: a stop that sits beside the send arrow makes the row's
+/// width jump when a turn starts, and a stop in the navigation bar (where this
+/// used to live) is nowhere near the thumb that just sent the message.
+///
+/// A decision rather than a chain of `if`s in the view because the interesting
+/// cases are the ones that are easy to get backwards — a turn is running AND the
+/// agent is blocked on a question, so the composer is the ANSWER field and must
+/// still send.
+enum ComposerPrimaryAction: Equatable {
+    case send
+    case stop
+    /// Present but dead. The row only shows the button at all when there is
+    /// content or a turn to stop, so this is the greyed-out send: something is
+    /// typed, and the composer cannot take it yet (offline, or a busy composer
+    /// with nothing to interrupt).
+    case disabled
+
+    static func decide(busy: Bool, hasContent: Bool, pendingQuestion: Bool) -> ComposerPrimaryAction {
+        // Answering outranks stopping: the turn that asked the question is
+        // waiting on this very field, so offering "stop" instead of "send" here
+        // would hide the only control that unblocks it.
+        if pendingQuestion { return hasContent ? .send : .disabled }
+        if busy { return .stop }
+        return hasContent ? .send : .disabled
+    }
+
+    /// Resolve against whether this composer can actually stop anything. The
+    /// new-session launcher is `busy` while it creates a session, and there is
+    /// no turn behind that to abort, so it keeps the greyed send it always had.
+    func availableWithStop(_ canStop: Bool) -> ComposerPrimaryAction {
+        self == .stop && !canStop ? .disabled : self
+    }
+}

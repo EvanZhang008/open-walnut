@@ -56,6 +56,14 @@ import PhotosUI
 struct ComposerBar: View {
     let placeholder: String
     var busy: Bool = false
+    /// A turn is running but BLOCKED on a structured question, so this composer
+    /// is its answer field: send stays live (it routes to /answer) and the
+    /// primary button must not offer to stop the turn that is waiting here.
+    var pendingQuestion: Bool = false
+    /// Abort the running turn. Absent = this composer has nothing to interrupt
+    /// (the new-session launcher is `busy` while it CREATES a session), and the
+    /// primary button keeps its greyed-send treatment.
+    var onStop: (() async -> Void)? = nil
     var disabled: Bool = false
     var disabledNotice: String? = nil
     /// Identity of the thread this composer writes into ("chat:<conversation>",
@@ -158,7 +166,16 @@ struct ComposerBar: View {
 
     private var trimmed: String { draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var hasContent: Bool { !trimmed.isEmpty || !selectedImages.isEmpty }
-    private var canSend: Bool { !busy && !disabled && hasContent }
+    /// A turn is running AND this composer is not the field it is waiting on.
+    /// Everything that used to read `busy` reads this: for every composer but
+    /// the chat's blocked-question case the two are identical.
+    private var waitingForReply: Bool { busy && !pendingQuestion }
+    private var canSend: Bool { !waitingForReply && !disabled && hasContent }
+    private var primaryAction: ComposerPrimaryAction {
+        ComposerPrimaryAction
+            .decide(busy: busy, hasContent: hasContent, pendingQuestion: pendingQuestion)
+            .availableWithStop(onStop != nil)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -511,7 +528,7 @@ struct ComposerBar: View {
             if useLongDraftEditor {
                 LongDraftEditor(text: draft, isFocused: $longDraftFocused)
             } else {
-                TextField(busy ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
+                TextField(waitingForReply ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
                     .lineLimit(1...6)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
@@ -557,8 +574,10 @@ struct ComposerBar: View {
             // voice input composes with typed text instead of replacing it.
             // The send button joins it once there's something to send.
             micButton
-            if hasContent {
-                sendButton
+            // ONE trailing seat: send, or stop while a turn runs. Never both, so
+            // a turn starting cannot shuffle the row's buttons sideways.
+            if hasContent || primaryAction == .stop {
+                primaryButton
             }
         }
         .padding(.horizontal, 12)
@@ -828,6 +847,31 @@ struct ComposerBar: View {
         .accessibilityIdentifier("chat.mic")
     }
 
+    @ViewBuilder
+    private var primaryButton: some View {
+        switch primaryAction {
+        case .stop: stopButton
+        case .send, .disabled: sendButton
+        }
+    }
+
+    /// Stop the running turn. Lives here rather than in the navigation bar (where
+    /// it used to be) so it is under the thumb that just sent the message, and so
+    /// the top-right of the chat can be empty.
+    private var stopButton: some View {
+        Button {
+            Task { await onStop?() }
+        } label: {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(Theme.danger, in: Circle())
+        }
+        .accessibilityIdentifier("chat.stop")
+        .accessibilityLabel("Stop")
+    }
+
     private var sendButton: some View {
         Button(action: send) {
             Image(systemName: "arrow.up")
@@ -952,7 +996,7 @@ struct ComposerBar: View {
         // flag (a second read would always say "not armed").
         let route = Self.voiceDeliveryRoute(
             autoSendArmed: quickAction.takeAutoSend(),
-            offline: disabled, busy: busy, transcript: text
+            offline: disabled, busy: waitingForReply, transcript: text
         )
         if case .draft(let reason) = route {
             if reason != "not-armed" {
@@ -1148,8 +1192,9 @@ private struct RecordingIndicator: View {
 }
 
 /// Chat tab's composer — a thin ChatStore wrapper around ComposerBar.
-/// `busy` gates the send button while a turn runs (contract: 409 turn_active);
-/// typing stays available the whole time.
+/// `busy` turns the send button into a STOP while a turn runs (contract: 409
+/// turn_active, so a second send could not be taken anyway); typing stays
+/// available the whole time.
 struct ComposerView: View {
     @Environment(ChatStore.self) private var chat
     @Environment(ConnectionStore.self) private var connection
@@ -1161,7 +1206,12 @@ struct ComposerView: View {
             placeholder: chat.pendingQuestion
                 ? "Answer \(chat.activeAgentName)'s question"
                 : "Message \(chat.activeAgentName)",
-            busy: (chat.sending || chat.streaming) && !chat.pendingQuestion,
+            busy: chat.sending || chat.streaming,
+            // The two halves the old single `busy` flag conflated: a turn is
+            // running (so the primary button offers STOP), and it is blocked on a
+            // question (so this field is the answer and send wins).
+            pendingQuestion: chat.pendingQuestion,
+            onStop: { await chat.stopTurn() },
             disabled: !connection.online,
             disabledNotice: connection.online ? nil : "Offline — reconnecting…",
             // Per-conversation draft. A brand-new (unsaved) conversation shares

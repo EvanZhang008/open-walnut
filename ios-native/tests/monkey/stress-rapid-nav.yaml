@@ -14,15 +14,26 @@ appId: dev.openwalnut.ios
     visible:
         id: "chat.composer"
     timeout: 5000
-# History sheet open/close loop (sheet presentation races).
+# Drawer open/close loop (overlay + gesture races). Closes on the scrim, whose
+# tappable area is the sliver of chat still showing beside the open drawer.
 - repeat:
     times: 8
     commands:
       - tapOn:
-          id: "chat.history"
+          id: "chat.menu"
+      - tapOn:
+          id: "chat.drawer.scrim"
+# Close it by gesture too: the interactive swipe is a different code path from the
+# button, and it is the one that can leave the drawer parked half open.
+- repeat:
+    times: 4
+    commands:
+      - tapOn:
+          id: "chat.menu"
       - swipe:
-          direction: DOWN
-          duration: 300
+          start: "85%, 55%"
+          end: "3%, 55%"
+          duration: 250
 - extendedWaitUntil:
     visible:
         id: "chat.composer"
