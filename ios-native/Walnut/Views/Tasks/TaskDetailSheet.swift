@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Task detail — status/priority/due/project editing over PATCH /tasks/:id
+/// Task detail — every setting editable from ONE grouped properties list
+/// (`TaskPropertiesList`) over PATCH /tasks/:id and the focus endpoints
 /// (optimistic apply + rollback on failure), plus the task's sessions
 /// (tap → conversation). Presented as a medium/large sheet.
 struct TaskDetailSheet: View {
@@ -18,9 +19,10 @@ struct TaskDetailSheet: View {
     @State private var editError: String?
     @State private var showDuePicker = false
     @State private var dueDraft = Date()
-    @State private var editingProject = false
-    @State private var projectDraft = ""
-    /// Wave-1 detail plane: full-row readback + star/pin/delete/field edits.
+    @State private var editingTitle = false
+    @State private var titleDraft = ""
+    @FocusState private var titleFocused: Bool
+    /// Wave-1 detail plane: full-row readback + delete/field edits.
     @State private var detailController: TaskDetailController
 
     init(task: WalnutTask) {
@@ -51,8 +53,8 @@ struct TaskDetailSheet: View {
                             .font(.caption)
                             .foregroundStyle(Theme.danger)
                     }
-                    chips
-                    metadata
+                    properties
+                    TaskMetaCaptions(task: current)
                     sessionsBlock
                     if let summary = current.summary, !summary.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
@@ -64,8 +66,9 @@ struct TaskDetailSheet: View {
                                 .foregroundStyle(.primary)
                         }
                     }
-                    // Wave-1 detail plane: star/pin/delete + description/note
-                    // readback with editing + blocked/children/parent relations.
+                    // Wave-1 detail plane: description/note readback with
+                    // editing, blocked/children/parent relations, and the one
+                    // destructive Delete row at the foot of the sheet.
                     TaskDetailExtras(controller: detailController) {
                         // Row already removed optimistically by the store —
                         // just close. (A refetch here could race the DELETE
@@ -96,6 +99,19 @@ struct TaskDetailSheet: View {
             }
             .sheet(isPresented: $showDuePicker) { duePickerSheet }
         }
+    }
+
+    private var properties: some View {
+        TaskPropertiesList(
+            task: current,
+            phaseCaption: phaseChipText,
+            apply: { apply($0) },
+            reportError: { editError = $0 },
+            openDuePicker: {
+                dueDraft = current.dueDateValue ?? Calendar.current.startOfDay(for: .now)
+                showDuePicker = true
+            }
+        )
     }
 
     // MARK: - Edits
@@ -168,226 +184,142 @@ struct TaskDetailSheet: View {
         }
     }
 
-    /// Tappable status circle: todo↔done one-tap toggle; long-press for the
-    /// three-state menu (In Progress is the deliberate third option).
+    /// Status circle = one-tap todo↔done. The three-state choice used to hide in
+    /// a long-press menu here; it is a visible segmented control in the
+    /// properties list now, so this stays a plain button (one setting, one home).
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            Menu {
-                statusMenuItems
+            Button {
+                apply(.init(status: current.statusKind == .done ? "todo" : "done"))
             } label: {
                 StatusCircle(status: current.statusKind)
                     .font(.title2)
                     .padding(.top, 2)
-            } primaryAction: {
-                apply(.init(status: current.statusKind == .done ? "todo" : "done"))
             }
+            .buttonStyle(.plain)
             .accessibilityIdentifier("task.statusToggle")
-            Text(current.title)
-                .font(.title2.weight(.semibold))
-                .strikethrough(current.isDone, color: .secondary)
-                .foregroundStyle(current.isDone ? .secondary : .primary)
-            Spacer()
+            titleView
             if saving { ProgressView().controlSize(.small) }
         }
     }
 
+    /// Tap the title to rename it in place. Multi-line because task titles are
+    /// sentences; committed on blur, and on the first newline the keyboard's
+    /// return key inserts (a vertical-axis TextField does not fire onSubmit).
     @ViewBuilder
-    private var statusMenuItems: some View {
-        Button {
-            apply(.init(status: "todo"))
-        } label: { Label("To Do", systemImage: "circle") }
-        Button {
-            apply(.init(status: "in_progress"))
-        } label: { Label("In Progress", systemImage: "circle.lefthalf.filled") }
-        Button {
-            apply(.init(status: "done"))
-        } label: { Label("Done", systemImage: "checkmark.circle.fill") }
-    }
-
-    private var chips: some View {
-        HStack(spacing: 8) {
-            Chip(text: statusLabel, color: statusColor)
-            if let phaseText = phaseChipText {
-                Chip(text: phaseText, color: .secondary)
-            }
-            priorityMenu
-            if current.pinned == true {
-                tierMenu
-            }
-            if current.starred == true {
-                Chip(text: "Starred", color: Theme.warning, systemImage: "star.fill")
-            }
-        }
-    }
-
-    /// Pinned chip WITH the focus tier ("Pinned · Focus") — tap → tier picker
-    /// (built-ins + custom tiers, mirroring the desktop focus bar). Moves are
-    /// optimistic (map write now, PUT behind, revert + banner on failure).
-    private var tierMenu: some View {
-        Menu {
-            let currentTier = tasks.tierId(for: task.id) ?? "satellite"
-            ForEach(tasks.allTierChoices, id: \.id) { choice in
-                Button {
-                    Task {
-                        if let failure = await tasks.setTier(taskId: task.id, tier: choice.id) {
-                            editError = failure
-                        }
-                    }
-                } label: {
-                    if choice.id == currentTier {
-                        Label(choice.label, systemImage: "checkmark")
-                    } else {
-                        Text(choice.label)
-                    }
+    private var titleView: some View {
+        if editingTitle {
+            TextField("Title", text: $titleDraft, axis: .vertical)
+                .font(.title2.weight(.semibold))
+                .focused($titleFocused)
+                .submitLabel(.done)
+                .onSubmit { commitTitle() }
+                .onChange(of: titleDraft) { _, next in
+                    if next.contains(where: \.isNewline) { commitTitle() }
                 }
-            }
-        } label: {
-            Chip(
-                text: "Pinned · \(tasks.tierBadge(for: current) ?? "Satellite")",
-                color: Theme.tint, systemImage: "pin.fill"
-            )
-        }
-        .accessibilityIdentifier("task.tier")
-    }
-
-    /// Priority is a tappable chip → menu of the four levels.
-    private var priorityMenu: some View {
-        Menu {
-            ForEach(Self.priorities, id: \.value) { p in
-                Button {
-                    apply(.init(priority: p.value))
-                } label: {
-                    if current.priority == p.value {
-                        Label(p.label, systemImage: "checkmark")
-                    } else {
-                        Text(p.label)
-                    }
+                .onChange(of: titleFocused) { _, focused in
+                    if !focused { commitTitle() }
                 }
-            }
-        } label: {
-            Chip(
-                text: priorityLabel,
-                color: priorityColor,
-                systemImage: current.priorityKind == .none || current.priorityKind == .unknown
-                    ? "flag" : "flag.fill"
-            )
-        }
-        .accessibilityIdentifier("task.priority")
-    }
-
-    static let priorities: [(value: String, label: String)] = [
-        ("immediate", "Immediate"), ("important", "Important"),
-        ("backlog", "Backlog"), ("none", "None"),
-    ]
-
-    private var metadata: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            projectRow
-            dueRow
-            if let created = current.createdAtValue {
-                MetaRow(label: "Created", value: Self.fullDate(created))
-            }
-            if let updated = current.updatedAtValue {
-                MetaRow(label: "Updated", value: Self.fullDate(updated))
-            }
-            if let completed = current.completedAtValue {
-                MetaRow(label: "Completed", value: Self.fullDate(completed))
-            }
-            if let tags = current.tags, !tags.isEmpty {
-                MetaRow(label: "Tags", value: tags.joined(separator: ", "))
-            }
-        }
-    }
-
-    /// Project: value tap → inline text field (a new name auto-creates the
-    /// project server-side; empty = Inbox).
-    @ViewBuilder
-    private var projectRow: some View {
-        if editingProject {
-            HStack(alignment: .top) {
-                Text("Project")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 90, alignment: .leading)
-                TextField("Inbox", text: $projectDraft)
-                    .font(.subheadline)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit {
-                        editingProject = false
-                        let next = projectDraft.trimmingCharacters(in: .whitespaces)
-                        if next != current.project { apply(.init(project: next)) }
-                    }
-                    .accessibilityIdentifier("task.projectField")
-                Button("Cancel") { editingProject = false }
-                    .font(.caption)
-            }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("task.title.edit")
         } else {
             Button {
-                projectDraft = current.project
-                editingProject = true
+                titleDraft = current.title
+                editingTitle = true
+                titleFocused = true
             } label: {
-                MetaRow(
-                    label: "Project",
-                    value: current.project.isEmpty ? "Inbox" : current.project,
-                    valueColor: Theme.tint
-                )
+                Text(current.title)
+                    .font(.title2.weight(.semibold))
+                    .strikethrough(current.isDone, color: .secondary)
+                    .foregroundStyle(current.isDone ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("task.project")
+            .accessibilityIdentifier("task.title")
         }
     }
 
-    /// Due date: tap → DatePicker sheet; clear button when set.
-    private var dueRow: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Button {
-                dueDraft = current.dueDateValue ?? Calendar.current.startOfDay(for: .now)
-                showDuePicker = true
-            } label: {
-                MetaRow(
-                    label: "Due",
-                    value: current.dueDateValue.map(Self.fullDate) ?? "Add date",
-                    valueColor: current.isOverdue ? Theme.danger : Theme.tint
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("task.due")
-            if current.dueDate != nil {
-                Button {
-                    apply(.init(dueDate: "")) // "" = explicit clear
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                }
-                .accessibilityIdentifier("task.dueClear")
-            }
-        }
+    /// Newlines fold to spaces: a title is one line of text, and the return key
+    /// is what commits, so a stray break must never reach the server.
+    private func commitTitle() {
+        guard editingTitle else { return }
+        editingTitle = false
+        titleFocused = false
+        let next = titleDraft
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard !next.isEmpty, next != current.title else { return }
+        apply(.init(title: next))
     }
 
     private var duePickerSheet: some View {
         NavigationStack {
-            DatePicker("Due date", selection: $dueDraft, displayedComponents: [.date])
-                .datePickerStyle(.graphical)
-                .padding()
-                .navigationTitle("Due Date")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Cancel") { showDuePicker = false }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Set") {
-                            showDuePicker = false
-                            apply(.init(dueDate: Self.isoDay(dueDraft)))
-                        }
-                        .fontWeight(.semibold)
-                        .accessibilityIdentifier("task.dueSet")
-                    }
+            // Order matters twice over. The DatePicker goes FIRST because the
+            // toolbar is translucent and content lays out under it — a quick row
+            // in that slot was drawn behind the title bar, while the picker's own
+            // padding absorbs the overlap. And the quick row sits directly under
+            // the calendar rather than pinned to the bottom edge, which left
+            // ~700pt of dead space between the two at the large detent.
+            VStack(spacing: 0) {
+                DatePicker("Due date", selection: $dueDraft, displayedComponents: [.date])
+                    .datePickerStyle(.graphical)
+                    .padding()
+                Divider()
+                quickDueRow
+                Spacer(minLength: 0)
+            }
+            .navigationTitle("Due Date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { showDuePicker = false }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Set") {
+                        showDuePicker = false
+                        apply(.init(dueDate: Self.isoDay(dueDraft)))
+                    }
+                    .fontWeight(.semibold)
+                    .accessibilityIdentifier("task.dueSet")
+                }
+            }
         }
-        .presentationDetents([.medium])
+        // Large only. The graphical calendar alone already reached the bottom
+        // edge of a medium detent (measured before the quick row existed), so
+        // there is no room there for another 54pt of controls.
+        .presentationDetents([.large])
+    }
+
+    /// The three dates people actually pick, plus a clear — one tap each, so the
+    /// common case never goes through the calendar. "None" only appears when
+    /// there IS a date to remove.
+    private var quickDueRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(TaskDueQuickChoice.allCases.filter {
+                    $0 != .clear || current.dueDate != nil
+                }) { choice in
+                    Button {
+                        showDuePicker = false
+                        // "" = explicit clear, same convention as TaskEdit.
+                        apply(.init(dueDate: choice.date(from: .now).map(Self.isoDay) ?? ""))
+                    } label: {
+                        Text(choice.label)
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(Theme.tintSoft, in: Capsule())
+                            .foregroundStyle(Theme.tint)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("task.due.quick.\(choice.rawValue)")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
     }
 
     /// "YYYY-MM-DD" — the PATCH contract accepts a bare date.
@@ -397,23 +329,6 @@ struct TaskDetailSheet: View {
     }
 
     // MARK: - Labels
-
-    private var statusLabel: String {
-        switch current.statusKind {
-        case .todo: return "To Do"
-        case .inProgress: return "In Progress"
-        case .done: return "Done"
-        case .unknown: return current.status
-        }
-    }
-
-    private var statusColor: Color {
-        switch current.statusKind {
-        case .done: return Theme.success
-        case .inProgress: return Theme.warning
-        default: return .secondary
-        }
-    }
 
     /// Phase enum → readable Title Case (e.g. AGENT_COMPLETE → Agent Complete).
     /// nil when the phase is just the status restated (TODO+todo showed
@@ -431,64 +346,7 @@ struct TaskDetailSheet: View {
             .joined(separator: " ")
     }
 
-    private var priorityLabel: String {
-        switch current.priorityKind {
-        case .immediate: return "Immediate"
-        case .important: return "Important"
-        case .backlog: return "Backlog"
-        case .none, .unknown: return "Priority"
-        }
-    }
-
-    private var priorityColor: Color {
-        switch current.priorityKind {
-        case .immediate: return Theme.danger
-        case .important: return Theme.warning
-        default: return .secondary
-        }
-    }
-
     static func fullDate(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
-    }
-}
-
-/// Small pill chip with an optional leading SF Symbol.
-private struct Chip: View {
-    let text: String
-    let color: Color
-    var systemImage: String? = nil
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if let systemImage {
-                Image(systemName: systemImage).font(.caption2)
-            }
-            Text(text).font(.caption.weight(.medium))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(color.opacity(0.15), in: Capsule())
-        .foregroundStyle(color == .secondary ? Color.secondary : color)
-    }
-}
-
-/// A label + value line for the metadata block.
-private struct MetaRow: View {
-    let label: String
-    let value: String
-    var valueColor: Color = .primary
-
-    var body: some View {
-        HStack(alignment: .top) {
-            Text(label)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(width: 90, alignment: .leading)
-            Text(value)
-                .font(.subheadline)
-                .foregroundStyle(valueColor)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
     }
 }

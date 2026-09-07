@@ -273,7 +273,7 @@ struct NewTaskSheet: View {
             (.notPinned, "Not pinned", "circle.dashed"),
         ]
         for tier in TasksStore.builtinTiers {
-            rows.append((.tier(tier.id), tier.label, Self.tierIcon(tier.id)))
+            rows.append((.tier(tier.id), tier.label, TaskPropertyLogic.tierIcon(tier.id)))
         }
         // Custom tiers are rare and load asynchronously; an empty/failed fetch
         // simply means this list is the four built-ins (never a blocked sheet).
@@ -281,16 +281,6 @@ struct NewTaskSheet: View {
             rows.append((.tier(tier.id), tier.label, "square.stack.3d.up"))
         }
         return rows.map { (choice: $0.0, label: $0.1, icon: $0.2) }
-    }
-
-    private static func tierIcon(_ id: String) -> String {
-        switch id {
-        case "focus": return "scope"
-        case "satellite": return "circle.circle"
-        case "backlog": return "tray.full"
-        case "wait": return "pause.circle"
-        default: return "square.stack.3d.up"
-        }
     }
 
     private var pinSection: some View {

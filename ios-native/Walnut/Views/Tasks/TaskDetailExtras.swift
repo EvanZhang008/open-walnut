@@ -1,8 +1,15 @@
 import SwiftUI
 
 /// Wave-1 detail sections for TaskDetailSheet — description/note readback with
-/// editing, blocked/children/parent relations, and the star/pin/delete action
-/// row. Split out of TaskDetailSheet to keep both files under the size budget.
+/// editing, blocked/children/parent relations, and the sheet's one destructive
+/// Delete row. Split out of TaskDetailSheet to keep both files under the size
+/// budget.
+///
+/// Star and pin used to live here too, as a second home for settings the chip
+/// row above already owned. They are gone: pin is the Board row of
+/// `TaskPropertiesList`, and `starred` is retired server-side (POST
+/// /tasks/:id/star is a documented no-op that always answers `starred: false`),
+/// so a star control could never latch and had to stop pretending it could.
 struct TaskDetailExtras: View {
     @Bindable var controller: TaskDetailController
     /// Called after a successful delete — the sheet dismisses.
@@ -23,7 +30,6 @@ struct TaskDetailExtras: View {
                     .font(.caption)
                     .foregroundStyle(Theme.danger)
             }
-            actionRow
             if let detail = controller.detail {
                 relationsBlock(detail)
                 descriptionBlock(detail)
@@ -36,6 +42,7 @@ struct TaskDetailExtras: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            deleteRow
         }
         // Delete ladder: plain confirm first; 409 active-sessions → force.
         // Optimistic: the row vanishes + the sheet closes the moment the user
@@ -43,7 +50,17 @@ struct TaskDetailExtras: View {
         // toast (a modal after dismissal would be homeless). A 409 marks the
         // id in deleteNeedsForceIds, so the NEXT delete confirm on this task
         // offers Stop Sessions & Delete directly.
-        .confirmationDialog("Delete this task?", isPresented: $confirmDelete, titleVisibility: .visible) {
+        //
+        // An ALERT, not a confirmationDialog, and BOTH rungs of the ladder are
+        // alerts for the same reason. Presented from inside a sheet, iOS
+        // anchored the confirmationDialog as a popover, and because the only
+        // button in it was Delete, that button landed exactly where an action
+        // sheet puts Cancel — a reflexive cancel tap deleted the task
+        // (2026-09-07 UI gate). An alert is never anchored to the tap, and the
+        // explicit `.cancel` button below is what guarantees a safe way out
+        // exists no matter which rung is showing.
+        .alert("Delete this task?", isPresented: $confirmDelete) {
+            Button("Cancel", role: .cancel) { confirmDelete = false }
             if tasks.deleteNeedsForceIds.contains(controller.taskId) {
                 Button("Stop Sessions & Delete", role: .destructive) {
                     deleteOptimistically(force: true)
@@ -53,6 +70,8 @@ struct TaskDetailExtras: View {
                     deleteOptimistically(force: false)
                 }
             }
+        } message: {
+            Text("This can't be undone.")
         }
         .alert("Task has active sessions", isPresented: Binding(
             get: { controller.deleteNeedsForce != nil },
@@ -81,78 +100,41 @@ struct TaskDetailExtras: View {
         }
     }
 
-    // MARK: - Actions (star / pin / delete)
+    // MARK: - Delete (the sheet's one destructive control, at the very bottom)
 
-    private var actionRow: some View {
-        HStack(spacing: 10) {
-            let starred = controller.detail?.starred == true
-            Button {
-                Task { await controller.toggleStar() }
-            } label: {
-                actionChip(
-                    starred ? "Starred" : "Star",
-                    icon: starred ? "star.fill" : "star",
-                    color: starred ? Theme.warning : .secondary
-                )
+    private var deleteRow: some View {
+        Button {
+            confirmDelete = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "trash")
+                    .font(.body)
+                Text("Delete Task")
+                    .font(.body)
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("task.star")
-
-            let pinned = isPinned
-            Button {
-                Task {
-                    // Optimistic store path: the row + tier map flip NOW; a
-                    // failure reverts and surfaces below. The detail record
-                    // refresh rides behind (no spinner gate).
-                    if let taskRow {
-                        if let failure = await tasks.setPinned(taskRow, pinned: !pinned) {
-                            controller.errorMessage = failure
-                        } else {
-                            await controller.load()
-                        }
-                    } else if await controller.setPinned(!pinned) != nil {
-                        // Fallback for rows outside the list projection.
-                        await tasks.loadTasks()
-                        await controller.load()
-                    }
-                }
-            } label: {
-                actionChip(
-                    pinned ? "Pinned · \(tierLabel)" : "Pin",
-                    icon: pinned ? "pin.fill" : "pin",
-                    color: pinned ? Theme.tint : .secondary
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("task.pin")
-
-            Spacer()
-
-            Button {
-                confirmDelete = true
-            } label: {
-                actionChip("Delete", icon: "trash", color: Theme.danger)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("task.delete")
+            .foregroundStyle(Theme.danger)
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(.secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Theme.danger.opacity(0.35), lineWidth: 0.5)
+            )
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .disabled(controller.acting)
+        .accessibilityIdentifier("task.delete")
     }
 
     /// Live list row (the optimistic writes land here first).
     private var taskRow: WalnutTask? {
         tasks.tasks.first(where: { $0.id == controller.taskId })
-    }
-
-    private var isPinned: Bool {
-        // List row first — it carries the optimistic flip; the detail record
-        // is a slower snapshot and would show the stale value mid-flight.
-        taskRow?.pinned ?? (controller.detail?.pinned == true)
-    }
-
-    /// Where the pin lives (focus tier label) — "Satellite" until mapped.
-    private var tierLabel: String {
-        tasks.tierLabel(for: tasks.tierId(for: controller.taskId) ?? "satellite")
     }
 
     /// Optimistic delete: dismiss + remove NOW; revert + toast on failure.
@@ -171,17 +153,6 @@ struct TaskDetailExtras: View {
                 tasks.transientError = failure
             }
         }
-    }
-
-    private func actionChip(_ text: String, icon: String, color: Color) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon).font(.caption)
-            Text(text).font(.caption.weight(.medium))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(color.opacity(0.12), in: Capsule())
-        .foregroundStyle(color == .secondary ? Color.primary : color)
     }
 
     // MARK: - Relations (blocked / parent / children)
