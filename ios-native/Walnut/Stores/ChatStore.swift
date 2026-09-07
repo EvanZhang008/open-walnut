@@ -1,6 +1,22 @@
 import Foundation
 import Observation
 
+/// The ONE network read whose APPLY-TIME ordering this store has to get right:
+/// a conversation's page of messages. Injectable so WalnutTests can hold
+/// conversation A's fetch open, switch to conversation B, and only then release
+/// it — the ordering that painted A's messages under B's title cannot be staged
+/// through a live URLSession.
+///
+/// Same shape as `WalnutTaskTransport`: `WalnutAPI` already has the method, so
+/// conformance is an empty extension.
+protocol ChatMessagesTransport {
+    func messages(
+        conversationID: String, agentID: String, limit: Int, before: String?
+    ) async throws -> [ChatMessage]
+}
+
+extension WalnutAPI: ChatMessagesTransport {}
+
 /// Chat state — conversation list, active conversation's messages, one live
 /// SSE stream, and the send flow (POST → 202 → deltas over SSE).
 ///
@@ -10,6 +26,10 @@ import Observation
 @MainActor
 final class ChatStore {
     private let api = WalnutAPI()
+    /// Message reads go through the seam, not `api`: in production they are the
+    /// same object, and a hosted test can script the ordering (see
+    /// `ChatMessagesTransport`).
+    @ObservationIgnored private let transport: ChatMessagesTransport
     private var sse: SSEClient?
     @ObservationIgnored private var trackedTasks: [UUID: Task<Void, Never>] = [:]
     /// In-flight send()s. Kept separate from `trackedTasks` only because they
@@ -33,6 +53,21 @@ final class ChatStore {
     var activeID: String?
     var messages: [ChatMessage] = []
     var hasOlder = false
+
+    /// Which conversation each LOCAL row in `messages` belongs to, keyed by row
+    /// id. The `local-…` optimistic user bubble and the `turn-…` provisional
+    /// reply are the only rows this store invents, and they are exactly the rows
+    /// `carryLocalRows` keeps across a canonical refetch.
+    ///
+    /// The owner is what makes that decision answerable. "The fetch has not
+    /// caught up with this row yet" (a replica lagging git-sync — keep it) and
+    /// "this row belongs to the conversation you just left" (drop it) look
+    /// IDENTICAL from the row alone, and guessing wrong the second way is how a
+    /// previous conversation's text ends up rendered under the new
+    /// conversation's title. Cleared whenever the conversation or the agent
+    /// changes; pruned after every merge to the rows still on screen, so it
+    /// cannot grow. Internal for WalnutTests.
+    @ObservationIgnored private(set) var localRowConversation: [String: String] = [:]
 
     /// Console agents (Walnut = main, Mentor, Note Assistant, …).
     var agents: [AgentSummary] = []
@@ -105,8 +140,25 @@ final class ChatStore {
 
     // MARK: - Lifecycle
 
-    init() {
+    /// `transport` nil (production) = this store's own `WalnutAPI` instance.
+    /// WalnutTests pass a scripted one to drive the real conversation-switch
+    /// ordering without a network.
+    init(transport: ChatMessagesTransport? = nil) {
+        self.transport = transport ?? api
         LifecycleHub.shared.register(self)
+    }
+
+    /// Is `conversationID` STILL the conversation on screen?
+    ///
+    /// Every async result here resolves later than the tap that asked for it,
+    /// and the user can open another conversation in between — so a request
+    /// captures its conversation when it starts and re-checks it HERE, when the
+    /// result lands. Applying a result without this check renders one
+    /// conversation's messages under another conversation's title, and since
+    /// nothing refetches afterwards the mismatch is stable rather than a flash
+    /// (2026-09-07 drawer UI gate).
+    private func stillViewing(_ conversationID: String?) -> Bool {
+        isActive && conversationID == activeID
     }
 
     /// Cold launch lands on the MAIN agent with a fresh chat (user call,
@@ -176,6 +228,7 @@ final class ChatStore {
         activeID = nil
         conversations = []
         messages = []
+        localRowConversation.removeAll()
         hasOlder = false
         if let saved = UserDefaults.standard.string(forKey: activeConversationKey) {
             select(saved)
@@ -232,16 +285,21 @@ final class ChatStore {
         errorMessage = nil
         initialPaintDone = false
         messages = []
+        // Nothing the previous conversation invented may outlive it: the owner
+        // map is what tells a later merge that a leftover echo is not ours, and
+        // an entry whose row is gone would be a lie about the next conversation.
+        localRowConversation.removeAll()
         connectStream()
         if let id {
             // Cached tail hydrates OFF-MAIN (P0-1) and only wins while nothing
             // canonical has landed for this conversation yet — loadMessages runs
             // concurrently and its result is authoritative whichever finishes
-            // first.
+            // first. `stillViewing` is the apply-time check: this read can land
+            // several conversation switches later.
             trackTask { [weak self] in
                 guard let self else { return }
                 if let cached = await DiskCache.loadAsync([ChatMessage].self, key: "messages-\(id)"),
-                   !cached.isEmpty, self.activeID == id,
+                   !cached.isEmpty, self.stillViewing(id),
                    self.messages.isEmpty, !self.initialPaintDone {
                     self.messages = cached
                     // Cached rows landed — force the bottom rows to instantiate
@@ -268,15 +326,25 @@ final class ChatStore {
     // MARK: - Messages
 
     func loadMessages(_ id: String) async {
-        guard isActive else { return }
+        // Refuse a load for a conversation nobody is looking at, BEFORE flipping
+        // `loadingMessages`: that flag is store-wide, so a stale conversation's
+        // fetch would redact the timeline of the conversation the user did open.
+        guard stillViewing(id) else { return }
         loadingMessages = true
         defer { loadingMessages = false }
         do {
             let agentID = activeAgentID
-            let fetched = try await api.messages(conversationID: id, agentID: agentID, limit: Self.pageSize)
+            let fetched = try await transport.messages(
+                conversationID: id, agentID: agentID, limit: Self.pageSize, before: nil
+            )
             guard isActive, !Task.isCancelled else { return }
             connection?.reportReachability(true, source: "chat-rest", endpoint: "/api/v1/conversations/messages")
-            guard id == activeID, agentID == activeAgentID else { return }
+            // Apply-time check, not request-time: this answer describes `id`, and
+            // `id` is only allowed to write `messages` while it is still the
+            // conversation on screen. A fetch that raced a drawer tap is DROPPED
+            // — the conversation the user actually opened has its own fetch, and
+            // that one is the authority for what is rendered under its title.
+            guard stillViewing(id), agentID == activeAgentID else { return }
             // Carry local-only bubbles across the replace — server history
             // doesn't know about them and a refetch must never erase them.
             // Besides failed/in-flight optimistic bubbles, this keeps
@@ -286,13 +354,20 @@ final class ChatStore {
             // LAGGING copy until git-sync converges, and adopting that copy
             // wholesale erased the user's just-sent message AND the fresh
             // reply right after the turn ended (2026-08-23 dogfood round 10).
-            let localOnly = Self.carryLocalRows(current: messages, fetched: fetched)
+            let localOnly = Self.carryLocalRows(
+                current: messages, fetched: fetched,
+                conversationID: id, owners: localRowConversation
+            )
             let wasAtBottom = bottomPinned
             let changed = fetched.count + localOnly.count != messages.count
                 || fetched.last?.id != messages.dropLast(localOnly.count).last?.id
             MainWork.track("chat.loadMessages", count: fetched.count) {
                 messages = Self.reattachSentImages(to: fetched, from: sentImages) + localOnly
             }
+            // The owner map describes rows that are ON SCREEN and nothing else:
+            // an echo the fetch just absorbed has no owner left to record.
+            let survivingLocalIDs = Set(localOnly.map(\.id))
+            localRowConversation = localRowConversation.filter { survivingLocalIDs.contains($0.key) }
             // Freeze-report context: rows handed to SwiftUI for layout.
             FreezeContext.shared.setHistoryRows(messages.count)
             hasOlder = fetched.count >= Self.pageSize
@@ -333,8 +408,22 @@ final class ChatStore {
     /// an echo when it carries MORE matching rows than the canonical rows we
     /// already had — an identical older message ("ok", "continue") can never
     /// absorb the new echo and vanish it. Internal for WalnutTests.
+    ///
+    /// `conversationID` is the conversation the FETCH is for, and `owners` says
+    /// which conversation each local row belongs to (`localRowConversation`).
+    /// Every rule below asks a question about this conversation's fetch ("has the
+    /// canonical copy landed yet"), which is unanswerable for a row that came
+    /// from a DIFFERENT conversation — such a row is not lagging, it is simply
+    /// somebody else's, and carrying it forward is what renders the previous
+    /// conversation's text under the new conversation's title. A row with no
+    /// recorded owner counts as this conversation's: the store tags every local
+    /// row it invents and drops the whole map on a switch, so untagged means
+    /// canonical (or a caller with no conversation scope, e.g. a pure-logic test).
     nonisolated static func carryLocalRows(
-        current: [ChatMessage], fetched: [ChatMessage], now: Date = Date()
+        current: [ChatMessage], fetched: [ChatMessage],
+        conversationID: String? = nil,
+        owners: [String: String] = [:],
+        now: Date = Date()
     ) -> [ChatMessage] {
         func key(_ m: ChatMessage) -> String { "\(m.role)|\(m.text)" }
         let isEcho: (ChatMessage) -> Bool = {
@@ -368,6 +457,14 @@ final class ChatStore {
         let parseISO = ISO8601DateFormatter()
         var out: [ChatMessage] = []
         for row in current {
+            // Another conversation's row is dropped FIRST, ahead of every other
+            // rule: not kept for being pending, not kept for being failed, not
+            // kept for being inside the TTL. Those rules all mean "this
+            // conversation's fetch has not caught up yet", which cannot be true
+            // of a row that was never part of this conversation.
+            if let owner = owners[row.id], let conversationID, owner != conversationID {
+                continue
+            }
             if row.failed == true || row.pending == true {
                 out.append(row)
                 continue
@@ -404,8 +501,11 @@ final class ChatStore {
         loadingMessages = true
         defer { loadingMessages = false }
         do {
-            let older = try await api.messages(conversationID: id, agentID: activeAgentID, limit: Self.pageSize, before: oldest.id)
-            guard isActive, !Task.isCancelled, id == activeID else { return }
+            let older = try await transport.messages(
+                conversationID: id, agentID: activeAgentID,
+                limit: Self.pageSize, before: oldest.id
+            )
+            guard !Task.isCancelled, stillViewing(id) else { return }
             messages.insert(contentsOf: older, at: 0)
             hasOlder = older.count >= Self.pageSize
         } catch {
@@ -465,6 +565,14 @@ final class ChatStore {
 
         let jpegDatas = images.map(\.jpegData)
         var convID = activeID
+        // The conversation this send belongs to, captured BEFORE the first
+        // suspension point (nil = the lazy new chat, whose id only exists once
+        // createConversation answers). A POST easily outlives a drawer tap, so
+        // every write below re-checks it: this send's echo, streaming flag and
+        // watchdog all describe ONE conversation, and writing them into whatever
+        // happens to be on screen afterwards is the same class of bug as
+        // adopting a stale fetch.
+        let target = convID
         var optimistic = ChatMessage(
             id: "local-\(Date().timeIntervalSince1970)",
             role: "user", text: text, createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
@@ -477,6 +585,9 @@ final class ChatStore {
         // Append FIRST — even payload preparation or createConversation failure
         // must leave the text + images on screen as a failed bubble, never lose them.
         messages.append(optimistic)
+        // Tag the echo with its conversation (a new chat has none yet — tagged
+        // below, once createConversation names it).
+        if let target { localRowConversation[optimistic.id] = target }
         // Sending explicitly accepts a re-pin: the user wants to see their own
         // message land even if they were reading history.
         bottomPinned = true
@@ -501,9 +612,18 @@ final class ChatStore {
                     return false
                 }
                 convID = created
-                activeID = created
-                UserDefaults.standard.set(created, forKey: activeConversationKey)
-                connectStream()
+                // Adopt the new conversation as the active one ONLY while the
+                // user is still on the new chat this send started from. If they
+                // opened another conversation while POST /conversations was in
+                // flight, hijacking their view IS the bug — the message still
+                // goes out below (nothing is lost) and the new conversation
+                // appears in the drawer on the next list refresh.
+                if stillViewing(target) {
+                    activeID = created
+                    UserDefaults.standard.set(created, forKey: activeConversationKey)
+                    localRowConversation[optimistic.id] = created
+                    connectStream()
+                }
             }
             guard let convID else {
                 sending = false
@@ -520,12 +640,19 @@ final class ChatStore {
                 return true
             }
             connection?.reportReachability(true, source: "chat-rest")
+            rememberSentImages(text: text, datas: jpegDatas)
+            sending = false
+            // Accepted — but the user may be reading another conversation by now.
+            // The turn is genuinely running over THERE, so none of the state
+            // below describes what is on screen: setting `streaming` would freeze
+            // the new conversation's composer with no message-end coming to
+            // release it, and the watchdog would be armed against a conversation
+            // nobody is watching. Report success and write nothing.
+            guard stillViewing(convID) else { return true }
             // Solidify the bubble; message-start arrives on SSE shortly.
             if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
                 messages[idx].pending = false
             }
-            rememberSentImages(text: text, datas: jpegDatas)
-            sending = false
             streaming = true
             streamText = ""
             streamTextTruncated = false
@@ -535,6 +662,13 @@ final class ChatStore {
             return true
         } catch {
             sending = false
+            // Is the failure still about the conversation on screen? If the user
+            // switched away, the bubble this describes left with its conversation
+            // (select clears `messages`), so an error banner and a frozen
+            // composer would land on a conversation that never sent anything.
+            // `markSendFailed` stays unconditional either way: it is an id lookup,
+            // so it is exactly a no-op once the row is gone.
+            let mine = stillViewing(convID ?? target)
             // Cancelled/suspended sends settle silently but must NOT leave a
             // forever-pending bubble: the draft is already cleared, so the
             // failed bubble (tap to retry) is the only copy of the text.
@@ -547,6 +681,7 @@ final class ChatStore {
                 // (the draft is already cleared) so it can be retried after
                 // message-end, and gate sends until then.
                 markSendFailed(optimistic.id)
+                guard mine else { return false }
                 streaming = true
                 watchedUserText = nil
                 if let convID { startTurnWatchdog(conversationID: convID) }
@@ -556,6 +691,7 @@ final class ChatStore {
                 // vanish on a network error. Tap to retry / copy / delete.
                 markSendFailed(optimistic.id)
                 reportIfNetwork(error)
+                guard mine else { return false }
                 errorMessage = error.localizedDescription
             }
             return false
@@ -611,12 +747,14 @@ final class ChatStore {
         // re-sends them (no loss); silently drop any that no longer decode.
         let images = (message.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
         messages.removeAll { $0.id == message.id }
+        localRowConversation[message.id] = nil
         errorMessage = nil
         await send(message.text, images: images)
     }
 
     func discardFailed(_ message: ChatMessage) {
         messages.removeAll { $0.id == message.id }
+        localRowConversation[message.id] = nil
     }
 
     // MARK: - SSE
@@ -702,7 +840,9 @@ final class ChatStore {
     }
 
     private func handle(_ event: SSEEvent, conversationID: String) {
-        guard isActive, conversationID == activeID else { return }
+        // Same apply-time rule as every fetch: an event is dispatched onto the
+        // MainActor from the SSE callback, so a switch can land in between.
+        guard stillViewing(conversationID) else { return }
         lastSSEEventAt = Date()
         let data = Data(event.data.utf8)
         switch event.event {
@@ -931,11 +1071,16 @@ final class ChatStore {
                     && MarkdownParser.replaceEntityRefs($0.text, bold: false) == normalized
             } ?? false
             if !isDuplicate {
+                let turnID = "turn-\(Date().timeIntervalSince1970)"
                 messages.append(ChatMessage(
-                    id: "turn-\(Date().timeIntervalSince1970)",
+                    id: turnID,
                     role: "assistant", text: fullText,
                     createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
                 ))
+                // Tag the provisional reply with its conversation, so a later
+                // merge can tell "the canonical reply has not landed yet" from
+                // "this reply belongs to a conversation you have left".
+                localRowConversation[turnID] = conversationID
             }
         }
         // Live row → provisional row shifts layout; keep the reader glued to
