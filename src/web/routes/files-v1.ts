@@ -196,6 +196,7 @@ filesV1Router.put('/file-content', async (req: Request, res: Response, next: Nex
         res.status(409).json({
           error: { code: 'conflict', message: err.message },
           currentHash: err.currentHash,
+          reason: err.reason,
         })
         return
       }

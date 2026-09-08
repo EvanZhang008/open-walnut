@@ -499,7 +499,7 @@ export interface FileWriteMeta {
  * while `unlocked-machine-write` is a CLIENT BUG reaching the server — an
  * automatic write that never presented a token at all.
  */
-export type FileConflictReason = 'stale-lock' | 'unlocked-machine-write'
+export type FileConflictReason = 'stale-lock' | 'unlocked-machine-write' | 'unverified-base'
 
 /**
  * ONE line per write, and one per refusal, shared by BOTH write edges (the
@@ -605,6 +605,13 @@ export async function writeFileContentPayload(
   expectedHash?: unknown,
   meta?: FileWriteMeta,
   writer?: SnapshotWriter,
+  /**
+   * `'content'` = the caller computed `expectedHash` FROM the bytes it is
+   * replacing. Anything else (including absent) = it quoted a token it was
+   * holding, which is the shape that produced five stale-copy write-backs, and an
+   * automatic write claiming nothing is refused below.
+   */
+  baseFrom?: unknown,
 ): Promise<FileWriteResult> {
   const { filePath, isRemote } = assertPathAllowed(rawPath, host, 'write')
   if (typeof content !== 'string') {
@@ -624,6 +631,16 @@ export async function writeFileContentPayload(
   // lock could be bypassed at all was that the client chose the token).
   const machineWrite = writer === 'live' || writer === 'merge'
   const unlockedMachineWrite = machineWrite && (typeof expectedHash !== 'string' || expectedHash.length === 0)
+  // A machine write must also prove its token came from BYTES, not from a ref.
+  //
+  // The 2026-09-08 recurrence is why a lock alone is not enough: the editor sent a
+  // token that genuinely matched the file on disk, together with text from a
+  // three-day-old cached copy, because the token was read out of a ref that had
+  // moved on while the buffer had not. The server cannot tell those apart — a
+  // matching hash is a matching hash — so it demands the claim instead, and only a
+  // client that derives the token from the base bytes can make it. That also means
+  // a TAB STILL RUNNING AN OLD BUNDLE is fenced out here, with no reload needed.
+  const unverifiedBase = machineWrite && baseFrom !== 'content'
   if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
     throw new FileContentError(
       `Content too large to save (max ${MAX_FILE_SIZE} bytes) — the editor only loads the first ${MAX_FILE_SIZE} bytes of a file`,
@@ -661,6 +678,7 @@ export async function writeFileContentPayload(
         meta.previousSize = Buffer.byteLength(current, 'utf-8')
       }
       if (unlockedMachineWrite) throw new FileConflictError(computeContentHash(current), 'unlocked-machine-write')
+      if (unverifiedBase) throw new FileConflictError(computeContentHash(current), 'unverified-base')
       if (expectedHash && computeContentHash(current) !== expectedHash) {
         throw new FileConflictError(computeContentHash(current), 'stale-lock')
       }
@@ -731,6 +749,9 @@ export async function writeFileContentPayload(
       }
       if (unlockedMachineWrite) {
         return { hash: computeContentHash(current), reason: 'unlocked-machine-write' as const }
+      }
+      if (unverifiedBase) {
+        return { hash: computeContentHash(current), reason: 'unverified-base' as const }
       }
       if (expectedHash && computeContentHash(current) !== expectedHash) {
         return { hash: computeContentHash(current), reason: 'stale-lock' as const }
@@ -1078,12 +1099,12 @@ fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunctio
   // Read the body and the attribution fields OUTSIDE the try: the catch below logs
   // a refused write with the same detail as a successful one, which it can only do
   // if these are in its scope.
-  const { path: rawPath, host, content, expectedHash, writer, origin } = req.body ?? {}
+  const { path: rawPath, host, content, expectedHash, writer, origin, baseFrom } = req.body ?? {}
   const hostArg = typeof host === 'string' && host.length > 0 ? host : undefined
   const meta: FileWriteMeta = {}
   const writerArg: SnapshotWriter = writer === 'live' || writer === 'merge' ? writer : 'user'
   try {
-    const result = await writeFileContentPayload(rawPath, hostArg, content, expectedHash, meta, writerArg)
+    const result = await writeFileContentPayload(rawPath, hostArg, content, expectedHash, meta, writerArg, baseFrom)
     // `writer` is the trigger (user save / live auto-write / merge) and `origin` the
     // view that fired it, so a write nobody remembers making can be traced to a
     // surface in one grep.
@@ -1120,7 +1141,12 @@ fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunctio
         origin: typeof origin === 'string' ? origin : undefined,
         expectedHash, content, meta, err,
       })
-      res.status(409).json({ error: err.message, code: 'conflict', currentHash: err.currentHash })
+      // `reason` is part of the answer, not just the log: a client that gets
+      // `unverified-base` learns its own bundle is too old to write this file, which
+      // is a different situation from `stale-lock` (merge and retry).
+      res.status(409).json({
+        error: err.message, code: 'conflict', currentHash: err.currentHash, reason: err.reason,
+      })
       return
     }
     if (err instanceof FileContentError) {

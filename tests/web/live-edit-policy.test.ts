@@ -18,11 +18,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   decideAfterConflict, agentPathMatches, MAX_MERGE_ATTEMPTS, AGENT_WRITE_TOOLS,
   liveSuspensionKey, isLiveSuspended, suspendLiveEdit, resumeLiveEdit, clearLiveSuspensions,
-  noteFileDeleted, isRecentlyDeleted, noteWritten, freshestHash,
+  noteFileDeleted, isRecentlyDeleted, noteWritten, freshestBase,
   loadLiveEditPref, LIVE_EDIT_PREF_KEY, LIVE_WRITE_DEBOUNCE_MS,
   planLiveWrite,
 } from '../../web/src/hooks/useLiveEdit';
 import { threeWayMerge } from '../../web/src/utils/three-way-merge';
+import { computeContentHashClient } from '../../web/src/utils/content-hash';
 
 describe('decideAfterConflict', () => {
   const clean = threeWayMerge('a\nb\n', 'A\nb\n', 'a\nB\n');
@@ -181,28 +182,52 @@ describe('recently deleted paths', () => {
   });
 });
 
-describe('freshestHash', () => {
-  // A record for a file the panel has LEFT carries the lock token from keystroke
-  // time. If one of our own writes landed after that keystroke, the token is
-  // stale and the flush would 409 against our own bytes.
+describe('freshestBase', () => {
+  // A record for a file the panel has LEFT carries the base captured at keystroke
+  // time. If one of our own writes landed after that keystroke, that base is no
+  // longer what is on disk and the flush would 409 against our own bytes.
+  //
+  // It hands back BYTES, not a hash, because the write's token is now derived from
+  // the base rather than quoted: a correction that cannot show the bytes it claims
+  // are on disk is exactly the kind of unprovable token this bug was made of.
   beforeEach(() => { clearLiveSuspensions(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('returns the captured token when nothing was written since', () => {
-    expect(freshestHash(undefined, '/a.ts', 'h0', Date.now())).toBe('h0');
-    noteWritten(undefined, '/a.ts', 'h1');
+  it('returns the captured base when nothing was written since', () => {
+    expect(freshestBase(undefined, '/a.ts', 'base0', Date.now())).toBe('base0');
+    noteWritten(undefined, '/a.ts', 'h1', 'our write 1');
     vi.advanceTimersByTime(10);
-    expect(freshestHash(undefined, '/a.ts', 'h2', Date.now())).toBe('h2');
+    expect(freshestBase(undefined, '/a.ts', 'base2', Date.now())).toBe('base2');
   });
 
-  it('swaps in the newer write\'s token for a record captured before it', () => {
+  it("swaps in our newer write's TEXT for a record captured before it", () => {
     const capturedAt = Date.now();
     vi.advanceTimersByTime(10);
-    noteWritten(undefined, '/a.ts', 'h1');
-    expect(freshestHash(undefined, '/a.ts', 'h0', capturedAt)).toBe('h1');
+    noteWritten(undefined, '/a.ts', 'h1', 'our write 1');
+    expect(freshestBase(undefined, '/a.ts', 'base0', capturedAt)).toBe('our write 1');
     // Another file, another host: their writes are not this file's.
-    expect(freshestHash(undefined, '/b.ts', 'h0', capturedAt)).toBe('h0');
-    expect(freshestHash('builder', '/a.ts', 'h0', capturedAt)).toBe('h0');
+    expect(freshestBase(undefined, '/b.ts', 'base0', capturedAt)).toBe('base0');
+    expect(freshestBase('builder', '/a.ts', 'base0', capturedAt)).toBe('base0');
+  });
+
+  it('moves the base to the EMPTY string when our write emptied the file', () => {
+    // The empty string is a real base, not "no base". While `noteWritten` let the
+    // text be omitted and defaulted it to '', these two were the same value, so a
+    // write that emptied a file could not move the base — and the next flush then
+    // 409'd against bytes WE had just written and was dropped. `text` is required
+    // for exactly this reason.
+    const capturedAt = Date.now();
+    vi.advanceTimersByTime(10);
+    noteWritten(undefined, '/c.ts', 'h-empty', '');
+    expect(freshestBase(undefined, '/c.ts', 'base0', capturedAt)).toBe('');
+  });
+
+  it('holds a bounded number of files (it stores whole file texts)', () => {
+    for (let i = 0; i < 20; i++) noteWritten(undefined, `/f${i}.ts`, `h${i}`, `text ${i}`);
+    const capturedAt = Date.now() - 1000;
+    // The newest is remembered, the oldest was evicted.
+    expect(freshestBase(undefined, '/f19.ts', 'base0', capturedAt)).toBe('text 19');
+    expect(freshestBase(undefined, '/f0.ts', 'base0', capturedAt)).toBe('base0');
   });
 });
 
@@ -249,8 +274,8 @@ describe('planLiveWrite — an armed write may not outlive the buffer it came fr
   it('writes the armed text while the buffer is still the one it came from', () => {
     expect(planLiveWrite({
       armedText: 'my typing\n', armedGen: 7, currentGen: 7,
-      bufferText: 'my typing\n', baseContent: BASE,
-    })).toEqual({ action: 'write', text: 'my typing\n' });
+      armedBaseText: BASE, bufferText: 'my typing\n', baseContent: BASE,
+    })).toEqual({ action: 'write', text: 'my typing\n', baseText: BASE });
   });
 
   it('NEVER writes text from an older generation — the buffer on screen wins', () => {
@@ -258,8 +283,10 @@ describe('planLiveWrite — an armed write may not outlive the buffer it came fr
     // the buffer now holds what the read installed plus the user's edit.
     expect(planLiveWrite({
       armedText: 'the stale copy\n', armedGen: 3, currentGen: 4,
+      armedBaseText: 'the stale base\n',
       bufferText: 'the newer file, edited\n', baseContent: 'the newer file\n',
-    })).toEqual({ action: 'write', text: 'the newer file, edited\n' });
+      // The base follows the TEXT: writing the buffer means the buffer's base.
+    })).toEqual({ action: 'write', text: 'the newer file, edited\n', baseText: 'the newer file\n' });
   });
 
   it('writes nothing when the newer buffer is already the bytes on disk', () => {
@@ -286,7 +313,33 @@ describe('planLiveWrite — an armed write may not outlive the buffer it came fr
     expect(planLiveWrite({
       armedText: 'older\n', armedGen: 1, currentGen: 2,
       bufferText: 'restored draft\n', baseContent: null,
-    })).toEqual({ action: 'write', text: 'restored draft\n' });
+      // No base ⇒ nothing to derive a token from. writeOnce drops it rather than
+      // sending an unprovable one; the draft store still holds the text.
+    })).toEqual({ action: 'write', text: 'restored draft\n', baseText: null });
+  });
+
+  it('2026-09-08: generations in step is NOT proof — the base travels with the text', () => {
+    // The fifth clobber. The pane bumps its generation when it installs a LOCK,
+    // but the editor is reseeded by a remount one render later. In that window the
+    // generation and the lock described the freshly read 40 KB file while the
+    // editor still held a three-day-old 28 KB copy out of the IndexedDB content
+    // cache, so armedGen === currentGen was TRUE for stale text and this function
+    // waved it through — correctly, by its own rule.
+    //
+    // What makes the write refusable is the base riding along: the armed text's
+    // base is the stale copy, so the token derived from it cannot match disk.
+    const STALE = 'the three-day-old copy\n';
+    const plan = planLiveWrite({
+      armedText: STALE, armedGen: 2, currentGen: 2, armedBaseText: STALE,
+      bufferText: STALE, baseContent: 'the newer 40 KB file\n',
+    });
+    expect(plan).toEqual({ action: 'write', text: STALE, baseText: STALE });
+    // And the property that actually protects the file: the token derived from that
+    // base is NOT the token of the bytes on disk, so the server refuses it. Pinned
+    // here rather than only in the server test, because "baseText is some string"
+    // would pass while proving nothing.
+    expect(plan.action === 'write' && computeContentHashClient(plan.baseText!))
+      .not.toBe(computeContentHashClient('the newer 40 KB file\n'));
   });
 
   it('an unchanged buffer at the SAME generation is still written (it is a real edit)', () => {
@@ -294,7 +347,8 @@ describe('planLiveWrite — an armed write may not outlive the buffer it came fr
     // authoritative even if it happens to equal baseContent (an edit typed and
     // undone still clears the dirty state through the normal write path).
     expect(planLiveWrite({
-      armedText: BASE, armedGen: 5, currentGen: 5, bufferText: BASE, baseContent: BASE,
-    })).toEqual({ action: 'write', text: BASE });
+      armedText: BASE, armedGen: 5, currentGen: 5, armedBaseText: BASE,
+      bufferText: BASE, baseContent: BASE,
+    })).toEqual({ action: 'write', text: BASE, baseText: BASE });
   });
 });

@@ -33,6 +33,7 @@ const { createFileHistoryRouter } = await import('../../../src/web/routes/file-h
 const { fileContentRouter } = await import('../../../src/web/routes/file-content.js')
 const { errorHandler } = await import('../../../src/web/middleware/error-handler.js')
 const { DaemonNeedsUpgradeError } = await import('../../../src/core/daemon-file-reader.js')
+const { computeContentHash } = await import('../../../src/utils/file-ops.js')
 
 type Deps = Parameters<typeof createFileHistoryRouter>[0]
 
@@ -64,10 +65,21 @@ const save = async (filePath: string, content: string, writer?: string) => {
   let expectedHash: string | undefined
   if (writer === 'live' || writer === 'merge') {
     const read = await request(app).get('/api/file-content').query({ path: filePath })
-    expectedHash = read.body?.contentHash ?? undefined
+    // Hash the BYTES the read returned, rather than quoting the token that came
+    // with them. Quoting would let this helper claim `baseFrom: 'content'` while
+    // doing the exact thing the claim promises it did not do, which is a confusing
+    // example to leave in a test file about that rule.
+    const base = typeof read.body?.content === 'string' ? read.body.content as string : ''
+    expectedHash = computeContentHash(base)
   }
   return request(app).put('/api/file-content')
-    .send({ path: filePath, content, ...(writer ? { writer } : {}), ...(expectedHash ? { expectedHash } : {}) })
+    .send({
+      path: filePath, content,
+      ...(writer ? { writer } : {}),
+      // A machine write must present a lock AND say the token came from the bytes
+      // it is replacing; the route refuses one that cannot (see file-content.ts).
+      ...(expectedHash ? { expectedHash, baseFrom: 'content' } : {}),
+    })
 }
 
 const history = (filePath: string, extra: Record<string, string> = {}) =>

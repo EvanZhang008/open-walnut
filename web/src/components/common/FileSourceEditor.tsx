@@ -35,6 +35,19 @@ import { log } from '@/utils/log';
 export interface FileSourceEditorHandle {
   /** Current editor text — pulled by the parent at save time. */
   getValue: () => string;
+  /**
+   * The bytes this editor's text is a MODIFICATION OF: what it was seeded with,
+   * moved forward by markClean (our save landed) and setValue (a merge/pull).
+   *
+   * Why the editor owns this and the parent does not (2026-09-08 data loss): the
+   * parent advances its lock and its base the moment a READ lands, but the editor
+   * is reseeded by a remount one render later. In that window the parent's base
+   * described the new bytes while this editor still held the old ones, and an
+   * auto-write took the text from here and the token from there — a pair the
+   * server cannot refuse. Asking the editor for BOTH halves makes the pair
+   * impossible to mismatch.
+   */
+  getBase: () => string;
   focus: () => void;
   /**
    * Re-baseline "clean" at the CURRENT text — called by the parent after a
@@ -44,6 +57,20 @@ export interface FileSourceEditorHandle {
    */
   markClean: () => void;
   /**
+   * Move the BASE to bytes that are now on disk, without touching the document or
+   * dirty tracking.
+   *
+   * This is the other half of markClean, and it exists because the parent
+   * deliberately does NOT markClean when a keystroke landed while a write was in
+   * flight: the file is still dirty by exactly those characters, and re-baselining
+   * would turn the dirty dot off and delete the draft that backs them. But the
+   * bytes that reached disk DID change, so the base has to move even though
+   * "clean" does not. Without this, the next automatic write derives its token
+   * from a base one generation behind disk and 409s by construction, every single
+   * typing pause (found in review, 2026-09-08).
+   */
+  setBase: (text: string) => void;
+  /**
    * Replace the WHOLE document in place — Live Edit's merge/pull path.
    *
    * Deliberately not a remount: the parent's remount key is what reseeds an
@@ -51,7 +78,7 @@ export interface FileSourceEditorHandle {
    * `getValue()` returns the new text immediately after this call, and the
    * caller (not this editor) decides whether the result counts as clean.
    */
-  setValue: (text: string) => void;
+  setValue: (text: string, base?: string) => void;
   /** Scroll a 1-based line into view (centered) — reference-jump target.
    *  `term` flashes the landed-on keyword so the eye finds it instantly.
    *  Optional: the WYSIWYG editor shares this handle type and has no lines. */
@@ -75,6 +102,12 @@ export interface EditorSelection {
 interface FileSourceEditorProps {
   /** Seed text. Only read on mount — see the contract note above. */
   initialValue: string;
+  /**
+   * The disk bytes `initialValue` is based on. Differs from `initialValue` only
+   * when the seed is an unsaved DRAFT: then the editor holds the draft text but
+   * what is on disk is this. Omitted = the seed IS the disk bytes.
+   */
+  baseValue?: string;
   /** File path; its extension picks the syntax grammar. */
   path: string;
   /** Fired when the doc's dirtiness (differs from seed) changes. */
@@ -140,7 +173,7 @@ const editorTheme = EditorView.theme({
 });
 
 export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEditorProps>(
-  function FileSourceEditor({ initialValue, path, onDirtyChange, onDocChange, onSave, initialLine, initialFlashTerm, onSelectText, onSymbolClick }, ref) {
+  function FileSourceEditor({ initialValue, baseValue, path, onDirtyChange, onDocChange, onSave, initialLine, initialFlashTerm, onSelectText, onSymbolClick }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     // Latest-callback refs: the listeners live inside a once-created view and must
@@ -157,19 +190,28 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
     onSymbolClickRef.current = onSymbolClick;
     // Seed + last-reported dirtiness, both mount-scoped (the parent remounts to reseed).
     const seedRef = useRef(initialValue);
+    /** See FileSourceEditorHandle.getBase. Mount-scoped like seedRef. */
+    const baseRef = useRef(baseValue ?? initialValue);
     const dirtyRef = useRef(false);
 
     useImperativeHandle(ref, () => ({
       getValue: () => viewRef.current?.state.doc.toString() ?? seedRef.current,
+      getBase: () => baseRef.current,
       focus: () => viewRef.current?.focus(),
       markClean: () => {
         seedRef.current = viewRef.current?.state.doc.toString() ?? seedRef.current;
+        // Our bytes are the bytes on disk now.
+        baseRef.current = seedRef.current;
         if (dirtyRef.current) {
           dirtyRef.current = false;
           onDirtyChangeRef.current(false);
         }
       },
-      setValue: (text: string) => {
+      setBase: (text: string) => { baseRef.current = text; },
+      setValue: (text: string, base?: string) => {
+        // A merge lands text that is NOT on disk, so the caller says what is; an
+        // adopt lands exactly the disk bytes, so the text itself is the base.
+        baseRef.current = base ?? text;
         const view = viewRef.current;
         // No view yet ⇒ the seed IS the document; move it so the mount uses it.
         if (!view) { seedRef.current = text; return; }

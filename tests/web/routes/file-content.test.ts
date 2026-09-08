@@ -7,6 +7,7 @@ import request from 'supertest';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { fileContentRouter, isSecretPath } from '../../../src/web/routes/file-content.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
+import { computeContentHash } from '../../../src/utils/file-ops.js';
 
 function createApp() {
   const app = express();
@@ -453,7 +454,10 @@ describe('PUT /api/file-content — an automatic write must carry a lock', () =>
     const read = await request(createApp()).get('/api/file-content').query({ path: target })
     const res = await request(createApp())
       .put('/api/file-content')
-      .send({ path: target, content: 'edited\n', writer: 'live', expectedHash: read.body.contentHash })
+      .send({
+        path: target, content: 'edited\n', writer: 'live',
+        expectedHash: read.body.contentHash, baseFrom: 'content',
+      })
     expect(res.status).toBe(200)
     expect(await fs.readFile(target, 'utf-8')).toBe('edited\n')
   })
@@ -468,6 +472,100 @@ describe('PUT /api/file-content — an automatic write must carry a lock', () =>
       .send({ path: target, content: 'mine\n' })
     expect(res.status).toBe(200)
     expect(await fs.readFile(target, 'utf-8')).toBe('mine\n')
+  })
+})
+
+describe('an automatic write must prove its token came from BYTES', () => {
+  // 2026-09-08, the FIFTH stale-copy write-back. The editor sent a token that
+  // genuinely matched the file on disk together with text from a three-day-old
+  // cached copy: it had read the token out of a ref that moved when a read landed,
+  // while the editor was reseeded a render later and still held the old bytes. A
+  // matching hash is a matching hash, so the server could not tell that apart from
+  // a legitimate save.
+  //
+  // So it demands the CLAIM: `baseFrom: 'content'` means "this token is the hash of
+  // the bytes I am replacing", which only a client that derives it from those bytes
+  // can say. The side effect is the point — a tab still running an OLD BUNDLE
+  // cannot send it, so it cannot auto-write, with no reload and no user action.
+  let tmpDir: string
+  beforeEach(async () => { tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-fc-base-')) })
+  afterEach(async () => { await fs.rm(tmpDir, { recursive: true, force: true }) })
+
+  const NEWER = `# newer\n\n${'a paragraph another writer added\n'.repeat(50)}`
+  const STALE = '# stale\n\nthe old copy\n'
+
+  it('refuses a live write that carries a CORRECT hash but no content claim', async () => {
+    const target = path.join(tmpDir, 'doc.md')
+    await fs.writeFile(target, NEWER)
+    const read = await request(createApp()).get('/api/file-content').query({ path: target })
+    // Exactly the incident: the right token for the file on disk, the wrong bytes.
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({ path: target, content: STALE, writer: 'live', expectedHash: read.body.contentHash })
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('conflict')
+    expect(await fs.readFile(target, 'utf-8')).toBe(NEWER)
+  })
+
+  it('refuses a merge write with a correct hash and no content claim', async () => {
+    const target = path.join(tmpDir, 'doc2.md')
+    await fs.writeFile(target, NEWER)
+    const read = await request(createApp()).get('/api/file-content').query({ path: target })
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({ path: target, content: STALE, writer: 'merge', expectedHash: read.body.contentHash })
+    expect(res.status).toBe(409)
+    expect(await fs.readFile(target, 'utf-8')).toBe(NEWER)
+  })
+
+  it('accepts a live write whose token IS the hash of the bytes on disk, claimed', async () => {
+    const target = path.join(tmpDir, 'doc3.md')
+    await fs.writeFile(target, NEWER)
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({
+        path: target, content: `${NEWER}and my edit\n`, writer: 'live',
+        expectedHash: computeContentHash(NEWER), baseFrom: 'content',
+      })
+    expect(res.status).toBe(200)
+    expect(await fs.readFile(target, 'utf-8')).toBe(`${NEWER}and my edit\n`)
+  })
+
+  it('refuses a claimed write whose base is the STALE copy (the guard doing its job)', async () => {
+    // The same client, behaving correctly: it derives the token from the bytes it
+    // actually edited, which are stale, so the token does not match disk.
+    const target = path.join(tmpDir, 'doc4.md')
+    await fs.writeFile(target, NEWER)
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({
+        path: target, content: STALE, writer: 'live',
+        expectedHash: computeContentHash(STALE), baseFrom: 'content',
+      })
+    expect(res.status).toBe(409)
+    expect(res.body.currentHash).toBe(computeContentHash(NEWER))
+    expect(await fs.readFile(target, 'utf-8')).toBe(NEWER)
+  })
+
+  it('an explicit USER save needs no claim (a human is watching the 409 dialog)', async () => {
+    const target = path.join(tmpDir, 'doc5.md')
+    await fs.writeFile(target, NEWER)
+    const read = await request(createApp()).get('/api/file-content').query({ path: target })
+    const res = await request(createApp())
+      .put('/api/file-content')
+      .send({ path: target, content: STALE, expectedHash: read.body.contentHash })
+    expect(res.status).toBe(200)
+  })
+
+  it('names the reason so an old bundle is distinguishable from a real race', async () => {
+    const { writeFileContentPayload, FileConflictError } = await import('../../../src/web/routes/file-content.js')
+    const target = path.join(tmpDir, 'doc6.md')
+    await fs.writeFile(target, NEWER)
+    const err = await writeFileContentPayload(
+      target, undefined, STALE, computeContentHash(NEWER), {}, 'live', undefined,
+    ).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(FileConflictError)
+    expect((err as InstanceType<typeof FileConflictError>).reason).toBe('unverified-base')
   })
 })
 
@@ -491,7 +589,8 @@ describe('a refused write is attributable', () => {
     expect(unlocked).toBeInstanceOf(FileConflictError)
     expect((unlocked as InstanceType<typeof FileConflictError>).reason).toBe('unlocked-machine-write')
 
-    const stale = await writeFileContentPayload(target, undefined, 'stale\n', 'deadbeefdead', {}, 'live')
+    // baseFrom set: this call is about the LOCK being stale, not about the claim.
+    const stale = await writeFileContentPayload(target, undefined, 'stale\n', 'deadbeefdead', {}, 'live', 'content')
       .then(() => null, (e: unknown) => e)
     expect(stale).toBeInstanceOf(FileConflictError)
     expect((stale as InstanceType<typeof FileConflictError>).reason).toBe('stale-lock')

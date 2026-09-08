@@ -33,6 +33,8 @@ import type { FileSourceEditorHandle } from './FileSourceEditor';
 interface FileMarkdownEditorProps {
   /** Full file bytes (frontmatter included). Only read on mount — see contract. */
   initialValue: string;
+  /** The disk bytes `initialValue` is based on — see FileSourceEditorHandle.getBase. */
+  baseValue?: string;
   /**
    * Absolute path of the file being edited. Only its DIRECTORY is used, and only
    * for rendering: a relative image reference (`![alt](diagram.png)`, which is how
@@ -64,10 +66,14 @@ interface FileMarkdownEditorProps {
 }
 
 export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdownEditorProps>(
-  function FileMarkdownEditor({ initialValue, path, host, imageVersion, onDirtyChange, onDocChange, onSave, onAskSelection }, ref) {
+  function FileMarkdownEditor({ initialValue, baseValue, path, host, imageVersion, onDirtyChange, onDocChange, onSave, onAskSelection }, ref) {
     // Mount-scoped split: the parent remounts (key) to reseed, mirroring
     // FileSourceEditor. The frontmatter half never enters the editor.
     const seedRef = useRef(splitFrontmatter(initialValue));
+    /** WHOLE-FILE bytes the content is a modification of — see
+     *  FileSourceEditorHandle.getBase. Kept as one string (frontmatter included)
+     *  because a write is whole-file. */
+    const baseRef = useRef(baseValue ?? initialValue);
     // Directory of the file — the base a relative image src resolves against.
     // `/README.md` (a file at the filesystem root) has an empty prefix, so it
     // becomes `/`; a bare `README.md` with no directory at all stays undefined,
@@ -99,6 +105,9 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
           : seedRef.current.body;
         return joinFrontmatter(seedRef.current.frontmatter, body);
       },
+      getBase: () => baseRef.current,
+      /** See FileSourceEditorHandle.setBase — base moves, document does not. */
+      setBase: (text: string) => { baseRef.current = text; },
       focus: () => { editorRef.current?.commands.focus(); },
       /**
        * Replace the document in place (Live Edit's merge/pull path).
@@ -114,7 +123,10 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
        * re-render triggers. `emitUpdate: false` on the imperative path is what
        * keeps a programmatic set from being reported as a user edit.
        */
-      setValue: (text: string) => {
+      setValue: (text: string, base?: string) => {
+        // See FileSourceEditor.setValue: a merge's text is not the disk bytes, an
+        // adopt's is.
+        baseRef.current = base ?? text;
         seedRef.current = splitFrontmatter(text);
         const ed = editorRef.current;
         if (ed && !ed.isDestroyed) {
@@ -134,6 +146,8 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
             body: ed.storage.markdown.getMarkdown() as string,
           };
         }
+        // Our bytes are the bytes on disk now.
+        baseRef.current = joinFrontmatter(seedRef.current.frontmatter, seedRef.current.body);
         if (dirtyRef.current) {
           dirtyRef.current = false;
           onDirtyChangeRef.current(false);

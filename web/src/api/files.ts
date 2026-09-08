@@ -90,8 +90,24 @@ export async function fetchFileContentConditional(
 }
 
 /** A save rejected because the file changed on disk under the editor. */
+/**
+ * Why the server refused. Three different situations that must not be treated
+ * alike:
+ *   - `stale-lock`: someone really did change the file. Merge and retry.
+ *   - `unverified-base`: THIS bundle could not prove where its token came from.
+ *     Nothing changed on disk, so merging is pointless (and would report a
+ *     collision that never happened) — the tab needs newer code.
+ *   - `unlocked-machine-write`: a client bug sent an automatic write with no lock
+ *     at all. Should be impossible; never merge it.
+ */
+export type FileSaveConflictReason = 'stale-lock' | 'unverified-base' | 'unlocked-machine-write';
+
 export class FileSaveConflictError extends Error {
-  constructor(public currentHash: string) {
+  constructor(
+    public currentHash: string,
+    /** Absent from a server too old to send it; treat that as `stale-lock`. */
+    public reason: FileSaveConflictReason = 'stale-lock',
+  ) {
     super('This file changed on disk since you opened it.');
     this.name = 'FileSaveConflictError';
   }
@@ -128,6 +144,15 @@ export async function saveFileContent(
      * still fires, under an anonymous origin.
      */
     origin?: string;
+    /**
+     * Set ONLY when `expectedHash` was computed from the bytes this write is
+     * replacing (see utils/content-hash.ts), rather than quoted from a ref the
+     * editor happened to be holding. The server REFUSES an automatic write without
+     * it, which is what makes the guard independent of any particular bundle being
+     * loaded in any particular tab: an old build cannot send this, so an old build
+     * cannot auto-write. Five stale-copy write-backs are why.
+     */
+    baseFrom?: 'content';
   } = {},
 ): Promise<{ size: number; contentHash: string }> {
   const res = await fetch('/api/file-content', {
@@ -139,11 +164,16 @@ export async function saveFileContent(
       ...(opts.host ? { host: opts.host } : {}),
       ...(opts.expectedHash ? { expectedHash: opts.expectedHash } : {}),
       ...(opts.writer ? { writer: opts.writer } : {}),
+      // Attribution: which view fired it. Accepted here since the beginning but
+      // never actually sent, so every write log line said `origin: undefined`.
+      ...(opts.origin ? { origin: opts.origin } : {}),
+      ...(opts.baseFrom ? { baseFrom: opts.baseFrom } : {}),
     }),
   });
   const body = await res.json().catch(() => ({} as Record<string, unknown>));
   if (res.status === 409 && typeof body?.currentHash === 'string') {
-    throw new FileSaveConflictError(body.currentHash);
+    const reason = typeof body?.reason === 'string' ? body.reason as FileSaveConflictReason : undefined;
+    throw new FileSaveConflictError(body.currentHash, reason);
   }
   if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : `Save failed: ${res.status}`);
   const result = { size: body.size as number, contentHash: body.contentHash as string };

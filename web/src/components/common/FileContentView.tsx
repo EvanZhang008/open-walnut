@@ -42,6 +42,7 @@ import {
   saveFileDraft, loadFileDraft, deleteFileDraft, planDraftReplay, planStaleDraftRestore,
 } from '@/utils/file-drafts';
 import { highlightLines } from '@/utils/code-highlight';
+import { computeContentHashClient } from '@/utils/content-hash';
 import { vaultRelativeNotePath } from '@/utils/notes-link';
 import { useRevealFile } from '@/hooks/useRevealFile';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -390,14 +391,16 @@ export function FileContentView({
     draftTimerRef.current = setTimeout(() => { draftTimerRef.current = null; void flushDraft(); }, DRAFT_DEBOUNCE_MS);
   }, [host, filePath, cancelDraftTimer, flushDraft]);
 
-  /** Put text in the live editor without a remount and without arming a write. */
-  const applyEditorText = useCallback((text: string) => {
+  /** Put text in the live editor without a remount and without arming a write.
+   *  `base` = the disk bytes that text is a modification of; omitted means the
+   *  text IS the disk bytes (an adopt). See FileSourceEditorHandle.getBase. */
+  const applyEditorText = useCallback((text: string, base?: string) => {
     // A different buffer from here on: any write armed against the previous one
     // must not go out under the lock this apply belongs to.
     noteBufferInstalled('apply-editor-text');
     applyingRef.current = true;
     try {
-      editorRef.current?.setValue(text);
+      editorRef.current?.setValue(text, base);
     } finally {
       if (wysiwygRef.current) {
         // TipTap's setContent({emitUpdate:false}) emits nothing now, but a late
@@ -923,7 +926,16 @@ export function FileContentView({
     // disabled, beforeunload guard off) and dropDraft would delete that backup —
     // the characters would then exist only in the buffer, invisibly unsaved.
     const buffer = editorRef.current?.getValue();
-    if (buffer != null && buffer !== text) return;
+    if (buffer != null && buffer !== text) {
+      // Dirty tracking stays where it is (see above), but "what is on disk" moved,
+      // so the editor's BASE has to move even though "clean" does not. Skipping
+      // this leaves the base one generation behind disk, and since an automatic
+      // write derives its token from the base, every following typing pause 409s
+      // by construction and runs a pointless merge cycle (found in review,
+      // 2026-09-08). Ordering matters: this must run BEFORE the return.
+      editorRef.current?.setBase(text);
+      return;
+    }
     editorRef.current?.markClean();
     draftRef.current = null;
     // The bytes are on disk now, so the side record is obsolete. Cancelling the
@@ -1002,6 +1014,12 @@ export function FileContentView({
     sessionId,
     canEdit,
     getText: () => editorRef.current?.getValue() ?? null,
+    // The bytes the EDITOR says its text is based on. Deliberately not
+    // `baseContentRef`: that one moves when a read lands, which is a render before
+    // the editor is reseeded, and writing under a base the editor never held is
+    // the 2026-09-08 data loss. Null when no editor is mounted, which stops an
+    // automatic write rather than guessing.
+    getBaseText: () => editorRef.current?.getBase() ?? null,
     applyText: applyEditorText,
     lockHashRef,
     bufferGenRef,
@@ -1039,7 +1057,18 @@ export function FileContentView({
       // user's "overwrite it with mine" decision, so send the hash the server
       // just told us is current rather than the stale seed hash (which would
       // 409 forever).
-      const expectedHash = conflictHashRef.current ?? lockHashRef.current;
+      //
+      // Otherwise the token comes from the EDITOR'S OWN BASE, hashed here, for the
+      // same reason the automatic write does (see useLiveEdit's PendingWrite.
+      // baseText). `lockHashRef` is advanced the moment a READ lands, while the
+      // editor is reseeded a render later, so quoting it lets a ⌘S pressed inside
+      // that window replace the file with text from before the read — the 2026-09-08
+      // mechanism with a human hand on it. Hashing the editor's base cannot do
+      // that: if the editor is behind, the save 409s and the user gets the
+      // conflict dialog, which is the whole point of the dialog.
+      const editorBase = editorRef.current?.getBase();
+      const expectedHash = conflictHashRef.current
+        ?? (editorBase != null ? computeContentHashClient(editorBase) : lockHashRef.current);
       const res = await saveFileContent(filePath, text, {
         host, expectedHash, writer: 'user', origin: viewIdRef.current,
       });
@@ -2140,6 +2169,13 @@ export function FileContentView({
             key={`wys:${filePath}:${baseHash ?? ''}:${seedNonce}`}
             ref={editorRef}
             initialValue={draftRef.current ?? data.content}
+            // The DISK bytes behind that seed. Equal to it for a clean open; the
+            // disk bytes a replayed draft sits on top of; and deliberately
+            // ABSENT after a stale-draft restore, where the base is bytes we no
+            // longer hold — the editor then reports its own text as its base, so
+            // an automatic write cannot match disk and is refused instead of
+            // silently replacing someone else's newer file.
+            baseValue={baseContentRef.current ?? undefined}
             path={filePath}
             host={host}
             imageVersion={imageVersion}
@@ -2153,6 +2189,7 @@ export function FileContentView({
             key={`src:${filePath}:${baseHash ?? ''}:${seedNonce}`}
             ref={editorRef}
             initialValue={draftRef.current ?? data.content}
+            baseValue={baseContentRef.current ?? undefined}
             path={filePath}
             onDirtyChange={setEditorDirty}
             onDocChange={handleDocChange}
