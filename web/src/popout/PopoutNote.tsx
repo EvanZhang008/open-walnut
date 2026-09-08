@@ -60,6 +60,7 @@ export function PopoutNote() {
         attachmentNotePath={notePath}
         showWidthToggle
         showRawToggle
+        showFormatToolbar
         showBreadcrumb
         pendingExternal={pendingExternal}
         onApplyExternal={applyExternalChange}

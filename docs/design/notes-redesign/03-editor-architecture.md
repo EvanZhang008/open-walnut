@@ -151,6 +151,12 @@ BubbleMenu.configure({
 - **Pure DOM overlay** driven by current selection; it does **not** re-render the doc (typing latency
   unaffected — the "no-jank" contract).
 
+#### 2.2.1 Always-visible format toolbar (added 2026-09-08)
+
+The bubble menu alone was not discoverable: it only appears once text is selected, so users went looking for tools that "must be somewhere". `NotesFormatToolbar` is the persistent row under the title bar (undo/redo, bold/italic/strike/inline-code, a "Normal text ▾" block picker, list indent/outdent, link/image/table/divider, clear formatting). It is opt-in per shell (`MarkdownEditorPanel showFormatToolbar`; on for /notes, note pop-outs and the global-notes popup, off for task fields and memory), hidden in raw mode, and it drives exactly the same modules as the bubble and slash menus (`block-transforms`, `extensions/list-indent`, `image-insert`, `link-prompt`), so there is still one conversion path. Rendering contract: the row is a SIBLING of the editor in the shell (outside the scroll area) and reads state through `useEditorState`, so its per-transaction re-render never touches the ProseMirror tree. The block picker is a portalled menu placed by `useMenuPlacement` (never a native `<select>`).
+
+The ``` shortcut converts on the THIRD BACKTICK (`extensions/fence-code-block.ts`), not on the following space/Enter as stock TipTap does: with the stock rule, typing ``` visibly did nothing and the shortcut read as broken. Consequence: a language tag cannot be typed after the fence (Notion has the same trade-off); the stock ```lang␠ / `~~~` rules stay registered behind ours.
+
 ### 2.3 Block drag-handle + inserter — `@tiptap/extension-drag-handle-react`
 
 **Recommendation: BUY the off-the-shelf `@tiptap/extension-drag-handle-react`, do NOT hand-roll a

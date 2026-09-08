@@ -12,6 +12,7 @@ import { useCallback } from 'react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import type { Editor } from '@tiptap/core';
 import { turnInto } from './block-transforms';
+import { editLinkViaPrompt } from './link-prompt';
 import { usePrompt } from '@/hooks/useConfirm';
 
 interface NotesBubbleMenuProps {
@@ -36,17 +37,7 @@ export function NotesBubbleMenu({ editor, onAsk }: NotesBubbleMenuProps) {
     return ed.state.doc.textBetween(from, to, ' ').trim().length > 0;
   }, []);
 
-  const setLink = useCallback(async () => {
-    const prev = editor.getAttributes('link').href as string | undefined;
-    // allowEmpty: clearing the field removes the link.
-    const url = await prompt({ title: 'Link URL', defaultValue: prev ?? 'https://', placeholder: 'https://…', confirmLabel: 'Apply', allowEmpty: true });
-    if (url === null) return; // cancelled
-    if (url.trim() === '') {
-      editor.chain().focus().extendMarkRange('link').unsetLink().run();
-      return;
-    }
-    editor.chain().focus().extendMarkRange('link').setLink({ href: url.trim() }).run();
-  }, [editor, prompt]);
+  const setLink = useCallback(() => { void editLinkViaPrompt(editor, prompt); }, [editor, prompt]);
 
   return (
     <BubbleMenu

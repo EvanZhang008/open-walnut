@@ -48,6 +48,7 @@ export function PopoutGlobalNotes() {
         enableBlockTools
         showWidthToggle
         showRawToggle
+        showFormatToolbar
         rawFlushIO={GLOBAL_RAW_IO}
       />
     </div>

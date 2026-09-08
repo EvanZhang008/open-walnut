@@ -35,6 +35,7 @@ import Link from '@tiptap/extension-link';
 import { Markdown } from 'tiptap-markdown';
 
 import { tableExtensions } from '@/components/notes/extensions/table-kit';
+import { FenceCodeBlock } from '@/components/notes/extensions/fence-code-block';
 import { TagNode } from '@/components/notes/extensions/tag-node';
 import { Callout } from '@/components/notes/extensions/callout-node';
 import { WikiEmbedNode } from '@/components/notes/extensions/wiki-embed-node';
@@ -67,7 +68,10 @@ const TightTaskList = TaskList.extend({
  */
 export function buildNotesExtensions(): Extensions {
   return [
-    StarterKit.configure({ link: false }),
+    StarterKit.configure({ link: false, codeBlock: false }),
+    // Same node ('codeBlock'), only the ``` input rule differs — mirrored so the
+    // resolved extension list stays identical to production.
+    FenceCodeBlock,
     TightTaskList,
     TaskItem.configure({ nested: true }),
     Image.configure({ inline: true, allowBase64: true }),

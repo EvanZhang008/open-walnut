@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Editor } from '@tiptap/core';
 import { NotesEditor } from './NotesEditor';
+import { NotesFormatToolbar } from './NotesFormatToolbar';
 import { BacklinksPanel } from './BacklinksPanel';
 import { RawMarkdownView } from './RawMarkdownView';
 import { fetchNotesList, fetchTags } from '@/api/notes-v2';
@@ -25,6 +26,7 @@ import './notes-width.css';
  * SAME toolbar + behavior:
  *   - width toggle (Normal ⇄ Full)               — prop `showWidthToggle`
  *   - raw-markdown ↔ rendered toggle (⌘E)        — prop `showRawToggle`
+ *   - always-visible format toolbar row          — prop `showFormatToolbar`
  *   - save-status indicator + last-updated time
  *   - optional bookmark glyph                     — prop `showBookmark`
  *   - optional breadcrumb header                  — prop `showBreadcrumb`
@@ -97,6 +99,12 @@ export interface MarkdownEditorPanelProps {
   // ── Chrome flags ──
   showWidthToggle?: boolean;
   showRawToggle?: boolean;
+  /**
+   * Always-visible format toolbar row under the header (undo/redo, marks,
+   * block picker, indent, insert, clear). Hidden while in raw mode. Off by
+   * default so compact hosts (task fields, memory) keep their quiet chrome.
+   */
+  showFormatToolbar?: boolean;
   showBookmark?: boolean;
   showBreadcrumb?: boolean;
   showBacklinks?: boolean;
@@ -149,6 +157,7 @@ export function MarkdownEditorPanel({
   autoFocus,
   showWidthToggle = false,
   showRawToggle = false,
+  showFormatToolbar = false,
   showBookmark = false,
   showBreadcrumb = false,
   showBacklinks = false,
@@ -213,6 +222,16 @@ export function MarkdownEditorPanel({
   const [rawMode, setRawMode] = useState(false);
   const [rawText, setRawText] = useState('');
   const editorRef = useRef<Editor | null>(null);
+  // The live TipTap instance for the toolbar row, handed over by NotesEditor on
+  // mount (editorRef above is only captured on the FIRST EDIT, too late for a
+  // toolbar that must work on an untouched doc). `gen` keys the toolbar so it
+  // REMOUNTS per editor instance: useEditorState snapshots the instance it was
+  // created with and a later swap only shows up on the next transaction, so a
+  // toolbar kept alive across a doc switch would read the destroyed editor.
+  const [live, setLive] = useState<{ editor: Editor | null; gen: number }>({ editor: null, gen: 0 });
+  const handleEditorReady = useCallback((ed: Editor | null) => {
+    setLive((prev) => ({ editor: ed, gen: prev.gen + 1 }));
+  }, []);
   const rawDirtyRef = useRef(false);
   const rawSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rawPathRef = useRef<string | null>(null);
@@ -478,6 +497,13 @@ export function MarkdownEditorPanel({
           </div>
         </div>
       )}
+      {showFormatToolbar && !rawMode && live.editor && (
+        <NotesFormatToolbar
+          key={live.gen}
+          editor={live.editor}
+          attachmentNotePath={attachmentNotePath ?? undefined}
+        />
+      )}
       {pendingExternal && pendingExternal.path === key && (
         <ReloadBanner
           kind={pendingExternal.kind}
@@ -504,6 +530,7 @@ export function MarkdownEditorPanel({
             tasks={tasks}
             focusedTaskId={focusedTaskId ?? undefined}
             onTaskClick={onTaskClick}
+            onEditorReady={showFormatToolbar ? handleEditorReady : undefined}
           />
         </div>
         {rawMode && showRawToggle && (

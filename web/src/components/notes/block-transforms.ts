@@ -49,7 +49,14 @@ export function insertBlock(editor: Editor, kind: BlockKind, range?: Range): boo
 
     switch (kind) {
       case 'paragraph':
-        return chain.setParagraph().run();
+        // Turn-into (no range): clearNodes first so "Normal text" also lifts the
+        // block OUT of a list / quote / callout; setParagraph alone would leave a
+        // paragraph inside the list item, which reads as "nothing happened".
+        // Slash "/text" (range set) means "a plain paragraph HERE": inside a
+        // callout that must not eject the paragraph and split the callout.
+        return range
+          ? chain.setParagraph().run()
+          : chain.clearNodes().setParagraph().run();
       case 'h1':
         return chain.setHeading({ level: 1 }).run();
       case 'h2':

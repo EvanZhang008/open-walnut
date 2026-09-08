@@ -9,15 +9,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import type { Editor } from '@tiptap/core';
 import { Selection } from '@tiptap/pm/state';
-import { canJoin } from '@tiptap/pm/transform';
 import StarterKit from '@tiptap/starter-kit';
 import TaskList from '@tiptap/extension-task-list';
 import Placeholder from '@tiptap/extension-placeholder';
 import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
 import { Markdown } from 'tiptap-markdown';
-import { uploadNoteImage } from '@/api/notes';
-import { uploadNoteAttachment } from '@/api/notes-v2';
 import { entityRefsToMarkdownLinks } from '@/utils/markdown';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { log } from '@/utils/log';
@@ -33,6 +30,9 @@ import { resolveWikiLinkTarget } from './wiki-link/resolve-wiki-link';
 import { tableExtensions } from './extensions/table-kit';
 import { ListAutoJoin } from './extensions/list-auto-join';
 import { EmptyAwareTaskItem } from './extensions/empty-task-item';
+import { FenceCodeBlock } from './extensions/fence-code-block';
+import { findListItemType, indentListItem, outdentListItem } from './extensions/list-indent';
+import { insertImageFile } from './image-insert';
 import { normalizeForEditor } from './notes-content-preprocess';
 import { TagNode } from './extensions/tag-node';
 import { Callout } from './extensions/callout-node';
@@ -102,6 +102,12 @@ interface NotesEditorProps {
   imageHost?: string;
   /** Reload generation for image URLs (`&r=`) — see ResolveImageSrcContext.version. */
   imageVersion?: string | number;
+  /**
+   * Hands the live TipTap instance to the host (null again on teardown) so
+   * chrome that lives OUTSIDE the scroll area — the shell's format toolbar —
+   * can drive it. The editor is built once per mount, so this fires once.
+   */
+  onEditorReady?: (editor: Editor | null) => void;
 }
 
 /**
@@ -164,166 +170,7 @@ function isUrl(text: string): boolean {
   }
 }
 
-/**
- * When sinkListItem fails (item is first in its list), try joining the
- * current list with the nearest previous same-type list — removing any
- * empty paragraphs between them — then retry sink.
- *
- * This handles the common case where blank lines in notes split a single
- * logical task list into multiple ProseMirror taskList nodes.
- */
-function tryJoinPreviousListAndSink(editor: Editor, listItemType: string): boolean {
-  try {
-  const { state } = editor;
-  const { $from } = state.selection;
-
-  // Find the containing list node
-  let listDepth = 0;
-  for (let d = $from.depth; d > 0; d--) {
-    const n = $from.node(d).type.name;
-    if (n === 'taskList' || n === 'bulletList' || n === 'orderedList') {
-      listDepth = d;
-      break;
-    }
-  }
-  if (!listDepth || $from.index(listDepth) !== 0) return false;
-
-  const listType = $from.node(listDepth).type;
-  const parent = $from.node(listDepth - 1);
-  const listIdx = $from.index(listDepth - 1);
-  if (listIdx === 0) return false;
-
-  // Only join with the IMMEDIATELY previous sibling if it's the same list type,
-  // or if there's exactly one empty block between them (single blank line).
-  // Multiple empty blocks = intentional separation, don't join.
-  const prevSibling = parent.child(listIdx - 1);
-  let prevListIdx: number;
-
-  if (prevSibling.type === listType) {
-    // Immediately adjacent same-type list — join directly
-    prevListIdx = listIdx - 1;
-  } else if (
-    prevSibling.content.size === 0 &&
-    listIdx >= 2 &&
-    parent.child(listIdx - 2).type === listType
-  ) {
-    // One empty block gap (single blank line) — join across it
-    prevListIdx = listIdx - 2;
-  } else {
-    return false; // too far apart or non-matching
-  }
-
-  // Calculate gap: from end of prevList to start of our list
-  const contentStart = $from.start(listDepth - 1);
-  let offset = 0;
-  for (let i = 0; i <= prevListIdx; i++) offset += parent.child(i).nodeSize;
-  const gapStart = contentStart + offset; // right after prevList
-
-  let listOffset = 0;
-  for (let i = 0; i < listIdx; i++) listOffset += parent.child(i).nodeSize;
-  const gapEnd = contentStart + listOffset; // right before our list
-
-  const { tr } = state;
-
-  // Delete empty paragraphs between the two lists
-  if (gapStart < gapEnd) tr.delete(gapStart, gapEnd);
-
-  // Join the now-adjacent same-type lists
-  const joinAt = tr.mapping.map(gapStart);
-  // canJoin is a free function in prosemirror-transform, not a Node method.
-  if (!canJoin(tr.doc, joinAt)) return false;
-  tr.join(joinAt);
-  editor.view.dispatch(tr);
-
-  // Retry sink — now the item has a previous sibling
-  const sunk = editor.commands.sinkListItem(listItemType);
-  if (sunk) detachListItemChildren(editor);
-  return sunk;
-  } catch (err) {
-    log.warn('notes', 'tryJoinPreviousListAndSink failed', { error: String(err) });
-    return false;
-  }
-}
-
-/**
- * Detach nested child list from the list item at cursor,
- * making them siblings after the current item.
- * Enables per-line Tab indentation: only the current item moves, not children.
- */
-function detachListItemChildren(editor: Editor): boolean {
-  try {
-    const { state } = editor;
-    const { $from } = state.selection;
-
-    let depth = $from.depth;
-    while (depth > 0) {
-      const name = $from.node(depth).type.name;
-      if (name === 'taskItem' || name === 'listItem') break;
-      depth--;
-    }
-    if (depth === 0) return false;
-
-    const item = $from.node(depth);
-    const itemPos = $from.before(depth);
-    const itemEnd = $from.after(depth);
-
-    // Find nested list (taskList, bulletList, orderedList) within this item
-    let nestedList: ReturnType<typeof item.child> | null = null;
-    let offsetInItem = 1; // +1 for item open tag
-
-    for (let i = 0; i < item.childCount; i++) {
-      const child = item.child(i);
-      const t = child.type.name;
-      if (t === 'taskList' || t === 'bulletList' || t === 'orderedList') {
-        nestedList = child;
-        break;
-      }
-      offsetInItem += child.nodeSize;
-    }
-
-    if (!nestedList || nestedList.childCount === 0) return false;
-
-    const children: ReturnType<typeof item.child>[] = [];
-    nestedList.forEach(child => children.push(child));
-
-    const nestedPos = itemPos + offsetInItem;
-    const { tr } = state;
-
-    // Validate positions before mutating
-    if (nestedPos < 0 || nestedPos + nestedList.nodeSize > state.doc.content.size + 2) {
-      log.warn('notes', 'detachListItemChildren: position out of bounds', {
-        nestedPos, nestedSize: nestedList.nodeSize, docSize: state.doc.content.size,
-      });
-      return false;
-    }
-
-    // Remove nested list from inside the item
-    tr.delete(nestedPos, nestedPos + nestedList.nodeSize);
-
-    // Insert children as siblings after the (now shorter) item
-    let insertPos = tr.mapping.map(itemEnd);
-    for (const child of children) {
-      tr.insert(insertPos, child);
-      insertPos += child.nodeSize;
-    }
-
-    // Validate resulting document before dispatch
-    try { tr.doc.check(); } catch (checkErr) {
-      log.warn('notes', 'detachListItemChildren: invalid doc after transform, aborting', {
-        error: String(checkErr),
-      });
-      return false;
-    }
-
-    editor.view.dispatch(tr);
-    return true;
-  } catch (err) {
-    log.warn('notes', 'detachListItemChildren failed', { error: String(err) });
-    return false;
-  }
-}
-
-export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion }: NotesEditorProps) {
+export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -376,41 +223,10 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
   const attachmentNotePathRef = useRef(attachmentNotePath);
   attachmentNotePathRef.current = attachmentNotePath;
 
-  /**
-   * Upload a File (image blob), insert into editor.
-   * Vault surface (attachmentNotePath set): save into `_attachment/` beside the
-   * note and insert an Obsidian `![[...]]` embed — portable markdown on disk.
-   * Non-vault surface: chat image store + `![](/api/images/…)` (legacy path).
-   */
-  const handleImageUpload = useCallback(async (file: File, editor: Editor) => {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const dataUrl = reader.result as string;
-        if (!dataUrl?.includes(',')) return;
-        const [header, base64] = dataUrl.split(',');
-        if (!base64) return;
-        const mediaType = header.match(/data:(.*?);/)?.[1] || 'image/png';
-        // wikiEmbed is only in the schema when enableWikiLinks is on — guard so
-        // a misconfigured surface degrades to the legacy path instead of throwing.
-        const notePath = attachmentNotePathRef.current;
-        if (notePath && editor.schema.nodes.wikiEmbed) {
-          const { path } = await uploadNoteAttachment(notePath, base64, mediaType);
-          editor.chain().focus()
-            .insertContent({ type: 'wikiEmbed', attrs: { target: path } })
-            .run();
-        } else {
-          const url = await uploadNoteImage(base64, mediaType);
-          editor.chain().focus().setImage({ src: url }).run();
-        }
-      } catch {
-        // Upload failed — insert as inline data URL as fallback
-        const dataUrl = reader.result as string;
-        if (dataUrl) editor.chain().focus().setImage({ src: dataUrl }).run();
-      }
-    };
-    reader.onerror = () => { /* silently skip — user can retry paste */ };
-    reader.readAsDataURL(file);
+  // Paste / drop share the toolbar's upload path (image-insert.ts); the vault
+  // vs. chat-store routing is decided by the current attachment path.
+  const handleImageUpload = useCallback((file: File, editor: Editor) => {
+    insertImageFile(file, editor, attachmentNotePathRef.current);
   }, []);
 
   const editor = useEditor({
@@ -418,7 +234,10 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
       StarterKit.configure({
         // Disable built-in link — we use TaskAwareLink with custom renderHTML
         link: false,
+        // Replaced by FenceCodeBlock: ``` converts on the third backtick.
+        codeBlock: false,
       }),
+      FenceCodeBlock,
       TightTaskList,
       // Merge adjacent same-type lists eagerly — markdown can't express the
       // split, so the editor must not show one (numbering restarting at 1).
@@ -613,15 +432,8 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
           const n = $from.node(d).type.name;
           if (n === 'table' || n === 'tableCell' || n === 'tableHeader') return false;
         }
-        let listItemType: string | null = null;
-        for (let d = $from.depth; d > 0; d--) {
-          const name = $from.node(d).type.name;
-          if (name === 'taskItem' || name === 'listItem') {
-            listItemType = name;
-            break;
-          }
-        }
         if (!editorRef.current) return false;
+        const listItemType = findListItemType(editorRef.current);
         if (!listItemType) {
           // Tab trap outside lists: never move focus out of the editor.
           // (Slash-menu / tag / wiki-link popups grab Tab at the document
@@ -636,19 +448,8 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
           return true;
         }
         event.preventDefault();
-        if (event.shiftKey) {
-          editorRef.current.commands.liftListItem(listItemType);
-        } else {
-          // Sink first (standard — moves item with children), then detach children
-          const sunk = editorRef.current.commands.sinkListItem(listItemType);
-          if (sunk) {
-            detachListItemChildren(editorRef.current);
-          } else {
-            // Sink failed — item is likely first in a split list.
-            // Join with previous same-type list, then retry.
-            tryJoinPreviousListAndSink(editorRef.current, listItemType);
-          }
-        }
+        if (event.shiftKey) outdentListItem(editorRef.current, listItemType);
+        else indentListItem(editorRef.current, listItemType);
         return true;
       },
     },
@@ -657,6 +458,15 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
   // Keep editorRef in sync
   useEffect(() => {
     editorRef.current = editor;
+  }, [editor]);
+
+  // Latest callback without re-running the hand-off effect on every render.
+  const onEditorReadyRef = useRef(onEditorReady);
+  onEditorReadyRef.current = onEditorReady;
+  useEffect(() => {
+    if (!editor) return;
+    onEditorReadyRef.current?.(editor);
+    return () => { onEditorReadyRef.current?.(null); };
   }, [editor]);
 
   // Tell the ![[embed]] NodeView which note it is rendering inside, so it can

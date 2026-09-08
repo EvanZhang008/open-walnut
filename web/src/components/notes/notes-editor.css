@@ -302,6 +302,103 @@
   background: var(--border, #2a2d34);
 }
 
+/* ── Format toolbar (always-visible row under the title bar) ───────────── */
+.notes-format-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1px;
+  padding: 4px 16px;
+  border-bottom: 1px solid var(--border, #2a2d34);
+  background: var(--bg, #1a1c21);
+  flex-shrink: 0;
+}
+.notes-format-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--radius-sm, 5px);
+  background: transparent;
+  color: var(--fg-secondary, #c4c7cc);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.notes-format-btn:hover:not(:disabled) { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
+.notes-format-btn.active { background: var(--accent-subtle, rgba(99, 102, 241, 0.2)); color: var(--accent, #6366f1); }
+.notes-format-btn:disabled { opacity: 0.35; cursor: default; }
+.notes-format-btn code { font-family: var(--font-mono, monospace); font-size: 11px; }
+.notes-format-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 5px;
+  background: var(--border, #2a2d34);
+}
+
+/* Block-type picker trigger: a text label + chevron, wide enough that the
+   label change (Normal text ↔ Heading 1) does not reflow its neighbours. */
+.notes-format-block-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 118px;
+  padding: 0 8px 0 10px;
+  border: none;
+  border-radius: var(--radius-sm, 5px);
+  background: transparent;
+  color: var(--fg, #e8eaed);
+  font-size: 13px;
+  cursor: pointer;
+}
+.notes-format-block-btn:hover:not(:disabled) { background: var(--bg-hover, #2d3038); }
+.notes-format-block-btn:disabled { opacity: 0.35; cursor: default; }
+.notes-format-block-label { flex: 1; text-align: left; white-space: nowrap; }
+.notes-format-block-btn svg { color: var(--fg-muted, #8a8f98); flex-shrink: 0; }
+
+/* Portalled menu — position/maxHeight come from useMenuPlacement; overflow-y
+   is the hook's contract (a capped menu must scroll, never clip). */
+.notes-format-block-menu {
+  min-width: 190px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-elevated, #23262d);
+  border: 1px solid var(--border, #2a2d34);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--card-shadow, 0 4px 16px rgba(0, 0, 0, 0.3));
+}
+.notes-format-block-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm, 5px);
+  background: transparent;
+  color: var(--fg, #e8eaed);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.notes-format-block-item:hover { background: var(--bg-hover, #2d3038); }
+.notes-format-block-item.active { color: var(--accent, #6366f1); }
+.notes-format-block-check { font-size: 12px; }
+/* Each row previews its own style, so the picker reads without trying it. */
+.notes-format-block-sample.sample-h1 { font-size: 17px; font-weight: 700; }
+.notes-format-block-sample.sample-h2 { font-size: 15px; font-weight: 650; }
+.notes-format-block-sample.sample-h3 { font-size: 14px; font-weight: 600; }
+.notes-format-block-sample.sample-codeBlock { font-family: var(--font-mono, monospace); font-size: 12px; }
+.notes-format-block-sample.sample-blockquote { border-left: 2px solid var(--border, #2a2d34); padding-left: 6px; color: var(--fg-secondary, #c4c7cc); }
+.notes-format-block-sample.sample-bulletList::before { content: '•  '; color: var(--fg-muted, #8a8f98); }
+.notes-format-block-sample.sample-orderedList::before { content: '1.  '; color: var(--fg-muted, #8a8f98); }
+.notes-format-block-sample.sample-taskList::before { content: '☐  '; color: var(--fg-muted, #8a8f98); }
+
 /* ── Tag autocomplete popup ────────────────────────────────────────────── */
 .notes-tag-panel {
   min-width: 200px;

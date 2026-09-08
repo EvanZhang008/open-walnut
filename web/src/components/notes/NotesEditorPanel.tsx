@@ -81,6 +81,7 @@ export function NotesEditorPanel({
       attachmentNotePath={notePath}
       showWidthToggle
       showRawToggle
+      showFormatToolbar
       showBookmark
       showLocate
       showBreadcrumb

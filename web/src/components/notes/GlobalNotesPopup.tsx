@@ -68,6 +68,7 @@ export function GlobalNotesPopup({ content, onDirty, saving, onClose, tasks, foc
             enableBlockTools
             showWidthToggle
             showRawToggle
+            showFormatToolbar
             rawFlushIO={GLOBAL_RAW_IO}
             tasks={tasks}
             focusedTaskId={focusedTaskId}
