@@ -50,7 +50,7 @@ import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnsw
 import { findImagePaths, resolveImagePath } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
-import { useSelectionScrollGuard, useSelectionFrozen, useSelectionFrozenWith } from '@/utils/selection-guard';
+import { useSelectionScrollGuard, useSelectionFrozen, useSelectionFrozenWith, useSelectionAnchoredScroll } from '@/utils/selection-guard';
 import { runWhenVisible, visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 
@@ -1446,6 +1446,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // to read IS that intent, and it avoids a silent teleport-to-bottom the
   // instant the selection clears.
   const selectionActive = useSelectionScrollGuard(containerRef);
+  // Held selections keep their place when the timeline changes height around
+  // them (at turn end the persisted twin renders above the frozen copy and used
+  // to shove the selected line hundreds of px below the fold).
+  useSelectionAnchoredScroll(containerRef);
   const scrollRafId = useRef<number | null>(null);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstScrollDone = useRef(false);
@@ -3660,9 +3664,39 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 // per-block signal available — deltas always append at the tail).
                 const isLiveTail = isStreaming && i === lastVisibleTimelineIdx;
                 if (blockWantsBubble) {
+                  // A reply that is still arriving is selectable prose like any
+                  // other, so the streaming bubble wears the SAME identity a
+                  // persisted row wears (`data-message-id` + `data-msg-role`) —
+                  // that pair is the whole contract the quote pill reads off the
+                  // DOM, and without it selecting inside a live answer offered
+                  // no Copy, no Pin and no Ask at all (`selectionBody` requires
+                  // a `[data-message-id]` ancestor).
+                  //
+                  // The id is the one the model's own `message_start` carried,
+                  // which is exactly the id the persisted twin will have: the
+                  // absorption filter pairs stream block to history row id-first
+                  // (`computeAbsorbedIndices`). So a pin or a thread anchor made
+                  // mid-answer still resolves after the turn lands, against the
+                  // twin. A block with no id yet (a system notice, a snapshot
+                  // without one) still gets a body so Copy works — Pin and Ask
+                  // gate themselves on the id inside the pill.
+                  //
+                  // No `data-msg-ts`: a block that is still arriving has no
+                  // settled message timestamp, and the pill's `timestamp` is
+                  // optional everywhere it lands, so a pin made mid-answer simply
+                  // shows no time in the outline until the row is reloaded.
+                  const streamMsgId = item.block.type === 'text' ? item.block.msgId : undefined;
                   return (
-                    <div key={`b-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
-                      <div className={isFirst ? 'session-msg-content' : ''}>
+                    <div
+                      key={`b-${item.index}`}
+                      className={isFirst ? 'session-msg session-msg-assistant' : ''}
+                      {...(streamMsgId ? { 'data-message-id': streamMsgId, 'data-msg-role': 'assistant' } : {})}
+                    >
+                      {/* Always the body class: it is `word-break` only (no bubble
+                          padding), and a text block that follows a tool call is
+                          deliberately NOT `isFirst`, yet its prose is just as
+                          quotable as the first block's. */}
+                      <div className="session-msg-content">
                         <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                       </div>
                     </div>

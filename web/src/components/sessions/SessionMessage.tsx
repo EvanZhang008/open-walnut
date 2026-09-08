@@ -6,6 +6,7 @@ import {
 } from '@/utils/markdown';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLabels';
+import { useStableHtml } from '@/hooks/useStableHtml';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
@@ -154,6 +155,25 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
   const container = img.closest('.tool-result-image-item') ?? img.parentElement;
   if (container instanceof HTMLElement) container.style.display = 'none';
 };
+
+/**
+ * Plain markdown prose: a person's own words, and a subagent group's result.
+ *
+ * Its own leaf so BOTH the html string and the `dangerouslySetInnerHTML` prop are
+ * memoized. Rendered inline, these rows rebuilt their DOM on every re-render of
+ * the timeline (React 19 writes innerHTML whenever the prop OBJECT changes
+ * identity — see hooks/useStableHtml.ts), and a full history refetch re-renders
+ * them: selecting a phrase in your own message and then clicking "Show earlier
+ * messages" destroyed the selection. Subscribes the label store itself, the way
+ * RichChunkView does, so memo() can block everything else without going stale.
+ */
+const StableMarkdownBody = memo(function StableMarkdownBody({ text, cwd }: { text: string; cwd?: string }) {
+  const labelsVersion = useEntityLabelsVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the pill lookups inside
+  const html = useMemo(() => renderMarkdownWithRefs(text, cwd), [text, cwd, labelsVersion]);
+  const htmlProp = useStableHtml(html);
+  return <div className="markdown-body" dangerouslySetInnerHTML={htmlProp} />;
+});
 
 interface SessionMessageProps {
   message: SessionHistoryMessage;
@@ -955,9 +975,7 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
           ) : tool.result ? (
             <div className="task-group-result">
               <div className="task-group-result-label">Result</div>
-              <div className="markdown-body" dangerouslySetInnerHTML={{
-                __html: renderMarkdownWithRefs(tool.result.slice(0, 3000))
-              }} />
+              <StableMarkdownBody text={tool.result.slice(0, 3000)} />
             </div>
           ) : (
             <div className="task-group-empty">No subagent data available</div>
@@ -1157,7 +1175,7 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
           // placeholder inside a user message, and it would also make anything
           // they copied off a web page render as DOM rather than as the text
           // they can see they pasted.
-          <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(bodyText, sessionCwd) }} />
+          <StableMarkdownBody text={bodyText} cwd={sessionCwd} />
         ) : (
           <RichMarkdown text={bodyText} cwd={sessionCwd} scope={message.msgId} />
         ))}

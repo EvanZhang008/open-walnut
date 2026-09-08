@@ -15,6 +15,7 @@ import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { GenericToolCall } from '../sessions/SessionMessage';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { useSelectionFrozen } from '@/utils/selection-guard';
+import { useStableHtml } from '@/hooks/useStableHtml';
 
 interface ClaudeStreamViewProps {
   blocks: StreamingBlock[];
@@ -138,11 +139,14 @@ export const ClaudeStreamView = memo(function ClaudeStreamView({
 const StreamTextBlock = memo(function StreamTextBlock({ content }: { content: string }) {
   const { value: displayContent, hostRef } = useSelectionFrozen(content);
   const html = useRenderedMarkdown(displayContent);
+  // Stable prop identity so a re-render with the FROZEN html does not rewrite
+  // innerHTML anyway (React 19 — see useStableHtml).
+  const htmlProp = useStableHtml(html);
   return (
     <div
       ref={hostRef}
       className="claude-stream-text markdown-body"
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={htmlProp}
     />
   );
 });

@@ -726,6 +726,52 @@ if (outputFormat === 'stream-json') {
         emitStream(wrap({ type: 'future_sse_event_xyz', payload: { x: 1 } }));
       }
 
+      // A reply long enough to DRAG A SELECTION INSIDE while it is still
+      // growing: 'Hello, world!' is three words, so a mouse drag over it can't
+      // tell "the pill survived the stream" from "the pill was never placed".
+      // Honours chunk-delay: so the paragraph arrives over seconds.
+      if (mode === 'long-text') {
+        (async () => {
+          const pause = () => chunkDelayMs > 0
+            ? new Promise((r) => setTimeout(r, chunkDelayMs))
+            : Promise.resolve();
+          // Deliberately shares no phrase with the seeded fixture transcripts: a
+          // test that drags over the STREAMING reply must not be able to match
+          // the same words in an already-persisted message instead.
+          const sentences = [
+            'The scheduler drains one queue at a time and never blocks on a slow writer. ',
+            'Every batch is fenced by its own token, so a retry cannot double-apply it. ',
+            'Metrics are emitted per batch rather than per record, which keeps the log small. ',
+            'The last pass verifies checksums and then flips the read path over. ',
+          ];
+          emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+          for (const s of sentences) {
+            emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: s } }));
+            await pause();
+          }
+          emitStream(wrap({ type: 'content_block_stop', index: 0 }));
+          emitStream({
+            type: 'assistant',
+            message: {
+              id: msgId, role: 'assistant', model: 'mock-model',
+              content: [{ type: 'text', text: sentences.join('') }],
+              stop_reason: 'end_turn',
+              usage: { input_tokens: 10, output_tokens: 40 },
+            },
+            session_id: outputSessionId,
+          });
+          emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 40 } }));
+          emitStream(wrap({ type: 'message_stop' }));
+          process.stdout.write(JSON.stringify({
+            type: 'result', subtype: 'success', is_error: false,
+            duration_ms: 50, num_turns: 1, result: sentences.join(''),
+            session_id: outputSessionId, total_cost_usd: 0.001,
+            usage: { input_tokens: 10, output_tokens: 40 },
+          }) + '\n', () => process.exit(0));
+        })();
+        return;
+      }
+
       if (mode === 'thinking-then-text') {
         // Realistic extended-thinking flow:
         //   SSE: index=0 thinking block → index=1 text block

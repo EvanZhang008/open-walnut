@@ -42,6 +42,7 @@
 import { memo, useEffect, useId, useMemo, useState, type RefObject } from 'react';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { useStableHtml } from '@/hooks/useStableHtml';
 import {
   splitRichChunks, scopeStyleHtml, hasRichContent, extractAppHtml, isAppComplete,
   collapseHtmlBlankLines, stripTransparentWrapper, richScopeId, richChunkKey, type RichChunk,
@@ -101,6 +102,7 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
     [split, body, cwd, labelsVersion],
   );
+  const plainProp = useStableHtml(plainHtml);
 
   if (!split) {
     return (
@@ -109,7 +111,11 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
         ref={hostRef}
         className="markdown-body"
         onClick={onClick}
-        dangerouslySetInnerHTML={{ __html: plainHtml }}
+        // Stable prop identity, NOT an inline literal: React 19 rewrites
+        // innerHTML on every re-render of this element unless the prop object
+        // is the same one (see useStableHtml). That rewrite is what used to
+        // destroy a selection inside a streaming reply on the next delta.
+        dangerouslySetInnerHTML={plainProp}
       />
     );
   }
@@ -129,10 +135,11 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
 /**
  * One finished (or tail) markdown/HTML chunk.
  *
- * memo + primitive props is what freezes the DOM: an unchanged chunk re-renders
- * to the SAME `__html` string, which React diffs by string identity and skips.
- * Only the entity-label version can invalidate it, because a pill's text lives in
- * that store.
+ * memo + primitive props is what keeps an unchanged chunk from re-rendering at
+ * all, and `useStableHtml` is what keeps the DOM untouched when it does re-render:
+ * React 19 rewrites innerHTML whenever the prop OBJECT changes identity, string
+ * equality no longer buys anything (hooks/useStableHtml.ts). Only the entity-label
+ * version can invalidate the html itself, because a pill's text lives in that store.
  */
 const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd }: {
   text: string;
@@ -160,10 +167,11 @@ const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd }: 
     [text, cwd, labelsVersion],
   );
   const html = useMemo(() => scopeStyleHtml(rendered, scopeId), [rendered, scopeId]);
+  const htmlProp = useStableHtml(html);
   return (
     <div
       className={`markdown-body rich-chunk${kind === 'html' ? ' rich-html-chunk' : ''}`}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={htmlProp}
     />
   );
 });

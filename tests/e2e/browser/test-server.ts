@@ -225,6 +225,72 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Streaming-selection fixture (session-stream-selection.spec.ts): that spec
+        // SENDS a real turn through the mock CLI, which appends to the session's
+        // stream file — so it gets its own record rather than rewriting the
+        // transcript another spec counts rows in.
+        id: 'pw-task-stream-select',
+        title: 'Streaming selection fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-stream-select-session'],
+        active_session_ids: [],
+        session_id: 'pw-stream-select-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Second streaming-selection session: the two tests in that spec each send
+        // their own turn, so they must not share a session even in serial mode — the
+        // first test's reply is persisted history by the time the second runs, and a
+        // drag would land on finished text and pass for the wrong reason.
+        id: 'pw-task-streamsel2',
+        title: 'Streaming selection fixture task 2',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-streamsel2-session'],
+        active_session_ids: [],
+        session_id: 'pw-streamsel2-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Third streaming-selection session: same reason — one session per test.
+        id: 'pw-task-streamsel3',
+        title: 'Streaming selection fixture task 3',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-streamsel3-session'],
+        active_session_ids: [],
+        session_id: 'pw-streamsel3-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Conversation-threads fixture (session-threads.spec.ts): the outline
         // transcript again under its own session, so thread anchors and pin resets
         // never touch the record the outline spec asserts on.
@@ -1095,10 +1161,12 @@ await fs.writeFile(
   //  · every message text is unique, so the outline's row label identifies exactly
   //    one row to jump to.
   //
-  // The SAME transcript is written three times, under three session ids with three
+  // The SAME transcript is written six times, under six session ids with six
   // uuid prefixes: `pw-pins-session` (0199aa…) for session-outline-rewind.spec.ts,
-  // `pw-quote-session` (0199cc…) for session-quote-pin.spec.ts and
-  // `pw-threads-session` (0199bb…) for session-threads.spec.ts. Pins and thread
+  // `pw-quote-session` (0199cc…) for session-quote-pin.spec.ts,
+  // `pw-threads-session` (0199bb…) for session-threads.spec.ts and
+  // `pw-stream-select-session` (0199dd…), `pw-streamsel2-session` (0199de…) and
+  // `pw-streamsel3-session` (0199df…) for session-stream-selection.spec.ts. Pins and thread
   // anchors are SERVER state on the session record, so two spec files sharing one
   // session rewrite each other's state under parallel workers (seen 2026-09-04:
   // the outline spec counted the quote spec's pin as a third tick, and the threads
@@ -1191,6 +1259,9 @@ await fs.writeFile(
   await fs.writeFile(path.join(jsonlDir, 'pw-pins-session.jsonl'), pinsTranscript('pw-pins-session', '0199aa'))
   await fs.writeFile(path.join(jsonlDir, 'pw-quote-session.jsonl'), pinsTranscript('pw-quote-session', '0199cc'))
   await fs.writeFile(path.join(jsonlDir, 'pw-threads-session.jsonl'), pinsTranscript('pw-threads-session', '0199bb'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-stream-select-session.jsonl'), pinsTranscript('pw-stream-select-session', '0199dd'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-streamsel2-session.jsonl'), pinsTranscript('pw-streamsel2-session', '0199de'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-streamsel3-session.jsonl'), pinsTranscript('pw-streamsel3-session', '0199df'))
   // Changed-tab code-intel fixture (changed-code-intel.spec.ts): a session whose
   // JSONL records a Write of sync-controller.go — the Changed tab reconstructs
   // the diff from exactly these tool_use blocks, and the on-disk twin (written
@@ -1439,6 +1510,45 @@ await fs.writeFile(
         messageCount: 53,
         cwd: vscodeFixtureRoot,
         title: 'Threads fixture session',
+      },
+      {
+        claudeSessionId: 'pw-stream-select-session',
+        taskId: 'pw-task-stream-select',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Streaming selection fixture session',
+      },
+      {
+        claudeSessionId: 'pw-streamsel2-session',
+        taskId: 'pw-task-streamsel2',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Streaming selection fixture session 2',
+      },
+      {
+        claudeSessionId: 'pw-streamsel3-session',
+        taskId: 'pw-task-streamsel3',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Streaming selection fixture session 3',
       },
       {
         claudeSessionId: 'pw-changed-session',

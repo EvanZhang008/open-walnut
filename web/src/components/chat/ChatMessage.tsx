@@ -12,6 +12,7 @@ import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, rend
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { useSelectionFrozen } from '@/utils/selection-guard';
+import { useStableHtml } from '@/hooks/useStableHtml';
 import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
 import { SuggestSegments, useSuggestSegments } from './SuggestSegments';
@@ -941,6 +942,12 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   const isSystemInitiated = source === 'cron' || source === 'heartbeat';
 
   // ── Early returns for special message types ──
+  // Stable prop object for the message body: React 19 rewrites innerHTML whenever
+  // the `dangerouslySetInnerHTML` OBJECT changes identity (hooks/useStableHtml.ts),
+  // which replaces every child node and takes any text selection inside the bubble
+  // with it. Must stay above the early returns below — it is a hook.
+  const bodyProp = useStableHtml(html ?? '');
+
   // These MUST come after all hooks (Rules of Hooks: same number of hooks every render).
 
   // Compaction in-progress — spinner divider
@@ -1358,7 +1365,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
             <div
               className="markdown-body"
               onClick={handleContentClick}
-              dangerouslySetInnerHTML={{ __html: html ?? '' }}
+              dangerouslySetInnerHTML={bodyProp}
             />
             {queued && (
               <span className="chat-queued-badge">

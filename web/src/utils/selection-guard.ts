@@ -79,6 +79,74 @@ export function useSelectionScrollGuard(ref: RefObject<HTMLElement | null>): () 
 }
 
 /**
+ * Keeps the passage the user has SELECTED at the same place on screen while the
+ * content around it changes height.
+ *
+ * Measured in production (2026-09-08), holding a selection inside a streaming
+ * reply: at turn end the persisted twin renders ABOVE the frozen streaming copy,
+ * so `scrollHeight` jumped 6812 → 7440 while `scrollTop` stayed put and the
+ * selected line moved from y=563 to y=1191 — 331px BELOW the bottom edge. The
+ * selection survived, the words simply left the screen on their own, and the next
+ * scroll then correctly dismissed the quote pill because the passage really was
+ * gone. Auto-scroll being paused during a selection is not enough: nobody
+ * scrolled, the document grew above the anchor.
+ *
+ * So: while a selection lives inside `ref`, any DOM change that moves it is
+ * answered by adding the same delta to `scrollTop`. Not while the pointer is
+ * still down — an in-progress gesture is already protected by pausing the app's
+ * own scroll writes, and writing scrollTop under a held button is what makes a
+ * drag run away to the bottom (failure mode 1 above).
+ */
+export function useSelectionAnchoredScroll(ref: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof MutationObserver === 'undefined') return;
+    let raf = 0;
+    /** Viewport y the selection is being held at, or null when there is none. */
+    let anchoredTop: number | null = null;
+
+    const topOfSelection = (): number | null => {
+      if (typeof window === 'undefined') return null;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+      if (!selectionIntersects(el)) return null;
+      const r = sel.getRangeAt(sel.rangeCount - 1).getBoundingClientRect();
+      if (!r.width && !r.height) return null;
+      return r.top;
+    };
+    // Any selection change, and any scroll the USER made, redefine where the
+    // passage is meant to sit. Our own scrollTop write lands here too, which is
+    // harmless: it re-reads the position we just restored.
+    const remember = () => { anchoredTop = topOfSelection(); };
+
+    const compensate = () => {
+      raf = 0;
+      if (pointerSelectingWithin(el)) return;
+      if (anchoredTop === null) { remember(); return; }
+      const now = topOfSelection();
+      if (now === null) { anchoredTop = null; return; }
+      const delta = Math.round(now - anchoredTop);
+      if (delta === 0) return;
+      el.scrollTop += delta;
+      anchoredTop = topOfSelection() ?? anchoredTop;
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(compensate); };
+
+    const mo = new MutationObserver(schedule);
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    document.addEventListener('selectionchange', remember);
+    el.addEventListener('scroll', remember, { passive: true });
+    remember();
+    return () => {
+      mo.disconnect();
+      cancelAnimationFrame(raf);
+      document.removeEventListener('selectionchange', remember);
+      el.removeEventListener('scroll', remember);
+    };
+  }, [ref]);
+}
+
+/**
  * Freezes `value` while a selection gesture or active selection is inside the
  * host element, so innerHTML swaps can't destroy the selection's anchor
  * nodes mid-copy. Unfreezes (and catches up to the latest value) as soon as
@@ -87,11 +155,19 @@ export function useSelectionScrollGuard(ref: RefObject<HTMLElement | null>): () 
  * Attach `hostRef` to the element rendering the value.
  *
  * What actually preserves the selection: the component still re-renders on
- * every delta (props change), but React diffs `dangerouslySetInnerHTML` by
- * `__html` STRING EQUALITY — same frozen string ⇒ React skips the innerHTML
- * write ⇒ the selection's anchor text nodes are never touched. Any refactor
- * that makes the rendered html differ per render (timestamps, changing keys)
- * silently breaks this fix.
+ * every delta (props change), but it renders the SAME html string, so the host
+ * element's children are never replaced. Any refactor that makes the rendered
+ * html differ per render (timestamps, changing keys) silently breaks this fix.
+ *
+ * ⚠️ FREEZING THE STRING IS ONLY HALF OF IT. React 19 writes
+ * `domElement.innerHTML` unconditionally whenever the
+ * `dangerouslySetInnerHTML` PROP OBJECT identity changed — it does not compare
+ * the strings (React 18 did). So a host that passes an inline
+ * `{{ __html: frozen }}` literal still replaces every child node on every
+ * delta, and the frozen selection dies anyway; that is exactly how this guard
+ * silently stopped working after the React 19 upgrade (2026-09-08). Every host
+ * must take its prop from `useStableHtml` (`hooks/useStableHtml.ts`), whose
+ * doc block carries the evidence.
  *
  * Render-time reads of module pointer state / live DOM selection (and the
  * frozenRef write) are deliberate rule-bends: all idempotent, and a torn or

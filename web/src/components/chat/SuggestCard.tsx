@@ -16,6 +16,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { log } from '@/utils/log';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { useStableHtml } from '@/hooks/useStableHtml';
 import { invokeAction } from '@/api/actions';
 import { readCardRecord, recordCardAction, terminalVerdict, type ActionVerdict } from '@/utils/suggest-card-state';
 import type { SuggestAction, SuggestCardSpec } from '@/utils/suggest-parse';
@@ -52,7 +53,7 @@ function staticBlock(action: SuggestAction): string | null {
 /**
  * What the click will actually run. The label is free text the model chose, and
  * the model's input includes task titles, notes and transcripts it did not write,
- * so "Fix typo" can sit over an arbitrary `delegate`. The confirmation step shows
+ * so "Fix typo" can sit over an arbitrary `session_start`. The confirmation step shows
  * the op name and its literal args verbatim — never truncated, the CSS scrolls
  * instead, because an authorization prompt that hides part of the call is worse
  * than no prompt at all.
@@ -84,6 +85,10 @@ export function SuggestCard({ card, onContentClick }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
     [card.body, labelsVersion],
   );
+  // Stable prop identity: a card inside a streaming reply re-renders on every
+  // delta, and React 19 would rewrite this body's innerHTML each time even
+  // though the html is unchanged, destroying any selection in it (useStableHtml).
+  const bodyProp = useStableHtml(bodyHtml);
 
   const setState = useCallback((actionId: string, next: ActionState) => {
     setStates((prev) => ({ ...prev, [actionId]: next }));
@@ -158,7 +163,7 @@ export function SuggestCard({ card, onContentClick }: {
         <div
           className="sug-card-body markdown-body"
           onClick={onContentClick}
-          dangerouslySetInnerHTML={{ __html: bodyHtml }}
+          dangerouslySetInnerHTML={bodyProp}
         />
       )}
       <div className="sug-card-actions">

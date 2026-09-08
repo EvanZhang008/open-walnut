@@ -58,7 +58,12 @@ interface PillState {
   /** Viewport point the pill hangs above: the selection's FOCUS caret, i.e. where
    *  the gesture ended, so the pill is under the hand that just let go. */
   anchor: { x: number; y: number };
-  msgId: string;
+  /**
+   * The row's id, when the passage sits in a row that HAS one. A streaming block
+   * that has not been told its message id yet is prose all the same: Copy needs
+   * no identity, so the pill still comes up and only Pin/Ask stand down.
+   */
+  msgId?: string;
   role: 'user' | 'assistant' | 'system';
   timestamp?: string;
   /** Captured from the message's text index while the selection still exists. */
@@ -79,7 +84,11 @@ function roleOf(value: string | null | undefined): 'user' | 'assistant' | 'syste
 
 /** The message body a selection lives in, or null when the selection is not one
  *  message's prose: both ends must sit in the SAME `.session-msg-content` inside
- *  this container, in the top document, outside any editable control. */
+ *  this container, in the top document, outside any editable control.
+ *
+ *  A `[data-message-id]` ancestor is NOT required — a live streaming block is a
+ *  message body before it is told its id, and the reader watching that answer
+ *  arrive is exactly who wants to copy a line out of it. */
 function selectionBody(container: HTMLElement, selection: Selection): Element | null {
   if (selection.isCollapsed || selection.rangeCount === 0) return null;
   const { anchorNode, focusNode } = selection;
@@ -98,8 +107,20 @@ function selectionBody(container: HTMLElement, selection: Selection): Element | 
   const body = anchorEl.closest('.session-msg-content');
   if (!body || body !== focusEl.closest('.session-msg-content')) return null;
   if (!container.contains(body)) return null;
-  if (!body.closest('[data-message-id]')) return null;
   return body;
+}
+
+/** Is any part of the selection still inside the scroller's box? A passage the
+ *  reader scrolled past has nothing left for a viewport-anchored pill to point
+ *  at, and a pill clamped to the viewport edge would point at the wrong words. */
+function selectionVisibleIn(container: HTMLElement, selection: Selection): boolean {
+  if (selection.rangeCount === 0) return false;
+  const box = container.getBoundingClientRect();
+  const r = selection.getRangeAt(selection.rangeCount - 1).getBoundingClientRect();
+  if (!r.width && !r.height) return false;
+  // Both axes: a wide code block scrolls sideways inside a message, and the pill
+  // would otherwise be clamped back into the viewport over unrelated words.
+  return r.bottom > box.top && r.top < box.bottom && r.right > box.left && r.left < box.right;
 }
 
 /** Focus before anchor in document order = the user dragged (or shift-arrowed)
@@ -166,6 +187,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
    * did nothing at all (measured). Self-clearing: any press elsewhere sets it back.
    */
   const pressedPill = useRef(false);
+  /** Is a pill on screen? Read by the scroll handler, which must re-anchor an
+   *  existing pill without ever conjuring one, and kept in a ref so the one
+   *  listener set never has to be torn down and rebuilt per state change. */
+  const showing = useRef(false);
+  showing.current = !!state;
   // Referentially stable anchor: useMenuPlacement takes it as a dependency.
   const placement = useMenuPlacement(!!state, noTrigger, pillRef, {
     anchorPoint: state?.anchor ?? null,
@@ -188,8 +214,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     const anchor = focusPoint(selection, range);
     if (!anchor) { setState(null); return; }
     const row = body.closest('[data-message-id]') as HTMLElement | null;
-    const msgId = row?.getAttribute('data-message-id');
-    if (!msgId) { setState(null); return; }
+    const msgId = row?.getAttribute('data-message-id') ?? undefined;
     // Indexing ONE message body per gesture tick — a paragraph, so microseconds.
     // The quote MUST come from the index rather than `text`: toString() serializes
     // layout (block breaks become newlines, runs collapse), so its string does not
@@ -222,9 +247,51 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
       if (e.key === 'Escape') { setState(null); return; }
       schedule();
     };
-    // A scroll moves the text out from under a viewport-anchored pill, so the
-    // pill goes rather than pointing at the wrong words.
-    const onScroll = () => setState(null);
+    // A scroll used to DISMISS the pill outright, which made it unusable for the
+    // one reader who needs it most: while a reply streams, the timeline shrinks
+    // and grows under a live selection (a Queued badge becomes Delivered, the
+    // "Resuming session…" line becomes the working indicator, the turn ends and
+    // the indicator goes) and the browser CLAMPS scrollTop on every shrink,
+    // firing a scroll nobody asked for. "I select text while it is generating and
+    // the Copy/Ask pill gets cancelled" was that clamp.
+    //
+    // A scroll now RE-ANCHORS instead: the passage is still selected, so the pill
+    // follows it. It is still dismissed once the passage has scrolled clear of the
+    // timeline (and a vanished selection has no box, so that covers it too) — the
+    // original intent, narrowed to the case it was actually protecting. Only while
+    // a pill is up, so a scroll can never REVIVE one that Escape dismissed.
+    const onScroll = () => {
+      if (!showing.current) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        // Same reason `evaluate` bails on a pill press: a press clears the
+        // selection (the guard in main.tsx), which releases the selection freeze,
+        // which resizes the timeline and clamps scrollTop — so a scroll can arrive
+        // with nothing selected while the pill's own click is still in flight, and
+        // unmounting in that frame would swallow it.
+        //
+        // Measured on this machine the clamp lands ~700ms AFTER mouseup, so no
+        // press observed here actually raced it; this is a one-line floor for the
+        // slower machine (or the longer press) where it would.
+        if (pressedPill.current) return;
+        const container = containerRef.current;
+        const selection = typeof window !== 'undefined' ? window.getSelection() : null;
+        if (container && selection && !selectionVisibleIn(container, selection)) {
+          setState(null);
+          return;
+        }
+        if (!selection || selection.rangeCount === 0) return;
+        // A scroll cannot change WHAT is selected, only where it sits on screen,
+        // so move the anchor instead of re-running evaluate(): re-indexing the
+        // body costs ~19ms on a long answer (useQuotePinPaint rate-limits itself
+        // for that reason) and this fires on every frame of a flung scroll.
+        const point = focusPoint(selection, selection.getRangeAt(selection.rangeCount - 1));
+        if (!point) return;
+        setState((prev) => (prev && (prev.anchor.x !== point.x || prev.anchor.y !== point.y)
+          ? { ...prev, anchor: point }
+          : prev));
+      });
+    };
     // Capture phase: this only RECORDS where the press landed, and it has to do so
     // before anything can move the DOM out from under the target.
     const onPointerDown = (e: PointerEvent) => {
@@ -246,7 +313,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
   }, [evaluate]);
 
   const pin = useCallback(() => {
-    if (!state) return;
+    if (!state?.msgId) return;
     log.info('session', 'pinning a quoted passage', {
       sessionId, msgId: state.msgId, chars: state.quote.exact.length,
     });
@@ -264,7 +331,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
   }, [onPin, sessionId, state]);
 
   const ask = useCallback(() => {
-    if (!state || !onAsk) return;
+    if (!state?.msgId || !onAsk) return;
     log.info('session', 'asking about a quoted passage', {
       sessionId, msgId: state.msgId, chars: state.quote.exact.length,
     });
@@ -293,6 +360,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
   // on every real transcript. Only a synthetic `queue-…` echo (a user line the
   // parser re-emitted) can't be a parent. Assistant rows only: "ask about this"
   // means asking about a REPLY.
+  // A row with no id yet (a streaming block before its message_start id lands)
+  // can hold neither a pin nor an anchor — both name their target by that id —
+  // so the pill degrades to Copy rather than offering a button that would drop
+  // the passage on the floor.
+  const canPin = !!state.msgId;
   const canAsk = !!onAsk && state.role === 'assistant' && !!state.msgId && !state.msgId.startsWith('queue-');
 
   return createPortal(
@@ -306,16 +378,18 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
       // and would unmount this pill before `click` fires.
       onMouseUp={(e) => e.stopPropagation()}
     >
-      <button
-        type="button"
-        className="quote-pin-pill-btn"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={pin}
-        title="Pin this passage (adds it to the outline)"
-      >
-        {ICON_PIN}
-        <span>Pin</span>
-      </button>
+      {canPin && (
+        <button
+          type="button"
+          className="quote-pin-pill-btn"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={pin}
+          title="Pin this passage (adds it to the outline)"
+        >
+          {ICON_PIN}
+          <span>Pin</span>
+        </button>
+      )}
       {canAsk && (
         <button
           type="button"

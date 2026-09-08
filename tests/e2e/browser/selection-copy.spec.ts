@@ -20,6 +20,7 @@
  * Harness: same WS-patch + history-mock approach as mid-stream-message.spec.ts.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { dragPhrase } from './selection-helpers';
 
 const SESSION_ID = 'pw-selection-copy';
 
@@ -350,5 +351,62 @@ test.describe('Selection & copy in session chat', () => {
       const txt = (await page.locator('.session-history').textContent()) ?? '';
       return (txt.match(/ABSORB-TARGET/g) || []).length;
     }, { timeout: 8000 }).toBe(1);
+  });
+  test('a DRAG selection inside a live block survives deltas, and the quote pill stays', async ({ page }) => {
+    // The reported bug (2026-09-08): "while a reply is still generating I select
+    // text, Copy and Ask appear, and then it gets cancelled." Two causes, both
+    // under test here:
+    //   1. the streaming bubble carried no `data-message-id`, so the pill's
+    //      `selectionBody` refused the passage outright — no pill at all;
+    //   2. React 19 rewrites `innerHTML` for an identical string whenever the
+    //      prop object identity changed, so the next delta detached the text
+    //      node the drag was anchored in and the pill went with it.
+    await mockSession(page);
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.waitForLoadState('networkidle');
+    await waitForWs(page);
+    await page.waitForSelector('.session-msg', { timeout: 8000 });
+
+    const sentence = 'The scheduler drains one queue at a time and never blocks on a slow writer.';
+    const phrase = 'never blocks on a slow writer';
+    await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: sentence, msgId: 'msg-drag-1' });
+    await expect(page.locator('.session-streaming-panel')).toContainText(phrase);
+
+    await dragPhrase(page, '.session-streaming-panel', phrase);
+    expect(await selectedText(page)).toBe(phrase);
+    // Non-vacuity: the range must be anchored in a TEXT node, the thing an
+    // innerHTML rewrite destroys.
+    expect(await page.evaluate(() => window.getSelection()?.anchorNode?.nodeType)).toBe(3);
+
+    // The pill is offered on a live reply, with Ask (the streaming block wears
+    // the msgId the persisted twin will carry, so an anchor made now survives).
+    const pill = page.locator('[data-testid="quote-pin-pill"]');
+    await expect(pill).toBeVisible();
+    await expect(pill.getByText('Copy')).toBeVisible();
+    await expect(pill.locator('[data-testid="quote-ask-btn"]')).toBeVisible();
+
+    // Six more deltas into the SAME block: the selection and the pill must both
+    // still be there, pointing at the same words.
+    for (let i = 0; i < 6; i++) {
+      await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: ` chunk-${i} more streamed prose.`, msgId: 'msg-drag-1' });
+      await page.waitForTimeout(50);
+    }
+    await expect(page.locator('.session-streaming-panel')).toContainText(phrase);
+    expect(await selectedText(page)).toBe(phrase);
+    await expect(pill).toBeVisible();
+
+    // Turn end removes the working indicator, which shrinks the timeline and
+    // makes the browser clamp scrollTop — a scroll nobody asked for. That used
+    // to dismiss the pill; it must re-anchor instead.
+    await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false });
+    await page.waitForTimeout(400);
+    await expect(pill).toBeVisible();
+    expect(await selectedText(page)).toBe(phrase);
+
+    // Clearing the selection releases the freeze: the block catches up to every
+    // delta it held back, and the pill goes.
+    await page.locator('.session-history').getByText('Line one of the explanation', { exact: false }).first().click();
+    await expect(page.locator('.session-streaming-panel')).toContainText('chunk-5 more streamed prose');
+    await expect(pill).toHaveCount(0);
   });
 });
