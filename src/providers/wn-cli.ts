@@ -205,7 +205,7 @@ THE THREE VERBS (keep it simple)
                    record AND start it      walnut tools call task_create '{"title":"...","start_session":true}'
   session_start    start a session for it   walnut tools call session_start '{"task":"<id>","message":"..."}'
   session_send     message any session      walnut tools call session_send '{"to":"<id|task|title>","text":"..."}'
-  Add "expect_reply":true to either send/start to be told when the work finishes;
+  Either send/start tells you when the work finishes BY DEFAULT (pass "expect_reply":false to opt out);
   answer such a request with session_send '{"in_reply_to":"rq-...","text":"..."}'.
   Replies and Walnut fallback notifications arrive in YOUR session automatically —
   do NOT sleep or poll for them; use \`walnut wait\` only when you cannot continue

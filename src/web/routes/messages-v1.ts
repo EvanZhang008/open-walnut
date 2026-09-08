@@ -42,7 +42,9 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
       const result = await performSessionSend({
         to: str(b.to),
         text: typeof b.text === 'string' ? b.text : '',
-        expectReply: b.expect_reply === true,
+        // Tri-state, NOT `=== true`: omitting the flag must reach the core as
+        // `undefined` so it can apply the session-caller default (on).
+        expectReply: typeof b.expect_reply === 'boolean' ? b.expect_reply : undefined,
         replyTimeoutSecs: num(b.reply_timeout),
         inReplyTo: str(b.in_reply_to),
         messageId: str(b.messageId),

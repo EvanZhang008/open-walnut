@@ -19,7 +19,7 @@ const DONE_PHASE: TaskPhase = 'COMPLETE';
 const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract
 
 - Choose one path per request. Do quick, simple work yourself when the user did not ask to track it. Delegate complex, long-running, or already-tracked work.
-- \`task_create\` records work only. It does not start work. \`session_start\` starts a session for a task; \`session_send\` messages a live session (add \`expect_reply\` to be told the outcome).
+- \`task_create\` records work only. It does not start work. \`session_start\` starts a session for a task; \`session_send\` messages a live session. Both tell you the outcome by default; pass \`expect_reply: false\` for fire-and-forget.
 - Project is the only grouping layer. An empty project means Inbox.
 - A task has one current session slot. Reuse only with an explicit task ID; never guess from a similar title.
 - Task phases are ${PHASE_ORDER.join(', ')}. Set \`${READY_PHASE}\` when your work is ready to look at and \`${DONE_PHASE}\` when it is finished. A blocked or parked task is just TODO. You may set any phase; none is reserved.

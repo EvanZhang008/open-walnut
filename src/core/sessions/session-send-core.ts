@@ -58,7 +58,11 @@ export interface SessionSendInput {
   /** Session id, unique id prefix (>=4), task id/prefix, or unique title substring. */
   to?: string;
   text: string;
-  /** Register a pending request; the target is told how to reply. Session callers only. */
+  /** Register a pending request; the target is told how to reply. Session
+   *  callers only. Tri-state, and `undefined` is NOT "off" (changed
+   *  2026-09-01): true = register and fail loudly for a non-session caller,
+   *  undefined = DEFAULT ON for a session caller / silently skipped otherwise,
+   *  false = never. Ignored on an `inReplyTo` send (that IS the answer). */
   expectReply?: boolean;
   /** Seconds until the no-reply fallback notification (clamped 60s..24h, default 1h). */
   replyTimeoutSecs?: number;
@@ -310,20 +314,33 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
 
   // expect_reply: register the pending row BEFORE delivery so the trailer can
   // name a request id that already exists.
+  //
+  // ON unless explicitly disabled. A session asking another session something
+  // wants the answer; making that opt-in meant every forgotten flag silently
+  // dropped it. A human/external caller has nowhere to route a reply to, so
+  // the DEFAULT degrades to "no request" there — only an explicit `true` still
+  // errors, because then the caller asked for something impossible.
+  // (An inReplyTo send never reaches here — performReply returns at :259.)
   let request: SessionRequest | undefined;
-  if (input.expectReply) {
+  if (input.expectReply !== false) {
     if (caller.kind !== 'session') {
-      throw new SendError('bad_request',
-        'expect_reply needs a session caller — a reply can only be routed back to a tracked session');
+      if (input.expectReply === true) {
+        throw new SendError('bad_request',
+          'expect_reply needs a session caller — a reply can only be routed back to a tracked session');
+      }
+    } else {
+      request = await createSessionRequest({
+        fromSessionId: caller.record.claudeSessionId,
+        toSessionId: targetSid,
+        toTaskId: target.taskId ?? target.session.taskId,
+        text,
+        replyTimeoutSecs: input.replyTimeoutSecs,
+        // Nobody asked for this one — the default did. Longer fallback fuse, so
+        // routine session→session notes don't each become a "no reply" notice.
+        implicit: input.expectReply === undefined,
+      });
+      enqueueText = `${enqueueText}\n${buildReplyTrailer(request)}`;
     }
-    request = await createSessionRequest({
-      fromSessionId: caller.record.claudeSessionId,
-      toSessionId: targetSid,
-      toTaskId: target.taskId ?? target.session.taskId,
-      text,
-      replyTimeoutSecs: input.replyTimeoutSecs,
-    });
-    enqueueText = `${enqueueText}\n${buildReplyTrailer(request)}`;
   }
 
   const source = caller.kind === 'human' ? 'cli' : 'peer';

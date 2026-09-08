@@ -28,8 +28,18 @@ const REQUESTS_FILE = path.join(WALNUT_HOME, 'session-requests.json');
 const MAX_REQUESTS = 500;
 /** Settled rows older than this are pruned on write. */
 const SETTLED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-/** Default reply deadline when the sender names none. */
+/** Default reply deadline when the sender EXPLICITLY asked for a reply and
+ *  named no timeout. An explicit ask is an ask: an hour of silence is worth
+ *  hearing about. */
 export const DEFAULT_REPLY_TIMEOUT_SECS = 3_600;
+/** Default deadline for an IMPLICIT request — one the expect_reply default
+ *  created because the caller was a session and said nothing either way
+ *  (2026-09-01). These are the common case now, and most of them are "tell me
+ *  when you're done" rather than "answer me": a 1h fuse on every session→session
+ *  message turns the reply loop into a notification firehose, which is the exact
+ *  noise the bell-badge denoise work went after. Six hours still guarantees the
+ *  asker eventually hears something, without narrating every quiet hand-off. */
+export const IMPLICIT_REPLY_TIMEOUT_SECS = 6 * 60 * 60;
 /** Deadline bounds — a sweep tick is 60s, so sub-minute deadlines are noise. */
 export const MIN_REPLY_TIMEOUT_SECS = 60;
 export const MAX_REPLY_TIMEOUT_SECS = 24 * 60 * 60;
@@ -89,8 +99,15 @@ function prune(requests: SessionRequest[]): SessionRequest[] {
   return kept;
 }
 
-export function clampReplyTimeoutSecs(secs: number | undefined): number {
-  if (typeof secs !== 'number' || !Number.isFinite(secs)) return DEFAULT_REPLY_TIMEOUT_SECS;
+/**
+ * `implicit` = this request exists only because the expect_reply DEFAULT fired,
+ * not because anyone asked. It changes nothing but the fallback fuse; a caller
+ * that names its own timeout is honoured either way.
+ */
+export function clampReplyTimeoutSecs(secs: number | undefined, implicit = false): number {
+  if (typeof secs !== 'number' || !Number.isFinite(secs)) {
+    return implicit ? IMPLICIT_REPLY_TIMEOUT_SECS : DEFAULT_REPLY_TIMEOUT_SECS;
+  }
   return Math.min(MAX_REPLY_TIMEOUT_SECS, Math.max(MIN_REPLY_TIMEOUT_SECS, Math.floor(secs)));
 }
 
@@ -100,6 +117,10 @@ export async function createSessionRequest(input: {
   toTaskId?: string;
   text: string;
   replyTimeoutSecs?: number;
+  /** True when only the expect_reply default created this row — see
+   *  clampReplyTimeoutSecs. Purely a deadline hint; the row is otherwise
+   *  identical, so a reply settles it the same way. */
+  implicit?: boolean;
 }): Promise<SessionRequest> {
   const request: SessionRequest = {
     id: `rq-${randomUUID().replace(/-/g, '').slice(0, 12)}`,
@@ -109,7 +130,7 @@ export async function createSessionRequest(input: {
     preview: oneLine(input.text),
     status: 'pending',
     createdAt: new Date().toISOString(),
-    deadlineAt: Date.now() + clampReplyTimeoutSecs(input.replyTimeoutSecs) * 1000,
+    deadlineAt: Date.now() + clampReplyTimeoutSecs(input.replyTimeoutSecs, input.implicit) * 1000,
   };
   await updateJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, (store) => ({
     requests: [...prune(store.requests ?? []), request],

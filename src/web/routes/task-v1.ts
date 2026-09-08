@@ -269,7 +269,9 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         model: str('model'),
         mode: str('mode'),
         engine: b.engine,
-        expectReply: b.expect_reply === true,
+        // Tri-state, NOT `=== true`: omitting the flag must reach the core as
+        // `undefined` so it can apply the session-caller default (on).
+        expectReply: typeof b.expect_reply === 'boolean' ? b.expect_reply : undefined,
         replyTimeoutSecs: typeof b.reply_timeout === 'number' ? b.reply_timeout : undefined,
         callerSid,
         source: 'api-v1',

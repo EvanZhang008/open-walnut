@@ -52,7 +52,7 @@ Keep messages short and factual: what changed, where, what the other session sho
 
 ## Ask for a result, and get it without polling
 
-Add `"expect_reply": true` and Walnut registers a request, returned to you as `requestId` (`rq-…`). This needs a tracked session as the caller, because a reply has to have somewhere to land:
+Walnut registers a request for you and returns its `requestId` (`rq-…`) — this is the DEFAULT for a session caller, so you get an answer without asking. Pass `"expect_reply": false` for fire-and-forget. It needs a tracked session as the caller, because a reply has to have somewhere to land; the human's own CLI just gets no request:
 
 ```bash
 walnut tools call session_send '{"to":"9f3a","text":"Is the migration safe to run twice?","expect_reply":true,"reply_timeout":900}'

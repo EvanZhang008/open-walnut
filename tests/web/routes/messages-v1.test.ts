@@ -101,6 +101,42 @@ describe('POST /api/v1/messages', () => {
     })
   })
 
+  // expect_reply is TRI-state as of 2026-09-01 and the route must not flatten
+  // it: the core reads `undefined` as "apply the session-caller default (on)".
+  // The old `b.expect_reply === true` mapping turned every omission into a hard
+  // false, which silently reverted the default at the transport boundary — and
+  // the core's own tests can't see that, they call the core directly.
+  it('passes expect_reply through as UNDEFINED when the body omits it', async () => {
+    const res = await request(createApp())
+      .post('/api/v1/messages')
+      .set('x-walnut-caller-sid', 'sess-caller-1')
+      .send({ to: 'sess-target-1', text: 'no flag' })
+
+    expect(res.status).toBe(202)
+    expect(coreInput().expectReply).toBeUndefined()
+  })
+
+  it('passes an explicit expect_reply:false through as FALSE, not undefined', async () => {
+    const res = await request(createApp())
+      .post('/api/v1/messages')
+      .set('x-walnut-caller-sid', 'sess-caller-1')
+      .send({ to: 'sess-target-1', text: 'fire and forget', expect_reply: false })
+
+    expect(res.status).toBe(202)
+    expect(coreInput().expectReply).toBe(false)
+  })
+
+  it('ignores a non-boolean expect_reply rather than coercing it', async () => {
+    // "false"/0/null from a sloppy client must not read as an opt-out; only a
+    // real boolean speaks, everything else falls back to the default.
+    const res = await request(createApp())
+      .post('/api/v1/messages')
+      .send({ to: 'sess-target-1', text: 'junk flag', expect_reply: 'false' })
+
+    expect(res.status).toBe(202)
+    expect(coreInput().expectReply).toBeUndefined()
+  })
+
   it('forwards the caller provenance headers into the core input', async () => {
     const res = await request(createApp())
       .post('/api/v1/messages')

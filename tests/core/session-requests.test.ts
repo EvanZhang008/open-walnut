@@ -23,6 +23,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-session-requ
 import {
   REQUESTS_FILE,
   DEFAULT_REPLY_TIMEOUT_SECS,
+  IMPLICIT_REPLY_TIMEOUT_SECS,
   MIN_REPLY_TIMEOUT_SECS,
   MAX_REPLY_TIMEOUT_SECS,
   buildReplyDeliveryText,
@@ -132,6 +133,45 @@ describe('createSessionRequest / getSessionRequest', () => {
     expect(created.toSessionId).toBeUndefined();
     expect(created.deadlineAt).toBeGreaterThanOrEqual(before + MIN_REPLY_TIMEOUT_SECS * 1000);
     expect(created.deadlineAt).toBeLessThanOrEqual(Date.now() + MIN_REPLY_TIMEOUT_SECS * 1000);
+  });
+});
+
+describe('clampReplyTimeoutSecs — implicit vs explicit fuse', () => {
+  // Since expect_reply defaults ON (2026-09-01), most rows exist because the
+  // default fired, not because anyone asked. A 1h fuse on every one of those
+  // turns the reply loop into a "no reply came" firehose, so an IMPLICIT row
+  // gets a longer default. An explicit ask keeps the short one.
+  it('gives an implicit request the 6h fuse and an explicit one the 1h fuse', () => {
+    expect(clampReplyTimeoutSecs(undefined, true)).toBe(IMPLICIT_REPLY_TIMEOUT_SECS);
+    expect(clampReplyTimeoutSecs(undefined, false)).toBe(DEFAULT_REPLY_TIMEOUT_SECS);
+    expect(clampReplyTimeoutSecs(undefined)).toBe(DEFAULT_REPLY_TIMEOUT_SECS);
+    expect(IMPLICIT_REPLY_TIMEOUT_SECS).toBe(6 * 60 * 60);
+    expect(IMPLICIT_REPLY_TIMEOUT_SECS).toBeGreaterThan(DEFAULT_REPLY_TIMEOUT_SECS);
+    expect(IMPLICIT_REPLY_TIMEOUT_SECS).toBeLessThanOrEqual(MAX_REPLY_TIMEOUT_SECS);
+  });
+
+  it('an explicit timeout wins over BOTH defaults — implicit is only a fallback', () => {
+    expect(clampReplyTimeoutSecs(900, true)).toBe(900);
+    expect(clampReplyTimeoutSecs(900, false)).toBe(900);
+    // Junk still falls back per-kind rather than producing a NaN deadline.
+    expect(clampReplyTimeoutSecs(Number.NaN, true)).toBe(IMPLICIT_REPLY_TIMEOUT_SECS);
+    // The bounds apply identically regardless of kind.
+    expect(clampReplyTimeoutSecs(59, true)).toBe(MIN_REPLY_TIMEOUT_SECS);
+    expect(clampReplyTimeoutSecs(86_401, true)).toBe(MAX_REPLY_TIMEOUT_SECS);
+  });
+
+  it('createSessionRequest honours the implicit flag on the stored deadline', async () => {
+    const before = Date.now();
+    const implicit = await createSessionRequest({
+      fromSessionId: 'sess-asker-1', toSessionId: 'sess-target-1', text: 'defaulted', implicit: true,
+    });
+    const explicit = await createSessionRequest({
+      fromSessionId: 'sess-asker-1', toSessionId: 'sess-target-1', text: 'asked for it',
+    });
+
+    expect(implicit.deadlineAt).toBeGreaterThanOrEqual(before + IMPLICIT_REPLY_TIMEOUT_SECS * 1000);
+    expect(explicit.deadlineAt).toBeLessThan(before + IMPLICIT_REPLY_TIMEOUT_SECS * 1000);
+    expect(explicit.deadlineAt).toBeGreaterThanOrEqual(before + DEFAULT_REPLY_TIMEOUT_SECS * 1000);
   });
 });
 

@@ -12,8 +12,9 @@ defineOp({
   description:
     'Start a NEW coding session for one existing task and send it the first message; returns the sessionId. ' +
     'Create the task first with task_create. If the task already has a live session this returns 409 with ' +
-    'existing_session_id — talk to it with session_send instead. Pass expect_reply=true to have the new ' +
-    'session report back to YOUR session when it finishes (Walnut also notifies you if it ends without replying).',
+    'existing_session_id — talk to it with session_send instead. The new session reports back to YOUR ' +
+    'session when it finishes BY DEFAULT (Walnut also notifies you if it ends without replying); pass ' +
+    'expect_reply=false for fire-and-forget.',
   input: {
     task: z.string().min(1).describe('Task id or unique prefix'),
     message: z.string().optional().describe('First instruction; defaults to a sentence naming the task'),
@@ -22,7 +23,7 @@ defineOp({
     model: z.string().optional().describe('Session model id or provider model value'),
     mode: SESSION_MODE.optional().describe('Session permission mode'),
     engine: SESSION_ENGINE.optional().describe('Coding agent engine; default claude'),
-    expect_reply: z.boolean().optional().describe('Route the session\'s reply back to your session; enables the no-reply fallback notification'),
+    expect_reply: z.boolean().optional().describe('Route the session\'s reply back to your session; enables the no-reply fallback notification. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
   },
   handler: async (args, call) => {
@@ -50,14 +51,14 @@ defineOp({
     'THE way to talk to any session (yours never — no self-send). `to` accepts a session id, a unique id ' +
     'prefix (>=4 chars), a task id (routes to that task\'s session), or a unique title substring. When ' +
     'another session is the caller, the text is delivered as a fenced peer note that carries no user ' +
-    'authorization. expect_reply=true asks the receiver to reply and registers a Walnut fallback ' +
-    'notification if it finishes without replying. To ANSWER such a request, call this op with ' +
+    'authorization. The receiver is asked to reply BY DEFAULT, with a Walnut fallback notification if it ' +
+    'finishes without replying; pass expect_reply=false when you do not want an answer. To ANSWER such a request, call this op with ' +
     'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
     'A task with no session yet → 409: start one with session_start.',
   input: {
     to: z.string().min(1).optional().describe('Session id / unique prefix, task id, or unique title substring (omit only with in_reply_to)'),
     text: z.string().min(1).describe('Message text'),
-    expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying'),
+    expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),

@@ -374,6 +374,53 @@ describe('performSessionSend — expect_reply', () => {
     expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 
+  // The default flipped ON 2026-09-01: a session that asks another session
+  // something almost always wants the answer, and every forgotten flag used to
+  // drop it silently. These three pin the tri-state so the default can't
+  // regress to opt-in, and so it can't start 400-ing the human's own CLI.
+  it('DEFAULTS to registering a request when a session caller omits the flag', async () => {
+    sessions = [
+      rec('sess-caller-4', { title: 'Asker', host: 'devbox' }),
+      rec('sess-target-1', { title: 'Target', taskId: 'task-77' }),
+    ];
+
+    const result = await performSessionSend({
+      to: 'sess-target-1', text: 'no flag passed', callerSid: 'sess-caller-4',
+    });
+
+    expect(result.requestId).toMatch(/^rq-[a-f0-9]{12}$/);
+    await expect(getSessionRequest(result.requestId!)).resolves.toMatchObject({
+      status: 'pending', fromSessionId: 'sess-caller-4', toSessionId: 'sess-target-1',
+    });
+    expect(deliveredText()).toContain(`[Reply requested — ${result.requestId}]`);
+  });
+
+  it('the DEFAULT degrades to no request for the human — it must not 400 like an explicit true does', async () => {
+    sessions = [rec('sess-target-1', { title: 'Target' })];
+
+    // Same call as the explicit-true case above, minus the flag. That one is a
+    // 400; this one must succeed silently, or every UI/CLI-launched send breaks.
+    const result = await performSessionSend({ to: 'sess-target-1', text: 'just deliver it' });
+
+    expect(result.requestId).toBeUndefined();
+    expect(result.delivery).toBe('queued');
+    expect(deliveredText()).not.toContain('[Reply requested');
+  });
+
+  it('expect_reply: false opts a session caller out of the default', async () => {
+    sessions = [
+      rec('sess-caller-4', { title: 'Asker', host: 'devbox' }),
+      rec('sess-target-1', { title: 'Target', taskId: 'task-77' }),
+    ];
+
+    const result = await performSessionSend({
+      to: 'sess-target-1', text: 'fire and forget', callerSid: 'sess-caller-4', expectReply: false,
+    });
+
+    expect(result.requestId).toBeUndefined();
+    expect(deliveredText()).not.toContain('[Reply requested');
+  });
+
   it('registers a pending row and appends the trailer OUTSIDE the peer fence', async () => {
     sessions = [
       rec('sess-caller-4', { title: 'Asker', host: 'devbox' }),

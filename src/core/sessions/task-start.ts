@@ -41,7 +41,13 @@ export interface SessionStartParams {
   model?: string;
   mode?: string;
   engine?: SessionEngine;
-  /** Register a reply request routed back to the caller session. */
+  /** Register a reply request routed back to the caller session.
+   *  Tri-state, and `undefined` is NOT "off" (changed 2026-09-01):
+   *    true      — register, and fail loudly if the caller is not a session
+   *    undefined — DEFAULT ON for a session caller, silently skipped otherwise
+   *    false     — never register
+   *  Rationale: a session that starts another session essentially always wants
+   *  the outcome back, and omitting the flag used to lose it silently. */
   expectReply?: boolean;
   replyTimeoutSecs?: number;
   /** Transport-stamped caller sid (required for expectReply). */
@@ -125,24 +131,35 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
   const engine = normalizeEngine(params.engine);
   const preassignedSessionId = engineCaps(engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
 
+  // expect_reply is ON unless explicitly disabled. A session that dispatches
+  // work to another session wants to be told how it went; making that opt-in
+  // meant every forgotten flag silently dropped the outcome on the floor.
+  // A human/external caller has nowhere to route a reply to, so the DEFAULT
+  // degrades to "no request" there — only an explicit `true` still errors,
+  // because then the caller asked for something impossible.
   let requestId: string | undefined;
-  if (params.expectReply) {
+  if (params.expectReply !== false) {
     const { resolveCaller } = await import('./session-send-core.js');
     const caller = await resolveCaller(params.callerSid);
     if (caller.kind !== 'session') {
-      throw new QuickStartError(
-        'expect_reply needs a session caller — a reply can only be routed back to a tracked session', 400);
+      if (params.expectReply === true) {
+        throw new QuickStartError(
+          'expect_reply needs a session caller — a reply can only be routed back to a tracked session', 400);
+      }
+    } else {
+      const { createSessionRequest, buildReplyTrailer } = await import('../session-requests.js');
+      const request = await createSessionRequest({
+        fromSessionId: caller.record.claudeSessionId,
+        ...(preassignedSessionId ? { toSessionId: preassignedSessionId } : {}),
+        toTaskId: task.id,
+        text: message,
+        replyTimeoutSecs: params.replyTimeoutSecs,
+        // Nobody asked for this one — the default did. Longer fallback fuse.
+        implicit: params.expectReply === undefined,
+      });
+      requestId = request.id;
+      message = `${message}\n${buildReplyTrailer(request)}`;
     }
-    const { createSessionRequest, buildReplyTrailer } = await import('../session-requests.js');
-    const request = await createSessionRequest({
-      fromSessionId: caller.record.claudeSessionId,
-      ...(preassignedSessionId ? { toSessionId: preassignedSessionId } : {}),
-      toTaskId: task.id,
-      text: message,
-      replyTimeoutSecs: params.replyTimeoutSecs,
-    });
-    requestId = request.id;
-    message = `${message}\n${buildReplyTrailer(request)}`;
   }
 
   bus.emit(EventNames.SESSION_START, {
