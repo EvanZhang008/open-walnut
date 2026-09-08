@@ -86,6 +86,10 @@ interface V1Message {
   source?: string
   detail?: string
   resultPreview?: string
+  /** Additive expanded-card fields (see the mapping describe at the bottom). */
+  inputPreview?: string
+  thinkingText?: string
+  agent?: string
 }
 
 async function createConv(): Promise<string> {
@@ -614,6 +618,109 @@ describe('duplicate rows in the conversation index', () => {
     expect(survivors[0].title).toBe('Still main')
     expect(survivors[0].isMain).toBe(true)
     expect(survivors[0].pinned).toBe(true)
+  }, 30_000)
+})
+
+describe('expanded-card fields survive the lane mapping', () => {
+  /** A Task delegation: the row that carries `agent`. */
+  const taskLine = (toolUseId: string, subagentType: string) => ({
+    type: 'assistant', uuid: `tk-${++seq}`, timestamp: T(),
+    message: {
+      role: 'assistant', id: `msg-${seq}`,
+      content: [{
+        type: 'tool_use', id: toolUseId, name: 'Task',
+        input: { description: 'Investigate the crash', prompt: 'read the logs', subagent_type: subagentType },
+      }],
+    },
+  })
+  const thinkingLine = (thinking: string, text: string) => ({
+    type: 'assistant', uuid: `th-${++seq}`, timestamp: T(),
+    message: {
+      role: 'assistant', id: `msg-${seq}`,
+      content: [{ type: 'thinking', thinking }, { type: 'text', text }],
+    },
+  })
+
+  it('carries agent, thinkingText and inputPreview through to the wire', async () => {
+    const convId = await createConv()
+    const sessionId = 'lane-messages-sid-cards'
+    await seedLaneSession(convId, sessionId)
+    await writeJsonl(sessionId, [
+      userLine('why did it crash?'),
+      thinkingLine('The stack points at the lockfile.\nI should delegate the log read.', 'Let me delegate.'),
+      taskLine('tu-task', 'log-reader'),
+      toolResultLine('tu-task'),
+      toolLine('tu-bash'),
+      toolResultLine('tu-bash'),
+      asstLine('a stale lockfile'),
+    ])
+
+    const all = await getMessages(convId, '?limit=50')
+
+    // 1. `agent` — the subagent label the projection has always produced and this
+    //    mapping used to drop, so the phone could not say which agent ran.
+    const task = all.find((m) => m.text === 'Task')!
+    expect(task.kind).toBe('tool')
+    expect(task.agent).toBe('log-reader')
+    // ...and it is absent on an ordinary tool row (not stamped on everything).
+    const bash = all.find((m) => m.text === 'Bash')!
+    expect(bash.agent).toBeUndefined()
+
+    // 2. `thinkingText` — the fuller excerpt behind the collapsed ≤160 line.
+    const thinking = all.find((m) => m.kind === 'thinking')!
+    expect(thinking.text).toBe('The stack points at the lockfile. I should delegate the log read.')
+    expect(thinking.thinkingText).toBe('The stack points at the lockfile.\nI should delegate the log read.')
+
+    // 3. `inputPreview` — the real input, with `detail` untouched beside it.
+    expect(bash.detail).toBe('echo hi')
+    expect(bash.inputPreview).toBe('command: echo hi')
+    // A Task row's prompt is reachable too, which `detail` (description) never was.
+    expect(task.detail).toBe('Investigate the crash')
+    expect(task.inputPreview).toContain('prompt: read the logs')
+    expect(task.inputPreview).toContain('subagent_type: log-reader')
+  }, 30_000)
+
+  /**
+   * The collapsed thinking line is FOLDED (whitespace → single spaces) rather than
+   * newline-preserving, which is a change to a field that already shipped. It is
+   * right for a one-line row — the same treatment `detail` gets — but the reason it
+   * is pinned here is that the two producers of these rows must agree byte for byte:
+   * the lane branch (session-projection.ts thinkingLine) and the chat-history branch
+   * (normalizeEntries). A client cannot be asked which engine answered in order to
+   * know whether its "collapsed" line contains newlines.
+   */
+  it('folds the collapsed thinking line identically on both branches', async () => {
+    // Over the 160 cap AND multi-line, so both rules are exercised at once.
+    const thinking = 'Line one about the lockfile.\n\n\tLine two, indented.\n'
+      + 'Then a much longer third line that pushes this reasoning block well past the '
+      + 'one hundred and sixty character budget so the clip has to happen too.'
+
+    const convId = await createConv()
+    const sessionId = 'lane-messages-sid-fold'
+    await seedLaneSession(convId, sessionId)
+    await writeJsonl(sessionId, [userLine('why?'), thinkingLine(thinking, 'because.')])
+    const laneRow = (await getMessages(convId, '?limit=50')).find((m) => m.kind === 'thinking')!
+
+    const { normalizeEntries } = await import('../../../src/web/routes/api-v1.js')
+    const historyRow = normalizeEntries([{
+      tag: 'ai', role: 'assistant', timestamp: '2026-01-01T00:00:00.000Z',
+      content: [{ type: 'thinking', thinking }, { type: 'text', text: 'because.' }],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }] as any).find((m) => m.kind === 'thinking')!
+
+    // Folded: no newline, no tab, no run of two spaces.
+    expect(laneRow.text).not.toContain('\n')
+    expect(laneRow.text).not.toContain('\t')
+    expect(laneRow.text).not.toMatch(/ {2}/)
+    // Clipped to the documented 160, plus the ellipsis that marks the cut.
+    expect(laneRow.text.endsWith('…')).toBe(true)
+    expect(laneRow.text.slice(0, -1).length).toBe(160)
+    expect(laneRow.text.length).toBe(161)
+    // The whole point: byte-identical from the other producer.
+    expect(historyRow.text).toBe(laneRow.text)
+    // The expanded excerpt is the one that KEEPS the newlines, and also agrees.
+    expect(laneRow.thinkingText).toContain('\n')
+    expect(historyRow.thinkingText).toBe(laneRow.thinkingText)
   }, 30_000)
 })
 

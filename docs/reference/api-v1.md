@@ -304,10 +304,39 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
 ```
 
 - `kind: "tool"` — a tool call; `text` is the tool name. Additive: `detail`
-  (one-line input summary, e.g. `"ls docs/"`) and `resultPreview` (≤700 char
-  clipped output) when available — clients render a collapsed
+  (one-line input summary, e.g. `"ls docs/"`) and `resultPreview` (clipped
+  output) when available — clients render a collapsed
   `Bash — ls docs/` row that expands to the output.
-- `kind: "thinking"` — a reasoning step; `text` is a short (≤160 char) excerpt.
+  - **How the caps read**: every clipped field is "N characters plus a
+    one-character `…`", so the longest value a client can receive is N+1.
+    `detail` and a `kind:"thinking"` `text` are N=160; `inputPreview` and
+    `thinkingText` are N=2000; `resultPreview` is N=700. Size a buffer for N+1.
+  - `inputPreview` (additive) — the tool INPUT for the expanded card's Input
+    section: `key: value` lines in the input's own order, newlines preserved,
+    ≤2000+`…` chars (each value ≤1000+`…` so one fat key cannot hide the
+    others), with secrets masked as `[REDACTED]`. Present when the input has
+    anything renderable. This is where the real value lives when `detail` shows
+    something else: `detail` for a `Bash` call prefers the human `description`,
+    so the command itself is only in `inputPreview`.
+  - `agent` (additive) — on a `Task`/`Agent` row, the delegated subagent's
+    label, so the row can read `Task — investigate the crash · reviewer`.
+  - `detail`, `inputPreview` and `resultPreview` are **all redacted** by one
+    rule: recognised secret shapes (API keys, bearer tokens, AWS credentials,
+    `password=`/`token=` pairs, URL userinfo, private-key blocks) come through
+    as `[REDACTED]`. A tool's output leaks as readily as its input, and a
+    `description` a model wrote can embed a secret just as a command can, so no
+    preview field is exempt. `detail`'s **shape** is unchanged (still ≤160+`…`,
+    still one line, still the same input key), but the masker is a pattern
+    matcher and these fields are text a human reads, so it can also rewrite
+    content that merely LOOKS like a credential: a `token=`/`password=` pair
+    followed by six or more credential-shaped characters is masked whether or
+    not it is one, and a `-----BEGIN … PRIVATE KEY-----` marker followed by ≥40
+    base64 characters truncates the preview from that point. Treat every preview
+    as lossy by construction (clipped, whitespace-folded, masked) — never as a
+    faithful copy of the tool's own text.
+- `kind: "thinking"` — a reasoning step; `text` is a short (≤160+`…`,
+  whitespace folded onto one line) excerpt. `thinkingText` (additive) carries a
+  fuller ≤2000+`…` excerpt with newlines kept, for a card that expands on tap.
 - `kind: "notification"` — a system-generated card (additive); `source` says
   which system produced it (`"session-error"`, `"agent-error"`, `"cron"`,
   `"compaction"`, …). Render as a distinct card, not a chat bubble. Noisy
@@ -380,10 +409,18 @@ to show the degradation.
 | `message-start` | `{ "turnId" }` | A turn began |
 | `queued` | `{ "turnId", "position" }` | Turn accepted but waiting behind another turn on the shared agent queue (additive, may precede `message-start` by minutes) |
 | `text-delta` | `{ "delta" }` | Streaming assistant text chunk |
-| `tool` | `{ "name" }` | The agent invoked a tool |
-| `thinking` | `{}` | The agent is reasoning (render a spinner) |
+| `tool` | `{ "name", "toolUseId"?, "detail"? }` | The agent invoked a tool. `detail` (additive) is the same one-line input summary the message rows carry (≤160+`…`, masked), so the activity line can read `Bash · ls docs/`; `toolUseId` (additive) pairs this frame with its `tool-result` |
+| `tool-result` | `{ "toolUseId" }` | That tool finished (additive) — clears the activity line. Carries NO output: the result reaches the client as the message row's `resultPreview`. Only sent for a `toolUseId` whose `tool` frame this turn actually delivered, so an id you never saw open is never closed |
+| `thinking` | `{ "delta"? }` | The agent is reasoning. `delta` (additive, optional) is the reasoning text — coalesced into ~120 ms batches, so treat it as an append, not one whole block. Clients that ignore it and just show a spinner keep working |
 | `message-end` | `{ "turnId", "fullText", "engine"? }` | Turn finished; `fullText` = complete reply |
 | `error` | `{ "message", "engine"? }` | Turn failed |
+
+- `tool`, `tool-result` and `thinking` arrive on **every** engine (the
+  in-process loop and a Personal AI CLI lane alike), so an activity line can
+  name what the agent is doing instead of blinking "Thinking…" for minutes.
+  Subagent activity is deliberately NOT relayed: a delegated agent's own tool
+  calls would overwrite the `Task` row the human needs to see.
+- Nothing is emitted after a turn's `message-end` / `error`.
 
 - A `: ping` comment is sent every 25 s — treat it as keep-alive noise.
 - **Replay**: the server keeps a ring buffer of the current turn's events.
@@ -631,7 +668,13 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   carries HTML, and the cut is made where it cannot leave half a tag behind so a
   rich reply is never truncated mid-attribute; `kind: "tool"` rows carry
   the tool name, plus additive `detail` (input summary) / `resultPreview`
-  (clipped output) when available). `agent` (additive, 2026-08) appears on
+  (clipped output) when available, and `kind: "thinking"` rows carry a
+  one-line reasoning excerpt of ≤160+`…` chars). The heavier expanded-card fields
+  (`inputPreview`, `thinkingText`) are NOT on this slim tail: it is pushed to
+  the cloud companion under a 1 MB frame cap and polled while a session view is
+  open, so it stays small. They ride
+  `GET /api/v1/conversations/:id/messages`, which reads the same transcript
+  unclipped. `agent` (additive, 2026-08) appears on
   `Task`/`Agent` tool rows and names the delegated subagent (team agent name,
   the tool input's `name`, or its `subagent_type`) — render it as a badge on
   the delegation row; the subagent's own transcript is not inlined. The primary

@@ -39,7 +39,9 @@ import { getLastSyncAtAsync } from '../../integrations/git-sync.js'
 import { setDeviceInfo } from '../../core/device-auth.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { parseFrontmatter, readId, generateNoteId, stampId } from '../../core/parse-frontmatter.js'
-import { toolDetail, toolResultPreview, toolResultText } from '../../core/tool-summary.js'
+import {
+  toolDetail, toolResultPreview, toolResultText, toolInputPreview, thinkingLine, thinkingExcerpt,
+} from '../../core/tool-summary.js'
 import { scheduleNotesIndexUpdate } from '../../core/notes-indexer.js'
 import {
   ensureIndexBootstrap,
@@ -274,8 +276,10 @@ async function conversationExists(agentId: string, conversationId: string): Prom
 }
 
 // ── Message normalization (mobile-friendly flat shape) ──
-
-const KIND_TEXT_MAX = 160
+//
+// The kind-row caps (collapsed line ≤160, expanded excerpts ≤2000) live in ONE
+// place, core/tool-summary.ts, because THREE surfaces build these rows and the
+// documented caps have to be the same number in all of them.
 
 interface ApiV1Message {
   id: string
@@ -289,10 +293,17 @@ interface ApiV1Message {
   detail?: string
   /** kind:'tool' only (additive) — clipped tool output for the expanded card. */
   resultPreview?: string
-}
-
-function shortText(s: string): string {
-  return s.length > KIND_TEXT_MAX ? s.slice(0, KIND_TEXT_MAX) + '…' : s
+  /** kind:'tool' only (additive) — the tool INPUT for the expanded card's Input
+   *  section (`key: value` lines, ≤2000 chars, secrets masked). `detail` stays
+   *  the collapsed ≤160 one-liner, so a Bash command that `detail` never carried
+   *  (it prefers `description`) is reachable here. */
+  inputPreview?: string
+  /** kind:'thinking' only (additive) — fuller reasoning excerpt (≤2000 chars)
+   *  for the expanded card; `text` stays the collapsed ≤160 line. */
+  thinkingText?: string
+  /** kind:'tool' on a Task/Agent row only (additive) — the delegated subagent's
+   *  label, so the phone can say WHICH agent a delegation belongs to. */
+  agent?: string
 }
 
 /**
@@ -422,13 +433,22 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
     const textParts: string[] = []
     for (const block of entry.content as Array<Record<string, unknown>>) {
       if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
-        push({ role: 'assistant', text: shortText(block.thinking), createdAt, kind: 'thinking' })
+        // Same two fields the lane branch produces (see laneTranscriptToApiV1):
+        // the two sources must look identical to the client, which is why the
+        // collapsed line comes from the shared thinkingLine and not shortText.
+        const excerpt = thinkingExcerpt(block.thinking)
+        push({
+          role: 'assistant', text: thinkingLine(block.thinking), createdAt, kind: 'thinking',
+          ...(excerpt ? { thinkingText: excerpt } : {}),
+        })
       } else if (block.type === 'tool_use' && typeof block.name === 'string') {
         const detail = toolDetail(block.name, block.input as Record<string, unknown> | undefined)
+        const inputPreview = toolInputPreview(block.input as Record<string, unknown> | undefined)
         const result = typeof block.id === 'string' ? resultsById.get(block.id) : undefined
         push({
           role: 'assistant', text: block.name, createdAt, kind: 'tool',
           ...(detail ? { detail } : {}),
+          ...(inputPreview ? { inputPreview } : {}),
           ...(result ? { resultPreview: toolResultPreview(result) } : {}),
         })
       } else if (block.type === 'text' && typeof block.text === 'string' && block.text) {
@@ -631,7 +651,13 @@ function laneTranscriptToApiV1(rows: ProjectedTranscriptMessage[]): Array<Omit<A
         role, text: raw, ...(createdAt ? { createdAt } : {}),
         kind: row.kind,
         ...(row.detail ? { detail: row.detail } : {}),
+        ...(row.inputPreview ? { inputPreview: row.inputPreview } : {}),
         ...(row.resultPreview ? { resultPreview: row.resultPreview } : {}),
+        ...(row.thinkingText ? { thinkingText: row.thinkingText } : {}),
+        // The projection has carried `agent` since Task/Agent rows learned their
+        // subagent label; this mapping dropped it, so the phone could never say
+        // which agent a delegation belonged to even though it decodes the field.
+        ...(row.agent ? { agent: row.agent } : {}),
       })
       continue
     }
@@ -1472,6 +1498,12 @@ async function rescueUserMessage(
  *     the in-process path emits). This is what feeds the client's inactivity
  *     watchdog and paints the live bubble during a multi-minute turn; the SSE
  *     channel's own 25s comment ping is transport-level only and carries no event.
+ *   - `session:tool-use` → SSE `tool`, `session:tool-result` → SSE `tool-result`,
+ *     `session:thinking-delta` → SSE `thinking`. Same three frames the in-process
+ *     branch has always emitted. Relaying only text is what made a lane turn look
+ *     like a blinking "Thinking…" with no tool ever named: the client's activity
+ *     line is driven by these frames and it had none, so a five-minute turn of
+ *     real work was indistinguishable from a hang.
  *   - turn answer → SSE `message-end` + a normal assistant entry on disk.
  *   - timeout / `session:error` → SSE `error` + the same failure the in-process
  *     catch persists.
@@ -1491,24 +1523,133 @@ async function runApiV1LaneTurn(
   // subscribing FIRST means no delta of this turn can slip through the gap.
   const subName = `api-v1-lane-relay-${turnId}`
   let laneSessionId: string | null = null
+
+  // ── Thinking coalescer ──
+  // Thinking deltas arrive at TOKEN rate with urgency:'urgent', and this channel
+  // fans out to every open client (plus the bridge mirror, and the 512-event
+  // replay ring, which a raw token stream would blow through — evicting this
+  // turn's own message-start from what a reconnect replays). The client buffers
+  // deltas at the same cadence anyway (ChatStore.appendDelta), so batching here
+  // is invisible to it and cheap for everyone: one trailing 120ms window per
+  // burst, flushed on turn end so the tail is never lost.
+  const THINKING_FLUSH_MS = 120
+  let thinkingBuf = ''
+  let thinkingTimer: NodeJS.Timeout | null = null
+  const flushThinking = (): void => {
+    if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null }
+    if (!thinkingBuf) return
+    const delta = thinkingBuf
+    thinkingBuf = ''
+    emitSse(conversationId, 'thinking', { delta })
+  }
+
+  // Set just before this turn's terminal frame. Nothing may be relayed after it:
+  // iOS finalizes the turn on `message-end`, so a later frame would leave its
+  // activity line lit on a finished turn — and it would also sit in the replay
+  // ring AFTER the terminal frame, which is the shape that once re-materialized a
+  // previous answer as a permanent duplicate on reconnect. One rule for all four
+  // kinds on purpose: two rules in one handler is how the next person reintroduces
+  // this. (A trailing delta after the CLI's result line is normal, not rare.)
+  let turnSettled = false
+
+  // toolUseIds whose `tool` frame this turn actually put on the wire. A
+  // `tool-result` means "clear the activity line for THIS id", so one whose `tool`
+  // frame was dropped (a subagent's, a replayed one, one that arrived before the
+  // lane id resolved) is an instruction about a line the client never drew: iOS
+  // looks the id up, misses, and is left holding a frame it cannot place. Relaying
+  // only known ids makes the pair symmetric — every drop rule above now
+  // automatically applies to the result too, instead of each one having to
+  // remember to.
+  const relayedToolUseIds = new Set<string>()
+
+  // Live relay. Interest-scoped global subscription (the pattern every session-event
+  // consumer uses): session events are addressed to 'main-ai'/'session-runner', and
+  // without `interest` this handler would wake on every event in the process.
+  // The lane id is only known once the lane resolves, hence the onSessionId hook —
+  // subscribing FIRST means no delta of this turn can slip through the gap.
   bus.subscribe(subName, (event) => {
-    if (event.name !== EventNames.SESSION_TEXT_DELTA) return
     const d = event.data as {
       sessionId?: string; delta?: string; parentToolUseId?: string; replayed?: boolean
+      toolName?: string; toolUseId?: string; input?: unknown
     }
-    if (laneSessionId === null || d.sessionId !== laneSessionId || !d.delta) return
-    // Subagent text never reaches the turn's result text (claude-code-session.ts
-    // keeps it out of fullText), and a `replayed` delta is JSONL history being
-    // re-read — neither belongs in the phone's live bubble for THIS turn.
-    if (d.parentToolUseId || d.replayed) return
-    emitSse(conversationId, 'text-delta', { delta: d.delta })
-  }, { global: true, interest: [EventNames.SESSION_TEXT_DELTA] })
+    if (turnSettled) return
+    // Own lane only, and never a `replayed` event (JSONL history being re-read,
+    // not this turn happening). Identical gate for all four event kinds.
+    if (laneSessionId === null || d.sessionId !== laneSessionId || d.replayed) return
+    // `parentToolUseId` = a SUBAGENT's nested activity. Dropped for every kind,
+    // for the same reason the text path drops it: this channel drives ONE activity
+    // line for the main turn, and a subagent's tools would overwrite "Task —
+    // investigate the crash" with whatever the delegate happens to be reading —
+    // hiding the one fact the human needs (the main agent is inside a delegation).
+    // The subagent's own transcript is its own surface. Note thinking deltas never
+    // carry the field at all (stream_event lines have no parent_tool_use_id), so
+    // that kind is unaffected by this rule today.
+    if (d.parentToolUseId) return
+    switch (event.name) {
+      case EventNames.SESSION_TEXT_DELTA: {
+        if (!d.delta) return
+        // Subagent text never reaches the turn's result text
+        // (claude-code-session.ts keeps it out of fullText) — see the gate above.
+        emitSse(conversationId, 'text-delta', { delta: d.delta })
+        return
+      }
+      case EventNames.SESSION_THINKING_DELTA: {
+        if (!d.delta) return
+        thinkingBuf += d.delta
+        if (!thinkingTimer) {
+          thinkingTimer = setTimeout(flushThinking, THINKING_FLUSH_MS)
+          thinkingTimer.unref?.()
+        }
+        return
+      }
+      case EventNames.SESSION_TOOL_USE: {
+        if (!d.toolName) return
+        // A tool starting ENDS the reasoning burst it followed: flush first so the
+        // frames stay in causal order on a channel the client reads as a sequence.
+        flushThinking()
+        const detail = toolDetail(d.toolName, d.input as Record<string, unknown> | undefined)
+        if (d.toolUseId) relayedToolUseIds.add(d.toolUseId)
+        emitSse(conversationId, 'tool', {
+          name: d.toolName,
+          ...(d.toolUseId ? { toolUseId: d.toolUseId } : {}),
+          ...(detail ? { detail } : {}),
+        })
+        return
+      }
+      case EventNames.SESSION_TOOL_RESULT: {
+        if (!d.toolUseId) return
+        // Only an id this turn announced (see relayedToolUseIds). `delete` rather
+        // than `has`: it also makes a repeated result frame a no-op, and keeps the
+        // set from outliving the tools it describes.
+        if (!relayedToolUseIds.delete(d.toolUseId)) return
+        // toolUseId ONLY. The result text is already on the wire twice (the
+        // session stream, and `resultPreview` on the row GET /messages serves) and
+        // it is unbounded — this frame exists to clear the activity line, not to
+        // ship output down a channel with a 512-event replay ring.
+        emitSse(conversationId, 'tool-result', { toolUseId: d.toolUseId })
+        return
+      }
+      default:
+        return
+    }
+  }, {
+    global: true,
+    interest: [
+      EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_THINKING_DELTA,
+      EventNames.SESSION_TOOL_USE, EventNames.SESSION_TOOL_RESULT,
+    ],
+  })
 
   try {
     const { sessionId, resultText } = await runLaneTurn(agentId, conversationId, message, {
       source: 'api-v1',
       onSessionId: (sid) => { laneSessionId = sid },
     })
+
+    // The turn is over: hand the client the reasoning tail BEFORE any terminal
+    // frame, then stop relaying (see `turnSettled`).
+    flushThinking()
+    turnSettled = true
 
     if (resultText === null) {
       // runLaneTurn degrades instead of rejecting: null is a timeout, a
@@ -1543,10 +1684,17 @@ async function runApiV1LaneTurn(
   } catch (err) {
     // getOrCreateLaneSession can still throw (no config, record write failure) —
     // without this the client would only learn of it from its own watchdog.
+    flushThinking()
+    turnSettled = true
     const errMsg = err instanceof Error ? err.message : String(err)
     log.web.error('api-v1 lane turn error', { conversationId, turnId, agentId, error: errMsg })
     await persistAndEmitTurnError(agentId, conversationId, errMsg)
   } finally {
+    // Discard, never emit: by here the terminal frame is already out (see
+    // `turnSettled`). Clearing the timer matters on its own — a pending one would
+    // otherwise keep a reference to this closure past the turn.
+    if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null }
+    thinkingBuf = ''
     bus.unsubscribe(subName)
   }
 }
@@ -1734,13 +1882,33 @@ async function runApiV1Turn(
           broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta, agentId, conversationId })
         },
         onThinking: (thinkingText) => {
-          emitSse(conversationId, 'thinking', {})
+          // `delta` is additive and OPTIONAL — an old client that only looked at
+          // the event name keeps working. Unlike the lane path this callback is not
+          // a token stream: the loop hands over one WHOLE thinking block after the
+          // response, so it is clipped to the same ≤2000 the row's `thinkingText`
+          // uses rather than putting a 30KB block in a single frame that also rides
+          // the bridge mirror and the 512-event replay ring.
+          const delta = thinkingExcerpt(thinkingText)
+          emitSse(conversationId, 'thinking', { ...(delta ? { delta } : {}) })
           broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingText, agentId, conversationId })
         },
         onToolCall: (toolName, input, toolUseId) => {
           const detail = toolDetail(toolName, input as Record<string, unknown> | undefined)
-          emitSse(conversationId, 'tool', { name: toolName, ...(detail ? { detail } : {}) })
+          // toolUseId is additive here too, so both branches emit the same shape;
+          // the client pairs `tool` with `tool-result` on it.
+          emitSse(conversationId, 'tool', {
+            name: toolName,
+            ...(toolUseId ? { toolUseId } : {}),
+            ...(detail ? { detail } : {}),
+          })
           broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId, conversationId })
+        },
+        onToolResult: (_toolName, _result, toolUseId) => {
+          // toolUseId only — same reasoning as the lane path: this frame clears the
+          // activity line, and the output already reaches the phone as the row's
+          // `resultPreview`. Without it the in-process branch would leave the
+          // client naming a tool that finished minutes ago.
+          if (toolUseId) emitSse(conversationId, 'tool-result', { toolUseId })
         },
         onUsage: (usage) => {
           bus.emit('agent:usage', { usage }, ['web-ui'], { source: 'agent' })

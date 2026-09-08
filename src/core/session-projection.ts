@@ -355,6 +355,14 @@ export interface ProjectedTranscriptMessage {
   detail?: string
   /** kind:'tool' only (additive) — clipped tool output for the expanded card. */
   resultPreview?: string
+  /** kind:'tool' only (additive, `full` reads only) — the tool INPUT rendered
+   *  for the expanded card's Input section (`key: value` lines, ≤2000 chars,
+   *  secrets masked). `detail` stays the collapsed ≤160 one-liner. */
+  inputPreview?: string
+  /** kind:'thinking' only (additive, `full` reads only) — fuller reasoning
+   *  excerpt (≤2000 chars) for the expanded card; `text` stays the collapsed
+   *  ≤160 line. */
+  thinkingText?: string
   /** Task/Agent tool rows only (additive) — the subagent's name/label
    *  (team agent name, `name` input, or `subagent_type`), so mobile can show
    *  which agent a delegated run belongs to. The subagent's own transcript
@@ -394,6 +402,10 @@ export interface BuildTranscriptOptions {
    * sweep ships. The reader's own 4 MB byte ceiling still applies (a whale JSONL
    * degrades to a bounded sliding window), so `full` removes the ROW cap, not
    * every bound.
+   *
+   * Also gates the expanded-card fields (`inputPreview`, `thinkingText`): they
+   * are bytes the bridge-pushed slim tail cannot afford. Reasoning at the tool
+   * row in buildSessionTranscript.
    */
   full?: boolean
 }
@@ -410,7 +422,8 @@ export async function buildSessionTranscript(
 ): Promise<SessionTranscript> {
   const { readSessionHistoryTail } = await import('./session-history.js')
   const { getSessionByClaudeId } = await import('./session-tracker.js')
-  const { toolDetail, toolResultPreview } = await import('./tool-summary.js')
+  const { toolDetail, toolResultPreview, toolInputPreview, thinkingLine, thinkingExcerpt }
+    = await import('./tool-summary.js')
   const record = await getSessionByClaudeId(sessionId)
   // ACP/codex sessions have no claude JSONL — their history lives in the ACP
   // journal (acpJournalPath / <runtimeId>.acp.jsonl). The claude-only read
@@ -436,6 +449,25 @@ export async function buildSessionTranscript(
     // not something the human typed — Claude Code hides them entirely; the
     // slim phone tail drops them too (a 4K skill dump would eat the preview).
     if (m.role === 'user' && m.injected) continue
+    // Thinking FIRST, then tools, then text: `kind?: 'thinking'` has been part of
+    // this shape (and of the api-v1 doc) all along with nobody producing it, so
+    // the phone had no reasoning to show at all and rendered a bare blinking
+    // "Thinking…". The order matches the other producer of these rows
+    // (api-v1 normalizeEntries: thinking → tool → text) and the real sequence —
+    // the model reasons, then acts. It cannot be taken from the block order
+    // itself: SessionHistoryMessage collapses one message's thinking blocks into
+    // a single joined string.
+    if (m.thinking) {
+      const line = thinkingLine(m.thinking)
+      // `full` only — see the tool row below for why the fat fields are gated.
+      const excerpt = opts?.full ? thinkingExcerpt(m.thinking) : undefined
+      if (line) {
+        messages.push({
+          role: 'assistant', text: line, timestamp: m.timestamp, kind: 'thinking',
+          ...(excerpt ? { thinkingText: excerpt } : {}),
+        })
+      }
+    }
     for (const t of m.tools ?? []) {
       const detail = toolDetail(t.name, t.input)
       const resultPreview = toolResultPreview(t.result)
@@ -451,9 +483,32 @@ export async function buildSessionTranscript(
           ?? (typeof input.name === 'string' && input.name ? input.name : undefined)
           ?? (typeof input.subagent_type === 'string' && input.subagent_type ? input.subagent_type : undefined)
       }
+      // `inputPreview` and `thinkingText` ride the `full` read ONLY.
+      //
+      // Not because of the row budget: TRANSCRIPT_TAIL slices `history`, i.e.
+      // source MESSAGES, before this loop expands each one into rows — a message
+      // with five tool calls is already six rows — so extra kind rows cannot
+      // crowd a real message out of anyone's tail. What binds is BYTES on the
+      // slim path, and that path has the one failure mode worth engineering
+      // around: the sweep's tail is pushed over the bridge under a 1MB cap, and
+      // an oversized payload is SKIPPED (projection-cache.ts), which freezes the
+      // cloud replica's copy of that session forever. Worst case these two fields
+      // add ~2KB per row to a 100-message tail that already carries 4-12KB text
+      // rows; "it probably still fits" is not a bet worth taking against a
+      // silent-freeze failure. The slim path is also polled every few seconds by
+      // the live session view over cellular, and the cloud's own slim builder
+      // (session-stream-v1 buildTranscriptViaBridge) is a separate implementation
+      // that would then disagree with this one.
+      //
+      // `full` has neither problem: no bridge push, no polling, one HTTP response
+      // to one client, and it is the read the mobile CHAT uses — the surface whose
+      // expanded card is what all of this exists for. A slim consumer that wants
+      // the fat fields should get its own option, with its own byte budget.
+      const inputPreview = opts?.full ? toolInputPreview(t.input) : undefined
       messages.push({
         role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool',
         ...(detail ? { detail } : {}),
+        ...(inputPreview ? { inputPreview } : {}),
         ...(resultPreview ? { resultPreview } : {}),
         ...(agent ? { agent } : {}),
       })

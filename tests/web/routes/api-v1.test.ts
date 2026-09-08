@@ -967,6 +967,50 @@ describe('message normalization: tool detail + result preview (additive)', () =>
     expect(tools[2].detail).toBeUndefined()
     expect(tools[2].resultPreview).toBeUndefined()
   })
+
+  it('adds inputPreview and thinkingText without touching detail', async () => {
+    const { normalizeEntries } = await import('../../../src/web/routes/api-v1.js')
+    const reasoning = 'First, check the lockfile.\nThen rebuild.\n' + 'more reasoning. '.repeat(300)
+    const entries = [
+      {
+        tag: 'ai', role: 'assistant', timestamp: '2026-07-10T00:00:01Z',
+        content: [
+          { type: 'thinking', thinking: reasoning },
+          // The pinned Bash case: `detail` MUST stay the description (web depends
+          // on that ≤160 line), and the command must be reachable in inputPreview.
+          { type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'ls docs/', description: 'List docs' } },
+          // One fat value cannot hide the key next to it (per-value clip).
+          { type: 'tool_use', id: 'tu-2', name: 'Write', input: { file_path: '/tmp/demo/big.ts', content: 'y'.repeat(50_000) } },
+          // A secret in a command line is masked before it leaves the box.
+          { type: 'tool_use', id: 'tu-3', name: 'Bash', input: { command: 'deploy --token=hunter2secretvalue' } },
+          // Nothing renderable → neither field appears.
+          { type: 'tool_use', id: 'tu-4', name: 'Mystery', input: {} },
+          { type: 'text', text: 'done' },
+        ],
+      },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = normalizeEntries(entries as any)
+
+    const think = out.find((m) => m.kind === 'thinking')!
+    expect(think.text.length).toBeLessThanOrEqual(161) // documented collapsed cap
+    expect(think.text).not.toContain('\n')
+    expect(think.thinkingText!.length).toBeLessThanOrEqual(2001)
+    expect(think.thinkingText).toContain('\n') // paragraphs kept in the excerpt
+
+    const tools = out.filter((m) => m.kind === 'tool')
+    expect(tools[0].detail).toBe('List docs') // byte-identical to before
+    expect(tools[0].inputPreview).toBe('command: ls docs/\ndescription: List docs')
+
+    expect(tools[1].inputPreview!.length).toBeLessThanOrEqual(2001)
+    expect(tools[1].inputPreview).toContain('file_path: /tmp/demo/big.ts')
+
+    expect(tools[2].inputPreview).toContain('[REDACTED]')
+    expect(tools[2].inputPreview).not.toContain('hunter2secretvalue')
+
+    expect(tools[3].inputPreview).toBeUndefined()
+    expect(tools[3].detail).toBeUndefined()
+  })
 })
 
 describe('GET /api/v1/media (additive)', () => {
