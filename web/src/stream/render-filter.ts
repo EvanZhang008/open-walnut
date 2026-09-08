@@ -27,6 +27,7 @@
 
 import type { StreamingBlock } from '@/stream/stream-reducer';
 import { lastMainLaneIndex } from '@/stream/stream-reducer';
+import { GROUPABLE_STREAM_TOOLS } from '@/stream/group-blocks';
 import type { SessionHistoryMessage } from '@/types/session';
 import { computeAbsorbedIndices, buildIdOnlyEvidence, type DeltaEvidence } from '@/cache/promote-blocks';
 
@@ -80,11 +81,12 @@ export interface RenderFilterResult {
 /**
  * Which blocks has history absorbed?
  *
- * Live-tail guard: while streaming, the LAST main-lane block is the one still
- * accumulating — its partial content could transiently equal an already-
- * persisted message (and with partial-message streaming its msgId is known
- * before the content finishes). Matching never reaches it; it becomes eligible
- * the moment the turn ends or a newer main-lane block lands. Trailing
+ * Live-tail guard: while streaming, the LAST main-lane text/thinking block is
+ * the one still accumulating — its partial content could transiently equal an
+ * already-persisted message (and with partial-message streaming its msgId is
+ * known before the content finishes). Matching never reaches it; it becomes
+ * eligible the moment the turn ends or a newer main-lane block lands. An
+ * Agent/Task tail is not guarded (exact-id twin, see below). Trailing
  * subagent-lane blocks after it belong to live background agents — their lane
  * rule (running parent → keep) makes exclusion harmless.
  *
@@ -104,7 +106,17 @@ export function computeRenderFilter(input: RenderFilterInput): RenderFilterResul
   const contentDelta = messages.slice(Math.min(Math.max(watermark, 0), messages.length));
   const fullEv = input.historyEvidence ?? buildHistoryEvidence(messages);
   const tailIdx = isStreaming ? lastMainLaneIndex(blocks) : -1;
-  const liveTail = tailIdx >= (input.completedLen ?? 0) ? tailIdx : -1;
+  // An Agent/Task tail is never protected: its only match key is the exact
+  // toolUseId, and its persisted row is the anchor we WANT on screen (it
+  // lazy-loads the transcript and mirrors the ledger's live status). Protecting
+  // it kept a streamed Agent card visible for a whole sync subagent run next
+  // to the persisted card of the same call (the turn-start refetch lands the
+  // row while the Agent is still 'calling' and last in the main lane). Other
+  // tool_calls keep the guard: their persisted twin is result-less until the
+  // tool returns and would render as finished-with-empty-output.
+  const tail = tailIdx >= 0 ? blocks[tailIdx] : undefined;
+  const tailIsAgentCall = tail?.type === 'tool_call' && GROUPABLE_STREAM_TOOLS.has(tail.name);
+  const liveTail = tailIdx >= (input.completedLen ?? 0) && !tailIsAgentCall ? tailIdx : -1;
   const boundary = liveTail >= 0 ? liveTail : blocks.length;
   const { absorbed, unmatched } = computeAbsorbedIndices(
     blocks, contentDelta as SessionHistoryMessage[], boundary, fullEv, input.finishedAgentIds,

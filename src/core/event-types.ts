@@ -468,6 +468,22 @@ export interface BackgroundTaskInfo {
   lastTool?: string;
   summary?: string;
   workflowName?: string;
+  /** The Agent tool call that spawned this task (task_started/progress/notification
+   *  `tool_use_id`) — lets the UI tie a ledger row to the chat's tool block. */
+  toolUseId?: string;
+  /** Tool calls this task has made (task_progress.usage.tool_uses). */
+  toolUses?: number;
+  /** CLI-reported wall time (task_progress.usage.duration_ms) — authoritative for a
+   *  finished task; the UI ticks from startedAt while it runs. */
+  durationMs?: number;
+  /** Walnut's clock at the FIRST task_started for this id (a replay must not reset it). */
+  startedAt?: number;
+  /** Walnut's clock at the first terminal status. Never overwritten. */
+  endedAt?: number;
+  /** CLI detached this task from the turn (task_updated patch `is_backgrounded`). */
+  isBackgrounded?: boolean;
+  /** Nesting level from task_started.spawn_depth (1 = spawned by the main agent). */
+  spawnDepth?: number;
 }
 
 /** A phase in a dynamic workflow (from task_progress.workflow_progress[] entries of

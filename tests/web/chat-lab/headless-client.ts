@@ -50,7 +50,7 @@ interface OptimisticBubble {
 
 /** One visible item in the projected timeline — what the user would see. */
 export interface VisibleItem {
-  kind: 'history' | 'bubble' | 'block' | 'task-group' | 'orphan-group';
+  kind: 'history' | 'bubble' | 'block' | 'task-group';
   label: string;
 }
 
@@ -289,10 +289,7 @@ export class HeadlessChatClient {
         : 'permission';
       return [{ kind: 'block', label }];
     }
-    if (g.kind === 'task-group') {
-      return [{ kind: 'task-group', label: `agent:${g.taskBlock.toolUseId}:children=${g.childBlocks.length}` }];
-    }
-    return [{ kind: 'orphan-group', label: `orphan:${g.parentToolUseId}:children=${g.childBlocks.length}` }];
+    return [{ kind: 'task-group', label: `agent:${g.taskBlock.toolUseId}:children=${g.childBlocks.length}` }];
   }
 
   /** The live region only — streaming items rendered BELOW the last history

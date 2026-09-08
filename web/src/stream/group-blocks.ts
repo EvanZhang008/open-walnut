@@ -3,20 +3,29 @@
  * to the grouped items the timeline renders.
  *
  * Extracted from SessionChatHistory.tsx so the grouping semantics (task
- * groups, ORPHAN subagent lanes, hidden-parent asymmetry) are testable
- * headlessly — the chat lab replays production event traces through the real
- * reducer + render-filter + THIS projection and asserts on the result without
- * a browser. Same pattern as stream-reducer.ts / render-filter.ts.
+ * groups, subagent lanes, hidden-parent asymmetry) are testable headlessly —
+ * the chat lab replays production event traces through the real reducer +
+ * render-filter + THIS projection and asserts on the result without a browser.
+ * Same pattern as stream-reducer.ts / render-filter.ts.
  *
- * Grouping rules (the exact semantics that survived the incident chain):
+ * Grouping rules — the Claude Code model: a subagent's transcript never
+ * renders in the MAIN conversation. The chat shows one compact Agent row at the
+ * position the agent was spawned; the live run is the Background ledger's job
+ * (WorkflowProgress, fed by session:background-tasks), and the full transcript
+ * is one click away on either surface.
  *  · A visible Task/Agent tool_call anchors a 'task-group' holding its lane
- *    children (parentToolUseId match).
- *  · A HIDDEN parent (absorbed by history — its twin renders in the persisted
- *    timeline) is treated as ABSENT: its still-visible late children must form
- *    an ORPHAN group instead of anchoring to a block that no longer renders.
- *  · Orphan children must NEVER render flat in the main conversation; they get
- *    a synthesized box at the first VISIBLE child's position (a hidden anchor
- *    index emits no timeline item, so the box would never render).
+ *    children (parentToolUseId match). The box renders collapsed; its children
+ *    are available on demand, never by default.
+ *  · Every lane child (a block carrying parentToolUseId) is CONSUMED — it never
+ *    renders flat in the main conversation, whether or not its anchor is
+ *    around. Children whose anchor is HIDDEN (absorbed by history — the
+ *    persisted Agent row renders at the spawn position) or ABSENT (the anchor
+ *    streamed before page load / was reset) are simply not rendered: their
+ *    content lives in the subagent transcript, and their liveness in the
+ *    ledger. The old design boxed them as an anonymous "orphan group" at the
+ *    bottom of the chat — the user then saw the SAME agent twice (a ✓ history
+ *    card at the spawn position and a live box at the tail) and could not tell
+ *    which was current (2026-09-08 report, the pic-1 duplicate).
  *  · HIDDEN children are absorbed (their twin renders via the persisted
  *    message's group) — excluded so groups don't double-render content.
  */
@@ -25,11 +34,15 @@ import type { StreamingBlock } from './stream-reducer';
 
 export type GroupedStreamItem =
   | { kind: 'block'; block: StreamingBlock; index: number }
-  | { kind: 'task-group'; taskBlock: StreamingBlock & { type: 'tool_call' }; childBlocks: StreamingBlock[]; index: number }
-  | { kind: 'orphan-group'; parentToolUseId: string; childBlocks: StreamingBlock[]; subagentType?: string; taskDescription?: string; index: number };
+  | { kind: 'task-group'; taskBlock: StreamingBlock & { type: 'tool_call' }; childBlocks: StreamingBlock[]; index: number };
 
 /** Tool names whose streaming child blocks should be grouped under them. */
 export const GROUPABLE_STREAM_TOOLS = new Set(['Task', 'Agent']);
+
+/** True for a block that belongs to a subagent lane (any depth). */
+export function isLaneChild(b: StreamingBlock): boolean {
+  return (b.type === 'tool_call' || b.type === 'text' || b.type === 'thinking') && !!b.parentToolUseId;
+}
 
 export function groupStreamingBlocks(blocks: StreamingBlock[], hidden?: Set<number>): GroupedStreamItem[] {
   // Find groupable tool_call blocks (Task, Agent). Only MAIN-LANE ones are
@@ -50,9 +63,7 @@ export function groupStreamingBlocks(blocks: StreamingBlock[], hidden?: Set<numb
       if (b.parentToolUseId) laneParentOf.set(b.toolUseId, b.parentToolUseId);
       else if (!hidden?.has(i)) parentToolUseIds.add(b.toolUseId);
     }
-    if ((b.type === 'tool_call' || b.type === 'text' || b.type === 'thinking') && b.parentToolUseId) {
-      hasLaneChildren = true;
-    }
+    if (isLaneChild(b)) hasLaneChildren = true;
   }
 
   if (parentToolUseIds.size === 0 && !hasLaneChildren) {
@@ -75,61 +86,30 @@ export function groupStreamingBlocks(blocks: StreamingBlock[], hidden?: Set<numb
   // Group child blocks under their ROOT parent. Children are tool_calls AND
   // text/thinking — the CLI inlines the subagent's whole conversation
   // (assistant text included) with parent_tool_use_id set; nested agents'
-  // descendants resolve to the top-level Agent's box. Children whose root
-  // tool_call is NOT in blocks form an orphan lane. HIDDEN children are
-  // absorbed — exclude them so groups don't double-render content.
+  // descendants resolve to the top-level Agent's box. HIDDEN children are
+  // absorbed — exclude them so groups don't double-render content. Children
+  // whose root anchor is not a visible block are consumed and dropped.
   const childBlocksByParent = new Map<string, StreamingBlock[]>();
   const consumedIndices = new Set<number>();
-  const rootOfIndex = new Map<number, string>();
 
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    const childParent = (b.type === 'tool_call' || b.type === 'text' || b.type === 'thinking')
-      ? b.parentToolUseId : undefined;
-    if (childParent) {
-      consumedIndices.add(i);
-      const root = resolveRoot(childParent);
-      rootOfIndex.set(i, root);
-      if (hidden?.has(i)) continue;
-      const arr = childBlocksByParent.get(root);
-      if (arr) arr.push(b);
-      else childBlocksByParent.set(root, [b]);
-    }
+    if (!isLaneChild(b)) continue;
+    consumedIndices.add(i);
+    if (hidden?.has(i)) continue;
+    const root = resolveRoot((b as StreamingBlock & { parentToolUseId: string }).parentToolUseId);
+    if (!parentToolUseIds.has(root)) continue;
+    const arr = childBlocksByParent.get(root);
+    if (arr) arr.push(b);
+    else childBlocksByParent.set(root, [b]);
   }
 
-  // Build grouped result. Orphan lanes surface at their FIRST child's position.
-  const emittedOrphans = new Set<string>();
   const result: GroupedStreamItem[] = [];
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    if (consumedIndices.has(i)) {
-      // Root (not the raw parentToolUseId): nested agents' children must orphan
-      // under the TOP-LEVEL agent when its tool_call left the buffer, forming
-      // one box rather than one per nesting level.
-      const pid = rootOfIndex.get(i);
-      // Anchor an orphan group at its first VISIBLE child — a hidden anchor
-      // index emits no timeline item, so the box would never render.
-      if (pid && !parentToolUseIds.has(pid) && !emittedOrphans.has(pid) && !hidden?.has(i)) {
-        emittedOrphans.add(pid);
-        const children = childBlocksByParent.get(pid) ?? [];
-        if (children.length === 0) continue; // all children absorbed — nothing to box
-        // Label from whichever child carries the subagent identity
-        let subagentType: string | undefined;
-        let taskDescription: string | undefined;
-        for (const c of children) {
-          if ((c.type === 'text' || c.type === 'tool_call') && (c.subagentType || c.taskDescription)) {
-            subagentType = c.subagentType;
-            taskDescription = c.taskDescription;
-            break;
-          }
-        }
-        result.push({ kind: 'orphan-group', parentToolUseId: pid, childBlocks: children, subagentType, taskDescription, index: i });
-      }
-      continue;
-    }
+    if (consumedIndices.has(i)) continue;
     // parentToolUseIds membership already excludes HIDDEN parents — a hidden
-    // parent falls through to a plain 'block' (skipped at render), and its
-    // visible children boxed via the orphan path above.
+    // parent falls through to a plain 'block' (skipped at render).
     if (b.type === 'tool_call' && parentToolUseIds.has(b.toolUseId)) {
       result.push({
         kind: 'task-group',
@@ -146,9 +126,9 @@ export function groupStreamingBlocks(blocks: StreamingBlock[], hidden?: Set<numb
 
 /**
  * Project a box's childBlocks (ALL descendants, root-flattened — what
- * groupStreamingBlocks puts in task-group/orphan-group.childBlocks) into the
- * box's OWN nested view: direct children render flat, a nested Agent/Task
- * tool_call becomes an inner task-group holding ITS descendants, recursively.
+ * groupStreamingBlocks puts in task-group.childBlocks) into the box's OWN
+ * nested view: direct children render flat, a nested Agent/Task tool_call
+ * becomes an inner task-group holding ITS descendants, recursively.
  *
  * Mechanism: within this box, "main lane" = blocks whose parentToolUseId is
  * the box itself — strip that marker and reuse groupStreamingBlocks, which

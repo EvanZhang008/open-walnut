@@ -551,9 +551,11 @@ describe('promoteCompletedBlocks — background-subagent lane', () => {
       expect(r.unmatched).toHaveLength(0);
     });
 
-    it('a live grandchild keeps the top-level parent anchor alive (deferred-parent pass)', () => {
-      // Top-level Agent has a twin AND children, but a grandchild is still live —
-      // absorbing the anchor would orphan it into an anonymous box.
+    it('the top-level parent absorbs on its twin even while a grandchild is live (children kept, silently)', () => {
+      // The persisted Agent row is the anchor from here on: the streamed
+      // tool_call is a duplicate of it. Lane children of a hidden anchor are
+      // consumed by the grouping layer (never re-boxed), so absorbing the
+      // parent early costs nothing on screen and removes the live twin card.
       const blocks: StreamingBlock[] = [
         { type: 'tool_call', toolUseId: 'toolu_top', name: 'Agent', status: 'calling' },
         nestedAgent('toolu_mid', 'toolu_top'),
@@ -561,7 +563,9 @@ describe('promoteCompletedBlocks — background-subagent lane', () => {
       ];
       const delta = [agentToolMsg('toolu_top', false)];
       const r = promoteCompletedBlocks(blocks, delta, blocks.length);
-      expect(r.kept).toEqual(blocks); // anchor + children all kept
+      expect(r.removed).toBe(1);
+      expect(r.kept).toEqual(blocks.slice(1)); // children kept until the run is proven over
+      expect(r.unmatched).toHaveLength(0);
     });
 
     it('cyclic parent chain terminates and keeps blocks (degraded, never hangs)', () => {
@@ -626,10 +630,11 @@ describe('promoteCompletedBlocks — background-subagent lane', () => {
         expect(r.unmatched).toHaveLength(0);
       });
 
-      it('transported id counts as the completion proof for a deferred top-level parent', () => {
+      it('transported id is the completion proof for the LANE; the parent absorbs on its twin regardless', () => {
         // Top-level Agent has its toolUseId twin in history but bgTaskFinished
         // never landed (notification consumed as an enqueue only). The
-        // transported id supplies the missing "run is over" proof.
+        // transported id supplies the missing "run is over" proof for the
+        // children; the parent itself is a plain twin match either way.
         const blocks: StreamingBlock[] = [
           { type: 'tool_call', toolUseId: 'toolu_top', name: 'Agent', status: 'done' },
           laneText('child output', 'toolu_top'),
@@ -638,7 +643,8 @@ describe('promoteCompletedBlocks — background-subagent lane', () => {
         const withIds = promoteCompletedBlocks(blocks, delta, blocks.length, undefined, new Set(['toolu_top']));
         expect(withIds.removed).toBe(2);
         const withoutIds = promoteCompletedBlocks(blocks, delta, blocks.length);
-        expect(withoutIds.kept).toEqual(blocks);
+        expect(withoutIds.removed).toBe(1);
+        expect(withoutIds.kept).toEqual(blocks.slice(1));
       });
 
       it('does not absorb an UNRELATED lane (id must be on the chain)', () => {

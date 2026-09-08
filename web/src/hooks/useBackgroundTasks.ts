@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useEvent } from './useWebSocket';
-import { fetchWorkflowProgress } from '@/api/sessions';
+import { fetchWorkflowProgress, type WorkflowProgressSnapshot } from '@/api/sessions';
 import { log } from '@/utils/log';
 import { runWhenVisible } from '@/utils/page-visibility';
 
@@ -20,6 +20,20 @@ export interface BackgroundTask {
   lastTool?: string;
   summary?: string;
   workflowName?: string;
+  /** The Agent tool call that spawned this task — ties a ledger row to a chat tool block. */
+  toolUseId?: string;
+  /** Tool calls made so far (task_progress.usage.tool_uses). */
+  toolUses?: number;
+  /** CLI-reported wall time (task_progress.usage.duration_ms). */
+  durationMs?: number;
+  /** Server clock at the first task_started — the row ticks its elapsed off this. */
+  startedAt?: number;
+  /** Server clock at the first terminal status. */
+  endedAt?: number;
+  /** CLI detached this task from the turn (is_backgrounded). */
+  isBackgrounded?: boolean;
+  /** Nesting level (1 = spawned by the main agent). */
+  spawnDepth?: number;
 }
 
 /** A phase in a dynamic workflow (mirrors backend WorkflowPhaseInfo). */
@@ -86,6 +100,21 @@ const EMPTY: BackgroundTasksState = { inFlight: 0, tasks: [], phases: [], agents
  * but a live event ALWAYS wins over the persisted snapshot (it's fresher), so
  * once any live snapshot arrives the fetch result is ignored.
  */
+/** The fetched snapshot is either the live process's ledger (tasks populated,
+ *  same rows the event stream carries) or the on-disk workflow manifest (tasks
+ *  empty by construction — only workflow agents are persisted). */
+function snapshotToState(snap: WorkflowProgressSnapshot): BackgroundTasksState {
+  return {
+    workflowName: snap.workflowName,
+    workflowDescription: snap.workflowDescription,
+    scriptSource: snap.scriptSource,
+    inFlight: snap.inFlight ?? 0,
+    tasks: Array.isArray(snap.tasks) ? (snap.tasks as BackgroundTask[]) : [],
+    phases: Array.isArray(snap.phases) ? snap.phases : [],
+    agents: Array.isArray(snap.agents) ? (snap.agents as WorkflowAgent[]) : [],
+  };
+}
+
 export function useBackgroundTasks(sessionId: string | undefined): BackgroundTasksState {
   const [state, setState] = useState<BackgroundTasksState>(EMPTY);
   // True once a live event has set state — gates the persisted-manifest fallback
@@ -102,16 +131,8 @@ export function useBackgroundTasks(sessionId: string | undefined): BackgroundTas
     let cancelled = false;
     fetchWorkflowProgress(sessionId).then((snap) => {
       if (cancelled || !snap || sawLiveRef.current) return;
-      log.info('workflow', `restored persisted workflow: agents=${snap.agents?.length ?? 0} phases=${snap.phases?.length ?? 0}`, { sessionId });
-      setState({
-        workflowName: snap.workflowName,
-        workflowDescription: snap.workflowDescription,
-        scriptSource: snap.scriptSource,
-        inFlight: snap.inFlight ?? 0,
-        tasks: [],
-        phases: Array.isArray(snap.phases) ? snap.phases : [],
-        agents: Array.isArray(snap.agents) ? (snap.agents as WorkflowAgent[]) : [],
-      });
+      log.info('workflow', `restored workflow snapshot: tasks=${snap.tasks?.length ?? 0} agents=${snap.agents?.length ?? 0} phases=${snap.phases?.length ?? 0}`, { sessionId });
+      setState(snapshotToState(snap));
     });
     return () => { cancelled = true; };
   }, [sessionId]);
@@ -132,16 +153,8 @@ export function useBackgroundTasks(sessionId: string | undefined): BackgroundTas
     // Hidden tabs defer the manifest fetch until shown (reconnect hits every tab).
     runWhenVisible(`bg-tasks:reconnect:${sessionId}`, () => fetchWorkflowProgress(sessionId).then((snap) => {
       if (!snap || sawLiveRef.current) return;
-      log.info('workflow', `reconnect: restored persisted workflow: agents=${snap.agents?.length ?? 0} phases=${snap.phases?.length ?? 0}`, { sessionId });
-      setState({
-        workflowName: snap.workflowName,
-        workflowDescription: snap.workflowDescription,
-        scriptSource: snap.scriptSource,
-        inFlight: snap.inFlight ?? 0,
-        tasks: [],
-        phases: Array.isArray(snap.phases) ? snap.phases : [],
-        agents: Array.isArray(snap.agents) ? (snap.agents as WorkflowAgent[]) : [],
-      });
+      log.info('workflow', `reconnect: restored workflow snapshot: tasks=${snap.tasks?.length ?? 0} agents=${snap.agents?.length ?? 0}`, { sessionId });
+      setState(snapshotToState(snap));
     }).catch(() => {}));
   });
 

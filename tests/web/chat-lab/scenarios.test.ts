@@ -78,16 +78,22 @@ describe('chat-lab: incident d9df1a86 / inc-1786072428043 — subagent finishes 
     c.result();
   }
 
-  it('REPRODUCES the phantom subagent box under the pre-fix contract (no unsettled loop)', () => {
+  it('under the pre-fix stamp contract the lane blocks stay HELD, but the grouping layer keeps them off screen', () => {
     server.faults.noUnsettledStamp = true; // pre-fix: rows served without the flag
+
     playIncident(client, server);
 
-    // The bug: the client's copy of the Agent row never gains bgTaskFinished,
-    // so the lane blocks have no absorption proof and a subagent box sits in
-    // the live region — exactly the screenshot. A refresh clears it.
-    const residuals = refreshResiduals(client, server);
-    expect(residuals.length, 'pre-fix contract must reproduce the pinned subagent box').toBeGreaterThan(0);
-    expect(residuals.some(r => r.kind === 'task-group' || r.kind === 'orphan-group')).toBe(true);
+    // The original bug: the client's copy of the Agent row never gains
+    // bgTaskFinished, so the lane blocks have no absorption proof. They used
+    // to re-box as a subagent card in the live region — exactly the
+    // screenshot. Two layers now stand between that state and the screen: the
+    // unsettled loop (the shipped fix, tested below) eventually absorbs them,
+    // and, independently, a subagent lane is never main-conversation content
+    // (Claude Code model: the ledger + transcript own the run). So the state
+    // residual is still there — and the UI residual is not.
+    expect(client.blocks.some(b => b.type === 'text' && b.parentToolUseId === 'toolu_lab_agent_1'),
+      'pre-fix contract must leave the lane blocks without absorption proof').toBe(true);
+    expect(refreshResiduals(client, server), 'no subagent card may sit in the live region').toEqual([]);
   });
 
   it('PROVES the shipped contract clears it (unsettled stamp + client re-ask)', () => {
@@ -96,7 +102,7 @@ describe('chat-lab: incident d9df1a86 / inc-1786072428043 — subagent finishes 
     expectNothingVanished(client, server);
   });
 
-  it('agent still RUNNING at quiescence keeps its box visible (not a false positive)', () => {
+  it('agent still RUNNING after the turn: ONE card (the history row), nothing live at the tail', () => {
     client.send('please investigate the thing');
     server.append(userRow('please investigate the thing'));
     const agentToolId = 'toolu_lab_agent_2';
@@ -106,12 +112,17 @@ describe('chat-lab: incident d9df1a86 / inc-1786072428043 — subagent finishes 
     client.result();
     client.textDelta('still working', { parentToolUseId: agentToolId, subagentType: 'lab-explorer' });
 
-    // No notification yet — the live agent's box SHOULD render; hiding it would
-    // be the vanish direction. Refresh-equivalence is expected to differ here,
-    // and that difference is the design (the fresh mount lazy-loads the box
-    // from history; the live one shows streamed children).
+    // No notification yet — the agent is live. The 2026-09-08 report: the user
+    // saw the SAME agent twice, a ✓ history card at the spawn position and a
+    // live box at the tail, and could not tell which one was current. The
+    // Claude Code model has one answer: the persisted Agent row is the card;
+    // the live run is the Background ledger's job. The streamed lane block is
+    // still HELD (no absorption proof — it is what the ledger reads), just not
+    // rendered in the conversation.
     const live = client.liveRegion();
-    expect(live.some(i => i.kind === 'task-group' || i.kind === 'orphan-group')).toBe(true);
+    expect(live, 'no live subagent card while the history row already shows the agent').toEqual([]);
+    expect(client.blocks.some(b => b.type === 'text' && b.parentToolUseId === agentToolId)).toBe(true);
+    expectRefreshEquivalent(client, server);
   });
 });
 
@@ -329,14 +340,15 @@ describe('chat-lab: seeded random interleavings (property mode)', () => {
   }
 });
 
-describe('chat-lab: phantom orphan box — hidden parent + visible children (defense in depth)', () => {
+describe('chat-lab: hidden parent + live children — no box of any kind at the tail', () => {
   /** The exact asymmetry from inc-1785965937858's amplifier: history absorbs
    *  the Agent parent tool_call by toolUseId while its lane children have no
-   *  proof yet (agent still running) → the children re-box as an ANONYMOUS
-   *  orphan-group at the bottom. The honest shape is the labeled Agent
-   *  task-group (worst case a brief duplicate of the history card — the safe
-   *  direction); a phantom "Subagent (continued)" box is the incident shape. */
-  it('a RUNNING agent whose parent is in history renders a LABELED task-group, never an orphan box', () => {
+   *  proof yet (agent still running). Two designs were tried and both put a
+   *  second card on screen: an anonymous "Subagent (continued)" orphan box, then
+   *  a labeled live duplicate of the history card (2026-09-08 report). The
+   *  contract now: lane children of a hidden anchor render NOWHERE in the
+   *  conversation; the history row is the one card, the ledger shows the run. */
+  it('a RUNNING agent whose parent is in history leaves the live region empty', () => {
     client.reload();
     client.send('launch the investigator');
     server.append(userRow('launch the investigator'));
@@ -353,8 +365,7 @@ describe('chat-lab: phantom orphan box — hidden parent + visible children (def
     client.textDelta('lane progress line', { parentToolUseId: agentToolId, subagentType: 'lab-explorer' });
 
     const live = client.liveRegion();
-    const orphans = live.filter(i => i.kind === 'orphan-group');
-    expect(orphans, 'hidden parent + visible children must not synthesize a phantom orphan box').toEqual([]);
-    expect(live.some(i => i.kind === 'task-group'), 'the live lane must render under the labeled Agent box').toBe(true);
+    expect(live, 'hidden parent + live children must not put any card in the live region').toEqual([]);
+    expectRefreshEquivalent(client, server);
   });
 });

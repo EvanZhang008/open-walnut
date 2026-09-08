@@ -294,6 +294,15 @@ const WORKFLOW_RECONSTRUCT_TIMEOUT_MS = 5_000;
 
 /** Reconstruct the dynamic-workflow progress panel from the on-disk manifest (null = none). */
 export async function getSessionWorkflowPayload(sessionId: string): Promise<Record<string, unknown> | null> {
+  // A live process is the ledger's owner: plain background agents exist only
+  // in its memory (no manifest is written for them), and a tab that opens after
+  // the last task_progress heartbeat would otherwise show an empty panel while
+  // the tab that watched the run still lists every agent. In-memory lookup only
+  // (no attach-on-demand): a dead process has no ledger, and the manifest below
+  // is the persisted answer for workflow runs.
+  const { sessionRunner } = await import('../../providers/claude-code-session.js');
+  const live = sessionRunner.findByClaudeId(sessionId)?.backgroundTasksSnapshot(sessionId);
+  if (live) return live as unknown as Record<string, unknown>;
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   const { reconstructWorkflowProgress } = await import('../session-history.js');

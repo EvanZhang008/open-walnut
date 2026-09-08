@@ -5,7 +5,8 @@
  * Semantics carried over from the destructive promote-blocks era (its tests
  * pin the matching rules; these pin the FILTER policy on top):
  *  · absorbed = hidden, never deleted — late history means brief double-render
- *  · live tail (last main-lane block while streaming) is never hidden
+ *  · live tail (last main-lane block while streaming) is never hidden — except
+ *    an Agent/Task call, whose exact-id twin is the card we want
  *  · watermark bounds content matching; ids match at any scope
  *  · reset only when EVERYTHING is absorbed and no turn is live
  */
@@ -114,6 +115,29 @@ describe('computeHiddenBlocks — absorption proof', () => {
     const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true });
     expect(hidden.has(0)).toBe(false); // live main tail protected
     expect(hidden.has(1)).toBe(false); // running lane parent → kept silently
+  });
+
+  it('an Agent tool_call at the live tail IS hidden on its id twin (the persisted card is the anchor)', () => {
+    // Sync subagent: the Agent call blocks the turn, so it is the last
+    // main-lane block for the whole run, still 'calling'. The turn-start
+    // refetch lands its persisted row (complete tool_use line) → one card.
+    const agent: StreamingBlock = { type: 'tool_call', toolUseId: 'tu-agent', name: 'Agent', status: 'calling', input: { description: 'dig' } };
+    const blocks = [text('Launching.', 'msg-1'), agent, text('sub line', 'msg-s', 'tu-agent')];
+    const messages = [msg({ text: 'Launching.', msgId: 'msg-1', tools: [{ name: 'Agent', toolUseId: 'tu-agent', input: {} }] } as Partial<SessionHistoryMessage>)];
+    const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true });
+    expect(hidden.has(0)).toBe(true);
+    expect(hidden.has(1)).toBe(true);  // Agent tail absorbed
+    expect(hidden.has(2)).toBe(false); // running lane → kept silently (ledger reads it)
+  });
+
+  it('a plain tool_call at the live tail is still protected (its twin is result-less until it returns)', () => {
+    const bash: StreamingBlock = { type: 'tool_call', toolUseId: 'tu-bash', name: 'Bash', status: 'calling', input: { command: 'sleep 30' } };
+    const blocks = [text('Running it.', 'msg-1'), bash];
+    const messages = [msg({ text: 'Running it.', msgId: 'msg-1', tools: [{ name: 'Bash', toolUseId: 'tu-bash', input: {} }] } as Partial<SessionHistoryMessage>)];
+    const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true });
+    expect(hidden.has(0)).toBe(true);
+    expect(hidden.has(1)).toBe(false); // live Bash card stays until the turn moves on
+    expect(computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: false }).has(1)).toBe(true);
   });
 
   it('hides lane blocks once the parent Agent is bgTaskFinished', () => {

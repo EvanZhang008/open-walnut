@@ -193,31 +193,19 @@ export function computeAbsorbedIndices(
   // pure-UI blocks are only GC'd when their turn's real content fully promoted.
   let allMatchableMatched = true;
   const pureUiIndices: number[] = [];
-  // Groupable Task/Agent parents whose absorption is decided AFTER the main
-  // pass (atomic with their lane children — see the tool_call branch).
-  const deferredParents: number[] = [];
 
   // NESTED lanes (a subagent spawned its own Agent — inc-1786138083302): a
   // grandchild block's parentToolUseId is the nested Agent's tool_use id, but
   // archival proof (bgTaskFinished) only ever lands on the TOP-LEVEL parent —
   // the whole nested run persists into that one subagents/agent-<id>.jsonl.
   // Map each nested groupable tool_call to its own parent so lane checks can
-  // resolve any block's ancestry chain to its top-level root (cycle-guarded).
+  // walk any block's ancestry chain toward its top-level root (cycle-guarded).
   const laneParentOf = new Map<string, string>();
   for (const b of blocks) {
     if (b.type === 'tool_call' && b.parentToolUseId && GROUPABLE_STREAM_PARENTS.has(b.name)) {
       laneParentOf.set(b.toolUseId, b.parentToolUseId);
     }
   }
-  const resolveLaneRoot = (pid: string): string => {
-    let cur = pid;
-    const seen = new Set<string>();
-    while (laneParentOf.has(cur) && !seen.has(cur)) {
-      seen.add(cur);
-      cur = laneParentOf.get(cur)!;
-    }
-    return cur;
-  };
   // Finished-parent proof for a single id: bgTaskFinished on a history row
   // (delta or full scope), or a server-transported orphan finished-agent id
   // (nested agents have NO history row to stamp — see finishedAgentIds).
@@ -257,25 +245,22 @@ export function computeAbsorbedIndices(
     const laneFinished = laneParent != null && laneRootFinished(laneParent);
 
     if (b.type === 'tool_call') {
-      // GROUPABLE PARENT (Task/Agent, main lane): its absorption is decided
-      // ATOMICALLY with its lane children in a post-pass below — absorbing it
-      // on the bare toolUseId twin while children are still live removes the
-      // anchor those children need and the grouping layer synthesizes an
-      // anonymous "Subagent (continued)" orphan box at the bottom
-      // (inc-1785965937858's amplifier, the phantom-box incident shape).
-      if (!laneParent && GROUPABLE_STREAM_PARENTS.has(b.name)) {
-        deferredParents.push(i);
-        continue;
-      }
+      // A GROUPABLE PARENT (Task/Agent, main lane) absorbs on its bare
+      // toolUseId twin like any other tool_call, even while its lane children
+      // are still live: the persisted Agent row IS the anchor from then on
+      // (it renders at the spawn position and lazy-loads the subagent
+      // transcript), and children of a hidden anchor are consumed by the
+      // grouping layer, never re-boxed (stream/group-blocks.ts). The previous
+      // design deferred the parent until its run was proven over so the live
+      // children kept a labeled box — which put the SAME agent on screen
+      // twice for the whole run (✓ history card + live box at the tail).
       if (b.toolUseId && (ev.toolUseIds.has(b.toolUseId) || full?.toolUseIds.has(b.toolUseId))) { absorbed.add(i); continue; }
       if (laneParent) {
         // Chain check starts at laneParent, NOT at this block's own id: a
-        // nested Agent tool_call absorbing on its OWN finished proof while its
-        // top-level parent still runs would let the deferred-parent pass see
-        // "all children absorbed" and absorb the running anchor too — the
-        // phantom-box shape (inc-1785965937858). Its own children DO absorb
-        // (their pid is this id); this box stays as their anchor until the
-        // chain above it is proven finished.
+        // nested Agent tool_call is one block of its top-level parent's run
+        // and archives with it, so it is proven over exactly when the chain
+        // above it is (inc-1785965937858). Its own children DO absorb on it
+        // (their pid is this id).
         if (laneFinished) absorbed.add(i);
         continue;
       }
@@ -337,45 +322,6 @@ export function computeAbsorbedIndices(
     // Pure-UI block (permission/system): no possible twin; GC below iff its
     // whole window matched.
     pureUiIndices.push(i);
-  }
-
-  // Deferred groupable parents — parent/child ATOMICITY + completion proof.
-  // A parent absorbs iff it has its own twin, NO live lane child (anywhere in
-  // blocks, live tail included), AND the run is proven over by either:
-  //  · finishedBgParents (bgTaskFinished from a task-notification, or a sync
-  //    agent's persisted result) — the authoritative proof; or
-  //  · at least one lane child, ALL absorbed (a sync agent's children persist
-  //    inline via childMessages, so each has its own id twin).
-  // The childCount>0 requirement is the phantom-box guard: an agent that has
-  // produced NO lane output yet has nothing to anchor, and absorbing its
-  // parent lets the physical reset drop the array — the NEXT lane block then
-  // arrives parentless and the grouping layer synthesizes an anonymous
-  // "Subagent (continued)" orphan box at the bottom (inc-1785965937858's
-  // amplifier, reproduced in tests/web/chat-lab). A RUNNING agent keeps its
-  // parent SILENTLY — expected live state, not a divergence: worst case is a
-  // brief labeled duplicate next to the history card (the safe direction).
-  for (const i of deferredParents) {
-    const b = blocks[i] as StreamingBlock & { type: 'tool_call' };
-    const hasTwin = !!b.toolUseId
-      && (ev.toolUseIds.has(b.toolUseId) || full?.toolUseIds.has(b.toolUseId) === true);
-    if (!hasTwin) {
-      if (b.toolUseId) { allMatchableMatched = false; unmatched.push({ index: i, kind: 'tool_call', reason: 'no toolUseId twin in delta' }); }
-      continue;
-    }
-    const finished = !!b.toolUseId && idFinished(b.toolUseId);
-    let childCount = 0;
-    let liveChild = false;
-    for (let j = 0; j < blocks.length; j++) {
-      const c = blocks[j];
-      // Root-resolved: nested agents' grandchildren belong to THIS parent's
-      // run — a live grandchild must keep the top-level anchor alive too.
-      if ((c.type === 'text' || c.type === 'thinking' || c.type === 'tool_call')
-        && c.parentToolUseId && resolveLaneRoot(c.parentToolUseId) === b.toolUseId) {
-        childCount++;
-        if (!absorbed.has(j)) { liveChild = true; break; }
-      }
-    }
-    if (!liveChild && (finished || childCount > 0)) absorbed.add(i);
   }
 
   // Second pass: GC pure-UI blocks in the eligible window IFF all matchable content

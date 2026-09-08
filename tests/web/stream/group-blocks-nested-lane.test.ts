@@ -13,8 +13,12 @@
  *     task-group, so the children never joined any group either.
  *
  * The fix resolves every child's parent CHAIN to its top-level root: all
- * descendant blocks land inside the top-level Agent's group (or its orphan
- * box when the top parent has left the buffer).
+ * descendant blocks land inside the top-level Agent's group. When the top
+ * parent has left the buffer (turn ended, anchor absorbed by history) the
+ * whole lane is consumed and renders nowhere in the conversation — the
+ * persisted Agent row is the one card, the Background ledger shows the run
+ * (Claude Code model; the earlier "orphan box at the tail" put the same agent
+ * on screen twice, 2026-09-08 report).
  */
 import { describe, it, expect } from 'vitest';
 import { groupStreamingBlocks, groupLaneChildren, countAgentTree } from '@/stream/group-blocks';
@@ -63,21 +67,23 @@ describe('groupStreamingBlocks — nested subagent lanes', () => {
     expect(childContents).toContain("I'll search the pulled CR workspace");
     expect(childContents).toContain('toolu_gc_bash');
     expect(childContents).toContain('No node_modules there.');
-    // No orphan group — everything anchored to the visible top parent
-    expect(grouped.some((g) => g.kind === 'orphan-group')).toBe(false);
+    // Exactly one group — everything anchored to the visible top parent
+    expect(grouped.filter((g) => g.kind === 'task-group')).toHaveLength(1);
   });
 
-  it('grandchild blocks whose top parent left the buffer form ONE orphan box', () => {
+  it('grandchild blocks whose top parent left the buffer render NOWHERE (no flat, no box)', () => {
     const blocks = nestedBlocks().slice(2); // top-level Agent tool_call gone (turn ended)
     const grouped = groupStreamingBlocks(blocks);
+    expect(grouped).toEqual([]);
+  });
 
-    const flat = grouped.filter((g) => g.kind === 'block');
-    expect(flat).toHaveLength(0);
-    const orphans = grouped.filter((g) => g.kind === 'orphan-group');
-    expect(orphans).toHaveLength(1);
-    if (orphans[0].kind !== 'orphan-group') throw new Error('unreachable');
-    expect(orphans[0].parentToolUseId).toBe(TOP);
-    expect(orphans[0].childBlocks).toHaveLength(5);
+  it('a HIDDEN top parent (absorbed by history) is the same as an absent one: its lane is consumed whole', () => {
+    const blocks = nestedBlocks();
+    const grouped = groupStreamingBlocks(blocks, new Set([1])); // index 1 = TOP tool_call, hidden
+    // The hidden anchor emits a plain 'block' item the timeline skips; nothing
+    // else survives — no orphan box, no flat spill. Main text is untouched.
+    const kinds = grouped.map((g) => `${g.kind}:${g.kind === 'block' ? g.index : 'group'}`);
+    expect(kinds).toEqual(['block:0', 'block:1']);
   });
 
   it('a hidden grandchild parent does not strand its children (they stay in the top group)', () => {
@@ -118,17 +124,16 @@ describe('groupStreamingBlocks — nested subagent lanes', () => {
     expect(gcTexts).toContain('No node_modules there.');
   });
 
-  it('groupLaneChildren works for the orphan variant (top parent gone)', () => {
-    const blocks = nestedBlocks().slice(2);
-    const grouped = groupStreamingBlocks(blocks);
-    const orphan = grouped.find((g) => g.kind === 'orphan-group');
-    if (orphan?.kind !== 'orphan-group') throw new Error('orphan must exist');
-    const inner = groupLaneChildren(orphan.parentToolUseId, orphan.childBlocks);
-    const innerGroup = inner.find((g) => g.kind === 'task-group');
-    expect(innerGroup).toBeDefined();
-    if (innerGroup?.kind !== 'task-group') throw new Error('unreachable');
-    expect(innerGroup.taskBlock.toolUseId).toBe(MID);
-    expect(innerGroup.childBlocks).toHaveLength(3);
+  it('groupLaneChildren drops a grandchild lane whose nested Agent tool_call is missing (no inner orphan box)', () => {
+    // MID's tool_call streamed before page load: its children have no visible
+    // anchor inside the box either — they are consumed, not spilled flat.
+    const children = nestedBlocks().slice(2).filter((b) => !(b.type === 'tool_call' && b.toolUseId === MID));
+    const inner = groupLaneChildren(TOP, children);
+    const flatTexts = inner
+      .filter((g): g is Extract<typeof g, { kind: 'block' }> => g.kind === 'block')
+      .map((g) => (g.block.type === 'text' ? g.block.content : ''));
+    expect(flatTexts).toEqual(['child narration']);
+    expect(inner.some((g) => g.kind === 'task-group')).toBe(false);
   });
 
   it('countAgentTree reports direct vs total spawns (the "3 then 3 = 6" readout)', () => {
@@ -159,6 +164,7 @@ describe('groupStreamingBlocks — nested subagent lanes', () => {
       { type: 'text', content: 'cyclic', parentToolUseId: 'toolu_a' },
     ];
     const grouped = groupStreamingBlocks(blocks); // must terminate
-    expect(grouped.length).toBeGreaterThan(0);
+    // Every block is a lane child with no visible root — all consumed.
+    expect(grouped).toEqual([]);
   });
 });

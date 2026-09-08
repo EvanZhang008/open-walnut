@@ -19,7 +19,7 @@
  *
  * These tests verify the handleStreamLine() branches in ClaudeCodeSession:
  *   1. running → task_progress×N → idle: stays 'running' mid-workflow, only
- *      flips to AGENT_COMPLETE on the trailing idle.
+ *      flips to NEED_ACTION on the trailing idle.
  *   2. multiple results (incl. origin=task-notification) don't complete early.
  *   3. NORMAL single-turn session (no workflow) still completes (regression guard),
  *      and a trailing idle does NOT double-fire SESSION_RESULT.
@@ -97,29 +97,41 @@ function makeSessionStateEvent(sessionId: string, state: 'running' | 'idle' | 'r
 
 function makeTaskStartedEvent(
   sessionId: string, taskId: string,
-  opts: { workflowName?: string; description?: string; subagentType?: string; taskType?: string } = {},
+  opts: {
+    workflowName?: string; description?: string; subagentType?: string; taskType?: string
+    toolUseId?: string; spawnDepth?: number
+  } = {},
 ): string {
   return JSON.stringify({
     type: 'system', subtype: 'task_started', session_id: sessionId, task_id: taskId,
     workflow_name: opts.workflowName, description: opts.description, subagent_type: opts.subagentType,
-    task_type: opts.taskType,
+    task_type: opts.taskType, tool_use_id: opts.toolUseId, spawn_depth: opts.spawnDepth,
   })
 }
 
 function makeTaskProgressEvent(
   sessionId: string, taskId: string,
-  opts: { summary?: string; tokens?: number; lastTool?: string } = {},
+  opts: {
+    summary?: string; tokens?: number; lastTool?: string
+    toolUses?: number; durationMs?: number; toolUseId?: string
+  } = {},
 ): string {
+  const hasUsage = opts.tokens != null || opts.toolUses != null || opts.durationMs != null
   return JSON.stringify({
     type: 'system', subtype: 'task_progress', session_id: sessionId, task_id: taskId,
-    summary: opts.summary, last_tool_name: opts.lastTool,
-    usage: opts.tokens != null ? { total_tokens: opts.tokens } : undefined,
+    summary: opts.summary, last_tool_name: opts.lastTool, tool_use_id: opts.toolUseId,
+    usage: hasUsage
+      ? { total_tokens: opts.tokens, tool_uses: opts.toolUses, duration_ms: opts.durationMs }
+      : undefined,
   })
 }
 
-function makeTaskNotificationEvent(sessionId: string, taskId: string, status = 'completed'): string {
+function makeTaskNotificationEvent(
+  sessionId: string, taskId: string, status = 'completed', opts: { toolUseId?: string } = {},
+): string {
   return JSON.stringify({
     type: 'system', subtype: 'task_notification', session_id: sessionId, task_id: taskId, status,
+    tool_use_id: opts.toolUseId,
   })
 }
 
@@ -617,7 +629,7 @@ describe('Dynamic workflow: workflow_progress[] → phases + per-agent breakdown
 // sub-agent — because its idle-wait loop excludes in_process_teammate tasks. The
 // real replay showed 18/20 idles firing with 1–5 tasks still in flight, including
 // a run of idle@bgInFlight=5 (the panel's "5 running"). The OLD code treated the
-// first such idle as turn-over → hard-reset the counter to 0 → AGENT_COMPLETE →
+// first such idle as turn-over → hard-reset the counter to 0 → NEED_ACTION →
 // the agent self-reported await_human_action while the workflow was still running.
 //
 // The fix: idle completes the turn ONLY when our bgTasksInFlight counter has
@@ -1102,6 +1114,162 @@ describe('task_type rides task_started into the SESSION_BACKGROUND_TASKS snapsho
       .find(t => t.taskId === 'ag-1')!
     expect(after.taskType).toBe('local_agent')
     expect(after.tokens).toBe(500)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  Ledger display fields: tool_use_id / tool_uses / duration_ms / start+end clocks
+// ═══════════════════════════════════════════════════════════════════
+//
+// The Background panel renders each subagent as a Claude-Code-style row
+// ("Agent 58s · 64.5k tokens · 16 tool uses · Running Bash · View transcript"), so the
+// snapshot has to carry the numbers behind that line. All display-only: none of them
+// touch _runningBgCount / turn-over gating.
+
+describe('background-task snapshot carries the ledger display fields', () => {
+  it('task_started → task_progress → task_notification fills toolUseId/toolUses/durationMs/startedAt/endedAt/spawnDepth', () => {
+    const sid = 'wf-ledger-fields'
+    const session = makeRunningRemoteSession('task-ledger')
+
+    const snaps: Array<Record<string, unknown>> = []
+    bus.subscribe('web-ui', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_BACKGROUND_TASKS) snaps.push(e.data as Record<string, unknown>)
+    })
+    const row = (taskId: string) => (snaps[snaps.length - 1]!.tasks as Array<Record<string, unknown>>)
+      .find(t => t.taskId === taskId)!
+
+    // Pin the clock so startedAt/endedAt are exact, not "roughly now".
+    const nowSpy = vi.spyOn(Date, 'now')
+    try {
+      nowSpy.mockReturnValue(1_000_000)
+      feedLines(session, [
+        makeInitEvent(sid),
+        makeTaskStartedEvent(sid, 'a6ec1bb7e', {
+          description: 'Investigate repo structure', subagentType: 'general-purpose',
+          taskType: 'local_agent', toolUseId: 'toolu_01ledger', spawnDepth: 1,
+        }),
+      ])
+      let t = row('a6ec1bb7e')
+      expect(t.toolUseId).toBe('toolu_01ledger')
+      expect(t.spawnDepth).toBe(1)
+      expect(t.startedAt).toBe(1_000_000)
+      expect(t.endedAt).toBeUndefined()
+
+      // Heartbeat: the CLI's own usage counters ride task_progress.usage.
+      nowSpy.mockReturnValue(1_006_830)
+      feedLines(session, [
+        makeTaskProgressEvent(sid, 'a6ec1bb7e', {
+          summary: 'Running Check repo layout', tokens: 50_551, lastTool: 'Bash',
+          toolUses: 16, durationMs: 6_830, toolUseId: 'toolu_01ledger',
+        }),
+      ])
+      t = row('a6ec1bb7e')
+      expect(t.toolUses).toBe(16)
+      expect(t.durationMs).toBe(6_830)
+      expect(t.tokens).toBe(50_551)
+      expect(t.lastTool).toBe('Bash')
+      expect(t.startedAt).toBe(1_000_000) // untouched by progress
+      expect(t.endedAt).toBeUndefined()
+
+      // A progress snapshot without usage keeps the last counters (never resets to 0).
+      feedLines(session, [makeTaskProgressEvent(sid, 'a6ec1bb7e', { summary: 'thinking' })])
+      t = row('a6ec1bb7e')
+      expect(t.toolUses).toBe(16)
+      expect(t.durationMs).toBe(6_830)
+
+      // Terminal: the real CLI ordering is task_updated{completed} then task_notification.
+      // endedAt is stamped by the FIRST terminal event and must not move afterwards.
+      nowSpy.mockReturnValue(1_009_000)
+      feedLines(session, [makeTaskUpdatedEvent(sid, 'a6ec1bb7e', { status: 'completed' })])
+      expect(row('a6ec1bb7e').endedAt).toBe(1_009_000)
+
+      nowSpy.mockReturnValue(1_020_000)
+      feedLines(session, [makeTaskNotificationEvent(sid, 'a6ec1bb7e', 'completed')])
+      t = row('a6ec1bb7e')
+      expect(t.endedAt).toBe(1_009_000)          // first terminal wins
+      expect(t.startedAt).toBe(1_000_000)        // survives the terminal bookend
+      expect(t.toolUseId).toBe('toolu_01ledger') // notification without an id keeps it
+      expect(t.toolUses).toBe(16)
+      expect(t.status).toBe('completed')
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('a replayed task_started does NOT reset startedAt (daemon restart re-emits it)', () => {
+    const sid = 'wf-ledger-replay'
+    const session = makeRunningRemoteSession('task-ledger-replay')
+
+    const snaps: Array<Record<string, unknown>> = []
+    bus.subscribe('web-ui', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_BACKGROUND_TASKS) snaps.push(e.data as Record<string, unknown>)
+    })
+    const row = () => (snaps[snaps.length - 1]!.tasks as Array<Record<string, unknown>>)
+      .find(t => t.taskId === 'r1')!
+
+    const nowSpy = vi.spyOn(Date, 'now')
+    try {
+      nowSpy.mockReturnValue(2_000_000)
+      feedLines(session, [
+        makeInitEvent(sid),
+        makeTaskStartedEvent(sid, 'r1', { description: 'Explore', toolUseId: 'toolu_first' }),
+      ])
+      expect(row().startedAt).toBe(2_000_000)
+
+      // The daemon replays the stream 42s later — a fresh Date.now() here would restart
+      // the row's elapsed timer, so the panel would show "0s" for a long-running agent.
+      nowSpy.mockReturnValue(2_042_000)
+      feedLines(session, [
+        makeTaskStartedEvent(sid, 'r1', { description: 'Explore' }), // replay, no tool_use_id
+      ])
+      expect(row().startedAt).toBe(2_000_000)
+      expect(row().toolUseId).toBe('toolu_first') // first non-empty wins; blank never clobbers
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+})
+
+describe('task_progress.description is the activity line, not the title', () => {
+  it('keeps the task_started description as the row title and routes the progress line to summary', () => {
+    const sid = 'wf-progress-description'
+    const session = makeRunningRemoteSession('task-progress-description')
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'p1', { description: 'Second read-only survey', subagentType: 'Explore', taskType: 'local_agent', toolUseId: 'toolu_p1' }),
+      // The real CLI shape: `description` carries what the agent is doing right now.
+      JSON.stringify({ type: 'system', subtype: 'task_progress', session_id: sid, task_id: 'p1', tool_use_id: 'toolu_p1', description: 'Reading src/core/event-types.ts', usage: { total_tokens: 66_192, tool_uses: 1, duration_ms: 4_228 }, last_tool_name: 'Read' }),
+    ])
+    const row = session.backgroundTasksSnapshot(sid)!.tasks[0]!
+    expect(row.description).toBe('Second read-only survey')
+    expect(row.summary).toBe('Reading src/core/event-types.ts')
+    expect(row.lastTool).toBe('Read')
+  })
+})
+
+describe('backgroundTasksSnapshot(): the ledger a late-opening tab reads', () => {
+  it('is null before anything ran, then equals the last broadcast payload (finished agents included)', () => {
+    const sid = 'wf-ledger-snapshot'
+    const session = makeRunningRemoteSession('task-ledger-snapshot')
+    expect(session.backgroundTasksSnapshot(sid)).toBeNull()
+
+    const snaps: Array<Record<string, unknown>> = []
+    bus.subscribe('web-ui', (e: BusEvent) => {
+      if (e.name === EventNames.SESSION_BACKGROUND_TASKS) snaps.push(e.data as Record<string, unknown>)
+    })
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'a71', { description: 'Survey', subagentType: 'Explore', taskType: 'local_agent', toolUseId: 'toolu_snap' }),
+      makeTaskProgressEvent(sid, 'a71', { tokens: 1200, toolUses: 4, toolUseId: 'toolu_snap' }),
+      makeTaskUpdatedEvent(sid, 'a71', { status: 'completed' }),
+      makeTaskNotificationEvent(sid, 'a71', 'completed'),
+    ])
+    const snap = session.backgroundTasksSnapshot(sid)!
+    // A finished agent stays in the ledger: that is the whole point of a ledger
+    // over a "currently running" list, and what a reload must be able to read.
+    expect(snap.tasks.map(t => [t.taskId, t.status, t.toolUseId, t.toolUses])).toEqual([['a71', 'completed', 'toolu_snap', 4]])
+    expect(snap.inFlight).toBe(0)
+    expect(snap).toEqual(snaps[snaps.length - 1])
   })
 })
 

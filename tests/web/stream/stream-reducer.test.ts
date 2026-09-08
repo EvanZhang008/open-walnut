@@ -310,7 +310,7 @@ describe('appendLaneText', () => {
     expect(blocks[0]).toEqual({ type: 'text', content: 'lane A more A', msgId: 'msg-a', parentToolUseId: 'p-a' });
   });
 
-  it('carries subagentType/taskDescription onto new lane blocks (orphan-group labels)', () => {
+  it('carries subagentType/taskDescription onto new lane blocks (subagent lane identity)', () => {
     const blocks = appendLaneText([], {
       delta: 'bg output', msgId: 'msg-1', parentToolUseId: 'p-1',
       subagentType: 'Explore', taskDescription: 'scan files',

@@ -3735,6 +3735,66 @@ select {
 .wf-task-completed .wf-task-name,
 .wf-task-stopped .wf-task-name { color: var(--fg-muted); }
 
+/* ── Background AGENT ledger row (Claude Code "Background tasks" parity) ──
+   Two lines: title + subagent-type chip, then the muted numbers / activity / transcript
+   link. Wraps instead of overflowing — this panel lives in a narrow session column. */
+.wf-agent-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+.wf-agent-row:last-child { border-bottom: none; }
+.wf-agent-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wf-agent-row-name {
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+.wf-agent-row-completed .wf-agent-row-name,
+.wf-agent-row-stopped .wf-agent-row-name { color: var(--fg-muted); }
+.wf-agent-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  /* Align the meta under the title, past the status dot. */
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  min-width: 0;
+}
+.wf-agent-row-meta-item {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Separators are CSS so the row builder stays a pure list of text segments. */
+.wf-agent-row-meta-item + .wf-agent-row-meta-item::before {
+  content: '·';
+  margin-right: 6px;
+  opacity: 0.6;
+}
+.wf-agent-row-transcript {
+  margin-left: auto;
+  padding: 0;
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+}
+.wf-agent-row-transcript:hover { text-decoration: underline; }
+
 /* ── Dynamic-workflow rich view: script, phases, clickable agent rows ── */
 .wf-script-toggle {
   margin-left: 8px;
@@ -4058,6 +4118,14 @@ select {
 }
 .wf-modal-title { font-weight: 600; font-size: 14px; color: var(--fg); }
 .wf-modal-meta { font-size: 12px; color: var(--fg-muted); }
+/* The agent is still running: this transcript is partial and re-reads every 8s. */
+.wf-modal-live {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--accent);
+  flex: none;
+  animation: session-pulse 1.4s ease-in-out infinite;
+}
 .wf-modal-close {
   margin-left: auto;
   display: flex;

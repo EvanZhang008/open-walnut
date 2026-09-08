@@ -14,7 +14,7 @@ import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-un
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
-import { groupStreamingBlocks, groupLaneChildren, countAgentTree, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
+import { groupStreamingBlocks, groupLaneChildren, countAgentTree, isLaneChild, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
 import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
@@ -594,17 +594,15 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
   );
 });
 
-/** A streaming Task group — collapsible container for child blocks during live streaming.
- *  `taskBlock` is absent for an ORPHAN group: a background subagent kept producing
- *  after its parent Agent tool_call left the streaming buffer (turn ended / re-send).
- *  Orphan identity comes from the children's subagentType/taskDescription instead. */
+/** A streaming Task group — the Agent's compact row at its spawn position while
+ *  its tool_call is still in the streaming buffer. Renders COLLAPSED: the
+ *  subagent's live transcript is not main-conversation content (the Background
+ *  ledger tracks the run; the transcript is one click away here or there). The
+ *  moment history absorbs the tool_call, the persisted TaskGroup takes over at
+ *  the same position — one card per agent, never a live twin at the tail. */
 interface StreamingTaskGroupProps {
-  taskBlock?: StreamingBlock & { type: 'tool_call' };
+  taskBlock: StreamingBlock & { type: 'tool_call' };
   childBlocks: StreamingBlock[];
-  /** Orphan variant's own lane id — needed to derive the nested per-level view. */
-  orphanParentToolUseId?: string;
-  orphanSubagentType?: string;
-  orphanTaskDescription?: string;
   sessionId: string;
   sessionCwd?: string;
   sessionHost?: string;
@@ -613,21 +611,17 @@ interface StreamingTaskGroupProps {
   onFileOpen?: (path: string, line?: number) => void;
 }
 
-function StreamingTaskGroup({ taskBlock, childBlocks, orphanParentToolUseId, orphanSubagentType, orphanTaskDescription, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: StreamingTaskGroupProps) {
-  const [open, setOpen] = useState(true); // Default open during streaming
-  const description = taskBlock
-    ? (typeof taskBlock.input?.description === 'string'
-        ? taskBlock.input.description
-        : typeof taskBlock.input?.prompt === 'string'
-          ? (taskBlock.input.prompt as string).slice(0, 80) + ((taskBlock.input.prompt as string).length > 80 ? '...' : '')
-          : 'Task')
-    : (orphanTaskDescription || 'Subagent (continued)');
-  const subagentType = taskBlock
-    ? (typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : '')
-    : (orphanSubagentType ?? '');
-  const modelChip = agentModelLabel(taskBlock?.input);
-  const isDone = taskBlock?.status === 'done';
-  const isError = taskBlock?.status === 'error';
+function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: StreamingTaskGroupProps) {
+  const [open, setOpen] = useState(false);
+  const description = typeof taskBlock.input?.description === 'string'
+    ? taskBlock.input.description
+    : typeof taskBlock.input?.prompt === 'string'
+      ? (taskBlock.input.prompt as string).slice(0, 80) + ((taskBlock.input.prompt as string).length > 80 ? '...' : '')
+      : 'Task';
+  const subagentType = typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : '';
+  const modelChip = agentModelLabel(taskBlock.input);
+  const isDone = taskBlock.status === 'done';
+  const isError = taskBlock.status === 'error';
   const toolCount = childBlocks.filter(b => b.type === 'tool_call').length;
 
   // Nested view: direct children render flat; a nested Agent/Task spawned by
@@ -635,12 +629,12 @@ function StreamingTaskGroup({ taskBlock, childBlocks, orphanParentToolUseId, orp
   // (recursive — matches history rendering where childMessages nest per level).
   // childBlocks arrive root-flattened from groupStreamingBlocks; selfId lets
   // groupLaneChildren re-derive the per-level structure.
-  const selfId = taskBlock?.toolUseId ?? orphanParentToolUseId;
-  const nestedItems = open && selfId ? groupLaneChildren(selfId, childBlocks) : null;
+  const selfId = taskBlock.toolUseId;
+  const nestedItems = open ? groupLaneChildren(selfId, childBlocks) : null;
   // Header chip: "N subagents (M nested)" — visible without expanding, so the
   // user can read the fan-out (e.g. 2 direct + 2 spawned deeper = 4 total)
   // straight off the top-level box.
-  const agentTree = selfId ? countAgentTree(selfId, childBlocks) : { direct: 0, total: 0 };
+  const agentTree = countAgentTree(selfId, childBlocks);
 
   return (
     <div className={`task-group ${open ? 'task-group--open' : ''} ${isDone ? 'task-group--done' : ''} ${isError ? 'task-group--error' : ''}`}>
@@ -649,7 +643,7 @@ function StreamingTaskGroup({ taskBlock, childBlocks, orphanParentToolUseId, orp
         <span className="task-group-icon">
           {isError ? '✗' : isDone ? '✓' : '▶'}
         </span>
-        <span className="task-group-label">{taskBlock ? taskBlock.name : 'Agent'}</span>
+        <span className="task-group-label">{taskBlock.name}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
         {modelChip && <span className="task-group-model">{modelChip}</span>}
         <span className="task-group-description">{description}</span>
@@ -665,17 +659,14 @@ function StreamingTaskGroup({ taskBlock, childBlocks, orphanParentToolUseId, orp
       </button>
       {open && (
         <div className="task-group-body">
-          {taskBlock && <TaskGroupPrompt input={taskBlock.input} />}
-          {(nestedItems ?? childBlocks.map((block, index) => ({ kind: 'block' as const, block, index }))).map((item, ci) => {
-            if (item.kind === 'task-group' || item.kind === 'orphan-group') {
+          <TaskGroupPrompt input={taskBlock.input} />
+          {(nestedItems ?? []).map((item, ci) => {
+            if (item.kind === 'task-group') {
               return (
                 <StreamingTaskGroup
                   key={`nested-${ci}`}
-                  taskBlock={item.kind === 'task-group' ? item.taskBlock : undefined}
+                  taskBlock={item.taskBlock}
                   childBlocks={item.childBlocks}
-                  orphanParentToolUseId={item.kind === 'orphan-group' ? item.parentToolUseId : undefined}
-                  orphanSubagentType={item.kind === 'orphan-group' ? item.subagentType : undefined}
-                  orphanTaskDescription={item.kind === 'orphan-group' ? item.taskDescription : undefined}
                   sessionId={sessionId}
                   sessionCwd={sessionCwd}
                   sessionHost={sessionHost}
@@ -698,7 +689,7 @@ function StreamingTaskGroup({ taskBlock, childBlocks, orphanParentToolUseId, orp
   );
 }
 
-// Grouping semantics (task groups / orphan subagent lanes / hidden-parent
+// Grouping semantics (task groups / consumed subagent lanes / hidden-parent
 // asymmetry) live in the pure module so the chat lab can replay production
 // traces through the exact projection the timeline renders.
 
@@ -2964,15 +2955,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Pre-group once for both boundary detection and streaming rendering.
   const groupedBlocks = groupStreamingBlocks(blocks, hiddenBlocks);
   const groupedByIndex = new Map<number, GroupedStreamItem>();
-  const consumedBlockIndices = new Set<number>();
   for (const g of groupedBlocks) {
-    if (g.kind === 'task-group' || g.kind === 'orphan-group') {
-      groupedByIndex.set(g.index, g);
-      for (const child of g.childBlocks) {
-        const childIdx = blocks.indexOf(child);
-        if (childIdx >= 0) consumedBlockIndices.add(childIdx);
-      }
-    }
+    if (g.kind === 'task-group') groupedByIndex.set(g.index, g);
+  }
+  // Every subagent-lane block is consumed — it renders inside its Agent box
+  // when that box is open, and nowhere at all when the anchor is hidden or
+  // gone (the ledger + transcript own the run; see stream/group-blocks.ts).
+  const consumedBlockIndices = new Set<number>();
+  for (let i = 0; i < blocks.length; i++) {
+    if (isLaneChild(blocks[i])) consumedBlockIndices.add(i);
   }
 
   const leadingStreamRunIndices: number[] = [];
@@ -3092,7 +3083,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   // Last VISIBLE timeline index — the item still receiving tokens when
   // streaming. Skips DOM-null items (boundary-merged, transparent, blocks
-  // consumed into a task/orphan group without anchoring one) so a trailing
+  // of a subagent lane, which never render flat) so a trailing
   // signature-only artifact can't steal "liveness" from the real tail block.
   let lastVisibleTimelineIdx = -1;
   for (let i = timeline.length - 1; i >= 0; i--) {
@@ -3617,21 +3608,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               }
 
               if (item.kind === 'block') {
-                // Check if this block anchors a Task group (parent tool_call) or
-                // an ORPHAN group (anchored at its FIRST child, which is itself a
-                // consumed index — so this check must come before the skip below).
+                // Check if this block anchors a Task group (parent tool_call).
                 const grouped = groupedByIndex.get(item.index);
-                if (grouped && (grouped.kind === 'task-group' || grouped.kind === 'orphan-group')) {
+                if (grouped && grouped.kind === 'task-group') {
                   const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
                   return (
                     <div key={`tg-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
                       <div className={isFirst ? 'session-msg-content' : ''}>
                         <StreamingTaskGroup
-                          taskBlock={grouped.kind === 'task-group' ? grouped.taskBlock : undefined}
+                          taskBlock={grouped.taskBlock}
                           childBlocks={grouped.childBlocks}
-                          orphanParentToolUseId={grouped.kind === 'orphan-group' ? grouped.parentToolUseId : undefined}
-                          orphanSubagentType={grouped.kind === 'orphan-group' ? grouped.subagentType : undefined}
-                          orphanTaskDescription={grouped.kind === 'orphan-group' ? grouped.taskDescription : undefined}
                           sessionId={sessionId}
                           sessionCwd={sessionCwd}
                           sessionHost={sessionHost}
@@ -3644,7 +3630,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   );
                 }
 
-                // Skip blocks that were consumed into a task/orphan group
+                // Skip subagent-lane blocks (rendered inside their Agent box or not at all)
                 if (consumedBlockIndices.has(item.index)) return null;
 
                 // Regular block rendering

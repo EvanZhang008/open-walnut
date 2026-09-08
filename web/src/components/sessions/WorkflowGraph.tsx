@@ -21,13 +21,13 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { WorkflowPhase, WorkflowAgent } from '@/hooks/useBackgroundTasks';
 import { buildLayout, phaseCounts, DENSITY_THRESHOLD, type LaidOutPhase } from './workflow-layout';
+// fmtTokens lives in the pure background-ledger module (the panel's row builder needs it
+// without pulling React in); re-exported here so the graph stays one import for callers.
+import { fmtTokens } from './background-ledger';
+
+export { fmtTokens };
 
 // ── shared formatting helpers (exported — WorkflowProgress reuses for its legacy path) ──
-export function fmtTokens(n?: number): string {
-  if (!n) return '';
-  if (n >= 1000) return `${Math.round(n / 1000)}k`;
-  return String(n);
-}
 function fmtDuration(ms?: number): string {
   if (!ms) return '';
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;

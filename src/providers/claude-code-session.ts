@@ -67,7 +67,7 @@ import {
 } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
-import type { WorkflowPhaseInfo, WorkflowAgentInfo } from '../core/event-types.js'
+import type { WorkflowPhaseInfo, WorkflowAgentInfo, SessionBackgroundTasksPayload } from '../core/event-types.js'
 import { recordTurn } from '../core/observability/recorder.js'
 import type { SessionServerClient } from './session-server-client.js'
 import { sanitizeInitModel } from '../agent/providers/defaults.js'
@@ -323,6 +323,13 @@ type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | St
  */
 function mapPermissionMode(cliMode: string): SessionMode | null {
   return sessionModeFromCli(cliMode)
+}
+
+/** `tool_use_id` off a task_* system event, normalized to undefined when absent or
+ *  empty — callers use `prev ?? readToolUseId(sys)` so a blank never clobbers a set id. */
+function readToolUseId(sys: Record<string, unknown>): string | undefined {
+  const id = sys.tool_use_id
+  return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
 function isMissingBypassCapabilityError(err: unknown): boolean {
@@ -888,7 +895,7 @@ export class ClaudeCodeSession {
   /** THE authoritative set of background tasks (dynamic workflows / subagents), keyed by
    *  task_id, each carrying its latest status. "Is bg work in flight" is derived from this
    *  set (see hasActiveBackgroundWork) — there is no parallel scalar counter to desync. */
-  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean; endedPerLevel?: boolean }>()
+  private _bgTasks = new Map<string, { description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; isBackgrounded?: boolean; endedPerLevel?: boolean; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; spawnDepth?: number }>()
   /** Task ids that have EVER appeared in a `background_tasks_changed` payload — proof of
    *  membership in the CLI's level universe. Only a task the CLI itself once listed may be
    *  absent-marked by a later level (see the background_tasks_changed handler); a task the
@@ -1203,7 +1210,7 @@ export class ClaudeCodeSession {
   }
 
   /** Snapshot of background tasks for the UI (Workflow progress panel). */
-  get backgroundTasks(): Array<{ taskId: string; description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string }> {
+  get backgroundTasks(): Array<{ taskId: string; description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; isBackgrounded?: boolean; spawnDepth?: number }> {
     return [...this._bgTasks.entries()].map(([taskId, t]) => ({ taskId, ...t }))
   }
   get workflowName(): string | undefined { return this._workflowName }
@@ -1233,6 +1240,25 @@ export class ClaudeCodeSession {
     this._workflowScript = undefined
     this._workflowDescription = undefined
     this._workflowName = undefined
+  }
+
+  /** The Background ledger as this process knows it — the exact payload the
+   *  `session:background-tasks` event carries, so a tab that opens (or reloads)
+   *  after the last heartbeat reads the same rows the live tab saw. Null when
+   *  nothing ever ran here (the route then falls back to the on-disk manifest). */
+  backgroundTasksSnapshot(sessionId: string): SessionBackgroundTasksPayload | null {
+    if (this._bgTasks.size === 0 && this._workflowAgents.size === 0 && !this._workflowName) return null
+    return {
+      sessionId,
+      taskId: this.taskId,
+      workflowName: this._workflowName,
+      inFlight: this._runningBgCount(),
+      tasks: this.backgroundTasks,
+      phases: sortedPhases(this._workflowPhases),
+      agents: this.workflowAgents,
+      scriptSource: this._workflowScript,
+      workflowDescription: this._workflowDescription,
+    }
   }
 
   /** Broadcast the current background-task set so the UI can render workflow progress. */
@@ -4193,6 +4219,12 @@ export class ClaudeCodeSession {
                 // read it here too in case a future CLI stamps it at start. Never
                 // un-background: keep a previously-recorded true.
                 isBackgrounded: sys.is_backgrounded === true || prevStarted?.isBackgrounded,
+                // Display-only. toolUseId: first non-empty wins (never clobber with
+                // undefined). startedAt is OUR clock at the first start we saw — a
+                // replayed task_started must not restart the row's elapsed timer.
+                toolUseId: prevStarted?.toolUseId ?? readToolUseId(sys),
+                startedAt: prevStarted?.startedAt ?? Date.now(),
+                spawnDepth: typeof sys.spawn_depth === 'number' ? sys.spawn_depth : prevStarted?.spawnDepth,
               })
               if (this._processStatus !== 'running') {
                 this._processStatus = 'running'
@@ -4211,18 +4243,27 @@ export class ClaudeCodeSession {
             if (ingestedWorkflow) this._ingestWorkflowProgress(wp as unknown[])
             if (taskId) {
               const prev = this._bgTasks.get(taskId) ?? { status: 'running' }
-              const usage = sys.usage as { total_tokens?: number } | undefined
+              const usage = sys.usage as { total_tokens?: number; tool_uses?: number; duration_ms?: number } | undefined
               // Terminal is terminal: a late progress event must NOT revive a finished task.
               const progressStatus = ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prev.status)
                 ? prev.status : 'running'
+              // On task_progress the CLI's `description` is the live activity line
+              // ("Reading src/foo.ts"), not the task's title: the title is the
+              // task_started description and stays put, and the progress line
+              // feeds the activity summary (a real event carries no `summary`).
+              const progressLine = (sys.description as string | undefined)
               this._bgTasks.set(taskId, {
                 ...prev,
-                description: (sys.description as string | undefined) ?? prev.description,
+                description: prev.description ?? progressLine,
                 subagentType: (sys.subagent_type as string | undefined) ?? prev.subagentType,
                 status: progressStatus,
                 tokens: usage?.total_tokens ?? prev.tokens,
                 lastTool: (sys.last_tool_name as string | undefined) ?? prev.lastTool,
-                summary: (sys.summary as string | undefined) ?? prev.summary,
+                summary: (sys.summary as string | undefined) ?? progressLine ?? prev.summary,
+                // Display-only counters: a snapshot that omits them keeps the last value.
+                toolUses: usage?.tool_uses ?? prev.toolUses,
+                durationMs: usage?.duration_ms ?? prev.durationMs,
+                toolUseId: prev.toolUseId ?? readToolUseId(sys),
               })
             }
             // Emit if EITHER bookkeeping ran — a workflow_progress snapshot without a
@@ -4251,6 +4292,10 @@ export class ClaudeCodeSession {
                 status: nextStatus,
                 description: (patch.description as string | undefined) ?? prev.description,
                 isBackgrounded,
+                // Display-only: stamp the end once, at the FIRST terminal status we see.
+                // A later notification for the same task must not move it.
+                endedAt: prev.endedAt
+                  ?? (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(nextStatus) ? Date.now() : undefined),
               })
               if (patch.is_backgrounded === true && !prev.isBackgrounded) {
                 log.session.info('background task detached from turn (is_backgrounded)', {
@@ -4274,7 +4319,13 @@ export class ClaudeCodeSession {
             const status = (sys.status as string | undefined) ?? 'completed'
             if (taskId) {
               const prev = this._bgTasks.get(taskId)
-              this._bgTasks.set(taskId, { ...(prev ?? {}), status })
+              this._bgTasks.set(taskId, {
+                ...(prev ?? {}),
+                status,
+                toolUseId: prev?.toolUseId ?? readToolUseId(sys),
+                endedAt: prev?.endedAt
+                  ?? (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(status) ? Date.now() : undefined),
+              })
               log.session.info('background task terminal', {
                 sessionId: sid, taskId: this.taskId, bgTaskId: taskId, status,
                 remainingInFlight: this._runningBgCount(), via: 'task_notification',

@@ -11,21 +11,38 @@
  *
  * Two render modes:
  *   - Workflow mode (agents.length > 0): the rich WorkflowGraph.
- *   - Legacy mode (no agents): flat background-task list (plain background tasks).
+ *   - Legacy mode (no agents): the flat LEDGER — one two-line AgentRow per background
+ *     agent (Claude Code "Background tasks" parity) plus the compact TaskRow for plain
+ *     background tasks (local_bash shell commands etc.).
  *
  * The counts here are DISPLAY-ONLY — completion is driven by the backend's
  * session_state_changed{idle} signal, never by this panel.
  */
 
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { useBackgroundTasks, type BackgroundTask, type WorkflowAgent } from '@/hooks/useBackgroundTasks';
+import { publishLiveAgents } from '@/stores/background-agents-store';
 import { WorkflowGraph, StatusDot, fmtTokens, agentMeta } from './WorkflowGraph';
 import { phaseCounts, isAgentTask } from './workflow-layout';
+import { buildAgentMeta } from './background-ledger';
 import { WorkflowTranscriptModal, type TranscriptTarget } from './WorkflowTranscriptModal';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
 
-// ── Legacy flat task row (non-workflow background tasks) ──
+/** ONE 1s clock per panel, not per row: a 20-agent fan-out would otherwise create 20
+ *  intervals. Only armed while something is actually ticking (see the call site). */
+function useSecondTick(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    setNow(Date.now()); // re-arming after a pause must not show a stale second
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [enabled]);
+  return now;
+}
+
+// ── Legacy flat task row (plain background tasks — shell commands etc.) ──
 const TaskRow = memo(function TaskRow({ task }: { task: BackgroundTask }) {
   const activity = task.summary
     || (task.lastTool ? `${task.description ?? ''} · ${task.lastTool}` : task.description)
@@ -44,8 +61,45 @@ const TaskRow = memo(function TaskRow({ task }: { task: BackgroundTask }) {
   );
 });
 
+// ── Background AGENT ledger row (Claude Code "Background tasks" parity) ──
+// Line 1: status + what it was asked to do + its subagent type.
+// Line 2: Agent · elapsed · tokens · tool uses · what it's doing · View transcript.
+const AgentRow = memo(function AgentRow({
+  task, now, onOpenTranscript,
+}: { task: BackgroundTask; now: number; onOpenTranscript: (t: BackgroundTask) => void }) {
+  const title = task.description || task.subagentType || task.taskId.slice(0, 8);
+  return (
+    <div className={`wf-agent-row wf-agent-row-${task.status}`}>
+      <div className="wf-agent-row-head">
+        <StatusDot status={task.status} />
+        <span className="wf-agent-row-name" title={title}>{title}</span>
+        {task.subagentType && (
+          <span className="task-group-agent-type" title="Subagent type">{task.subagentType}</span>
+        )}
+      </div>
+      <div className="wf-agent-row-meta">
+        {/* CSS owns the middot separators, so the builder stays a plain list of segments. */}
+        {buildAgentMeta(task, now).map((seg, i) => (
+          <span key={i} className="wf-agent-row-meta-item">{seg}</span>
+        ))}
+        <button
+          className="wf-agent-row-transcript"
+          onClick={() => onOpenTranscript(task)}
+          title="Read this agent's full transcript"
+        >
+          View transcript
+        </button>
+      </div>
+    </div>
+  );
+});
+
 export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { sessionId: string }) {
   const { workflowName, workflowDescription, scriptSource, inFlight, tasks, phases, agents } = useBackgroundTasks(sessionId);
+  // The chat's Agent cards read the same ledger by toolUseId (store, not
+  // context: a heartbeat must re-render the one card that moved, not the
+  // whole conversation), so both surfaces show one status per agent.
+  useEffect(() => { publishLiveAgents(sessionId, tasks); }, [sessionId, tasks]);
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
   const [showScript, setShowScript] = useState(false);
   // null = follow the smart default (collapse a finished run, expand a live one);
@@ -58,6 +112,16 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
 
   const isWorkflow = agents.length > 0;
+
+  // Collapse: ALWAYS default collapsed — the panel sits quietly as a one-line
+  // header (counts show liveness) and never auto-expands, even while work is
+  // running (auto-expand hogged chat space mid-turn). User clicks win.
+  // Fullscreen forces expanded — a collapsed full-screen panel makes no sense.
+  // Computed BEFORE the early return below so the tick hook can gate on it (hooks
+  // must not sit after a conditional return).
+  const collapsed = !isFullscreen && (collapseOverride ?? true);
+  // Elapsed on a running agent row only ticks when a row is on screen to show it.
+  const now = useSecondTick(!collapsed && !isWorkflow && tasks.some(t => t.status === 'running' && isAgentTask(t)));
 
   // Nothing to show until at least one background task / agent has appeared.
   if (!isWorkflow && tasks.length === 0 && inFlight === 0) return null;
@@ -81,12 +145,6 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
     ? wfCounts.tokens
     : tasks.reduce((s, t) => s + (t.tokens ?? 0), 0);
 
-  // Collapse: ALWAYS default collapsed — the panel sits quietly as a one-line
-  // header (counts show liveness) and never auto-expands, even while work is
-  // running (auto-expand hogged chat space mid-turn). User clicks win.
-  // Fullscreen forces expanded — a collapsed full-screen panel makes no sense.
-  const collapsed = !isFullscreen && (collapseOverride ?? true);
-
   // Orientation: Home Panel stays VERTICAL (glanceable stacked timeline — the daily
   // surface); only fullscreen promotes to the HORIZONTAL swimlane graph (space is
   // guaranteed there). Deliberately NOT width-based — predictable, no surprise flips.
@@ -95,6 +153,27 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   const openTranscript = (a: WorkflowAgent) =>
     setTranscriptTarget({ agentId: a.agentId, label: a.label, model: a.model, meta: agentMeta(a) });
   const toggleAgent = (id: string) => setExpandedAgent(prev => (prev === id ? null : id));
+  // A plain background agent's taskId IS its subagent id, and workflow:false picks the
+  // flat transcript layout + the bare cache key the chat's TaskGroup already uses.
+  const openAgentTranscript = (t: BackgroundTask) => setTranscriptTarget({
+    agentId: t.taskId, label: t.description, meta: buildAgentMeta(t, Date.now()).join(' · '),
+    workflow: false, live: t.status === 'running',
+  });
+
+  // `live`/`meta` must follow the AGENT, not the click that opened the modal: an agent
+  // that finishes while the reader is open owes one final (cacheable) fetch, and the
+  // header numbers should keep counting. So re-derive them from the current snapshot.
+  // An agent the ledger no longer lists (state replaced by the persisted
+  // manifest after a reconnect) is not live either: keep the click-time meta
+  // but stop polling.
+  const openAgent = transcriptTarget?.workflow === false
+    ? tasks.find(t => t.taskId === transcriptTarget.agentId)
+    : undefined;
+  const modalTarget = transcriptTarget?.workflow === false
+    ? (openAgent
+        ? { ...transcriptTarget, meta: buildAgentMeta(openAgent, now).join(' · '), live: openAgent.status === 'running' }
+        : { ...transcriptTarget, live: false })
+    : transcriptTarget;
 
   return (
     <>
@@ -174,7 +253,9 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
               {agentTasks.length > 0 && plainTasks.length > 0 && (
                 <div className="wf-section-label">Agents</div>
               )}
-              {agentTasks.map(t => <TaskRow key={t.taskId} task={t} />)}
+              {agentTasks.map(t => (
+                <AgentRow key={t.taskId} task={t} now={now} onOpenTranscript={openAgentTranscript} />
+              ))}
               {agentTasks.length > 0 && plainTasks.length > 0 && (
                 <div className="wf-section-label">Tasks</div>
               )}
@@ -184,9 +265,9 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
         </>
       )}
 
-      {transcriptTarget && (
+      {modalTarget && (
         <WorkflowTranscriptModal
-          target={transcriptTarget}
+          target={modalTarget}
           sessionId={sessionId}
           onClose={() => setTranscriptTarget(null)}
         />

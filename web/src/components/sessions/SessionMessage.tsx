@@ -8,6 +8,7 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { useStableHtml } from '@/hooks/useStableHtml';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
+import { useLiveAgentStatus } from '@/stores/background-agents-store';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
 import { MessageMetaRow, UUID_RE } from './MessageMetaRow';
@@ -893,11 +894,29 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
       : tool.name;
   const subagentType = typeof tool.input?.subagent_type === 'string' ? tool.input.subagent_type : '';
   const modelChip = agentModelLabel(tool.input);
-  const hasResult = !!tool.result;
+  // The card's state follows the Background ledger while this session's live
+  // task set knows the agent (a background agent's tool_result is launch
+  // metadata written while it still runs, so result-presence alone would draw
+  // ✓ on a running agent — the 2026-09-08 report's ✓ card above a "60 tools"
+  // live box). ✓ needs proof the RUN is over: the ledger's terminal status, or
+  // the parser's bgTaskFinished stamp (a task-notification for background
+  // agents, the tool_result itself for sync ones — history-delta.ts uses the
+  // same stamp as "settled"). A launched agent with neither shows the neutral
+  // ▶ (no dot): its outcome is unknown here, e.g. a reload mid-run before the
+  // next ledger heartbeat.
+  const live = useLiveAgentStatus(sessionId, tool.toolUseId);
+  const liveRunning = live?.status === 'running' || live?.status === 'paused';
+  const liveFailed = live?.status === 'failed';
+  const liveDone = live != null && !liveRunning && !liveFailed;
+  const finished = liveDone || !!tool.bgTaskFinished;
 
   // Resolved children: inline (already attached) or lazy-loaded
   const children = tool.childMessages ?? lazyChildren;
   const toolCount = children?.reduce((n, m) => n + (m.tools?.length ?? 0), 0) ?? 0;
+  // The ledger's tool_uses counter is the live number while the agent runs
+  // and stays the right number after it finishes (the badge must not vanish
+  // on completion); a lazy-loaded transcript can only be equal or behind.
+  const shownToolCount = live?.toolUses != null ? Math.max(live.toolUses, toolCount) : toolCount;
   const agentTree = countAgentTreeHistory(children);
 
   const handleToggle = useCallback(async () => {
@@ -912,7 +931,10 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
         try {
           const result = await fetchSubagentHistory(sessionId, tool.agentId);
           setLazyChildren(result.messages);
-          setSubagentCache(sessionId, tool.agentId, result.messages);
+          // Only a proven-finished run is cacheable: the ledger's transcript
+          // reader shares this key, and a partial transcript cached here would
+          // be served as the final one after the agent completes.
+          if (tool.bgTaskFinished) setSubagentCache(sessionId, tool.agentId, result.messages);
           log.info('session', `lazy-loaded subagent ${tool.agentId}: ${result.messages.length} msgs`);
         } catch (err) {
           log.warn('session', 'failed to lazy-load subagent', { agentId: tool.agentId, error: String(err) });
@@ -933,11 +955,11 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
   const hiddenCount = innerStart;
 
   return (
-    <div className={`task-group ${open ? 'task-group--open' : ''}`}>
+    <div className={`task-group ${open ? 'task-group--open' : ''} ${liveRunning ? 'task-group--live' : ''} ${liveFailed ? 'task-group--error' : ''}`}>
       <button className="task-group-header" onClick={handleToggle}>
         <span className="task-group-chevron">{open ? '\u25BC' : '\u25B6'}</span>
         <span className="task-group-icon">
-          {loadingChildren ? '\u23F3' : hasResult ? '\u2713' : '\u25B6'}
+          {loadingChildren ? '\u23F3' : liveFailed ? '\u2717' : liveRunning ? '\u25B6' : finished ? '\u2713' : '\u25B6'}
         </span>
         <span className="task-group-label">{tool.name}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
@@ -948,9 +970,10 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
             ⑂ {agentTree.direct}{agentTree.total > agentTree.direct ? `+${agentTree.total - agentTree.direct}` : ''} agent{agentTree.total !== 1 ? 's' : ''}
           </span>
         )}
-        {!open && toolCount > 0 && (
-          <span className="task-group-badge">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
+        {!open && shownToolCount > 0 && (
+          <span className="task-group-badge">{shownToolCount} tool{shownToolCount !== 1 ? 's' : ''}</span>
         )}
+        {liveRunning && <span className="task-group-streaming-dot" />}
       </button>
       {open && (
         <div className="task-group-body">
