@@ -17,6 +17,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createMockConstants } from '../helpers/mock-constants.js'
+
+// Hermetic stores: a reused lane now consults the conversation store before it
+// sends (the catch-up check), so this file must not read the real home dir.
+vi.mock('../../src/constants.js', () => createMockConstants())
 
 const getOrCreateLaneSession = vi.hoisted(() => vi.fn())
 const sendMessageToSession = vi.hoisted(() => vi.fn(async () => ({ id: 'qm-test' })))
@@ -44,10 +49,18 @@ function emitResult(data: Record<string, unknown>): void {
   bus.emit(EventNames.SESSION_RESULT, data as never, ['main-ai'], { source: 'test' })
 }
 
-/** Let the lane resolve + (for a reused lane) the send complete before emitting. */
+/**
+ * Let the lane resolve + (for a reused lane) the send complete before emitting.
+ *
+ * Polls rather than counting microtasks: a reused lane now awaits a store read
+ * (the catch-up check) between resolving the lane and sending, so a fixed tick
+ * budget would race it.
+ */
 async function settleSend(): Promise<void> {
-  for (let i = 0; i < 5; i++) await Promise.resolve()
-  await new Promise((r) => setTimeout(r, 5))
+  for (let i = 0; i < 60; i++) {
+    if (sendMessageToSession.mock.calls.length > 0) return
+    await new Promise((r) => setTimeout(r, 5))
+  }
 }
 
 beforeEach(() => {

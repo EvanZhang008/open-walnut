@@ -27,6 +27,9 @@ import { WALNUT_HOME, validateAgentId } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { getConfig } from '../config-manager.js';
 import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
+// One source of truth for the seed's header: the store renders the block, this
+// module splices it into the spawn prompt and has to find it again on a repair.
+import { CONVERSATION_SEED_HEADER, clipRenderedSeed } from '../chat-history.js';
 import { personalAiProfile, consoleAgentProfile } from './profiles.js';
 import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import type { SessionEngine } from '../types.js';
@@ -394,14 +397,44 @@ export async function cleanupLaneClaudeMd(homeDir: string = WALNUT_HOME): Promis
   }
 }
 
+/**
+ * Hard ceiling the provider enforces on a spawn's system prompt
+ * (claude-code-session.ts `MAX_PROFILE_PROMPT_BYTES`): the prompt rides the
+ * spawn argv, so an oversized one does NOT degrade — `send()` throws and the
+ * mint fails, which would take the whole chat down. Mirrored rather than
+ * imported because it is a local const over there; the ratchet is a test that
+ * mints on a whale conversation and asserts the prompt stays under it.
+ */
+const MAX_LANE_PROMPT_BYTES = 65536;
+
+/** Argv headroom held back for the join, the header and future persona growth. */
+const LANE_SEED_RESERVE_BYTES = 4096;
+
+/** Below this there is no room for a useful recap; seeding is skipped and said. */
+const LANE_SEED_MIN_BYTES = 2048;
+
 /** The persona/skills/memory bundle + effort a claude-engine lane spawns with.
  *  Exported for quick-start's `walnutAgent` launches ("Ask Walnut" draft tab):
  *  those are ordinary task sessions that spawn with this same profile, so the
- *  persona/memory/skills bundle has exactly one builder. */
+ *  persona/memory/skills bundle has exactly one builder.
+ *
+ *  `opts.conversationId` additionally appends the CONVERSATION SEED — the prior
+ *  content of that conversation — and is passed ONLY by the mint. Two reasons it
+ *  must not be passed anywhere else: the seed is a one-shot snapshot (the record
+ *  keeps it verbatim, and a cold `--resume` deliberately re-emits the spawn-time
+ *  prompt byte-for-byte to hold the cache prefix), and the drift-repair path
+ *  compares persona halves, so a repair that rebuilt a GROWN seed would rewrite
+ *  the record on every single turn. See splitLanePrompt. */
 export async function buildLaneProfile(
   config: Awaited<ReturnType<typeof getConfig>>,
   agentId: string,
-): Promise<{ profile: import('../types.js').SessionProfile; effort: import('../types.js').SessionEffort }> {
+  opts?: { conversationId?: string },
+): Promise<{
+  profile: import('../types.js').SessionProfile;
+  effort: import('../types.js').SessionEffort;
+  /** Present only when a conversation seed was requested AND rendered. */
+  seed?: import('../chat-history.js').ConversationSeed;
+}> {
   // Walnut's own skills (workspace / ~/.open-walnut/skills / shipped) — no CLI
   // engine ever discovers these, so the lane prompt carries the index itself.
   // ~/.claude/skills is excluded (Claude Code loads it natively). Failure is
@@ -429,7 +462,103 @@ export async function buildLaneProfile(
   // xhigh, tuned for coding sessions) — measured 100s+ for "what tasks do I have
   // today". Config `agent.session_effort` still wins when the user set one.
   const effort = config.agent?.session_effort ?? 'medium';
-  return { profile, effort };
+  if (!opts?.conversationId) return { profile, effort };
+
+  // ── Conversation seed (mint only) ──
+  // The invariant this serves: an engine that answers a turn must be given the
+  // conversation's whole prior content, or it denies things the user can see on
+  // screen. Delivered HERE rather than as a first user turn: a turn burns a turn,
+  // the model often answers it, and the mints that carry no message at all (the
+  // read-driven `ensure: true` one the phone's model pill triggers on mount)
+  // would produce a visible orphan turn.
+  const base = profile.systemPrompt ?? '';
+  const headroom = MAX_LANE_PROMPT_BYTES - Buffer.byteLength(base, 'utf-8') - LANE_SEED_RESERVE_BYTES;
+  if (headroom < LANE_SEED_MIN_BYTES) {
+    log.session.warn('Personal AI lane: no argv headroom for the conversation seed — the lane starts without prior turns', {
+      agentId, conversationId: opts.conversationId,
+      personaBytes: Buffer.byteLength(base, 'utf-8'), headroom,
+    });
+    return { profile, effort };
+  }
+  const { buildConversationSeed } = await import('../chat-history.js');
+  const seed = await buildConversationSeed(agentId, opts.conversationId, { maxBytes: headroom })
+    .catch((err) => {
+      // A lane without prior turns still answers; a lane that failed to mint
+      // does not. Never let the seed fail the spawn.
+      log.session.warn('Personal AI lane: building the conversation seed failed', {
+        agentId, conversationId: opts.conversationId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    });
+  if (!seed || !seed.text) return { profile, effort, ...(seed ? { seed } : {}) };
+  return {
+    profile: { ...profile, systemPrompt: `${base}\n\n${seed.text}` },
+    effort,
+    seed,
+  };
+}
+
+/**
+ * Split a lane system prompt into its persona half and its frozen conversation
+ * seed.
+ *
+ * The seed is a mint-time snapshot that must stay byte-stable for the life of
+ * the lane (a cold `--resume` re-emits the spawn prompt verbatim so the cache
+ * prefix holds). The persona half, in contrast, is refreshed whenever skills /
+ * memory / the persona itself change. Comparing and rewriting only the persona
+ * half is what keeps the drift repair from firing on every turn just because the
+ * conversation grew — which would be a sqlite write per lane send AND a record
+ * whose stored prompt grows without bound.
+ */
+export function splitLanePrompt(prompt: string): { persona: string; seed: string } {
+  // LAST occurrence, not the first: the seed is appended, so the real boundary is
+  // always the last one. The persona half can legitimately contain the header
+  // string (standing memory quoting it, a skill describing this mechanism), and
+  // splitting there would classify the whole persona as "seed" — after which the
+  // persona half never changes, the drift repair silently stops repairing, and a
+  // lane keeps a stale persona for its entire life. The same reasoning is why the
+  // rendered seed neutralizes the marker inside quoted turns (chat-history
+  // neutralizeSeedMarkers): the boundary must be the one WE wrote.
+  const at = prompt.lastIndexOf(CONVERSATION_SEED_HEADER);
+  if (at < 0) return { persona: prompt.trimEnd(), seed: '' };
+  return { persona: prompt.slice(0, at).trimEnd(), seed: prompt.slice(at) };
+}
+
+/**
+ * The prompt a drift repair writes: the FRESH persona plus the lane's FROZEN
+ * seed, clamped to the provider's ceiling.
+ *
+ * Why the clamp is not optional. The mint clamps (headroom check above), but the
+ * repair used to concatenate blind, and the persona is the half that grows —
+ * standing memory grows every week, a skill gets added. A lane that minted at
+ * 60,729 B with a 6 KB memory growth wrote a 66,729 B record: 1,193 B over the
+ * ceiling. Nothing notices at write time; the next COLD RESUME throws in the
+ * provider (claude-code-session MAX_PROFILE_PROMPT_BYTES) and the lane is bricked
+ * — the exact "the chat is dead" outcome this whole change exists to prevent,
+ * arrived at from the fix side.
+ *
+ * Degradation ladder, worst case last: keep the whole seed → shrink the seed from
+ * its oldest end (clipRenderedSeed, which keeps the notice) → drop the seed
+ * entirely. Dropping is survivable precisely because the record's seed only
+ * matters on a cold resume, and a resumed CLI restores its own transcript: the
+ * cost is a lost cache prefix, not lost memory.
+ */
+export function buildRepairedLanePrompt(
+  freshPersona: string,
+  frozenSeed: string,
+): { prompt: string; seed: 'none' | 'whole' | 'clipped' | 'dropped' } {
+  const personaBytes = Buffer.byteLength(freshPersona, 'utf-8');
+  // Nothing to preserve: a lane minted before the seed existed, or one whose mint
+  // had no argv headroom. Its catch-up rides the message channel instead.
+  if (!frozenSeed) return { prompt: freshPersona, seed: 'none' };
+  const whole = `${freshPersona}\n\n${frozenSeed}`;
+  if (Buffer.byteLength(whole, 'utf-8') <= MAX_LANE_PROMPT_BYTES) return { prompt: whole, seed: 'whole' };
+  // Same reserve as the mint, so a repaired record is never closer to the
+  // ceiling than a freshly minted one.
+  const room = MAX_LANE_PROMPT_BYTES - personaBytes - LANE_SEED_RESERVE_BYTES - 2;
+  if (room < LANE_SEED_MIN_BYTES) return { prompt: freshPersona, seed: 'dropped' };
+  return { prompt: `${freshPersona}\n\n${clipRenderedSeed(frozenSeed, room)}`, seed: 'clipped' };
 }
 
 /** Last drift-repair attempt per session — the check reads skills + memory
@@ -502,6 +631,90 @@ async function waitForLaneRecord(lane: string, timeoutMs: number, engineLabel: s
   }
 }
 
+/**
+ * The prior conversation wrapped onto the mint's first MESSAGE, or null when
+ * there is nothing to carry that way.
+ *
+ * The second carrier for the conversation seed, and for an ACP lane the only one.
+ * Its existence is the answer to "the argv is a hard ceiling": a system prompt
+ * over 64KB makes the provider throw and the mint fail, while stdin has no
+ * ceiling at all — so a recap the profile cannot hold is not lost, it changes
+ * carrier. Bounded only by the token policy for that reason.
+ *
+ * Wrapped in the established `[Conversation context]…[/Conversation context]`
+ * banner, exactly like the turn-time catch-up: the mobile transcript projection
+ * strips a leading banner, the console folds it into a collapsed disclosure row,
+ * and the conversation auto-titler ignores it. The store keeps the user's clean
+ * text either way — both senders persist the message BEFORE the mint, so only the
+ * CLI transcript ever sees the spliced copy.
+ *
+ * PRECONDITION: `firstMessage` is non-empty. A mint with no message (the
+ * read-driven `ensure: true` one the phone's model pill fires on mount) has
+ * nothing to prepend to, and inventing a turn would put a bubble on screen the
+ * user never sent — the callers guard that, visibly, rather than this returning
+ * null for two different reasons.
+ *
+ * Never throws: a lane that answers is worth more than a seeded one that never
+ * minted.
+ */
+async function recapOntoFirstMessage(
+  agentId: string,
+  conversationId: string,
+  firstMessage: string,
+  lane: string,
+): Promise<{ message: string; watermark: string; stats: import('../chat-history.js').ConversationSeedStats } | null> {
+  try {
+    const { buildConversationSeed, CATCH_UP_BANNER_OPEN, CATCH_UP_BANNER_CLOSE } = await import('../chat-history.js');
+    // No maxBytes: this rides stdin, so only the token policy bounds it.
+    const recap = await buildConversationSeed(agentId, conversationId);
+    if (!recap.text) return null;
+    return {
+      message: `${CATCH_UP_BANNER_OPEN}\n${recap.text}\n${CATCH_UP_BANNER_CLOSE}\n\n${firstMessage}`,
+      watermark: recap.watermark,
+      stats: recap.stats,
+    };
+  } catch (err) {
+    log.session.warn('Personal AI lane: building the message-carried recap failed', {
+      lane, agentId, conversationId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * Latch how far this lane has been caught up.
+ *
+ * Called ONLY when the recap was actually delivered by one of the two carriers,
+ * or when there was nothing to deliver. The key's presence is what tells the
+ * turn-time catch-up "this lane was seeded, only inject what another engine has
+ * answered SINCE", so latching after a recap that reached neither carrier tells
+ * that exact lie: trigger B is suppressed by the mark and trigger A only ever
+ * carries foreign answers, so a lane that got nothing stays blind to the
+ * conversation for its entire life. Measured on a 60KB persona: the record
+ * carried no seed, the mark was latched anyway, and the next send found nothing
+ * to inject.
+ *
+ * Best-effort — a lane that answers is worth more than a bookkeeping row, and the
+ * worst case of a lost write is one duplicated recap later.
+ */
+async function latchLaneSeen(
+  agentId: string,
+  conversationId: string,
+  sessionId: string,
+  watermark: string,
+  lane: string,
+): Promise<void> {
+  try {
+    const { recordLaneSeen, laneEngineLabel } = await import('../chat-history.js');
+    await recordLaneSeen(agentId, conversationId, laneEngineLabel(sessionId), watermark);
+  } catch (err) {
+    log.session.warn('Personal AI lane: recording the seed high-water mark failed', {
+      lane, sessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function resolveLane(
   lane: string,
   agentId: string,
@@ -525,16 +738,35 @@ async function resolveLane(
     // claude engine only — ACP has no profile channel (no system-prompt param).
     if (!isAcpEngine(existingEngine)) {
       const { profile, effort } = await buildLaneProfile(config, agentId);
-      if (existing.profile?.systemPrompt !== profile.systemPrompt) {
+      // PERSONA halves only. The record's prompt also carries the mint-time
+      // conversation seed, which is a frozen snapshot: comparing whole prompts
+      // would differ on every turn (the conversation grew) and rewrite the
+      // record on every send, and rebuilding the seed here would break the
+      // byte-exact spawn prompt a cold --resume re-emits.
+      const current = splitLanePrompt(existing.profile?.systemPrompt ?? '');
+      const freshPersona = splitLanePrompt(profile.systemPrompt ?? '').persona;
+      if (current.persona !== freshPersona) {
+        // CLAMPED, always: the persona is the half that grows, and an over-ceiling
+        // record does not degrade — it throws on the next cold resume and the lane
+        // never comes back. See buildRepairedLanePrompt.
+        const rebuilt = buildRepairedLanePrompt(profile.systemPrompt ?? '', current.seed);
         const { updateSessionRecord } = await import('../session-tracker.js');
-        await updateSessionRecord(existing.claudeSessionId, { profile, effort }).catch((err) => {
+        await updateSessionRecord(existing.claudeSessionId, {
+          profile: { ...profile, systemPrompt: rebuilt.prompt }, effort,
+        }).catch((err) => {
           log.session.warn('Personal AI lane: profile refresh failed', {
             lane, sessionId: existing.claudeSessionId,
             error: err instanceof Error ? err.message : String(err),
           });
         });
-        log.session.info('Personal AI lane: stale profile refreshed on record', {
-          lane, sessionId: existing.claudeSessionId,
+        // A clipped or dropped seed means the grown persona is crowding out the
+        // conversation the lane was given — worth a warn, not an info.
+        const logAt = rebuilt.seed === 'clipped' || rebuilt.seed === 'dropped'
+          ? log.session.warn
+          : log.session.info;
+        logAt('Personal AI lane: stale profile refreshed on record', {
+          lane, sessionId: existing.claudeSessionId, seed: rebuilt.seed,
+          promptBytes: Buffer.byteLength(rebuilt.prompt, 'utf-8'),
         });
       }
     }
@@ -552,24 +784,78 @@ async function resolveLane(
     // handleAcpStart, which creates the lane-bound record on establish) and wait
     // for that record. Known limitation: no persona/profile — ACP has no
     // system-prompt channel, so an ACP lane is a bare provider chat.
+    //
+    // That limitation is why the MESSAGE is an ACP lane's only carrier for the
+    // conversation seed — not a fallback the way it is on the claude branch, the
+    // whole channel. The invariant has no exception for a transport: an ACP lane
+    // that answers turn one without the prior conversation denies text the user is
+    // looking at, exactly like a claude lane would.
+    //
+    // Same guard, same banner, same latch-follows-delivery rule as below; the
+    // `!seedInProfile` half is constantly true here because there is no profile.
+    // A message-less mint still carries nothing and latches nothing, so
+    // buildLaneCatchUp trigger B covers it on its first real send.
     const acpEngine = resolveEngine(engine);
+    const viaMessage = firstMessage
+      ? await recapOntoFirstMessage(agentId, conversationId, firstMessage, lane)
+      : null;
     bus.emit(EventNames.SESSION_START, {
       taskId: '',
-      message: firstMessage,
+      message: viaMessage?.message ?? firstMessage,
       cwd: WALNUT_HOME,
       title,
       lane,
       engine: acpEngine,
     }, ['session-runner'], { source: 'personal-ai-lane' });
+    // Throws on a session that never established — and then nothing was delivered,
+    // so nothing has been latched. That ordering is the point.
     const sessionId = await waitForLaneRecord(lane, 90_000, engineCaps(acpEngine).displayName);
+    if (viaMessage) await latchLaneSeen(agentId, conversationId, sessionId, viaMessage.watermark, lane);
     log.session.info('Personal AI lane: ACP session created', {
       lane, sessionId, agentId, conversationId, engine: acpEngine,
+      // One grep answers "did this lane ever get its history, and how".
+      seedCarrier: viaMessage ? 'message' : 'none',
+      seedTurns: viaMessage?.stats.turnsKept ?? 0,
+      seedTurnsAvailable: viaMessage?.stats.turnsTotal ?? 0,
+      seedTokens: viaMessage?.stats.tokens ?? 0,
+      seedOmitted: viaMessage?.stats.omitted ?? false,
     });
     return { sessionId, created: true, engine: acpEngine };
   }
 
-  const { profile, effort } = await buildLaneProfile(config, agentId);
+  // The seed rides the profile, so it lands on BOTH the record and the spawn —
+  // deliberately the same string, because a cold --resume re-emits the record's
+  // prompt and the cache prefix has to match the original spawn byte for byte.
+  const { profile, effort, seed } = await buildLaneProfile(config, agentId, { conversationId });
   const sessionId = crypto.randomUUID();
+
+  // Did the seed actually ride the spawn profile? Empty text with turns available
+  // means it did NOT (no argv headroom, or the build failed); empty text with no
+  // turns available means there was nothing to carry.
+  const seedInProfile = !!seed && (seed.text !== '' || seed.stats.turnsTotal === 0);
+
+  // ── Fallback carrier: the first message ──
+  // The argv could not hold the recap, but the conversation HAS prior content, so
+  // the lane would answer its very first turn blind — the exact failure this whole
+  // change exists to prevent, narrowed to one turn. So it changes carrier (see
+  // recapOntoFirstMessage), which is the same channel the turn-time catch-up uses.
+  //
+  // Only when there IS a message to ride: a read-driven `ensure: true` mint passes
+  // none, and that lane is covered by buildLaneCatchUp trigger B instead.
+  let message = firstMessage;
+  /** null = nothing was delivered, so nothing may be latched (see below). */
+  let deliveredWatermark: string | null = seedInProfile ? (seed?.watermark ?? '') : null;
+  if (!seedInProfile && firstMessage) {
+    const viaMessage = await recapOntoFirstMessage(agentId, conversationId, firstMessage, lane);
+    if (viaMessage) {
+      message = viaMessage.message;
+      deliveredWatermark = viaMessage.watermark;
+      log.session.warn('Personal AI lane: the spawn argv could not hold the seed — the recap rides the first message instead', {
+        lane, sessionId, agentId, conversationId,
+        turns: viaMessage.stats.turnsKept, tokens: viaMessage.stats.tokens, omitted: viaMessage.stats.omitted,
+      });
+    }
+  }
 
   // Seed the record BEFORE the spawn — same reason quick-start does (the id is
   // ours, so the row can exist before the CLI). Here it additionally CLOSES the
@@ -590,7 +876,7 @@ async function resolveLane(
   // Personal AI (which never prompted the user to approve its own tool calls).
   bus.emit(EventNames.SESSION_START, {
     taskId: '',
-    message: firstMessage,
+    message,
     cwd: WALNUT_HOME,
     title,
     profile,
@@ -599,6 +885,29 @@ async function resolveLane(
     preassignedSessionId: sessionId,
   }, ['session-runner'], { source: 'personal-ai-lane' });
 
-  log.session.info('Personal AI lane: session created', { lane, sessionId, agentId, conversationId });
+  // Latch how far this lane has been caught up — ONLY when the recap was actually
+  // delivered by one of the two carriers, or when there was nothing to deliver
+  // (see latchLaneSeen). Not latching is cheap and self-healing: the very next
+  // send finds no mark and no seed in the profile, and trigger B delivers the
+  // recap through the message channel. That path is what the read-driven mint
+  // (no message to ride) relies on.
+  if (deliveredWatermark !== null) {
+    await latchLaneSeen(agentId, conversationId, sessionId, deliveredWatermark, lane);
+  } else {
+    log.session.warn('Personal AI lane: the mint delivered no conversation seed — the next send catches the lane up instead', {
+      lane, sessionId, agentId, conversationId,
+      seedBuilt: !!seed, seedTurnsAvailable: seed?.stats.turnsTotal ?? 0,
+      hadMessageToRide: !!firstMessage,
+    });
+  }
+
+  log.session.info('Personal AI lane: session created', {
+    lane, sessionId, agentId, conversationId,
+    seedCarrier: seedInProfile ? 'profile' : (message !== firstMessage ? 'message' : 'none'),
+    seedTurns: seed?.stats.turnsKept ?? 0,
+    seedTurnsAvailable: seed?.stats.turnsTotal ?? 0,
+    seedTokens: seed?.stats.tokens ?? 0,
+    seedOmitted: seed?.stats.omitted ?? false,
+  });
   return { sessionId, created: true, engine: 'claude' };
 }

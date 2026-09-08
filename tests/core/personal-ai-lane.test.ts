@@ -23,7 +23,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
-import { WALNUT_HOME } from '../../src/constants.js'
+import { WALNUT_HOME, conversationFile } from '../../src/constants.js'
 import { personalAiLaneKey, parseLaneKey, getOrCreateLaneSession } from '../../src/core/sessions/personal-ai-lane.js'
 import { personalAiProfile, walnutMcpProfile } from '../../src/core/sessions/profiles.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
@@ -290,7 +290,377 @@ describe('buildLaneMemoryContext', () => {
     expect(prompt).toContain('Marker entry XYZZY')
   })
 
-  it('cleanupLaneClaudeMd removes retired managed files across naming versions, never a user-authored one', async () => {
+})
+
+// ══════════════════════════════════════════════════════════════════
+//  5. The conversation seed — a fresh lane is told what already happened
+//
+//  THE INVARIANT: every engine that answers a turn in a conversation must be
+//  given that conversation's whole prior content. A lane minted for a
+//  conversation that already has turns used to start with an EMPTY context while
+//  the phone and the console kept rendering the whole thing, so it answered
+//  "there is no such context in this conversation" about text on the screen.
+// ══════════════════════════════════════════════════════════════════
+
+/** Write a conversation store DIRECTLY — fixture data, no per-entry write lock. */
+async function seedConversation(
+  conversationId: string,
+  turns: Array<{ user: string; assistant: string; engine?: string }>,
+  compactionSummary: string | null = null,
+): Promise<void> {
+  const entries: unknown[] = []
+  let t = Date.parse('2026-09-01T00:00:00.000Z')
+  for (const turn of turns) {
+    entries.push({ tag: 'ai', role: 'user', content: turn.user, timestamp: new Date(t += 1000).toISOString() })
+    entries.push({
+      tag: 'ai', role: 'assistant',
+      content: [{ type: 'text', text: turn.assistant }],
+      timestamp: new Date(t += 1000).toISOString(),
+      ...(turn.engine ? { engine: turn.engine } : {}),
+    })
+  }
+  const file = conversationFile('general', conversationId)
+  await fsp.mkdir(file.slice(0, file.lastIndexOf('/')), { recursive: true })
+  await fsp.writeFile(file, JSON.stringify({
+    version: 2, lastUpdated: new Date().toISOString(), compactionCount: 0, compactionSummary, entries,
+  }), 'utf-8')
+}
+
+async function storeOf(conversationId: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await fsp.readFile(conversationFile('general', conversationId), 'utf-8'))
+}
+
+/** Standing memory of a known size — the half of the persona that GROWS. */
+async function setMemory(bytes: number): Promise<void> {
+  await fsp.mkdir(`${WALNUT_HOME}/memory`, { recursive: true })
+  await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`, `## Standing notes\n\n${'m'.repeat(bytes)}\n`, 'utf-8')
+}
+
+/** A conversation big enough that the seed fills every byte of argv headroom. */
+async function seedWhale(conversationId: string): Promise<void> {
+  const body = 'z'.repeat(1500)
+  await seedConversation(conversationId, Array.from({ length: 300 }, (_, i) => ({
+    user: `question ${i}`, assistant: `answer ${i} ${body}`, engine: 'walnut-agent-fallback',
+  })))
+}
+
+describe('the conversation seed on a fresh mint', () => {
+  it('puts the prior turns in the spawn profile, newest last, without thinking or tool bytes', async () => {
+    await seedConversation('conv-seeded', [
+      { user: 'what broke the deploy?', assistant: 'A stale asset mirror.', engine: 'walnut-agent-fallback' },
+      { user: 'and the fix?', assistant: 'One directory per build.', engine: 'walnut-agent-fallback' },
+    ], '## Goal\nEARLIER-SUMMARY-MARKER')
+
+    await getOrCreateLaneSession('general', 'conv-seeded', { firstMessage: 'anything else?' })
+    const prompt = started[0].profile?.systemPrompt ?? ''
+
+    expect(prompt).toContain('## Conversation so far (injected by Walnut)')
+    expect(prompt).toContain('what broke the deploy?')
+    expect(prompt).toContain('A stale asset mirror.')
+    expect(prompt).toContain('EARLIER-SUMMARY-MARKER')
+    // Order: the persona comes first, then the seed, then the turns in order.
+    expect(prompt.indexOf('Personal AI')).toBeLessThan(prompt.indexOf('## Conversation so far'))
+    expect(prompt.indexOf('A stale asset mirror.')).toBeLessThan(prompt.indexOf('One directory per build.'))
+    // The message riding the spawn is NOT repeated inside the recap.
+    expect(prompt).not.toContain('anything else?')
+
+    // The record carries the identical string: a cold --resume re-emits the
+    // record's prompt, and the cache prefix has to match the spawn byte for byte.
+    const { getSessionByLane } = await import('../../src/core/session-tracker.js')
+    const record = await getSessionByLane('chat:general:conv-seeded')
+    expect(record?.profile?.systemPrompt).toBe(prompt)
+
+    // And the lane's high-water mark is latched, so the turn-time catch-up knows
+    // this lane has already been given everything up to here.
+    const store = await storeOf('conv-seeded')
+    const laneSeen = store.laneSeen as Record<string, string>
+    expect(laneSeen[`lane:${record!.claudeSessionId}`]).toBe(
+      ((store.entries as Array<{ timestamp: string }>).at(-1))!.timestamp,
+    )
+  })
+
+  it('mints with no seed at all for an empty conversation, but still latches the mark', async () => {
+    const lane = await getOrCreateLaneSession('general', 'conv-fresh', { firstMessage: 'first ever' })
+    expect(started[0].profile?.systemPrompt).not.toContain('## Conversation so far')
+    const laneSeen = (await storeOf('conv-fresh')).laneSeen as Record<string, string>
+    // Present with an empty value: the KEY is the "was seeded" latch.
+    expect(Object.keys(laneSeen)).toEqual([`lane:${lane.sessionId}`])
+    expect(laneSeen[`lane:${lane.sessionId}`]).toBe('')
+  })
+
+  it('caps a whale conversation under the spawn-argv ceiling, keeps the NEWEST turns, and says what it dropped', async () => {
+    // The spawn prompt rides the argv and the provider THROWS over 64KB
+    // (claude-code-session MAX_PROFILE_PROMPT_BYTES) — an uncapped seed would not
+    // degrade, it would break the mint and take the whole chat down. One real
+    // conversation on a live box holds 881 pre-lane entries.
+    const body = 'z'.repeat(1500)
+    const turns = Array.from({ length: 300 }, (_, i) => ({
+      user: `question ${i}`, assistant: `answer ${i} ${body}`, engine: 'walnut-agent-fallback',
+    }))
+    await seedConversation('conv-whale', turns)
+
+    await getOrCreateLaneSession('general', 'conv-whale', { firstMessage: 'next' })
+    const prompt = started[0].profile?.systemPrompt ?? ''
+    expect(Buffer.byteLength(prompt, 'utf-8')).toBeLessThan(65536)
+    // Newest kept whole, oldest gone, and the omission is STATED — a silent
+    // truncation reproduces the very failure being fixed.
+    expect(prompt).toContain('question 299')
+    expect(prompt).toContain(`answer 299 ${body}`)
+    expect(prompt).not.toContain('question 0\n')
+    expect(prompt).toContain('earlier turns omitted')
+  })
+
+  it('carries the recap in the FIRST MESSAGE when the argv could not hold the seed', async () => {
+    // The argv is a hard ceiling the provider throws on; stdin is not. So a mint
+    // with no headroom does not have to answer its first turn blind — it hands the
+    // recap to the other carrier, the same one the turn-time catch-up uses, wrapped
+    // in the same banner (the phone strips it, the console folds it away).
+    await setMemory(62_000)
+    await seedConversation('conv-blind', [
+      { user: 'EARLIER-QUESTION', assistant: 'EARLIER-ANSWER', engine: 'walnut-agent-fallback' },
+    ])
+    await getOrCreateLaneSession('general', 'conv-blind', { firstMessage: 'go on then' })
+    expect(started).toHaveLength(1)
+    // The profile genuinely has no room for it…
+    expect(started[0].profile?.systemPrompt).not.toContain('## Conversation so far')
+    // …so the message carries it, with the user's own text LAST.
+    const message = started[0].message ?? ''
+    expect(message).toContain('[Conversation context]')
+    expect(message).toContain('[/Conversation context]')
+    expect(message).toContain('EARLIER-QUESTION')
+    expect(message).toContain('EARLIER-ANSWER')
+    expect(message.endsWith('go on then')).toBe(true)
+    expect(message.indexOf('[/Conversation context]')).toBeLessThan(message.indexOf('go on then'))
+    // Delivered, so the mark latches — the first real send must not repeat it.
+    const store = await storeOf('conv-blind')
+    const laneSeen = store.laneSeen as Record<string, string>
+    expect(Object.values(laneSeen)).toEqual([
+      ((store.entries as Array<{ timestamp: string }>).at(-1))!.timestamp,
+    ])
+  })
+
+  it('carries NOTHING on a read-driven mint, and latches nothing either', async () => {
+    // The `ensure: true` mint the phone's model pill fires on mount passes no
+    // message at all. There is nothing to prepend to, and inventing a turn would
+    // put a bubble on screen the user never sent — so this lane stays uncaught-up
+    // on purpose, and buildLaneCatchUp trigger B delivers the recap on its first
+    // real send. That only works if NO mark is latched here.
+    await setMemory(62_000)
+    await seedConversation('conv-readonly', [
+      { user: 'EARLIER-QUESTION', assistant: 'EARLIER-ANSWER', engine: 'walnut-agent-fallback' },
+    ])
+    await getOrCreateLaneSession('general', 'conv-readonly')
+    expect(started).toHaveLength(1)
+    expect(started[0].message ?? '').toBe('')
+    expect(started[0].profile?.systemPrompt).not.toContain('## Conversation so far')
+    expect((await storeOf('conv-readonly')).laneSeen ?? {}).toEqual({})
+  })
+
+  it('does NOT latch the mark when the seed could not be rendered at all', async () => {
+    // Fault injection standing in for any throw inside the builder (an unreadable
+    // store, a lock timeout, a tokenizer failure): an out-of-contract field the
+    // renderer trips on. It lands in the same "no seed" state as the headroom miss,
+    // and must reach the same conclusion — do not claim this lane was seeded.
+    await seedConversation('conv-fault', [{ user: 'q', assistant: 'a', engine: 'x' }])
+    const store = await storeOf('conv-fault')
+    const entries = store.entries as Array<Record<string, unknown>>
+    entries[0] = { tag: 'ai', role: 'user', content: [], displayText: 42, timestamp: entries[0].timestamp }
+    await fsp.writeFile(conversationFile('general', 'conv-fault'), JSON.stringify(store), 'utf-8')
+
+    await getOrCreateLaneSession('general', 'conv-fault', { firstMessage: 'go' })
+    expect(started).toHaveLength(1)
+    expect(started[0].profile?.systemPrompt).not.toContain('## Conversation so far')
+    expect((await storeOf('conv-fault')).laneSeen ?? {}).toEqual({})
+  })
+})
+
+describe('profile drift repair vs. the frozen seed', () => {
+  it('leaves the record untouched when only the CONVERSATION grew', async () => {
+    await seedConversation('conv-drift', [{ user: 'q1', assistant: 'a1', engine: 'x' }])
+    const lane = await getOrCreateLaneSession('general', 'conv-drift', { firstMessage: 'go' })
+    const { getSessionByLane } = await import('../../src/core/session-tracker.js')
+    const minted = (await getSessionByLane('chat:general:conv-drift'))!.profile!.systemPrompt!
+
+    // The conversation keeps growing, as it does on every turn. Rebuilding the
+    // seed here would rewrite the record on EVERY send and break the byte-exact
+    // prompt a cold --resume re-emits.
+    await seedConversation('conv-drift', [
+      { user: 'q1', assistant: 'a1', engine: 'x' },
+      { user: 'q2', assistant: 'a2', engine: 'x' },
+    ])
+    const again = await getOrCreateLaneSession('general', 'conv-drift')
+    expect(again.sessionId).toBe(lane.sessionId)
+    expect((await getSessionByLane('chat:general:conv-drift'))!.profile!.systemPrompt).toBe(minted)
+  })
+
+  it('does not REWRITE the record when nothing changed', async () => {
+    // The previous test proves the stored string is equal; this one proves no write
+    // happened at all, by leaving a fingerprint only a write can erase: whitespace
+    // that the persona comparison normalizes away (splitLanePrompt trims the
+    // persona half). A repair that compared WHOLE prompts would see a difference,
+    // rewrite the record, and drop it — which is the sqlite-write-per-send this
+    // split exists to avoid.
+    await seedConversation('conv-nowrite', [{ user: 'q1', assistant: 'a1', engine: 'x' }])
+    await getOrCreateLaneSession('general', 'conv-nowrite', { firstMessage: 'go' })
+    const { getSessionByLane, updateSessionRecord } = await import('../../src/core/session-tracker.js')
+    const minted = (await getSessionByLane('chat:general:conv-nowrite'))!
+    const seedAt = minted.profile!.systemPrompt!.indexOf('## Conversation so far')
+    const FINGERPRINT = '\n   \n'
+    const marked = minted.profile!.systemPrompt!.slice(0, seedAt).trimEnd()
+      + FINGERPRINT + minted.profile!.systemPrompt!.slice(seedAt)
+    await updateSessionRecord(minted.claudeSessionId, { profile: { ...minted.profile!, systemPrompt: marked } })
+
+    await getOrCreateLaneSession('general', 'conv-nowrite')
+    const after = (await getSessionByLane('chat:general:conv-nowrite'))!.profile!.systemPrompt!
+    expect(after).toContain(FINGERPRINT + '## Conversation so far')
+  })
+
+  it('clamps the repaired record to the provider ceiling when the PERSONA grew', async () => {
+    // The mint clamps; the repair used to concatenate blind. Since the seed fills
+    // the headroom the mint left, ANY persona growth beyond the reserve pushes the
+    // record over the provider's 64KB argv limit — measured at 66,729 B from a
+    // 60,729 B mint plus 6 KB of standing memory. Nothing notices at write time:
+    // the next COLD RESUME throws inside the provider and the lane never comes
+    // back, which is the same dead chat this whole change exists to prevent.
+    await setMemory(20_000)
+    await seedWhale('conv-repair')
+    await getOrCreateLaneSession('general', 'conv-repair', { firstMessage: 'go' })
+    const { getSessionByLane } = await import('../../src/core/session-tracker.js')
+    const minted = (await getSessionByLane('chat:general:conv-repair'))!.profile!.systemPrompt!
+    expect(Buffer.byteLength(minted, 'utf-8')).toBeLessThanOrEqual(65536)
+
+    await setMemory(20_000 + 8_000) // > LANE_SEED_RESERVE_BYTES, so it must clamp
+    await getOrCreateLaneSession('general', 'conv-repair')
+    const repaired = (await getSessionByLane('chat:general:conv-repair'))!.profile!.systemPrompt!
+    expect(Buffer.byteLength(repaired, 'utf-8')).toBeLessThanOrEqual(65536)
+    // The fresh persona landed, and the seed was SHRUNK rather than dropped: its
+    // newest turns and the omission notice are still there.
+    expect(Buffer.byteLength(repaired, 'utf-8')).toBeGreaterThan(Buffer.byteLength(minted, 'utf-8') / 2)
+    expect(repaired).toContain('## Conversation so far')
+    expect(repaired).toContain('answer 299')
+    expect(repaired).toContain('earlier turns omitted')
+  })
+
+  it('drops the seed rather than write an unspawnable record when the persona alone eats the budget', async () => {
+    await setMemory(20_000)
+    await seedWhale('conv-crowded')
+    await getOrCreateLaneSession('general', 'conv-crowded', { firstMessage: 'go' })
+    // Standing memory balloons until the persona still fits but leaves less room
+    // than a recap can say anything in. (A persona that ALONE exceeds the ceiling
+    // is a pre-existing condition of its own — the mint cannot spawn that lane
+    // either — and no amount of seed clamping fixes it.)
+    await setMemory(56_000)
+    await getOrCreateLaneSession('general', 'conv-crowded')
+    const { getSessionByLane } = await import('../../src/core/session-tracker.js')
+    const repaired = (await getSessionByLane('chat:general:conv-crowded'))!.profile!.systemPrompt!
+    expect(Buffer.byteLength(repaired, 'utf-8')).toBeLessThanOrEqual(65536)
+    expect(repaired).not.toContain('## Conversation so far')
+    // Survivable precisely because the record's seed only matters on a cold
+    // resume, and a resumed CLI restores its own transcript.
+    expect(repaired).toContain('m'.repeat(100))
+  })
+
+  it('splits at the seed WE appended, not at a header the persona happens to quote', async () => {
+    // Standing memory or a skill can legitimately contain the header string. Split
+    // at the FIRST occurrence and the whole persona is classified as "seed": the
+    // persona half then never changes again, the repair silently stops repairing,
+    // and the lane keeps a stale persona for life.
+    await fsp.mkdir(`${WALNUT_HOME}/memory`, { recursive: true })
+    await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`,
+      '## Notes\n\nWalnut injects "## Conversation so far (injected by Walnut)" at mint. FIRST-MEMORY\n', 'utf-8')
+    await seedConversation('conv-quote', [{ user: 'q', assistant: 'SEED-MARKER', engine: 'x' }])
+    await getOrCreateLaneSession('general', 'conv-quote', { firstMessage: 'go' })
+    const { getSessionByLane } = await import('../../src/core/session-tracker.js')
+
+    await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`,
+      '## Notes\n\nWalnut injects "## Conversation so far (injected by Walnut)" at mint. SECOND-MEMORY\n', 'utf-8')
+    await getOrCreateLaneSession('general', 'conv-quote')
+    const after = (await getSessionByLane('chat:general:conv-quote'))!.profile!.systemPrompt!
+    expect(after).toContain('SECOND-MEMORY')      // the repair still fires
+    expect(after).not.toContain('FIRST-MEMORY')
+    expect(after).toContain('SEED-MARKER')        // and the frozen seed survived
+  })
+
+  it('refreshes the PERSONA half while keeping the seed half byte-identical', async () => {
+    await seedConversation('conv-persona', [
+      { user: 'keep me', assistant: 'KEEP-THIS-SEED-MARKER', engine: 'x' },
+    ])
+    await getOrCreateLaneSession('general', 'conv-persona', { firstMessage: 'go' })
+    const { getSessionByLane } = await import('../../src/core/session-tracker.js')
+    const before = (await getSessionByLane('chat:general:conv-persona'))!.profile!.systemPrompt!
+    const seedHalf = before.slice(before.indexOf('## Conversation so far'))
+
+    // Standing memory changed — the persona bundle must be rebuilt.
+    await fsp.mkdir(`${WALNUT_HOME}/memory`, { recursive: true })
+    await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`, '## New rule NEW-PERSONA-MARKER\n', 'utf-8')
+    await getOrCreateLaneSession('general', 'conv-persona')
+
+    const after = (await getSessionByLane('chat:general:conv-persona'))!.profile!.systemPrompt!
+    expect(after).toContain('NEW-PERSONA-MARKER')
+    expect(after.slice(after.indexOf('## Conversation so far'))).toBe(seedHalf)
+    expect(after).toContain('KEEP-THIS-SEED-MARKER')
+  })
+})
+
+describe('an ACP lane', () => {
+  // DECISION REVERSED (2026-09-08): this used to pin "the user's message rides the
+  // spawn UNCHANGED", on the grounds that splicing a recap into it would rewrite
+  // the user's own first bubble. It would not: the store keeps the clean copy (both
+  // senders persist before the mint), the phone strips the banner and the console
+  // folds it into a collapsed row. So an ACP lane no longer answers its first turn
+  // blind — the invariant has no exception for a transport. Do not reinstate.
+  it('gets the recap in its FIRST MESSAGE — the message is its only carrier', async () => {
+    // handleAcpStart takes no profile, so unlike a claude lane the message is not a
+    // fallback here, it is the whole channel.
+    await seedConversation('conv-acp', [
+      { user: 'EARLIER-QUESTION', assistant: 'EARLIER-ANSWER', engine: 'walnut-agent-fallback' },
+    ])
+    const started0 = started.length
+    const pending = getOrCreateLaneSession('general', 'conv-acp', { firstMessage: 'hello acp', engine: 'codex' })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(started.length).toBe(started0 + 1)
+    const ev = started[started0]
+    expect(ev.profile).toBeUndefined()   // still no system-prompt channel
+    const message = ev.message ?? ''
+    expect(message).toContain('[Conversation context]')
+    expect(message).toContain('[/Conversation context]')
+    expect(message).toContain('EARLIER-ANSWER')
+    expect(message.endsWith('hello acp')).toBe(true)
+
+    // Nothing is latched until the worker establishes: an ACP session id is minted
+    // by the provider, so the mint waits for the record before it can name the lane
+    // — and a session that never establishes delivered nothing.
+    expect((await storeOf('conv-acp')).laneSeen).toBeUndefined()
+
+    // Stand in for handleAcpStart adopting the worker's own session id.
+    const ACP_SID = 'acp-1111-2222-3333'
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    await createSessionRecord(ACP_SID, '', '', WALNUT_HOME, {
+      lane: 'chat:general:conv-acp', engine: 'codex' as never,
+    })
+    expect((await pending).sessionId).toBe(ACP_SID)
+    // Delivered → latched, so the first real send does not repeat it.
+    const laneSeen = (await storeOf('conv-acp')).laneSeen as Record<string, string>
+    expect(Object.keys(laneSeen)).toEqual([`lane:${ACP_SID}`])
+  })
+
+  it('carries NOTHING on a message-less ACP mint, and latches nothing either', async () => {
+    // Same guard as the claude branch: no message to ride means no splice, and no
+    // latch — buildLaneCatchUp trigger B owns that lane's first real send.
+    await seedConversation('conv-acp-quiet', [
+      { user: 'EARLIER-QUESTION', assistant: 'EARLIER-ANSWER', engine: 'walnut-agent-fallback' },
+    ])
+    const started0 = started.length
+    void getOrCreateLaneSession('general', 'conv-acp-quiet', { engine: 'codex' })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(started.length).toBe(started0 + 1)
+    expect(started[started0].message ?? '').toBe('')
+    expect((await storeOf('conv-acp-quiet')).laneSeen).toBeUndefined()
+  })
+})
+
+describe('retired managed CLAUDE.md', () => {
+  it('is removed across naming versions, never a user-authored one', async () => {
     const { cleanupLaneClaudeMd } = await import('../../src/core/sessions/personal-ai-lane.js')
     const markers = [
       '<!-- walnut:personal-ai-lane-context v1 -->',

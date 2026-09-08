@@ -121,6 +121,20 @@ const KEEPALIVE_INTERVAL_MS = 60_000
 export const FALLBACK_ENGINE_LABEL = 'walnut-agent-fallback'
 
 /**
+ * Engine label for an ORDINARY in-process turn — the same word
+ * `resolveAgentEngineProvider` uses, so config and provenance read alike.
+ *
+ * Both labels are now written to DISK as well (chat-history's `engine` stamp),
+ * not just onto the terminal SSE frame. That stamp is what lets a lane engine
+ * discover turns another engine answered while it was unreachable: the incident
+ * this pair exists for is a replica answering turn 1 with FALLBACK_ENGINE_LABEL
+ * while the Mac slept, after which the Mac's lane denied the turn had happened.
+ * With the answer unstamped, that had to be reconstructed from commit authorship
+ * and tool-name vocabulary.
+ */
+export const IN_PROCESS_ENGINE_LABEL = 'walnut-agent'
+
+/**
  * No-frame watchdog on the replica. The primary always ends a turn with a
  * terminal frame, so this only fires when the primary or the bridge vanished
  * mid-turn. Without it the phone's composer would stay locked forever.

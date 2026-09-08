@@ -14,7 +14,7 @@ import { getContextThreshold } from '../agent/model.js';
 import type { ChatHistoryStore, ChatEntry, DisplayMessage } from './types.js';
 import { CHAT_HISTORY_FILE, chatHistoryFile, conversationFile } from '../constants.js';
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
-import { estimateMessagesTokens, estimateFullPayload, compactDailyLog, formatDateKey } from './daily-log.js';
+import { estimateMessagesTokens, estimateFullPayload, estimateTokens, compactDailyLog, formatDateKey } from './daily-log.js';
 import { getWorkingMemory, isWorkingMemoryEmpty, truncateWorkingMemoryForCompact, snapshotWorkingMemory } from './working-memory.js';
 import { effectiveTotalTokens, getLastTurnTokens, clearLastTurnTokens } from './token-truth.js';
 import { log } from '../logging/index.js';
@@ -647,7 +647,14 @@ export async function getLastContextHashes(agentId?: string, conversationId?: st
  */
 export async function addAIMessages(
   msgs: MessageParam[],
-  options?: { displayText?: string; source?: ChatEntry['source']; contextHashes?: Record<string, string>; taskId?: string; agentId?: string; conversationId?: string; turnId?: string },
+  options?: {
+    displayText?: string; source?: ChatEntry['source']; contextHashes?: Record<string, string>;
+    taskId?: string; agentId?: string; conversationId?: string; turnId?: string;
+    /** Which engine produced this answer — see the engine-stamp section below.
+     *  Stamped on the ASSISTANT entries of the batch only (a tool_result carrier
+     *  is not an answer), and never sent to the model. */
+    engine?: string;
+  },
 ): Promise<void> {
   if (msgs.length === 0) return;
   const aid = options?.agentId;
@@ -706,6 +713,11 @@ export async function addAIMessages(
       // one signal it has.
       if (options?.turnId && role === 'assistant') {
         entry.turnId = options.turnId;
+      }
+      // Engine provenance, assistant entries only: it answers "who produced
+      // this?", and the tool_result carriers of a batch produced nothing.
+      if (options?.engine && role === 'assistant') {
+        (entry as EngineStampedEntry).engine = options.engine;
       }
       store.entries!.push(entry);
     }
@@ -1027,6 +1039,622 @@ export async function adoptRecoveredAssistantMessage(opts: {
       agentId, conversationId, turnId, textLength: text.length, insertedAt: idx + 1,
     });
     return 'adopted';
+  }, agentId, conversationId);
+}
+
+// ── Engine provenance, and seeding a fresh engine with the conversation ────
+//
+// THE INVARIANT: every engine that answers a turn in a conversation must be
+// given that conversation's whole prior content, so the model's memory is never
+// narrower than what the UI shows. The in-process loop satisfies it by
+// construction — it reads this store on every turn (getModelContext). A LANE
+// engine does not: a `claude` CLI minted for a conversation that already has
+// turns starts with an empty context while the phone and the console keep
+// rendering the whole conversation, so it answers "there is no such context in
+// this conversation" about text the user is looking at.
+//
+// Two mechanisms close that, and they are deliberately different because the
+// seam can open at two different moments:
+//
+//   1. THE MINT. buildConversationSeed renders the prior conversation into the
+//      spawn profile's system prompt (personal-ai-lane.resolveLane). It rides
+//      the profile, NOT a first user turn: a turn burns a turn, the model often
+//      answers it, and the mint sites that pass no first message at all (a
+//      read-driven `ensure: true` mint, which the phone's model pill triggers on
+//      mount) would produce a visible orphan turn.
+//   2. THE TURN. A lane can already exist and THEN miss content: the Mac sleeps,
+//      the cloud replica answers a turn with its in-process fallback and
+//      persists it, the Mac wakes and continues on the SAME lane. Nothing is
+//      re-minted, so nothing re-seeds. buildLaneCatchUp finds exactly those
+//      entries and the sender prepends them to the user's next message
+//      (lane-turn.runLaneTurn).
+//
+// Both need to know WHICH engine produced an entry, which is what the `engine`
+// stamp is for. Before it the answering engine rode only the terminal SSE frame
+// and never reached disk, which is why the incident had to be reconstructed from
+// commit authorship and tool-name vocabulary.
+
+/**
+ * ChatEntry plus the engine that produced it.
+ *
+ * A local extension for the same reason as RecoveredChatEntry above: unknown
+ * JSON fields round-trip untouched through the store, and every writer and
+ * reader of this stamp lives in THIS module — the catch-up rule below is the
+ * only thing that keys behavior off it. The model never sees it either
+ * (getModelContext projects `{ role, content }` only).
+ */
+export type EngineStampedEntry = ChatEntry & { engine?: string };
+
+/** The engine that answered this entry, or undefined when it is unstamped. */
+export function entryEngine(entry: ChatEntry): string | undefined {
+  const value = (entry as EngineStampedEntry).engine;
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+/**
+ * The engine label for one Personal AI lane session.
+ *
+ * Per-SESSION, not per-engine-kind ('claude-code'), because the catch-up rule
+ * needs to distinguish "this lane answered it" from "some other engine did", and
+ * a re-minted lane (a failed `--resume`, an engine swap) is a different context
+ * that has to be seeded again. It is also the strictly more useful forensic
+ * value: it names the transcript the answer can be read back from.
+ */
+export function laneEngineLabel(sessionId: string): string {
+  return `lane:${sessionId}`;
+}
+
+/**
+ * Per-lane high-water marks: laneLabel → the timestamp of the newest entry that
+ * lane has been GIVEN. Store-level rather than per-entry so the common turn
+ * (nothing to catch up) costs no write at all, and so a 900-entry conversation
+ * is not rewritten with a `seenBy` array on every row.
+ *
+ * The KEY's presence is itself the signal "this lane has been seeded once".
+ */
+type LaneSeenStore = ChatHistoryStore & { laneSeen?: Record<string, string> };
+
+/** Token ceiling for one injected block. Chat latency and the spawn argv both
+ *  bound this; see personal-ai-lane's byte clamp for the argv half. */
+export const CONVERSATION_SEED_TOKEN_BUDGET = 10_000;
+
+/** Rough bytes-per-token, used only to pre-clamp before tokenizing. */
+const SEED_BYTES_PER_TOKEN = 4;
+
+/** Cost of the `\n\n` that joins two rendered turns — inside the budget, not on
+ *  top of it (see renderSeed). */
+const SEED_JOIN_BYTES = 2;
+const SEED_JOIN_TOKENS = 1;
+
+/** At most this share of the budget goes to the compaction summary, so a long
+ *  summary can never crowd out the recent turns (which are the concrete part). */
+const SEED_SUMMARY_BUDGET_SHARE = 0.3;
+
+export const CONVERSATION_SEED_HEADER = '## Conversation so far (injected by Walnut)';
+const CONVERSATION_SEED_PREAMBLE = 'These turns already happened in THIS conversation and the user can still see them on screen. Treat them as your own memory of it: do not greet the user again, and never say a topic was not discussed just because it is not written below. If your own context already holds these turns, this block is a duplicate — ignore it.';
+
+const CATCH_UP_HEADER = '## Conversation turns you have not seen (injected by Walnut)';
+/**
+ * True for BOTH triggers, deliberately. Trigger A carries turns another engine
+ * answered; trigger B carries turns that simply predate this session. An earlier
+ * wording claimed "answered elsewhere while this session was unreachable" for
+ * both, which is a confident false statement to a model in the trigger-B case
+ * (the lane was never unreachable — it never existed). Also carries the seed
+ * preamble's duplicate-tolerance sentence: after a sync merge drops a high-water
+ * mark this block can arrive for turns the model already holds, and "ignore the
+ * duplicate" is the only instruction that makes that harmless.
+ */
+const CATCH_UP_PREAMBLE = 'These turns are part of THIS conversation and the user can see them on screen, but they may not be in your own context: some were answered by a different engine, and some are older than this session. Treat them as your own memory of the conversation, and never say a topic was not discussed just because it is not written here. If your context already holds these turns, this block is a duplicate — ignore it. The message AFTER this block is the user\'s new message; answer that one.';
+
+/** Stated, never silent: a model that cannot see something concludes it never
+ *  happened, which is the exact failure this whole section exists to fix. */
+export const CONVERSATION_SEED_OMITTED_NOTICE = '_(earlier turns omitted to fit the context budget — ask the user if you need anything from before this point)_';
+
+/**
+ * Banner wrapper for a block that rides a MESSAGE rather than a system prompt.
+ *
+ * Uses the established `[Banner]…[/Banner]` convention (task context, cron and
+ * plan-mode prefixes already use it) so the two readers that strip a leading
+ * banner keep working: the mobile transcript projection and the conversation
+ * auto-titler. Without it the user's own bubble would open with the recap and
+ * the conversation would be titled after it.
+ */
+export const CATCH_UP_BANNER_OPEN = '[Conversation context]';
+export const CATCH_UP_BANNER_CLOSE = '[/Conversation context]';
+
+export interface ConversationSeedStats {
+  /** Turns available to inject (after the "cut at the last answer" rule). */
+  turnsTotal: number;
+  /** Turns that survived the budget. */
+  turnsKept: number;
+  /** True when anything was dropped or clipped — the notice is then present. */
+  omitted: boolean;
+  bytes: number;
+  tokens: number;
+}
+
+export interface ConversationSeed {
+  /** The rendered block, or '' when there is nothing to inject. */
+  text: string;
+  /**
+   * Timestamp of the newest entry the block covers, '' when it covers nothing.
+   * Recorded as the lane's high-water mark once the block has been delivered.
+   */
+  watermark: string;
+  stats: ConversationSeedStats;
+}
+
+/**
+ * One turn-shaped unit of the conversation.
+ *
+ * Rendering and TOKENIZING are lazy on purpose. The overwhelmingly common turn
+ * finds nothing to inject, and eagerly rendering + tokenizing every turn of a
+ * 900-entry conversation would put tens of milliseconds of synchronous tokenizer
+ * work on the shared event loop for every single lane send. Selection runs on
+ * the cheap metadata below; only the turns the budget actually considers are
+ * ever turned into text.
+ */
+interface SeedTurn {
+  /** The turn's model-facing entries (a shallow slice, not a copy). */
+  entries: ChatEntry[];
+  /** Newest entry timestamp in the turn — the watermark candidate. */
+  timestamp: string;
+  /** Engines that answered inside this turn (empty = unstamped/legacy). */
+  answeredBy: string[];
+  /** Newest ANSWER timestamp in the turn (what the watermark is compared to). */
+  answeredAt: string;
+  /** Memoized renders. */
+  _text?: string;
+  _bytes?: number;
+  _tokens?: number;
+}
+
+/** What replaces one of Walnut's own control markers found inside quoted history. */
+const SEED_MARKER_PLACEHOLDER = '[marker removed by Walnut]';
+
+/**
+ * Neutralize Walnut's own block markers inside quoted conversation content.
+ *
+ * A stored message can contain the exact terminator of the block being built —
+ * most easily by quoting a previous injected block back. The two server-side
+ * banner strippers happen to survive it (they take the LAST occurrence, and the
+ * real terminator is always last), so this is NOT a stripping bug: it is what the
+ * MODEL reads, where a forged terminator makes the user's real message look like
+ * part of the quoted history, and what the transcript renderer shows.
+ */
+function neutralizeSeedMarkers(text: string): string {
+  let out = text;
+  for (const marker of [CATCH_UP_BANNER_CLOSE, CATCH_UP_BANNER_OPEN, CONVERSATION_SEED_HEADER, CATCH_UP_HEADER]) {
+    if (out.includes(marker)) out = out.split(marker).join(SEED_MARKER_PLACEHOLDER);
+  }
+  return out;
+}
+
+function seedTurnText(turn: SeedTurn): string {
+  if (turn._text !== undefined) return turn._text;
+  const lines: string[] = [];
+  for (const entry of turn.entries) {
+    const text = neutralizeSeedMarkers(seedEntryText(entry));
+    if (!text) continue;
+    const label = entry.role === 'user' ? '**User:**' : '**You:**';
+    // Continuation lines are INDENTED. Without it, lines 2..n of a multi-line
+    // message sit at column 0 with no speaker attached, so a pasted transcript
+    // (or any line that merely looks like a speaker label) reads as a new
+    // speaker's turn — and the label prefix is only honest for line 1.
+    const [first, ...rest] = text.split('\n');
+    lines.push(rest.length === 0
+      ? `${label} ${first}`
+      : `${label} ${first}\n${rest.map((line) => `  ${line}`).join('\n')}`);
+  }
+  turn._text = lines.join('\n\n');
+  return turn._text;
+}
+
+function seedTurnBytes(turn: SeedTurn): number {
+  if (turn._bytes === undefined) turn._bytes = Buffer.byteLength(seedTurnText(turn), 'utf-8');
+  return turn._bytes;
+}
+
+function seedTurnTokens(turn: SeedTurn): number {
+  if (turn._tokens === undefined) turn._tokens = estimateTokens(seedTurnText(turn));
+  return turn._tokens;
+}
+
+/** True when this entry's content carries an image block (path or base64). */
+function hasImageBlock(entry: ChatEntry): boolean {
+  return Array.isArray(entry.content)
+    && (entry.content as Array<{ type?: string }>).some((b) => b?.type === 'image');
+}
+
+/**
+ * The text of one entry as the seed renders it: TEXT blocks only.
+ *
+ * `thinking`, `tool_use` and `tool_result` blocks are dropped — they are
+ * engine-specific, they are most of the bytes, and a tool call replayed without
+ * its result reads as an instruction rather than as history.
+ */
+function seedEntryText(entry: ChatEntry): string {
+  const text = entryPlainText(entry).trim() || (entry.displayText ?? '').trim();
+  if (text) return text;
+  return hasImageBlock(entry) ? '(image attached)' : '';
+}
+
+/**
+ * Group the conversation's model-facing entries into renderable turns.
+ *
+ * Two rules that both paths depend on:
+ *  - the SAME projection getModelContext uses (`tag === 'ai' && !compacted`),
+ *    MINUS the error entries, so the lane is given what the in-process engine
+ *    would have been given and nothing else. An error row ("[Error: the main AI
+ *    did not answer this turn]") is a notification about the infrastructure, not
+ *    something a participant said: quoting it back as `**You:**` tells the model
+ *    it authored an apology it never wrote, and the timeline the user is looking
+ *    at does not show it either (getDisplayEntries filters the same predicate).
+ *    Dropping it also correctly makes that turn UNANSWERED, so the cut-at-the-
+ *    last-answer rule below stops at the last real answer;
+ *  - CUT AT THE LAST ANSWER. Both senders eagerly persist the user's message
+ *    BEFORE the turn runs, so the store already ends with the very message that
+ *    is about to be delivered. Everything after the last assistant entry is that
+ *    unanswered turn, and injecting it would show the user their own question
+ *    twice.
+ */
+function collectSeedTurns(entries: ChatEntry[]): SeedTurn[] {
+  const ai = entries.filter((e) => e.tag === 'ai' && !e.compacted && !isNotificationOnlyError(e));
+  let lastAnswer = -1;
+  for (let i = ai.length - 1; i >= 0; i--) {
+    if (ai[i].role === 'assistant') { lastAnswer = i; break; }
+  }
+  if (lastAnswer < 0) return [];
+  const answered = ai.slice(0, lastAnswer + 1);
+
+  // Turn boundaries: a user entry that is not a tool_result carrier.
+  const starts: number[] = [];
+  for (let i = 0; i < answered.length; i++) {
+    if (isTurnStartingUserEntry(answered[i])) starts.push(i);
+  }
+  // Content before the first turn start (a leading notification-shaped entry)
+  // still belongs to the conversation — give it its own leading group.
+  if (starts.length === 0 || starts[0] > 0) starts.unshift(0);
+
+  const turns: SeedTurn[] = [];
+  for (let k = 0; k < starts.length; k++) {
+    const from = starts[k];
+    const to = k + 1 < starts.length ? starts[k + 1] : answered.length;
+    const turnEntries = answered.slice(from, to);
+    const answeredBy: string[] = [];
+    let timestamp = '';
+    let answeredAt = '';
+    for (const entry of turnEntries) {
+      if (entry.timestamp > timestamp) timestamp = entry.timestamp;
+      if (entry.role === 'assistant') {
+        const engine = entryEngine(entry);
+        if (engine && !answeredBy.includes(engine)) answeredBy.push(engine);
+        if (entry.timestamp > answeredAt) answeredAt = entry.timestamp;
+      }
+    }
+    turns.push({ entries: turnEntries, timestamp, answeredBy, answeredAt });
+  }
+  return turns;
+}
+
+/** Clip to a byte ceiling on a character boundary, marking the cut. */
+function clipToBytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, 'utf-8') <= maxBytes) return text;
+  const marker = '… [clipped]';
+  const room = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf-8'));
+  // Byte-safe slice: cut in the byte domain, then drop a broken tail character.
+  const buf = Buffer.from(text, 'utf-8').subarray(0, room);
+  return buf.toString('utf-8').replace(/�+$/, '') + marker;
+}
+
+/**
+ * Render the NEWEST turns that fit, oldest-first, with the compaction summary
+ * ahead of them and an explicit notice when anything was left out.
+ *
+ * Truncation direction is load-bearing: the newest turns are what the user is
+ * looking at, so they are kept WHOLE and the oldest end is dropped. When even
+ * the newest turn alone does not fit it is clipped rather than dropped — a block
+ * that says nothing is worse than a block that says "this is the tail".
+ */
+function renderSeed(
+  turns: SeedTurn[],
+  summary: string | null,
+  header: string,
+  preamble: string,
+  maxTokens: number,
+  maxBytes: number,
+): ConversationSeed {
+  const empty: ConversationSeed = {
+    text: '', watermark: '',
+    stats: { turnsTotal: turns.length, turnsKept: 0, omitted: false, bytes: 0, tokens: 0 },
+  };
+  if (turns.length === 0) return empty;
+
+  // The fixed scaffolding (header, preamble, notice, section joins) comes OUT of
+  // the budget, not on top of it: `maxBytes` is an argv ceiling the provider
+  // hard-fails on, so "the content fits and then we add 600 bytes of framing" is
+  // not a budget at all. Same for tokens, so `stats.tokens <= maxTokens` is a
+  // real invariant rather than one that holds only for the content.
+  const overheadText = [header, preamble, CONVERSATION_SEED_OMITTED_NOTICE, '### Summary of earlier turns'].join('\n\n');
+  const overhead = Buffer.byteLength(overheadText, 'utf-8') + 16;
+  const byteBudget = Math.min(maxBytes - overhead, maxTokens * SEED_BYTES_PER_TOKEN);
+  const tokenBudget = maxTokens - estimateTokens(overheadText);
+  if (byteBudget <= 0 || tokenBudget <= 0) return empty;
+
+  // The summary is the oldest content, so it gets a bounded share and never
+  // crowds out the recent turns. Typed defensively: the field is JSON off disk,
+  // and a non-string there used to throw out of this whole builder.
+  let summaryText = '';
+  let omitted = false;
+  const summaryBody = typeof summary === 'string' ? summary.trim() : '';
+  if (summaryBody) {
+    const share = Math.floor(byteBudget * SEED_SUMMARY_BUDGET_SHARE);
+    summaryText = clipToBytes(summaryBody, share);
+    if (summaryText !== summaryBody) omitted = true;
+  }
+  let bytes = Buffer.byteLength(summaryText, 'utf-8');
+  let tokens = summaryText ? estimateTokens(summaryText) : 0;
+
+  /** Rendered turn bodies, oldest-first (what the block prints). */
+  const kept: string[] = [];
+  let watermark = '';
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    // The newest turn CONSIDERED sets the watermark, whether or not it renders.
+    // A turn whose every block is dropped by the filter (tool traffic only) has
+    // still been resolved by this block: leaving the mark behind it would
+    // re-select that turn on every send for the life of the lane.
+    if (!watermark) watermark = turn.timestamp;
+    const body = seedTurnText(turn);
+    if (!body) continue; // tool-only turn: nothing survives the block filter
+    // The `\n\n` between two turns is content too, and it is what made the
+    // rendered block overshoot `maxBytes` by up to a kilobyte on long recaps.
+    const joins = kept.length > 0 ? 1 : 0;
+    const cost = seedTurnBytes(turn) + joins * SEED_JOIN_BYTES;
+    const costTokens = seedTurnTokens(turn) + joins * SEED_JOIN_TOKENS;
+    if (bytes + cost <= byteBudget && tokens + costTokens <= tokenBudget) {
+      kept.unshift(body);
+      bytes += cost;
+      tokens += costTokens;
+      continue;
+    }
+    // The newest turn does not fit on its own → clip it, so the tail still
+    // lands. A block that says nothing is worse than one that says "this is
+    // where the conversation is right now".
+    if (kept.length === 0) {
+      const clipped = clipToBytes(body, Math.max(0, byteBudget - bytes));
+      if (clipped.trim()) {
+        kept.unshift(clipped);
+        bytes += Buffer.byteLength(clipped, 'utf-8');
+        tokens += estimateTokens(clipped);
+      }
+    }
+    omitted = true;
+    break;
+  }
+  // Every turn rendered empty. `watermark` is still carried out so the caller can
+  // advance past them; `text` stays '' so nothing is injected.
+  if (kept.length === 0) return { ...empty, watermark, stats: { ...empty.stats, omitted: true } };
+
+  const parts = [header, preamble];
+  if (summaryText) parts.push(`### Summary of earlier turns\n\n${summaryText}`);
+  if (omitted) parts.push(CONVERSATION_SEED_OMITTED_NOTICE);
+  parts.push(kept.join('\n\n'));
+  const text = parts.join('\n\n');
+
+  return {
+    text,
+    watermark,
+    stats: {
+      turnsTotal: turns.length,
+      turnsKept: kept.length,
+      omitted,
+      bytes: Buffer.byteLength(text, 'utf-8'),
+      tokens: estimateTokens(text),
+    },
+  };
+}
+
+/**
+ * The whole prior conversation, rendered for a system prompt.
+ *
+ * `maxBytes` exists because the block rides the spawn argv on a claude lane and
+ * the provider hard-FAILS a system prompt over 64KB (claude-code-session's
+ * MAX_PROFILE_PROMPT_BYTES) — a seed that blew that limit would not degrade, it
+ * would break the mint and take the whole chat down with it.
+ */
+export async function buildConversationSeed(
+  agentId: string,
+  conversationId: string,
+  opts?: { maxTokens?: number; maxBytes?: number },
+): Promise<ConversationSeed> {
+  const store = await readStore(agentId, conversationId);
+  return renderSeed(
+    collectSeedTurns(store.entries ?? []),
+    store.compactionSummary,
+    CONVERSATION_SEED_HEADER,
+    CONVERSATION_SEED_PREAMBLE,
+    opts?.maxTokens ?? CONVERSATION_SEED_TOKEN_BUDGET,
+    opts?.maxBytes ?? Number.MAX_SAFE_INTEGER,
+  );
+}
+
+/**
+ * Shrink an ALREADY RENDERED seed to a byte ceiling, dropping whole turns from
+ * the OLDEST end and keeping the header, the summary and the newest turns.
+ *
+ * The drift repair needs this. A lane's record carries `freshPersona + frozenSeed`
+ * and the persona half is rewritten whenever skills/memory/persona change, so a
+ * persona that GREW can push a record that minted just under the provider's
+ * 64KB argv ceiling over it — and the provider does not degrade there, it throws
+ * on the next cold `--resume` and the lane never comes back. The seed cannot be
+ * rebuilt from the store at that point (the resume must re-emit the spawn-time
+ * prompt byte-for-byte to hold the cache prefix, so a rebuilt-and-grown seed
+ * would be a different prompt anyway), so the frozen text is shrunk in place.
+ *
+ * Lives here rather than in the lane module because THIS module owns the rendered
+ * shape: continuation lines are indented, so a line starting with `**User:** ` at
+ * column 0 is unambiguously the start of a turn (see seedTurnText).
+ */
+export function clipRenderedSeed(seed: string, maxBytes: number): string {
+  if (Buffer.byteLength(seed, 'utf-8') <= maxBytes) return seed;
+  const firstTurn = seed.search(/\n\n\*\*(?:User|You):\*\* /);
+  // No recognizable turn boundary (a foreign or future shape): fall back to a
+  // plain tail clip rather than guessing.
+  if (firstTurn < 0) return clipToBytes(seed, maxBytes);
+  const head = seed.slice(0, firstTurn);
+  const bodies = seed.slice(firstTurn + 2).split(/\n\n(?=\*\*(?:User|You):\*\* )/);
+  // Whatever survives is a tail of the conversation, so the notice must be there.
+  const framed = head.includes(CONVERSATION_SEED_OMITTED_NOTICE)
+    ? head
+    : `${head}\n\n${CONVERSATION_SEED_OMITTED_NOTICE}`;
+  const render = (kept: string[]): string => `${framed}\n\n${kept.join('\n\n')}`;
+  const kept = bodies.slice();
+  while (kept.length > 1 && Buffer.byteLength(render(kept), 'utf-8') > maxBytes) kept.shift();
+  return clipToBytes(render(kept), maxBytes);
+}
+
+export interface LaneCatchUpInput {
+  agentId: string;
+  conversationId: string;
+  /** laneEngineLabel(sessionId) of the lane about to be sent to. */
+  laneLabel: string;
+  /**
+   * "Does this lane's spawn profile carry the mint seed?" (its record's
+   * systemPrompt contains CONVERSATION_SEED_HEADER).
+   *
+   * It suppresses the one-shot full recap below, and it is checked IN ADDITION to
+   * the high-water mark because the mark lives in a git-synced file: a
+   * last-writer-wins merge can drop it, and re-injecting a whole conversation on
+   * that basis would be a big, visible duplicate. Losing a small foreign-turn
+   * catch-up the same way is cheap.
+   *
+   * A THUNK, not a value, so the common turn — mark present, nothing foreign —
+   * never pays for the record read this answer needs.
+   */
+  seededAtMint: () => boolean | Promise<boolean>;
+  /**
+   * When the lane was minted (its record's `startedAt`) — the FLOOR for trigger A
+   * when the high-water mark is missing.
+   *
+   * The mark lives in a git-synced, whole-file last-writer-wins document, so it
+   * can be lost. Without a floor, a lost mark makes '' the comparison base and
+   * every foreign answer in the conversation's whole history counts as "newer
+   * than the mark": a lane that already holds 40 turns gets all 40 re-injected.
+   * A seeded lane provably holds everything up to its own mint, so its mint time
+   * is a sound floor. Also a THUNK, and only ever called on the same rare path
+   * as seededAtMint (no mark).
+   */
+  laneSeededAt?: () => string | Promise<string>;
+  maxTokens?: number;
+}
+
+/**
+ * Entries this LANE has not been given, or null in the (overwhelmingly common)
+ * case that there are none. A returned block with an empty `text` means "nothing
+ * to say, but advance the mark" — see `deliverable` below.
+ *
+ * ── The detection rule, and why it is idempotent ──
+ *
+ * Two independent triggers, both anchored on facts written to disk:
+ *
+ *  A. FOREIGN ANSWERS. An assistant entry stamped with an engine that is not
+ *     this lane, newer than this lane's high-water mark. That is the honest
+ *     signal: the stamp says who answered, so "not this lane" IS "this lane
+ *     never saw it". The turn is expanded to include the user message it
+ *     answers — a foreign answer without its question is unreadable, and the
+ *     user's own message carries no stamp of its own.
+ *  B. NEVER SEEDED. No high-water mark AND no seed in the spawn profile. That is
+ *     an ACP lane (which has no system-prompt channel at all, so this is its
+ *     ONLY channel) or a lane minted before the seed existed. Fires at most once
+ *     and injects the same recap the mint would have.
+ *
+ * Idempotency comes from the high-water mark, which the caller records only
+ * AFTER the block has actually been delivered (recordLaneSeen). A retry that
+ * never reached the CLI therefore re-injects; a delivered one never does,
+ * because every entry it covered is now at or below the mark. Trigger B is
+ * additionally latched by the profile check, so it cannot re-fire even if the
+ * mark is lost in a sync merge.
+ *
+ * The NORMAL turn is a no-op with no store write: every answer in the
+ * conversation carries THIS lane's label, so trigger A finds nothing, and the
+ * mark exists, so trigger B is off. Cost is one store read (see the caller).
+ *
+ * DECLARED GAP: trigger A selects TURNS THAT WERE ANSWERED elsewhere. A user
+ * message that got no answer at all (the user sent two in a row and only the
+ * second was answered) is not carried by it — only the answered turn's own
+ * question is. Widening the rule to "any turn with no answer" would also re-feed
+ * a lane its own orphaned question (a turn killed mid-flight), which is a
+ * confident wrong statement about what happened; a provable signal that misses a
+ * rare case is the better trade. Trigger B, which is not looking for provenance,
+ * carries everything.
+ */
+export async function buildLaneCatchUp(input: LaneCatchUpInput): Promise<ConversationSeed | null> {
+  const { agentId, conversationId, laneLabel, seededAtMint } = input;
+  const store = await readStore(agentId, conversationId) as LaneSeenStore;
+  const watermark = store.laneSeen?.[laneLabel];
+  const turns = collectSeedTurns(store.entries ?? []);
+  if (turns.length === 0) return null;
+
+  const maxTokens = input.maxTokens ?? CONVERSATION_SEED_TOKEN_BUDGET;
+
+  // Trigger B — never seeded. The whole prior conversation, once.
+  if (watermark === undefined && !(await seededAtMint())) {
+    return deliverable(renderSeed(
+      turns, store.compactionSummary, CATCH_UP_HEADER, CATCH_UP_PREAMBLE,
+      maxTokens, Number.MAX_SAFE_INTEGER,
+    ));
+  }
+
+  // Trigger A — turns answered by another engine after our high-water mark. When
+  // the mark was lost, the mint time floors the comparison (see laneSeededAt).
+  let mark = watermark;
+  if (mark === undefined) mark = (await input.laneSeededAt?.()) ?? '';
+  const unseen = turns.filter((t) =>
+    t.answeredAt > mark && t.answeredBy.some((engine) => engine !== laneLabel));
+  if (unseen.length === 0) return null;
+  return deliverable(renderSeed(
+    unseen, null, CATCH_UP_HEADER, CATCH_UP_PREAMBLE, maxTokens, Number.MAX_SAFE_INTEGER,
+  ));
+}
+
+/**
+ * A rendered catch-up worth acting on: one with text to inject, OR one that
+ * resolved turns into no text at all and therefore only has a mark to advance.
+ *
+ * The second case is not hypothetical bookkeeping. A foreign turn made entirely
+ * of tool traffic renders to nothing after the block filter, so before this the
+ * mark stayed behind it and that same turn was re-selected, re-rendered and
+ * re-discarded on EVERY send for the life of the lane. The caller sends nothing
+ * and commits the mark (see lane-turn.withCatchUpContext).
+ */
+function deliverable(seed: ConversationSeed): ConversationSeed | null {
+  return seed.text || seed.watermark ? seed : null;
+}
+
+/**
+ * Record how far a lane has been caught up. Called AFTER the block reached the
+ * lane (a mint's spawn, or a completed send) — that ordering is what makes a
+ * failed delivery retry instead of silently losing the content.
+ *
+ * A watermark of '' is meaningful: the KEY's presence latches "this lane has
+ * been seeded", which is what keeps trigger B from re-firing on a conversation
+ * that was empty at mint.
+ */
+export async function recordLaneSeen(
+  agentId: string,
+  conversationId: string,
+  laneLabel: string,
+  watermark: string,
+): Promise<void> {
+  return withWriteLock(async () => {
+    const store = await readStore(agentId, conversationId) as LaneSeenStore;
+    const current = store.laneSeen?.[laneLabel];
+    // Never move BACKWARD: two producers can serialize out of order here, and a
+    // lower mark would re-inject content the lane already has.
+    if (current !== undefined && watermark <= current) return;
+    store.laneSeen = { ...(store.laneSeen ?? {}), [laneLabel]: watermark };
+    await writeStore(store, agentId, conversationId);
   }, agentId, conversationId);
 }
 
