@@ -49,6 +49,12 @@ interface FixtureMessage {
   text?: string;
   html?: string;
   sentAt: number;
+  /** The display name the LISTING carries. A conversation transport has this and no address. */
+  fromName?: string;
+  /** Addresses only the BODY read reveals, which is the gap-fill path. */
+  bodyFrom?: { name?: string; address: string };
+  bodyCc?: Array<{ name?: string; address: string }>;
+  bodyReplyTo?: Array<{ name?: string; address: string }>;
 }
 
 /** Everything the test controls, and everything the fixture records, in one place. */
@@ -171,7 +177,9 @@ function envelopeOf(mailbox, uidValidity, message) {
     messageId: mailbox + ':' + uidValidity + ':' + message.uid,
     rfcMessageId: '<m' + message.uid + '.' + mailbox + '@example.invalid>',
     mailboxId: mailbox,
-    from: { name: 'Alice', address: message.from },
+    // A conversation-shaped transport names the participant and cannot name the address, which is
+    // what an empty \`from\` models here.
+    from: { name: message.fromName || 'Alice', address: message.from },
     to: [{ address: 'me@example.invalid' }],
     subject: message.subject,
     sentAt: message.sentAt,
@@ -281,6 +289,11 @@ export function activate(walnut) {
         ...(text ? { text } : {}),
         ...(html ? { html } : {}),
         bytes: Buffer.byteLength(text) + Buffer.byteLength(html),
+        // The addresses only a read of the thread reveals. A transport whose listing carries them
+        // leaves all of these unset, which every other message in this file does.
+        ...(message.bodyFrom ? { from: message.bodyFrom } : {}),
+        ...(message.bodyCc ? { cc: message.bodyCc } : {}),
+        ...(message.bodyReplyTo ? { replyTo: message.bodyReplyTo } : {}),
       };
     },
     markRead: async (accountId, messageId, read) => { S().markRead.push([messageId, read]); },
@@ -971,6 +984,155 @@ describe('an envelope-only update', () => {
       `/search?account=${encodeURIComponent(ACCOUNT_ID)}&q=persimmon`,
     )).body.messages).toHaveLength(1);
   }, 120_000);
+});
+
+/**
+ * A conversation-shaped transport lists a thread's participants as display names with NO address,
+ * and only a read of the thread returns a real `from`. Before `MailBody` could carry addresses the
+ * stored envelope kept an empty one forever: cache search never matched the sender and Reply had
+ * nothing to prefill.
+ *
+ * Every message below lives in `Projects/2026`, whose role is `archive`, so the tick's inbox
+ * prefetch never touches it and each body fetch here is the one the test asked for.
+ */
+describe('a listing that cannot name an address', () => {
+  const FILED = 'Projects/2026';
+  const gapId = `${FILED}:900:1`;
+  const namedId = `${FILED}:900:2`;
+  const junkId = `${FILED}:900:3`;
+
+  function readMessage(messageId: string) {
+    return getJson<{
+      message: {
+        from: { name?: string; address: string };
+        cc?: Array<{ address: string }>;
+        replyTo?: Array<{ address: string }>;
+      };
+      body: { text?: string } | null;
+    }>(`/messages/${encodeURIComponent(ACCOUNT_ID)}/${encodeURIComponent(messageId)}`);
+  }
+
+  function filedList() {
+    return getJson<{ messages: Array<{ messageId: string; from: { name?: string; address: string } }> }>(
+      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=${encodeURIComponent(FILED)}`,
+    );
+  }
+
+  function searchFor(query: string) {
+    return getJson<{ messages: Array<{ messageId: string }> }>(
+      `/search?account=${encodeURIComponent(ACCOUNT_ID)}&q=${encodeURIComponent(query)}`,
+    );
+  }
+
+  // The fixture's mailbox outlives this block and the retention case downstream counts rows, so the
+  // container goes back to the one message the rest of the file expects to find in it. The rows
+  // themselves are dropped by the next epoch change, which resets every container.
+  afterAll(() => {
+    marks().messages[FILED] = [message(1, 'Filed away')];
+  });
+
+  it('fills the sender from the body, indexes it, and cannot be erased by a later empty one', async () => {
+    marks().uidvalidity = 900;
+    marks().messages[FILED] = [
+      message(1, 'A thread with no sender address', {
+        from: '',
+        fromName: 'Ann',
+        text: 'the word tamarind is only in this body',
+        bodyFrom: { name: 'Ann', address: 'ann@example.invalid' },
+        // One usable, one that is not an address at all: the good one is kept and the other is
+        // dropped, rather than the whole field being refused or the junk being stored.
+        bodyCc: [{ address: 'carol@example.invalid' }, { address: 'not an address' }],
+        bodyReplyTo: [{ address: 'thread-42@example.invalid' }],
+      }),
+      message(2, 'A thread the listing named', {
+        from: 'bob@example.invalid',
+        bodyFrom: { name: 'Someone else', address: 'someone-else@example.invalid' },
+      }),
+      message(3, 'A thread whose body address is junk', {
+        from: '',
+        fromName: 'Cal',
+        bodyFrom: { name: 'Cal', address: 'cal at example dot invalid' },
+      }),
+    ];
+    await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+
+    // The envelope as the listing had it: a name, and no address anywhere.
+    const listed = await filedList();
+    expect(listed.body.messages.find((one) => one.messageId === gapId)!.from)
+      .toEqual({ name: 'Ann', address: '' });
+    expect((await searchFor('ann@example.invalid')).body.messages).toEqual([]);
+
+    // The body read is the first thing that can name the sender, and the answer that learned it
+    // already carries it: the row it was built from predates the fetch by milliseconds.
+    const first = await readMessage(gapId);
+    expect(first.status).toBe(200);
+    expect(first.body.message.from).toEqual({ name: 'Ann', address: 'ann@example.invalid' });
+    expect(first.body.message.cc).toEqual([{ address: 'carol@example.invalid' }]);
+    expect(first.body.message.replyTo).toEqual([{ address: 'thread-42@example.invalid' }]);
+
+    // It was WRITTEN, not just answered: the next list carries it, and so does the index a human
+    // searches, which is the whole reason the sender matters more than a rendered header.
+    expect((await filedList()).body.messages.find((one) => one.messageId === gapId)!.from)
+      .toEqual({ name: 'Ann', address: 'ann@example.invalid' });
+    expect((await searchFor('ann@example.invalid')).body.messages.map((one) => one.messageId))
+      .toEqual([gapId]);
+
+    // A SECOND body fetch that cannot name the sender either must not erase what the first one
+    // learned. The body_ref is cleared by hand because a stored body short-circuits the read, and
+    // what is graded is the write: `COALESCE(NULLIF(...))` keeps the value already in the column.
+    marks().messages[FILED]![0]!.bodyFrom = { name: 'Ann', address: '' };
+    await mailDatabaseForTesting()!.run(
+      'UPDATE messages SET body_ref = NULL, body_bytes = NULL WHERE account_id = ? AND message_id = ?',
+      [ACCOUNT_ID, gapId],
+    );
+    const again = await readMessage(gapId);
+    expect(again.body.body?.text).toContain('tamarind');
+    expect(again.body.message.from).toEqual({ name: 'Ann', address: 'ann@example.invalid' });
+    expect((await rows<{ from_addr: string }>(
+      `SELECT from_addr FROM messages WHERE message_id = '${gapId}'`,
+    ))[0]!.from_addr).toBe('ann@example.invalid');
+  }, 120_000);
+
+  it('leaves an address the listing already had, and drops one the body malformed', async () => {
+    // GAP FILL, never a correction. A body that names a different sender than the listing did must
+    // not be able to rewrite who a stored message came from.
+    const named = await readMessage(namedId);
+    expect(named.status).toBe(200);
+    expect(named.body.message.from).toEqual({ name: 'Alice', address: 'bob@example.invalid' });
+
+    // And an address that fails the base's own shape check is dropped: it would end up in a `from`
+    // a reply is aimed at, so a value nothing can send to is worse than the hole it would fill.
+    const junk = await readMessage(junkId);
+    expect(junk.status).toBe(200);
+    expect(junk.body.message.from).toEqual({ name: 'Cal', address: '' });
+    expect((await rows<{ from_addr: string }>(
+      `SELECT from_addr FROM messages WHERE message_id = '${junkId}'`,
+    ))[0]!.from_addr).toBe('');
+  }, 60_000);
+
+  it('keeps the filled sender through a later envelope update that still cannot name one', async () => {
+    // Any change to the envelope (a flag, an edited subject) rewrites `from` from the LISTING, which
+    // for this transport is a name with no address. Blanking the column there loses the fill for
+    // good, because the body is already stored and nothing would ever fetch it again.
+    marks().messages[FILED]![0]!.subject = 'A thread with no sender address (edited)';
+    await mailDatabaseForTesting()!.run(
+      'UPDATE mailboxes SET cursor = NULL WHERE account_id = ? AND mailbox_id = ?',
+      [ACCOUNT_ID, FILED],
+    );
+    await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+
+    const row = (await rows<{ subject: string; from_addr: string }>(
+      `SELECT subject, from_addr FROM messages WHERE message_id = '${gapId}'`,
+    ))[0]!;
+    // The update really landed, so this is not a skipped no-op...
+    expect(row.subject).toBe('A thread with no sender address (edited)');
+    // ...and the address a body taught the cache survived it, in the column and in the DTO.
+    expect(row.from_addr).toBe('ann@example.invalid');
+    expect((await filedList()).body.messages.find((one) => one.messageId === gapId)!.from)
+      .toEqual({ name: 'Ann', address: 'ann@example.invalid' });
+    expect((await searchFor('ann@example.invalid')).body.messages.map((one) => one.messageId))
+      .toEqual([gapId]);
+  }, 60_000);
 });
 
 describe('a delete that lands in the middle of a tick', () => {

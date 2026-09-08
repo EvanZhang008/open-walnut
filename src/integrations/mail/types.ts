@@ -250,6 +250,24 @@ export interface MailBody {
    * somewhere to put them. Never the attachment CONTENT: v1 does not cache that at all.
    */
   attachments?: MailAttachmentMeta[]
+  /**
+   * Addresses the LISTING could not name, only.
+   *
+   * A conversation-shaped transport lists a thread's participants as display-name strings with no
+   * address at all, and only a read of the thread returns a real `from`. Without somewhere to put
+   * it the stored envelope keeps an empty address forever, so cache search never matches the sender
+   * and a reply has nothing to prefill.
+   *
+   * GAP FILL, never a correction: the base fills only a field that is still empty, so a body that
+   * names a different sender than the listing did can never overwrite it, and a body that also
+   * cannot name one can never erase what a later poll learns. Every address is shape-checked
+   * before it is stored and a bad one is dropped. A provider whose listing already carries
+   * addresses should leave all four unset.
+   */
+  from?: MailAddress
+  to?: MailAddress[]
+  cc?: MailAddress[]
+  replyTo?: MailAddress[]
 }
 
 export interface MailSendResult {

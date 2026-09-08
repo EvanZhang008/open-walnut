@@ -86,8 +86,12 @@ export type {
  * 1.4.0 adds `AccountSetupSpec.presets` (known services, so the console can fill the server
  * fields from an address domain) and carries them to the console as `MailProviderSummary.setupPresets`.
  * Additive and optional: a provider that declares none renders exactly the form it did before.
+ *
+ * 1.5.0 lets `MailBody` carry `from`, `to`, `cc` and `replyTo`, for a transport whose LISTING
+ * cannot name an address and only a body fetch can. The base treats them as gap fill only: an
+ * address the envelope already had is never overwritten. Additive and optional.
  */
-export const MAIL_BASE_API_VERSION = '1.4.0'
+export const MAIL_BASE_API_VERSION = '1.5.0'
 
 /**
  * The method bag published as `mail:base`.

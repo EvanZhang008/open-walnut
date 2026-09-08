@@ -447,16 +447,24 @@ export class MailStore {
     await this.db.run('UPDATE messages SET body_error = NULL WHERE rowid = ?', [rowid])
   }
 
+  /**
+   * `fromAddr` is a sender the LISTING could not name, learned from the body. Gap fill, in SQL:
+   * a `from_addr` that already holds a value wins, and an empty offer never erases one. Deciding
+   * that in the service alone would not be enough, because its "is it empty" answer comes from a
+   * row it read earlier and a poll may have filled the column in between.
+   */
   async setMessageBody(rowid: number, body: {
     bodyRef: string
     bodyBytes: number
     snippet: string
     payload: string
+    fromAddr?: string
   }): Promise<void> {
     await this.db.run(
       'UPDATE messages SET body_ref = ?, body_bytes = ?, snippet = ?, payload = ?,'
+      + " from_addr = COALESCE(NULLIF(from_addr, ''), NULLIF(?, ''), from_addr),"
       + ' body_error = NULL WHERE rowid = ?',
-      [body.bodyRef, body.bodyBytes, body.snippet, body.payload, rowid],
+      [body.bodyRef, body.bodyBytes, body.snippet, body.payload, body.fromAddr ?? '', rowid],
     )
   }
 

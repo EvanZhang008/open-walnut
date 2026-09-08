@@ -19,6 +19,12 @@ import type { MailBodyStore } from './bodies.js'
 import { MailBodyTooLargeError, MAX_BODY_BYTES, plainTextOf, snippetOf } from './bodies.js'
 import { keyOfMessage } from './message-tasks.js'
 import {
+  fillAddressesFromBody,
+  filledAddresses,
+  senderForUpdate,
+  type BodyAddressFill,
+} from './service-body.js'
+import {
   envelopeToDto,
   parseJson,
   sizeHintOf,
@@ -73,6 +79,8 @@ export class MailService {
     bodies: MailBodyStore
     providers: MailProviderRegistry
     now?: () => number
+    /** Optional: the only thing logged here is an address a body offered and the base refused. */
+    log?: { debug(message: string, fields?: Record<string, unknown>): void }
   }) {}
 
   private get now(): number {
@@ -306,7 +314,14 @@ export class MailService {
       )
       const stored = await this.storeBody(row, body)
       const message = await this.oneWithTaskId(row)
-      return { message: { ...message, hasBody: true, snippet: stored.snippet }, body: stored.body }
+      // `row` was read BEFORE the body arrived, so anything the body just taught the cache has to
+      // ride this answer explicitly or the response that learned it would still not carry it.
+      return {
+        message: {
+          ...message, hasBody: true, snippet: stored.snippet, ...filledAddresses(stored.filled),
+        },
+        body: stored.body,
+      }
     } catch (error) {
       if (error instanceof MailServiceError) throw error
       const code = error instanceof MailBodyTooLargeError
@@ -496,15 +511,30 @@ export class MailService {
     return row
   }
 
-  private async storeBody(row: MessageRow, body: MailBody): Promise<{ body: MailBodyDto; snippet: string }> {
+  private async storeBody(row: MessageRow, body: MailBody): Promise<{
+    body: MailBodyDto
+    snippet: string
+    filled: BodyAddressFill
+  }> {
     const declared = body.bytes ?? Buffer.byteLength(body.text ?? body.html ?? '')
     if (declared > MAX_BODY_BYTES) throw new MailBodyTooLargeError(declared)
     const stored = await this.deps.bodies.write(row.account_id, row.message_id, row.sent_at, {
       ...body,
       bytes: declared,
     }, row.subject)
+    // A transport that can only name the sender on a body read fills the gaps its listing left,
+    // and ONLY the gaps: see service-body.ts.
+    const filled = fillAddressesFromBody(
+      { fromAddr: row.from_addr, payload: parseJson<MessagePayload>(row.payload, {}) },
+      body,
+    )
+    if (filled.dropped.length > 0) {
+      this.deps.log?.debug('mail body offered an address the base cannot use', {
+        accountId: row.account_id, messageId: row.message_id, fields: filled.dropped.join(', '),
+      })
+    }
     const payload: MessagePayload = {
-      ...parseJson<MessagePayload>(row.payload, {}),
+      ...filled.payload,
       bodyFormat: stored.format,
       bodyTruncated: stored.truncated,
     }
@@ -513,12 +543,14 @@ export class MailService {
       bodyBytes: stored.bytes,
       snippet: stored.snippet,
       payload: JSON.stringify(payload),
+      ...(filled.fromAddr ? { fromAddr: filled.fromAddr } : {}),
     })
     // The FTS row is rewritten with the whole plain text, which is the only reason cache
-    // search can find a word that appears nowhere but deep inside the body.
+    // search can find a word that appears nowhere but deep inside the body. With the FILLED
+    // sender, so an address the listing never carried is searchable as soon as it is known.
     await this.deps.store.indexMessage(row.rowid, {
       subject: row.subject,
-      fromAddr: row.from_addr,
+      fromAddr: filled.fromAddr ?? row.from_addr,
       snippet: stored.snippet,
       bodyText: stored.text,
     })
@@ -526,6 +558,7 @@ export class MailService {
     // and two extra file reads per body open is latency for nothing.
     return {
       snippet: stored.snippet,
+      filled,
       body: {
         format: stored.format,
         ...(stored.storedText !== undefined ? { text: stored.storedText } : {}),
@@ -576,8 +609,11 @@ export class MailService {
     existing?: { snippet: string; payload: string | null },
   ): MessageWrite {
     const stored = parseJson<MessagePayload>(existing?.payload ?? null, {})
+    // Carried forward like the body fields below, and for the same reason: an envelope that cannot
+    // name an address must not blank one a body already named. See `senderForUpdate`.
+    const from = senderForUpdate(envelope.from, stored)
     const payload: MessagePayload = {
-      from: envelope.from,
+      from,
       ...(envelope.to ? { to: envelope.to } : {}),
       ...(envelope.cc ? { cc: envelope.cc } : {}),
       ...(envelope.replyTo ? { replyTo: envelope.replyTo } : {}),
@@ -595,7 +631,7 @@ export class MailService {
       rfcMessageId: envelope.rfcMessageId ?? '',
       mailboxId: envelope.mailboxId,
       threadId: threadIdOf(envelope),
-      fromAddr: envelope.from?.address ?? '',
+      fromAddr: from?.address ?? '',
       subject: envelope.subject ?? '',
       // An envelope with no preview must not wipe a snippet the body already produced.
       snippet: envelope.snippet ? snippetOf(envelope.snippet) : existing?.snippet ?? '',

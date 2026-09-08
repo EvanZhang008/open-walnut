@@ -8,6 +8,9 @@
  * - A TICK BUDGET, checked between containers, with retention last. Under pressure the sweep
  *   is the first thing dropped, because a cache that is 200 rows too big is not a problem and
  *   a tick that never ends is.
+ * - WHAT THE BUDGET DROPS ROTATES. Breaking out of the container loop on the deadline is right;
+ *   restarting the next wide sweep at the same index is not, because an account with more folders
+ *   than fit in one tick then abandons the same trailing folders forever. See `sweepOrder`.
  * - PUSH AND POLL SHARE ONE FETCH PATH. `provider.watch` hands back a hint; the hint flips a
  *   flag and kicks this loop. No provider callback ever does I/O, so no provider callback can
  *   block the event loop.
@@ -69,10 +72,47 @@ interface AccountState {
   dirty: Set<string>
   /** False until one sync of this account drained every container it looked at. */
   backfilled: boolean
+  /**
+   * Where the next WIDE sweep starts among the non-inbox containers, wrapping.
+   *
+   * In memory only, and it does not need to survive a restart: it is a fairness cursor, and a
+   * process that starts again at 0 has simply not starved anything yet.
+   */
+  sweepFrom: number
 }
 
 function emptyState(): AccountState {
-  return { polls: 0, failures: 0, nextAt: 0, paused: false, dirty: new Set(), backfilled: false }
+  return {
+    polls: 0, failures: 0, nextAt: 0, paused: false, dirty: new Set(),
+    backfilled: false, sweepFrom: 0,
+  }
+}
+
+/**
+ * The order one wide sweep visits its containers: every inbox first, then the rest from `from`.
+ *
+ * The rotation is the whole point. The container loop stops on the tick deadline, which is
+ * correct, but a mailbox with more folders than fit in one tick used to abandon the SAME trailing
+ * folders on every wide tick, permanently and silently: a real account measured 63 folders at up
+ * to a second each against a 20 second budget, so everything past folder 20 was never synced once.
+ * Starting each sweep further along means the set that gets dropped moves, and every folder is
+ * reached within a few ticks.
+ *
+ * The inbox is never rotated away: it is the one container a human is watching, and it is polled
+ * on every tick anyway, so spending a rotation slot on it would only cost the tail folders a turn.
+ */
+function sweepOrder(
+  mailboxes: MailboxRow[],
+  from: number,
+): { containers: MailboxRow[]; rotated: number } {
+  const inbox = (row: MailboxRow): boolean => row.role === ('inbox' satisfies MailboxRole)
+  const rest = mailboxes.filter((row) => !inbox(row))
+  if (rest.length === 0) return { containers: [...mailboxes], rotated: 0 }
+  const at = ((from % rest.length) + rest.length) % rest.length
+  return {
+    containers: [...mailboxes.filter(inbox), ...rest.slice(at), ...rest.slice(0, at)],
+    rotated: rest.length,
+  }
 }
 
 export class MailSync {
@@ -336,26 +376,53 @@ export class MailSync {
 
       const mailboxes = await this.refreshMailboxes(accountId, spec, state, force)
       const wide = force || state.polls % NON_INBOX_EVERY === 1
-      const containers = wide
-        ? mailboxes
-        : mailboxes.filter((row) => row.role === ('inbox' satisfies MailboxRole) || state.dirty.has(row.mailbox_id))
+      const sweep = wide ? sweepOrder(mailboxes, state.sweepFrom) : {
+        containers: mailboxes.filter(
+          (row) => row.role === ('inbox' satisfies MailboxRole) || state.dirty.has(row.mailbox_id),
+        ),
+        rotated: 0,
+      }
+      const containers = sweep.containers
 
       const headlines: Array<{ from: string; subject: string }> = []
       let exhausted = true
       // Counted separately from `added`: a message appearing in Sent is one the user sent, and
       // announcing it as "received" is wrong in the one place a human reads the number.
       let received = 0
+      let visited = 0
+      /** Non-inbox containers visited, which is what the rotation cursor counts. */
+      let visitedRotated = 0
+      /** The container loop stopped on the deadline, so some containers were never reached. */
+      let ranOut = false
       for (const mailbox of containers) {
-        if (Date.now() >= deadlineAt) { exhausted = false; break }
+        if (Date.now() >= deadlineAt) { exhausted = false; ranOut = true; break }
         const outcome = await this.syncContainer(accountId, mailbox, spec, deadlineAt)
         added += outcome.added
         updated += outcome.updated
         if (mailbox.role === ('inbox' satisfies MailboxRole)) {
           received += outcome.added
           headlines.push(...outcome.headlines)
+        } else {
+          visitedRotated += 1
         }
+        visited += 1
         exhausted = exhausted && outcome.exhausted
         state.dirty.delete(mailbox.mailbox_id)
+      }
+      // Named, because it used to be invisible: an account whose tail folders never synced looked
+      // exactly like an account with nothing in them.
+      if (ranOut) {
+        this.deps.walnut.log.warn('mail sync ran out of tick budget', {
+          accountId, containers: containers.length, visited, left: containers.length - visited,
+        })
+      }
+      // Only a WIDE sweep moves the cursor, and that includes the reset. A narrow tick visits the
+      // inbox and drains it, so it reports `exhausted` almost every time: resetting on those would
+      // put every wide sweep back at index 0 and undo the rotation entirely.
+      if (wide && ranOut) {
+        state.sweepFrom = sweep.rotated > 0 ? (state.sweepFrom + visitedRotated) % sweep.rotated : 0
+      } else if (wide && exhausted) {
+        state.sweepFrom = 0
       }
 
       const inbox = mailboxes.find((row) => row.role === 'inbox')
