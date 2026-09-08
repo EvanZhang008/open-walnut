@@ -14,7 +14,11 @@ protocol SessionSendTransport {
     func sendSessionMessage(
         id: String, text: String, images: [ImagePayload], messageId: String?
     ) async throws -> String
-    func sessionTranscript(id: String, fresh: Bool) async throws -> SessionTranscript
+    /// `rich` has no default in the protocol on purpose: it is a per-CALL-SITE
+    /// bandwidth decision (see `WalnutAPI.sessionTranscriptPath`), and a default
+    /// either silently spends ~48 KB/min in the degraded poll or silently drops
+    /// the tool-input / reasoning fields the timeline needs.
+    func sessionTranscript(id: String, fresh: Bool, rich: Bool) async throws -> SessionTranscript
 }
 
 extension WalnutAPI: SessionSendTransport {}

@@ -57,7 +57,10 @@ struct FilePreviewTarget: Identifiable, Equatable {
 enum HTMLPreviewPhase: Equatable {
     case loading
     case loaded
-    case failed(String)
+    /// Carries the whole failure, not just its sentence: the empty state needs
+    /// the headline and the retry decision too, and re-deriving either from a
+    /// String would be guessing.
+    case failed(FileReadFailure)
 }
 
 /// Server-side HTML file rendered in a sandboxed WKWebView — the phone-side
@@ -112,11 +115,21 @@ struct HTMLFilePreview: View {
                     ProgressView()
                         .controlSize(.large)
                 }
-                if case .failed(let message) = loader.phase {
+                if case .failed(let failure) = loader.phase {
+                    // Headline, sentence AND escape hatch all come from the
+                    // failure. The old fixed "Can't preview file" blamed the
+                    // FILE for whatever went wrong, including the cases where
+                    // the file was fine and the network was not.
                     ContentUnavailableView {
-                        Label("Can't preview file", systemImage: "doc.richtext")
+                        Label(failure.title, systemImage: failure.icon)
                     } description: {
-                        Text(message)
+                        Text(failure.message)
+                    } actions: {
+                        if failure.isRetryable {
+                            Button("Try Again") { loader.reload() }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("file.preview.retry")
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(.systemBackground))
@@ -139,6 +152,12 @@ struct HTMLFilePreview: View {
                 loader = nil
             }
         }
+        // `children: .contain` FIRST. A SwiftUI accessibility identifier on a view
+        // that is NOT itself an element propagates to every element inside it, so
+        // this one overwrote the Try Again button's own id and `file.preview.retry`
+        // was unreachable to tooling (the gate had to tap by point). As a container
+        // the ZStack owns the id and its children keep theirs.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("file.htmlPreview")
     }
 
@@ -287,9 +306,14 @@ final class HTMLPreviewLoader {
     private static let maxRestoreAttempts = 2
     private static let restoreRetryDelayMs = 400
 
+    /// Kept for `reload()`: the retry has to present the same Bearer header the
+    /// first attempt did, and a `WKWebView` request cannot be replayed.
+    @ObservationIgnored private let token: String?
+
     init(target: FilePreviewTarget, url: URL, token: String?) {
         self.target = target
         self.url = url
+        self.token = token
         let config = WKWebViewConfiguration()
         // Ephemeral store: nothing persisted, no cookie jar shared with the
         // app's URLSession or other previews. Remembering a scroll position
@@ -300,16 +324,42 @@ final class HTMLPreviewLoader {
         webView.isOpaque = false
         webView.backgroundColor = .systemBackground
         self.webView = webView
-        let navigator = HTMLPreviewNavigator(url: url)
+        let navigator = HTMLPreviewNavigator(url: url, host: target.host)
         self.navigator = navigator
         navigator.loader = self
         webView.navigationDelegate = navigator
+        webView.load(Self.request(url: url, token: token, ignoringCache: false))
+        observeOffset()
+    }
+
+    private static func request(url: URL, token: String?, ignoringCache: Bool) -> URLRequest {
         var request = URLRequest(url: url)
+        if ignoringCache { request.cachePolicy = .reloadIgnoringLocalCacheData }
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        webView.load(request)
-        observeOffset()
+        return request
+    }
+
+    /// Re-issue the SAME read. This is the escape hatch the failed state was
+    /// missing, and it is deliberately a re-ask rather than a page refresh: every
+    /// retryable failure (the host unreachable for a moment, a file the agent
+    /// had not finished writing when its path was announced) resolves by asking
+    /// the identical URL again a beat later. The 2026-09-07 report was exactly
+    /// that: a 404 that the very same URL answered 200 for seventy seconds later.
+    func reload() {
+        // A torn-down loader has no navigation delegate, so a load would never
+        // report back and the view would spin forever.
+        guard navigator != nil else { return }
+        // Straight assignment, NOT setPhase: that guard exists so a friendly
+        // failure survives the `.cancel` that produced it, and it would swallow
+        // precisely this failed → loading transition.
+        phase = .loading
+        pendingRestore = nil
+        restoreAttempts = 0
+        // Cache-busting matters: WebKit is entitled to keep the 404 (and its
+        // body) and answer the retry from its own cache without a round trip.
+        webView.load(Self.request(url: url, token: token, ignoringCache: true))
     }
 
     /// Keep the bank current. `.new` only (no `.initial`): the value the scroll
@@ -492,9 +542,14 @@ private final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
     /// Weak: the loader owns this object.
     weak var loader: HTMLPreviewLoader?
     private let url: URL
+    /// Which box owns the file. Immutable, so these non-isolated delegate
+    /// callbacks may read it without hopping — and without it the failure copy
+    /// cannot name the machine it asked, which is the whole point of the copy.
+    private let host: String?
 
-    init(url: URL) {
+    init(url: URL, host: String?) {
         self.url = url
+        self.host = host
     }
 
     /// Initial document, ignoring fragment (in-page anchors must work).
@@ -534,12 +589,12 @@ private final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         // Map server refusals onto the file browser's friendly copy instead
         // of rendering the raw plain-text error body as a page. The mapping
-        // itself lives in FilePathReference.swift (FilePreviewLink
-        // .friendlyMessage) so the TEXT viewer, which sees the same refusals as
-        // APIError rather than as status codes, says the same words.
+        // itself lives in FilePathReference.swift (`FilePreviewLink.failure`) so
+        // the TEXT viewer, which sees the same refusals as APIError rather than
+        // as status codes, says the same words and offers the same retry.
         if let http = navigationResponse.response as? HTTPURLResponse, http.statusCode >= 400 {
-            let message = FilePreviewLink.friendlyMessage(forHTTPStatus: http.statusCode)
-            Task { @MainActor [loader] in loader?.setPhase(.failed(message)) }
+            let failure = FilePreviewLink.failure(forHTTPStatus: http.statusCode, host: host)
+            Task { @MainActor [loader] in loader?.setPhase(.failed(failure)) }
             decisionHandler(.cancel)
             return
         }
@@ -551,7 +606,8 @@ private final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor [loader] in loader?.setPhase(.failed(error.localizedDescription)) }
+        let failure = FilePreviewLink.failure(for: error, host: host)
+        Task { @MainActor [loader] in loader?.setPhase(.failed(failure)) }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
@@ -561,7 +617,10 @@ private final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
         // transport error still reports honestly.
         let nsError = error as NSError
         if nsError.domain == "WebKitErrorDomain" && nsError.code == 102 { return }
-        let message = error.localizedDescription
-        Task { @MainActor [loader] in loader?.setPhase(.failed(message)) }
+        // A transport failure is a statement about the PHONE's reachability, not
+        // about the file — and it is retryable, which is why it goes through the
+        // same ladder instead of dumping Apple's localizedDescription on screen.
+        let failure = FilePreviewLink.failure(for: error, host: host)
+        Task { @MainActor [loader] in loader?.setPhase(.failed(failure)) }
     }
 }

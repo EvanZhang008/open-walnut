@@ -26,6 +26,10 @@ final class TimelineCollectionController: UIViewController {
     /// the host re-submits its input so rows re-measure at the new width.
     var onWidthChange: (CGFloat) -> Void = { _ in }
     private var lastReportedWidth: CGFloat = 0
+    /// Fired when the preferred content size category changes while the timeline
+    /// is on screen. Its own signal, not a width change: text size moves every
+    /// measured height and no width at all, so nothing in the layout pass fires.
+    var onTextSizeChange: () -> Void = {}
     /// Pull-to-refresh (SwiftUI `.refreshable` can't reach a hosted
     /// UICollectionView, so the refresh control lives here).
     var onRefresh: (() async -> Void)?
@@ -88,6 +92,13 @@ final class TimelineCollectionController: UIViewController {
         collectionView.register(UICollectionViewCell.self,
                                 forCellWithReuseIdentifier: TimelineHostedCell.reuseID)
         view.addSubview(collectionView)
+        // The hosted cells adopt a new text size on their own, immediately; the
+        // ROWS' heights come from the actor's arithmetic and only move when
+        // something asks for a rebuild. Registering here is that ask.
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
+            (controller: TimelineCollectionController, _) in
+            controller.onTextSizeChange()
+        }
         if onRefresh != nil {
             let control = UIRefreshControl()
             control.addTarget(self, action: #selector(refreshPulled), for: .valueChanged)

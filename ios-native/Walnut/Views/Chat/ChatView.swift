@@ -201,30 +201,44 @@ struct ChatView: View {
     /// Measured cause: the container adopted its one labelled child's identifier
     /// and reported its own bounds, so `children: .contain` below is the fix. The
     /// explicit widths are kept because the closer has to BE the sliver.
+    /// The DIM and the CLOSER are two different things and are built as two now.
+    ///
+    /// The dim is decoration: it covers the screen, takes no touch, has no label,
+    /// and is mounted at all times so its `.opacity` can FADE with the slide (an
+    /// `if` cannot — SwiftUI evaluates the branch against the TARGET value, so a
+    /// conditional scrim pops off on the first frame of the close).
+    ///
+    /// The closer is a control, so it EXISTS ONLY WHILE THE DRAWER IS OPEN.
+    /// `.accessibilityHidden(!isOpen)` on the shared container was not enough:
+    /// measured in the real hierarchy after a close, `chat.drawer.scrim` was still
+    /// there, enabled, labelled "Close menu", reporting the WHOLE SCREEN as its
+    /// frame — a full-screen invisible button over the chat is the worst shape a
+    /// stale element can take. Not rendering it is the only state that cannot be
+    /// misread. Its width is still the SLIVER of chat beside the drawer, because
+    /// automation taps the centre of what it matched and the drawer sits above the
+    /// rest of this layer (a centre tap on a full-screen closer lands on a
+    /// conversation row and selects it).
     private var scrimLayer: some View {
-        HStack(spacing: 0) {
+        ZStack(alignment: .trailing) {
             Color.black.opacity(ChatDrawerGeometry.maxScrimOpacity)
-                .frame(width: drawerWidth * drawer)
+                .opacity(drawer)
                 .allowsHitTesting(false)
-            Color.black.opacity(ChatDrawerGeometry.maxScrimOpacity)
-                .frame(width: max(0, containerWidth - drawerWidth * drawer))
-                .contentShape(Rectangle())
-                .onTapGesture { setDrawer(open: false) }
-                .accessibilityIdentifier("chat.drawer.scrim")
-                .accessibilityLabel("Close menu")
-                .accessibilityAddTraits(.isButton)
+                .accessibilityHidden(true)
+            if isOpen {
+                Color.clear
+                    .frame(width: max(0, containerWidth - drawerWidth * drawer))
+                    .contentShape(Rectangle())
+                    .onTapGesture { setDrawer(open: false) }
+                    .accessibilityIdentifier("chat.drawer.scrim")
+                    .accessibilityLabel("Close menu")
+                    .accessibilityAddTraits(.isButton)
+            }
         }
         // `children: .contain` so the layer stays a plain container: without it the
         // container adopts its one labelled child's identifier and reports the
         // WHOLE SCREEN as that element's frame.
         .accessibilityElement(children: .contain)
         .ignoresSafeArea()
-        // Opacity as a MODIFIER, not baked into the colours above: the modifier
-        // is animatable, a `Color`'s own alpha is not, and a scrim that snaps to
-        // full black on the first frame of the slide is the tell.
-        .opacity(drawer)
-        .allowsHitTesting(isOpen)
-        .accessibilityHidden(!isOpen)
     }
 
     private func setDrawer(open: Bool) {
@@ -418,30 +432,58 @@ private struct MessageListView: View {
     }
 }
 
-/// Shimmering ellipsis row shown while the agent thinks / runs tools.
+/// Live "what the agent is doing right now" row: an icon that breathes plus the
+/// running tool's name (or "Thinking…").
+///
+/// CONTRAST, not decoration. This row carries the one thing the user asked to be
+/// able to see, and it used to fade the WHOLE row — text included — between
+/// 1.85:1 and 3.39:1, for ever. The text is fixed at a readable colour now
+/// (`ReadableText`) and only the leading glyph breathes, between `shimmerFloor`
+/// and full, which keeps even the dim end of the cycle above the 3:1 non-text
+/// minimum. Motion is off under Reduce Motion and while the scene is not active.
+///
+/// NO TAP, on purpose. This is a STATUS line, and the action a reader wants
+/// while it is on screen — stop the turn — already has a real control: the
+/// composer's primary button turns into Stop for exactly the same period
+/// (`ComposerView.stopButton`). Making the status line a second, unlabelled way
+/// to do that would be a hidden gesture; making it tappable for anything ELSE
+/// would be a control that appears and vanishes with the turn. It is exposed as
+/// a frequently-updating status element instead, so VoiceOver reads it and does
+/// not offer to activate it.
 struct ThinkingRow: View {
     let activity: String?
     @Environment(\.scenePhase) private var scenePhase
-    @State private var phase = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var breathing = false
+
+    private var isThinking: Bool { activity == nil || activity == "Thinking" }
+    private var label: String {
+        activity.map { $0 == "Thinking" ? "Thinking…" : "\($0)…" } ?? "Thinking…"
+    }
+    private var animates: Bool { scenePhase == .active && !reduceMotion }
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: activity == nil || activity == "Thinking" ? "sparkles" : "wrench.and.screwdriver")
+            Image(systemName: isThinking ? "sparkles" : "wrench.and.screwdriver")
                 .font(.caption)
-            Text(activity.map { $0 == "Thinking" ? "Thinking…" : "\($0)…" } ?? "Thinking…")
+                .opacity(breathing ? ReadableText.shimmerFloor : 1)
+                .animation(
+                    animates
+                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                        : nil,
+                    value: breathing
+                )
+            Text(label)
                 .font(.footnote)
         }
-        .foregroundStyle(.secondary)
-        .opacity(phase ? 0.35 : 1)
-        .animation(
-            scenePhase == .active ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : nil,
-            value: phase
-        )
-        .onAppear { phase = scenePhase == .active }
-        .onChange(of: scenePhase) { _, phaseState in
-            phase = phaseState == .active
-        }
+        .foregroundStyle(ReadableText.secondary)
+        .onAppear { breathing = animates }
+        .onChange(of: scenePhase) { _, _ in breathing = animates }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier("chat.activity")
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(.updatesFrequently)
     }
 }

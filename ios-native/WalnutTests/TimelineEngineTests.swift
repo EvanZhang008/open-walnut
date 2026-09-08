@@ -119,7 +119,11 @@ final class TimelineEngineTests: XCTestCase {
 
         let snapshot = await actor.buildSnapshot(input(messages, streaming: true, liveText: "live tail text"))
         let kinds = Set(snapshot.rows.map(\.content.reuseKind))
-        for expected in ["text", "bubble", "toolChip", "chip", "notification", "image",
+        // "thinking" replaced "chip" here: a `kind:"thinking"` message used to
+        // build the plain one-line `.chip` capsule and now builds an expandable
+        // reasoning row. `.chip` survives as the generic capsule with no
+        // producer of its own.
+        for expected in ["text", "bubble", "toolChip", "thinking", "notification", "image",
                          "table", "code", "failedNotice", "activity"] {
             XCTAssertTrue(kinds.contains(expected), "missing row kind \(expected); got \(kinds)")
         }
@@ -137,7 +141,7 @@ final class TimelineEngineTests: XCTestCase {
                               createdAt: "2026-08-08T06:00:00Z", kind: .tool,
                               detail: "explore", resultPreview: "out", agent: "researcher")
         let snapshot = await actor.buildSnapshot(input([msg]))
-        guard case .toolChip(_, _, _, let agent, _) = snapshot.rows.first?.content else {
+        guard case .toolChip(_, _, _, _, let agent, _) = snapshot.rows.first?.content else {
             return XCTFail("expected toolChip row")
         }
         XCTAssertEqual(agent, "researcher")

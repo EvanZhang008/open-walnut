@@ -22,15 +22,89 @@ enum TimelineTextStyler {
 
     // MARK: - Fonts (mirrors MarkdownView / MessageRow)
 
-    static let bodyFont = UIFont.preferredFont(forTextStyle: .body)
-    static let captionFont = UIFont.preferredFont(forTextStyle: .caption1)
-    static let caption2Font = UIFont.preferredFont(forTextStyle: .caption2)
-    static let footnoteFont = UIFont.preferredFont(forTextStyle: .footnote)
-    static let subheadlineFont = UIFont.preferredFont(forTextStyle: .subheadline)
-    static let codeFont = UIFont.monospacedSystemFont(
-        ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
-    static let codePreviewFont = UIFont.monospacedSystemFont(
-        ofSize: UIFont.preferredFont(forTextStyle: .caption2).pointSize, weight: .regular)
+    /// These used to be `static let`, i.e. FROZEN at whatever the text size was
+    /// the first time anything touched them. A fresh launch at XXXL was therefore
+    /// correct and a live text-size change was not: the SwiftUI-hosted cells adopt
+    /// the new size at once while every height in the memo still described the old
+    /// one, which on the phone is rows overlapping and labels sliced.
+    ///
+    /// They are resolved per CATEGORY now, memoized so the hot measurement paths
+    /// still pay a dictionary hit rather than a UIKit font lookup, and dropped by
+    /// `adopt(_:)` when the category moves. The layout actor calls `adopt` at the
+    /// top of every build from `TimelineInput.sizeCategory`, and invalidates its
+    /// own row memo on the same value — one signal, both halves.
+    static var bodyFont: UIFont { fonts.resolve(.body) }
+    static var captionFont: UIFont { fonts.resolve(.caption1) }
+    static var caption2Font: UIFont { fonts.resolve(.caption2) }
+    static var footnoteFont: UIFont { fonts.resolve(.footnote) }
+    static var subheadlineFont: UIFont { fonts.resolve(.subheadline) }
+    static var codeFont: UIFont { fonts.resolveMonospaced(.footnote) }
+    static var codePreviewFont: UIFont { fonts.resolveMonospaced(.caption2) }
+
+    /// Adopt a content size category: a no-op unless it actually changed.
+    ///
+    /// Called from the layout actor, and the fonts are read from the actor AND
+    /// from the main thread (cells), which is why the box locks rather than
+    /// relying on either being the only caller.
+    static func adopt(_ category: UIContentSizeCategory) {
+        fonts.adopt(category)
+    }
+
+    private static let fonts = FontBox()
+
+    /// Text-style → font, for ONE content size category at a time.
+    private final class FontBox {
+        private let lock = NSLock()
+        private var category: UIContentSizeCategory = .unspecified
+        private var resolved: [UIFont.TextStyle: UIFont] = [:]
+        private var monospaced: [UIFont.TextStyle: UIFont] = [:]
+
+        func adopt(_ next: UIContentSizeCategory) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard next != category else { return }
+            category = next
+            resolved.removeAll(keepingCapacity: true)
+            monospaced.removeAll(keepingCapacity: true)
+        }
+
+        func resolve(_ style: UIFont.TextStyle) -> UIFont {
+            lock.lock()
+            defer { lock.unlock() }
+            return locked(style)
+        }
+
+        func resolveMonospaced(_ style: UIFont.TextStyle) -> UIFont {
+            lock.lock()
+            defer { lock.unlock() }
+            if let font = monospaced[style] { return font }
+            // Derived UNDER the same lock as its base size: released in between,
+            // an `adopt` could land and this would bank a monospaced font sized
+            // for the previous text size, which nothing would clear again.
+            let font = UIFont.monospacedSystemFont(ofSize: locked(style).pointSize,
+                                                   weight: .regular)
+            monospaced[style] = font
+            return font
+        }
+
+        /// Caller holds the lock.
+        ///
+        /// Resolved FOR the adopted category rather than from the ambient system
+        /// one, so the number the actor invalidates on and the font it then
+        /// measures with cannot disagree — and so a test can drive a text size
+        /// without touching the simulator's settings. `.unspecified` means
+        /// "whatever the system is set to", which is `preferredFont`'s own answer
+        /// with no trait collection.
+        private func locked(_ style: UIFont.TextStyle) -> UIFont {
+            if let font = resolved[style] { return font }
+            let traits: UITraitCollection? = category == .unspecified
+                ? nil
+                : UITraitCollection { $0.preferredContentSizeCategory = category }
+            let font = UIFont.preferredFont(forTextStyle: style, compatibleWith: traits)
+            resolved[style] = font
+            return font
+        }
+    }
 
     static func headingFont(_ level: Int) -> UIFont {
         let base: UIFont

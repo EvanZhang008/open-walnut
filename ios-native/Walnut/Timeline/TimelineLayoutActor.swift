@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import UIKit
 
 /// Background build pipeline: TimelineInput (a plain snapshot of store state)
 /// → immutable, height-measured TimelineSnapshot. All parsing, markdown
@@ -11,9 +12,9 @@ import CoreGraphics
 /// pending-slot handoff race-free.
 ///
 /// INCREMENTAL BY MEMOIZATION, not by delta protocol: message rows are cached
-/// keyed on (message id, revision-relevant flags, expansion, width). The
-/// store's ids are content-derived, so an unchanged message costs a
-/// dictionary hit — a 21 ev/s storm re-BUILDS only the live tail while the
+/// keyed on (message id, revision-relevant flags, expansion, width, text size)
+/// and validated against the memoized message itself, so an unchanged message
+/// costs a dictionary hit — a 21 ev/s storm re-BUILDS only the live tail while the
 /// 105 history messages replay from cache. Live head rows use the dedicated
 /// head cache (LiveMarkdownWindow's quantized head is byte-stable across
 /// many ticks); a live window carrying raw HTML has no head, because it is
@@ -25,10 +26,13 @@ actor TimelineLayoutActor {
     private var pendingInput: TimelineInput?
     private var building = false
 
-    /// Memoized rows per message. Key includes everything that affects a
-    /// message's rows; value is the built rows (immutable).
-    private var rowCache: [String: [TimelineRow]] = [:]
+    /// Memoized rows per message. The key is the BUCKET; the message stored
+    /// beside the rows is the AUTHORITY — see `cacheKey`.
+    private var rowCache: [String: (message: ChatMessage, rows: [TimelineRow])] = [:]
     private var cacheWidth: CGFloat = 0
+    /// Text size the memo was measured at. A live Dynamic Type change moves every
+    /// height in it, exactly like a width change.
+    private var cacheSizeCategory: UIContentSizeCategory = .unspecified
     private static let rowCacheLimit = 600
 
     /// Live-head memo (see TimelineRowBuilder.liveRows).
@@ -75,11 +79,16 @@ actor TimelineLayoutActor {
 
     private func build(_ input: TimelineInput) -> TimelineSnapshot {
         generation += 1
-        if input.width != cacheWidth {
+        // Fonts are resolved for the CURRENT text size rather than frozen at first
+        // access, so a live Dynamic Type change has to reach the styler before any
+        // measurement in this build reads a font.
+        TimelineTextStyler.adopt(input.sizeCategory)
+        if input.width != cacheWidth || input.sizeCategory != cacheSizeCategory {
             rowCache = [:]
             headCache = nil
             richEntryIdentities.removeAll(keepingCapacity: true)
             cacheWidth = input.width
+            cacheSizeCategory = input.sizeCategory
         }
         if input.scope != cacheScope {
             // The row cache SURVIVES a switch (its keys are scoped, so it can
@@ -97,13 +106,13 @@ actor TimelineLayoutActor {
         }
         for message in input.messages {
             let key = cacheKey(message, expandedRowIDs: input.expandedRowIDs, scope: input.scope)
-            if let cached = rowCache[key] {
-                rows.append(contentsOf: cached)
+            if let cached = rowCache[key], cached.message == message {
+                rows.append(contentsOf: cached.rows)
             } else {
                 let built = builder.rows(for: message, width: input.width,
                                          expandedRowIDs: input.expandedRowIDs,
                                          scope: input.scope)
-                rowCache[key] = built
+                rowCache[key] = (message, built)
                 let identities = TimelineRowBuilder.richIdentities(in: built)
                 if !identities.isEmpty { richEntryIdentities[key] = identities }
                 rows.append(contentsOf: built)
@@ -120,12 +129,22 @@ actor TimelineLayoutActor {
             let live = builder.liveRows(
                 liveText: input.liveText, storeTruncated: input.liveTextTruncated,
                 activity: input.activity, width: input.width,
-                tailRevision: tailRevision, cachedHead: headCache, scope: input.scope
+                tailRevision: tailRevision, cachedHead: headCache, scope: input.scope,
+                liveThinking: input.liveThinking
             )
             headCache = live.headCache
             rows.append(contentsOf: live.rows)
         } else {
             headCache = nil
+            // The reasoning row OUTLIVES the turn, on purpose: the stores clear
+            // `liveThinking` in the same synchronous block that installs the
+            // fetched `kind:"thinking"` rows, so keeping it here is what stops
+            // the reasoning from blinking out for the length of the refetch (and
+            // from staying blank when that refetch fails). Only the reasoning —
+            // the shimmering activity row and the live reply text belong to a
+            // turn that is over.
+            rows.append(contentsOf: builder.liveThinkingRows(
+                liveThinking: input.liveThinking, width: input.width, scope: input.scope))
         }
         return TimelineSnapshot(rows: rows, width: input.width, generation: generation)
     }
@@ -159,8 +178,9 @@ actor TimelineLayoutActor {
             for (key, identities) in richEntryIdentities
             where !identities.isDisjoint(with: changed) {
                 guard let cached = rowCache[key] else { continue }
-                rowCache[key] = builder.rebankRichHeights(cached, width: cacheWidth,
-                                                          changed: changed)
+                rowCache[key] = (cached.message,
+                                 builder.rebankRichHeights(cached.rows, width: cacheWidth,
+                                                           changed: changed))
             }
             // The head is memoized on its own byte-stable string, so a card
             // sitting in it would be just as stuck as one in a message — but a
@@ -173,16 +193,28 @@ actor TimelineLayoutActor {
         }
     }
 
-    /// Everything that can change a message's rows must be in the key.
-    /// Message ids are content-derived (role|timestamp|kind|text-hash), so
-    /// text/kind changes already produce a new id; the optimistic-bubble
-    /// mutable flags and expansion state ride explicitly.
+    /// The memo's BUCKET, not its proof of freshness. Everything that can change
+    /// a message's rows and is not part of the message itself rides here: the
+    /// scope, the optimistic-bubble mutable flags, the expansion state.
     ///
-    /// THE SCOPE IS PART OF THE KEY, not decoration. `/api/v1` numbers a
-    /// conversation's messages positionally ("m0"…), so the message id alone
-    /// made this memo answer conversation Q's "m0" with conversation P's rows —
-    /// which is why the stale transcript survived even a full reload: the
-    /// snapshot itself carried the previous conversation's content.
+    /// CONTENT IS CHECKED SEPARATELY, by comparing the memoized `ChatMessage`
+    /// against the one being built. It has to be: only ONE of the two stores
+    /// digests its payload into the id (`SessionConversationStore.assignStableIDs`).
+    /// `ChatStore` keeps the server's ids verbatim and `/api/v1` numbers a
+    /// conversation's messages POSITIONALLY ("m0", "m1", …), so a tool row at
+    /// "m7" that gains its `resultPreview` across the mid-turn refetch arrives
+    /// under the same id with different content — and a key-only memo kept
+    /// serving the row built before the result existed. It read "Running…", at a
+    /// stale height, for the life of the view (collapsing and re-expanding was the
+    /// only way out, because that changed the key). Equality is exact where a
+    /// digest would only be probable, and it is nearly free in the common case:
+    /// an unchanged message hands `String ==` two identical string buffers, which
+    /// compares in O(1).
+    ///
+    /// THE SCOPE IS PART OF THE KEY, not decoration. The same positional ids made
+    /// this memo answer conversation Q's "m0" with conversation P's rows — which
+    /// is why the stale transcript survived even a full reload: the snapshot
+    /// itself carried the previous conversation's content.
     private func cacheKey(_ m: ChatMessage, expandedRowIDs: Set<String>,
                           scope: String) -> String {
         let namespace = TimelineScope.namespace(scope, m.id)

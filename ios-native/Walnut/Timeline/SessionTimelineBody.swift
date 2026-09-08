@@ -45,6 +45,7 @@ struct SessionTimelineBody: View {
                 streaming: store.streaming,
                 liveText: store.liveText,
                 liveTextTruncated: store.liveTextTruncated,
+                liveThinking: store.liveThinking,
                 activity: store.activity,
                 // Session transcripts are numbered per session, so a session's
                 // rows must live in that session's id space (see TimelineScope).

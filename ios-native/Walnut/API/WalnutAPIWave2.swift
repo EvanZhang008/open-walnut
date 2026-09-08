@@ -166,6 +166,30 @@ extension WalnutAPI {
                              body: [String: String](), retrySafe: true)
     }
 
+    /// Set the IN-PROCESS engine's per-conversation model and/or effort.
+    ///
+    /// The lane engine's model belongs to its session (`/sessions/:id/model`);
+    /// calling this on a lane conversation is a client bug and answers 409
+    /// `lane_engine`. A nil argument is OMITTED from the body rather than sent as
+    /// null, so setting the model can never quietly clear the effort.
+    ///
+    /// Idempotent (last write wins), hence `retrySafe`.
+    /// Errors: 400 `unknown_model`, 409 `lane_engine`, 503 `primary_unreachable`
+    /// on a replica that can't relay, and 404 on a server predating the endpoint.
+    func setChatModel(
+        agentID: String = "general", conversationID: String? = nil,
+        model: String? = nil, effort: String? = nil
+    ) async throws -> ChatModelChange {
+        var query = "agentId=\(escape(agentID))"
+        if let conversationID, !conversationID.isEmpty {
+            query += "&conversationId=\(escape(conversationID))"
+        }
+        var body: [String: String] = [:]
+        if let model { body["model"] = model }
+        if let effort { body["effort"] = effort }
+        return try await send("PUT", "/chat/model?\(query)", body: body, retrySafe: true)
+    }
+
     /// One directory level for the session path picker. `host` "" / nil = the
     /// primary box. `prefix` may be partial (the server lists its parent and
     /// reports the resolved `parent` back) and may start with `~`.

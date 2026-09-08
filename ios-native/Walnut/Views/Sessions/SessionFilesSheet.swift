@@ -231,7 +231,10 @@ struct SessionDirectoryList: View {
         } catch let error as APIError where error.isCancelled {
             return
         } catch {
-            loadError = Self.friendlyFilesError(error)
+            // WITH the host. Dropping it here is what made every failed listing on
+            // a remote box read as a statement about the reader's Mac — the exact
+            // thing `FileReadFailure` carries a host to prevent.
+            loadError = Self.friendlyFilesError(error, host: host.isEmpty ? nil : host)
         }
         loaded = true
     }
@@ -263,8 +266,12 @@ struct SessionDirectoryList: View {
     /// the server reuses the `not_supported_cloud` code for both 403 (a secret
     /// path, refused forever) and 501 (an old daemon, fixed on the next
     /// reconnect), so the code alone told half of those readers the wrong thing.
-    static func friendlyFilesError(_ error: Error) -> String {
-        FilePreviewLink.friendlyMessage(for: error)
+    /// `host` is the box the listing was aimed at. Optional, because one caller
+    /// (the contract test's cloud-501 case) genuinely does not know one — and
+    /// that is exactly why the copy has to stay host-neutral rather than default
+    /// to the reader's Mac.
+    static func friendlyFilesError(_ error: Error, host: String? = nil) -> String {
+        FilePreviewLink.failure(for: error, host: host).message
     }
 }
 
@@ -299,7 +306,9 @@ struct SessionFileViewer: View {
 
     @State private var content: SessionFileContent?
     @State private var loaded = false
-    @State private var loadError: String?
+    /// The whole failure, not just its sentence: the empty state needs the
+    /// headline and the retry decision too.
+    @State private var loadFailure: FileReadFailure?
     @State private var showSource = false
     /// Set when the resolver found the file somewhere else.
     @State private var healedPath: String?
@@ -344,14 +353,13 @@ struct SessionFileViewer: View {
                 HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .padding(.top, 40)
-            } else if let loadError {
-                unavailable("Can't open file", icon: "doc.questionmark", detail: loadError)
+            } else if let loadFailure {
+                unavailable(loadFailure)
             } else if let content {
-                if let serverError = content.error {
-                    unavailable("Can't open file", icon: "doc.questionmark", detail: serverError)
+                if content.error != nil {
+                    unavailable(FilePreviewLink.failure(fromPayloadError: content.error, host: hostParam))
                 } else if content.binary == true {
-                    unavailable("Binary file", icon: "doc.zipper",
-                                detail: "This file isn't text — open it on your Mac.")
+                    unavailable(FileReadFailure(kind: .unsupportedType, host: hostParam))
                 } else {
                     notices(for: content)
                     FileSourceLinesView(
@@ -365,13 +373,32 @@ struct SessionFileViewer: View {
         .task { await load() }
     }
 
-    private func unavailable(_ title: String, icon: String, detail: String) -> some View {
+    private func unavailable(_ failure: FileReadFailure) -> some View {
         ContentUnavailableView {
-            Label(title, systemImage: icon)
+            Label(failure.title, systemImage: failure.icon)
         } description: {
-            Text(detail)
+            Text(failure.message)
+        } actions: {
+            if failure.isRetryable {
+                Button("Try Again") { retry() }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("session.files.viewer.retry")
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Re-issue the same read from scratch. `load()` is guarded on `loaded`, so
+    /// the reset has to come first — and the HEAL bookkeeping has to be reset
+    /// with it, because a retry that kept a previous run's `healedPath` would
+    /// silently read a different file than the one the reader asked for.
+    private func retry() {
+        loaded = false
+        loadFailure = nil
+        content = nil
+        healedPath = nil
+        healedNotice = nil
+        Task { await load() }
     }
 
     /// Above-the-body banners: a server clip, and a self-heal that changed which
@@ -400,7 +427,7 @@ struct SessionFileViewer: View {
         guard !loaded else { return }
         anchorLine = ref?.line
         anchorEndLine = ref?.endLine
-        var firstMessage: String?
+        var firstFailure: FileReadFailure?
         // Only a "wrong path" shape is worth re-resolving. 403/413/501/503 are
         // honest statements about a path that DOES exist, and re-resolving one
         // would just replace a true answer with a guess.
@@ -413,16 +440,16 @@ struct SessionFileViewer: View {
                 return
             }
             pathLooksWrong = true
-            firstMessage = payload.error
+            firstFailure = FilePreviewLink.failure(fromPayloadError: payload.error, host: hostParam)
         } catch let error as APIError where error.isCancelled {
             return
         } catch let error as APIError {
             if case .server(let status, _, _, _, _) = error, status == 400 || status == 404 {
                 pathLooksWrong = true
             }
-            firstMessage = FilePreviewLink.friendlyMessage(for: error)
+            firstFailure = FilePreviewLink.failure(for: error, host: hostParam)
         } catch {
-            firstMessage = error.localizedDescription
+            firstFailure = FilePreviewLink.failure(for: error, host: hostParam)
         }
 
         if pathLooksWrong, let healed = await resolve() {
@@ -444,7 +471,7 @@ struct SessionFileViewer: View {
                 // reader actually asked for.
             }
         }
-        loadError = firstMessage ?? "Couldn't read that file."
+        loadFailure = firstFailure ?? FileReadFailure(kind: .serverError(status: nil), host: hostParam)
         loaded = true
     }
 

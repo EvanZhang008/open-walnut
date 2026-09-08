@@ -276,6 +276,79 @@ final class Wave2ContractTests: XCTestCase {
         XCTAssertTrue(SessionDirectoryList.friendlyFilesError(offline).contains("reachable"))
     }
 
+    // MARK: - Session transcript: the richness opt-in
+
+    /// A coding session's timeline could NEVER show a tool's Input or expand a
+    /// reasoning row, because `GET /sessions/:id/transcript` answers from the slim
+    /// projection unless asked for the rich one. `rich=1` is that ask — and it only
+    /// pays off WITH `fresh=1`, because the sweep writes the cached file in the slim
+    /// shape and the server will not force a live build just because `rich`
+    /// appeared. So `rich` without `fresh` is dropped rather than sent as a
+    /// parameter that cannot be answered.
+    func testRichIsAskedForOnlyWhereItCanBeAnswered() {
+        XCTAssertEqual(WalnutAPI.sessionTranscriptPath(id: "s-1", fresh: false, rich: false),
+                       "/sessions/s-1/transcript")
+        XCTAssertEqual(WalnutAPI.sessionTranscriptPath(id: "s-1", fresh: false, rich: true),
+                       "/sessions/s-1/transcript",
+                       "a cache-first read cannot carry the fields, so asking is pointless")
+        XCTAssertEqual(WalnutAPI.sessionTranscriptPath(id: "s-1", fresh: true, rich: false),
+                       "/sessions/s-1/transcript?fresh=1")
+        let rich = WalnutAPI.sessionTranscriptPath(id: "s-1", fresh: true, rich: true)
+        XCTAssertTrue(rich.contains("fresh=1"), rich)
+        XCTAssertTrue(rich.contains("rich=1"), rich)
+        XCTAssertEqual(rich.filter { $0 == "?" }.count, 1,
+                       "two query strings is not a query string: \(rich)")
+    }
+
+    /// …and which READS ask for it, which the server cannot decide for us: poll
+    /// and non-poll are the same URL. Open pays for the fields once (the fresh
+    /// phase, not the cached one); the 5s degraded poll never does.
+    @MainActor
+    func testOnlyTheNonPollReadsPayForTheRichFields() async {
+        let transport = MockSessionSendTransport()
+        let store = SessionConversationStore(session: ScriptedSSE.session(), transport: transport)
+        await store.open()
+        XCTAssertEqual(transport.transcriptReads.map(\.fresh), [false, true],
+                       "the two-phase open is a cached read then a fresh one")
+        XCTAssertEqual(transport.transcriptReads.map(\.rich), [false, true],
+                       "the cached read cannot carry the fields; the fresh one must ask")
+        // Arm the degraded poll. Its loop reads BEFORE its first sleep, so the
+        // read it makes is observable without waiting out the 5s interval.
+        store.handle(SSEEvent(id: nil, event: "bridge-offline", data: "{}"))
+        for _ in 0..<20 where transport.transcriptReads.count < 3 {
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        let polled = Array(transport.transcriptReads.dropFirst(2))
+        XCTAssertFalse(polled.isEmpty, "the bridge-offline fallback never read at all")
+        XCTAssertTrue(polled.allSatisfy { $0.fresh && !$0.rich },
+                      "the 5s poll asked for the expensive fields: \(polled)")
+        store.close()
+    }
+
+    /// Both fields the parameter adds stay OPTIONAL, so a server that predates it
+    /// yields today's rows rather than a decode failure and an empty transcript.
+    func testTranscriptTakesTheRichFieldsAndSurvivesWithoutThem() throws {
+        let rich = try decode(SessionTranscript.self, """
+        { "sessionId": "s-1", "exportedAt": "2026-09-08T04:00:00Z", "truncated": false,
+          "messages": [
+            { "role": "assistant", "text": "Bash", "timestamp": "2026-09-08T04:00:00Z",
+              "kind": "tool", "detail": "ls docs/", "inputPreview": "ls -la docs/" },
+            { "role": "assistant", "text": "Weighing two options",
+              "timestamp": "2026-09-08T04:00:01Z", "kind": "thinking",
+              "thinkingText": "the kubelet log before the chart" } ] }
+        """)
+        XCTAssertEqual(rich.messages[0].inputPreview, "ls -la docs/")
+        XCTAssertEqual(rich.messages[1].thinkingText, "the kubelet log before the chart")
+        let slim = try decode(SessionTranscript.self, """
+        { "sessionId": "s-1", "exportedAt": "2026-09-08T04:00:00Z", "truncated": false,
+          "messages": [ { "role": "assistant", "text": "Bash",
+                          "timestamp": "2026-09-08T04:00:00Z", "kind": "tool" } ] }
+        """)
+        XCTAssertNil(slim.messages[0].inputPreview)
+        XCTAssertNil(slim.messages[0].thinkingText)
+    }
+
     func testRoutinesFriendlyErrorLadder() {
         let upgrade = APIError.server(status: 400, code: "session_control_needs_upgrade",
                                       message: "old daemon", serverHash: nil, serverContent: nil)

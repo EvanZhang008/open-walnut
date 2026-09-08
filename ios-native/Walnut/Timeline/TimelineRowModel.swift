@@ -120,11 +120,29 @@ enum TimelineRowContent {
     case localImages(datas: [Data], dimmed: Bool)
     /// Markdown table — hosted grid (rare; bounded by maxRenderedTableRows).
     case table(header: [AttributedString], rows: [[AttributedString]])
-    /// Tool call chip; expanding shows `resultPreview` (heights for BOTH
-    /// states are pre-measured — toggling swaps `height`, never re-measures).
-    case toolChip(name: String, detail: String?, resultPreview: String?,
-                  agent: String?, expanded: Bool)
-    /// Small grey capsule (thinking history rows).
+    /// Tool call chip; expanding shows an Input section (`inputPreview`) and a
+    /// Result section (`resultPreview`). Heights for BOTH states are
+    /// pre-measured — toggling swaps `height`, never re-measures. Every tool row
+    /// is expandable: a row with neither field expands to "No output", because a
+    /// chip that swallows a tap reads as a broken tap, not as an empty result.
+    case toolChip(name: String, detail: String?, inputPreview: String?,
+                  resultPreview: String?, agent: String?, expanded: Bool)
+    /// Reasoning ("thinking") row: a grey capsule with ONE line collapsed,
+    /// expanding to `body`. Collapse mirrors `.notification` — both heights are
+    /// pre-measured and `collapsible` decides whether the chevron and the tap
+    /// exist at all. Three shapes reach this case:
+    ///  - history with a fuller excerpt behind the line: collapsible, closed;
+    ///  - history with nothing more to show: `body == nil`, not collapsible,
+    ///    not expanded — no chevron, so a tap can never look broken;
+    ///  - the LIVE turn's reasoning: not collapsible and always expanded, the
+    ///    same way a short notification card is.
+    /// `maxLines` is the row's own truncation point: the cell limits the body to
+    /// it and the builder reserves exactly that many lines, so the two cannot
+    /// disagree about where the text stops (history and the live tail want
+    /// different caps, which is why this rides the row instead of a constant).
+    case thinking(line: String, body: String?, collapsible: Bool,
+                  expanded: Bool, maxLines: Int)
+    /// Small grey capsule (generic one-line status capsules).
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
     /// SwiftUI card; both heights pre-measured.
@@ -162,6 +180,7 @@ extension TimelineRowContent {
         case .localImages: return "localImages"
         case .table: return "table"
         case .toolChip: return "toolChip"
+        case .thinking: return "thinking"
         case .chip: return "chip"
         case .notification: return "notification"
         case .richHTML: return "richHTML"
@@ -205,12 +224,20 @@ extension TimelineRowContent {
         case .table(let header, let rows):
             hasher.combine(header)
             hasher.combine(rows)
-        case .toolChip(let name, let detail, let resultPreview, let agent, let expanded):
+        case .toolChip(let name, let detail, let inputPreview, let resultPreview,
+                       let agent, let expanded):
             hasher.combine(name)
             hasher.combine(detail)
+            hasher.combine(inputPreview)
             hasher.combine(resultPreview)
             hasher.combine(agent)
             hasher.combine(expanded)
+        case .thinking(let line, let body, let collapsible, let expanded, let maxLines):
+            hasher.combine(line)
+            hasher.combine(body)
+            hasher.combine(collapsible)
+            hasher.combine(expanded)
+            hasher.combine(maxLines)
         case .chip(let icon, let text):
             hasher.combine(icon)
             hasher.combine(text)
@@ -258,6 +285,18 @@ struct TimelineInput {
     var streaming: Bool
     var liveText: String
     var liveTextTruncated: Bool
+    /// Reasoning the agent has emitted during the IN-FLIGHT turn, accumulated
+    /// (bounded) by the stores' shared `LiveAgentActivity`. Empty = it is not
+    /// reasoning right now. Optional-with-default because every existing caller
+    /// predates it; `scope` above stays required for the opposite reason (a
+    /// defaulted scope is how a caller silently gets another conversation's
+    /// rows).
+    ///
+    /// Deliberately NOT in `TimelineLayoutActor.cacheKey`: that memo is keyed
+    /// per MESSAGE and this is not a message — it only ever feeds `liveRows`,
+    /// which is rebuilt from scratch on every streaming tick. It IS covered by
+    /// the diff, through the `contentKey` arm of the `.thinking` row it produces.
+    var liveThinking: String = ""
     var activity: String?
     var showLoadEarlier: Bool
     /// Content width the rows must be measured at.
@@ -269,6 +308,17 @@ struct TimelineInput {
     /// UI surface passes one; the default is the unscoped id space, for direct
     /// builder/actor use in tests and the DEBUG harness.
     var scope: String = TimelineScope.unscoped
+    /// Text size every height in this build was measured at.
+    ///
+    /// WHY IT IS AN INPUT: the layout NEVER self-sizes, so a Dynamic Type change
+    /// moves every measured height at once — and the SwiftUI-hosted cells adopt
+    /// the new size immediately while the memo still holds the old numbers, which
+    /// is rows overlapping and labels sliced (a fresh launch at XXXL was always
+    /// correct, so this was invalidation, never layout). Carrying it here makes it
+    /// invalidate exactly like `width`, on the same line, in the same place.
+    /// `.unspecified` = "whatever the system says", the default for direct
+    /// builder/actor use in tests.
+    var sizeCategory: UIContentSizeCategory = .unspecified
 }
 
 /// The actor's output: a complete row array (never a delta — latest wins).

@@ -98,6 +98,15 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// kind == .tool only — subagent name for Task/Agent delegation rows
     /// (session transcripts, additive 2026-08); nil on plain tool rows.
     let agent: String?
+    /// kind == .thinking only — the fuller reasoning excerpt behind the
+    /// collapsed one-line `text` (server-capped, additive 2026-09). nil on an
+    /// older server, which is why a thinking row must still render from `text`
+    /// alone: absent means "no more to show", never "broken row".
+    let thinkingText: String?
+    /// kind == .tool only — compact, redacted rendering of the tool INPUT
+    /// (additive 2026-09). `detail` is the one-line summary on the capsule;
+    /// this is what the expanded card's Input section shows.
+    let inputPreview: String?
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -123,10 +132,12 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
+        case thinkingText, inputPreview
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
-         detail: String? = nil, resultPreview: String? = nil, agent: String? = nil) {
+         detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
+         thinkingText: String? = nil, inputPreview: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -136,6 +147,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         self.detail = detail
         self.resultPreview = resultPreview
         self.agent = agent
+        self.thinkingText = thinkingText
+        self.inputPreview = inputPreview
     }
 
     var isUser: Bool { role == "user" }
@@ -552,9 +565,16 @@ struct SessionTranscript: Codable {
         /// Task/Agent delegation rows only (additive, 2026-08) — the subagent's
         /// name, rendered as a badge on the tool chip.
         let agent: String?
+        /// kind == "thinking" only — fuller reasoning excerpt behind the
+        /// collapsed line (additive 2026-09; nil on an older server).
+        let thinkingText: String?
+        /// kind == "tool" only — compact redacted tool input for the expanded
+        /// card's Input section (additive 2026-09).
+        let inputPreview: String?
 
         init(role: String, text: String, timestamp: String, kind: String?,
-             detail: String? = nil, resultPreview: String? = nil, agent: String? = nil) {
+             detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
+             thinkingText: String? = nil, inputPreview: String? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -562,6 +582,8 @@ struct SessionTranscript: Codable {
             self.detail = detail
             self.resultPreview = resultPreview
             self.agent = agent
+            self.thinkingText = thinkingText
+            self.inputPreview = inputPreview
         }
     }
 

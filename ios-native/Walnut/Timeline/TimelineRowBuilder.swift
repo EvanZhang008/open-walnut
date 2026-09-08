@@ -22,6 +22,38 @@ enum TimelineMetrics {
     /// Vertical padding inside a tool chip's subagent badge (its own capsule,
     /// nested in the chip's) — the term the chip's height formula used to omit.
     static let badgeVPad: CGFloat = 2
+    /// Expanded-card geometry, shared by the tool card and the thinking row so
+    /// the builder's arithmetic and the cells' padding cannot drift.
+    /// `expandCardPadding` is the card's inner inset, `expandCardGap` the gap
+    /// between the capsule and the card, `expandLabelGap` the gap under a
+    /// section's "Input"/"Result" label, `expandSectionSpacing` the gap between
+    /// two sections.
+    static let expandCardPadding: CGFloat = 10
+    static let expandCardGap: CGFloat = 4
+    static let expandLabelGap: CGFloat = 2
+    static let expandSectionSpacing: CGFloat = 6
+    /// Per-section body caps. A tool RESULT is the long one (kept at the value
+    /// the single-section card shipped with); an input preview is compact by
+    /// contract, and a reasoning excerpt is capped server-side.
+    static let expandResultMaxHeight: CGFloat = 320
+    static let expandInputMaxHeight: CGFloat = 200
+    /// Reasoning is WRAPPED prose, so its cap is a line count rather than a
+    /// height: the cell truncates at exactly this many lines (a nested vertical
+    /// scroller inside the transcript's own scroller is worse than a truncation),
+    /// and the builder reserves exactly that many lines. Both sides read this
+    /// one number, so they cannot disagree about where the text stops.
+    ///
+    /// Sized to the server's excerpt cap (2000 characters), which is ~45 caption
+    /// lines at the default text size — the point of the tap is to read the
+    /// reasoning, so cutting it in half would be answering half the request. The
+    /// resulting row is tall, and that is fine: it is opened deliberately and it
+    /// scrolls WITH the conversation.
+    static let expandThinkingMaxLines = 48
+    /// The LIVE reasoning row's cap, in the same unit (WRAPPED lines) as the
+    /// historical one. Much tighter than that one: it is on screen for the whole
+    /// turn and must not push the reply off the phone. The window it bounds is
+    /// cut from the NEWEST end — see `TimelineLiveThinkingWindow`.
+    static let liveThinkingMaxLines = 8
     static let imageSlotHeight: CGFloat = 220
     static let localImageSide: CGFloat = 120
     static let activityHeight: CGFloat = 28
@@ -69,9 +101,43 @@ enum TimelineMetrics {
     /// TimelineHostedHeightParityTests pins both directions.
     static func hostedLineHeight(_ font: UIFont) -> CGFloat { font.lineHeight + 2.5 }
 
+    /// ONE line of hosted `Text`, tight. Measured through
+    /// `UIHostingController` at the default text size: a caption line renders at
+    /// `lineHeight + 0.54`, so +1 rounds up without the ~2pt cushion
+    /// `hostedLineHeight` carries. The cushion is right for a row whose whole
+    /// height IS that one line (a capsule) and wrong for a line that is one term
+    /// of a sum, where it is pure reserved emptiness.
+    static func hostedTightLine(_ font: UIFont) -> CGFloat { font.lineHeight + 1 }
+
+    /// Height a hosted, WRAPPED `Text` of `lines` lines occupies.
+    ///
+    /// Deliberately NOT `lines * hostedLineHeight(font)`. That constant's slack
+    /// is per-row, so multiplying it by a line count multiplies the slack too —
+    /// measured, an 8-line caption body came out 23pt taller than SwiftUI laid it
+    /// out, which is a visible band of nothing under the text. SwiftUI's own
+    /// numbers, measured through `UIHostingController` at the default text size:
+    /// 8 caption lines render at 104.3pt against `8 * lineHeight = 105.0`, i.e.
+    /// each additional line costs slightly UNDER `UIFont.lineHeight`. So
+    /// `lines * lineHeight + 2.5` tracks it within ~3pt at 8 lines, and its
+    /// margin GROWS with the line count rather than shrinking — which is the
+    /// direction that matters, because the cell clips.
+    ///
+    /// Measured for `caption1`/`caption2`, which is all this is used with (the
+    /// reasoning card). Re-measure before pointing it at a larger text style.
+    static func hostedTextHeight(lines: Int, font: UIFont) -> CGFloat {
+        guard lines > 0 else { return 0 }
+        return CGFloat(lines) * font.lineHeight + 2.5
+    }
+
     /// Width available to assistant text at a given page width.
     static func assistantTextWidth(_ pageWidth: CGFloat) -> CGFloat {
         max(40, pageWidth - hMargin * 2 - assistantTrailingGap)
+    }
+
+    /// Width the content of an expanded card (tool sections, reasoning excerpt)
+    /// wraps at: the page minus the row margins minus the card's own padding.
+    static func expandCardContentWidth(_ pageWidth: CGFloat) -> CGFloat {
+        max(40, pageWidth - hMargin * 2 - expandCardPadding * 2)
     }
 
     /// Width a rich card's web view gets at a given page width — the width its
@@ -110,7 +176,8 @@ final class TimelineRowBuilder {
             return [toolChipRow(message, namespace: namespace, width: width,
                                 expandedRowIDs: expandedRowIDs)]
         case .thinking:
-            return [chipRow(id: "\(namespace)#0", icon: "sparkles", text: message.text, width: width)]
+            return [thinkingRow(message, namespace: namespace, width: width,
+                                expandedRowIDs: expandedRowIDs)]
         case .notification:
             return [notificationRow(message, namespace: namespace, width: width,
                                     expandedRowIDs: expandedRowIDs)]
@@ -448,10 +515,18 @@ final class TimelineRowBuilder {
         liveText: String, storeTruncated: Bool, activity: String?,
         width: CGFloat, tailRevision: Int,
         cachedHead: (key: String, rows: [TimelineRow])?,
-        scope: String = TimelineScope.unscoped
+        scope: String = TimelineScope.unscoped,
+        liveThinking: String = ""
     ) -> (rows: [TimelineRow], headCache: (key: String, rows: [TimelineRow])?) {
         var rows: [TimelineRow] = []
         var headCache = cachedHead
+        // Reasoning comes BEFORE the reply in a turn, so its row goes above the
+        // live text. It disappears the moment the store clears its accumulation
+        // (a canonical history load lands), which is the same instant the fetched
+        // `kind:"thinking"` rows appear — so the same reasoning is never on
+        // screen twice.
+        rows.append(contentsOf: liveThinkingRows(liveThinking: liveThinking,
+                                                width: width, scope: scope))
         if !liveText.isEmpty {
             let seg = LiveMarkdownWindow.segments(liveText)
             if seg.omittedPrefix || storeTruncated {
@@ -540,6 +615,9 @@ final class TimelineRowBuilder {
 
     // MARK: - Chips / tool / notification
 
+    /// Generic one-line capsule. Kept as the constructor for `.chip`, the
+    /// plain non-expandable capsule; reasoning rows have their own builder
+    /// below because they carry a second, pre-measured height.
     private func chipRow(id: String, icon: String, text: String, width: CGFloat) -> TimelineRow {
         TimelineRow(
             id: id, revision: 0, content: .chip(icon: icon, text: text),
@@ -560,25 +638,176 @@ final class TimelineRowBuilder {
             + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
     }
 
+    /// Reasoning row. Collapsed it is byte-for-byte the capsule it always was
+    /// (one line, same height); expanded it grows to the excerpt the server sent
+    /// under `thinkingText`, or — on a server that sends no excerpt — to the
+    /// WRAPPED collapsed line, which is itself new information because the
+    /// capsule shows only its first line.
+    ///
+    /// `body == nil` is the honest "there is nothing more here" answer: a short
+    /// line with no excerpt gets no chevron and no tap, so tapping can never
+    /// look broken. Both heights are computed here, like `notificationRow`.
+    private func thinkingRow(_ message: ChatMessage, namespace: String, width: CGFloat,
+                             expandedRowIDs: Set<String>) -> TimelineRow {
+        let id = "\(namespace)#0"
+        let line = message.text
+        let excerpt = message.thinkingText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let full = (excerpt?.isEmpty == false ? excerpt! : line)
+        let capsuleHeight = Self.capsuleRowHeight(badged: false)
+        // Line count first: whether the row is expandable AT ALL depends on it
+        // (a line that already fits the capsule, with no fuller excerpt behind
+        // it, has nothing to reveal).
+        let font = TimelineTextStyler.captionFont
+        let lines = wrappedLineCount(
+            full, font: font, width: TimelineMetrics.expandCardContentWidth(width))
+        let hasMore = !full.isEmpty && (full != line || lines > 1)
+        let expanded = hasMore && expandedRowIDs.contains(id)
+        var height = capsuleHeight
+        if expanded {
+            // The cell truncates at the same line cap, so this is the row's real
+            // height rather than a clamp that shaves ink off a long excerpt.
+            let shown = min(lines, TimelineMetrics.expandThinkingMaxLines)
+            height += TimelineMetrics.hostedTextHeight(lines: shown, font: font)
+                + TimelineMetrics.expandCardPadding * 2 + TimelineMetrics.expandCardGap
+        }
+        return TimelineRow(
+            id: id, revision: expanded ? 1 : 0,
+            content: .thinking(line: line, body: hasMore ? full : nil,
+                               collapsible: hasMore, expanded: expanded,
+                               maxLines: TimelineMetrics.expandThinkingMaxLines),
+            height: height
+        )
+    }
+
+    /// The reasoning row on its own (0 or 1 rows). Reachable from outside
+    /// `liveRows` because it OUTLIVES `streaming`: a turn that has just ended
+    /// keeps its reasoning until the canonical `kind:"thinking"` rows land, which
+    /// is what stops the row from blinking out for the length of the refetch —
+    /// and from staying blank if that refetch fails.
+    func liveThinkingRows(liveThinking: String, width: CGFloat,
+                          scope: String = TimelineScope.unscoped) -> [TimelineRow] {
+        liveThinkingRow(liveThinking,
+                        id: TimelineScope.namespace(scope, "live-thinking"),
+                        width: width).map { [$0] } ?? []
+    }
+
+    /// The IN-FLIGHT turn's reasoning, as an always-open reasoning row: a fixed
+    /// "Reasoning" capsule with the NEWEST `liveThinkingMaxLines` wrapped lines
+    /// in the card under it, so the reader watches the reasoning arrive instead
+    /// of watching one word blink.
+    ///
+    /// The window is cut in WRAPPED lines, at the same width and font the cell
+    /// renders at, and from the newest end — see `TimelineLiveThinkingWindow`
+    /// for what the newline-counting version this replaces did on the phone.
+    ///
+    /// Not collapsible, exactly like a short notification card: the row exists
+    /// only while the turn runs, and a chevron whose state nothing remembers
+    /// across ticks would flip back open a moment after being tapped.
+    private func liveThinkingRow(_ text: String, id: String, width: CGFloat) -> TimelineRow? {
+        let font = TimelineTextStyler.captionFont
+        let contentWidth = TimelineMetrics.expandCardContentWidth(width)
+        guard let window = TimelineLiveThinkingWindow.window(
+            of: text, maxLines: TimelineMetrics.liveThinkingMaxLines,
+            wrappedLines: { candidate in
+                self.wrappedLineCount(candidate, font: font, width: contentWidth)
+            }
+        ) else { return nil }
+        let height = Self.capsuleRowHeight(badged: false)
+            + TimelineMetrics.hostedTextHeight(lines: window.lines, font: font)
+            + TimelineMetrics.expandCardPadding * 2 + TimelineMetrics.expandCardGap
+        return TimelineRow(
+            // The row keeps ONE id across the whole turn (so it is reloaded, not
+            // re-created, per tick); the revision is content-derived because the
+            // text changes underneath that stable id. Hashed on the WINDOW, never
+            // on the accumulation, so the per-tick cost is bounded.
+            id: id, revision: window.body.hashValue,
+            content: .thinking(line: TimelineLiveThinkingWindow.capsuleLabel,
+                               body: window.body, collapsible: false,
+                               expanded: true,
+                               maxLines: TimelineMetrics.liveThinkingMaxLines),
+            height: height
+        )
+    }
+
+    /// Tool row. Expanded it is TWO labelled sections, Input then Result — the
+    /// input is what the reader is actually asking for when they tap a tool name
+    /// ("what did it run?"), and the card used to show only the output.
+    ///
+    /// Every tool row is expandable, including one with neither field: a row
+    /// still running has an input and no result yet, and a row that produced
+    /// nothing has to SAY so ("No output"). Swallowing the tap instead is what
+    /// reads as "tapping does nothing".
     private func toolChipRow(_ message: ChatMessage, namespace: String, width: CGFloat,
                              expandedRowIDs: Set<String>) -> TimelineRow {
         let id = "\(namespace)#0"
         let expanded = expandedRowIDs.contains(id)
-            && message.resultPreview?.isEmpty == false
         let capsuleHeight = Self.capsuleRowHeight(badged: message.agent?.isEmpty == false)
         var height = capsuleHeight
-        if expanded, let preview = message.resultPreview {
-            let size = measurer.codeSize(preview, font: TimelineTextStyler.codePreviewFont)
-            // Preview card: 10pt padding + 4pt gap under the capsule.
-            height += min(size.height, 320) + 10 * 2 + 4
+        if expanded {
+            height += expandedToolCardHeight(message, width: width)
+                + TimelineMetrics.expandCardGap
         }
         return TimelineRow(
             id: id, revision: expanded ? 1 : 0,
             content: .toolChip(name: message.text, detail: message.detail,
+                               inputPreview: message.inputPreview,
                                resultPreview: message.resultPreview,
                                agent: message.agent, expanded: expanded),
             height: height
         )
+    }
+
+    /// Height of the expanded tool card: inner padding + each present section +
+    /// the gap between two sections. Mirrors `TimelineToolChipView`'s expanded
+    /// subtree exactly — the two are the same layout described twice, once as
+    /// arithmetic and once as SwiftUI, and `TimelineHostedHeightParityTests`
+    /// pins them together.
+    private func expandedToolCardHeight(_ message: ChatMessage, width: CGFloat) -> CGFloat {
+        let label = TimelineMetrics.hostedTightLine(TimelineTextStyler.caption2Font)
+            + TimelineMetrics.expandLabelGap
+        let input = message.inputPreview?.isEmpty == false ? message.inputPreview : nil
+        let result = message.resultPreview?.isEmpty == false ? message.resultPreview : nil
+        var sections: [CGFloat] = []
+        if let input {
+            let size = measurer.codeSize(input, font: TimelineTextStyler.codePreviewFont)
+            sections.append(label + min(size.height, TimelineMetrics.expandInputMaxHeight))
+        }
+        if let result {
+            let size = measurer.codeSize(result, font: TimelineTextStyler.codePreviewFont)
+            sections.append(label + min(size.height, TimelineMetrics.expandResultMaxHeight))
+        } else {
+            // "Running…" (an input but no result yet) / "No output" — one line
+            // of caption under the Result label.
+            sections.append(label + TimelineMetrics.hostedTightLine(TimelineTextStyler.captionFont))
+        }
+        let spacing = TimelineMetrics.expandSectionSpacing * CGFloat(max(0, sections.count - 1))
+        return sections.reduce(0, +) + spacing + TimelineMetrics.expandCardPadding * 2
+    }
+
+    /// How many lines SwiftUI will wrap `text` into at `width` — a TextKit line
+    /// COUNT, deliberately not a TextKit height.
+    ///
+    /// The distinction is the whole point: SwiftUI's line box is TALLER than
+    /// `UIFont.lineHeight` (see `TimelineMetrics.hostedLineHeight`), so handing a
+    /// TextKit height straight to a hosted row leaves it a few points short per
+    /// line — and the cell clips, so those points are shaved INK. Counting lines
+    /// and then paying SwiftUI's line height per line rounds the right way.
+    /// Not private: the live-reasoning tests assert against the count the row was
+    /// built from, and a second implementation in the test would be free to agree
+    /// with the assertion while disagreeing with the row.
+    func wrappedLineCount(_ text: String, font: UIFont, width: CGFloat) -> Int {
+        guard !text.isEmpty else { return 0 }
+        // No lineSpacing in the attributes: the division below has to recover a
+        // line COUNT, which a styled paragraph's extra leading would corrupt.
+        let attributed = NSAttributedString(string: text, attributes: [.font: font])
+        let measured = measurer.height(attributed, width: max(40, width))
+        // Round to NEAREST, not up. One font means the measured height is n whole
+        // line heights — but `TimelineTextMeasurer.measure` CEILS its result, so a
+        // single 13.13pt line comes back as 14 and `.up` turned that into two
+        // lines. Measured: that off-by-one reserved a whole extra line on every
+        // reasoning row, and made a one-line row with nothing to reveal look
+        // expandable.
+        return max(1, Int((measured / font.lineHeight).rounded()))
     }
 
     private func notificationRow(_ message: ChatMessage, namespace: String, width: CGFloat,

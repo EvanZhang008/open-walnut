@@ -18,6 +18,11 @@ struct TimelineHost: UIViewControllerRepresentable {
     var streaming: Bool
     var liveText: String
     var liveTextTruncated: Bool
+    /// Reasoning the agent emitted during the current (or just-finished) turn,
+    /// accumulated by the stores' shared `LiveAgentActivity`. Defaulted, unlike
+    /// `scope` below: an omitted reasoning region renders nothing, while an
+    /// omitted scope renders the WRONG conversation.
+    var liveThinking: String = ""
     var activity: String?
     /// Which conversation these messages belong to. NOT optional and NOT
     /// defaulted on purpose: one host instance serves every conversation the
@@ -57,6 +62,15 @@ struct TimelineHost: UIViewControllerRepresentable {
         controller.onWidthChange = { [weak coordinator] _ in
             coordinator?.resubmit()
         }
+        // A Dynamic Type change moves every measured height and changes NO width,
+        // so the layout pass never fires for it and nothing else would ever ask for
+        // a rebuild — which is why a live text-size change used to leave the
+        // transcript's heights behind while its cells grew (rows overlapping,
+        // labels sliced). `resubmit()` re-stamps the category from the controller's
+        // own traits and the actor invalidates on it.
+        controller.onTextSizeChange = { [weak coordinator] in
+            coordinator?.resubmit()
+        }
         controller.onRefresh = onRefresh
         return controller
     }
@@ -73,6 +87,7 @@ struct TimelineHost: UIViewControllerRepresentable {
             streaming: streaming,
             liveText: liveText,
             liveTextTruncated: liveTextTruncated,
+            liveThinking: liveThinking,
             activity: activity,
             showLoadEarlier: showLoadEarlier,
             width: 0, // stamped in resubmit()
@@ -103,6 +118,7 @@ struct TimelineHost: UIViewControllerRepresentable {
             guard width > 0 else { return } // pre-layout; onWidthChange re-fires
             input.width = width
             input.expandedRowIDs = expandedRowIDs
+            input.sizeCategory = controller.traitCollection.preferredContentSizeCategory
             Task { [actor] in
                 await actor.submit(input) { snapshot in
                     Task { @MainActor [weak self] in

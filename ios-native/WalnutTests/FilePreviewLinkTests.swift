@@ -258,10 +258,221 @@ final class FilePreviewLinkTests: XCTestCase {
             XCTAssertFalse(message.contains("ENOENT") || message.contains("EACCES"),
                            "\(status) copy leaks an errno: \(message)")
         }
-        // 413 and 501 must not both say "open it on your Mac": one is permanent,
-        // the other fixes itself.
-        XCTAssertTrue(FilePreviewLink.friendlyMessage(forHTTPStatus: 413).contains("Mac"))
-        XCTAssertFalse(FilePreviewLink.friendlyMessage(forHTTPStatus: 501).contains("Mac"))
+        // 413 and 501 must not both send the reader away to another machine: one
+        // is permanent, the other fixes itself in a minute. (Both sentences NAME
+        // the owning box now, so the discriminator is the instruction, not the
+        // word "Mac".)
+        XCTAssertTrue(FilePreviewLink.friendlyMessage(forHTTPStatus: 413).contains("Open it on your Mac"))
+        XCTAssertFalse(FilePreviewLink.friendlyMessage(forHTTPStatus: 501).contains("Open it on"))
+        XCTAssertTrue(FilePreviewLink.friendlyMessage(forHTTPStatus: 501).lowercased().contains("try again"))
+    }
+
+    // MARK: - The 2026-09-07 defect: a 404 reported as "the file is gone"
+
+    /// The report: the phone (paired to the cloud companion) said
+    /// "That file isn't there anymore" about a file that was 15 KB on the Mac.
+    /// The relay had worked perfectly — the Mac's own daemon answered ENOENT,
+    /// because the agent announced the path SEVENTY SECONDS before it finished
+    /// writing the file. Every clause of that sentence was wrong: the file had
+    /// never existed, so it could not be there "anymore"; the condition was
+    /// temporary; and there was no way to try again.
+    func test404NeverClaimsTheFileWasDeleted() {
+        let failure = FilePreviewLink.failure(forHTTPStatus: 404)
+        XCTAssertFalse(failure.message.lowercased().contains("anymore"),
+                       "404 must not assert the file once existed: \(failure.message)")
+        XCTAssertFalse(failure.message.lowercased().contains("deleted"))
+        XCTAssertFalse(failure.message.lowercased().contains("gone,"))
+        XCTAssertTrue(failure.isRetryable,
+                      "a file an agent just named may still be being written — the reader needs a retry")
+        XCTAssertTrue(failure.message.contains("your Mac"),
+                      "the sentence must name the box that was asked: \(failure.message)")
+    }
+
+    /// The other half of the rule: an unreachable host must never be reported as
+    /// a missing file. These are the two sentences that used to be confusable.
+    func testUnreachableHostIsNotReportedAsAMissingFile() {
+        let unreachable = FilePreviewLink.failure(forHTTPStatus: 503, host: "buildbox")
+        XCTAssertEqual(unreachable.kind, .hostUnreachable)
+        XCTAssertTrue(unreachable.isRetryable)
+        XCTAssertTrue(unreachable.message.contains("buildbox"),
+                      "must name the box it could not reach: \(unreachable.message)")
+        XCTAssertTrue(unreachable.message.lowercased().contains("does not mean the file is gone"),
+                      "must actively deny the wrong conclusion: \(unreachable.message)")
+        XCTAssertNotEqual(unreachable.message, FilePreviewLink.failure(forHTTPStatus: 404, host: "buildbox").message)
+        XCTAssertNotEqual(unreachable.title, FilePreviewLink.failure(forHTTPStatus: 404, host: "buildbox").title)
+    }
+
+    // MARK: - Status → kind → (sentence, retry) — the whole ladder, one table
+
+    func testEveryServerFailureKindGetsItsOwnSentenceAndRetryDecision() {
+        // status, expected kind, retry offered
+        let table: [(Int, FileReadFailureKind, Bool)] = [
+            (401, .notAuthorised, false),
+            (403, .refused, false),
+            (404, .notFoundOnHost, true),
+            (410, .notFoundOnHost, true),
+            (413, .tooLarge, false),
+            (415, .unsupportedType, false),
+            (500, .serverError(status: 500), true),
+            (501, .hostNeedsUpgrade, true),
+            (502, .hostUnreachable, true),
+            (503, .hostUnreachable, true),
+            (504, .hostUnreachable, true),
+            (418, .serverError(status: 418), false),
+        ]
+        for (status, expectedKind, retry) in table {
+            let failure = FilePreviewLink.failure(forHTTPStatus: status, host: "buildbox")
+            XCTAssertEqual(failure.kind, expectedKind, "status \(status) classified wrong")
+            XCTAssertEqual(failure.isRetryable, retry,
+                           "status \(status) offers the wrong retry affordance: \(failure.message)")
+            XCTAssertFalse(failure.message.isEmpty, "status \(status) has no sentence")
+            XCTAssertGreaterThan(failure.message.split(separator: " ").count, 4,
+                                 "status \(status) reads like a code: \(failure.message)")
+            XCTAssertFalse(failure.title.isEmpty, "status \(status) has no headline")
+        }
+    }
+
+    /// Distinguishable cases must be distinguishable ON SCREEN. The shipped bug
+    /// was one sentence doing duty for several situations, so this pins the
+    /// sentences apart rather than trusting the enum.
+    func testDistinguishableCasesDoNotShareCopy() {
+        let kinds: [FileReadFailureKind] = [
+            .notFoundOnHost, .hostReadFailed("disk I/O error"), .refused, .tooLarge,
+            .hostNeedsUpgrade, .hostUnreachable, .transportFailed, .notAuthorised,
+            .unsupportedType, .serverError(status: 500), .serverError(status: nil),
+        ]
+        let failures = kinds.map { FileReadFailure(kind: $0, host: nil) }
+        XCTAssertEqual(Set(failures.map(\.message)).count, kinds.count,
+                       "two different situations share one sentence")
+        // Titles may repeat across the two serverError shapes and nothing else.
+        XCTAssertGreaterThanOrEqual(Set(failures.map(\.title)).count, kinds.count - 1)
+        for failure in failures {
+            XCTAssertFalse(failure.message.contains("ENOENT") || failure.message.contains("EACCES"),
+                           "copy leaks an errno: \(failure.message)")
+            XCTAssertFalse(failure.icon.isEmpty)
+        }
+    }
+
+    /// A sentence that does not say WHICH box was asked cannot distinguish "not
+    /// there" from "couldn't ask", which is the whole defect.
+    func testCopyNamesTheOwningBox() {
+        let named: [FileReadFailureKind] = [.notFoundOnHost, .hostUnreachable, .refused,
+                                            .hostNeedsUpgrade]
+        for kind in named {
+            XCTAssertTrue(FileReadFailure(kind: kind, host: "buildbox").message.contains("buildbox"),
+                          "\(kind) does not name a named host")
+        }
+        // `.hostNeedsUpgrade` is EXCLUDED from the fallback half, and that is the
+        // point rather than an omission: a 501 comes from a box whose daemon
+        // predates the bounded read, which in cloud mode is by definition not the
+        // reader's own Mac. Defaulting that one to the primary sent the reader to
+        // the wrong machine, so with no host named it names no machine at all.
+        for kind in named where kind != .hostNeedsUpgrade {
+            XCTAssertTrue(FileReadFailure(kind: kind, host: nil).message.contains("your Mac"),
+                          "\(kind) does not name the primary box")
+        }
+        let unnamedUpgrade = FileReadFailure(kind: .hostNeedsUpgrade, host: nil).message
+        XCTAssertFalse(unnamedUpgrade.contains("Mac"), unnamedUpgrade)
+        XCTAssertTrue(unnamedUpgrade.contains("older Walnut daemon"), unnamedUpgrade)
+        // The bridge's internal alias for the primary is not a user-facing name.
+        XCTAssertEqual(FileReadFailure(kind: .notFoundOnHost, host: "__local__").hostLabel, "your Mac")
+        XCTAssertEqual(FileReadFailure(kind: .notFoundOnHost, host: "").hostLabel, "your Mac")
+    }
+
+    /// The JSON viewer lane answers a missing file as 200-with-`error`, never as
+    /// 404, so it needs its own classifier — and "Cannot read file on host: …"
+    /// is a different situation than "File not found".
+    func testPayloadErrorLaneClassifiesNotFoundApartFromAFailedRead() {
+        let missing = FilePreviewLink.failure(fromPayloadError: "File not found", host: nil)
+        XCTAssertEqual(missing.kind, .notFoundOnHost)
+        XCTAssertTrue(missing.isRetryable)
+
+        let broken = FilePreviewLink.failure(fromPayloadError: "Cannot read file on host: disk I/O error")
+        XCTAssertEqual(broken.kind, .hostReadFailed("Cannot read file on host: disk I/O error"))
+        XCTAssertTrue(broken.isRetryable)
+        XCTAssertNotEqual(broken.message, missing.message)
+
+        // An empty/absent error string is still an unreadable file, not a crash.
+        XCTAssertEqual(FilePreviewLink.failure(fromPayloadError: nil).kind, .notFoundOnHost)
+        XCTAssertEqual(FilePreviewLink.failure(fromPayloadError: "   ").kind, .notFoundOnHost)
+    }
+
+    /// The retry AFFORDANCE is only worth anything if the button re-arms the
+    /// loader, and that is easy to break by accident: `setPhase` deliberately
+    /// refuses to overwrite a failure (so the friendly copy survives the
+    /// `.cancel` that produced it), so a `reload()` written in terms of
+    /// `setPhase` would leave the spinner-less failed state on screen forever
+    /// and the button would look dead. This pins the direct assignment.
+    @MainActor
+    func testReloadReArmsAFailedPreview() {
+        let target = FilePreviewTarget(path: "/tmp/walnut-test/report.html", host: nil)
+        let loader = HTMLPreviewLoader(
+            target: target,
+            url: URL(string: "http://127.0.0.1:59999/api/v1/file-content?path=/tmp/x.html&raw=1")!,
+            token: nil
+        )
+        defer { loader.teardown() }
+
+        loader.setPhase(.failed(FilePreviewLink.failure(forHTTPStatus: 404)))
+        XCTAssertEqual(loader.phase, .failed(FilePreviewLink.failure(forHTTPStatus: 404)))
+        // The guard that makes reload() need a direct assignment.
+        loader.setPhase(.loading)
+        XCTAssertNotEqual(loader.phase, .loading, "setPhase must keep the friendly failure")
+
+        loader.reload()
+        XCTAssertEqual(loader.phase, .loading, "Try Again left the preview in its failed state")
+
+        // A torn-down loader has no navigation delegate, so a reload would spin
+        // forever with nothing to report back — it must decline instead.
+        loader.teardown()
+        loader.setPhase(.failed(FilePreviewLink.failure(forHTTPStatus: 503)))
+        loader.reload()
+        XCTAssertNotEqual(loader.phase, .loading, "reload() must decline after teardown")
+    }
+
+    /// Transport failures say nothing about the file, and must not pretend to.
+    func testTransportFailureBlamesTheNetworkNotTheFile() {
+        let offline = FilePreviewLink.failure(
+            for: APIError.network(underlying: URLError(.notConnectedToInternet)), host: nil)
+        XCTAssertEqual(offline.kind, .transportFailed)
+        XCTAssertTrue(offline.isRetryable)
+        XCTAssertNotEqual(offline.message, FilePreviewLink.failure(forHTTPStatus: 404).message)
+
+        // A raw NSError (what WKWebView hands the preview) lands in the same place.
+        let raw = FilePreviewLink.failure(for: URLError(.timedOut))
+        XCTAssertEqual(raw.kind, .transportFailed)
+        XCTAssertTrue(raw.isRetryable)
+
+        XCTAssertEqual(FilePreviewLink.failure(for: APIError.unauthorized).kind, .notAuthorised)
+        XCTAssertFalse(FilePreviewLink.failure(for: APIError.unauthorized).isRetryable)
+        // The primary mid-upgrade is retryable, and reuses the daemon sentence.
+        let upgrading = APIError.server(status: 501, code: "session_control_needs_upgrade",
+                                       message: "raw", serverHash: nil, serverContent: nil)
+        XCTAssertEqual(FilePreviewLink.failure(for: upgrading).kind, .hostNeedsUpgrade)
+        XCTAssertTrue(FilePreviewLink.failure(for: upgrading).isRetryable)
+    }
+
+    /// A failure names the box it ASKED, or no box at all. The directory listing
+    /// dropped its `host` argument, so every failed listing on a remote host was
+    /// narrated as a statement about the reader's Mac — and a 501 in particular
+    /// comes from a box that is by definition not the reader's Mac.
+    func testFailureCopyNeverNamesAMachineItWasNotToldAbout() {
+        let cloud501 = APIError.server(status: 501, code: "not_supported_cloud",
+                                       message: "no bridge read",
+                                       serverHash: nil, serverContent: nil)
+        let unknown = SessionDirectoryList.friendlyFilesError(cloud501)
+        XCTAssertFalse(unknown.contains("Mac"), unknown)
+        XCTAssertTrue(unknown.contains("older Walnut daemon"), unknown)
+        let named = SessionDirectoryList.friendlyFilesError(cloud501, host: "build-box")
+        XCTAssertTrue(named.contains("build-box"), named)
+        XCTAssertFalse(named.contains("your Mac"), named)
+        // Every other case still names the primary when nobody said otherwise —
+        // those only arise about a path the primary was asked for.
+        XCTAssertTrue(FilePreviewLink.failure(forHTTPStatus: 404).message.contains("your Mac"))
+        XCTAssertTrue(FilePreviewLink.failure(forHTTPStatus: 404, host: "__local__")
+                        .message.contains("your Mac"))
+        XCTAssertTrue(FilePreviewLink.failure(forHTTPStatus: 404, host: "remote-1")
+                        .message.contains("remote-1"))
     }
 
     func testAPIErrorMapsThroughTheSameCopy() {

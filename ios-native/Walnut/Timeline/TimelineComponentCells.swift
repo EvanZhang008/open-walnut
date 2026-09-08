@@ -76,10 +76,17 @@ enum TimelineHostedCell {
     private static func rowContent(for row: TimelineRow,
                                    delegate: TimelineCellActionDelegate?) -> some View {
         switch row.content {
-        case .toolChip(let name, let detail, let resultPreview, let agent, let expanded):
+        case .toolChip(let name, let detail, let inputPreview, let resultPreview,
+                       let agent, let expanded):
             TimelineToolChipView(
-                name: name, detail: detail, resultPreview: resultPreview,
-                agent: agent, expanded: expanded,
+                name: name, detail: detail, inputPreview: inputPreview,
+                resultPreview: resultPreview, agent: agent, expanded: expanded,
+                onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
+            )
+        case .thinking(let line, let body, let collapsible, let expanded, let maxLines):
+            TimelineThinkingChipView(
+                line: line, body: body, collapsible: collapsible,
+                expanded: expanded, maxLines: maxLines,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
         case .chip(let icon, let text):
@@ -134,7 +141,13 @@ enum TimelineHostedCell {
             .padding(.horizontal, TimelineMetrics.hMargin)
             .frame(maxWidth: .infinity, alignment: .leading)
         case .activity(let activity):
+            // ONE line, always. The activity row is a fixed-height 28pt row and
+            // `ThinkingRow`'s label has no line limit of its own, so a long label
+            // ("Bash · npm run test:quick …", or a sentence of live reasoning)
+            // would wrap and paint over the row below it. Truncating is the safe
+            // direction for a shimmering status line.
             ThinkingRow(activity: activity)
+                .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .failedNotice(let notice):
             // Waiting (an automatic retry is pending) reads as amber + a
@@ -179,20 +192,99 @@ enum TimelineHostedCell {
     }
 }
 
+/// One labelled section of an expanded card ("Input" / "Result"), monospaced and
+/// horizontally scrollable so a wide line is reachable without wrapping the row.
+///
+/// Not private: the height-parity gate renders the tool card whole, and keeping
+/// this a named view is what lets the builder's arithmetic be read against ONE
+/// place rather than against an inline closure.
+struct TimelineExpandSection: View {
+    let label: String
+    let body_: String
+    let maxHeight: CGFloat
+    /// A plain caption note ("Running…", "No output") instead of a code body.
+    let isNote: Bool
+
+    /// Stand-in for a Result section with no output. The distinction matters to
+    /// the reader: a tool with an input and no result yet is still RUNNING, while
+    /// one with neither genuinely produced nothing. A pure function so a test can
+    /// pin both words without rendering SwiftUI.
+    static func resultNote(hasInput: Bool) -> String {
+        hasInput ? "Running…" : "No output"
+    }
+
+    init(label: String, body: String, maxHeight: CGFloat, isNote: Bool = false) {
+        self.label = label
+        self.body_ = body
+        self.maxHeight = maxHeight
+        self.isNote = isNote
+    }
+
+    /// Automation/VoiceOver id for this section's body ("tool.input" /
+    /// "tool.result"). Derived from the label so the two can never drift.
+    private var bodyIdentifier: String { "tool.\(label.lowercased())" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TimelineMetrics.expandLabelGap) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                // NOT `.tertiary`: measured 1.70:1 light / 2.48:1 dark, i.e. the
+                // label naming the section was the least readable thing in the
+                // card. Subordinate is carried by the size (caption2) and the
+                // uppercasing; see `ReadableText`.
+                .foregroundStyle(ReadableText.secondary)
+                .textCase(.uppercase)
+            if isNote {
+                Text(body_)
+                    .font(.caption)
+                    .foregroundStyle(ReadableText.secondary)
+                    .lineLimit(1)
+                    .accessibilityIdentifier(bodyIdentifier)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(body_)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: maxHeight)
+                // A horizontally scrolling, selection-enabled `Text` reports an
+                // EMPTY accessibility label (measured in the real hierarchy: both
+                // card bodies came back `a=''`), so the one thing the reader
+                // tapped the row to see was invisible to VoiceOver. Stating the
+                // label explicitly is what puts the bytes back.
+                .accessibilityElement()
+                .accessibilityIdentifier(bodyIdentifier)
+                .accessibilityLabel(body_)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 /// Mirror of MessageRow.ToolChip, driven by pre-computed expansion state
 /// (the actor pre-measured BOTH heights; toggling swaps rows, no self-size).
 private struct TimelineToolChipView: View {
     let name: String
     let detail: String?
+    let inputPreview: String?
     let resultPreview: String?
     let agent: String?
     let expanded: Bool
     let onToggle: () -> Void
 
-    private var isExpandable: Bool { resultPreview?.isEmpty == false }
+    private var input: String? {
+        inputPreview?.isEmpty == false ? inputPreview : nil
+    }
+    private var result: String? {
+        resultPreview?.isEmpty == false ? resultPreview : nil
+    }
+    /// ALWAYS. A tool row that refuses the tap is indistinguishable from a
+    /// broken tap, so a row with no result yet expands to its input plus
+    /// "Running…", and a row with nothing at all expands to "No output".
+    private var isExpandable: Bool { true }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: TimelineMetrics.expandCardGap) {
             HStack(spacing: 5) {
                 if let agent, !agent.isEmpty {
                     HStack(spacing: 3) {
@@ -215,11 +307,109 @@ private struct TimelineToolChipView: View {
                 if let detail, !detail.isEmpty {
                     Text(detail)
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 if isExpandable {
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+            }
+            // ONE readable ink for the whole capsule. NOT `.tertiary` on the
+            // detail and the chevron (measured on the phone: 1.69:1 light /
+            // 2.34:1 dark, under WCAG's 3:1 floor for a UI affordance let alone
+            // 4.5:1 for text), and NOT `.secondary` on the name either (3.24:1
+            // light). The chevron is the only thing that says this row OPENS,
+            // and the detail is the only thing telling eight stacked `Bash`
+            // rows apart, so neither can be paid for in contrast. Subordinate
+            // is carried by SIZE and WEIGHT instead: an 8pt glyph, a
+            // regular-weight caption detail under a medium-weight caption name.
+            // See `ReadableText`; `ReadableTextContrastTests` pins both bars.
+            .foregroundStyle(ReadableText.secondary)
+            .padding(.horizontal, TimelineMetrics.chipHPad)
+            .padding(.vertical, TimelineMetrics.chipVPad)
+            .background(Color(.tertiarySystemFill), in: Capsule())
+            .contentShape(Capsule())
+            .onTapGesture {
+                guard isExpandable else { return }
+                onToggle()
+            }
+
+            if expanded {
+                // Input FIRST: "what did it run" is the question a tool name
+                // raises. Result second, and it is always present as a section
+                // so the card can say "Running…" / "No output" rather than
+                // leaving the reader wondering whether the tap worked.
+                VStack(alignment: .leading, spacing: TimelineMetrics.expandSectionSpacing) {
+                    if let input {
+                        TimelineExpandSection(
+                            label: "Input", body: input,
+                            maxHeight: TimelineMetrics.expandInputMaxHeight)
+                    }
+                    if let result {
+                        TimelineExpandSection(
+                            label: "Result", body: result,
+                            maxHeight: TimelineMetrics.expandResultMaxHeight)
+                    } else {
+                        TimelineExpandSection(
+                            label: "Result",
+                            body: TimelineExpandSection.resultNote(hasInput: input != nil),
+                            maxHeight: TimelineMetrics.expandResultMaxHeight, isNote: true)
+                    }
+                }
+                .padding(TimelineMetrics.expandCardPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                // `children: .contain` FIRST, or the identifier propagates down
+                // and every element inside the card reports as
+                // "tool.expandedCard" — which is what hid `tool.input` /
+                // `tool.result` from tooling (measured: three elements in the real
+                // hierarchy all carrying the card's id, two of them with empty
+                // labels). A container owns its own id; its children keep theirs.
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("tool.expandedCard")
+            }
+        }
+        .padding(.horizontal, TimelineMetrics.hMargin)
+        .padding(.vertical, TimelineMetrics.chipRowVMargin)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Reasoning row: the capsule the transcript always showed, now with a chevron
+/// and a tap that reveals the excerpt behind it. Collapse state is pre-computed
+/// (the actor measured BOTH heights), exactly like the notification card.
+///
+/// `collapsible == false` means the row has no chevron and takes no tap — either
+/// because there is nothing more than the line already shown (history), or
+/// because it is the live turn's reasoning, which is always open. A chevron that
+/// opens onto the line the capsule already displayed would be the "tapping does
+/// nothing" complaint with an extra glyph.
+private struct TimelineThinkingChipView: View {
+    let line: String
+    let body_: String?
+    let collapsible: Bool
+    let expanded: Bool
+    let maxLines: Int
+    let onToggle: () -> Void
+
+    init(line: String, body: String?, collapsible: Bool, expanded: Bool,
+         maxLines: Int, onToggle: @escaping () -> Void) {
+        self.line = line
+        self.body_ = body
+        self.collapsible = collapsible
+        self.expanded = expanded
+        self.maxLines = maxLines
+        self.onToggle = onToggle
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TimelineMetrics.expandCardGap) {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles").font(.caption2)
+                Text(line).font(.caption).lineLimit(1)
+                if collapsible {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(.tertiary)
@@ -231,20 +421,34 @@ private struct TimelineToolChipView: View {
             .background(Color(.tertiarySystemFill), in: Capsule())
             .contentShape(Capsule())
             .onTapGesture {
-                guard isExpandable else { return }
+                guard collapsible else { return }
                 onToggle()
             }
 
-            if expanded, let resultPreview {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(resultPreview)
-                        .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(10)
-                }
-                .frame(maxHeight: 320 + 20)
-                .background(Color(.secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if expanded, let body_ {
+                // Prose, so it WRAPS (unlike the tool card's monospaced
+                // sections, which scroll horizontally) — reasoning is meant to
+                // be read, and a reader should not have to pan a sentence.
+                Text(body_)
+                    .font(.caption)
+                    .foregroundStyle(ReadableText.secondary)
+                    .textSelection(.enabled)
+                    // Same cap the builder reserved room for (it rides the row,
+                    // so history and the live tail can differ). A BACKSTOP, not
+                    // the trim: `lineLimit` keeps the FIRST n lines, so leaving it
+                    // to choose is what pinned the live card to the OLDEST
+                    // reasoning while the capsule advertised the newest. The
+                    // builder cuts the live window to exactly this many wrapped
+                    // lines (`TimelineLiveThinkingWindow`), so this only ever
+                    // fires on a historical excerpt longer than its own cap —
+                    // where truncating beats clipping, because the reader sees an
+                    // ellipsis rather than a sentence cut in half by the bounds.
+                    .lineLimit(maxLines)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(TimelineMetrics.expandCardPadding)
+                    .background(Color(.secondarySystemBackground),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .accessibilityIdentifier("thinking.expandedBody")
             }
         }
         .padding(.horizontal, TimelineMetrics.hMargin)

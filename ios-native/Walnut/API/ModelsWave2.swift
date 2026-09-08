@@ -320,23 +320,95 @@ struct ChatStats: Codable {
 /// the answer is produced by a real CLI session, so its model/effort/mode are
 /// the ordinary session-control endpoints' business. `sessionId` is nil until the
 /// conversation has had its first turn (the endpoint never mints a lane, because
-/// opening a picker must not spawn a CLI), and on `engine == "in-process"` there
-/// is no session at all: the model is a config-level setting the phone reports
-/// but must not pretend to switch.
+/// opening a picker must not spawn a CLI).
+///
+/// The in-process engine has no session, but it DOES have a per-conversation
+/// model now: it reports `model` / `effort` / `models` and the picker writes
+/// through `PUT /v1/chat/model`. Every one of those three is optional, because a
+/// server predating that change sends only `model` — the pill stays selectable
+/// with a one-row catalog in that case rather than going read-only, which is the
+/// state the user reported ("this should ALWAYS be selectable").
+///
+/// A REPLICA that cannot reach the primary answers 503 `primary_unreachable`
+/// rather than describing its OWN config, so this payload never carries a model
+/// the user isn't actually talking to.
 struct ChatEngineInfo: Codable, Equatable {
     let engine: String
     let sessionId: String?
     let cwd: String?
     /// "" = the primary box (matches ProjectedSession.host semantics).
     let host: String?
-    /// Only on the in-process engine: config.agent.main_model.
+    /// The engine's current model (in-process: this conversation's model).
     let model: String?
+    /// The current effort, when the model has an effort axis.
+    let effort: String?
+    /// The server saying whether the model can be switched at all. ABSENT = it is
+    /// too old to say, which is NOT a "no" (see the type comment).
+    let switchable: Bool?
+    /// In-process: the pickable catalog, same row shape as
+    /// `GET /v1/sessions/:id/model`. Absent on an older server.
+    let models: [SessionModelOptions.Model]?
 
-    /// A live lane session exists, so model/effort/mode are switchable.
+    /// A live lane session exists, so model/effort/mode are switchable through
+    /// the ordinary session endpoints.
     var switchableSessionId: String? {
         guard engine == "lane", let sessionId, !sessionId.isEmpty else { return nil }
         return sessionId
     }
+
+    /// Only an EXPLICIT `false` locks the pill. `nil` means an old server that
+    /// never had the field.
+    var isLockedByServer: Bool { switchable == false }
+
+    private enum CodingKeys: String, CodingKey {
+        case engine, sessionId, cwd, host, model, effort, switchable, models
+    }
+
+    init(
+        engine: String,
+        sessionId: String? = nil,
+        cwd: String? = nil,
+        host: String? = nil,
+        model: String? = nil,
+        effort: String? = nil,
+        switchable: Bool? = nil,
+        models: [SessionModelOptions.Model]? = nil
+    ) {
+        self.engine = engine
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.host = host
+        self.model = model
+        self.effort = effort
+        self.switchable = switchable
+        self.models = models
+    }
+
+    /// Every field but `engine` decodes leniently: a mixed-version box sending a
+    /// malformed additive value must not fail the whole lookup (which the
+    /// composer would then read as "the box is unreachable").
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        engine = try c.decode(String.self, forKey: .engine)
+        sessionId = try? c.decodeIfPresent(String.self, forKey: .sessionId)
+        cwd = try? c.decodeIfPresent(String.self, forKey: .cwd)
+        host = try? c.decodeIfPresent(String.self, forKey: .host)
+        model = try? c.decodeIfPresent(String.self, forKey: .model)
+        effort = try? c.decodeIfPresent(String.self, forKey: .effort)
+        switchable = try? c.decodeIfPresent(Bool.self, forKey: .switchable)
+        models = try? c.decodeIfPresent([SessionModelOptions.Model].self, forKey: .models)
+    }
+}
+
+/// PUT /v1/chat/model → 200. The in-process engine's per-conversation model.
+///
+/// The read-back is the truth (the box may substitute a value), so the pill
+/// adopts what comes back rather than what it asked for. `400 unknown_model`,
+/// `409 lane_engine` (a lane conversation's model belongs to its session
+/// endpoints) and `503 primary_unreachable` are the error shapes.
+struct ChatModelChange: Codable, Equatable {
+    let model: String?
+    let effort: String?
 }
 
 /// GET /v1/sessions/list-dirs → one directory level for the path picker.

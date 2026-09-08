@@ -67,7 +67,26 @@ final class MockSessionSendTransport: SessionSendTransport, @unchecked Sendable 
         return messageId ?? "qm-mobile-serverminted"
     }
 
-    func sessionTranscript(id: String, fresh: Bool) async throws -> SessionTranscript {
-        transcript
+    func sessionTranscript(id: String, fresh: Bool, rich: Bool) async throws -> SessionTranscript {
+        lock.lock()
+        reads.append(TranscriptRead(fresh: fresh, rich: rich))
+        lock.unlock()
+        return transcript
     }
+
+    /// One transcript read, as the store asked for it.
+    struct TranscriptRead: Equatable {
+        let fresh: Bool
+        let rich: Bool
+    }
+
+    /// Every transcript read, so a test can assert WHICH reads pay for the
+    /// expensive fields (the 5s degraded poll must not).
+    var transcriptReads: [TranscriptRead] {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads
+    }
+
+    private var reads: [TranscriptRead] = []
 }

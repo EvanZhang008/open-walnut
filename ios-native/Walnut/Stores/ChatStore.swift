@@ -110,6 +110,15 @@ final class ChatStore {
     /// True when streamText dropped its head to stay under the retention cap
     /// (drives the live row's "earlier output hidden" chip).
     private(set) var streamTextTruncated = false
+    /// Reasoning the agent has emitted during the in-flight turn — published on
+    /// the same coalesced cadence as `streamText`, from the shared
+    /// `LiveAgentActivity` below. Empty = nothing to show.
+    private(set) var liveThinking = ""
+    /// The `thinking` / `tool` / `tool-result` arms, shared with
+    /// SessionConversationStore. NOT observed: the accumulation is a hot buffer
+    /// (the stream repeats `thinking` at whatever rate the agent emits), and only
+    /// `flushLiveThinking` publishes it.
+    @ObservationIgnored private var live = LiveAgentActivity()
     /// Delta coalescing (freeze fix): applying every SSE text-delta straight
     /// to `streamText` re-rendered the live markdown row PER DELTA — a full
     /// MarkdownParser.parse of the ever-growing reply on the main thread,
@@ -281,6 +290,7 @@ final class ChatStore {
         streaming = false
         streamText = ""
         streamTextTruncated = false
+        clearLiveThinking()
         activity = nil
         errorMessage = nil
         initialPaintDone = false
@@ -363,6 +373,15 @@ final class ChatStore {
                 || fetched.last?.id != messages.dropLast(localOnly.count).last?.id
             MainWork.track("chat.loadMessages", count: fetched.count) {
                 messages = Self.reattachSentImages(to: fetched, from: sentImages) + localOnly
+                // HANDOFF: the live reasoning region retires HERE, in the same
+                // synchronous block that installs the fetched `kind:"thinking"`
+                // rows — so the same reasoning is never rendered twice, and a
+                // refetch that fails or arrives late leaves the reasoning on
+                // screen instead of blanking the spot it occupied. Gated on
+                // `streaming` because this also runs from the 5s poll / watchdog
+                // paths, and a mid-turn load must not wipe reasoning that is
+                // still accumulating.
+                if !streaming { clearLiveThinking() }
             }
             // The owner map describes rows that are ON SCREEN and nothing else:
             // an echo the fetch just absorbed has no owner left to record.
@@ -800,6 +819,7 @@ final class ChatStore {
         cancelTrackedTasks()
         sending = false
         streaming = false
+        clearLiveThinking()
         activity = nil
     }
 
@@ -813,7 +833,6 @@ final class ChatStore {
     }
 
     private struct DeltaPayload: Codable { let delta: String }
-    private struct ToolPayload: Codable { let name: String; let detail: String? }
     private struct EndPayload: Codable { let turnId: String; let fullText: String }
     private struct ErrorPayload: Codable { let message: String }
 
@@ -845,27 +864,32 @@ final class ChatStore {
         guard stillViewing(conversationID) else { return }
         lastSSEEventAt = Date()
         let data = Data(event.data.utf8)
+        // The three arms both live streams share. `impliesStreaming` is
+        // deliberately IGNORED here: the Personal AI chat has never taken a
+        // tool/thinking event as proof a turn of its own is running (only
+        // message-start and queued do that), and adopting the session store's
+        // policy would freeze this composer on somebody else's turn.
+        if let handled = LiveStreamEvents.apply(event: event.event, data: data, to: &live) {
+            setActivity(live.activityLabel)
+            if handled.needsFlush { scheduleLiveFlush() }
+            // The agent is now blocked on a structured question — surface the
+            // answer card. (The stream carries only the tool name; the question
+            // text/options are not on the v1 wire.)
+            if handled.toolName == "user_ask" { pendingQuestion = true }
+            return
+        }
         switch event.event {
         case "message-start":
             setStreaming(true)
             streamText = ""
             streamTextTruncated = false
             pendingDelta = ""
+            clearLiveThinking()
             setActivity(nil)
         case "text-delta":
             if let payload = try? JSONDecoder().decode(DeltaPayload.self, from: data) {
                 appendDelta(payload.delta)
             }
-        case "tool":
-            if let payload = try? JSONDecoder().decode(ToolPayload.self, from: data) {
-                setActivity(payload.detail.map { "\(payload.name) · \($0)" } ?? payload.name)
-                // The agent is now blocked on a structured question — surface
-                // the answer card. (The stream carries only the tool name; the
-                // question text/options are not on the v1 wire.)
-                if payload.name == "user_ask" { pendingQuestion = true }
-            }
-        case "thinking":
-            setActivity("Thinking")
         case "queued":
             // Another turn holds the agent right now — the wait before
             // message-start is expected, not a stall. Tell the user.
@@ -874,6 +898,7 @@ final class ChatStore {
         case "message-end":
             let payload = try? JSONDecoder().decode(EndPayload.self, from: data)
             flushPendingDelta() // the streamText fallback must include the tail
+            flushLiveThinking() // …and the reasoning row must show its last delta
             // A truncated streamText lost the reply's head — as a provisional
             // bubble it would render a mid-sentence fragment. Skip it and let
             // loadMessages paint the canonical row (fullText, when present,
@@ -912,13 +937,40 @@ final class ChatStore {
     /// the live markdown row re-renders at a bounded cadence.
     private func appendDelta(_ delta: String) {
         pendingDelta += delta
+        scheduleLiveFlush()
+    }
+
+    /// One coalescing timer for BOTH live buffers (reply text and reasoning):
+    /// they arrive interleaved from the same stream, and two timers would just
+    /// double the invalidation rate of the same views.
+    private func scheduleLiveFlush() {
         guard deltaFlushTask == nil else { return }
         deltaFlushTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(120))
             guard let self else { return }
             self.deltaFlushTask = nil
             self.flushPendingDelta()
+            self.flushLiveThinking()
         }
+    }
+
+    /// Publish the shared handler's bounded reasoning accumulation.
+    /// Equality-gated like every other per-event write — @Observable has no
+    /// same-value suppression, and the timeline body reads this. Internal (not
+    /// private) for WalnutTests, which flush deterministically rather than
+    /// waiting on the 120ms coalesce timer.
+    func flushLiveThinking() {
+        guard live.flush() else { return }
+        if liveThinking != live.thinkingText { liveThinking = live.thinkingText }
+    }
+
+    /// Drop the live reasoning region. Called at a turn boundary, on teardown,
+    /// and — the load-bearing one — from `loadMessages` once canonical history
+    /// has landed, so the reasoning and the fetched `kind:"thinking"` rows are
+    /// never both on screen.
+    private func clearLiveThinking() {
+        live.reset()
+        if !liveThinking.isEmpty { liveThinking = "" }
     }
 
     private func flushPendingDelta() {
@@ -1014,6 +1066,9 @@ final class ChatStore {
                     self.streaming = false
                     self.streamText = ""
                     self.streamTextTruncated = false
+                    // Canonical history already landed just above, so the
+                    // reasoning's handoff is complete — retire the live region.
+                    self.clearLiveThinking()
                     self.activity = nil
                     return
                 }

@@ -290,8 +290,37 @@ struct WalnutAPI {
     /// Transcript tail for one session (404 = no tail exported yet).
     /// `fresh: true` asks the primary to read the session's history right now
     /// (live view polling) instead of the 60s-throttled sweep file.
-    func sessionTranscript(id: String, fresh: Bool = false) async throws -> SessionTranscript {
-        try await get("/sessions/\(escape(id))/transcript\(fresh ? "?fresh=1" : "")")
+    /// `rich: true` asks for the tool-input / reasoning fields — see the path
+    /// builder for when that is worth asking.
+    func sessionTranscript(id: String, fresh: Bool = false,
+                           rich: Bool = false) async throws -> SessionTranscript {
+        try await get(Self.sessionTranscriptPath(id: escape(id), fresh: fresh, rich: rich))
+    }
+
+    /// `rich=1` is what makes a session row able to expand like a chat row:
+    /// without it the route answers from the SLIM projection, which carries no
+    /// `inputPreview` and no `thinkingText`, so a coding session's timeline could
+    /// never show a tool's Input or open a reasoning row. Both fields stay
+    /// optional in the decoder, so a server that predates the parameter — and a
+    /// replica, which accepts it and ignores it — simply yields today's rows.
+    ///
+    /// TWO RULES THE SERVER CANNOT ENFORCE FOR US, both encoded here:
+    ///  - it only pays off WITH `fresh=1`. The sweep writes the transcript file
+    ///    in the slim shape, so a cache-first read cannot carry the fields no
+    ///    matter what is asked, and the server deliberately does not force a live
+    ///    build just because `rich` appeared (that would defeat the fast disk read
+    ///    the two-phase open depends on). So `rich` alone is dropped rather than
+    ///    sent as a pointless parameter.
+    ///  - the caller decides, because poll and non-poll are the SAME URL. The
+    ///    fields cost ~4 KB gzipped per read: nothing at two reads on open plus
+    ///    one per turn end (~88 KB across a 20-turn session), but ~48 KB/min from
+    ///    the 5s degraded poll. Hence `rich` is required at every call site
+    ///    (`SessionConversationStore.loadTranscript`) rather than defaulted.
+    ///
+    /// A separate static so a test can pin the query without a network stack.
+    static func sessionTranscriptPath(id: String, fresh: Bool, rich: Bool) -> String {
+        guard fresh else { return "/sessions/\(id)/transcript" }
+        return "/sessions/\(id)/transcript?fresh=1" + (rich ? "&rich=1" : "")
     }
 
     /// Send text INTO a live session; returns the queued messageId (202).

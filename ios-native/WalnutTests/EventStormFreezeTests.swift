@@ -141,7 +141,13 @@ final class EventStormFreezeTests: XCTestCase {
         XCTAssertTrue(baselineFired,
             "positive control failed — the probe cannot see invalidations, so a green storm result would be meaningless")
         XCTAssertTrue(store.streaming)
-        XCTAssertEqual(store.activity, "Thinking")
+        // `activity` names the RUNNING TOOL and nothing else now
+        // (`LiveAgentActivity.activityLabel`), so pure reasoning leaves it nil and
+        // the reasoning text goes to its own row. Not the thing this test guards:
+        // the invariant is `stormFired == 0` below, and `baselineFired` above is
+        // what proves the probe can see an invalidation at all.
+        XCTAssertNil(store.activity,
+                     "pure reasoning must not put a word in the tool slot: \(store.activity ?? "")")
 
         // Storm: 589 repeat events = the measured death-window count (n=589).
         var stormFired = 0
@@ -206,7 +212,11 @@ final class EventStormFreezeTests: XCTestCase {
         XCTAssertTrue(baselineFired,
             "positive control failed — the probe cannot see invalidations, so a green storm result would be meaningless")
         XCTAssertTrue(chat.streaming)
-        XCTAssertEqual(chat.activity, "Thinking")
+        // Same new contract as the session store above: the tool slot stays nil
+        // while the agent is only reasoning. What this test guards is that a repeat
+        // event costs ZERO invalidations of these two flags.
+        XCTAssertNil(chat.activity,
+                     "pure reasoning must not put a word in the tool slot: \(chat.activity ?? "")")
 
         // Storm: repeat `thinking` through the REAL handler must be free.
         var stormFired = 0

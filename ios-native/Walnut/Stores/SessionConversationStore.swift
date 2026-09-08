@@ -91,6 +91,17 @@ final class SessionConversationStore {
     /// is finalizeTurn: a PREFIX clip of a tail-trimmed string no longer equals
     /// the reply's start, so the provisional row must be skipped.
     private(set) var liveTextTruncated = false
+    /// Reasoning the CLI has emitted during the in-flight turn — published on the
+    /// same coalesced cadence as `liveText`, from the shared `LiveAgentActivity`
+    /// below. Empty = nothing to show. This is what replaced throwing the
+    /// `thinking { delta }` payload away and showing one blinking word.
+    private(set) var liveThinking = ""
+    /// The `thinking` / `tool` / `tool-result` arms, shared with ChatStore. NOT
+    /// observed: the cloud bridge forwards CLI thinking_deltas 1:1 with no
+    /// coalescing (measured 10.7 ev/s sustained, microbursts to ~700/s), so the
+    /// accumulation must stay off the observation graph and only
+    /// `flushLiveThinking` may publish it.
+    @ObservationIgnored private var live = LiveAgentActivity()
     var activity: String?
     /// Delta coalescing (freeze fix, mirrors ChatStore): re-rendering the live
     /// markdown row per SSE delta saturated the main thread on long replies.
@@ -221,9 +232,9 @@ final class SessionConversationStore {
         FreezeContext.shared.note("sc-open")
         adoptLaunchStash()
         connectStream()
-        await loadTranscript(fresh: false)
+        await loadTranscript(fresh: false, rich: false)
         FreezeContext.shared.note("sc-open-cached", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
-        await loadTranscript(fresh: true)
+        await loadTranscript(fresh: true, rich: true)
         FreezeContext.shared.note("sc-open-fresh", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
     }
 
@@ -258,6 +269,7 @@ final class SessionConversationStore {
         // and resume() re-arms them.
         cancelRetryTasks()
         streaming = false
+        clearLiveThinking()
         activity = nil
     }
 
@@ -268,15 +280,20 @@ final class SessionConversationStore {
         isActive = true
         connectStream()
         rearmPendingRetries()
-        trackTask { [weak self] in await self?.loadTranscript(fresh: true) }
+        trackTask { [weak self] in await self?.loadTranscript(fresh: true, rich: true) }
     }
 
     // MARK: - Transcript
 
-    private func loadTranscript(fresh: Bool) async {
+    /// `rich` asks for the tool-input / reasoning fields. It is REQUIRED, not
+    /// defaulted: the fields only arrive with `fresh` (the sweep file is slim), and
+    /// they cost ~4 KB gzipped per read — fine on open / resume / turn end, ~48
+    /// KB/min from the 5s degraded poll, which is the same URL. See
+    /// `WalnutAPI.sessionTranscriptPath`.
+    private func loadTranscript(fresh: Bool, rich: Bool) async {
         guard isActive else { return }
         do {
-            let next = try await api.sessionTranscript(id: sessionId, fresh: fresh)
+            let next = try await api.sessionTranscript(id: sessionId, fresh: fresh, rich: rich)
             guard isActive, !Task.isCancelled else { return }
             reconcile(next)
             transcriptMissing = false
@@ -336,7 +353,9 @@ final class SessionConversationStore {
                 kind: Self.mapKind(m.kind),
                 detail: m.detail,
                 resultPreview: m.resultPreview,
-                agent: m.agent
+                agent: m.agent,
+                thinkingText: m.thinkingText,
+                inputPreview: m.inputPreview
             )
         }
         var merged: [ChatMessage]
@@ -376,6 +395,14 @@ final class SessionConversationStore {
         if next != historyMessages {
             historyMessages = next
         }
+        // HANDOFF: the live reasoning region retires HERE, in the same
+        // synchronous block that installs the fetched `kind:"thinking"` rows —
+        // so the same reasoning is never rendered twice, and a transcript load
+        // that fails or arrives late leaves the reasoning on screen instead of
+        // blanking the spot it occupied. Gated on `streaming` because reconcile
+        // also runs from the 5s poll, and a mid-turn load must not wipe
+        // reasoning that is still accumulating.
+        if !streaming { clearLiveThinking() }
         // Freeze-report context: row count of what SwiftUI is being asked to
         // lay out. Written per reconcile (transcript fetch / 5s poll), not per row.
         FreezeContext.shared.setHistoryRows(next.count)
@@ -422,13 +449,28 @@ final class SessionConversationStore {
     private static func assignStableIDs(_ rows: [ChatMessage]) -> [ChatMessage] {
         var counts: [String: Int] = [:]
         return rows.map { m in
-            let base = "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")|\(m.text.hashValue)"
+            // The PAYLOAD rides the digest, not just `text`. A tool row appears
+            // in a live transcript read BEFORE its `resultPreview` exists
+            // (running → finished), and a thinking row's excerpt can arrive with
+            // a later read. The row id is what keys TimelineLayoutActor's
+            // per-message row memo, so an id that ignored the payload would keep
+            // serving the older rows — the expanded card would say "Running…"
+            // for ever, and a reasoning row would never grow its excerpt.
+            var digest = Hasher()
+            digest.combine(m.text)
+            digest.combine(m.detail)
+            digest.combine(m.inputPreview)
+            digest.combine(m.resultPreview)
+            digest.combine(m.thinkingText)
+            digest.combine(m.agent)
+            let base = "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")|\(digest.finalize())"
             let n = counts[base, default: 0]
             counts[base] = n + 1
             return ChatMessage(id: "\(base)#\(n)", role: m.role, text: m.text,
                                createdAt: m.createdAt, kind: m.kind,
                                detail: m.detail, resultPreview: m.resultPreview,
-                               agent: m.agent)
+                               agent: m.agent, thinkingText: m.thinkingText,
+                               inputPreview: m.inputPreview)
         }
     }
 
@@ -725,7 +767,6 @@ final class SessionConversationStore {
     }
 
     private struct DeltaPayload: Codable { let delta: String }
-    private struct ToolPayload: Codable { let name: String; let detail: String? }
     private struct StatusPayload: Codable { let processStatus: String }
     private struct ErrorPayload: Codable { let message: String }
     private struct SnapshotPayload: Codable {
@@ -779,6 +820,16 @@ final class SessionConversationStore {
             return
         }
         let data = Data(event.data.utf8)
+        // The three arms both live streams share. This store DOES honour
+        // `impliesStreaming` (a CLI tool call is proof its own turn is running,
+        // which is why the page has always flipped `streaming` here); the chat
+        // store deliberately does not — see the note there.
+        if let handled = LiveStreamEvents.apply(event: event.event, data: data, to: &live) {
+            if handled.impliesStreaming { setStreaming(true) }
+            setActivity(live.activityLabel)
+            if handled.needsFlush { scheduleLiveFlush() }
+            return
+        }
         switch event.event {
         case "snapshot":
             if let snap = try? JSONDecoder().decode(SnapshotPayload.self, from: data) {
@@ -790,22 +841,13 @@ final class SessionConversationStore {
             liveText = ""
             liveTextTruncated = false
             pendingDelta = ""
+            clearLiveThinking()
             setActivity(nil)
         case "text-delta":
             if let p = try? JSONDecoder().decode(DeltaPayload.self, from: data) {
                 setStreaming(true)
                 appendDelta(p.delta)
             }
-        case "thinking":
-            setStreaming(true)
-            setActivity("Thinking")
-        case "tool":
-            if let p = try? JSONDecoder().decode(ToolPayload.self, from: data) {
-                setStreaming(true)
-                setActivity(p.detail.map { "\(p.name) · \($0)" } ?? p.name)
-            }
-        case "tool-result":
-            setActivity(nil)
         case "status":
             if let p = try? JSONDecoder().decode(StatusPayload.self, from: data) {
                 applyStatus(p.processStatus)
@@ -828,7 +870,7 @@ final class SessionConversationStore {
         case "bridge-online":
             offline = false
             stopPolling()
-            trackTask { [weak self] in await self?.loadTranscript(fresh: true) }
+            trackTask { [weak self] in await self?.loadTranscript(fresh: true, rich: true) }
         default:
             break
         }
@@ -925,6 +967,11 @@ final class SessionConversationStore {
         // streaming; the unguarded assignment put it right back).
         setStreaming(seed.isStreaming && SessionStatus(seed.processStatus).isAlive)
         pendingDelta = "" // snapshot resets the live region wholesale
+        // Reasoning is part of that live region, and the snapshot carries none
+        // (the buffer keeps text and tool_call blocks only) — so a stale
+        // accumulation must go rather than be stitched under a fresh seed. A
+        // mid-turn re-attach refills it from the CLI's next thinking delta.
+        clearLiveThinking()
         liveText = seed.liveText
         liveTextTruncated = seed.liveTextTruncated
         setActivity(seed.activityName)
@@ -999,13 +1046,40 @@ final class SessionConversationStore {
     /// sees `liveText` change at a bounded cadence regardless of delta rate.
     private func appendDelta(_ delta: String) {
         pendingDelta += delta
+        scheduleLiveFlush()
+    }
+
+    /// One coalescing timer for BOTH live buffers (reply text and reasoning):
+    /// they arrive interleaved from the same stream, and two timers would just
+    /// double the invalidation rate of the same views.
+    private func scheduleLiveFlush() {
         guard deltaFlushTask == nil else { return }
         deltaFlushTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(120))
             guard let self else { return }
             self.deltaFlushTask = nil
             self.flushPendingDelta()
+            self.flushLiveThinking()
         }
+    }
+
+    /// Publish the shared handler's bounded reasoning accumulation.
+    /// Equality-gated for the same reason `setActivity` is: an unconditional
+    /// write at CLI thinking-delta rate is a full-page invalidation storm.
+    /// Internal (not private) for WalnutTests, which flush deterministically
+    /// rather than waiting on the 120ms coalesce timer.
+    func flushLiveThinking() {
+        guard live.flush() else { return }
+        if liveThinking != live.thinkingText { liveThinking = live.thinkingText }
+    }
+
+    /// Drop the live reasoning region. Called at a turn boundary, on teardown,
+    /// and — the load-bearing one — from `reconcile` once canonical transcript
+    /// rows have landed, so the reasoning and the fetched `kind:"thinking"` rows
+    /// are never both on screen.
+    private func clearLiveThinking() {
+        live.reset()
+        if !liveThinking.isEmpty { liveThinking = "" }
     }
 
     /// Internal (not private) for WalnutTests — lets the watchdog repro tests
@@ -1074,6 +1148,7 @@ final class SessionConversationStore {
     private func finalizeTurnTracked() {
         awaitingFirstTurn = false // covers a turn-end with no observed turn-start
         flushPendingDelta() // `finished` below must include the delta tail
+        flushLiveThinking() // …and the reasoning row must show its last delta
         deltaFlushTask?.cancel()
         deltaFlushTask = nil
         let wasPinned = bottomPinned
@@ -1108,7 +1183,7 @@ final class SessionConversationStore {
         // The live row disappearing + provisional row appearing shifts layout;
         // keep the reader glued to the end of the reply they were watching.
         if isActive && wasPinned { scrollToBottomSignal += 1 }
-        trackTask { [weak self] in await self?.loadTranscript(fresh: true) }
+        trackTask { [weak self] in await self?.loadTranscript(fresh: true, rich: true) }
     }
 
     // MARK: - Polling fallback
@@ -1125,7 +1200,11 @@ final class SessionConversationStore {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.isActive else { return }
-                await self.loadTranscript(fresh: true)
+                // NOT rich: this loop runs every 5s while degraded, and the
+                // fields it would add cost ~48 KB/min there. The chevron a
+                // reader taps was already put on the row by the open / turn-end
+                // read; a poll only has to keep the text current.
+                await self.loadTranscript(fresh: true, rich: false)
                 try? await Task.sleep(for: .seconds(Self.pollSeconds))
             }
         }

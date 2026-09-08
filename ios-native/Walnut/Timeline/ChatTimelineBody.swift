@@ -32,6 +32,7 @@ struct ChatTimelineBody: View {
                 streaming: chat.streaming,
                 liveText: chat.streamText,
                 liveTextTruncated: chat.streamTextTruncated,
+                liveThinking: chat.liveThinking,
                 activity: chat.activity,
                 // Reading activeID here is what makes a conversation switch
                 // visible to the timeline at all: the host outlives the switch,
