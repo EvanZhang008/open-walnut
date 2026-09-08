@@ -18,6 +18,7 @@
  *   (see coords.ts) and a mailbox called "Projects/2026: old" round-trips.
  */
 import type {
+  AccountSetupPreset,
   Disposable,
   MailAccount,
   MailBody,
@@ -46,6 +47,7 @@ import {
   toEnvelope,
 } from './mime.js'
 import { createImapSender } from './provider-send.js'
+import { imapPortFor, SETUP_PRESETS, submissionPortFor } from './setup-presets.js'
 import { verifySmtp, type SmtpSecurity } from './smtp.js'
 
 /** Headers the ENVELOPE does not carry, or carries in a lossy form. */
@@ -133,6 +135,11 @@ export function createImapProvider(deps: {
     },
 
     setup: {
+      // The services most people are actually adding (see SETUP_PRESETS): this form knows their
+      // servers, and one that kept that to itself would send the human to look up a hostname it
+      // holds. Optional in the contract, so a provider with nothing to declare renders as before.
+      presets: SETUP_PRESETS,
+
       fields: [
         { name: 'address', label: 'Email address', kind: 'text', required: true, placeholder: 'you@example.com' },
         {
@@ -193,7 +200,10 @@ export function createImapProvider(deps: {
         const password = values.password ?? ''
         const host = (values.imap_host ?? '').trim()
         const tls = values.imap_tls === 'starttls' ? 'starttls' : 'tls'
-        const port = Number(values.imap_port) || (tls === 'starttls' ? 143 : 993)
+        // Blank, or the canonical port of the OTHER encryption, both mean "what this encryption
+        // uses". See imapPortFor: a preset fills no port, and switching the encryption after a fill
+        // must not submit 993 with STARTTLS.
+        const port = imapPortFor(values.imap_port, tls)
         if (!address || !password || !host) {
           throw providerError('invalid', 'An email address, a password and an IMAP server are all required.')
         }
@@ -201,7 +211,7 @@ export function createImapProvider(deps: {
         const smtpSecurity: SmtpSecurity = values.smtp_tls === 'tls'
           ? 'tls'
           : values.smtp_tls === 'none' ? 'none' : 'starttls'
-        const smtpPort = Number(values.smtp_port) || (smtpSecurity === 'tls' ? 465 : 587)
+        const smtpPort = submissionPortFor(values.smtp_port, smtpSecurity)
 
         const startedAt = Date.now()
         const probe = new ImapConnection({

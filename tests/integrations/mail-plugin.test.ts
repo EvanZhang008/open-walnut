@@ -186,7 +186,7 @@ describe('a provider plugin attaches through the service, with no kernel change'
     expect(marks().activated).toBe(1);
     // The CONTRACT version, not the manifest's. It has to move when methods arrive, or a
     // provider written against a later base has no way to gate on one being there.
-    expect(marks().version).toBe('1.3.0');
+    expect(marks().version).toBe('1.4.0');
 
     const providers = await getJson<{ providers: Array<{ id: string; label: string; capabilities: { bodies: string }; setupFields: unknown[] }> }>('/providers');
     expect(providers.status).toBe(200);
@@ -214,6 +214,46 @@ describe('a provider plugin attaches through the service, with no kernel change'
 
     const health = await getJson<{ providers: number }>('/health');
     expect(health.body.providers).toBe(2);
+  });
+
+  /**
+   * The known services ride the same row, and only for a provider that has any.
+   *
+   * ABSENT rather than `[]` for `fake`, because the console tells those two apart: an empty array
+   * would have it draw a chip row with nothing in it above every form. And a preset may only name
+   * fields the same row declares, or the fill writes a key nothing renders while the chip claims
+   * the servers were filled in.
+   */
+  it('carries setup presets for a provider that declares them and omits the field for one that does not', async () => {
+    interface Row {
+      id: string;
+      setupFields: Array<{ name: string }>;
+      setupPresets?: Array<{ id: string; match?: string[]; values: Record<string, string>; help?: string; helpUrl?: string }>;
+    }
+    const providers = await getJson<{ providers: Row[] }>('/providers');
+    expect(providers.status).toBe(200);
+    const fake = providers.body.providers.find((one) => one.id === 'fake')!;
+    const imap = providers.body.providers.find((one) => one.id === 'imap')!;
+    expect(fake.setupPresets).toBeUndefined();
+    expect(Object.keys(fake)).not.toContain('setupPresets');
+
+    const gmail = imap.setupPresets?.find((one) => one.id === 'gmail');
+    expect(gmail).toBeDefined();
+    expect(gmail!.match).toContain('gmail.com');
+    expect(gmail!.values).toMatchObject({
+      imap_host: 'imap.gmail.com', imap_tls: 'tls', smtp_host: 'smtp.gmail.com',
+    });
+    // Deliberately no port: `submit` derives it from the encryption choice, so the two can never
+    // be submitted in disagreement (993 with STARTTLS reaches a port speaking neither).
+    expect(Object.keys(gmail!.values)).not.toContain('imap_port');
+
+    const declared = new Set(imap.setupFields.map((one) => one.name));
+    for (const preset of imap.setupPresets ?? []) {
+      for (const name of Object.keys(preset.values)) expect(declared).toContain(name);
+      // A preset fills servers. A credential is the human's to type, and would be a secret in a
+      // response every open tab polls.
+      expect(Object.keys(preset.values)).not.toContain('password');
+    }
   });
 
   it('drops the provider when the plugin that registered it is turned off', async () => {

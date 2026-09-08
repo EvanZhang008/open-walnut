@@ -129,6 +129,10 @@ export class MailProviderRegistry {
         // The declared fields travel; `submit` does not. A console renders the add-an-account
         // form from this and nothing else, which is what keeps it from knowing any provider.
         setupFields: spec.setup.fields,
+        // Presets travel the same way, and are OMITTED rather than defaulted to `[]`: a provider
+        // that declares none has no known services, and an empty array would make the console
+        // draw a chip row with nothing in it.
+        ...(spec.setup.presets?.length ? { setupPresets: spec.setup.presets } : {}),
       }))
       .sort((a, b) => a.id.localeCompare(b.id))
   }

@@ -210,6 +210,30 @@ const spec = {
         required: true,
         help: 'This fixture accepts the word ok and refuses everything else.',
       },
+      // The two fields a preset exists to fill. OPTIONAL, because `submit` below only ever
+      // checks the token: the specs that add an account without touching them must keep working.
+      { name: 'host', label: 'Mail server', kind: 'text', placeholder: 'mail.example.invalid' },
+      { name: 'port', label: 'Port', kind: 'text', placeholder: '993' },
+    ],
+    /**
+     * One known service, so the console's preset row is exercised without a network.
+     *
+     * The domain is deliberately NOT `example.invalid`: the specs add their account as
+     * `alice@example.invalid`, and a preset matching that would fill the servers in the middle of
+     * a flow whose subject is something else.
+     */
+    presets: [
+      {
+        id: 'fixturehost',
+        label: 'Fixture Host',
+        match: ['preset.invalid'],
+        // 1143, NOT the 993 the field's placeholder shows. A preset value equal to the placeholder
+        // is indistinguishable from nothing having happened, in the assertion and in the
+        // screenshot alike. (The real IMAP presets fill no port at all: `submit` derives it.)
+        values: { host: 'mail.preset.invalid', port: '1143' },
+        help: 'Fixture Host wants an app password, never your main account password.',
+        helpUrl: 'https://example.invalid/app-passwords',
+      },
     ],
     async submit(values) {
       if (values.token !== 'ok') {

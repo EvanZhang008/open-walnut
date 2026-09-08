@@ -42,6 +42,7 @@ export { ADDRESS_SHAPE } from './agent-format.js'
 export type {
   AccountSetupField,
   AccountSetupFieldKind,
+  AccountSetupPreset,
   AccountSetupSpec,
   Disposable,
   MailAccount,
@@ -81,8 +82,12 @@ export type {
  * 1.3.0 is the DTO gaining fields, which is the other kind of thing a provider gates on: an
  * envelope may now carry `replyTo`, `MailMessageDto` carries `cc`, `replyTo` and `taskId`, and
  * `MailAccountDto` carries a per-account `capabilities.send`. All additive, all optional.
+ *
+ * 1.4.0 adds `AccountSetupSpec.presets` (known services, so the console can fill the server
+ * fields from an address domain) and carries them to the console as `MailProviderSummary.setupPresets`.
+ * Additive and optional: a provider that declares none renders exactly the form it did before.
  */
-export const MAIL_BASE_API_VERSION = '1.3.0'
+export const MAIL_BASE_API_VERSION = '1.4.0'
 
 /**
  * The method bag published as `mail:base`.

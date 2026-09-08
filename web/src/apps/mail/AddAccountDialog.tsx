@@ -20,9 +20,24 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
-import { mailFailure, type AccountSetupField, type MailProviderSummary } from '@/api/mail';
+import {
+  mailFailure,
+  type AccountSetupField,
+  type AccountSetupPreset,
+  type MailProviderSummary,
+} from '@/api/mail';
 import { log } from '@/utils/log';
 import { addMailAccount } from './mail-actions';
+import {
+  addressFieldName,
+  OTHER_PRESET_ID,
+  safeHelpUrl,
+  unknownPresetKeys,
+  withAutoPreset,
+  withChosenPreset,
+  withTyped,
+  type PresetState,
+} from './setup-presets';
 
 interface Props {
   providers: MailProviderSummary[];
@@ -42,6 +57,10 @@ function initialValues(fields: AccountSetupField[]): Record<string, string> {
   return values;
 }
 
+function initialState(fields: AccountSetupField[]): PresetState {
+  return { values: initialValues(fields), edited: [], chosen: null };
+}
+
 export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
   useModalOverlay(onClose);
   // One provider means there is nothing to choose: skip the picker entirely.
@@ -50,9 +69,10 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
     () => providers.find((one) => one.id === providerId),
     [providers, providerId],
   );
-  const [values, setValues] = useState<Record<string, string>>(
-    () => initialValues(providers.length === 1 ? providers[0]!.setupFields : []),
+  const [state, setState] = useState<PresetState>(
+    () => initialState(providers.length === 1 ? providers[0]!.setupFields : []),
   );
+  const values = state.values;
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<{ status: number; message: string } | null>(null);
 
@@ -66,12 +86,31 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
 
   const pickProvider = (next: MailProviderSummary) => {
     setProviderId(next.id);
-    setValues(initialValues(next.setupFields));
+    setState(initialState(next.setupFields));
     setFailure(null);
   };
 
   const fields = provider?.setupFields ?? [];
+  const presets = provider?.setupPresets ?? [];
+  const chosenPreset = presets.find((one) => one.id === state.chosen);
+  // The service's credential sentence belongs under the credential. A provider that declares
+  // presets but no password field still has to show it somewhere, so it falls to the last field,
+  // and to the chip row itself when there are no fields at all (see the form below): "renders
+  // nowhere" is the one outcome this must not have.
+  const helpAfter = (fields.find((field) => field.kind === 'password') ?? fields.at(-1))?.name;
   const missing = fields.some((field) => field.required && !values[field.name]?.trim());
+
+  // A preset naming a field this form does not have fills nothing the human can see, so the
+  // provider's mistake is reported rather than looking like a dead chip. Keyed on the joined
+  // names, not on the provider object: the accounts poll hands this dialog a new row object
+  // every few seconds, and an effect keyed on that would log the same line forever.
+  const unknownKeys = unknownPresetKeys(fields, presets).join(',');
+  useEffect(() => {
+    if (!providerId || !unknownKeys) return;
+    log.warn('mail', 'setup preset names fields this provider does not declare', {
+      providerId, unknown: unknownKeys,
+    });
+  }, [providerId, unknownKeys]);
 
   const submit = async () => {
     if (!provider || busy || missing) return;
@@ -146,19 +185,50 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
               </p>
             )}
 
-            {fields.map((field, index) => (
-              <SetupField
-                key={field.name}
-                field={field}
-                value={values[field.name] ?? ''}
-                inputRef={index === 0 ? firstFieldRef : undefined}
-                onChange={(next) => setValues((prev) => ({ ...prev, [field.name]: next }))}
+            {presets.length > 0 && (
+              <PresetChips
+                presets={presets}
+                chosen={state.chosen}
+                onChoose={(id) => setState((prev) => withChosenPreset(prev, presets, id))}
               />
+            )}
+
+            {/* No fields to sit under, so it sits with the chips. `helpAfter` is undefined here. */}
+            {fields.length === 0 && chosenPreset?.help && <PresetHelp preset={chosenPreset} />}
+
+            {fields.map((field, index) => (
+              <div className="mail-setup-row" key={field.name}>
+                <SetupField
+                  field={field}
+                  value={values[field.name] ?? ''}
+                  inputRef={index === 0 ? firstFieldRef : undefined}
+                  onChange={(next) => setState((prev) => {
+                    const typed = withTyped(prev, field.name, next);
+                    // Only typing into the ADDRESS auto-picks a service, and which field that is
+                    // comes from the spec rather than from a name this file assumes.
+                    return addressFieldName(fields, typed.values) === field.name
+                      ? withAutoPreset(typed, presets, next)
+                      : typed;
+                  })}
+                />
+                {/* Outside the field's own label: a link inside a <label> is a link whose click
+                    also focuses the input it sits in. */}
+                {field.name === helpAfter && chosenPreset?.help && (
+                  <PresetHelp preset={chosenPreset} />
+                )}
+              </div>
             ))}
 
             {failure && (
               <div className="mail-setup-error" data-testid="mail-add-error">
-                {failure.status === 401 && <p className="mail-setup-error-lead">{AUTH_HINT}</p>}
+                {/* The generic hint only when nothing more specific is on screen. With a service
+                    chosen, its own sentence IS the credential sentence, and the two can flatly
+                    contradict each other: Outlook.com's says an app password is refused, while this
+                    one says the credential must be an app password. Two sentences disagreeing about
+                    the same field is worse than either alone. */}
+                {failure.status === 401 && !chosenPreset?.help && (
+                  <p className="mail-setup-error-lead">{AUTH_HINT}</p>
+                )}
                 <p className="mail-setup-error-detail">{failure.message}</p>
               </div>
             )}
@@ -179,6 +249,79 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
       </div>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * The known services, as one row of chips above the form.
+ *
+ * A radiogroup rather than buttons, because that is what it is: exactly one service applies to an
+ * account, and "Other" is a real member of the group (it means "do not guess", not "cancel").
+ *
+ * The group is labelled BY the visible heading (`aria-labelledby`) rather than with an
+ * `aria-label` of its own: two different names for one control is what makes a screen reader
+ * announce something nobody on the call can find on screen.
+ */
+function PresetChips({ presets, chosen, onChoose }: {
+  presets: AccountSetupPreset[];
+  chosen: string | null;
+  onChoose: (id: string) => void;
+}) {
+  return (
+    <div className="mail-setup-field">
+      <span className="mail-setup-label" id="mail-preset-row-label">Which service is this?</span>
+      <span className="mail-setup-options" role="radiogroup" aria-labelledby="mail-preset-row-label">
+        {[...presets, { id: OTHER_PRESET_ID, label: 'Other', values: {} }].map((preset) => (
+          <button
+            type="button"
+            key={preset.id}
+            className={`mail-setup-option${preset.id === chosen ? ' active' : ''}`}
+            data-testid={`mail-preset-${preset.id === OTHER_PRESET_ID ? 'other' : preset.id}`}
+            role="radio"
+            aria-checked={preset.id === chosen}
+            onClick={() => onChoose(preset.id)}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </span>
+      <span className="mail-setup-help">
+        Picking one fills the server details. Typing your address picks it for you, and anything you
+        have typed yourself is left alone.
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The chosen service's own sentence about its credential, with the vendor's page behind it.
+ *
+ * The link text is deliberately NOT "app passwords": four of the five IMAP services want one and
+ * Outlook.com no longer accepts one at all, so a label the console assembles would describe the
+ * wrong thing for whichever service is the exception. What the page says is the provider's to word,
+ * in `help`; this only names whose page it is.
+ */
+function PresetHelp({ preset }: { preset: AccountSetupPreset }) {
+  // Checked, not trusted: `helpUrl` comes from a provider plugin and lands in an href. A refused
+  // scheme renders the sentence with no link rather than an href a click would execute.
+  const href = safeHelpUrl(preset.helpUrl);
+  return (
+    <p className="mail-setup-preset-help" data-testid="mail-preset-help">
+      {preset.help}
+      {href && (
+        <>
+          {' '}
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="mail-preset-help-link"
+          >
+            {preset.label} setup help
+          </a>
+        </>
+      )}
+    </p>
   );
 }
 

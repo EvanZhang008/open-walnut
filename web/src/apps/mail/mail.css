@@ -450,6 +450,9 @@
 .mail-provider-back { align-self: flex-start; }
 
 .mail-setup-field { display: flex; flex-direction: column; gap: 4px; }
+/* One field plus anything that belongs to it (the chosen service's credential sentence), so the
+   help line sits with its own input rather than at the form's own 12px rhythm. */
+.mail-setup-row { display: flex; flex-direction: column; gap: 4px; }
 
 .mail-setup-label {
   font-size: 12px;
@@ -464,6 +467,18 @@
 .mail-setup-help { font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
 
 .mail-setup-options { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; overflow-y: auto; }
+
+.mail-setup-preset-help {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  font-size: 11px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+}
+
+.mail-setup-preset-help a { color: var(--accent); }
 
 .mail-setup-option {
   padding: 5px 10px;

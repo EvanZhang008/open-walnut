@@ -153,6 +153,44 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
   // the caret: a credential dialog that needs a click before you can type is a dialog that made
   // the human do its work.
   await expect(page.getByTestId('mail-setup-address')).toBeFocused({ timeout: 15_000 })
+
+  // ── (a1) a known service fills the servers from the address, and hand typing wins ──
+  // The fixture declares one preset (its server.mjs), so this is the console's own arithmetic in
+  // the browser that runs it, with no mail host involved. The domain is the fixture's own, not
+  // the `example.invalid` the account below uses.
+  const presetChip = page.getByTestId('mail-preset-fixturehost')
+  const presetHost = page.getByTestId('mail-setup-host')
+  const presetPort = page.getByTestId('mail-setup-port')
+  await expect(presetChip).toBeVisible()
+  await expect(page.getByTestId('mail-preset-other')).toBeVisible()
+  // EMPTY before, and the preset's port is deliberately not the number the placeholder shows: a
+  // filled 993 under a `993` placeholder is indistinguishable from nothing having happened, both
+  // in this assertion and in the screenshot a human reviews.
+  await expect(presetHost).toHaveValue('')
+  await expect(presetPort).toHaveValue('')
+
+  await page.getByTestId('mail-setup-address').fill('owner@preset.invalid')
+  await expect(presetChip).toHaveAttribute('aria-checked', 'true')
+  await expect(presetHost).toHaveValue('mail.preset.invalid')
+  await expect(presetPort).toHaveValue('1143')
+
+  // The credential sentence for THAT service, with the vendor's own page behind it, opening in a
+  // new tab like every other external link in the console.
+  const presetHelp = page.getByTestId('mail-preset-help')
+  await expect(presetHelp).toContainText('app password')
+  const presetLink = page.getByTestId('mail-preset-help-link')
+  await expect(presetLink).toHaveAttribute('href', 'https://example.invalid/app-passwords')
+  await expect(presetLink).toHaveAttribute('target', '_blank')
+  await expect(presetLink).toHaveAttribute('rel', /noopener/)
+  await dialog.screenshot({ path: `${SCREENSHOT_DIR}/mail-preset-autofill.png` })
+
+  // A hand-typed port is a decision (some mail hosts really do need another one), so re-typing
+  // the address must not quietly undo it. What nobody touched is still the preset's.
+  await presetPort.fill('1993')
+  await page.getByTestId('mail-setup-address').fill('owner2@preset.invalid')
+  await expect(presetPort).toHaveValue('1993')
+  await expect(presetHost).toHaveValue('mail.preset.invalid')
+
   await page.getByTestId('mail-setup-address').fill('alice@example.invalid')
   await expect(page.getByTestId('mail-setup-token')).toHaveAttribute('type', 'password')
   await page.getByTestId('mail-setup-token').fill('wrong-token')
@@ -160,9 +198,26 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
 
   const addError = page.getByTestId('mail-add-error')
   await expect(addError).toBeVisible({ timeout: 30_000 })
-  await expect(addError).toContainText('app password')
-  // The provider's own words travel unedited, under the hint.
+  // The provider's own words travel unedited.
   await expect(addError).toContainText('The mail server refused that token.')
+
+  // ── (a2) ONE credential sentence, whichever one is the specific one ──
+  // A service is still chosen here, so its own help line is the credential sentence and the
+  // generic 401 hint must stand down. Both at once is how the console ended up telling somebody on
+  // Outlook.com "this must be an app password" directly under "an app password is refused".
+  const authHint = page.locator('.mail-setup-error-lead')
+  await expect(presetHelp).toBeVisible()
+  await expect(authHint).toHaveCount(0)
+  await expect(addError).not.toContainText('must be an app password')
+
+  // Choosing Other retires that sentence, and the generic hint takes over: still exactly one.
+  await page.getByTestId('mail-preset-other').click()
+  await expect(presetHelp).toHaveCount(0)
+  await expect(authHint).toHaveCount(1)
+  await expect(addError).toContainText('app password')
+  // Other clears nothing, so the servers the preset filled are still there to look at.
+  await expect(presetHost).toHaveValue('mail.preset.invalid')
+
   // The form STAYS, with what was typed: a dialog that closes here makes the human retype
   // every field to find out which one was wrong.
   await expect(page.getByTestId('mail-setup-address')).toHaveValue('alice@example.invalid')

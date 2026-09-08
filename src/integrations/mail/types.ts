@@ -46,6 +46,37 @@ export interface AccountSetupField {
 }
 
 /**
+ * A known service behind a provider: the values a person would otherwise have to look up.
+ *
+ * The provider already knows that Gmail is `imap.gmail.com:993` over TLS, so a form that makes
+ * the human find that out is a form that keeps a fact it holds to itself. A preset is DATA for
+ * exactly that reason: the console fills fields it does not understand, and a provider plugin can
+ * add a service without a console change.
+ *
+ * `match` is address domains, lowercase and without an `@`, so typing the address is enough to
+ * pick the preset. `values` are field names from the same spec's `fields`, and a preset may
+ * name a subset: it fills the servers and never the credential.
+ *
+ * Fill as FEW fields as the answer needs. A value another field already implies is a value that can
+ * end up contradicting it, because the human may change either one afterwards: the IMAP provider's
+ * presets deliberately name no port, since `submit` derives it from the encryption choice, and a
+ * preset that filled 993 could be submitted as 993 with STARTTLS by anybody who switched the
+ * encryption after the fill. Prefer deriving in `submit` over filling in a preset.
+ */
+export interface AccountSetupPreset {
+  id: string
+  label: string
+  /** Address domains this preset is for, lowercase, no `@`. Absent = pick it by hand only. */
+  match?: string[]
+  /** `field.name` -> value. Only names that exist in `fields`. */
+  values: Record<string, string>
+  /** One sentence for the human, shown with the credential field. */
+  help?: string
+  /** The provider's own public page for that credential. Opened in a new tab. */
+  helpUrl?: string
+}
+
+/**
  * What the console renders for "add an account", declared by the provider.
  *
  * `submit` receives the raw values and returns the account record. The base passes them
@@ -54,6 +85,8 @@ export interface AccountSetupField {
  */
 export interface AccountSetupSpec {
   fields: AccountSetupField[]
+  /** Optional. A provider with one service, or with servers it discovers, declares none. */
+  presets?: AccountSetupPreset[]
   submit(values: Record<string, string>): Promise<MailAccount>
 }
 
@@ -295,4 +328,14 @@ export interface MailProviderSummary {
   label: string
   capabilities: MailCapabilities
   setupFields: AccountSetupField[]
+  /**
+   * The provider's `setup.presets`, when it declared any.
+   *
+   * Flat and named for its half of the spec, like `setupFields`, rather than nested under a
+   * `setup` object: this row already shipped, and every reader of it (the console, the browser
+   * specs, a third-party viewer) would have to change to read a renamed field for no gain.
+   * ABSENT when the provider declares none, which is what lets the console tell "this provider
+   * has no known services" apart from "this provider has an empty list".
+   */
+  setupPresets?: AccountSetupPreset[]
 }

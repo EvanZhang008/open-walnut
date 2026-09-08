@@ -613,6 +613,185 @@ describe('account setup', () => {
   });
 });
 
+/**
+ * The known services the form offers, which are pure data and need no server.
+ *
+ * They are graded because they are FACTS ABOUT SOMEBODY ELSE'S SERVICE: a wrong port here does not
+ * fail loudly at build time, it fails as "Walnut cannot reach my mail" for the one person whose
+ * provider it is. The invariants below are the ones the console silently depends on.
+ */
+describe('setup presets', () => {
+  const presetsOf = () => buildProvider().provider.setup.presets ?? [];
+
+  it('answers Gmail with the settings Google documents', () => {
+    const gmail = presetsOf().find((one) => one.id === 'gmail');
+    expect(gmail).toBeDefined();
+    expect(gmail!.match).toEqual(['gmail.com', 'googlemail.com']);
+    expect(gmail!.values).toEqual({
+      imap_host: 'imap.gmail.com',
+      imap_tls: 'tls',
+      smtp_host: 'smtp.gmail.com',
+    });
+    expect(gmail!.help).toMatch(/app password/i);
+    expect(gmail!.helpUrl).toBe('https://myaccount.google.com/apppasswords');
+  });
+
+  it('covers the services a person is most likely to be adding', () => {
+    expect(presetsOf().map((one) => one.id))
+      .toEqual(['gmail', 'icloud', 'outlook', 'fastmail', 'yahoo']);
+  });
+
+  it('fills only fields this form declares, and never the credential', () => {
+    const { provider } = buildProvider();
+    const declared = new Set(provider.setup.fields.map((field) => field.name));
+    const secret = new Set(
+      provider.setup.fields.filter((field) => field.kind === 'password').map((field) => field.name),
+    );
+    for (const preset of provider.setup.presets ?? []) {
+      for (const name of Object.keys(preset.values)) {
+        expect(declared, `${preset.id} fills a field this form does not have: ${name}`).toContain(name);
+        expect(secret, `${preset.id} must not fill a credential`).not.toContain(name);
+      }
+      // The servers are the whole point: a preset that named neither would be a dead chip.
+      expect(Object.keys(preset.values)).toContain('imap_host');
+      expect(Object.keys(preset.values)).toContain('smtp_host');
+    }
+  });
+
+  it('matches on bare lowercase domains, which is what the console compares against', () => {
+    for (const preset of presetsOf()) {
+      expect(preset.match?.length, `${preset.id} has no domain to match`).toBeGreaterThan(0);
+      for (const domain of preset.match ?? []) {
+        // The console lowercases the typed address and compares strings, so an upper-case letter
+        // or a stray `@` here is a preset that can never be chosen by typing an address.
+        expect(domain).toBe(domain.toLowerCase());
+        expect(domain).not.toContain('@');
+        expect(domain).toMatch(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/);
+      }
+    }
+  });
+
+  /**
+   * No preset names a PORT, and that is the fix for a real hole rather than an omission.
+   *
+   * A preset that wrote `imap_port: '993'` looked right and was: 993 is the TLS port. Then somebody
+   * switched the encryption to STARTTLS underneath the fill and submitted 993 with STARTTLS, which
+   * no server speaks, and before this slice existed that same form would have submitted 143. The
+   * port now comes from the encryption choice inside `submit` (see the submit case below), so the
+   * two cannot disagree, and the fields' placeholders still show the numbers.
+   */
+  it('names no port, so the encryption choice is the only thing that decides one', () => {
+    for (const preset of presetsOf()) {
+      expect(Object.keys(preset.values)).not.toContain('imap_port');
+      expect(Object.keys(preset.values)).not.toContain('smtp_port');
+      expect(['tls', 'starttls']).toContain(preset.values.imap_tls);
+      expect(preset.help).toBeTruthy();
+      // No id, and nobody's address, in a string a console shows.
+      expect(preset.help).not.toContain('@');
+      expect(preset.helpUrl, `${preset.id} has no page for its credential`).toMatch(/^https:\/\//);
+    }
+  });
+
+  /**
+   * The one service that must NOT be told to make an app password.
+   *
+   * Outlook.com IMAP answers `LOGINDISABLED` and offers `AUTH=XOAUTH2` alone (checked against the
+   * live servers on 2026-09-08), so "use an app password" would send somebody to make a credential
+   * that is refused at sign-in, which is worse than saying nothing. If Walnut ever grows OAuth for
+   * IMAP this is the assertion to revisit, deliberately.
+   */
+  it('does not promise an app password for a service that refuses one', () => {
+    const outlook = presetsOf().find((one) => one.id === 'outlook')!;
+    expect(outlook.values.imap_host).toBe('outlook.office365.com');
+    expect(outlook.values.smtp_host).toBe('smtp-mail.outlook.com');
+    expect(outlook.help).not.toMatch(/use an app password/i);
+    expect(outlook.help).toMatch(/OAuth/);
+    // The other four do say it, because for them it is both true and the fix. Each vendor's own
+    // wording travels, so the pattern allows Apple's "app specific password" as well as the plain
+    // "app password" the rest use: matching the exact phrase would push every help string towards
+    // words its own vendor does not use, which is the opposite of useful.
+    for (const preset of presetsOf().filter((one) => one.id !== 'outlook')) {
+      expect(preset.help, `${preset.id} should name the credential it wants`)
+        .toMatch(/app[ -]?(specific[ -]?)?password/i);
+    }
+  });
+
+  // Every preset id has to be usable as a chip's test id and as a stable key.
+  it('gives every preset a unique simple id and a label', () => {
+    const ids = presetsOf().map((one) => one.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const preset of presetsOf()) {
+      expect(preset.id).toMatch(/^[a-z0-9-]+$/);
+      expect(preset.label.trim()).toBeTruthy();
+    }
+  });
+
+  /**
+   * The whole point of the two changes above, driven through `submit` the way the console does.
+   *
+   * The console posts `{...preset.values, ...whatever the human typed}`, so this is the exact map
+   * that reaches the provider. The regression it pins: fill from Gmail, then pick STARTTLS, and the
+   * account must store 143. A preset carrying `993` stored 993 with STARTTLS, which connects to a
+   * port that is not speaking STARTTLS and reads as "unreachable" for a form that looks right.
+   */
+  it('stores the port the encryption implies when a preset fill is switched to STARTTLS', async () => {
+    const { provider, config } = buildProvider();
+    const gmail = provider.setup.presets!.find((one) => one.id === 'gmail')!;
+
+    await provider.setup.submit({
+      ...gmail.values,
+      address: ADDRESS,
+      password: PASSWORD,
+      // The human changed this AFTER the fill, which is the order that used to break.
+      imap_tls: 'starttls',
+    });
+
+    expect(wire.connectOptions[0]).toMatchObject({ port: 143, secure: false });
+    const stored = (config().accounts as Record<string, Record<string, unknown>>)[localIdFor(ADDRESS)]!;
+    expect(stored).toMatchObject({ imap_host: 'imap.gmail.com', imap_port: 143, imap_tls: 'starttls' });
+  });
+
+  /**
+   * A stale canonical port is read as the same intent, in both directions and on both halves.
+   *
+   * `993` with STARTTLS and `143` with TLS can only be produced by filling the form in one order
+   * and changing it in another, so the provider treats them as "the port this encryption uses"
+   * rather than connecting somewhere nobody is listening. Anything that is NOT one of the four
+   * canonical numbers is somebody's real mail host and survives exactly as typed.
+   */
+  it('reconciles a stale canonical port, and leaves a deliberate one alone', async () => {
+    const stale = buildProvider();
+    await stale.provider.setup.submit({
+      address: ADDRESS, password: PASSWORD, imap_host: 'imap.example.invalid',
+      imap_tls: 'starttls', imap_port: '993',
+      smtp_host: 'smtp.example.invalid', smtp_tls: 'tls', smtp_port: '587',
+    });
+    let stored = (stale.config().accounts as Record<string, Record<string, unknown>>)[localIdFor(ADDRESS)]!;
+    expect(stored).toMatchObject({ imap_port: 143, smtp_port: 465, smtp_tls: 'tls' });
+    await stale.pool.disposeAll();
+
+    const other = buildProvider();
+    await other.provider.setup.submit({
+      address: ADDRESS, password: PASSWORD, imap_host: 'imap.example.invalid',
+      imap_tls: 'tls', imap_port: '143',
+      smtp_host: 'smtp.example.invalid', smtp_tls: 'starttls', smtp_port: '465',
+    });
+    stored = (other.config().accounts as Record<string, Record<string, unknown>>)[localIdFor(ADDRESS)]!;
+    expect(stored).toMatchObject({ imap_port: 993, smtp_port: 587 });
+    await other.pool.disposeAll();
+
+    const deliberate = buildProvider();
+    await deliberate.provider.setup.submit({
+      address: ADDRESS, password: PASSWORD, imap_host: 'imap.example.invalid',
+      imap_tls: 'starttls', imap_port: '1143',
+      smtp_host: 'smtp.example.invalid', smtp_tls: 'starttls', smtp_port: '2525',
+    });
+    stored = (deliberate.config().accounts as Record<string, Record<string, unknown>>)[localIdFor(ADDRESS)]!;
+    expect(stored).toMatchObject({ imap_port: 1143, smtp_port: 2525 });
+    await deliberate.pool.disposeAll();
+  });
+});
+
 describe('a poll', () => {
   it('asks from the cursor, filters the n:* quirk, and reports whether more is behind it', async () => {
     const first = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 });

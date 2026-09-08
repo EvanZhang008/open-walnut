@@ -53,12 +53,31 @@ export interface AccountSetupField {
   options?: Array<{ value: string; label: string }>;
 }
 
+/**
+ * A known service behind a provider: the server values a person would otherwise look up.
+ *
+ * `match` is address domains, lowercase and without an `@`, so typing the address is enough to
+ * pick one. `values` are `AccountSetupField` names, and a preset names a subset: the servers,
+ * never the credential.
+ */
+export interface AccountSetupPreset {
+  id: string;
+  label: string;
+  match?: string[];
+  values: Record<string, string>;
+  help?: string;
+  /** The provider's own public page for the credential. Opened in a new tab. */
+  helpUrl?: string;
+}
+
 export interface MailProviderSummary {
   id: string;
   label: string;
   capabilities: MailCapabilities;
   /** The add-an-account form, as data. The console knows no provider's fields. */
   setupFields: AccountSetupField[];
+  /** Known services, when the provider declared any. Absent means it has none. */
+  setupPresets?: AccountSetupPreset[];
 }
 
 export type MailAccountState = 'active' | 'auth-required' | 'disabled';
