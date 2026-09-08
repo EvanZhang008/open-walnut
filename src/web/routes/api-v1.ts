@@ -53,7 +53,7 @@ import {
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
-import { mirrorRelayedChatFrame, relayChatTurnToPrimary, FALLBACK_ENGINE_LABEL } from './chat-turn-relay.js'
+import { mirrorRelayedChatFrame, relayChatTurnToPrimary, FALLBACK_ENGINE_LABEL, IN_PROCESS_ENGINE_LABEL } from './chat-turn-relay.js'
 import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { log } from '../../logging/index.js'
@@ -1667,7 +1667,14 @@ async function runApiV1LaneTurn(
     // only place the phone can read the answer back after a reload.
     await chatHistory.addAIMessages(
       [{ role: 'assistant', content: [{ type: 'text', text: resultText }] }] as MessageParam[],
-      { agentId, conversationId },
+      // Stamp WHICH engine answered. The catch-up detector reads this to tell a
+      // turn this lane never saw (answered in-process while the box was asleep)
+      // from one of its own, and it is the only provenance that survives on disk.
+      {
+        agentId,
+        conversationId,
+        ...(laneSessionId ? { engine: chatHistory.laneEngineLabel(laneSessionId) } : {}),
+      },
     )
 
     // Strip entity refs so the frame's text matches GET /messages byte-wise.
@@ -1946,7 +1953,13 @@ async function runApiV1Turn(
         ? allNew.slice(1)
         : allNew
       if (afterUser.length > 0) {
-        await chatHistory.addAIMessages(afterUser, { agentId, conversationId })
+        // One argument covers both engines here: opts.engine is already the
+        // replica's fallback label on a relayed turn, and undefined otherwise.
+        await chatHistory.addAIMessages(afterUser, {
+          agentId,
+          conversationId,
+          engine: opts?.engine ?? IN_PROCESS_ENGINE_LABEL,
+        })
       }
 
       // Same stripping as the lane path above — the frame must match canonical.
