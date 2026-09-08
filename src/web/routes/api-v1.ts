@@ -2534,17 +2534,44 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
   }
 })
 
-// GET /api/v1/sessions/:id/transcript?fresh=1 — the "open session" payload: a
-// slim transcript tail. Default: the sweep-exported file (synced to the cloud
-// companion). `fresh=1` (additive) makes the PRIMARY box read the session's
-// history right now — this powers the mobile live session view, which polls
-// with fresh=1 while open; sweeps alone are 60s-throttled. Cloud boxes have no
-// disk/SSH access to sessions and always serve the synced file.
+// GET /api/v1/sessions/:id/transcript?fresh=1&rich=1 — the "open session"
+// payload: a slim transcript tail. Default: the sweep-exported file (synced to
+// the cloud companion). `fresh=1` (additive) makes the PRIMARY box read the
+// session's history right now — this powers the mobile live session view, which
+// polls with fresh=1 while open; sweeps alone are 60s-throttled. Cloud boxes
+// have no disk/SSH access to sessions and always serve the synced file.
+//
+// `rich=1` (additive) adds the expanded-card fields (`inputPreview`,
+// `thinkingText`) to the rows of a tail this route BUILDS. It deliberately does
+// not force a build: the sweep-exported file cannot carry the fields (the sweep
+// writes the slim shape), and making `rich=1` read live would break the phone's
+// two-phase open, whose whole point is that phase one is a fast disk read. So
+// `rich=1` alone answers without the fields, and `fresh=1&rich=1` answers with
+// them — which is the order the client already fetches in. The sweep and the
+// bridge push stay slim because neither passes the option; `rich` gates only the
+// two fields, so it can never move the tail slice, the clip, or `truncated`.
 apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { readSessionTranscript, exportSessionTranscripts, buildSessionTranscript } = await import('../../core/session-projection.js')
     const sessionId = paramStr(req.params.id)
     const wantFresh = req.query.fresh === '1'
+    const wantRich = req.query.rich === '1'
+    // Passed to BOTH inline builds below, so a tail is never rich on one path and
+    // slim on the other. `{ rich: false }` is byte-for-byte the bare
+    // buildSessionTranscript(sessionId) both sites called before: `rich` gates
+    // only the two fields, never the tail slice, the clip, or `truncated`.
+    //
+    // ONE build per request, and that is load-bearing rather than tidy. The first
+    // version of this route got the fields by ALSO building with `{ full: true }`
+    // and harvesting from it, because `full` was the only flag that produced them.
+    // Measured end to end over HTTP (n=40, real session JSONLs): fine under the
+    // reader's 4 MB ceiling (3.1 → 5.2 ms p50, zero extra reads — the mtime parse
+    // cache serves the second call), but OVER it the reads double (19.9 → 29.7 ms
+    // p50, 3.99 → 7.98 MiB per request) because readSessionHistoryTailWindow
+    // deliberately writes no cache entry. Those are DAEMON reads, so on a remote
+    // whale it shipped the same 4 MB across the tunnel twice per phone refetch.
+    // `rich` exists so this route never has to do that; keep it at one build.
+    const buildOpts = { rich: wantRich }
     // Same safe-id alphabet readSessionTranscript enforces (ids land in filenames).
     const safeId = /^[A-Za-z0-9_-]+$/.test(sessionId)
     // Just-created session (record seeded, CLI not spawned yet — no pid, no
@@ -2568,7 +2595,7 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     }
     if (wantFresh && !CLOUD_MODE && safeId) {
       try {
-        res.json(await buildSessionTranscript(sessionId))
+        res.json(await buildSessionTranscript(sessionId, buildOpts))
         return
       } catch { /* unreachable session — fall back to the exported file */ }
     }
@@ -2598,7 +2625,7 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       const record = await getSessionByClaudeId(sessionId)
       if (record && (record.process_status === 'running' || record.process_status === 'idle')) {
         try {
-          transcript = await buildSessionTranscript(sessionId)
+          transcript = await buildSessionTranscript(sessionId, buildOpts)
         } catch { /* unreachable session — serve 404 below */ }
       }
       exportSessionTranscripts().catch(() => { /* background; throttled internally */ })

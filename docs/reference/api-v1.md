@@ -661,18 +661,19 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   also excluded; no row shape changed, the list just never contains them.
 - Provenance/laggy-replica semantics identical to `/tasks` (`syncedAt`,
   `503 unavailable` on a fresh companion).
-- `GET /api/v1/sessions/:id/transcript?fresh=1` →
+- `GET /api/v1/sessions/:id/transcript?fresh=1&rich=1` →
   `{ "sessionId", "exportedAt", "truncated", "messages": [ { role, text,
-  timestamp, kind?, detail?, resultPreview?, agent? } ] }` — a slim transcript
-  tail (last ~100 entries; text capped at 4 KB/row, or 12 KB for a row that
+  timestamp, kind?, detail?, resultPreview?, agent?, inputPreview?,
+  thinkingText? } ] }`: a slim transcript tail (last ~100 entries; text
+  capped at 4 KB/row, or 12 KB for a row that
   carries HTML, and the cut is made where it cannot leave half a tag behind so a
   rich reply is never truncated mid-attribute; `kind: "tool"` rows carry
   the tool name, plus additive `detail` (input summary) / `resultPreview`
   (clipped output) when available, and `kind: "thinking"` rows carry a
   one-line reasoning excerpt of ≤160+`…` chars). The heavier expanded-card fields
-  (`inputPreview`, `thinkingText`) are NOT on this slim tail: it is pushed to
+  (`inputPreview`, `thinkingText`) are OFF by default on this tail: it is pushed to
   the cloud companion under a 1 MB frame cap and polled while a session view is
-  open, so it stays small. They ride
+  open, so it stays small. Ask for them with `rich=1` (below); they also ride
   `GET /api/v1/conversations/:id/messages`, which reads the same transcript
   unclipped. `agent` (additive, 2026-08) appears on
   `Task`/`Agent` tool rows and names the delegated subagent (team agent name,
@@ -691,6 +692,35 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   the live stream over the daemon bridge when that session's host is
   connected (see below), and gracefully falls back to the exported file
   otherwise. `exportedAt` tells you which one you got.
+- `rich=1` (additive, 2026-09): add the two expanded-card fields to the rows
+  that can carry them. `kind: "tool"` rows gain `inputPreview` (the tool's INPUT
+  rendered as `key: value` lines, ≤2000+`…` chars, secret-looking values masked;
+  `detail` stays the collapsed ≤160 one-liner) and `kind: "thinking"` rows gain
+  `thinkingText` (a fuller reasoning excerpt, ≤2000+`…` chars, newlines kept,
+  clipped from the START of the block; `text` stays the collapsed ≤160 line).
+  Nothing else about the response changes: same ~100-entry tail, same 4 KB row
+  clip, same `truncated`. Parsed like `fresh`: **only the exact value `1` counts**,
+  anything else (`rich=true`, `rich=0`, a bare `rich`) reads as absent.
+  Two things to know before wiring a client to it:
+  - **Pair it with `fresh=1`.** `rich=1` decorates a tail the box BUILDS; it never
+    forces a build. The sweep-exported file is written in the slim shape and can
+    never carry the fields, so a cached (non-fresh) read answers without them.
+    That is deliberate: it keeps the two-phase open (cached paint, then a fresh
+    reconcile) fast. `fresh=1&rich=1` is the read that answers with them.
+  - **Cost, so you can choose a cadence.** Measured on a 50-row page: raw p90
+    36.8 → 54.3 KB, gzipped p90 13.8 → 17.8 KB, i.e. about +4 KB gzipped per
+    read. Fine at open/foreground/turn-end cadence (tens of reads per session);
+    if a client falls back to polling this every few seconds, that is ~48 KB/min
+    over cellular, and dropping `rich` from the polling path alone is the
+    reasonable answer. Server side it is cheap and reads nothing extra: the box
+    does the same single transcript read either way, and the added work is row
+    formatting only (measured +1.0 ms p50 on a normal session, +1.4 ms on a
+    worst case where every field maxes its 2000-char cap, and below the noise
+    floor on a session whose transcript is over 4 MB).
+  - **Not on a cloud companion.** A replica has no session on disk: without
+    `fresh` it serves the synced slim file, and with `fresh=1` it builds over
+    the daemon bridge, which is a separate parser that emits no `thinking` rows
+    at all and no `inputPreview`. `rich=1` is accepted and ignored there.
 
 ### Session talk (additive) — send into + stream out of a session
 

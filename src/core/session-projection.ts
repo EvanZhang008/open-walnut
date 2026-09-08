@@ -396,18 +396,44 @@ export interface BuildTranscriptOptions {
    * transcript IS this file, and its message ids are positional, so a sliding
    * 100-row tail made every id mean a different message after each turn).
    *
-   * NOT a new read cost: the underlying reader already parses the whole JSONL
-   * and caches it by mtime (session-history.ts readSessionHistoryInner) — the
-   * tail and the clip are applied AFTER that parse, purely to shrink what the
-   * sweep ships. The reader's own 4 MB byte ceiling still applies (a whale JSONL
-   * degrades to a bounded sliding window), so `full` removes the ROW cap, not
-   * every bound.
+   * NOT a new read cost: the reader has already parsed the JSONL before this
+   * option is consulted — the tail and the clip are applied AFTER that parse,
+   * purely to shrink what the sweep ships. The reader's own 4 MB byte ceiling
+   * still applies (a whale JSONL degrades to a bounded sliding window), so
+   * `full` removes the ROW cap, not every bound.
    *
-   * Also gates the expanded-card fields (`inputPreview`, `thinkingText`): they
-   * are bytes the bridge-pushed slim tail cannot afford. Reasoning at the tool
-   * row in buildSessionTranscript.
+   * One caveat, because it is easy to state too strongly: the reader's mtime
+   * parse cache (session-history.ts readSessionHistoryInner) covers files UNDER
+   * that 4 MB ceiling only. Over it, readSessionHistoryTailWindow deliberately
+   * writes no cache entry (session-history.ts, "Over-ceiling DISPLAY dead-set
+   * memo"), so a whale re-reads and re-parses its 4 MB window on EVERY build —
+   * measured 19.9ms vs 3.1ms p50 for an under-ceiling session. Nothing here is a
+   * reason to call this builder twice for one response.
+   *
+   * Implies {@link BuildTranscriptOptions.rich} — a consumer that pages a whole
+   * conversation wants the expanded-card fields too, and that is the shape
+   * GET /api/v1/conversations/:id/messages has shipped since 2026-09.
    */
   full?: boolean
+  /**
+   * Add the expanded-card fields (`inputPreview`, `thinkingText`) and NOTHING
+   * else: the TRANSCRIPT_TAIL slice, clipTranscriptText, and `truncated` all
+   * behave exactly as they do without this flag.
+   *
+   * Split out of `full` because `full` is not a field switch, and reading it as
+   * one is what produced the defect this exists to fix: the fields were only
+   * reachable via `full`, so GET /api/v1/sessions/:id/transcript (a ~100-row
+   * tail the phone refetches at every turn end) could not have them without also
+   * becoming the whole unclipped conversation. `rich` is what that route's
+   * `?rich=1` passes.
+   *
+   * Deliberately NOT set by the export sweep or the bridge push: the slim tail
+   * is pushed to the cloud under a 1MB frame cap and an oversized payload is
+   * SKIPPED (projection-cache.ts), which freezes the replica's copy of that
+   * session forever. Worst case these two fields add ~2KB per row. Reasoning at
+   * the tool row in buildSessionTranscript.
+   */
+  rich?: boolean
 }
 
 /**
@@ -442,6 +468,10 @@ export async function buildSessionTranscript(
     history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile) ?? []
   }
   const tail = opts?.full ? history : history.slice(-TRANSCRIPT_TAIL)
+  // `full` implies `rich`: a consumer paging a whole conversation wants the
+  // expanded-card fields, and that is the shape the mobile CHAT read has shipped.
+  // Computed once, ABOVE the loop, so the two field gates below cannot drift.
+  const wantRich = opts?.rich === true || opts?.full === true
   const messages: ProjectedTranscriptMessage[] = []
   for (const m of tail) {
     if (m.role === 'system') continue
@@ -459,8 +489,9 @@ export async function buildSessionTranscript(
     // a single joined string.
     if (m.thinking) {
       const line = thinkingLine(m.thinking)
-      // `full` only — see the tool row below for why the fat fields are gated.
-      const excerpt = opts?.full ? thinkingExcerpt(m.thinking) : undefined
+      // `rich` only (and `full`, which implies it) — see the tool row below for
+      // why the fat fields are gated at all, and why the gate is not `full`.
+      const excerpt = wantRich ? thinkingExcerpt(m.thinking) : undefined
       if (line) {
         messages.push({
           role: 'assistant', text: line, timestamp: m.timestamp, kind: 'thinking',
@@ -483,7 +514,8 @@ export async function buildSessionTranscript(
           ?? (typeof input.name === 'string' && input.name ? input.name : undefined)
           ?? (typeof input.subagent_type === 'string' && input.subagent_type ? input.subagent_type : undefined)
       }
-      // `inputPreview` and `thinkingText` ride the `full` read ONLY.
+      // `inputPreview` and `thinkingText` ride an OPT-IN read only (`rich`, or
+      // `full` which implies it) — never a default one.
       //
       // Not because of the row budget: TRANSCRIPT_TAIL slices `history`, i.e.
       // source MESSAGES, before this loop expands each one into rows — a message
@@ -500,11 +532,20 @@ export async function buildSessionTranscript(
       // (session-stream-v1 buildTranscriptViaBridge) is a separate implementation
       // that would then disagree with this one.
       //
-      // `full` has neither problem: no bridge push, no polling, one HTTP response
-      // to one client, and it is the read the mobile CHAT uses — the surface whose
-      // expanded card is what all of this exists for. A slim consumer that wants
-      // the fat fields should get its own option, with its own byte budget.
-      const inputPreview = opts?.full ? toolInputPreview(t.input) : undefined
+      // An opt-in read has neither problem: no bridge push, no sweep, one HTTP
+      // response to one client that asked.
+      //
+      // Why the gate is `rich` and not `full`, which is where it started. `full`
+      // ALSO drops the tail slice and the clip, so the ONE default-shaped read
+      // that needed these fields (GET /api/v1/sessions/:id/transcript?rich=1, a
+      // ~100-row tail the phone refetches at every turn end) could not opt in
+      // without also becoming the whole unclipped conversation. Routing it
+      // through `full` and narrowing afterwards is worse, not better: it means
+      // calling this builder twice per request, and over the 4 MB ceiling the
+      // second call re-reads and re-parses the window (measured 19.9 → 29.7ms
+      // p50, 3.99 → 7.98 MiB read per request) — and on a REMOTE session those
+      // are daemon reads, so it ships the same 4 MB across the tunnel twice.
+      const inputPreview = wantRich ? toolInputPreview(t.input) : undefined
       messages.push({
         role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool',
         ...(detail ? { detail } : {}),
