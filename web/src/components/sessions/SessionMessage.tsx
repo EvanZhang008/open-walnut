@@ -21,6 +21,8 @@ import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { BashToolCall } from './BashToolCall';
 import { parseSessionEnvelopes } from './session-envelope';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
+import { splitLeadingBanners } from './injected-banner';
+import { InjectedBannerRow } from './InjectedBannerRow';
 import { log } from '@/utils/log';
 
 // ── Edit Diff View ──
@@ -1042,6 +1044,19 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
     return <InjectedContextRow text={text} />;
   }
 
+  // Walnut sometimes PREPENDS a machine block ("[Conversation context]…") to the
+  // message it hands the CLI, so the transcript stores that block inside the
+  // human's own turn and the bubble used to open with prose they never typed.
+  // Peel the leading blocks off: they fold into disclosure rows above the prose,
+  // and everything downstream (envelope parsing, markdown, copy/pin/rewind) then
+  // works on the typed text alone. `null` for an ordinary message, so that
+  // message takes exactly the path it took before.
+  const bannerSplit = useMemo(
+    () => (isUser && text ? splitLeadingBanners(text) : null),
+    [isUser, text],
+  );
+  const bodyText = bannerSplit ? bannerSplit.body : text;
+
   // Detect image paths in assistant text and render inline previews
   const textImagePaths = useMemo(() => {
     if (!text || isUser) return [];
@@ -1053,8 +1068,8 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   // pure and returns null for anything that is not an envelope, so an ordinary
   // message takes exactly the path it took before.
   const envelopeSegments = useMemo(
-    () => (isUser && text ? parseSessionEnvelopes(text) : null),
-    [isUser, text],
+    () => (isUser && bodyText ? parseSessionEnvelopes(bodyText) : null),
+    [isUser, bodyText],
   );
 
   // `<suggest>` action cards in a session's own answer: a session's prose can
@@ -1085,25 +1100,27 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   const rewind = useSessionRewindApi();
   const msgId = message.msgId ?? message.walnutMessageId;
   const rowMenuItems = (): ContextMenuItem[] => {
-    const hasText = !!text && !!text.trim();
+    // bodyText, not text: copying/pinning a turn must yield what the human typed,
+    // never the machine block Walnut prepended to it.
+    const hasText = !!bodyText && !!bodyText.trim();
     return [
-      { key: 'copy', label: 'Copy message', when: hasText, onSelect: () => { void copyTextRobust(text!); } },
+      { key: 'copy', label: 'Copy message', when: hasText, onSelect: () => { void copyTextRobust(bodyText); } },
       {
         key: 'copy-rich', label: 'Copy as rich text', when: hasText,
         title: 'Keeps formatting when pasted into a doc or email',
-        onSelect: () => { void copyRichText(markdownToRichHtml(text!), text!); },
+        onSelect: () => { void copyRichText(markdownToRichHtml(bodyText), bodyText); },
       },
       { divider: true },
       {
         key: 'pin', label: pins.isPinned(msgId) ? 'Unpin from outline' : 'Pin to outline', when: !!msgId,
-        onSelect: () => pins.toggle({ msgId, role, text, timestamp }),
+        onSelect: () => pins.toggle({ msgId, role, text: bodyText, timestamp }),
       },
       {
         // Same predicate as the hover strip: only the user's own messages, and
         // only CLI transcript uuids, are rewindable.
         key: 'rewind', label: 'Rewind to here',
         when: rewind.available && isUser && !!msgId && UUID_RE.test(msgId),
-        onSelect: () => rewind.request(msgId!, pinLabelFor(text, 'this message')),
+        onSelect: () => rewind.request(msgId!, pinLabelFor(bodyText, 'this message')),
       },
       { divider: true },
       {
@@ -1115,15 +1132,22 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
 
   return (
     <div
-      className={`session-msg ${envelopeSegments ? 'session-msg-envelope'
+      className={`session-msg ${envelopeSegments || (bannerSplit && !bodyText) ? 'session-msg-envelope'
         : isUser ? 'session-msg-user' : 'session-msg-assistant'}`}
       onContextMenu={(e) => rowMenu.open(e, undefined)}
     >
       <div className="session-msg-content" onClick={handleContentClick}>
         {thinking && <SessionThinking text={thinking} />}
-        {text && envelopeSegments ? (
+        {/* Folded machine blocks first, then the human's words — the typed text
+            stays the dominant part of the bubble. A turn that was ONLY banners
+            drops the bubble chrome entirely (session-msg-envelope above): there is
+            no human message there to attribute one to. */}
+        {bannerSplit?.banners.map((banner, i) => (
+          <InjectedBannerRow key={`${banner.name}-${i}`} banner={banner} sessionCwd={sessionCwd} />
+        ))}
+        {bodyText && envelopeSegments ? (
           <SessionEnvelopeSegments segments={envelopeSegments} sessionCwd={sessionCwd} />
-        ) : text && (useSegments ? (
+        ) : bodyText && (useSegments ? (
           <SuggestSegments segments={segments} cwd={sessionCwd} scope={message.msgId} />
         ) : isUser ? (
           // The rich path is for MODEL output only. A person's own text goes
@@ -1133,9 +1157,9 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
           // placeholder inside a user message, and it would also make anything
           // they copied off a web page render as DOM rather than as the text
           // they can see they pasted.
-          <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(text, sessionCwd) }} />
+          <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(bodyText, sessionCwd) }} />
         ) : (
-          <RichMarkdown text={text} cwd={sessionCwd} scope={message.msgId} />
+          <RichMarkdown text={bodyText} cwd={sessionCwd} scope={message.msgId} />
         ))}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render
@@ -1188,7 +1212,7 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
         <MessageMetaRow
           msgId={msgId}
           role={role}
-          text={text}
+          text={bodyText}
           timestamp={timestamp}
           alwaysVisible={showCopyActions}
         />

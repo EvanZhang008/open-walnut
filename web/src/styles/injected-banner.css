@@ -1,0 +1,36 @@
+/**
+ * Folded machine-banner row inside a session transcript bubble.
+ *
+ * The row reuses the panel's `tool-run-*` disclosure markup, whose muted grey
+ * (`--fg-muted`, #86868B) is tuned for the PAGE background. Inside a user bubble
+ * the backdrop is `--accent` (#007AFF) and that grey measures 1.11:1 — legible in
+ * a design mock, invisible on screen. These rules only re-tone the row when it
+ * sits in a user bubble; a banner-only turn renders outside one and keeps the
+ * ordinary muted look.
+ *
+ * Near-white text with a translucent pill, deliberately at 12px: the human's own
+ * words stay the dominant thing in the bubble by SIZE and weight, not by being the
+ * only readable thing in it.
+ */
+
+.session-msg-user .injected-banner-row .tool-run-toggle {
+  color: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.session-msg-user .injected-banner-row .tool-run-toggle:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* The expanded recap rides `.chat-tool-block-result`, which brings its own light
+   card + `--fg-secondary` text, so it needs no re-toning here. Links are the one
+   thing globals restyles for the blue backdrop; pull them back to the card's own
+   accent so they stay legible on it. */
+.session-msg-user .injected-banner-row .tool-run-body .markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+}

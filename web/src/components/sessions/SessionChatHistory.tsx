@@ -8,6 +8,7 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
+import { typedUserText } from './injected-banner';
 import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
@@ -3385,7 +3386,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               <span className="session-initial-prompt-label">Initial Prompt</span>
             </div>
             <div className="session-msg-content">
-              <div className="markdown-body">{initialPrompt}</div>
+              {/* The typed words only: a stored turn can open with a machine block
+                  Walnut prepended, and this preview has no room to fold one. */}
+              <div className="markdown-body">{typedUserText(initialPrompt)}</div>
             </div>
           </div>
         )}

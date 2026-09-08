@@ -35,6 +35,7 @@ import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNL
 import { openPopout } from '@/popout/openPopout';
 import { navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
+import { typedUserText } from './injected-banner';
 // PlanPreviewSection replaced by inline plan popover in meta bar
 import { ChatInput } from '@/components/chat/ChatInput';
 import { SideQuestionDrawer } from '@/components/sessions/SideQuestionDrawer';
@@ -1913,7 +1914,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                       onToggleNotes={() => setNotesOpen(o => !o)}
                       messagesOpen={messagesOpen}
                       onToggleMessages={() => setMessagesOpen(o => !o)}
-                      msgCount={historyMessages.filter(m => m.role === 'user' && m.text.trim()).length}
+                      // typedUserText: a turn that was only a machine block Walnut
+                      // prepended is not one of "my messages", so it must not be
+                      // counted here either — the list below drops it.
+                      msgCount={historyMessages.filter(m => m.role === 'user' && typedUserText(m.text).trim()).length}
                       onRestart={handleRestart}
                       restartBusy={restartBusy}
                       onTerminate={handleTerminate}

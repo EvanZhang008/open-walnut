@@ -290,6 +290,27 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Injected-banner fixture. Its OWN task, so the spec opens exactly one
+        // session from the kebab (pw-task-001 owns hundreds).
+        id: 'pw-task-banner',
+        title: 'Injected banner fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-banner-session'],
+        active_session_ids: [],
+        session_id: 'pw-banner-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-changed',
         title: 'Changed fixture task',
         status: 'in_progress',
@@ -1292,6 +1313,61 @@ await fs.writeFile(
       ].join('\n'),
     )
   }
+
+  // Injected-banner fixture (session-injected-banner.spec.ts): a transcript whose
+  // user turns carry the machine block Walnut prepends to a lane message. The
+  // banner markers come from the PRODUCTION constants, so renaming them server
+  // side breaks this spec instead of quietly putting the recap back inside the
+  // human's chat bubble. Five turns, one per shape the splitter must survive.
+  {
+    const { CATCH_UP_BANNER_OPEN, CATCH_UP_BANNER_CLOSE } = await import('../../../src/core/chat-history.js')
+    const recap = [
+      '## Conversation turns you have not seen (injected by Walnut)',
+      'These turns are part of THIS conversation and the user can see them.',
+      '',
+      '### User',
+      'BANNER_RECAP_MARKER',
+    ].join('\n')
+    // Composed exactly as src/core/sessions/lane-turn.ts composes it.
+    const wrap = (typed: string) =>
+      `${CATCH_UP_BANNER_OPEN}\n${recap}\n${CATCH_UP_BANNER_CLOSE}\n\n${typed}`
+    const turns = [
+      // ① ordinary turn — proves the fix changes nothing for a plain message
+      'BANNER_PLAIN_TYPED and nothing else.',
+      // ② the defect: block + the words the human typed
+      wrap('BANNER_TYPED_ONE please carry on.'),
+      // ③ block with NO typed text at all
+      `${CATCH_UP_BANNER_OPEN}\n${recap}\n${CATCH_UP_BANNER_CLOSE}`,
+      // ④ two banner kinds stacked above one message
+      `[Task Context]\nid: pw-task-banner\nBANNER_TASK_MARKER\n[/Task Context]\n\n${wrap('BANNER_TYPED_TWO after two blocks.')}`,
+      // ⑤ truncated write: no terminator, so the message must stay WHOLE
+      `${CATCH_UP_BANNER_OPEN}\n${recap}\n\nBANNER_TRUNCATED_TYPED must still be readable.`,
+    ]
+    await fs.writeFile(
+      path.join(jsonlDir, 'pw-banner-session.jsonl'),
+      [
+        ...turns.flatMap((text, i) => [
+          JSON.stringify({
+            type: 'user',
+            uuid: `0199cd01-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            parentUuid: i === 0 ? null : `0199cd02-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
+            sessionId: 'pw-banner-session',
+            timestamp: new Date(sessionFixtureNow - 120_000 + i * 2_000).toISOString(),
+            message: { role: 'user', content: text },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            uuid: `0199cd02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            parentUuid: `0199cd01-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            sessionId: 'pw-banner-session',
+            timestamp: new Date(sessionFixtureNow - 119_000 + i * 2_000).toISOString(),
+            message: { role: 'assistant', content: [{ type: 'text', text: `Answered turn ${i + 1}.` }] },
+          }),
+        ]),
+        '',
+      ].join('\n'),
+    )
+  }
 }
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
@@ -1620,6 +1696,21 @@ await fs.writeFile(
         messageCount: 5,
         cwd: vscodeFixtureRoot,
         title: 'Envelope inbox: cross-session coordination',
+      },
+      {
+        // Injected-banner fixture. Its transcript (written above) carries the
+        // machine block Walnut prepends to a lane message, in five shapes.
+        claudeSessionId: 'pw-banner-session',
+        taskId: 'pw-task-banner',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 100_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 130_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 100_000).toISOString(),
+        messageCount: 5,
+        cwd: vscodeFixtureRoot,
+        title: 'Injected banner: lane catch-up rendering',
       },
       {
         // Same-browser task-store fixture — see pw-task-store-sync above.

@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { SessionHistoryMessage } from '@/types/session';
+// typedUserText: a stored turn can open with a machine block Walnut prepended,
+// which would otherwise be all this one-line preview ever shows.
+import { typedUserText } from './injected-banner';
 
 interface UserMessagesSummaryProps {
   messages: SessionHistoryMessage[];
@@ -18,10 +21,14 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
   const [collapsed, setCollapsed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Extract user messages with their original index in the full messages array
-  const userMessages = messages
-    .map((m, i) => ({ message: m, originalIndex: i }))
-    .filter(({ message }) => message.role === 'user' && message.text.trim());
+  // Extract user messages with their original index in the full messages array.
+  // A turn that was ONLY an injected block has no typed text and is not one of
+  // "my messages" at all, so it drops out here.
+  const userMessages = messages.flatMap((message, originalIndex) => {
+    if (message.role !== 'user') return [];
+    const text = typedUserText(message.text);
+    return text.trim() ? [{ message, originalIndex, text }] : [];
+  });
 
   // Always scroll to bottom to show latest messages
   useEffect(() => {
@@ -51,7 +58,7 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
       </button>
       {!collapsed && (
         <div className="user-messages-summary-list" ref={scrollRef}>
-          {userMessages.map(({ message, originalIndex }) => (
+          {userMessages.map(({ message, originalIndex, text }) => (
             <div
               key={originalIndex}
               className={`user-messages-summary-item${onMessageClick ? ' user-messages-summary-item-clickable' : ''}`}
@@ -61,7 +68,7 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
                 {formatTime(message.timestamp)}
               </span>
               <span className="user-messages-summary-text">
-                {message.text}
+                {text}
               </span>
             </div>
           ))}

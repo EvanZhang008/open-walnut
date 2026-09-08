@@ -18,6 +18,8 @@
  * only the grey bubble disappears sooner. Stuck-forever is strictly worse.)
  */
 
+import { typedUserText } from './injected-banner';
+
 /** Minimal shapes — structural, so the component's richer types just fit. */
 interface PersistedLike {
   role: string;
@@ -94,12 +96,55 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
 
   const scanStart = dedupScanStart(prevMsgLen, messages.length);
   const newUserTextCounts = new Map<string, number>();
+  // Walnut PREPENDS machine banners to some sends ("[Conversation context]…",
+  // lane-turn.ts), so the persisted echo is banner + typed text while the bubble
+  // holds only what the human typed — no text pass can ever match it. The id path
+  // above covers the normal delivery, but it is the ONLY thing that does, and the
+  // registry is in-memory: a server restart drops the claim and this used to leave
+  // the user looking at two copies of their own message.
+  //
+  // So each banner-carrying row is ALSO indexed by its peeled text, as an ALIAS of
+  // the key it already lives under — never as a second entry. Consuming through the
+  // alias decrements the row's own count, so one persisted row still accounts for
+  // exactly one bubble, which is the multiset invariant every pass below rests on.
+  // For a row with no banner the peel is identical to the text, `peeledToRaw` stays
+  // empty, and dedup behaves byte-for-byte as it did before.
+  const peeledToRaw = new Map<string, string[]>();
   for (let i = scanStart; i < messages.length; i++) {
     if (messages[i].role === 'user') {
       const t = messages[i].text;
       newUserTextCounts.set(t, (newUserTextCounts.get(t) ?? 0) + 1);
+      const peeled = typedUserText(t);
+      // A banner-ONLY row peels to '' — it holds nothing a human typed, so it must
+      // never be able to account for a bubble.
+      if (peeled && peeled !== t) {
+        const raws = peeledToRaw.get(peeled);
+        if (raws) raws.push(t);
+        else peeledToRaw.set(peeled, [t]);
+      }
     }
   }
+
+  /**
+   * Consume one persisted row matching `key`, by its own text or via a banner peel.
+   * Returns false when the windowed multiset cannot account for it — the caller
+   * must then leave the bubble on screen.
+   */
+  const takeText = (key: string): boolean => {
+    const direct = newUserTextCounts.get(key);
+    if (direct && direct > 0) {
+      newUserTextCounts.set(key, direct - 1);
+      return true;
+    }
+    for (const raw of peeledToRaw.get(key) ?? []) {
+      const n = newUserTextCounts.get(raw);
+      if (n && n > 0) {
+        newUserTextCounts.set(raw, n - 1);
+        return true;
+      }
+    }
+    return false;
+  };
 
   // Pass 1 — per-bubble evidence. `state[i]` records WHICH evidence proved bubble
   // i, so the merged-run passes below know what is still open and what an
@@ -112,10 +157,7 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
     const line = m.queueId ? persistedIdText.get(m.queueId) : undefined;
     if (line !== undefined) { state.push('id'); idLine.push(line); continue; }
     idLine.push(undefined);
-    const key = dedupKeyOf(m);
-    const c = newUserTextCounts.get(key);
-    if (c && c > 0) {
-      newUserTextCounts.set(key, c - 1);
+    if (takeText(dedupKeyOf(m))) {
       state.push('text');
       continue;
     }
@@ -148,8 +190,7 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   const claimLine = (line: string) => {
     // Only lines INSIDE the scan window are in the multiset. An id-bound line from
     // outside it has no entry — nothing to retire, and pass 4 can't reach it either.
-    const n = newUserTextCounts.get(line);
-    if (n && n > 0) newUserTextCounts.set(line, n - 1);
+    takeText(line);
   };
   for (let i = 0; i < optimistic.length; i++) {
     if (state[i] !== 'id') continue;
@@ -178,9 +219,9 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
       texts.push(dedupKeyOf(optimistic[j]));
       let hit = false;
       for (const sep of SEPARATORS) {
-        const joined = texts.join(sep);
-        const n = newUserTextCounts.get(joined);
-        if (n && n > 0) { newUserTextCounts.set(joined, n - 1); hit = true; break; }
+        // takeText, so a merged batch delivered behind a banner is provable too:
+        // the row peels to the same join the bubbles reconstruct.
+        if (takeText(texts.join(sep))) { hit = true; break; }
       }
       if (hit) {
         for (let k = i; k <= j; k++) state[k] = 'text';
