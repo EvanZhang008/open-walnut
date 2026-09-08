@@ -1552,6 +1552,20 @@ export interface ConversationMeta {
    *  excluded from the oldest-is-main self-heal — a recovered thread must
    *  never silently capture the notification/cron stream. */
   recovered?: boolean;
+  /** Per-conversation model override for the IN-PROCESS engine (the model the
+   *  agent loop runs this conversation's turns on). Absent = follow
+   *  `config.agent.main_model`. Written by PUT /api/v1/chat/model.
+   *
+   *  Deliberately NOT used on the lane engine: there the conversation's turns run
+   *  inside a `claude` session, and that session record already owns model/effort
+   *  (one switch, reachable through /sessions/:id/model). Two writable copies of
+   *  "which model" would drift the moment either side changed. */
+  model?: string;
+  /** Per-conversation reasoning-effort override, same ownership rule as `model`.
+   *  Accepted and persisted for every engine, but the in-process agent loop has
+   *  no effort concept today (nothing in src/agent/ reads it), so it is a no-op
+   *  there rather than something faked into the request. */
+  effort?: string;
 }
 
 /** Per-agent conversation registry, persisted as _index.json. */

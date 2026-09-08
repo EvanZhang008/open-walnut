@@ -1581,9 +1581,12 @@ async function runApiV1Turn(
     // mirroring chat.ts. A failure to read config degrades to the in-process
     // loop — never "no engine".
     let useLaneEngine = false
+    /** Kept for the in-process model override below: the same read, not a second one. */
+    let engineConfig: import('../../core/types.js').Config | undefined
     try {
       const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-      useLaneEngine = resolveAgentEngineProvider(await getConfig()) === 'claude-code'
+      engineConfig = await getConfig()
+      useLaneEngine = resolveAgentEngineProvider(engineConfig) === 'claude-code'
     } catch (err) {
       log.web.warn('api-v1 engine resolution failed; using the in-process loop', {
         conversationId, turnId, agentId, error: err instanceof Error ? err.message : String(err),
@@ -1699,6 +1702,31 @@ async function runApiV1Turn(
     // skipped entirely on the lane path above, which never runs the in-process loop.
     const { runAgentLoop } = await import('../../agent/loop.js')
 
+    // Per-conversation model override (PUT /api/v1/chat/model). Absent → no
+    // modelConfig at all, so loop.ts builds its own from config exactly as before.
+    // When present, the object mirrors the loop's default field-for-field and only
+    // `model` differs: overriding the provider/region/maxTokens too would silently
+    // change how a turn is billed and framed, which the user did not ask for.
+    // (`effort` is intentionally NOT threaded — the in-process loop has no effort
+    // concept; see the PUT route's comment.)
+    let modelOverride: { model: string; provider?: string; region?: string; maxTokens?: number } | undefined
+    try {
+      const { getConversationModel } = await import('../../core/conversations.js')
+      const row = await getConversationModel(agentId, conversationId)
+      if (row.model) {
+        modelOverride = {
+          model: row.model,
+          provider: engineConfig?.agent?.main_provider,
+          region: engineConfig?.agent?.region,
+          maxTokens: engineConfig?.agent?.maxTokens,
+        }
+      }
+    } catch (err) {
+      log.web.warn('api-v1 conversation model override unreadable; using the config default', {
+        conversationId, turnId, agentId, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+
     try {
       const result = await runAgentLoop(userContent, history, {
         onTextDelta: (delta) => {
@@ -1741,6 +1769,7 @@ async function runApiV1Turn(
         conversationId,
         ...(agentSystem && { system: agentSystem }),
         ...(agentTools && { tools: agentTools }),
+        ...(modelOverride && { modelConfig: modelOverride }),
       })
 
       // newMessages = [userPrompt, ...ai]; the user prompt is already persisted.

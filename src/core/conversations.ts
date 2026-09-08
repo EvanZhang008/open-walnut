@@ -288,9 +288,15 @@ function collapseTwinsForWrite(
   // that happens to be newest. Deleting a loser that carried isMain would retire
   // the agent's main conversation (nothing can recreate that flag) and a lost
   // `pinned` silently un-pins the chat, so both are OR-ed into the survivor.
+  // model/effort are sticky for the same reason (a user's explicit pick, and the
+  // row that carries it is often NOT the one a later send bumps) — but they are
+  // values, not flags, so "the winner's own value wins, else inherit" is the
+  // analogue of the OR above. Never overwrite a value the winner already has.
   for (const loser of losers) {
     if (loser.isMain) winner.isMain = true;
     if (loser.pinned) winner.pinned = true;
+    if (winner.model === undefined && loser.model !== undefined) winner.model = loser.model;
+    if (winner.effort === undefined && loser.effort !== undefined) winner.effort = loser.effort;
   }
   if (losers.length > 0) {
     index.conversations = index.conversations.filter((c) => c.id !== id || c === winner);
@@ -712,6 +718,71 @@ export async function renameConversation(
     await writeIndex(agentId, index);
     return meta;
   });
+}
+
+/**
+ * Set (or clear) this conversation's model / effort override.
+ *
+ * `null` clears the field, so the conversation falls back to
+ * `config.agent.main_model` — the same "no override" state a conversation starts
+ * in. An `undefined` field is left untouched, so a caller can set one without
+ * knowing the other.
+ *
+ * Same winner discipline as every other writer here (pickConversationRow +
+ * collapseTwinsForWrite): a pick that landed on a twin row the read path ignores
+ * would look like it did nothing, which is exactly how the title used to
+ * oscillate.
+ */
+export async function setConversationModel(
+  agentId: string,
+  conversationId: string,
+  patch: { model?: string | null; effort?: string | null },
+): Promise<ConversationMeta> {
+  validateConversationId(conversationId);
+  await migrateIfNeeded(agentId);
+  return withIndexLock(agentId, async () => {
+    const index = await readIndex(agentId);
+    const meta = collapseTwinsForWrite(index, conversationId);
+    if (!meta) throw new Error(`Conversation not found: ${conversationId}`);
+    if (patch.model !== undefined) {
+      if (patch.model === null || patch.model === '') delete meta.model;
+      else meta.model = patch.model;
+    }
+    if (patch.effort !== undefined) {
+      if (patch.effort === null || patch.effort === '') delete meta.effort;
+      else meta.effort = patch.effort;
+    }
+    await writeIndex(agentId, index);
+    log.agent.info('conversation model override set', {
+      agentId, conversationId, model: meta.model ?? null, effort: meta.effort ?? null,
+    });
+    return meta;
+  });
+}
+
+/**
+ * This conversation's model/effort override, or `{}` when it has none. Read-only
+ * and lock-free (same winner rule as listConversations), so the turn path can
+ * ask on every turn without serializing behind an index write.
+ */
+export async function getConversationModel(
+  agentId: string,
+  conversationId: string,
+): Promise<{ model?: string; effort?: string }> {
+  try {
+    validateConversationId(conversationId);
+    const index = await readIndex(agentId);
+    const meta = pickConversationRow(index.conversations, conversationId);
+    if (!meta) return {};
+    return {
+      ...(meta.model !== undefined ? { model: meta.model } : {}),
+      ...(meta.effort !== undefined ? { effort: meta.effort } : {}),
+    };
+  } catch {
+    // A missing/garbage index must degrade to "no override" — the turn then runs
+    // on the config default, which is what it did before this field existed.
+    return {};
+  }
 }
 
 /** Pin or unpin a conversation. */

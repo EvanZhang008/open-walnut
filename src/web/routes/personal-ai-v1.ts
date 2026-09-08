@@ -10,7 +10,8 @@
  *   POST   /conversations/:id/answer { answers }   → { ok: true }
  *   PUT    /conversations/active { conversationId } → { activeConversationId }
  *   GET    /chat/stats?agentId&conversationId      → conversation size stats
- *   GET    /chat/engine?agentId&conversationId     → { engine, sessionId? } (read-only)
+ *   GET    /chat/engine?agentId&conversationId     → { engine, sessionId?, switchable?, models? }
+ *   PUT    /chat/model?agentId&conversationId      → { model, effort } (in-process engine)
  *   POST   /chat/clear?agentId&conversationId      → { ok: true }
  *   POST   /chat/compact?agentId&conversationId    → { ok, async|alreadyRunning } (Wave 3)
  *
@@ -19,7 +20,11 @@
  *
  * Cloud companion (REPLICA): Class A — the replica runs its OWN Personal AI agent
  * (the v1 chat endpoints already work there), so these operate on the local
- * conversation store / turn queue directly. No bridge.
+ * conversation store / turn queue directly. No bridge. The two ENGINE routes are
+ * the exception: a chat turn is relayed to the primary, so which engine (and which
+ * model) answers is a fact about the primary. Those relay, and when the primary
+ * cannot be reached they answer 503 `primary_unreachable` — never this box's own
+ * config, which would describe a box that will not answer.
  *
  * Stop semantics: the WS chat keys AbortControllers per client socket; a REST
  * client has no socket identity, so stop aborts ALL of the agent's active
@@ -35,6 +40,9 @@ import { log } from '../../logging/index.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { EventNames } from '../../core/event-bus.js'
 import { listConversations } from '../../core/conversations.js'
+// Type-only (erased at compile time): session-controls.ts dynamically imports THIS
+// module for the `server.chat.model` relay, so a value import would be a cycle.
+import type { SessionControlAction } from '../../core/sessions/session-controls.js'
 
 export const personalAiV1Router = Router()
 
@@ -129,47 +137,137 @@ async function resolveChatTarget(req: Request, res: Response): Promise<{ agentId
 }
 
 /**
- * On a REPLICA, ask the primary the engine question and answer with its reply.
- * Returns true when it answered (so the caller returns), false on the primary
- * itself or when the bridge can't serve it.
+ * On a REPLICA, run one chat control action on the primary and answer with its
+ * reply. Returns true when it answered (so the caller returns), false only on the
+ * primary itself.
  *
- * Degrading to the local answer rather than erroring is deliberate: with the
- * bridge down a relayed turn falls back to this box's in-process loop, so the
- * local engine really is the one that would answer the next message. The answer
- * stays honest in both states.
+ * A REPLICA NEVER ANSWERS THESE FROM ITS OWN CONFIG. That used to be the
+ * degradation ("the bridge is down, so this box's fallback loop really would
+ * answer the next message"), and it was wrong twice over: a relayed turn is what
+ * actually happens, and the bridge-down window is measured in seconds while the
+ * pill it mislabelled stays on screen. The phone's model pill therefore described
+ * a box that would never answer — and it locked the control with that box's
+ * reason. A 503 the client retries is the honest answer, and it matches what
+ * GET /conversations/:id/messages already does for the same hop
+ * (`primary_unreachable`, `retry: true`).
+ *
+ * A genuine DOMAIN failure from the primary (it ran the action and refused) is
+ * passed through with its own status and code — that is a real answer about the
+ * answering box, not a reachability problem.
  */
-async function relayChatEngine(
+async function relayChatToPrimary(
   res: Response,
+  action: Extract<SessionControlAction, 'server.chat.engine' | 'server.chat.model'>,
   ids: { agentId: string; conversationId: string },
-  ensure: boolean,
+  params: Record<string, unknown>,
+  isValidResult: (result: Record<string, unknown>) => boolean,
 ): Promise<boolean> {
   if (!CLOUD_MODE) return false
+  const unreachable = (reason: string): void => {
+    log.web.info('chat control relay unreachable — reporting the primary, not this box', {
+      ...ids, action, reason,
+    })
+    sendError(res, 503, 'primary_unreachable',
+      'Your primary box is unreachable, so the chat engine could not be reached yet',
+      { retry: true })
+  }
   try {
     const { callPrimaryControl } = await import('./v1-control-relay.js')
     // '__server__' is the established box-level sid for a `server.*` action (the
     // daemon executes nothing itself and forwards the action opaquely).
     const outcome = await callPrimaryControl(
-      'server.chat.engine' as never,
+      action,
       '__server__',
-      { agentId: ids.agentId, conversationId: ids.conversationId, ...(ensure ? { ensure: true } : {}) },
+      { agentId: ids.agentId, conversationId: ids.conversationId, ...params },
       15_000,
     )
     if (!outcome.ok) {
-      log.web.info('chat engine relay refused — answering from this box', {
-        ...ids, ensure, failureKind: outcome.failure.kind, reason: outcome.failure.message,
-      })
-      return false
+      // needs_upgrade (an old primary that has never heard of this action) and
+      // bridge_offline are both "nobody who can answer is reachable" — same 503,
+      // and both self-heal on the primary's next deploy/reconnect.
+      if (outcome.failure.kind === 'error') {
+        sendError(res, outcome.failure.status, outcome.failure.code, outcome.failure.message)
+        return true
+      }
+      unreachable(`${outcome.failure.kind}: ${outcome.failure.message}`)
+      return true
     }
-    if (typeof outcome.result?.engine !== 'string') return false
+    if (!isValidResult(outcome.result)) {
+      // A truthy-but-wrong body must never be handed to the phone as if it were
+      // the contract (the iOS client fails the whole decode on a shape miss).
+      unreachable('the primary answered in an unexpected shape')
+      return true
+    }
     res.json(outcome.result)
     return true
   } catch (err) {
-    // Bridge offline, or an OLD primary that doesn't know this action ("Unknown
-    // control action"). Fall through to the local answer.
-    log.web.info('chat engine relay unavailable — answering from this box', {
-      ...ids, ensure, error: err instanceof Error ? err.message : String(err),
+    unreachable(err instanceof Error ? err.message : String(err))
+    return true
+  }
+}
+
+/** The engine question, relayed. `ensure: true` asks the primary to mint the lane. */
+function relayChatEngine(
+  res: Response,
+  ids: { agentId: string; conversationId: string },
+  ensure: boolean,
+): Promise<boolean> {
+  return relayChatToPrimary(
+    res, 'server.chat.engine', ids,
+    ensure ? { ensure: true } : {},
+    (result) => typeof result.engine === 'string',
+  )
+}
+
+/** One selectable row, the SAME item shape core/sessions/session-controls.ts
+ *  ModelOption uses (that is what GET /sessions/:id/model-options returns and
+ *  what the phone's picker already decodes). */
+interface ChatModelOption {
+  id: string
+  label: string
+  supportsEffort?: boolean
+}
+
+/**
+ * The models the IN-PROCESS loop can actually run, in the picker's item shape.
+ *
+ * Deliberately NOT the lane picker's catalog (sessionModelsAsCatalog /
+ * computeModelOptions). Those rows are `claude` CLI switch strings ('sonnet-1m',
+ * 'opus') and the CLI is the only thing that can resolve them; the in-process loop
+ * calls a provider adapter directly and looks its model up in MODEL_CATALOG, where
+ * the ids are per-provider ('global.anthropic.claude-opus-4-8' on bedrock, plain
+ * aliases on claude_cli). Offering a lane row here would have validated fine and
+ * then failed at the wire on the next turn — a confident wrong answer.
+ *
+ * So: the same list Settings offers for `agent.main_model`
+ * (getModelsForProvider(<the resolved main provider>) + the user's config
+ * overrides), which is by construction the set this loop resolves. `supportsEffort`
+ * is false because the in-process loop has no effort concept at all.
+ *
+ * Note: for a provider whose catalog is discovered at runtime (ollama) the static
+ * baseline is empty; this endpoint does not probe a local server (a GET on the
+ * chat path must not wait on one).
+ */
+async function inProcessModelOptions(
+  config: import('../../core/types.js').Config,
+): Promise<ChatModelOption[]> {
+  try {
+    const { resolveMainProviderName } = await import('../../agent/providers/default-provider.js')
+    const { getModelsForProvider } = await import('../../agent/providers/model-catalog.js')
+    const provider = resolveMainProviderName(config)
+    const overrides = config.providers?.[provider]?.models
+    return getModelsForProvider(provider, overrides).map((m) => ({
+      id: m.id,
+      label: m.label ?? m.id,
+      supportsEffort: false,
+    }))
+  } catch (err) {
+    // An empty list means "not switchable yet", which is degraded but honest; a
+    // throw here would take the whole engine question down with it.
+    log.web.warn('in-process model catalog unavailable', {
+      error: err instanceof Error ? err.message : String(err),
     })
-    return false
+    return []
   }
 }
 
@@ -187,14 +285,18 @@ async function relayChatEngine(
 //
 // READ-ONLY on purpose: it never mints a lane. Minting is a side effect of
 // sending, and a picker that spawns a CLI just by being opened would start a
-// process the user never asked for. Hence `sessionId: null` until the
-// conversation has had its first turn: the client shows the model as read-only
-// (or hides the pill) rather than fabricating one.
+// process the user never asked for. Hence `sessionId: null` on the LANE engine
+// until the conversation has had its first turn: the client shows the model as
+// read-only (or hides the pill) rather than fabricating one.
 //
 // `engine: 'in-process'` means the config is NOT on the lane engine, so there is
-// no per-conversation session and nothing to switch: the model is whatever
-// `config.agent.main_model` says, which is a config-level fact and not this
-// endpoint's to change.
+// no per-conversation `claude` session. The model is still SWITCHABLE
+// (`switchable: true` + a `models` catalog + PUT /chat/model): it used to be
+// reported as a read-only config-level fact, and the pill said so out loud ("the
+// model comes from the server's config"), which is not something a user should
+// have to open Settings to change for one conversation. The override lives on the
+// conversation row; `model` here is the EFFECTIVE id (row override, else the config
+// default), so a client can render the pill from this response alone.
 personalAiV1Router.get('/chat/engine', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveChatTarget(req, res)
@@ -207,19 +309,29 @@ personalAiV1Router.get('/chat/engine', async (req: Request, res: Response, next:
     const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
     const config = await getConfig()
     if (resolveAgentEngineProvider(config) !== 'claude-code') {
+      const { getConversationModel } = await import('../../core/conversations.js')
+      const row = await getConversationModel(ids.agentId, ids.conversationId)
       res.json({
         engine: 'in-process',
         sessionId: null,
-        ...(config.agent?.main_model ? { model: config.agent.main_model } : {}),
+        switchable: true,
+        model: row.model ?? config.agent?.main_model ?? null,
+        effort: row.effort ?? null,
+        models: await inProcessModelOptions(config),
       })
       return
     }
     const { personalAiLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
     const { getSessionByLane } = await import('../../core/session-tracker.js')
     const record = await getSessionByLane(personalAiLaneKey(ids.agentId, ids.conversationId))
+    const sessionId = record?.claudeSessionId ?? null
     res.json({
       engine: 'lane',
-      sessionId: record?.claudeSessionId ?? null,
+      sessionId,
+      // Additive: the lane's model is switchable through the session endpoints
+      // (/sessions/:id/model|effort) — but only once the lane exists. Omitted
+      // rather than false when it doesn't, so no existing client's decode changes.
+      ...(sessionId ? { switchable: true } : {}),
       ...(record?.cwd ? { cwd: record.cwd } : {}),
       // '' on the record means the primary box, matching ProjectedSession.host.
       ...(record ? { host: record.host ?? '' } : {}),
@@ -228,6 +340,193 @@ personalAiV1Router.get('/chat/engine', async (req: Request, res: Response, next:
     next(err)
   }
 })
+
+// PUT /api/v1/chat/model?agentId&conversationId { model?, effort? }
+//   → 200 { model: string | null, effort: string | null }
+//
+// The per-conversation model switch for the IN-PROCESS engine. `null` clears the
+// override (back to `config.agent.main_model`); an omitted field is left alone.
+// The response echoes the STORED override, so `null` means "following the config
+// default" — GET /chat/engine is where the effective id lives.
+//
+// On the LANE engine this route is a client bug, not a fallback: the lane session
+// owns model+effort and /sessions/:id/model applies it live. Answering 409
+// `lane_engine` (with the session id to switch instead) makes that loud rather
+// than writing a second copy of "which model" that nothing would read.
+//
+// `effort` is accepted and persisted on every engine but is a NO-OP for the
+// in-process loop: nothing in src/agent/ reads a reasoning-effort level (it is a
+// `claude -p --effort` concept). Persisting it keeps a user's pick across an engine
+// switch; faking it into the provider request would be a lie.
+personalAiV1Router.put('/chat/model', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ids = await resolveChatTarget(req, res)
+    if (!ids) return
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const patch = parseChatModelPatch(body)
+    if ('error' in patch) {
+      sendError(res, 400, patch.error.code, patch.error.message)
+      return
+    }
+    // A replica never owns the answering engine — relay the write to the box whose
+    // turn will read it (same 503 as the engine question when it can't be reached).
+    if (await relayChatToPrimary(
+      res, 'server.chat.model', ids,
+      {
+        ...(patch.model !== undefined ? { model: patch.model } : {}),
+        ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+      },
+      (result) => 'model' in result,
+    )) return
+
+    const outcome = await applyChatModelPatch(ids.agentId, ids.conversationId, patch)
+    if ('error' in outcome) {
+      // sessionId rides BOTH inside the error object and at the top level: the
+      // frozen shape puts extras at the top, and a client reading error.sessionId
+      // must not come up empty on the one field that tells it where to switch.
+      res.status(outcome.error.status).json({
+        error: {
+          code: outcome.error.code,
+          message: outcome.error.message,
+          ...(outcome.error.sessionId !== undefined ? { sessionId: outcome.error.sessionId } : {}),
+        },
+        ...(outcome.error.sessionId !== undefined ? { sessionId: outcome.error.sessionId } : {}),
+      })
+      return
+    }
+    res.json(outcome)
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('not found')) {
+      sendError(res, 404, 'not_found', err.message)
+      return
+    }
+    next(err)
+  }
+})
+
+/** Validated `{ model?, effort? }` patch (present-and-typed only, no catalog check).
+ *  A field ABSENT from the body stays undefined (leave it alone); `null` — and an
+ *  all-whitespace string, which is what an emptied text field sends — means clear. */
+type ChatModelPatch = { model?: string | null; effort?: string | null }
+
+function parseChatModelPatch(
+  body: Record<string, unknown>,
+): ChatModelPatch | { error: { code: string; message: string } } {
+  const hasModel = Object.prototype.hasOwnProperty.call(body, 'model')
+  const hasEffort = Object.prototype.hasOwnProperty.call(body, 'effort')
+  if (!hasModel && !hasEffort) {
+    return { error: { code: 'bad_request', message: 'At least one of model, effort is required' } }
+  }
+  const patch: ChatModelPatch = {}
+  if (hasModel) {
+    const raw = body.model
+    if (raw !== null && typeof raw !== 'string') {
+      return { error: { code: 'bad_request', message: 'model must be a string or null' } }
+    }
+    patch.model = raw === null ? null : raw.trim() || null
+  }
+  if (hasEffort) {
+    const raw = body.effort
+    if (raw !== null && typeof raw !== 'string') {
+      return { error: { code: 'bad_request', message: 'effort must be a string or null' } }
+    }
+    patch.effort = raw === null ? null : raw.trim() || null
+  }
+  return patch
+}
+
+/**
+ * Apply a validated patch on THIS box (the answering box). Shared by the local
+ * route and the primary-side relay handler below, so a phone on a replica and a
+ * phone on the primary can never take different rules.
+ */
+async function applyChatModelPatch(
+  agentId: string,
+  conversationId: string,
+  patch: ChatModelPatch,
+): Promise<
+  | { model: string | null; effort: string | null }
+  | { error: { status: number; code: string; message: string; sessionId?: string | null } }
+> {
+  const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+  const config = await getConfig()
+  if (resolveAgentEngineProvider(config) === 'claude-code') {
+    const { personalAiLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
+    const { getSessionByLane } = await import('../../core/session-tracker.js')
+    const record = await getSessionByLane(personalAiLaneKey(agentId, conversationId))
+    return {
+      error: {
+        status: 409,
+        code: 'lane_engine',
+        message: 'This conversation answers on a lane session — switch its model through /api/v1/sessions/:id/model',
+        sessionId: record?.claudeSessionId ?? null,
+      },
+    }
+  }
+  if (typeof patch.model === 'string') {
+    const catalog = await inProcessModelOptions(config)
+    if (!catalog.some((m) => m.id === patch.model)) {
+      return {
+        error: {
+          status: 400,
+          code: 'unknown_model',
+          message: `Unknown model: ${patch.model}`,
+        },
+      }
+    }
+  }
+  if (typeof patch.effort === 'string') {
+    const { VALID_SESSION_EFFORT_IDS } = await import('../../core/types.js')
+    if (!VALID_SESSION_EFFORT_IDS.has(patch.effort)) {
+      return {
+        error: {
+          status: 400,
+          code: 'bad_request',
+          message: `Invalid effort: ${patch.effort} (expected one of ${[...VALID_SESSION_EFFORT_IDS].join(', ')})`,
+        },
+      }
+    }
+  }
+  const { setConversationModel } = await import('../../core/conversations.js')
+  const conversation = await setConversationModel(agentId, conversationId, patch)
+  // Same event the PATCH /conversations/:id route emits, so the web console's
+  // conversation row updates without a poll.
+  broadcastEvent(EventNames.CONVERSATION_UPDATED, { agentId, conversation })
+  log.web.info('chat model override applied via api-v1', {
+    agentId, conversationId, model: conversation.model ?? null, effort: conversation.effort ?? null,
+  })
+  return { model: conversation.model ?? null, effort: conversation.effort ?? null }
+}
+
+/**
+ * PRIMARY side of `server.chat.model` — the same write the local route does, on
+ * the box whose turn will read it. Throws SessionControlError so the relay maps
+ * the status/code onto the replica's frozen error shape (the 409's `sessionId`
+ * does not survive that hop; a client that needs it asks GET /chat/engine, which
+ * relays the whole lane answer).
+ */
+export async function handlePrimaryChatModelRelay(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { SessionControlError } = await import('../../core/sessions/session-controls.js')
+  const agentId = typeof params.agentId === 'string' && params.agentId ? params.agentId : DEFAULT_AGENT_ID
+  const { getActiveConversationId, ensureConversationRow } = await import('../../core/conversations.js')
+  const conversationId = typeof params.conversationId === 'string' && params.conversationId
+    ? params.conversationId
+    : await getActiveConversationId(agentId)
+  const patch = parseChatModelPatch(params)
+  if ('error' in patch) throw new SessionControlError(patch.error.message, 400, { code: patch.error.code })
+  // Same reason the chat-turn relay ensures the row: the conversation was created
+  // in the REPLICA's index, and waiting for git-sync to deliver it here is lossy
+  // (whole-file LWW can drop a new row). Without this, picking a model before the
+  // conversation's first turn would 500 on "Conversation not found".
+  await ensureConversationRow(agentId, conversationId)
+  const outcome = await applyChatModelPatch(agentId, conversationId, patch)
+  if ('error' in outcome) {
+    throw new SessionControlError(outcome.error.message, outcome.error.status, { code: outcome.error.code })
+  }
+  return outcome as unknown as Record<string, unknown>
+}
 
 // POST /api/v1/chat/engine/session?agentId&conversationId → { sessionId, cwd, host, created }
 //

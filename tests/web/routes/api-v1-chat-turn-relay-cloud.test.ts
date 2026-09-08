@@ -597,13 +597,17 @@ describe('the chat engine question is answered by the box that answers the turn'
     expect(uplink!.params).toMatchObject({ agentId: 'general', conversationId: conv.id, ensure: true })
   }, 30_000)
 
-  it('bridge down → answers from THIS box rather than erroring', async () => {
-    // No bridge at all. The degradation is honest, not a failure: with the bridge
-    // down the next turn really would run on this replica's own engine, so this
-    // box's answer is the true one.
+  it('bridge down → 503 primary_unreachable, never this box\'s own config', async () => {
+    // No bridge at all. Answering from this box used to be treated as honest
+    // degradation ("the fallback loop would answer the next message"), but the
+    // relayed turn is what actually happens and the mislabelled pill outlives the
+    // outage — it told the phone the model was fixed by "the server's config" and
+    // locked the control with that reason. A retryable 503 is the true answer.
     const conv = await createConversation('general')
     const got = await getEngine(conv.id)
-    expect(got.status).toBe(200)
-    expect(typeof got.body.engine).toBe('string')
+    expect(got.status).toBe(503)
+    expect((got.body.error as { code: string }).code).toBe('primary_unreachable')
+    expect(got.body.retry).toBe(true)
+    expect(got.body.engine).toBeUndefined()
   }, 30_000)
 })

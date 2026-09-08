@@ -800,6 +800,11 @@ export type SessionControlAction =
   // any turn. `ensure: true` mints the lane (the explicit half of the
   // read-only-GET / minting-POST pair in routes/personal-ai-v1.ts).
   | 'server.chat.engine'
+  // Set (or clear) a conversation's model/effort override on the answering box.
+  // The companion WRITE to server.chat.engine's read: the override only means
+  // anything to the box that runs the turn, so a replica must never store it
+  // locally — the phone's pick would then live on the one box that never answers.
+  | 'server.chat.model'
   // Bank one batch of human time-tracking samples on the primary. The store,
   // its rollup and its day files live there — and the day key is the LOCAL day
   // of each sample on the box that validates it, so only the primary (in the
@@ -1270,6 +1275,14 @@ export async function handleSessionControlRelay(
       case 'server.chat.engine': {
         const { handlePrimaryChatEngineRelay } = await import('../../web/routes/chat-turn-relay.js');
         result = await handlePrimaryChatEngineRelay(p);
+        break;
+      }
+      // Write the conversation's model/effort override HERE, where the turn runs.
+      // Same function the primary's own PUT /api/v1/chat/model calls, so the lane
+      // refusal and the catalog check are identical on both surfaces.
+      case 'server.chat.model': {
+        const { handlePrimaryChatModelRelay } = await import('../../web/routes/personal-ai-v1.js');
+        result = await handlePrimaryChatModelRelay(p);
         break;
       }
       // ── Time tracking: bank a replica-forwarded heartbeat batch here ──
