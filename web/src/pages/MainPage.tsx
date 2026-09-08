@@ -15,7 +15,6 @@ import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
-import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import { RoutinesView } from '@/components/routines/RoutinesView';
 import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
@@ -209,29 +208,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const custom = focusBar.customTiers.find((t) => t.id === tier);
     return custom ? custom.label : `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
   }, [focusBar.customTiers]);
-  // Flat project picker options — Project is the single grouping layer.
-  // Sourced from the REGISTRY first (so an existing but empty project is listed,
-  // and quick-capture doesn't badge it as "new"), then unioned with names seen on
-  // the loaded tasks as a fallback for when that fetch hasn't landed / failed.
-  // Deduped case-insensitively — project identity is NOCASE — registry spelling
-  // wins since it's the canonical one.
   const projectRegistry = useProjectRegistry();
   const { projectByCwd, projectDefaults } = projectRegistry;
-  const quickTaskProjectOptions = useMemo(() => {
-    const byLower = new Map<string, string>();
-    for (const name of projectRegistry.projectNames) {
-      const project = name.trim();
-      if (project) byLower.set(project.toLowerCase(), project);
-    }
-    for (const task of tasks) {
-      if (task.title.startsWith('.metadata')) continue;
-      const project = (task.project || '').trim();
-      if (!project) continue;   // Inbox is the absence of a project, never an option
-      const key = project.toLowerCase();
-      if (!byLower.has(key)) byLower.set(key, project);
-    }
-    return [...byLower.values()].sort((a, b) => a.localeCompare(b));
-  }, [tasks, projectRegistry.projectNames]);
   const ordering = useOrdering();
   // Configured task defaults (platform/project) for quick-add capture. Fetched once;
   // refreshed on config:changed. Quick-add ("Add to Focus") routes to these instead of
@@ -448,8 +426,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     });
   }, [effectiveMaxPanels, panelModeLoaded, placeholderCount]);
 
-  // Quick task capture — anchored under the Ask Walnut slot's "+ Task".
-  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   // Session finder — search existing sessions by title/task/cwd/host and open
   // one as a column. Toggled by ⌘⇧O.
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
@@ -752,7 +728,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (project) openLauncherForProjectRef.current(project);
       else openDraftColumnRef.current();
     };
-    const handleTaskComposer = () => { setQuickTaskOpen(true); };
+    // The /task slash command. The draft column is the ONE place a task is
+    // created (its "Create task for later" is the no-session path).
+    const handleTaskComposer = () => { openDraftColumnRef.current(); };
     const handleToggleTodo = () => setTodoVisible(prev => !prev);
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
     const handleToggleCalendar = () => setCalendarVisible(prev => !prev);
@@ -1272,8 +1250,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;
         e.preventDefault();
-        // Close the task composer so the finder overlay can't stack on it.
-        setQuickTaskOpen(false);
         setSessionSearchOpen(prev => !prev);
       }
     };
@@ -1508,7 +1484,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handleFixWalnut = useCallback(() => {
     const dir = walnutInstallDirRef.current;
     if (!dir) return; // the button is hidden when null; belt-and-braces
-    setQuickTaskOpen(false);   // the task composer and a launcher don't co-exist
     // `cwdPinned`: the checkout is the target, not a suggestion — no async seed
     // (a project default) may move it.
     const draftId = openDraftColumn({ cwd: dir, host: null, cwdPinned: true, intent: 'fix-walnut' });
@@ -1873,8 +1848,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     update(id, updates);
   }, [update]);
 
-  // Shared QuickTaskComposer create handler (the Ask Walnut slot's "+ Task" AND
-  // the todo-anchored instance): create → locate the new row → success toast w/ Undo.
+  // The draft column's "Create task for later" (a task with no session):
+  // create → locate the new row → success toast w/ Undo.
   const handleQuickTaskCreate = useCallback(async (input: Parameters<typeof handleCreate>[0]) => {
     const created = await handleCreate(input);
     // LOCATE the new task: open the todo panel if hidden and select+scroll
@@ -2457,9 +2432,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       {/* THE CHAT SPOT IS AN ASK WALNUT SESSION VIEW (P1 of "remove the main
           agent"): no lane conversation, no in-process chat engine — the regular
-          SessionPanel for the selected `walnut_agent` task, plus a ≡ drawer at
-          its top-left to switch asks. Still collapsible via the Sidebar / Focus Dock toggle, and still
-          lent to a draft column while one is open (chatBorrowedByDraftRef). */}
+          SessionPanel for the selected Ask Walnut task, plus a ≡ drawer on its
+          title row to switch asks. Its × collapses the spot (the Sidebar / Focus
+          Dock toggle brings it back), and it is still lent to a draft column while
+          one is open (chatBorrowedByDraftRef). */}
       {/* The wrapper stays mounted in BOTH states (borrow/mobile CSS and the Focus
           Dock spec measure `.main-page-chat`'s width), but the SLOT only mounts
           while the chat is open: collapsed means flex:0 + opacity:0, not
@@ -2476,19 +2452,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           tasksLoading={loading}
           inspectorOpen={inspector.isOpen}
           onToggleInspector={inspector.toggle}
-          onOpenTaskComposer={() => setQuickTaskOpen(true)}
-          onCloseTaskComposer={() => setQuickTaskOpen(false)}
-          // "+ Session" — one verb "New": grow a draft column in the strip. It
-          // borrows this spot for its lifetime, so close the task composer too
-          // (the two launchers stay mutually exclusive).
-          onOpenDraftColumn={() => { setQuickTaskOpen(false); openDraftColumn(); }}
-          // "⌕ Sessions" — the finder overlay that used to be a QuickAccessBar
-          // pill above the old chat composer. ⌘⇧O opens the same panel.
-          onOpenSessionFinder={() => setSessionSearchOpen(true)}
           {...(walnutInstallDir ? { onFixWalnut: handleFixWalnut } : {})}
-          // Collapsing takes the task popover with it — it is placed against a
-          // button that is about to unmount.
-          onCloseChat={() => { setQuickTaskOpen(false); setChatVisible(false); }}
+          onCloseChat={() => setChatVisible(false)}
           // The inspector describes the session actually on screen.
           onSelectionChange={setAskSlotSelection}
           onTaskClick={handleFocusTaskById}
@@ -2506,7 +2471,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               health={health}
               loading={healthLoading}
               onNavigateSettings={handleNavigateSettings}
-              onStartSession={() => { setQuickTaskOpen(false); openDraftColumn(); }}
+              onStartSession={() => openDraftColumn()}
             />
           )}
           inspectorPanel={inspector.isOpen ? (
@@ -2532,15 +2497,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               />
             )
           ) : null}
-          taskComposerOpen={quickTaskOpen}
-          taskComposer={(
-            <QuickTaskComposer
-              open={quickTaskOpen}
-              onClose={() => setQuickTaskOpen(false)}
-              projectOptions={quickTaskProjectOptions}
-              onCreate={handleQuickTaskCreate}
-            />
-          )}
         />
         )}
       </div>

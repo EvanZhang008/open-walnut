@@ -1,12 +1,18 @@
 /**
- * The Ask Walnut slot's session switcher: a ≡ button at the top-left of the
- * panel header, and the drawer it opens.
+ * The Ask Walnut slot's session switcher: a ≡ button at the start of the panel
+ * header's title row, and the drawer it opens.
  *
  * The slot renders the ORDINARY session panel — same header, same chips, same
- * composer as a session column. The one thing it adds is this button, which
- * slides a drawer in from the left over the panel, the way the Claude app's
- * sidebar does: quick actions on top, the recent asks below, "New chat" pinned
- * to the bottom. Picking an ask (or an action) closes the drawer.
+ * window controls (×, popout, fullscreen) as a session column. The one thing it
+ * adds is this button, which slides a drawer in from the left over the panel,
+ * the way the Claude app's sidebar does: a search box, the asks below it, "New
+ * chat" pinned to the bottom. Picking an ask closes the drawer.
+ *
+ * Deliberately NOT a launcher for anything else (user, 2026-09-07): there is one
+ * concept, a task that may have a session, and one place to create one, the
+ * draft column. So no "+ Task" / "+ Session" rows, no separate finder overlay
+ * (the search box filters THIS list), and no "hide" row (the panel's own × does
+ * that, as in every column).
  *
  * The drawer is an overlay INSIDE the slot (absolute, inset 0), never a portal:
  * the slot has a definite height and clips itself, so the drawer can neither
@@ -14,14 +20,13 @@
  * Nothing here owns slot state; every choice is a callback.
  */
 
-import { forwardRef, useEffect, useRef, type ReactNode, type RefObject } from 'react';
-import { createPortal } from 'react-dom';
+import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
-import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
+import { timeAgo } from '@/utils/time';
 
-/** A row in the drawer's recents list. The just-launched task is not in the
- *  store yet, so a row is `{ id, title }` plus the Task when the store has it. */
+/** A row in the drawer's list. The just-launched task is not in the store yet,
+ *  so a row is `{ id, title }` plus the Task when the store has it. */
 export interface DrawerRow {
   id: string;
   title: string;
@@ -41,8 +46,7 @@ interface MenuButtonProps {
   onToggle: () => void;
 }
 
-/** The ≡ button. A forwardRef so the slot can anchor its "+ Task" popover to it
- *  (the popover's own trigger lives inside the drawer, which unmounts on pick). */
+/** The ≡ button. A forwardRef so the drawer can hand focus back to it on close. */
 export const AskWalnutMenuButton = forwardRef<HTMLButtonElement, MenuButtonProps>(
   function AskWalnutMenuButton({ open, onToggle }, ref) {
     return (
@@ -75,36 +79,55 @@ interface DrawerProps {
   selectedTaskId: string | null;
   onPick: (taskId: string) => void;
   onNew: () => void;
-  onOpenTaskComposer: () => void;
-  onOpenDraftColumn: () => void;
-  /** The session finder overlay. Absent hides the row. */
-  onOpenSessionFinder?: () => void;
+  /** Absent hides the link (no Walnut checkout on this machine). */
   onFixWalnut?: () => void;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
-  onCloseChat: () => void;
+}
+
+/** Case- and whitespace-insensitive "every word of the query appears in the
+ *  title", so `deploy ios` finds "iOS build 73 deploy". */
+function matches(title: string, query: string): boolean {
+  const hay = title.toLowerCase();
+  return query.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
 }
 
 export function AskWalnutDrawer({
   open, onClose, returnFocusRef, rows, selectedTaskId, onPick, onNew,
-  onOpenTaskComposer, onOpenDraftColumn, onOpenSessionFinder, onFixWalnut,
-  inspectorOpen, onToggleInspector, onCloseChat,
+  onFixWalnut, inspectorOpen, onToggleInspector,
 }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState('');
 
-  // Escape closes; focus moves into the drawer on open so the keyboard is in it
-  // and the composer under the scrim stops receiving keystrokes — and goes BACK
-  // on close, to whatever had it (the composer) or, if that is gone, the ≡.
-  // preventDefault before stopPropagation: the repo's Escape ownership
-  // convention (escape-beep-guard reads defaultPrevented to know who consumed it).
+  // Every open starts with an empty query. Keyed on `open` ALONE: the effect
+  // below re-runs whenever its callbacks change identity, and a reset living
+  // there would wipe a query mid-typing the first time a caller passes a
+  // per-render closure.
+  useEffect(() => { if (open) setQuery(''); }, [open]);
+
+  // Escape closes; focus moves into the search box on open so the keyboard is in
+  // the drawer (typing filters at once) and the composer under the scrim stops
+  // receiving keystrokes — and goes BACK on close, to whatever had it (the
+  // composer) or, if that is gone, the ≡. preventDefault before stopPropagation:
+  // the repo's Escape ownership convention (escape-beep-guard reads
+  // defaultPrevented to know who consumed it). A non-empty query is cleared by
+  // the first Escape; the second one closes. The query is read through a ref so
+  // the listener does not have to be re-bound on every keystroke.
+  const queryRef = useRef(query);
+  queryRef.current = query;
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus({ preventScroll: true });
+    searchRef.current?.focus({ preventScroll: true });
     const key = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.preventDefault();
       e.stopPropagation();
+      if (queryRef.current) {
+        setQuery('');
+        return;
+      }
       onClose();
     };
     document.addEventListener('keydown', key);
@@ -124,6 +147,11 @@ export function AskWalnutDrawer({
       ?.querySelector<HTMLElement>(`[data-task-id="${selectedTaskId}"]`)
       ?.scrollIntoView({ block: 'nearest' });
   }, [open, selectedTaskId]);
+
+  const visible = useMemo(
+    () => (query.trim() ? rows.filter((r) => matches(r.title, query)) : rows),
+    [rows, query],
+  );
 
   if (!open) return null;
 
@@ -160,74 +188,32 @@ export function AskWalnutDrawer({
           </button>
         </div>
 
-        <div className="ask-walnut-drawer-actions" role="group" aria-label="Quick actions">
-          <button
-            type="button"
-            className="ask-walnut-drawer-action"
-            data-testid="ask-walnut-task"
-            onClick={act(onOpenTaskComposer)}
-            title="Create a task without starting a session"
-          >
-            <span className="ask-walnut-drawer-ic" aria-hidden="true">+</span> Task
-          </button>
-          <button
-            type="button"
-            className="ask-walnut-drawer-action"
-            data-testid="ask-walnut-session-draft"
-            onClick={act(onOpenDraftColumn)}
-            title="Open a new coding session draft"
-          >
-            <span className="ask-walnut-drawer-ic" aria-hidden="true">+</span> Session
-          </button>
-          {onOpenSessionFinder && (
-            <button
-              type="button"
-              className="ask-walnut-drawer-action"
-              data-testid="ask-walnut-sessions"
-              onClick={act(onOpenSessionFinder)}
-              title="Find a session by title, folder or content"
-            >
-              <span className="ask-walnut-drawer-ic" aria-hidden="true">{'⌕'}</span> Find sessions
-            </button>
-          )}
-          {onFixWalnut && (
-            <button
-              type="button"
-              className="ask-walnut-drawer-action"
-              data-testid="ask-walnut-fix"
-              onClick={act(onFixWalnut)}
-              title="Describe what's broken — opens a session in Walnut's own checkout"
-            >
-              <span className="ask-walnut-drawer-ic" aria-hidden="true">{'\u{1F527}'}</span> Fix Walnut
-            </button>
-          )}
-          <button
-            type="button"
-            className={`ask-walnut-drawer-action${inspectorOpen ? ' is-active' : ''}`}
-            data-testid="ask-walnut-inspector"
-            aria-pressed={inspectorOpen}
-            onClick={act(onToggleInspector)}
-            title={inspectorOpen ? 'Hide the launch context' : "Show the selected session's launch context"}
-          >
-            <span className="ask-walnut-drawer-ic" aria-hidden="true">{'◎'}</span> Context
-          </button>
-          <button
-            type="button"
-            className="ask-walnut-drawer-action"
-            data-testid="ask-walnut-hide"
-            onClick={act(onCloseChat)}
-            title="Hide Ask Walnut"
-          >
-            <span className="ask-walnut-drawer-ic" aria-hidden="true">{'←'}</span> Hide Ask Walnut
-          </button>
+        <div className="ask-walnut-drawer-search">
+          <span className="ask-walnut-drawer-search-ic" aria-hidden="true">{'⌕'}</span>
+          <input
+            ref={searchRef}
+            type="search"
+            className="ask-walnut-drawer-search-input"
+            data-testid="ask-walnut-search"
+            placeholder="Search your asks"
+            aria-label="Search Ask Walnut sessions"
+            autoComplete="off"
+            spellCheck={false}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
         </div>
 
-        <div className="ask-walnut-drawer-section">Recents</div>
-        <div className="ask-walnut-drawer-list" role="group" aria-label="Recent Ask Walnut sessions" data-testid="ask-walnut-drawer-list">
+        <div className="ask-walnut-drawer-list" role="group" aria-label="Your asks" data-testid="ask-walnut-drawer-list">
           {rows.length === 0 && (
             <p className="ask-walnut-drawer-empty">No Ask Walnut sessions yet.</p>
           )}
-          {rows.map((row) => (
+          {/* role=status: a screen reader typing in the search box hears when the
+              list filtered down to nothing. */}
+          {rows.length > 0 && visible.length === 0 && (
+            <p className="ask-walnut-drawer-empty" role="status" data-testid="ask-walnut-search-empty">No asks match &ldquo;{query.trim()}&rdquo;.</p>
+          )}
+          {visible.map((row) => (
             <DrawerItem
               key={row.id}
               row={row}
@@ -247,6 +233,31 @@ export function AskWalnutDrawer({
           >
             <span aria-hidden="true">+</span> New chat
           </button>
+          {/* Two links about THIS surface, not launchers: what Walnut sends the
+              session (Context) and a shortcut into Walnut's own checkout (Fix). */}
+          <div className="ask-walnut-drawer-links">
+            <button
+              type="button"
+              className={`ask-walnut-drawer-link${inspectorOpen ? ' is-active' : ''}`}
+              data-testid="ask-walnut-inspector"
+              aria-pressed={inspectorOpen}
+              onClick={act(onToggleInspector)}
+              title={inspectorOpen ? 'Hide the launch context' : "Show the selected session's launch context"}
+            >
+              <span aria-hidden="true">{'◎'}</span> Context
+            </button>
+            {onFixWalnut && (
+              <button
+                type="button"
+                className="ask-walnut-drawer-link"
+                data-testid="ask-walnut-fix"
+                onClick={act(onFixWalnut)}
+                title="Describe what's broken — opens a session in Walnut's own checkout"
+              >
+                <span aria-hidden="true">{'\u{1F527}'}</span> Fix Walnut
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -254,6 +265,10 @@ export function AskWalnutDrawer({
 }
 
 function DrawerItem({ row, selected, onPick }: { row: DrawerRow; selected: boolean; onPick: () => void }) {
+  // Last activity, not birth: the list is in birth order (stable under the
+  // cursor), and the stamp on the right is the "when did I last touch this"
+  // hint the Claude sidebar gives.
+  const when = row.task?.updated_at || row.task?.created_at;
   return (
     <button
       type="button"
@@ -266,6 +281,7 @@ function DrawerItem({ row, selected, onPick }: { row: DrawerRow; selected: boole
     >
       {row.task ? <TaskDot task={row.task} /> : <span className="ask-walnut-drawer-dot task-circle-session" aria-hidden="true" />}
       <span className="ask-walnut-drawer-item-title">{row.title}</span>
+      {when && <span className="ask-walnut-drawer-item-time">{timeAgo(when)}</span>}
     </button>
   );
 }
@@ -275,61 +291,4 @@ function DrawerItem({ row, selected, onPick }: { row: DrawerRow; selected: boole
 function TaskDot({ task }: { task: Task }) {
   const cls = useTaskCircle(task);
   return <span className={`ask-walnut-drawer-dot ${cls}`} aria-hidden="true" />;
-}
-
-/**
- * The "+ Task" popover — portalled to <body> and placed by useMenuPlacement,
- * anchored to the ≡ button (its trigger row lives in the drawer, which closes on
- * pick, so the row cannot be the anchor).
- *
- * It used to be a hand-placed `position: absolute; top: 100%` box inside a
- * header that lived in an `overflow: hidden` slot: a form taller than the room
- * below was CLIPPED, with its Create/Cancel buttons unreachable and no
- * scrollbar to reach them (the menus-and-overlays rules in web/src/AGENTS.md).
- * The hook measures the real height, flips up when there is more room above,
- * clamps to the viewport and hands back a `maxHeight` that the wrapper's
- * `overflow-y: auto` turns into an internal scroll.
- *
- * Portals escape clipping, not bubbling — hence the pointerdown stop, so the form
- * can never reach a drag sensor above it in the React tree.
- */
-export function AskWalnutTaskPopover(
-  { open, anchorRef, onAnchorLost, children }: {
-    open: boolean;
-    anchorRef: RefObject<HTMLButtonElement | null>;
-    /** The ≡ left the DOM while the form was open (the panel went fullscreen,
-     *  which hides its leading slot): close the form rather than leave it
-     *  floating over the overlay anchored to nothing. */
-    onAnchorLost: () => void;
-    children: ReactNode;
-  },
-) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  // 'left': the anchor is the top-left ≡ button, so the popover opens RIGHTWARD
-  // from it — right-aligning would push it off the slot's left edge.
-  const placement = useMenuPlacement(open, anchorRef, menuRef, { align: 'left', onAnchorLost });
-  // The hook only reports an anchor that is still referenced but detached or
-  // zero-sized; an UNMOUNTED anchor nulls the ref and the hook goes quiet. A
-  // light poll while open covers that case.
-  const onAnchorLostRef = useRef(onAnchorLost);
-  onAnchorLostRef.current = onAnchorLost;
-  useEffect(() => {
-    if (!open) return;
-    const id = setInterval(() => {
-      if (!anchorRef.current?.isConnected) onAnchorLostRef.current();
-    }, 250);
-    return () => clearInterval(id);
-  }, [open, anchorRef]);
-  if (!open) return null;
-  return createPortal(
-    <div
-      ref={menuRef}
-      className="ask-walnut-task-popover"
-      style={menuPlacementStyle(placement)}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      {children}
-    </div>,
-    document.body,
-  );
 }

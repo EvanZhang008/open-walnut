@@ -10,7 +10,7 @@
  * long before the server is even asked.
  */
 import { expect, test, type APIRequestContext } from '@playwright/test'
-import { openAskWalnutDrawer } from './draft-helpers'
+import { draftComposer, draftPanels, openDraft } from './draft-helpers'
 
 const HOLD_MS = 3000
 const INSTANT_MS = 700
@@ -28,7 +28,7 @@ async function findTaskId(request: APIRequestContext, title: string): Promise<st
 
 test('Undo on the "Task created" toast drops the board row before the DELETE is answered', async ({ page, request }) => {
   const title = `Quick capture ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  // Deterministic parse: the composer's AI back-fill is not what this spec is about.
+  // Deterministic parse: the draft's AI back-fill is not what this spec is about.
   await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -38,16 +38,12 @@ test('Undo on the "Task created" toast drops the board row before the DELETE is 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // "+ Task" now lives in the Ask Walnut slot's ≡ drawer (the chat composer's
-  // QuickAccessBar went with the old chat implementation).
-  await openAskWalnutDrawer(page)
-  await page.getByTitle('Create a task without starting a session').click()
-  const composer = page.locator('.quick-task-composer')
-  await expect(composer).toBeVisible()
-  await page.locator('.qtc-input').fill(title)
-  const panel = page.locator('.qtc-confirm-panel')
-  await expect(panel.locator('.qtc-confirm-title')).toHaveValue(title)
-  await panel.locator('.qtc-confirm-primary').click()
+  // The draft column is the one place a task is created; "Create task for later"
+  // is its no-session path and the toast under test is its receipt.
+  const panel = await openDraft(page)
+  await draftComposer(page).fill(title)
+  await panel.locator('.draft-later-btn').click()
+  await expect(draftPanels(page)).toHaveCount(0, { timeout: 10_000 })
 
   // ONE locator for the toast: the 'sort' kind auto-dismisses, so two sequential
   // expects could straddle the dismissal.

@@ -160,11 +160,15 @@ Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project �
   (`SessionPanel`) and the chat slot.** The dedicated `/sessions` page was removed (2026-07-25);
   the route is now a redirect shim that reroutes `/sessions?id=…` deep links to the home session
   columns. The chat spot is the Ask Walnut slot (`AskWalnutSlot`): it hosts an embedded
-  `SessionPanel` for the selected ask, and a `DraftSessionPanel` in its New state. The slot adds
-  ONE control to the regular panel: a ≡ button at the top-left of the header (`headerLeading`)
-  that opens a drawer of the recent asks plus the quick actions (`+ Task`, `+ Session`,
-  `Find sessions`, `Fix Walnut`, `Context`, `Hide`) and `New chat`; tests reach those through
-  `openAskWalnutDrawer(page)` in `tests/e2e/browser/draft-helpers.ts`. Consequence
+  `SessionPanel` for the selected ask (every window control a column has, incl. the × which
+  hides the slot; only lock is absent), and a `DraftSessionPanel` in its New state. The slot
+  adds ONE control to the regular panel: a ≡ button leading the header's title row
+  (`headerLeading`) that opens a drawer with a search box filtering the asks (tasks born
+  `walnut_agent` OR filed under the `Ask Walnut` project), `New chat`, and two links
+  (`Context`, `Fix Walnut`); tests reach those through `openAskWalnutDrawer(page)` in
+  `tests/e2e/browser/draft-helpers.ts`. Deliberately NO `+ Task`/`+ Session`/finder/hide rows:
+  the draft column is the one task-creation surface (a task with no session is a plain todo),
+  ⌘⇧O is the session finder, the panel's × hides the slot. Consequence
   for tests: a Playwright locator for `.session-panel` or `.draft-session-panel` on `/` must be
   scoped to `.main-page-session-column` (see `REAL_PANEL` / `DRAFT_PANEL` in
   `tests/e2e/browser/draft-helpers.ts`) or pinned by `data-session-id`. The slot's panel sits

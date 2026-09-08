@@ -26,10 +26,15 @@ still live on the client.
   slot. The dedicated `/sessions` page was removed; `/sessions?id=…` deep links reroute to the
   home columns (`SessionsRedirect` in `App.tsx` + `utils/open-session.ts`). The chat spot is
   `AskWalnutSlot`, which hosts an embedded `SessionPanel` for the selected ask, and a
-  `DraftSessionPanel` in its New state. The slot's only addition to the regular panel is the ≡
-  button at the top-left of the header (both panels take it as `headerLeading`); it opens
-  `AskWalnutDrawer`, an in-slot overlay (never a portal: the slot clips itself) with the quick
-  actions, the recent asks and `New chat`. So scope every Playwright locator for `.session-panel`
+  `DraftSessionPanel` in its New state. The embedded panel keeps every window control a column
+  has (×, popout, fullscreen, locate; its × hides the slot), minus lock. The slot's only
+  addition is the ≡ button leading the header's TITLE row (both panels take it as
+  `headerLeading`; the title row because it ellipsizes, whereas the chips row wraps and pushed
+  the time-ago to a second line in a narrow slot); it opens `AskWalnutDrawer`, an in-slot
+  overlay (never a portal: the slot clips itself) with a search box, the asks and `New chat`.
+  Never put `contain: paint` on the slot's session wrapper: it makes the wrapper the containing
+  block for the panel's `position: fixed` fullscreen overlay, which then "expands" inside the
+  slot. So scope every Playwright locator for `.session-panel`
   or `.draft-session-panel` on `/` to `.main-page-session-column` (`REAL_PANEL` / `DRAFT_PANEL`
   in `tests/e2e/browser/draft-helpers.ts`), or pin it by `data-session-id`: the slot's panel
   sits earlier in the DOM, so an unscoped `.first()` grabs it instead of the column under test.

@@ -4,11 +4,12 @@
  * There is no "main agent" any more: talking to Walnut IS an ordinary
  * claude-code session bound to a task flagged `walnut_agent`, filed under the
  * `Ask Walnut` project. So this slot is a VIEW over the task store: the REGULAR
- * `SessionPanel` for the selected task, exactly as a session column renders it,
- * plus ONE addition — a ≡ button at the top-left of its header that opens a
- * drawer of the recent asks to switch between (the Claude app's sidebar shape).
- * Nothing here owns conversation state; the session panel and the session queue
- * do, exactly as they do in a session column.
+ * `SessionPanel` for the selected task, exactly as a session column renders it
+ * (same header, same ×/popout/fullscreen, same composer), plus ONE addition — a
+ * ≡ button at the start of its title row that opens a drawer of the asks to
+ * switch between (the Claude app's sidebar shape). The panel's × hides the slot,
+ * the way a column's × closes the column. Nothing here owns conversation state;
+ * the session panel and the session queue do, exactly as in a column.
  *
  * Three body states, and the transitions between them are the whole component:
  *   new      → `DraftSessionPanel` in its Ask Walnut shape (the tab users
@@ -17,8 +18,8 @@
  *              pending column, the answer streams right here.
  *   pending  → the HTTP round-trip, with the message echoed; an error keeps the
  *              payload so Retry replays the same launch.
- *   session  → `SessionPanel embedded` (no lock / popout / close chrome; locate
- *              and fullscreen stay).
+ *   session  → `SessionPanel embedded` (every window control but lock — there
+ *              is no column rotation to pin within).
  *
  * Selection persists in sessionStorage and is re-resolved whenever the task list
  * changes; the decisions live in ./ask-walnut-slot-model so they can be pinned
@@ -36,7 +37,7 @@ import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import type { QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { AskWalnutDrawer, AskWalnutMenuButton, AskWalnutTaskPopover, type DrawerRow } from './AskWalnutDrawer';
+import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
 import { resolveSelection, selectAskWalnutTasks } from './ask-walnut-slot-model';
 import '@/styles/walnut-agent.css';
 
@@ -78,26 +79,12 @@ export interface AskWalnutSlotProps {
   banner?: ReactNode;
   /** Rendered above the body while the inspector is open. */
   inspectorPanel?: ReactNode;
-  /** The task composer popover, placed against the ≡ button. */
-  taskComposer?: ReactNode;
-  /** Whether that composer is open — the popover needs it to know when to measure. */
-  taskComposerOpen?: boolean;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
-  /** "+ Task" — opens the task composer the owner passed in. */
-  onOpenTaskComposer: () => void;
-  /** Closes it again when its anchor (the ≡) leaves the DOM — the panel went
-   *  fullscreen with the form open. */
-  onCloseTaskComposer: () => void;
-  /** "+ Session" — the ordinary draft session column. */
-  onOpenDraftColumn: () => void;
-  /** "Sessions" — the session finder overlay (the old QuickAccessBar pill). */
-  onOpenSessionFinder?: () => void;
   /** "Fix Walnut" — a draft column pre-armed on Walnut's own checkout. Absent
-   *  (npm install / cloud) hides the button. */
+   *  (npm install / cloud) hides the link. */
   onFixWalnut?: () => void;
-  /** Collapse the slot — the drawer's "Hide Ask Walnut" row (the Focus Dock
-   *  brings it back). */
+  /** Collapse the slot — the panel's own × (the Focus Dock brings it back). */
   onCloseChat: () => void;
   /** Reported on every selection change, so the owner can point the context
    *  inspector at the session actually on screen. */
@@ -113,6 +100,9 @@ export interface AskWalnutSlotProps {
   }) => void;
 }
 
+/** Same precedence the panel mounts with (resolveTaskSessionId). */
+const hasSession = (task: Task): boolean => resolveTaskSessionId(task) !== null;
+
 /** The launch meta a fresh slot draft opens on: the launcher baseline with the
  *  Ask Walnut seeds the draft tab applies (Focus tier, model Auto). */
 function initialDraftMeta(): QuickStartTaskMeta {
@@ -120,12 +110,11 @@ function initialDraftMeta(): QuickStartTaskMeta {
 }
 
 export function AskWalnutSlot({
-  tasks, tasksLoading, banner, inspectorPanel, taskComposer, taskComposerOpen,
-  inspectorOpen, onToggleInspector, onOpenTaskComposer, onCloseTaskComposer, onOpenDraftColumn, onOpenSessionFinder,
-  onFixWalnut, onCloseChat, onSelectionChange,
+  tasks, tasksLoading, banner, inspectorPanel,
+  inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onSelectionChange,
   onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
-  const askTasks = useMemo(() => selectAskWalnutTasks(tasks), [tasks]);
+  const askTasks = useMemo(() => selectAskWalnutTasks(tasks, ASK_WALNUT_PROJECT), [tasks]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => {
     try { return sessionStorage.getItem(SS_SELECTED_KEY); } catch { return null; }
   });
@@ -139,7 +128,8 @@ export function AskWalnutSlot({
   const [launched, setLaunched] = useState<{ taskId: string; sessionId?: string; title: string } | null>(null);
   /** The ≡ drawer. Closed on every pick; not persisted (it is a gesture, not a view). */
   const [drawerOpen, setDrawerOpen] = useState(false);
-  /** The ≡ button, wherever the current body renders it — the "+ Task" popover's anchor. */
+  /** The ≡ button, wherever the current body renders it — where the drawer
+   *  returns focus when the element that had it is gone. */
   const menuBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -157,14 +147,15 @@ export function AskWalnutSlot({
   askTasksRef.current = askTasks;
 
   // Re-resolve the selection whenever the task list moves: a deleted/archived
-  // selection falls back to the newest ask, an empty list to nothing (which
-  // renders the composer). The just-launched task is EXEMPT until the store
-  // carries it — re-resolving there would yank the user off the ask they just
-  // sent, for the second the WS echo takes to land.
+  // selection falls back to the newest ask WITH a conversation (a todo filed
+  // under the project by hand stays pickable but is never the default), an
+  // empty list to nothing (which renders the composer). The just-launched task
+  // is EXEMPT until the store carries it — re-resolving there would yank the
+  // user off the ask they just sent, for the second the WS echo takes to land.
   useEffect(() => {
     if (launched && selectedTaskId === launched.taskId
       && !askTasks.some((t) => t.id === selectedTaskId)) return;
-    const next = resolveSelection(selectedTaskId, askTasks);
+    const next = resolveSelection(selectedTaskId, askTasks, hasSession);
     if (next !== selectedTaskId) setSelectedTaskId(next);
   }, [askTasks, selectedTaskId, launched]);
 
@@ -197,7 +188,7 @@ export function AskWalnutSlot({
     return () => clearTimeout(timer);
   }, [launched]);
 
-  // The drawer's recents: every Ask Walnut task, newest first, with the
+  // The drawer's list: every Ask Walnut task, newest first, with the
   // just-launched one on top until the store carries it.
   const rows = useMemo<DrawerRow[]>(() => {
     const list = askTasks.map((t) => ({ id: t.id, title: t.title || 'Ask Walnut', task: t }));
@@ -322,6 +313,21 @@ export function AskWalnutSlot({
 
   const toggleDrawer = useCallback(() => setDrawerOpen((v) => !v), []);
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
+
+  // The panel's × — the same control a session column has, meaning "put this
+  // away": the slot collapses (the Focus Dock brings it back). Stable so the
+  // memo'd SessionPanel is not re-rendered by a fresh closure each tick.
+  const onCloseChatRef = useRef(onCloseChat);
+  onCloseChatRef.current = onCloseChat;
+  const hideSlot = useCallback(() => onCloseChatRef.current(), []);
+  // The composer's ×: back to the conversation it was opened over, or, when
+  // there is none to go back to, away like the panel's.
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const closeDraft = useCallback(() => {
+    if (rowsRef.current.length) setNewMode(false);
+    else onCloseChatRef.current();
+  }, []);
 
   // ── The launch ──
 
@@ -453,7 +459,7 @@ export function AskWalnutSlot({
               autoFocus={newMode}
               onStart={handleStart}
               onSaveAsTask={noopDraftEdit}
-              onClose={() => setNewMode(false)}
+              onClose={closeDraft}
               onPathChange={noopDraftEdit}
               onProjectChange={noopDraftEdit}
               onMetaChange={handleMetaChange}
@@ -493,6 +499,7 @@ export function AskWalnutSlot({
               sessionId={sessionId}
               embedded
               headerLeading={menuButton}
+              onClose={hideSlot}
               {...(onTaskClick ? { onTaskClick } : {})}
               {...(onOpenTaskDetail ? { onOpenTaskDetail } : {})}
               {...(onSessionClick ? { onSessionClick } : {})}
@@ -517,20 +524,10 @@ export function AskWalnutSlot({
         selectedTaskId={view === 'session' ? selectedTaskId : null}
         onPick={selectAsk}
         onNew={startNew}
-        onOpenTaskComposer={onOpenTaskComposer}
-        onOpenDraftColumn={onOpenDraftColumn}
-        {...(onOpenSessionFinder ? { onOpenSessionFinder } : {})}
         {...(onFixWalnut ? { onFixWalnut } : {})}
         inspectorOpen={inspectorOpen}
         onToggleInspector={onToggleInspector}
-        onCloseChat={onCloseChat}
       />
-
-      {taskComposer && (
-        <AskWalnutTaskPopover open={taskComposerOpen === true} anchorRef={menuBtnRef} onAnchorLost={onCloseTaskComposer}>
-          {taskComposer}
-        </AskWalnutTaskPopover>
-      )}
     </div>
   );
 }

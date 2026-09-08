@@ -371,8 +371,11 @@ test('exact taskless deep link is restored by Back during a failed warm refresh'
   await page.getByRole('link', { name: 'Home', exact: true }).click();
   await expect.poll(() => new URL(page.url()).pathname).toBe('/');
 
-  await page.locator('.session-panel-close').first().click();
-  await page.locator('.session-panel-close').first().click();
+  // Scoped to the columns: the Ask Walnut slot on the home page renders a
+  // regular panel with its own × (which would hide the slot instead), and it
+  // sits earlier in the DOM.
+  await page.locator('.main-page-session-column .session-panel-close').first().click();
+  await page.locator('.main-page-session-column .session-panel-close').first().click();
   await expect(page.locator('.main-page-session-column .session-panel')).toHaveCount(0);
   await page.getByRole('button', { name: 'View options' }).click();
   await page.locator('.vd-rail-btn[data-rail-section="projects"]').click();

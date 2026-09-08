@@ -62,7 +62,9 @@ async function hideAllAsks(page: Page): Promise<void> {
       await route.fulfill({ response })
       return
     }
-    body.tasks = body.tasks.filter((task) => task?.walnut_agent !== true)
+    // Same predicate as the slot: born an ask OR filed under the Ask Walnut project.
+    body.tasks = body.tasks.filter((task) => task?.walnut_agent !== true
+      && ((task as { project?: string }).project ?? '').trim().toLowerCase() !== 'ask walnut')
     // The body is re-serialized here, so the upstream framing no longer describes it.
     const headers = { ...response.headers() }
     delete headers['content-length']

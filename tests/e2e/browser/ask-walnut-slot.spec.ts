@@ -3,16 +3,21 @@
  * main agent").
  *
  * What changed and therefore what this spec pins: the slot no longer renders a
- * hidden lane conversation. It derives its list from the task store
- * (`walnut_agent === true`) and renders the REGULAR `SessionPanel` for the
- * selected task — same header, same chips, same composer as a session column.
- * Its ONE addition is the ≡ button at the top-left of that header, which opens
- * a drawer (the Claude app's sidebar shape): quick actions on top, the recent
- * asks to switch between, and "New chat" pinned to the bottom. `New chat` is the
- * Ask Walnut composer (`DraftSessionPanel` in walnut mode) launching
- * `quick-start { walnutAgent: true }` straight into the slot — no session column
- * is opened for a slot launch. Every conversation is born a task, so the launch
- * is also observable on the board (amber title).
+ * hidden lane conversation. It derives its list from the task store (tasks born
+ * as asks, `walnut_agent === true`, plus tasks filed under the Ask Walnut
+ * project) and renders the REGULAR `SessionPanel` for the selected task — same
+ * header, same chips, same composer, same ×/popout/fullscreen as a session
+ * column. Its ONE addition is the ≡ button leading that header's title row,
+ * which opens a drawer (the Claude app's sidebar shape): a search box that
+ * filters the asks, the asks to switch between, "New chat" pinned to the
+ * bottom. `New chat` is the Ask Walnut composer (`DraftSessionPanel` in walnut
+ * mode) launching `quick-start { walnutAgent: true }` straight into the slot —
+ * no session column is opened for a slot launch. Every conversation is born a
+ * task, so the launch is also observable on the board (amber title).
+ *
+ * Deliberately NOT in the drawer (user, 2026-09-07): no "+ Task" / "+ Session"
+ * launchers (the draft column is the one task-creation surface), no separate
+ * session finder (the search box IS the search), no "hide" row (the panel's ×).
  *
  * Real UI only: one `page.goto('/')` per test to load the SPA (plus one
  * deliberate `page.reload()`, which is the persistence scenario), everything
@@ -40,7 +45,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { DRAFT_PANEL, loadHome, openAskWalnutDrawer } from './draft-helpers'
+import { DRAFT_PANEL, loadHome, openAskWalnutDrawer, openDraft } from './draft-helpers'
 
 const SCREENSHOT_DIR = process.env.ASK_SLOT_SHOT_DIR ?? '/tmp/ask-walnut-slot'
 
@@ -83,6 +88,7 @@ const drawerRow = (page: Page, taskId: string): Locator =>
   page.locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${taskId}"]`)
 const drawerNew = (page: Page): Locator => page.locator('[data-testid="ask-walnut-new"]')
 const drawerFix = (page: Page): Locator => page.locator('[data-testid="ask-walnut-fix"]')
+const drawerSearch = (page: Page): Locator => page.locator('[data-testid="ask-walnut-search"]')
 const slotDraft = (page: Page): Locator => page.locator('[data-testid="ask-walnut-draft"]')
 const slotPending = (page: Page): Locator => page.locator('[data-testid="ask-walnut-pending"]')
 const slotSession = (page: Page): Locator => page.locator('[data-testid="ask-walnut-session"]')
@@ -139,7 +145,7 @@ async function hideForeignWalnutTasks(page: Page): Promise<void> {
       return
     }
     const response = await route.fetch()
-    let body: { tasks?: Array<{ id?: string; walnut_agent?: boolean }> }
+    let body: { tasks?: Array<{ id?: string; walnut_agent?: boolean; project?: string }> }
     try {
       body = (await response.json()) as typeof body
     } catch {
@@ -150,8 +156,12 @@ async function hideForeignWalnutTasks(page: Page): Promise<void> {
       await route.fulfill({ response })
       return
     }
+    // Mirrors the slot's own predicate (walnut_agent OR the Ask Walnut project):
+    // a foreign task admitted by either arm would become a drawer row here.
+    const isAsk = (task: { walnut_agent?: boolean; project?: string }) =>
+      task.walnut_agent === true || (task.project ?? '').trim().toLowerCase() === 'ask walnut'
     body.tasks = body.tasks.filter(
-      (task) => task?.walnut_agent !== true || (task.id ? ourWalnutTaskIds.has(task.id) : false),
+      (task) => !isAsk(task) || (task.id ? ourWalnutTaskIds.has(task.id) : false),
     )
     const headers = { ...response.headers() }
     delete headers['content-length']
@@ -165,6 +175,12 @@ async function hideForeignWalnutTasks(page: Page): Promise<void> {
 }
 
 // ── Actions ──────────────────────────────────────────────────────────────────
+
+/** Let the drawer's 160ms slide/fade (or the panel's fullscreen enter) finish
+ *  before a screenshot: an expect passes on the first painted frame, and a shot
+ *  taken then shows the overlay half-transparent and a few px off — which reads
+ *  as a see-through bug on review when it is only an in-flight frame. */
+const settleMotion = (page: Page) => page.waitForTimeout(350)
 
 /** Open the drawer and pick an ask by task id. The drawer closes on pick. */
 async function pickAsk(page: Page, taskId: string): Promise<void> {
@@ -259,9 +275,9 @@ test('with no Ask Walnut tasks the slot is the composer, and the drawer lists no
 
   await expect(slotDraft(page)).toBeVisible({ timeout: 30_000 })
   await expect(slotDraftComposer(page)).toHaveAttribute('placeholder', /Ask Walnut anything/)
-  // The composer is the REGULAR draft panel with the ≡ at its top-left — the one
-  // thing the slot adds. No session view yet.
-  await expect(slotDraft(page).locator('.session-panel-header [data-testid="ask-walnut-menu"]')).toBeVisible()
+  // The composer is the REGULAR draft panel with the ≡ leading its title row —
+  // the one thing the slot adds. No session view yet.
+  await expect(slotDraft(page).locator('.session-panel-header-top [data-testid="ask-walnut-menu"]')).toBeVisible()
   await expect(slotSession(page)).toHaveCount(0)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/1-empty-state.png` })
@@ -272,6 +288,11 @@ test('with no Ask Walnut tasks the slot is the composer, and the drawer lists no
   await expect(drawerRows(page)).toHaveCount(0)
   await expect(drawer(page).getByText('No Ask Walnut sessions yet.')).toBeVisible()
   await expect(drawerNew(page)).toBeVisible()
+  // The search box takes the keyboard on open, and none of the removed launchers
+  // is there (a regression would bring one back as a titled button).
+  await expect(drawerSearch(page)).toBeFocused()
+  await expect(drawer(page).getByRole('button', { name: /^(\+ )?(Task|Session|Find sessions|Hide Ask Walnut)$/ })).toHaveCount(0)
+  await settleMotion(page)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/1b-empty-drawer.png` })
   // Escape closes it and the composer is back under the keyboard.
   await page.keyboard.press('Escape')
@@ -291,12 +312,20 @@ test('a launch from the slot streams its reply in the slot, and files an amber t
   firstSessionId = launch.sessionId
 
   // The composer is gone: the slot IS the session now, a real SessionPanel with
-  // the regular header (tool chips + title) and the ≡ leading its first row.
+  // the regular header (tool chips row + title row), the ≡ leading the TITLE
+  // row, and the same window controls a column has — ×, popout, fullscreen.
+  // Only lock is absent (there is no column rotation to pin within).
   await expect(slotDraft(page)).toHaveCount(0)
-  await expect(slotSession(page).locator('.session-panel')).toBeVisible()
-  await expect(slotSession(page).locator('.session-meta-row-2 .session-panel-header-leading [data-testid="ask-walnut-menu"]'))
+  const panel = slotSession(page).locator('.session-panel')
+  await expect(panel).toBeVisible()
+  await expect(panel.locator('.session-panel-header-top .session-panel-header-leading [data-testid="ask-walnut-menu"]'))
     .toBeVisible()
-  await expect(slotSession(page).locator('.session-meta-row-2').getByRole('button', { name: 'Files' })).toBeVisible()
+  await expect(panel.locator('.session-meta-row-2 .session-panel-header-leading')).toHaveCount(0)
+  await expect(panel.locator('.session-meta-row-2').getByRole('button', { name: 'Files' })).toBeVisible()
+  await expect(panel.locator('.session-panel-close')).toBeVisible()
+  await expect(panel.locator('.session-panel-popout')).toBeVisible()
+  await expect(panel.locator('.session-panel-expand')).toBeVisible()
+  await expect(panel.getByRole('button', { name: /Lock session panel|Unlock session panel/ })).toHaveCount(0)
 
   // One conversation → exactly one row in the drawer, and it is the current one.
   await openAskWalnutDrawer(page)
@@ -305,6 +334,7 @@ test('a launch from the slot streams its reply in the slot, and files an amber t
   // Exactly ONE row is ever current — the claim that makes the switch test below
   // meaningful (two current rows would let both assertions there pass).
   await expect(page.locator('[data-testid="ask-walnut-drawer-item"][aria-current="true"]')).toHaveCount(1)
+  await settleMotion(page)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/2b-drawer-one-row.png` })
   // Clicking the scrim (the part of the slot the drawer does not cover) closes it.
   const scrim = page.locator('[data-testid="ask-walnut-scrim"]')
@@ -363,6 +393,7 @@ test('New chat reopens the composer and a second launch adds a second, current r
   await expect(drawerRow(page, firstTaskId)).not.toHaveAttribute('aria-current', 'true')
   // Newest first: the second ask is the top row.
   await expect(drawerRows(page).first()).toHaveAttribute('data-task-id', secondTaskId)
+  await settleMotion(page)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/3b-drawer-two-rows.png` })
   await page.keyboard.press('Escape')
 
@@ -506,11 +537,10 @@ test('Fix Walnut re-arms a pristine draft that is already open', async ({ page }
   const installDir = config.installDir ?? ''
   expect(installDir, 'the fixture server reports no source checkout, so Fix Walnut cannot arm').toBeTruthy()
 
-  // 1. A plain "+ Session" draft (the drawer's row) — it borrows the chat spot on
-  //    the way in.
+  // 1. A plain draft from the task toolbar's "New task" (the ONE task-creation
+  //    surface) — it borrows the chat spot on the way in.
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
-  await openAskWalnutDrawer(page)
-  await page.getByTitle('Open a new coding session draft').click()
+  await openDraft(page)
   const draft = page.locator(DRAFT_PANEL)
   await expect(draft).toHaveCount(1, { timeout: 20_000 })
   await expect(draft.locator('.session-panel-title')).toHaveText('New Session')
@@ -575,57 +605,102 @@ test('the Focus Dock chat button is titled Ask Walnut and toggles the slot', asy
   await page.screenshot({ path: `${SCREENSHOT_DIR}/7-dock-toggle.png` })
 })
 
-// ── "+ Task" popover in a SHORT window ───────────────────────────────────────
+// ── The regular panel behaviours: ×, fullscreen, search ──────────────────────
 
-test.describe('in a 600px-tall window', () => {
-  test.use({ viewport: { width: 1100, height: 600 } })
-
-  /**
-   * The task composer is a MENU, so it obeys the menu rules (web/src/AGENTS.md):
-   * portalled out of its clipping ancestor and placed by `useMenuPlacement`.
-   *
-   * It used to be a hand-placed `position: absolute; top: 100%` box inside the
-   * slot header — and the slot is `overflow: hidden`, so in a short window the
-   * form was CLIPPED at the slot's bottom edge with its Create row unreachable
-   * (no scrollbar, no wheel target). 600px tall is where that showed. The
-   * trigger is now a drawer row (which unmounts on pick), so the popover anchors
-   * to the ≡ button instead.
-   */
-  test('the "+ Task" popover is placed, scrollable, and keeps its Create row on screen', async ({ page }) => {
-    await loadHome(page)
-    await expect(slot(page)).toBeVisible({ timeout: 30_000 })
-
-    await openAskWalnutDrawer(page)
-    await page.getByTitle('Create a task without starting a session').click()
-    const popover = page.locator('.ask-walnut-task-popover')
-    await expect(popover).toBeVisible({ timeout: 20_000 })
-
-    // Portalled: NOT a descendant of the overflow:hidden slot, and fixed-positioned.
-    expect(await popover.evaluate((el) => !!el.closest('.ask-walnut-slot')),
-      'the popover is still inside the clipping slot').toBe(false)
-    expect(await popover.evaluate((el) => getComputedStyle(el).position)).toBe('fixed')
-    // Capped and scrollable — the two halves of the useMenuPlacement contract.
-    expect(await popover.evaluate((el) => getComputedStyle(el).overflowY)).toBe('auto')
-
-    const viewport = page.viewportSize()!
-    const box = (await popover.boundingBox())!
-    expect(box, 'the popover never rendered a box').not.toBeNull()
-    expect(box.y, 'the popover starts above the viewport').toBeGreaterThanOrEqual(-1)
-    expect(box.y + box.height, 'the popover overflows the bottom of the viewport')
-      .toBeLessThanOrEqual(viewport.height + 1)
-
-    // THE ASSERTION THIS TEST EXISTS FOR: the form's Create row is reachable.
-    const create = popover.locator('.qtc-confirm-primary')
-    await create.scrollIntoViewIfNeeded()
-    const createBox = (await create.boundingBox())!
-    expect(createBox, 'the Create button never rendered a box').not.toBeNull()
-    expect(createBox.y, 'Create sits above the viewport').toBeGreaterThanOrEqual(-1)
-    expect(createBox.y + createBox.height, 'Create sits below the fold')
-      .toBeLessThanOrEqual(viewport.height + 1)
-    await expect(create).toBeVisible()
-
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/10-task-popover-600px.png` })
+test('the panel\'s × hides the slot, exactly as a column\'s × closes the column', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('open-walnut-focus-dock-visible', 'true')
   })
+  await hideForeignWalnutTasks(page)
+  await loadHome(page)
+  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+
+  await slotSession(page).locator('.session-panel-close').click()
+  await expectChatSpotYielded(page)
+  const dockChat = page.locator('.dock-chat-item')
+  await expect(dockChat).not.toHaveClass(/dock-chat-active/)
+  // And the dock brings it back, on the same ask.
+  await dockChat.click()
+  await expectChatSpotOpen(page)
+  await expect(slotSession(page)).toBeVisible({ timeout: 30_000 })
+
+  // The composer's × in New mode goes back to the conversation, not away.
+  await clickNew(page)
+  await expect(slotDraft(page)).toBeVisible({ timeout: 20_000 })
+  await slotDraft(page).locator('.session-panel-close').click()
+  await expect(slotSession(page)).toBeVisible({ timeout: 20_000 })
+  await expectChatSpotOpen(page)
+})
+
+test('expand-to-fullscreen takes the whole page, not the slot', async ({ page }) => {
+  await hideForeignWalnutTasks(page)
+  await loadHome(page)
+  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+
+  const slotBox = (await slot(page).boundingBox())!
+  const viewport = page.viewportSize()!
+  expect(slotBox.width, 'the slot already fills the page; this test needs a narrower slot')
+    .toBeLessThan(viewport.width * 0.8)
+
+  await slotSession(page).locator('.session-panel-expand').click()
+  const full = page.locator('.open-walnut-fullscreen')
+  await expect(full).toBeVisible()
+  // THE ASSERTION THIS TEST EXISTS FOR: `contain: paint` on the slot's wrapper
+  // once made it the containing block for the panel's position:fixed overlay,
+  // so "expand" grew to the slot's own box (user: "it only expands in there").
+  // 95vw, capped at 1400px by the panel's own rule — so the bound follows both.
+  await expect
+    .poll(async () => (await full.boundingBox())?.width ?? 0, { message: 'the fullscreen panel never left the slot' })
+    .toBeGreaterThan(Math.min(viewport.width * 0.9, 1380))
+  const fullBox = (await full.boundingBox())!
+  expect(fullBox.x).toBeLessThan(slotBox.x + 1)
+  // The ≡ is hidden in fullscreen (its drawer would land behind the overlay).
+  await expect(full.locator('[data-testid="ask-walnut-menu"]')).toHaveCount(0)
+  await settleMotion(page)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/10-fullscreen.png` })
+
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.open-walnut-fullscreen')).toHaveCount(0)
+  await expect(slotSession(page).locator('[data-testid="ask-walnut-menu"]')).toBeVisible()
+})
+
+test('the drawer\'s search filters the asks by title', async ({ page }) => {
+  await hideForeignWalnutTasks(page)
+  await loadHome(page)
+  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+
+  // Both asks carry the placeholder title, so give one a name to search for.
+  const needle = `renamed ask ${STAMP}`
+  const patch = await page.request.patch(`/api/tasks/${firstTaskId}`, { data: { title: needle } })
+  expect(patch.status(), await patch.text()).toBeLessThan(300)
+
+  await openAskWalnutDrawer(page)
+  await expect(drawerRow(page, firstTaskId)).toContainText(needle, { timeout: 20_000 })
+  await expect(drawerRows(page)).toHaveCount(2)
+
+  // Typing filters: word order and case do not matter.
+  await drawerSearch(page).fill(`ASK ${STAMP}`)
+  await expect(drawerRows(page)).toHaveCount(1)
+  await expect(drawerRows(page).first()).toHaveAttribute('data-task-id', firstTaskId)
+  await settleMotion(page)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/11-drawer-search.png` })
+
+  await drawerSearch(page).fill('no such ask zzz')
+  await expect(drawerRows(page)).toHaveCount(0)
+  await expect(page.locator('[data-testid="ask-walnut-search-empty"]')).toBeVisible()
+
+  // Escape clears the query first, then closes.
+  await page.keyboard.press('Escape')
+  await expect(drawer(page)).toHaveCount(1)
+  await expect(drawerRows(page)).toHaveCount(2)
+  await page.keyboard.press('Escape')
+  await expect(drawer(page)).toHaveCount(0)
+
+  // Picking the found row still switches the slot.
+  await openAskWalnutDrawer(page)
+  await drawerSearch(page).fill(needle)
+  await drawerRows(page).first().click()
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', firstSessionId, { timeout: 30_000 })
 })
 
 // ── Mobile (390px) ───────────────────────────────────────────────────────────
@@ -653,6 +728,7 @@ test.describe('at phone width', () => {
     const drawerBox = (await drawer(page).boundingBox())!
     expect(drawerBox.x + drawerBox.width).toBeLessThanOrEqual(390 + 1)
     await expect(drawerRow(page, launch.taskId)).toHaveAttribute('aria-current', 'true')
+    await settleMotion(page)
     await page.screenshot({ path: `${SCREENSHOT_DIR}/8b-mobile-drawer.png` })
     await page.keyboard.press('Escape')
     await expect(drawer(page)).toHaveCount(0)

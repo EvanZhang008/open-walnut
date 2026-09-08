@@ -80,11 +80,12 @@ export const DRAFT_PANEL = '.main-page-session-column .draft-session-panel'
  * Open the Ask Walnut slot's ≡ drawer and return it.
  *
  * The slot renders the REGULAR session panel; its only addition is the ≡ button
- * at the top-left of that header, which slides in a drawer holding the quick
- * actions ("+ Task", "+ Session", "Find sessions", "Fix Walnut", "Context",
- * "Hide Ask Walnut"), the recent asks, and "New chat". Every action a spec used
- * to click in the old slot header now lives in this drawer, so the route in is:
- * open the drawer, click the row (the rows keep the old `title` texts).
+ * leading that header's title row, which slides in a drawer holding a search
+ * box, the asks to switch between, "New chat", and two small links ("Context",
+ * "Fix Walnut"). Nothing else: task/session creation is the draft column
+ * (`openDraft`), hiding the slot is the panel's own ×. Specs that need Context or
+ * Fix Walnut route in here: open the drawer, click the link (`data-testid`
+ * `ask-walnut-inspector` / `ask-walnut-fix`).
  */
 export async function openAskWalnutDrawer(page: Page): Promise<Locator> {
   const drawer = page.locator('[data-testid="ask-walnut-drawer"]')

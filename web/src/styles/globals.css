@@ -19763,8 +19763,10 @@ td.usage-share-col {
   flex-wrap: wrap;
 }
 
-/* The host surface's one control at the very start of row 1 (SessionPanel and
-   DraftSessionPanel `headerLeading`): the Ask Walnut slot's ≡ session switcher. */
+/* The host surface's one control at the start of the TITLE row (SessionPanel and
+   DraftSessionPanel `headerLeading`): the Ask Walnut slot's ≡ session switcher.
+   The title row, because it ellipsizes; row 1 wraps, and a button there pushed
+   the time-ago onto a second line in a narrow slot. */
 .session-panel-header-leading {
   display: flex;
   align-items: center;

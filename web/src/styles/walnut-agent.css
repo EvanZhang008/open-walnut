@@ -225,8 +225,8 @@
   margin: 8px 12px 0;
 }
 
-/* ── The ≡ button: the first thing on the panel header's row 1 (the slot itself,
-   `.session-panel-header-leading`, is laid out in globals.css next to the row). ── */
+/* ── The ≡ button: the first thing on the panel header's TITLE row (the slot
+   itself, `.session-panel-header-leading`, is laid out in globals.css). ── */
 .ask-walnut-menu-btn {
   color: var(--fg-muted);
 }
@@ -293,46 +293,43 @@
   font-size: 16px;
   line-height: 1;
 }
-/* Quick actions: the nav rows at the top of the Claude sidebar. */
-.ask-walnut-drawer-actions {
-  display: flex;
-  flex-direction: column;
-  padding: 0 6px 6px;
-  border-bottom: 1px solid var(--border);
-}
-.ask-walnut-drawer-action {
+/* Search: filters the list below as you type (the Claude sidebar's search box).
+   Own chrome rather than the global input rule so it reads as part of the
+   drawer, not a form. */
+.ask-walnut-drawer-search {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 7px 8px;
+  gap: 8px;
+  margin: 0 10px 8px;
+  padding: 0 10px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg-muted);
+}
+.ask-walnut-drawer-search:focus-within {
+  border-color: var(--walnut-accent);
+}
+.ask-walnut-drawer-search-ic {
+  font-size: 15px;
+  line-height: 1;
+}
+.ask-walnut-drawer-search-input {
+  flex: 1;
+  min-width: 0;
   border: none;
-  border-radius: 8px;
+  outline: none;
   background: none;
   font-family: inherit;
   font-size: 13px;
   color: var(--fg);
-  text-align: left;
-  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
 }
-.ask-walnut-drawer-action:hover { background: var(--hover-bg); }
-.ask-walnut-drawer-action.is-active { color: var(--walnut-accent); }
-.ask-walnut-drawer-ic {
-  display: inline-flex;
-  justify-content: center;
-  width: 18px;
-  font-size: 14px;
-  color: var(--fg-muted);
-}
-.ask-walnut-drawer-section {
-  padding: 10px 14px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-}
-/* The recents list owns whatever height is left and scrolls inside. */
+.ask-walnut-drawer-search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.ask-walnut-drawer-search-input::placeholder { color: var(--fg-muted); }
+/* The list owns whatever height is left and scrolls inside. */
 .ask-walnut-drawer-list {
   flex: 1;
   min-height: 0;
@@ -372,6 +369,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* "3d ago" on the right: last touch, in the header's own time-ago voice. */
+.ask-walnut-drawer-item-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-muted);
+}
 /* Status dot: the board's task-circle colours (globals), as a 7px disc. */
 .ask-walnut-drawer-dot {
   flex-shrink: 0;
@@ -389,11 +393,35 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
-/* "New chat": the pinned pill at the bottom, like the Claude sidebar's. */
+/* "New chat": the pinned pill at the bottom, like the Claude sidebar's, with the
+   two surface links (Context / Fix Walnut) as small text under it. */
 .ask-walnut-drawer-foot {
-  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 10px;
   border-top: 1px solid var(--border);
 }
+.ask-walnut-drawer-links {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+}
+.ask-walnut-drawer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.ask-walnut-drawer-link:hover { color: var(--fg); background: var(--hover-bg); }
+.ask-walnut-drawer-link.is-active { color: var(--walnut-accent); }
 .ask-walnut-drawer-new {
   display: flex;
   align-items: center;
@@ -412,40 +440,6 @@
 }
 .ask-walnut-drawer-new:hover { background: var(--walnut-accent-strong); }
 
-/* The "+ Task" popover: a position:fixed card portalled to <body> and placed by
-   useMenuPlacement (see AskWalnutDrawer). It carries the card chrome; the
-   height cap the hook hands back only works because of the overflow-y here.
-   Position/top/right/maxHeight arrive as inline style. */
-.ask-walnut-task-popover {
-  width: 340px;
-  max-width: calc(100vw - 16px);
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
-  overflow-y: auto;
-  /* Never a horizontal bar: with classic (space-taking) scrollbars even a 2px
-     x-overflow spawns one, which eats height and then forces the V-bar too. */
-  overflow-x: hidden;
-}
-/* The composer renders as a STATIC child inside that card: its own rule
-   (globals .quick-task-composer) is an absolutely-positioned bottom:100% box
-   written for a composer at the BOTTOM of a column. Two classes so this wins on
-   specificity regardless of bundle order (including over the glass @supports
-   block at the end of globals.css, which would otherwise double-blur). */
-.ask-walnut-task-popover .quick-task-composer {
-  position: static;
-  width: 100%;
-  margin: 0;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  animation: none;
-}
-
 /* ── Bodies ── */
 .ask-walnut-slot-body {
   flex: 1;
@@ -462,13 +456,11 @@
   flex-direction: column;
   overflow: hidden;
 }
-/* A whole session transcript lives in here, so give WebKit a paint boundary: the
-   Mac app is a WKWebView, and without containment it rasterizes the entire
-   subtree whenever anything on the page changes size (measured 2130ms → 85ms on
-   the Files panel, same shape). Safe because the panel already clips itself. */
-.ask-walnut-session {
-  contain: paint;
-}
+/* NO `contain: paint` on .ask-walnut-session, tempting as the WebKit raster win
+   is: paint containment makes the wrapper the containing block for
+   position:fixed descendants, and the panel's fullscreen mode
+   (.open-walnut-fullscreen, 95vw × 95vh fixed) then "expanded" inside the slot
+   instead of over the page. The panel already clips itself. */
 /* The panel itself must FILL its wrapper: its glass header and composer are
    absolutely positioned against it, so a panel sized by content would put the
    composer at the top of the column. `flex: 1` (basis 0) is what makes this hold

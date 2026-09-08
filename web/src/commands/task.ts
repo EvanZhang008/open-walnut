@@ -2,7 +2,7 @@ import type { SlashCommand } from './types.js';
 
 export const taskCommand: SlashCommand = {
   name: 'task',
-  description: 'Quick Task — type it, AI structures it',
+  description: 'New task — opens the draft column (start a session, or save it for later)',
   type: 'frontend',
   source: 'control',
   execute: () => {

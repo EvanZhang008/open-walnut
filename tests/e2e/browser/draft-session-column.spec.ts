@@ -53,7 +53,7 @@ import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftLaunchBar, draftPanel,
   draftPanels,
   draftProjectPill, expectV4Stack, homeColumns, loadHome, lockLeftmostPanel, openDraft,
-  openAskWalnutDrawer, openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests,
+  openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests,
 } from './draft-helpers'
 import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -176,22 +176,21 @@ test('Start with no folder picked says so and opens the picker — no request, t
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01b-start-needs-folder.png`, fullPage: false })
 })
 
-test('the Ask Walnut slot\'s "+ Session" row opens the same draft column (no launcher popover)', async ({ page }) => {
+test('the /task slash command opens the same draft column (no launcher popover, no second surface)', async ({ page }) => {
   await loadHome(page)
 
   const seen = watchForbiddenRequests(page)
 
-  // "+ Session" moved from the chat composer's QuickAccessBar to the Ask Walnut
-  // slot's ≡ drawer. Disambiguated by its own title — the todo toolbar has a "+" too.
-  await openAskWalnutDrawer(page)
-  await page.getByTitle('Open a new coding session draft').click()
+  // The old chat composer's "+ Task" / "+ Session" chips and the slot drawer's
+  // rows are gone: the draft column is the ONE task-creation surface, and the
+  // /task command (a `task-composer:open` event) routes into it as well.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('task-composer:open')))
 
   await expect(draftPanel(page)).toBeVisible({ timeout: 10_000 })
-  // The launcher popover must NOT open: this chip was the last entry point still
-  // routing through it. Unscoped now — the home page does not mount
-  // SessionPathSelector at all any more, so ANY hit here is the regression.
+  // Neither the launcher popover nor the retired quick-task popover may open.
   await expect(page.locator('.session-path-selector')).toHaveCount(0)
-  expect(seen, 'the chip open path must be network-free').toEqual([])
+  await expect(page.locator('.quick-task-composer')).toHaveCount(0)
+  expect(seen, 'the open path must be network-free').toEqual([])
 })
 
 // ── 2. Locked + at max: "+" still adds ──────────────────────────────────────

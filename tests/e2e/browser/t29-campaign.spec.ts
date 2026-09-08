@@ -18,7 +18,6 @@
  */
 import fs from 'node:fs/promises'
 import { test, expect, type Page } from '@playwright/test'
-import { openAskWalnutDrawer } from './draft-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = '/tmp/t29-campaign/shots'
@@ -34,17 +33,17 @@ test.beforeAll(async () => {
 })
 
 /**
- * The session-finder row ("Find sessions") in the Ask Walnut slot's ≡ drawer —
- * distinct from the "+ Session" launcher row beside it.
+ * The session finder's entry point.
  *
  * It was a `.quick-access-pill` above the old chat composer; that composer went
- * away with the main agent (P1), so the finder moved into the slot's drawer and
- * is addressed by its test id (the labels of the two rows share the word
- * "session"). Opening the drawer is part of the gesture; it closes on the click.
+ * away with the main agent (P1), and the slot's ≡ drawer deliberately carries no
+ * "Find sessions" row either (its search box filters the asks). ⌘⇧O is the one
+ * gesture left, so this opens it from a non-input focus (the shortcut guard
+ * ignores the combo while typing in a field).
  */
-async function finderPill(page: Page) {
-  await openAskWalnutDrawer(page)
-  return page.locator('[data-testid="ask-walnut-sessions"]')
+async function openFinder(page: Page) {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('ControlOrMeta+Shift+O')
 }
 
 async function openHome(page: Page) {
@@ -52,10 +51,10 @@ async function openHome(page: Page) {
   await expect(page.locator('.main-page')).toBeVisible()
 }
 
-test('session finder: pill opens, query filters results, Escape clears then closes', async ({ page }) => {
+test('session finder: ⌘⇧O opens, query filters results, Escape clears then closes', async ({ page }) => {
   await openHome(page)
 
-  await (await finderPill(page)).click()
+  await openFinder(page)
   const panel = page.locator('.session-search-panel')
   await expect(panel).toBeVisible()
   const input = panel.locator('.session-search-input')
@@ -176,7 +175,7 @@ test('demo: session finder then quick add (continuous recording)', async ({ page
   await openHome(page)
 
   // Flow 1 — session finder.
-  await (await finderPill(page)).click()
+  await openFinder(page)
   const panel = page.locator('.session-search-panel')
   await expect(panel).toBeVisible()
   const input = panel.locator('.session-search-input')
