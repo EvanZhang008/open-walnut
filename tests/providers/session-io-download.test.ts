@@ -26,7 +26,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { findImagePaths, findRemoteImagePaths, findRelativeImageNames } from '../../src/providers/session-io.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
-import { sessionMirrorPath } from '../../src/core/remote-image-mirror.js'
+import { sessionMirrorPath, clearFailedFetches } from '../../src/core/remote-image-mirror.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR, REMOTE_IMAGES_DIR } from '../../src/constants.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 
@@ -62,6 +62,9 @@ const settle = () => new Promise((r) => setTimeout(r, 10))
 beforeEach(async () => {
   await fsp.rm(tmpBase, { recursive: true, force: true })
   await fsp.mkdir(SESSION_STREAMS_DIR, { recursive: true })
+  // The failed-fetch cache is module state shared by every case in this file: a
+  // path one test deliberately fails would otherwise be skipped by the next.
+  clearFailedFetches()
 })
 
 afterEach(async () => {
@@ -263,6 +266,121 @@ describe('RemoteSessionManager.processInbound (remote → local path rewrite)', 
     expect(readPaths(conn)).toHaveLength(0)
   })
 
+  it('does not corrupt a relative path in tool output into prefix + mirror slot', async () => {
+    // End to end for the invented-path bug: before the boundary fix this line came
+    // back as `M repo-part` + a mirror path, i.e. a string that starts in the repo
+    // and ends in the mirror. Only the RELATIVE name may be rewritten, and it is
+    // rewritten whole.
+    const mgr = new RemoteSessionManager('sid-invent', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn()
+    injectConn(mgr, conn)
+
+    const rel = 'repo-part/team/proj/docs/images/onboarding.png'
+    const out = mgr.processInbound(` M ${rel}`, 'sess-invent', '/workspace/proj')
+    await settle()
+
+    // The corruption's signature: the repo prefix survives and the mirror path is
+    // glued onto it. `REMOTE_IMAGES_DIR` is absolute, so the corrupted string is the
+    // prefix immediately followed by it.
+    expect(out).not.toContain(`repo-part${REMOTE_IMAGES_DIR}`)
+    expect(out).toBe(` M ${sessionMirrorPath('sess-invent', `/workspace/proj/${rel}`)}`)
+    // And the read that goes out is for a path that could actually exist.
+    expect(readPaths(conn)).toEqual([`/workspace/proj/${rel}`])
+  })
+
+  it('leaves a path that merely CONTAINS a mirror slot alone', async () => {
+    // The shape a streaming-edge rewrite left behind before excludeEdges existed:
+    // a source-tree prefix glued onto a mirror slot. `startsWith(REMOTE_IMAGES_DIR)`
+    // cannot see it, so every pass used to mint the path its OWN slot — basename
+    // with two hash prefixes, undownloadable, retried on every replay.
+    const mgr = new RemoteSessionManager('sid-glued', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn()
+    injectConn(mgr, conn)
+
+    const sid = '11111111-2222-3333-4444-555555555555'
+    const glued = `/workspace/marina/docs/images/tmp/open-walnut/images/remote/${sid}/aabbccdd11223344-diagram.png`
+    const text = `See ${glued}`
+
+    expect(mgr.processInbound(text, sid, '/workspace/marina/docs')).toBe(text)
+    await settle()
+    expect(readPaths(conn)).toHaveLength(0)
+  })
+
+  it('does not re-read a path the host said it does not have', async () => {
+    // Nine failing reads per burst, every few minutes, for a reference that can
+    // never resolve — the rewrite paths rebuild candidates from scratch each time,
+    // so the only thing that can stop it is remembering the answer.
+    const mgr = new RemoteSessionManager('sid-negcache', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn(async () => ({ ok: false, error: 'fs.read failed: no such file (ENOENT)' }))
+    injectConn(mgr, conn)
+
+    mgr.processInbound('See /tmp/never-there.png', 'sess-neg-a')
+    await settle()
+    expect(readPaths(conn)).toHaveLength(1)
+
+    // A DIFFERENT session: its own _imageCache is empty, so only the shared
+    // miss cache can stop the second attempt.
+    const mgr2 = new RemoteSessionManager('sid-negcache2', 'remotehost', REMOTE_TARGET)
+    injectConn(mgr2, conn)
+    mgr2.processInbound('See /tmp/never-there.png', 'sess-neg-b')
+    await settle()
+    expect(readPaths(conn)).toHaveLength(1)
+  })
+
+  it('DOES retry a read it merely failed to deliver', async () => {
+    // A transport failure says nothing about whether the file exists. Muting on it
+    // would black out images after every restart or tunnel flap.
+    const mgr = new RemoteSessionManager('sid-flaky', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn(async () => ({ ok: false, error: 'daemon command timeout: fs.read' }))
+    injectConn(mgr, conn)
+
+    mgr.processInbound('See /tmp/flaky.png', 'sess-flaky-a')
+    await settle()
+    const mgr2 = new RemoteSessionManager('sid-flaky2', 'remotehost', REMOTE_TARGET)
+    injectConn(mgr2, conn)
+    mgr2.processInbound('See /tmp/flaky.png', 'sess-flaky-b')
+    await settle()
+
+    expect(readPaths(conn)).toHaveLength(2)
+  })
+
+  it('a local write failure does not mute the remote path', async () => {
+    // The bytes arrived; the mirror write is what broke (EACCES, ENOSPC). Blaming
+    // the remote path for that would hide a perfectly good image.
+    const mgr = new RemoteSessionManager('sid-writefail', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn()
+    injectConn(mgr, conn)
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('EACCES') })
+    try {
+      mgr.processInbound('See /tmp/writefail.png', 'sess-wf-a')
+      await settle()
+    } finally {
+      spy.mockRestore()
+    }
+
+    const mgr2 = new RemoteSessionManager('sid-writefail2', 'remotehost', REMOTE_TARGET)
+    injectConn(mgr2, conn)
+    mgr2.processInbound('See /tmp/writefail.png', 'sess-wf-b')
+    await settle()
+    expect(readPaths(conn)).toHaveLength(2)
+  })
+
+  it('does not corrupt a relative name that embeds a mirror slot (pass 2)', async () => {
+    // The same corruption minus its leading slash is a valid multi-segment relative
+    // name; joining it onto cwd invents a path no host has ever had.
+    const mgr = new RemoteSessionManager('sid-relglued', 'remotehost', REMOTE_TARGET)
+    const conn = makeConn()
+    injectConn(mgr, conn)
+
+    const sid = '11111111-2222-3333-4444-555555555555'
+    const rel = `images/tmp/open-walnut/images/remote/${sid}/aabbccdd11223344-diagram.png`
+    const text = `See ${rel} here`
+
+    expect(mgr.processInbound(text, sid, '/workspace/marina/docs')).toBe(text)
+    await settle()
+    expect(readPaths(conn)).toHaveLength(0)
+  })
+
   it('is a no-op for the local daemon (__local__ shares the filesystem)', () => {
     const mgr = new RemoteSessionManager('sid-localin', '__local__', null)
     const conn = makeConn()
@@ -336,6 +454,76 @@ describe('findImagePaths (space-aware path detection)', () => {
 
   it('returns empty for text without image paths', () => {
     expect(findImagePaths('Hello world')).toHaveLength(0)
+  })
+})
+
+describe('an absolute path must START a token (the invented-path bug)', () => {
+  // 2026-09-08, found on a live remote session: the unquoted matcher had no
+  // left boundary, so `\/` matched any slash inside a longer token and a RELATIVE
+  // path was read as an absolute one beginning at its first slash. Everything
+  // downstream believed the invented path: its own mirror slot, a download that
+  // could only fail, and — because the rewrite replaces the matched span — stored
+  // text that begins in the source tree and ends in the mirror. The slot hash on
+  // the real session recomputes from the invented path, which is how this was
+  // pinned rather than guessed.
+
+  it('does not invent an absolute path out of a relative one', () => {
+    // The exact shape: a `git status --short` line in a tool result.
+    const line = ' M repo-part/team/proj/docs/images/onboarding.png'
+    expect(findImagePaths(line)).toEqual([])
+    // It is a relative reference, and that matcher gets the WHOLE name — which is
+    // what lets it be resolved against cwd and the transcript's path hints.
+    expect(findRelativeImageNames(line)).toEqual(['repo-part/team/proj/docs/images/onboarding.png'])
+  })
+
+  it('does not invent one out of a single-directory relative name either', () => {
+    // `images/architecture.png` used to yield `/architecture.png`, which is how a
+    // stored path ended up as `<prefix>/images` + a mirror slot.
+    expect(findImagePaths('see images/architecture.png here')).toEqual([])
+  })
+
+  it('still finds every shape a real transcript puts an absolute path in', () => {
+    const cases: [string, string][] = [
+      ['at /tmp/charts/a.png done', '/tmp/charts/a.png'],
+      ['/tmp/a.png ready', '/tmp/a.png'],
+      ['![x](/tmp/a.png)', '/tmp/a.png'],
+      ['{"file_path": "/workspace/x/a.png"}', '/workspace/x/a.png'],
+      ['path=/tmp/a.png', '/tmp/a.png'],
+      ['[/tmp/a.png]', '/tmp/a.png'],
+      ['<img src=/tmp/a.png>', '/tmp/a.png'],
+    ]
+    for (const [text, expected] of cases) {
+      expect(findImagePaths(text), text).toEqual([expected])
+    }
+  })
+
+  it('still finds two absolute paths separated only by a comma', () => {
+    expect(findImagePaths('files: /tmp/a.png,/tmp/b.png')).toEqual(['/tmp/a.png', '/tmp/b.png'])
+  })
+
+  it('accepts a path after ANY punctuation, because prose is not an allowlist', () => {
+    // The guard is "the slash must not continue a token", expressed as a negative
+    // lookbehind. The first version of this fix used an allowlist of permitted
+    // preceding characters instead, and silently dropped every one of these — a
+    // markdown-bolded path is ordinary in CLI prose, and losing it costs the image
+    // inbound AND stops the file being uploaded outbound.
+    for (const text of [
+      'Saved to **/tmp/chart.png**',
+      '|/tmp/chart.png|',
+      'cmd;/tmp/chart.png',
+      'x</tmp/chart.png>',
+      '→/tmp/chart.png',
+      '—/tmp/chart.png',
+      '‘/tmp/chart.png’',
+    ]) {
+      expect(findImagePaths(text), text).toEqual(['/tmp/chart.png'])
+    }
+  })
+
+  it('rejects a slash that continues a token, which is what defect #1 was', () => {
+    for (const text of ['the file/tmp/a.png', '$HOME/tmp/a.png', './images/a.png']) {
+      expect(findImagePaths(text), text).toEqual([])
+    }
   })
 })
 

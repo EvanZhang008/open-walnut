@@ -590,10 +590,39 @@ export function createSessionIO(
 const IMG_EXT = 'png|jpg|jpeg|gif|webp|bmp|tiff'
 
 /**
+ * The path must not CONTINUE a token: the character before its leading slash
+ * cannot be part of a path itself. Expressed as a negative lookbehind rather than
+ * an allowlist of permitted characters, because prose puts absolute paths after
+ * all sorts of punctuation (`**\/tmp/a.png**`, `|/tmp/a.png|`, `cmd;/tmp/a.png`,
+ * an arrow or a curly quote) and an allowlist silently drops every character
+ * nobody thought of.
+ */
+const PATH_NOT_MID_TOKEN = `(?<![\\w.\\-/])`
+
+/**
  * Unquoted path regex — no spaces allowed (safe default for free text).
  * Matches: /some/path/image.png
+ *
+ * The leading guard is load-bearing, not tidiness. Without it the `\/` could
+ * match ANY slash inside a longer token, so a RELATIVE path was silently read as
+ * an absolute one starting at its first slash: in a `git status` line reading
+ * `M repo-part/team/proj/docs/images/onboarding.png`, this matched
+ * `/team/proj/docs/images/onboarding.png`. Everything downstream then treated
+ * that invented path as a real remote file: it got its own mirror slot, the
+ * download could only ever fail, and the rewrite REPLACED the matched span, so
+ * the stored text became `repo-part` + the mirror path — one string that begins
+ * in the source tree and ends in the mirror. Confirmed on a live session by
+ * recomputing the slot hash from the invented path (2026-09-08). A relative
+ * reference is the relative matcher's job, and it resolves it against the
+ * session's cwd plus the transcript's own path hints instead of guessing.
+ *
+ * `$HOME/tmp/a.png` is correctly rejected too: that is a shell variable, not a
+ * path that exists.
  */
-const UNQUOTED_IMAGE_RE = new RegExp(`(\\/[\\w./_-]+\\.(?:${IMG_EXT}))\\b`, 'gi')
+const UNQUOTED_IMAGE_RE = new RegExp(
+  `${PATH_NOT_MID_TOKEN}(\\/[\\w./_-]+\\.(?:${IMG_EXT}))\\b`,
+  'gi',
+)
 
 /**
  * Quoted/backtick path regex — allows spaces in paths.

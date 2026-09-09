@@ -33,7 +33,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { findImagePaths, findRelativeImageNames } from '../providers/session-io.js';
 import { REMOTE_IMAGES_DIR } from '../constants.js';
-import { backfillMirrorSidecar, resolveSessionMirrorPath } from './remote-image-mirror.js';
+import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored } from './remote-image-mirror.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 import {
   SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest,
@@ -2900,6 +2900,7 @@ export async function rewriteHistoryRemoteImages(
   const filePathHints = new Map<string, string[]>()
   const isUsefulHint = (p: string) =>
     !p.startsWith(LOCAL_HOME) &&        // skip local filesystem paths
+    !looksAlreadyMirrored(p) &&         // a rewritten path is not a source of truth
     p.lastIndexOf('/') > 0              // require ≥2 path components
   const addHint = (p: string) => {
     const bn = path.basename(p)
@@ -2934,8 +2935,11 @@ export async function rewriteHistoryRemoteImages(
     // Pass 1: absolute remote paths
     const remotePaths = findImagePaths(text)
     for (const remotePath of remotePaths) {
-      // Skip local paths
+      // Skip local paths, and anything that is (or embeds) a mirror slot already
+      // — re-mirroring rewritten text mints a second, undownloadable slot and
+      // re-attempts its download on every single replay. See looksAlreadyMirrored.
       if (remotePath.startsWith(LOCAL_HOME) || remotePath.startsWith(REMOTE_IMAGES_DIR)) continue
+      if (looksAlreadyMirrored(remotePath)) continue
 
       let localPath = cache.get(remotePath)
       if (!localPath) {
@@ -2960,6 +2964,11 @@ export async function rewriteHistoryRemoteImages(
     if (cwd) {
       const relNames = findRelativeImageNames(rewritten)
       for (const relName of relNames) {
+        // A relative name can embed a mirror slot too: the corrupted shape
+        // `images/tmp/open-walnut/images/remote/<sid>/<hash>-x.png` matches the
+        // relative-name regex, and joining it onto cwd invents a path that has
+        // never existed on any host.
+        if (looksAlreadyMirrored(relName)) continue
         const basename = path.basename(relName)
         const hintPaths = filePathHints.get(basename) ?? []
         const cwdPath = `${cwd.replace(/\/$/, '')}/${relName}`

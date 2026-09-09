@@ -30,6 +30,7 @@ import {
   isMirrorPath,
   sessionMirrorPath,
   resolveSessionMirrorPath,
+  clearFailedFetches,
 } from '../../src/core/remote-image-mirror.js'
 
 const mirrorPath = () => path.join(REMOTE_IMAGES_DIR, 'sess-1', `chart-${Math.random().toString(36).slice(2)}.png`)
@@ -38,6 +39,9 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(REMOTE_IMAGES_DIR, { recursive: true })
   sendMock.mockReset()
+  // The not-found cache is module state shared by every case in this file: a path
+  // one test deliberately misses would otherwise be skipped by the next.
+  clearFailedFetches()
 })
 
 afterEach(async () => {

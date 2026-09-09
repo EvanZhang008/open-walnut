@@ -105,6 +105,59 @@ export function isMirrorPath(p: string): boolean {
   return resolved.startsWith(REMOTE_IMAGES_DIR + path.sep)
 }
 
+/**
+ * The shape of a mirror slot as it appears ANYWHERE inside a longer string:
+ * `…/images/remote/<session uuid>/<one file>`. Deliberately matched on the TAIL
+ * rather than against REMOTE_IMAGES_DIR, because that root is not a constant of
+ * the data: it follows WALNUT_DAEMON_DIR, so a path written under one daemon dir
+ * (a sandbox, a test, an older install) is still a mirror slot and still must not
+ * be mirrored a second time.
+ */
+const MIRROR_SLOT_TAIL_RE = new RegExp(
+  '(?:^|/)images/remote/(?:' +
+    // …/<session uuid>/<anything> — covers legacy bare-basename slots too.
+    '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[^/]+' +
+    // …/<any bucket>/<16-hex>-<name> — the hash-keyed slot naming, which is also
+    // used under a HOST alias (/api/local-image's host cache) and under the
+    // literal `unknown` when a session has no claude id yet.
+    '|[^/]+/[0-9a-f]{16}-[^/]+' +
+  ')$',
+  'i',
+)
+
+/**
+ * True when a path is a mirror slot, OR merely CONTAINS one — which means it is
+ * already-rewritten text that something glued a prefix onto.
+ *
+ * Why `isMirrorPath` alone is not enough (proven from a real transcript,
+ * 2026-09-03): a streaming delta boundary fell immediately before an absolute
+ * image path, so the fragment `/architecture.png` looked like a complete path of
+ * its own and was rewritten to a mirror slot. Re-joining the deltas produced
+ * `<session cwd>/images` + `/tmp/open-walnut/images/remote/<sid>/<hash>-architecture.png`,
+ * i.e. one string that starts in the source tree and ends in the mirror. The
+ * chunk-edge half is fixed (`excludeEdges`), but every LATER rewrite still sees
+ * that stored string as a brand-new remote path: it does not start with the
+ * mirror dir, so it gets its own slot, whose basename then carries TWO hash
+ * prefixes (`<hash2>-<hash1>-architecture.png` — verified by recomputing both
+ * hashes from the stored text). That second slot can never be downloaded, so the
+ * reference stays broken AND every replay re-attempts the download.
+ *
+ * Refusing to mirror such a path leaves the (already broken) reference alone
+ * instead of minting a second doomed slot per replay.
+ *
+ * The trade this makes: a path written under a DIFFERENT WALNUT_DAEMON_DIR is also
+ * skipped, even though local-image.ts documents a convention where such a path can
+ * genuinely exist on the remote host. That needs a daemon-dir mismatch to happen at
+ * all, and the cost is one image not mirrored rather than a transcript rewritten
+ * wrong on every replay.
+ */
+export function looksAlreadyMirrored(p: string): boolean {
+  // isMirrorPath resolves against the server's cwd, which is meaningless for a
+  // relative reference out of a transcript — the tail match is the whole answer there.
+  if (path.isAbsolute(p) && isMirrorPath(p)) return true
+  return MIRROR_SLOT_TAIL_RE.test(p)
+}
+
 /** Record where a mirror file came from (fire-and-forget safe; sync + tiny). */
 export function writeMirrorSidecar(
   mirrorPath: string,
@@ -227,22 +280,153 @@ export async function revalidateMirror(mirrorPath: string): Promise<Buffer | nul
   )
 }
 
+// ── Fetches that came back "not there" ───────────────────────────────
+// A remote path that is not there is not there, and asking again on every render
+// costs a daemon round trip each time. That is not hypothetical: a transcript can
+// contain an image reference that can NEVER resolve (a path corrupted by an old
+// rewrite, or a file the agent deleted), and history replay re-derives its
+// candidate list from scratch on every open, refocus and reconnect. Measured on a
+// real session: three unresolvable images x three candidates = nine failing
+// fs.read calls, repeating every few minutes for days.
+//
+// Two rules keep this from turning a storm into a broken image:
+//
+//  * Only a definitive NOT-FOUND is remembered. A transport failure, a cold daemon
+//    connect (the DOWNLOAD_TIMEOUT_MS note above measures that at ~40s against a
+//    10s cap) or a tunnel flap says nothing about whether the file exists, and
+//    muting on those would make the FIRST load after a restart the likeliest one
+//    to go dark. The daemon tags its ENOENT so this distinction is available.
+//  * Backoff, not a flat window. A model routinely NAMES an image in prose a moment
+//    before the tool writes it, so a first miss has to be cheap to retry (30s); a
+//    path that keeps missing doubles its way up to 10 minutes, which is what
+//    actually ends the storm.
+const FETCH_MISS_BASE_MS = 30 * 1000
+const FETCH_MISS_MAX_MS = 10 * 60 * 1000
+const FETCH_MISS_MAX_KEYS = 500
+const missedFetches = new Map<string, { at: number; misses: number }>()
+
+const missKey = (host: string, remotePath: string) => `${host} ${remotePath}`
+
+/** Cap the exponent, not just its result: `2 ** 4000` is Infinity. */
+const muteWindowMs = (misses: number) =>
+  Math.min(FETCH_MISS_BASE_MS * 2 ** Math.min(Math.max(0, misses - 1), 20), FETCH_MISS_MAX_MS)
+
+/**
+ * Is this exact fetch still muted?
+ *
+ * An expired record is deliberately KEPT, not pruned: the miss count is the whole
+ * backoff, and dropping it here resets every path to its 30s window forever (my
+ * first version did exactly that, and the escalation test caught it). Records leave
+ * only on a success (`noteFetchFound`) or via the size cap.
+ */
+export function fetchRecentlyMissing(host: string, remotePath: string): boolean {
+  const rec = missedFetches.get(missKey(host, remotePath))
+  if (!rec) return false
+  return Date.now() - rec.at < muteWindowMs(rec.misses)
+}
+
+/**
+ * Remember that the host definitively does NOT have this path. Callers must pass
+ * only that — never a timeout, a transport error, or a local write failure, each of
+ * which says nothing about whether the file exists.
+ *
+ * Exported because RemoteSessionManager reads remote bytes through its own live
+ * connection rather than through `downloadToMirror`, and the storm this cache
+ * exists to stop is the same one.
+ */
+export function noteFetchMissing(host: string, remotePath: string): void {
+  const key = missKey(host, remotePath)
+  const prev = missedFetches.get(key)
+  // Map iteration is insertion-ordered, and `set` on an existing key does NOT move
+  // it — delete first, so "the first key is the oldest" stays true.
+  if (prev) missedFetches.delete(key)
+  else if (missedFetches.size >= FETCH_MISS_MAX_KEYS) {
+    const oldest = missedFetches.keys().next().value
+    if (oldest !== undefined) missedFetches.delete(oldest)
+  }
+  const misses = (prev?.misses ?? 0) + 1
+  missedFetches.set(key, { at: Date.now(), misses })
+  // Log the first miss only. The storm this cache stops was invisible in the walnut
+  // log — it could only be seen in the exec host's own daemon log, on another machine.
+  if (!prev) {
+    log.web.info('remote-image not found on host', { host, remotePath, mutedForMs: muteWindowMs(misses) })
+  }
+}
+
+/** A path that resolved is no longer suspect — drop any backoff it accumulated. */
+export function noteFetchFound(host: string, remotePath: string): void {
+  missedFetches.delete(missKey(host, remotePath))
+}
+
+/** Test seam — module state has to be resettable between cases. */
+export function clearFailedFetches(): void {
+  missedFetches.clear()
+}
+
+/**
+ * Does this daemon reply mean "the host does not have that file", as opposed to
+ * "we could not ask"? The daemon appends the errno to its fs.read error text for
+ * exactly this purpose.
+ *
+ * A daemon too old to tag the code simply never looks missing, so those hosts fall
+ * back to the previous behaviour (retry every replay) instead of muting an image
+ * that might be fine. Degrading toward the noisy answer is the right direction: a
+ * broken picture is worse than a repeated read.
+ */
+export function isNotFoundReply(reply: { ok?: boolean; error?: unknown; exists?: unknown }): boolean {
+  if (reply.exists === false) return true
+  if (reply.ok !== false) return false
+  return typeof reply.error === 'string' && /\bENOENT\b/.test(reply.error)
+}
+
+/**
+ * Read remote bytes, distinguishing "the host says it has no such file" from
+ * "we could not ask". Only the former may be cached: see the note above.
+ */
+async function readRemoteBytes(
+  host: string,
+  remotePath: string,
+): Promise<{ bytes: Buffer } | { missing: true } | { unreachable: true }> {
+  const { getDaemonConnection } = await import('../providers/daemon-connection.js')
+  const { getConfig } = await import('./config-manager.js')
+  const config = await getConfig()
+  const hostDef = config.hosts?.[host]
+  if (!hostDef?.hostname) return { unreachable: true }
+  const conn = await getDaemonConnection(host, {
+    hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port,
+  })
+  const result = await conn.send('fs.read', { path: remotePath, encoding: 'base64' })
+  if (result.ok && typeof result.data === 'string') return { bytes: Buffer.from(result.data, 'base64') }
+  return isNotFoundReply(result) ? { missing: true } : { unreachable: true }
+}
+
 /**
  * Download a remote file into the mirror and record its sidecar. Returns the
  * bytes, or null on failure. The post-download stat pins the true remote
  * mtime/size so later revalidations compare against reality, not wall-clock.
+ *
+ * A path the host recently said it does not have returns null WITHOUT touching the
+ * daemon — see the note above the cache. A path we merely failed to REACH is
+ * retried, every time.
  */
 export async function downloadToMirror(
   host: string,
   remotePath: string,
   mirrorPath: string,
 ): Promise<Buffer | null> {
-  const buf = await withTimeout(
-    fetchRemoteBytes(host, remotePath).catch(() => null),
+  if (fetchRecentlyMissing(host, remotePath)) return null
+  const read = await withTimeout(
+    readRemoteBytes(host, remotePath).catch(() => ({ unreachable: true }) as const),
     DOWNLOAD_TIMEOUT_MS,
-    null,
+    { unreachable: true } as const,
   )
-  if (!buf) return null
+  if ('missing' in read) {
+    noteFetchMissing(host, remotePath)
+    return null
+  }
+  if (!('bytes' in read)) return null // could not ask — say nothing about the file
+  const buf = read.bytes
+  noteFetchFound(host, remotePath)
   try {
     fs.mkdirSync(path.dirname(mirrorPath), { recursive: true })
     fs.writeFileSync(mirrorPath, buf)

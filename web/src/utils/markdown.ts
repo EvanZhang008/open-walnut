@@ -1327,8 +1327,14 @@ export function extractMarkdownFields(
 /** Image file extension pattern */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 
-/** Match absolute image file paths in text (allows spaces/hyphens in path segments) */
-const IMAGE_PATH_IN_TEXT_RE = /(\/(?:[\w. -]+\/)+[\w. -]+\.(?:png|jpe?g|gif|webp))/gi;
+/** Match absolute image file paths in text (allows spaces/hyphens in path segments).
+ *  The lookbehind stops the leading `\/` from matching a slash INSIDE a longer
+ *  token, which used to read a relative path as an absolute one starting at its
+ *  first slash: a `git status --short` line `M repo/team/docs/images/x.png` became
+ *  the invented `/team/docs/images/x.png`, rendered as an <img> that 404s on every
+ *  paint. Same guard as UNQUOTED_IMAGE_RE server-side (src/providers/session-io.ts)
+ *  — the relative matcher below is what handles those references. */
+const IMAGE_PATH_IN_TEXT_RE = /(?<![\w.\-/])(\/(?:[\w. -]+\/)+[\w. -]+\.(?:png|jpe?g|gif|webp))/gi;
 
 /** Match relative image file paths like "screenshot.png" or "subdir/file.png".
  *  Boundaries include backtick — Claude Code commonly wraps filenames in backticks. */

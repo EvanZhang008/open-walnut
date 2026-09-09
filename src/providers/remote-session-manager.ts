@@ -18,7 +18,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { REMOTE_IMAGES_DIR } from '../constants.js'
-import { writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath } from '../core/remote-image-mirror.js'
+import {
+  writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored,
+  fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply,
+} from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
@@ -894,8 +897,10 @@ export class RemoteSessionManager implements SessionManager {
     const localHome = process.env.HOME || '/root'
 
     for (const remotePath of remotePaths) {
-      // Skip local paths
+      // Skip local paths, and anything that already is (or embeds) a mirror slot
+      // — see looksAlreadyMirrored; the same guard exists in session-history.ts.
       if (remotePath.startsWith(localHome) || remotePath.startsWith(REMOTE_IMAGES_DIR)) continue
+      if (looksAlreadyMirrored(remotePath)) continue
 
       let localPath = this._imageCache.get(remotePath)
       if (!localPath) {
@@ -920,6 +925,9 @@ export class RemoteSessionManager implements SessionManager {
     if (cwd) {
       const relNames = findRelativeImageNames(rewritten, findOpts)
       for (const relName of relNames) {
+        // A relative name can embed a mirror slot; joining it onto cwd invents a
+        // path no host has ever had. Same guard as session-history.ts.
+        if (looksAlreadyMirrored(relName)) continue
         const cwdPath = `${cwd.replace(/\/$/, '')}/${relName}`
 
         if (this._imageCache.has(cwdPath)) continue
@@ -1135,23 +1143,32 @@ export class RemoteSessionManager implements SessionManager {
    */
   private async downloadRemoteFile(remotePath: string, localPath: string): Promise<void> {
     if (!this.conn?.connected) return
+    // A path the host already said it does not have is not going to be there this
+    // render either, and the rewrite paths re-derive their candidate list from
+    // scratch every time. Shared with downloadToMirror so both entry points honour
+    // one cache. Only a real not-found is remembered — a transport failure or a
+    // local write error says nothing about whether the file exists.
+    if (fetchRecentlyMissing(this.hostKey, remotePath)) return
 
     try {
       const dir = path.dirname(localPath)
       fs.mkdirSync(dir, { recursive: true })
 
       const result = await this.conn.send('fs.read', { path: remotePath, encoding: 'base64' })
-      if (result.ok && result.data) {
-        const buf = Buffer.from(result.data as string, 'base64')
-        fs.writeFileSync(localPath, buf)
-        const st = await this.conn.send('fs.stat', { path: remotePath }).catch(() => null)
-        writeMirrorSidecar(localPath, {
-          host: this.hostKey,
-          remotePath,
-          remoteMtimeMs: st?.ok && st.exists ? (st.mtimeMs as number) : 0,
-          remoteSize: st?.ok && st.exists ? (st.size as number) : buf.length,
-        })
+      if (!result.ok || typeof result.data !== 'string') {
+        if (isNotFoundReply(result)) noteFetchMissing(this.hostKey, remotePath)
+        return
       }
+      noteFetchFound(this.hostKey, remotePath)
+      const buf = Buffer.from(result.data, 'base64')
+      fs.writeFileSync(localPath, buf)
+      const st = await this.conn.send('fs.stat', { path: remotePath }).catch(() => null)
+      writeMirrorSidecar(localPath, {
+        host: this.hostKey,
+        remotePath,
+        remoteMtimeMs: st?.ok && st.exists ? (st.mtimeMs as number) : 0,
+        remoteSize: st?.ok && st.exists ? (st.size as number) : buf.length,
+      })
     } catch (err) {
       log.session.warn('RemoteSessionManager: file download failed', {
         remotePath, localPath,
