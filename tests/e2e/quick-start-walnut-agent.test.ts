@@ -40,7 +40,7 @@ interface QuickStartResult {
   status: number
   taskId?: string
   sessionId?: string
-  task?: { project?: string; pinned?: boolean; focus_tier?: string; cwd?: string; walnut_agent?: boolean }
+  task?: { project?: string; title?: string; pinned?: boolean; focus_tier?: string; cwd?: string; walnut_agent?: boolean; agent_id?: string }
   error?: string
 }
 
@@ -126,6 +126,85 @@ describe('quick-start walnutAgent', () => {
     const res = await quickStart({ message: 'hi' })
     expect(res.status).toBe(400)
     expect(res.error).toMatch(/cwd/i)
+  })
+
+  it("agentId names another console agent: its persona, its own 'Ask <name>' project + placeholder, and an agent_id stamp", async () => {
+    const res = await quickStart({ walnutAgent: true, agentId: 'mentor', message: 'help me reflect on this week' })
+    expect(res.status, res.error).toBe(200)
+    // Same task shape as an Ask Walnut — marker on, filed under the agent's own
+    // project, titled after it until auto-titling names it — plus whose ask it is.
+    expect(res.task?.walnut_agent).toBe(true)
+    expect(res.task?.agent_id).toBe('mentor')
+    expect(res.task?.project).toBe('Ask Mentor')
+    expect(res.task?.title).toBe('Ask Mentor')
+    expect(res.task?.cwd).toBe(WALNUT_HOME)
+
+    const record = await getSessionByClaudeId(res.sessionId!)
+    expect(record!.profile?.systemPromptMode).toBe('append')
+    expect(record!.profile?.systemPrompt).toContain('You are Mentor')
+    expect(record!.profile?.systemPrompt).not.toContain('You are Walnut,')
+    expect(record!.profile?.systemPrompt).toContain('## Persona override')
+    expect(Object.keys(record!.profile?.mcpServers ?? {})).toContain('walnut')
+
+    // The placeholder gate knows the per-agent form, so this task gets titled
+    // like an Ask Walnut one does.
+    const { matchPlaceholderTitle } = await import('../../src/core/sessions/quick-start.js')
+    expect(matchPlaceholderTitle({ title: 'Ask Mentor', walnut_agent: true, project: 'Ask Mentor' }, [WALNUT_HOME])).toBe('Ask Mentor')
+    // addTask canonicalises the project's casing to the registry row while the
+    // title keeps the launch's spelling — the match must not care.
+    expect(matchPlaceholderTitle({ title: 'Ask mentor', walnut_agent: true, project: 'Ask Mentor' }, [WALNUT_HOME])).toBe('Ask mentor')
+    expect(matchPlaceholderTitle({ title: 'Ask Mentor', walnut_agent: true, project: 'Dev work' }, [WALNUT_HOME])).toBeUndefined()
+    expect(matchPlaceholderTitle({ title: 'Ask Mentor', project: 'Ask Mentor' }, [WALNUT_HOME])).toBeUndefined()
+  })
+
+  it('a retry on an existing Mentor ask that names no agent keeps the Mentor persona (the task stamp decides)', async () => {
+    const first = await quickStart({ walnutAgent: true, agentId: 'mentor', message: 'first' })
+    expect(first.status, first.error).toBe(200)
+    const retry = await quickStart({ walnutAgent: true, taskId: first.taskId, message: 'again' })
+    expect(retry.status, retry.error).toBe(200)
+    expect(retry.taskId).toBe(first.taskId)
+    const record = await getSessionByClaudeId(retry.sessionId!)
+    expect(record!.profile?.systemPrompt).toContain('You are Mentor')
+    expect(record!.profile?.systemPrompt).not.toContain('You are Walnut,')
+  })
+
+  it('the general agent is the default and stamps no agent_id; an explicit general is the same launch', async () => {
+    const res = await quickStart({ walnutAgent: true, agentId: 'general', message: 'hi' })
+    expect(res.status, res.error).toBe(200)
+    expect(res.task?.project).toBe('Ask Walnut')
+    expect(res.task?.agent_id).toBeUndefined()
+  })
+
+  it('rejects an unknown agent, a background-only agent, and agentId without walnutAgent — before anything is written', async () => {
+    const { listTasks } = await import('../../src/core/task-manager.js')
+    const before = (await listTasks()).length
+    for (const body of [
+      { walnutAgent: true, agentId: 'no-such-agent', message: 'hi' },
+      { walnutAgent: true, agentId: 'life-tracker', message: 'hi' },
+      { agentId: 'mentor', message: 'hi', cwd: WALNUT_HOME },
+      { walnutAgent: true, agentId: 42, message: 'hi' },
+    ]) {
+      const res = await quickStart(body)
+      expect(res.status, JSON.stringify(body)).toBe(400)
+      expect(res.error, JSON.stringify(body)).toMatch(/agent/i)
+    }
+    expect((await listTasks()).length).toBe(before)
+  })
+
+  it('drift repair rebuilds the persona the task was launched with, not the Personal AI', async () => {
+    const res = await quickStart({ walnutAgent: true, agentId: 'mentor', message: 'journal' })
+    expect(res.status, res.error).toBe(200)
+    const sid = res.sessionId!
+    const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
+    const record = await getSessionByClaudeId(sid)
+    await updateSessionRecord(sid, { profile: { ...record!.profile!, systemPrompt: 'OLD MENTOR (pre-upgrade)' } })
+
+    const { refreshWalnutSessionProfile } = await import('../../src/core/sessions/personal-ai-lane.js')
+    await refreshWalnutSessionProfile(sid)
+
+    const refreshed = await getSessionByClaudeId(sid)
+    expect(refreshed!.profile?.systemPrompt).toContain('You are Mentor')
+    expect(refreshed!.profile?.systemPrompt).not.toContain('You are Walnut,')
   })
 
   it('drift repair: a stale persisted persona is refreshed to the current build', async () => {

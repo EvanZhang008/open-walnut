@@ -53,6 +53,7 @@ import { ModelPicker, shortAcpModelName } from './ModelPicker';
 import { fetchEngineModelCatalog } from '@/api/sessions';
 import { draftComposerKey, type DraftColumn } from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
+import { GENERAL_AGENT_ID } from '@/components/chat/ask-walnut-slot-model';
 import '@/styles/walnut-agent.css';
 
 const PLACEHOLDER = 'What should this session do?';
@@ -286,6 +287,11 @@ export function DraftSessionPanel({
   // is nothing for the AI backfill to fill. Tabs render only on a PLAIN draft —
   // bound and fork drafts are already committed to a shape.
   const isWalnut = !!draft.walnut;
+  // A walnut draft for ANOTHER console agent (Mentor, Note Assistant, …): same
+  // launch shape, its own name in the header/placeholder, and the Walnut seeds
+  // (tasks, schedule) give way to the agent's own description.
+  const askAgent = isWalnut && draft.agent && draft.agent.id !== GENERAL_AGENT_ID ? draft.agent : null;
+  const askLabel = askAgent ? `Ask ${askAgent.name}` : 'Ask Walnut';
   // "Fix Walnut": a draft pre-armed on Walnut's own checkout, carrying the repair
   // intent. Committed to a shape like a bound or fork draft, so it shows NO mode
   // fork — the "Ask Walnut" card would flip it to a walnut launch, whose payload
@@ -430,7 +436,7 @@ export function DraftSessionPanel({
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
           <div className="session-panel-title-area">
             <span className="session-panel-title">
-              {isFork ? 'Fork Session' : isRepair ? '\u{1F527} Fix Walnut' : isWalnut ? 'Ask Walnut' : 'New Session'}
+              {isFork ? 'Fork Session' : isRepair ? '\u{1F527} Fix Walnut' : isWalnut ? askLabel : 'New Session'}
             </span>
             <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Draft</span>
             {isBound && (
@@ -495,7 +501,12 @@ export function DraftSessionPanel({
             {/* Composer seeds — prefill, never send. Only while the composer is
                 EMPTY: prefill is replace-only (ChatInput contract), so a visible
                 chip next to typed text is an invitation to silently destroy it. */}
-            {isWalnut && !text.trim() && (
+            {askAgent && (
+              <p className="draft-agent-desc" data-testid="draft-agent-desc">
+                {askAgent.description || `A session with ${askAgent.name}.`}
+              </p>
+            )}
+            {isWalnut && !askAgent && !text.trim() && (
               <div className="draft-walnut-suggests" role="group" aria-label="Ask Walnut suggestions">
                 {WALNUT_SUGGESTS.map((s) => (
                   <button
@@ -542,7 +553,7 @@ export function DraftSessionPanel({
           draftKey={draftComposerKey(draft.id)}
           placeholder={isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER
-              : isWalnut ? WALNUT_PLACEHOLDER : PLACEHOLDER}
+              : askAgent ? `${askLabel} anything…` : isWalnut ? WALNUT_PLACEHOLDER : PLACEHOLDER}
           prefillText={prefill.text}
           prefillNonce={prefill.nonce}
           showCommands={false}

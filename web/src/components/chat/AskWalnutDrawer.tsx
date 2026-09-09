@@ -8,6 +8,13 @@
  * the way the Claude app's sidebar does: a search box, the asks below it, "New
  * chat" pinned to the bottom. Picking an ask closes the drawer.
  *
+ * The drawer's title is the AGENT SWITCHER. Each console agent (Walnut, Mentor,
+ * Note Assistant, config-defined ones) keeps its own list of asks; the title
+ * names the one on show and opens the list of the others, with their
+ * descriptions. Picking an agent re-filters the list and re-targets New chat,
+ * and leaves the drawer open — it is a filter, not a destination. With a single
+ * agent the title is plain text.
+ *
  * Deliberately NOT a launcher for anything else (user, 2026-09-07): there is one
  * concept, a task that may have a session, and one place to create one, the
  * draft column. So no "+ Task" / "+ Session" rows, no separate finder overlay
@@ -24,6 +31,7 @@ import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from
 import type { Task } from '@open-walnut/core';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { timeAgo } from '@/utils/time';
+import type { AskAgent } from './ask-walnut-slot-model';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
  *  so a row is `{ id, title }` plus the Task when the store has it. */
@@ -32,6 +40,12 @@ export interface DrawerRow {
   title: string;
   task?: Task;
 }
+
+const ICON_CHEVRON = (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polyline points="4,6 8,10 12,6" />
+  </svg>
+);
 
 const ICON_MENU = (
   <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
@@ -44,21 +58,23 @@ const ICON_MENU = (
 interface MenuButtonProps {
   open: boolean;
   onToggle: () => void;
+  /** The agent on show ("Ask Walnut", "Ask Mentor"), for the accessible name. */
+  label: string;
 }
 
 /** The ≡ button. A forwardRef so the drawer can hand focus back to it on close. */
 export const AskWalnutMenuButton = forwardRef<HTMLButtonElement, MenuButtonProps>(
-  function AskWalnutMenuButton({ open, onToggle }, ref) {
+  function AskWalnutMenuButton({ open, onToggle, label }, ref) {
     return (
       <button
         ref={ref}
         type="button"
         className={`task-action-btn ask-walnut-menu-btn${open ? ' is-open' : ''}`}
         data-testid="ask-walnut-menu"
-        aria-label="Ask Walnut sessions"
+        aria-label={`${label} sessions`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title="Switch between your Ask Walnut sessions"
+        title={`Switch between your ${label} sessions, or switch agent`}
         onClick={onToggle}
       >
         {ICON_MENU}
@@ -74,6 +90,11 @@ interface DrawerProps {
    *  the ≡ button. Without a restore, a user who opened the drawer from the
    *  composer and pressed Escape kept typing into <body>. */
   returnFocusRef: RefObject<HTMLElement | null>;
+  /** Every console agent, Walnut first. One entry = no switcher. */
+  agents: readonly AskAgent[];
+  /** The agent whose asks `rows` are. */
+  agent: AskAgent;
+  onPickAgent: (agentId: string) => void;
   rows: DrawerRow[];
   /** null while the slot shows the composer or a pending launch. */
   selectedTaskId: string | null;
@@ -93,29 +114,38 @@ function matches(title: string, query: string): boolean {
 }
 
 export function AskWalnutDrawer({
-  open, onClose, returnFocusRef, rows, selectedTaskId, onPick, onNew,
+  open, onClose, returnFocusRef, agents, agent, onPickAgent, rows, selectedTaskId, onPick, onNew,
   onFixWalnut, inspectorOpen, onToggleInspector,
 }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
+  /** The agent list under the title. A gesture, reset on every open. */
+  const [agentsOpen, setAgentsOpen] = useState(false);
 
-  // Every open starts with an empty query. Keyed on `open` ALONE: the effect
-  // below re-runs whenever its callbacks change identity, and a reset living
-  // there would wipe a query mid-typing the first time a caller passes a
-  // per-render closure.
-  useEffect(() => { if (open) setQuery(''); }, [open]);
+  // Every open starts with an empty query and the agent list folded. Keyed on
+  // `open` ALONE: the effect below re-runs whenever its callbacks change
+  // identity, and a reset living there would wipe a query mid-typing the first
+  // time a caller passes a per-render closure.
+  useEffect(() => { if (open) { setQuery(''); setAgentsOpen(false); } }, [open]);
+
+  // Switching agents is a new list: the query that filtered the old one would
+  // otherwise hide the new one behind "No asks match".
+  useEffect(() => { setQuery(''); }, [agent.id]);
 
   // Escape closes; focus moves into the search box on open so the keyboard is in
   // the drawer (typing filters at once) and the composer under the scrim stops
   // receiving keystrokes — and goes BACK on close, to whatever had it (the
   // composer) or, if that is gone, the ≡. preventDefault before stopPropagation:
   // the repo's Escape ownership convention (escape-beep-guard reads
-  // defaultPrevented to know who consumed it). A non-empty query is cleared by
-  // the first Escape; the second one closes. The query is read through a ref so
-  // the listener does not have to be re-bound on every keystroke.
+  // defaultPrevented to know who consumed it). Escape peels one layer at a time:
+  // an open agent list folds, then a non-empty query clears, then the drawer
+  // closes. Both are read through refs so the listener does not have to be
+  // re-bound on every keystroke.
   const queryRef = useRef(query);
   queryRef.current = query;
+  const agentsOpenRef = useRef(agentsOpen);
+  agentsOpenRef.current = agentsOpen;
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -124,6 +154,10 @@ export function AskWalnutDrawer({
       if (e.key !== 'Escape') return;
       e.preventDefault();
       e.stopPropagation();
+      if (agentsOpenRef.current) {
+        setAgentsOpen(false);
+        return;
+      }
       if (queryRef.current) {
         setQuery('');
         return;
@@ -156,6 +190,7 @@ export function AskWalnutDrawer({
   if (!open) return null;
 
   const act = (fn: () => void) => () => { onClose(); fn(); };
+  const canSwitch = agents.length > 1;
 
   return (
     <div
@@ -172,11 +207,26 @@ export function AskWalnutDrawer({
         data-testid="ask-walnut-drawer"
         role="dialog"
         aria-modal="true"
-        aria-label="Ask Walnut sessions"
+        aria-label={`${agent.project} sessions`}
         tabIndex={-1}
       >
         <div className="ask-walnut-drawer-head">
-          <span className="ask-walnut-drawer-title">Ask Walnut</span>
+          {canSwitch ? (
+            <button
+              type="button"
+              className={`ask-walnut-drawer-title ask-walnut-agent-switch${agentsOpen ? ' is-open' : ''}`}
+              data-testid="ask-walnut-agent-switch"
+              aria-haspopup="true"
+              aria-expanded={agentsOpen}
+              title="Switch agent"
+              onClick={() => setAgentsOpen((v) => !v)}
+            >
+              {agent.project}
+              <span className={`ask-walnut-agent-caret${agentsOpen ? ' is-open' : ''}`} aria-hidden="true">{ICON_CHEVRON}</span>
+            </button>
+          ) : (
+            <span className="ask-walnut-drawer-title">{agent.project}</span>
+          )}
           <button
             type="button"
             className="task-action-btn ask-walnut-drawer-close"
@@ -188,6 +238,40 @@ export function AskWalnutDrawer({
           </button>
         </div>
 
+        {/* The other agents, inline under the title (an accordion, not a
+            portal: the drawer is already the overlay). Each row is the agent's
+            name and what it is for; the one on show is pressed. Plain buttons in
+            a group rather than a listbox: Tab reaches every row, and a listbox
+            role would promise arrow-key handling this list does not have. A pick
+            puts the keyboard back in the search box, on the new list. */}
+        {canSwitch && agentsOpen && (
+          <div
+            className="ask-walnut-agent-list"
+            role="group"
+            aria-label="Agents"
+            data-testid="ask-walnut-agent-list"
+          >
+            {agents.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                aria-pressed={a.id === agent.id}
+                className={`ask-walnut-agent-item${a.id === agent.id ? ' is-selected' : ''}`}
+                data-testid="ask-walnut-agent-item"
+                data-agent-id={a.id}
+                onClick={() => {
+                  setAgentsOpen(false);
+                  if (a.id !== agent.id) onPickAgent(a.id);
+                  searchRef.current?.focus({ preventScroll: true });
+                }}
+              >
+                <span className="ask-walnut-agent-name">{a.name}</span>
+                {a.description && <span className="ask-walnut-agent-desc">{a.description}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="ask-walnut-drawer-search">
           <span className="ask-walnut-drawer-search-ic" aria-hidden="true">{'⌕'}</span>
           <input
@@ -196,7 +280,7 @@ export function AskWalnutDrawer({
             className="ask-walnut-drawer-search-input"
             data-testid="ask-walnut-search"
             placeholder="Search your asks"
-            aria-label="Search Ask Walnut sessions"
+            aria-label={`Search ${agent.project} sessions`}
             autoComplete="off"
             spellCheck={false}
             value={query}
@@ -206,7 +290,7 @@ export function AskWalnutDrawer({
 
         <div className="ask-walnut-drawer-list" role="group" aria-label="Your asks" data-testid="ask-walnut-drawer-list">
           {rows.length === 0 && (
-            <p className="ask-walnut-drawer-empty">No Ask Walnut sessions yet.</p>
+            <p className="ask-walnut-drawer-empty">No {agent.project} sessions yet.</p>
           )}
           {/* role=status: a screen reader typing in the search box hears when the
               list filtered down to nothing. */}
@@ -229,7 +313,7 @@ export function AskWalnutDrawer({
             className="ask-walnut-drawer-new"
             data-testid="ask-walnut-new"
             onClick={act(onNew)}
-            title="Start a new Ask Walnut session"
+            title={`Start a new ${agent.project} session`}
           >
             <span aria-hidden="true">+</span> New chat
           </button>

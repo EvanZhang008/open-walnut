@@ -164,9 +164,14 @@ Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project �
   hides the slot; only lock is absent), and a `DraftSessionPanel` in its New state. The slot
   adds ONE control to the regular panel: a ≡ button leading the header's title row
   (`headerLeading`) that opens a drawer with a search box filtering the asks (tasks born
-  `walnut_agent` OR filed under the `Ask Walnut` project), `New chat`, and two links
+  `walnut_agent` OR filed under the agent's `Ask …` project), `New chat`, and two links
   (`Context`, `Fix Walnut`); tests reach those through `openAskWalnutDrawer(page)` in
-  `tests/e2e/browser/draft-helpers.ts`. Deliberately NO `+ Task`/`+ Session`/finder/hide rows:
+  `tests/e2e/browser/draft-helpers.ts`. The drawer's TITLE is the agent switcher: every
+  console agent (Walnut, Mentor, Note Assistant, config-defined) has its own list of asks and
+  its own composer; a launch under another agent sends `agentId`, the server files the task
+  under `Ask <name>` and stamps `task.agent_id` (rule in `src/core/sessions/ask-agent.ts`,
+  client twin `askProjectFor` in `ask-walnut-slot-model.ts`; the persona comes from
+  `buildLaneProfile(config, agentId)`). Deliberately NO `+ Task`/`+ Session`/finder/hide rows:
   the draft column is the one task-creation surface (a task with no session is a plain todo),
   ⌘⇧O is the session finder, the panel's × hides the slot. Consequence
   for tests: a Playwright locator for `.session-panel` or `.draft-session-panel` on `/` must be

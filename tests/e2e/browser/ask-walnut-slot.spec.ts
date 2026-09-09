@@ -55,6 +55,7 @@ const STAMP = Date.now().toString(36)
 const FIRST_PROMPT = `hello from the slot ${STAMP}`
 const SECOND_PROMPT = `second question ${STAMP}`
 const MOBILE_PROMPT = `mobile ask ${STAMP}`
+const MENTOR_PROMPT = `mentor ask ${STAMP}`
 
 /** The mock CLI's reply for a prompt (it appends run-dependent [cwd:…] suffixes). */
 const replyTo = (prompt: string): string => `I processed your message: ${prompt}`
@@ -156,10 +157,11 @@ async function hideForeignWalnutTasks(page: Page): Promise<void> {
       await route.fulfill({ response })
       return
     }
-    // Mirrors the slot's own predicate (walnut_agent OR the Ask Walnut project):
-    // a foreign task admitted by either arm would become a drawer row here.
+    // Mirrors the slot's own predicate (walnut_agent OR an agent's "Ask …"
+    // project): a foreign task admitted by either arm would become a drawer row
+    // here, in Walnut's list or in another agent's.
     const isAsk = (task: { walnut_agent?: boolean; project?: string }) =>
-      task.walnut_agent === true || (task.project ?? '').trim().toLowerCase() === 'ask walnut'
+      task.walnut_agent === true || (task.project ?? '').trim().toLowerCase().startsWith('ask ')
     body.tasks = body.tasks.filter(
       (task) => !isAsk(task) || (task.id ? ourWalnutTaskIds.has(task.id) : false),
     )
@@ -702,6 +704,117 @@ test('the drawer\'s search filters the asks by title', async ({ page }) => {
   await drawerRows(page).first().click()
   await expect(slotSession(page)).toHaveAttribute('data-session-id', firstSessionId, { timeout: 30_000 })
 })
+
+// ── Agents ───────────────────────────────────────────────────────────────────
+
+const agentSwitch = (page: Page): Locator => page.locator('[data-testid="ask-walnut-agent-switch"]')
+const agentItem = (page: Page, id: string): Locator =>
+  page.locator(`[data-testid="ask-walnut-agent-item"][data-agent-id="${id}"]`)
+
+test('the drawer\'s title switches agents: Mentor has its own list, its own composer, and its launch is stamped', async ({ page }) => {
+  await hideForeignWalnutTasks(page)
+  await loadHome(page)
+  await expect(slotSession(page)).toBeVisible({ timeout: 60_000 })
+
+  // The title names the agent on show and opens the others (the built-in
+  // console agents: Walnut, Mentor, Note Assistant; the background screenshot
+  // tracker is NOT a chat persona and must not be offered).
+  await openAskWalnutDrawer(page)
+  await expect(agentSwitch(page)).toHaveText(/Ask Walnut/)
+  await agentSwitch(page).click()
+  await expect(agentItem(page, 'general')).toHaveAttribute('aria-pressed', 'true')
+  await expect(agentItem(page, 'mentor')).toContainText('Mentor')
+  await expect(agentItem(page, 'life-tracker')).toHaveCount(0)
+  await settleMotion(page)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/12-agent-list.png` })
+
+  // Picking Mentor keeps the drawer open (it is a filter), retitles it, and
+  // shows Mentor's list — empty: the Walnut asks are not Mentor's.
+  await agentItem(page, 'mentor').click()
+  await expect(drawer(page)).toHaveCount(1)
+  await expect(agentSwitch(page)).toHaveText(/Ask Mentor/)
+  await expect(page.locator('[data-testid="ask-walnut-agent-list"]')).toHaveCount(0)
+  await expect(drawerRows(page)).toHaveCount(0)
+  await expect(drawer(page).locator('.ask-walnut-drawer-empty')).toHaveText(/No Ask Mentor sessions yet/)
+  await settleMotion(page)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/13-mentor-empty.png` })
+
+  // Behind the drawer the slot is already Mentor's composer: its name in the
+  // header and placeholder, its description where Walnut's seeds would be.
+  await page.keyboard.press('Escape')
+  await expect(drawer(page)).toHaveCount(0)
+  await expect(slotDraft(page)).toBeVisible()
+  await expect(slotDraft(page).locator('.session-panel-title')).toHaveText('Ask Mentor')
+  await expect(page.locator('[data-testid="draft-agent-desc"]')).toContainText(/reflection/i)
+  await expect(slotDraft(page).locator('.draft-walnut-suggests')).toHaveCount(0)
+  const composer = slotDraftComposer(page)
+  await expect(composer).toHaveAttribute('placeholder', /Ask Mentor anything/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/14-mentor-composer.png` })
+
+  // A launch from here is a Mentor launch: filed under Ask Mentor, stamped.
+  const quickStart = page.waitForResponse(
+    (response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/sessions/quick-start',
+  )
+  await composer.fill(MENTOR_PROMPT)
+  await composer.press('Enter')
+  const response = await quickStart
+  expect(response.status(), await response.text()).toBe(200)
+  const payload = (await response.json()) as {
+    taskId?: string; sessionId?: string; task?: { project?: string; agent_id?: string; walnut_agent?: boolean }
+  }
+  expect(payload.task?.project).toBe('Ask Mentor')
+  expect(payload.task?.agent_id).toBe('mentor')
+  expect(payload.task?.walnut_agent).toBe(true)
+  const mentorTaskId = payload.taskId!
+  ourWalnutTaskIds.add(mentorTaskId)
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', payload.sessionId!, { timeout: 60_000 })
+  await expect(slotSession(page).getByText(replyTo(MENTOR_PROMPT)).first()).toBeVisible({ timeout: 60_000 })
+
+  // Mentor's list has it; Walnut's does not — and going back to Walnut brings
+  // Walnut's newest conversation back into the slot.
+  await openAskWalnutDrawer(page)
+  await expect(drawerRow(page, mentorTaskId)).toHaveAttribute('aria-current', 'true', { timeout: 20_000 })
+  await expect(drawerRows(page)).toHaveCount(1)
+  await agentSwitch(page).click()
+  await agentItem(page, 'general').click()
+  await expect(agentSwitch(page)).toHaveText(/Ask Walnut/)
+  await expect(drawerRow(page, mentorTaskId)).toHaveCount(0)
+  await expect(drawerRows(page)).toHaveCount(2)
+  await page.keyboard.press('Escape')
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', secondSessionId, { timeout: 30_000 })
+
+  // Reload on Mentor: the drawer reopens on Mentor, the slot on its ask — with
+  // the agent list answering LAST. Before the list resolves every agent but
+  // Walnut is unknown; a slot that reconciled against that stand-in moved the
+  // selection onto Walnut's newest, then flipped back and forth with the real
+  // list forever (two effects each undoing the other). The delay makes the task
+  // store win the race every time instead of by luck.
+  await pickAskAgent(page, 'mentor')
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', payload.sessionId!, { timeout: 30_000 })
+  await page.route('**/api/agents', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    await route.continue()
+  })
+  await page.reload()
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', payload.sessionId!, { timeout: 60_000 })
+  // Stable, not merely passing through: still Mentor's a beat later.
+  await page.waitForTimeout(1500)
+  await expect(slotSession(page)).toHaveAttribute('data-session-id', payload.sessionId!)
+  await openAskWalnutDrawer(page)
+  await expect(agentSwitch(page)).toHaveText(/Ask Mentor/)
+  await page.unroute('**/api/agents')
+})
+
+/** Open the drawer and switch it to an agent; the drawer stays open. */
+async function pickAskAgent(page: Page, id: string): Promise<void> {
+  await openAskWalnutDrawer(page)
+  await agentSwitch(page).click()
+  await agentItem(page, id).click()
+  await expect(agentSwitch(page)).toHaveText(id === 'general' ? /Ask Walnut/ : /Ask /)
+  await page.keyboard.press('Escape')
+  await expect(drawer(page)).toHaveCount(0)
+}
 
 // ── Mobile (390px) ───────────────────────────────────────────────────────────
 

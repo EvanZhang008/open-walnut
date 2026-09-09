@@ -3,12 +3,13 @@
  *
  * The slot on the home page is a view over ORDINARY tasks: every Ask Walnut
  * launch stamps `walnut_agent` on the task it creates and files it under the
- * "Ask Walnut" project, so the drawer's list is "those tasks, newest first" and
- * the panel below is the selected task's session. Keeping the two decisions here
- * (which tasks, which one is selected) means they can be pinned without a DOM: a
- * browser spec can only observe them indirectly, and each one has a silent
- * failure mode (a list that reorders while an ask streams, a selection that
- * jumps off the task the user just launched).
+ * agent's project ("Ask Walnut" for the Personal AI, "Ask Mentor" for the
+ * Mentor agent, …), so the drawer's list is "that agent's tasks, newest first"
+ * and the panel below is the selected task's session. Keeping the decisions
+ * here (which agent owns a task, which tasks, which one is selected) means they
+ * can be pinned without a DOM: a browser spec can only observe them indirectly,
+ * and each one has a silent failure mode (a list that reorders while an ask
+ * streams, a selection that jumps off the task the user just launched).
  *
  * WHICH SESSION a task's panel mounts is deliberately NOT here — it is
  * `resolveTaskSessionId` in utils/session-status.ts, the one precedence every
@@ -16,6 +17,53 @@
  */
 
 import type { Task } from '@open-walnut/core';
+
+/** The Personal AI's agent id. Its asks carry no `agent_id` stamp. */
+export const GENERAL_AGENT_ID = 'general';
+
+/** A console agent as the slot sees it: identity plus the project its asks
+ *  file under. Built by `toAskAgent` from the registry's definition. */
+export interface AskAgent {
+  id: string;
+  name: string;
+  description?: string;
+  project: string;
+}
+
+/** The general agent before (or without) the registry: the slot must work on
+ *  first paint and on a server whose agent list failed to load. */
+export const GENERAL_ASK_AGENT: AskAgent = { id: GENERAL_AGENT_ID, name: 'Walnut', project: 'Ask Walnut' };
+
+/**
+ * The project an agent's asks are filed under. MUST match the server's rule
+ * (src/core/sessions/ask-agent.ts `askProjectFor`): the server files a launch
+ * there, and the list below admits a task by that name, so a drift between the
+ * two would make an agent's own asks vanish from its list.
+ */
+export function askProjectFor(agent: { id: string; name: string }): string {
+  if (agent.id === GENERAL_AGENT_ID) return GENERAL_ASK_AGENT.project;
+  return `Ask ${projectSafeName(agent.name) || projectSafeName(agent.id) || 'agent'}`;
+}
+
+/** The server's folding of a free-text agent name into a legal project name
+ *  (no path separators, no `..`, capped) — identical on purpose. */
+function projectSafeName(raw: string): string {
+  return raw
+    .replace(/[/\\\0]/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .trim()
+    .slice(0, 60)
+    .trim();
+}
+
+export function toAskAgent(def: { id: string; name: string; description?: string }): AskAgent {
+  return {
+    id: def.id,
+    name: def.id === GENERAL_AGENT_ID ? GENERAL_ASK_AGENT.name : def.name,
+    ...(def.description ? { description: def.description } : {}),
+    project: askProjectFor(def),
+  };
+}
 
 /** ISO → ms, with an unparseable/absent stamp sorting LAST rather than poisoning
  *  the comparison with NaN. */
@@ -52,20 +100,40 @@ function sameProject(a: string | undefined, b: string): boolean {
 }
 
 /**
- * Every Ask Walnut task, newest first. Never mutates the input list (it is the
- * shared task store's array).
+ * Whether a task belongs to an agent's list.
  *
- * Two ways in, by design (user, 2026-09-07): a task IS an ask when it was born
- * one (`walnut_agent`, wherever it has since been filed) OR when it lives under
- * the Ask Walnut project now (filed there by hand, or born there). One list, so
- * moving an ask to a project does not make its conversation vanish from the
- * drawer, and dragging a task INTO the project makes it reachable from the
- * chat. `project` is the registry name the launcher files asks under.
+ * Two ways in, by design (user, 2026-09-07): a task IS an agent's ask when it
+ * was born one (`walnut_agent` + that agent's `agent_id` stamp — no stamp means
+ * the Personal AI — wherever it has since been filed) OR when it lives under
+ * the agent's project now (filed there by hand, or born there). One list per
+ * agent, so moving an ask to a project does not make its conversation vanish
+ * from the drawer, and dragging a task INTO the project makes it reachable
+ * from the chat.
  */
-export function selectAskWalnutTasks(tasks: readonly Task[], project: string): Task[] {
-  return tasks
-    .filter((t) => t.walnut_agent === true || sameProject(t.project, project))
-    .sort(compareRecency);
+export function isAskOf(task: Task, agent: AskAgent): boolean {
+  if (task.walnut_agent === true && (task.agent_id || GENERAL_AGENT_ID) === agent.id) return true;
+  return sameProject(task.project, agent.project);
+}
+
+/** Every ask of ONE agent, newest first. Never mutates the input list (it is
+ *  the shared task store's array). */
+export function selectAgentTasks(tasks: readonly Task[], agent: AskAgent): Task[] {
+  return tasks.filter((t) => isAskOf(t, agent)).sort(compareRecency);
+}
+
+/**
+ * Which of the known agents a task belongs to, or null for a task that is
+ * nobody's ask. Used to open the drawer on the agent of the ask the slot is
+ * showing after a reload. The stamp wins over the project (a Mentor ask dragged
+ * into "Ask Walnut" is still Mentor's), then the first agent whose project it
+ * lives under.
+ */
+export function agentOfTask(task: Task, agents: readonly AskAgent[]): AskAgent | null {
+  if (task.walnut_agent === true) {
+    const byStamp = agents.find((a) => a.id === (task.agent_id || GENERAL_AGENT_ID));
+    if (byStamp) return byStamp;
+  }
+  return agents.find((a) => sameProject(task.project, a.project)) ?? null;
 }
 
 /**

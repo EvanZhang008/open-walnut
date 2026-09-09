@@ -111,7 +111,11 @@ export async function sweepPlaceholderTitles(now = Date.now()): Promise<{
     // 3493 rows/tick); the sweep needs only id/title/status/created_at/cwd.
     const suspects = (await listTasksSlim({ minimal: true })).filter((t) =>
       t.status !== 'done'
-      && ((t.title ?? '').startsWith('Session: ') || (t.title ?? '') === ASK_WALNUT_PLACEHOLDER_TITLE)
+      // "Ask …" on a walnut_agent task covers every agent's placeholder ("Ask
+      // Mentor"); matchPlaceholderTitle below does the exact check. Gated on the
+      // flag so a user's own "Ask …" titles do not each cost a session lookup.
+      && ((t.title ?? '').startsWith('Session: ') || (t.title ?? '') === ASK_WALNUT_PLACEHOLDER_TITLE
+        || (t.walnut_agent === true && (t.title ?? '').startsWith('Ask ')))
       && now - new Date(t.created_at).getTime() < MAX_TASK_AGE_MS);
 
     let deadlineHit = false;

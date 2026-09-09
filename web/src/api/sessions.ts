@@ -829,6 +829,10 @@ export async function quickStartSession(opts: {
    *  server owns the cwd (send ''), files the task under project 'Ask Walnut' and
    *  defaults the tier to Focus. Native (claude) engine only. */
   walnutAgent?: boolean;
+  /** Which console agent a walnutAgent launch speaks to ('mentor', 'note-agent',
+   *  a config-defined id). Absent = Walnut. Picks the persona and the task's
+   *  project ("Ask <name>") + agent_id stamp. */
+  agentId?: string;
   /** User opted into "create & start": server mkdirs the cwd before starting. */
   createCwd?: boolean;
   /** Coding-agent engine. undefined = the default engine; any other value is an

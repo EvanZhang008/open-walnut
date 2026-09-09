@@ -638,6 +638,12 @@ export interface Task {
    *  the same project is NOT a Personal-AI task). Local-only; rides the SQLite
    *  payload blob (no dedicated column), never pushed to sync backends. */
   walnut_agent?: boolean;
+  /** Which console agent a `walnut_agent` task speaks to when it is not the
+   *  Personal AI ('mentor', 'note-agent', a config-defined id). Absent = the
+   *  general agent. Read by the chat slot's drawer (whose asks are these) and
+   *  the persona drift repair (which persona to rebuild). Same storage rules as
+   *  walnut_agent: payload blob, local-only. */
+  agent_id?: string;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

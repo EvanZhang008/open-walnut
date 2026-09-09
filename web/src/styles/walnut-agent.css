@@ -130,6 +130,16 @@
   color: var(--walnut-accent);
   background: color-mix(in srgb, var(--walnut-accent) 8%, transparent);
 }
+/* Another agent's composer: the Walnut seeds (tasks, schedule) would be wrong
+   asks for Mentor, so its own description takes their place. */
+.draft-agent-desc {
+  margin: 0;
+  max-width: 420px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
 
 /* No dedicated Ask button — the composer's send arrow is the ONE send
    affordance in walnut mode, tinted amber so the mode reads at the point of
@@ -289,6 +299,82 @@
   font-weight: 700;
   color: var(--walnut-accent);
 }
+/* The title doubles as the agent switcher when there is more than one agent:
+   same type as the plain title, a caret, and only a hover tint to say it is a
+   control — a button-shaped title would read as a second header. */
+.ask-walnut-agent-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+.ask-walnut-agent-switch:hover,
+.ask-walnut-agent-switch.is-open {
+  background: color-mix(in srgb, var(--walnut-accent) 10%, transparent);
+}
+.ask-walnut-agent-caret {
+  display: inline-flex;
+  opacity: 0.85;
+  transition: transform 0.15s;
+}
+.ask-walnut-agent-caret.is-open { transform: rotate(180deg); }
+/* The agent list: an accordion under the title, above the search, so the
+   drawer's own scroll area stays the ask list. */
+.ask-walnut-agent-list {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 2px;
+  margin: 0 10px 8px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  /* Bounded: many config-defined agents scroll inside this box instead of
+     squeezing the search box and the ask list below it (menus never grow
+     inline past their container — web/src/AGENTS.md). */
+  max-height: 45%;
+  overflow-y: auto;
+}
+.ask-walnut-agent-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--fg);
+}
+.ask-walnut-agent-item:hover { background: var(--hover-bg); }
+.ask-walnut-agent-item.is-selected {
+  background: color-mix(in srgb, var(--walnut-accent) 10%, transparent);
+}
+.ask-walnut-agent-item.is-selected .ask-walnut-agent-name { color: var(--walnut-accent); }
+.ask-walnut-agent-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ask-walnut-agent-desc {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .ask-walnut-drawer-close {
   font-size: 16px;
   line-height: 1;
@@ -315,11 +401,20 @@
   font-size: 15px;
   line-height: 1;
 }
-.ask-walnut-drawer-search-input {
+/* The WRAPPER is the frame; the input inside must draw none of its own. The
+   global `input` / `input:focus` rules (globals.css) give every input padding,
+   a border and a 3px focus ring — the ring in particular outranks a bare class
+   selector, so it painted a second, inner frame on focus. Both states are
+   flattened here with matching specificity. */
+.ask-walnut-drawer-search-input,
+.ask-walnut-drawer-search-input:focus {
   flex: 1;
   min-width: 0;
+  padding: 0;
   border: none;
+  border-radius: 0;
   outline: none;
+  box-shadow: none;
   background: none;
   font-family: inherit;
   font-size: 13px;

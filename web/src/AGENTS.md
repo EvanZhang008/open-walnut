@@ -32,6 +32,13 @@ still live on the client.
   `headerLeading`; the title row because it ellipsizes, whereas the chips row wraps and pushed
   the time-ago to a second line in a narrow slot); it opens `AskWalnutDrawer`, an in-slot
   overlay (never a portal: the slot clips itself) with a search box, the asks and `New chat`.
+  The drawer's title is the agent switcher (an inline accordion, not a portal): one list of
+  asks PER console agent (`selectAgentTasks` / `isAskOf`: `walnut_agent` + the task's
+  `agent_id` stamp, no stamp = Walnut, OR the agent's `Ask <name>` project), the slot's draft
+  carries `draft.agent` so `DraftSessionPanel` names it ("Ask Mentor", the agent's description
+  in place of the Walnut seeds), and the launch payload carries `agentId`. The search input's
+  own chrome is flattened in BOTH rest and `:focus` (globals' `input:focus` ring outranks a bare
+  class and painted a second frame inside the wrapper).
   Never put `contain: paint` on the slot's session wrapper: it makes the wrapper the containing
   block for the panel's `position: fixed` fullscreen overlay, which then "expands" inside the
   slot. So scope every Playwright locator for `.session-panel`

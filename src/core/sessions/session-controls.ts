@@ -475,6 +475,7 @@ export async function createForkSiblingTask(
     // conversation: without the flag the fork loses the amber marker AND the
     // persona drift repair (both key on task.walnut_agent, never on project).
     ...(sourceTask.walnut_agent ? { walnut_agent: true } : {}),
+    ...(sourceTask.walnut_agent && sourceTask.agent_id ? { agent_id: sourceTask.agent_id } : {}),
   });
   // Visually group the source task + fork. Reuse the source task's existing
   // group if it already belongs to one. Best-effort: a grouping failure must

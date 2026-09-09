@@ -814,6 +814,8 @@ export interface AddTaskInput {
   focus_tier?: string;
   /** "Ask Walnut" launch: stamp the task as a Personal-AI task (see Task.walnut_agent). */
   walnut_agent?: boolean;
+  /** Which console agent a walnut_agent task speaks to (see Task.agent_id). */
+  agent_id?: string;
   /** Don't block the return on the external sync push. The task is written locally and
    *  returned immediately; the push to the external target runs in the background and
    *  backfills ext/external_url/sync_error via a TASK_UPDATED event. Set by the web
@@ -2143,6 +2145,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.sprint ? { sprint: input.sprint } : {}),
       ...(input.walnut_agent ? { walnut_agent: true } : {}),
+      ...(input.walnut_agent && input.agent_id ? { agent_id: input.agent_id } : {}),
       // Born pinned (interactive/AI creates — newTaskPinDefault), in the tier
       // the caller named, in ONE store write. An absent focus_tier IS Satellite
       // (see resolveNewTaskTier, which normalizes an explicit 'satellite' away

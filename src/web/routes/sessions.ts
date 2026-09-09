@@ -45,6 +45,7 @@ import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
+import { askProjectFor, resolveAskAgent, stampedAgentId } from '../../core/sessions/ask-agent.js'
 import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
 import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
 import { buildSessionVscodeEmbed, SessionVscodeEmbedError } from '../../core/session-vscode-embed.js'
@@ -268,7 +269,7 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd: rawCwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent } = req.body as {
+    const { cwd: rawCwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent, agentId } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -305,9 +306,26 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       /** "Ask Walnut" launch: spawn with the Personal AI profile. The server
        *  owns cwd (WALNUT_HOME) — the client sends none. Native engine only. */
       walnutAgent?: boolean
+      /** Which console agent the walnutAgent launch speaks to; absent = the
+       *  Personal AI. Picks persona, project ("Ask <name>") and the task's
+       *  agent_id stamp (core/sessions/ask-agent.ts). */
+      agentId?: string
     }
 
     const isWalnutAgent = walnutAgent === true
+    if (agentId !== undefined && (typeof agentId !== 'string' || !isWalnutAgent)) {
+      res.status(400).json({ error: 'agentId must be a string and requires walnutAgent' })
+      return
+    }
+    // Resolved HERE (not only in core) because the project default below needs
+    // the agent's name; an unknown id fails before anything is written. A retry
+    // on an existing ask names no agent: its task stamp says whose it is.
+    const askAgentId = agentId ?? (isWalnutAgent && existingTaskId ? await stampedAgentId(existingTaskId) : undefined)
+    const askAgent = isWalnutAgent ? await resolveAskAgent(askAgentId) : undefined
+    if (isWalnutAgent && !askAgent) {
+      res.status(400).json({ error: `Unknown console agent "${agentId}"` })
+      return
+    }
     if (isWalnutAgent) {
       // The profile rides the CLI's system-prompt flags; ACP has no channel for it,
       // so an ACP Ask-Walnut would silently launch a bare provider chat.
@@ -501,12 +519,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     const walnutTaskMeta = isWalnutAgent && taskMeta?.pinTier === undefined
       ? { ...taskMeta, pinTier: 'focus' as const }
       : taskMeta
-    const walnutExtras = isWalnutAgent
-      // Its OWN project, deliberately NOT 'Walnut' — that's where the user's
-      // app-dev tasks and fix-walnut repairs live; Personal-AI asks mixing into
-      // it made "whose task is this" unreadable. Keep in sync with the client's
-      // ASK_WALNUT_PROJECT (web/src/components/sessions/draft-column.ts).
-      ? { project: project?.trim() || 'Ask Walnut', projectFromFolder: false, walnutAgent: true }
+    const walnutExtras = askAgent
+      // Its OWN project per agent ("Ask Walnut", "Ask Mentor", …), deliberately
+      // NOT 'Walnut' — that's where the user's app-dev tasks and fix-walnut
+      // repairs live; Personal-AI asks mixing into it made "whose task is this"
+      // unreadable. The naming rule is askProjectFor (client twin in
+      // web/src/components/chat/ask-walnut-slot-model.ts).
+      ? { project: project?.trim() || askProjectFor(askAgent), projectFromFolder: false, walnutAgent: true, agentId: askAgent.id }
       : {}
 
     // Shared core (also used by the claude-code routine executor): task create/

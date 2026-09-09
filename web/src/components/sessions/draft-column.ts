@@ -117,6 +117,10 @@ export interface DraftColumn {
    *  profile. Folder/project are server-owned facts (ASK_WALNUT_PROJECT /
    *  WALNUT_HOME), so the launch bar renders no pills for them at all. */
   walnut?: boolean;
+  /** Which console agent a walnut draft speaks to when it is not the Personal
+   *  AI (the chat slot's drawer picks one): names the header ("Ask Mentor"),
+   *  the placeholder, and the `agentId` the launch sends. Absent = Walnut. */
+  agent?: { id: string; name: string; description?: string };
   /** What entering walnut mode overwrote (project pick, folder-remembered
    *  model, tier), restored when the user switches back to Start Task. Without
    *  it a tab round-trip silently converted a human project pick into an AI

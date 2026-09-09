@@ -3,13 +3,17 @@
  *
  * There is no "main agent" any more: talking to Walnut IS an ordinary
  * claude-code session bound to a task flagged `walnut_agent`, filed under the
- * `Ask Walnut` project. So this slot is a VIEW over the task store: the REGULAR
- * `SessionPanel` for the selected task, exactly as a session column renders it
- * (same header, same ×/popout/fullscreen, same composer), plus ONE addition — a
- * ≡ button at the start of its title row that opens a drawer of the asks to
- * switch between (the Claude app's sidebar shape). The panel's × hides the slot,
- * the way a column's × closes the column. Nothing here owns conversation state;
- * the session panel and the session queue do, exactly as in a column.
+ * agent's project (`Ask Walnut`; `Ask Mentor` for the Mentor agent, …). So this
+ * slot is a VIEW over the task store: the REGULAR `SessionPanel` for the
+ * selected task, exactly as a session column renders it (same header, same
+ * ×/popout/fullscreen, same composer), plus ONE addition — a ≡ button at the
+ * start of its title row that opens a drawer of the asks to switch between (the
+ * Claude app's sidebar shape). The drawer's title is the agent switcher: every
+ * console agent (Walnut, Mentor, Note Assistant, config-defined ones) has its
+ * own list of asks, and New chat starts one with the agent on show. The panel's
+ * × hides the slot, the way a column's × closes the column. Nothing here owns
+ * conversation state; the session panel and the session queue do, exactly as
+ * in a column.
  *
  * Three body states, and the transitions between them are the whole component:
  *   new      → `DraftSessionPanel` in its Ask Walnut shape (the tab users
@@ -26,24 +30,33 @@
  * without a DOM.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { ImageAttachment } from '@/api/chat';
 import { fetchAskWalnutLaunch, fetchWorkingDirs, quickStartSession } from '@/api/sessions';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
-import { ASK_WALNUT_PROJECT, type DraftColumn } from '@/components/sessions/draft-column';
+import type { DraftColumn } from '@/components/sessions/draft-column';
 import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import type { QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
+import { useEvent } from '@/hooks/useWebSocket';
+import { getAgentsSnapshot, loadAgents, subscribeAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
-import { resolveSelection, selectAskWalnutTasks } from './ask-walnut-slot-model';
+import {
+  GENERAL_AGENT_ID, GENERAL_ASK_AGENT, agentOfTask, resolveSelection, selectAgentTasks, toAskAgent,
+  type AskAgent,
+} from './ask-walnut-slot-model';
 import '@/styles/walnut-agent.css';
 
 /** Which task the slot is showing. sessionStorage (not localStorage): a tab is a
  *  per-window view, and two windows should be able to watch two asks. */
 const SS_SELECTED_KEY = 'walnut:ask-slot:selected';
+/** Which agent the drawer is on. Per-window like the selection; it matters on
+ *  its own only while the agent has no asks (a reload must not drop the user
+ *  from Mentor's empty composer back to Walnut). */
+const SS_AGENT_KEY = 'walnut:ask-slot:agent';
 
 /** The synthetic draft row's id. Fixed rather than timestamped: the slot holds at
  *  most ONE draft, and a stable id means ChatInput's persisted composer text
@@ -114,10 +127,41 @@ export function AskWalnutSlot({
   inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onSelectionChange,
   onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
-  const askTasks = useMemo(() => selectAskWalnutTasks(tasks, ASK_WALNUT_PROJECT), [tasks]);
+  // The console agents, from the shared agent store (the /agents page writes to
+  // the same store, so a rename lands here without a reload). Walnut is always
+  // first and always present: before the list resolves (or if it never does) the
+  // slot is the plain Ask Walnut slot.
+  const agentsSnapshot = useSyncExternalStore(subscribeAgents, getAgentsSnapshot, getAgentsSnapshot);
+  useEffect(() => { void loadAgents(); }, []);
+  useEvent('agents:changed', () => { void loadAgents(true); });
+  const agents = useMemo<AskAgent[]>(() => {
+    const consoleAgents = agentsSnapshot.agents
+      .filter((a) => a.console || a.id === GENERAL_AGENT_ID)
+      .map(toAskAgent);
+    const general = consoleAgents.find((a) => a.id === GENERAL_AGENT_ID) ?? GENERAL_ASK_AGENT;
+    return [general, ...consoleAgents.filter((a) => a.id !== GENERAL_AGENT_ID)];
+  }, [agentsSnapshot.agents]);
+  // Until the registry has answered once (a failed load counts: the list is
+  // then Walnut alone, for good), every agent but Walnut is unknown, and any
+  // selection logic run against that stand-in list would move the user off a
+  // Mentor ask onto Walnut's newest — and, once the real list landed, back.
+  const agentsLoaded = agentsSnapshot.agentsLoaded;
+
+  const [agentId, setAgentId] = useState<string>(() => {
+    try { return sessionStorage.getItem(SS_AGENT_KEY) || GENERAL_AGENT_ID; } catch { return GENERAL_AGENT_ID; }
+  });
+  // An agent id nobody knows (deleted from config, a stale key) falls back to
+  // Walnut rather than to an empty drawer with an unnamed title.
+  const agent = useMemo(() => agents.find((a) => a.id === agentId) ?? agents[0] ?? GENERAL_ASK_AGENT, [agents, agentId]);
+  useEffect(() => {
+    try { sessionStorage.setItem(SS_AGENT_KEY, agentId); } catch { /* per-render only */ }
+  }, [agentId]);
+
+  const askTasks = useMemo(() => selectAgentTasks(tasks, agent), [tasks, agent]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => {
     try { return sessionStorage.getItem(SS_SELECTED_KEY); } catch { return null; }
   });
+
   /** The user asked for a fresh ask (the "New" action). */
   const [newMode, setNewMode] = useState(false);
   const [pending, setPending] = useState<PendingLaunch | null>(null);
@@ -146,18 +190,41 @@ export function AskWalnutSlot({
   const askTasksRef = useRef(askTasks);
   askTasksRef.current = askTasks;
 
-  // Re-resolve the selection whenever the task list moves: a deleted/archived
-  // selection falls back to the newest ask WITH a conversation (a todo filed
-  // under the project by hand stays pickable but is never the default), an
-  // empty list to nothing (which renders the composer). The just-launched task
-  // is EXEMPT until the store carries it — re-resolving there would yank the
-  // user off the ask they just sent, for the second the WS echo takes to land.
+  // ONE reconciler for the pair (agent, selection), with a fixed precedence,
+  // run whenever either input moves:
+  //   1. The ask on show owns the agent. If the selected task exists and one of
+  //      the known agents owns it (stamp first, project second), the drawer moves
+  //      to THAT agent and the selection is left alone. The two persisted keys
+  //      can disagree (a window restored with one agent's ask and another agent
+  //      in the drawer, a task re-filed by hand), and the task is the thing the
+  //      user is looking at.
+  //   2. Otherwise the selection is re-resolved within the agent's list: a
+  //      deleted/archived selection falls back to the newest ask WITH a
+  //      conversation (a todo filed under the project by hand stays pickable but
+  //      is never the default), an empty list to nothing (the composer).
+  // Two effects doing these separately ping-ponged forever when the keys
+  // disagreed: one moved the selection to the agent, the other moved the agent
+  // to the (stale) selection, each commit undoing the last. Here a run changes
+  // at most one of the two, and the next run finds them agreeing.
+  // The just-launched task is EXEMPT until the store carries it — re-resolving
+  // there would yank the user off the ask they just sent, for the second the
+  // WS echo takes to land. selectAgent never trips step 1: it re-points the
+  // selection at the new agent's ask (or nothing) in the same act.
   useEffect(() => {
+    if (!agentsLoaded) return;
+    if (selectedTaskId) {
+      const task = tasks.find((t) => t.id === selectedTaskId);
+      const owner = task ? agentOfTask(task, agents) : null;
+      if (owner && owner.id !== agent.id) {
+        setAgentId(owner.id);
+        return;
+      }
+    }
     if (launched && selectedTaskId === launched.taskId
       && !askTasks.some((t) => t.id === selectedTaskId)) return;
     const next = resolveSelection(selectedTaskId, askTasks, hasSession);
     if (next !== selectedTaskId) setSelectedTaskId(next);
-  }, [askTasks, selectedTaskId, launched]);
+  }, [agentsLoaded, tasks, agents, agent, askTasks, selectedTaskId, launched]);
 
   // Once the store carries the launched task WITH its session slot, the launch
   // response has nothing left to cover — drop it, so a later delete of that ask
@@ -188,15 +255,15 @@ export function AskWalnutSlot({
     return () => clearTimeout(timer);
   }, [launched]);
 
-  // The drawer's list: every Ask Walnut task, newest first, with the
+  // The drawer's list: every ask of the agent on show, newest first, with the
   // just-launched one on top until the store carries it.
   const rows = useMemo<DrawerRow[]>(() => {
-    const list = askTasks.map((t) => ({ id: t.id, title: t.title || 'Ask Walnut', task: t }));
+    const list = askTasks.map((t) => ({ id: t.id, title: t.title || agent.project, task: t }));
     if (launched && !askTasks.some((t) => t.id === launched.taskId)) {
       return [{ id: launched.taskId, title: launched.title }, ...list];
     }
     return list;
-  }, [askTasks, launched]);
+  }, [askTasks, launched, agent]);
 
   const selectedTask = useMemo(
     () => askTasks.find((t) => t.id === selectedTaskId) ?? null,
@@ -243,13 +310,15 @@ export function AskWalnutSlot({
     return next && next !== base ? next : base;
   }, [selectedTaskId, selectedTask, launched, replacedBy]);
 
-  // 'loading' is the FIRST-PAINT state only: the store starts empty, and reading
-  // that as "no asks" flashed the composer (and stole focus) on every page load.
+  // 'loading' is the FIRST-PAINT state only: the task store starts empty, and
+  // reading that as "no asks" flashed the composer (and stole focus) on every
+  // page load. The agent list is part of first paint too: until it answers the
+  // list on screen would be Walnut's whatever agent the window was on.
   const view: 'new' | 'pending' | 'session' | 'loading' = pending
     ? 'pending'
     : newMode ? 'new'
-      : rows.length > 0 ? 'session'
-        : tasksLoading ? 'loading' : 'new';
+      : rows.length > 0 && agentsLoaded ? 'session'
+        : (tasksLoading || !agentsLoaded) ? 'loading' : 'new';
 
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
@@ -311,6 +380,30 @@ export function AskWalnutSlot({
     setSelectedTaskId(taskId);
   }, [dropLaunchedUnless]);
 
+  // Switch the drawer (and the slot) to another agent: its newest ask with a
+  // conversation comes up, or, when it has none yet, its composer — the way
+  // picking a project in the Claude sidebar shows that project's chats. The
+  // selection is re-pointed HERE, in the same act, so the follow-the-task effect
+  // above has nothing to correct. A launch still in flight belongs to the agent
+  // the user just left; its response must not pull them back.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
+  const selectAgent = useCallback((id: string) => {
+    const next = agentsRef.current.find((a) => a.id === id);
+    if (!next) return;
+    launchGenRef.current++;
+    setLaunched(null);
+    setPending(null);
+    setNewMode(false);
+    // A fresh composer for the new agent: the model/dates picked for the old
+    // one's draft are not this agent's.
+    setDraftMeta(initialDraftMeta());
+    setAgentId(next.id);
+    setSelectedTaskId(resolveSelection(null, selectAgentTasks(tasksRef.current, next), hasSession));
+  }, []);
+
   const toggleDrawer = useCallback(() => setDrawerOpen((v) => !v), []);
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
@@ -354,7 +447,7 @@ export function AskWalnutSlot({
       setLaunched({
         taskId: result.taskId,
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),
-        title: launch.message.split('\n')[0]?.trim() || 'Ask Walnut',
+        title: launch.message.split('\n')[0]?.trim() || launch.payload.project || 'Ask Walnut',
       });
       setSelectedTaskId(result.taskId);
       setNewMode(false);
@@ -387,8 +480,11 @@ export function AskWalnutSlot({
       cwd: '',
       message,
       ...(images?.length ? { images } : {}),
-      project: ASK_WALNUT_PROJECT,
+      project: agent.project,
       walnutAgent: true,
+      // Absent for Walnut: the server's default, and the payload the draft
+      // column's Ask Walnut card has always sent.
+      ...(agent.id !== GENERAL_AGENT_ID ? { agentId: agent.id } : {}),
       taskMeta: {
         unread: draftMeta.unread,
         priority: draftMeta.priority,
@@ -400,18 +496,23 @@ export function AskWalnutSlot({
       ...(draftMeta.model ? { model: draftMeta.model } : {}),
     };
     return runLaunch({ payload, message });
-  }, [draftMeta, runLaunch]);
+  }, [draftMeta, runLaunch, agent]);
 
   const draft = useMemo<DraftColumn>(() => ({
-    id: SLOT_DRAFT_ID,
+    // Per agent: the composer's persisted text rides the draft id, and a
+    // sentence typed for Mentor must not come back in Walnut's composer.
+    id: agent.id === GENERAL_AGENT_ID ? SLOT_DRAFT_ID : `${SLOT_DRAFT_ID}:${agent.id}`,
     cwd: '',
     host: null,
     walnut: true,
-    project: ASK_WALNUT_PROJECT,
+    ...(agent.id !== GENERAL_AGENT_ID
+      ? { agent: { id: agent.id, name: agent.name, ...(agent.description ? { description: agent.description } : {}) } }
+      : {}),
+    project: agent.project,
     // 'seed', not 'user': the project is a server-owned fact here, not a pick.
     projectSource: 'seed',
     meta: draftMeta,
-  }), [draftMeta]);
+  }), [draftMeta, agent]);
 
   const handleMetaChange = useCallback((
     _draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta,
@@ -428,8 +529,8 @@ export function AskWalnutSlot({
   // every slot render (and the slot re-renders on every task-store tick) would
   // defeat that memo and re-render the whole transcript each time.
   const menuButton = useMemo(
-    () => <AskWalnutMenuButton ref={menuBtnRef} open={drawerOpen} onToggle={toggleDrawer} />,
-    [drawerOpen, toggleDrawer],
+    () => <AskWalnutMenuButton ref={menuBtnRef} open={drawerOpen} onToggle={toggleDrawer} label={agent.project} />,
+    [drawerOpen, toggleDrawer, agent.project],
   );
 
   return (
@@ -471,7 +572,7 @@ export function AskWalnutSlot({
             <div className="ask-walnut-bare-header">{menuButton}</div>
             {pending.error ? (
               <>
-                <p className="ask-walnut-pending-error">Ask Walnut couldn&apos;t start: {pending.error}</p>
+                <p className="ask-walnut-pending-error">{agent.project} couldn&apos;t start: {pending.error}</p>
                 <div className="ask-walnut-pending-actions">
                   <button
                     className="btn btn-sm btn-primary"
@@ -487,7 +588,7 @@ export function AskWalnutSlot({
             ) : (
               <p className="ask-walnut-pending-status">
                 <span className="spinner ask-walnut-pending-spinner" />
-                Starting Ask Walnut…
+                Starting {agent.project}…
               </p>
             )}
             {pending.message && <p className="ask-walnut-pending-echo">{pending.message}</p>}
@@ -520,6 +621,9 @@ export function AskWalnutSlot({
         open={drawerOpen}
         onClose={closeDrawer}
         returnFocusRef={menuBtnRef}
+        agents={agents}
+        agent={agent}
+        onPickAgent={selectAgent}
         rows={rows}
         selectedTaskId={view === 'session' ? selectedTaskId : null}
         onPick={selectAsk}

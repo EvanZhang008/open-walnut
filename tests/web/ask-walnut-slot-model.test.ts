@@ -1,10 +1,12 @@
 /**
  * The Ask Walnut slot's selection model.
  *
- * Two decisions, both invisible from the DOM until they regress:
- *  - WHICH tasks are Ask Walnut tasks: born one (`walnut_agent`, wherever it was
- *    filed since) OR filed under the Ask Walnut project now (user, 2026-09-07:
- *    "one list — the ones under the project, and the ones that were moved out");
+ * Three decisions, all invisible from the DOM until they regress:
+ *  - WHICH tasks are an agent's asks: born one (`walnut_agent` + that agent's
+ *    `agent_id` stamp, no stamp = Walnut, wherever it was filed since) OR filed
+ *    under the agent's project now (user, 2026-09-07: "one list — the ones
+ *    under the project, and the ones that were moved out"), one list PER agent;
+ *  - WHICH agent a task belongs to (the stamp, then the project);
  *  - WHICH row survives a task-list change (the persisted pick while it exists,
  *    else the newest, else nothing).
  *
@@ -19,7 +21,9 @@
 
 import { describe, it, expect } from 'vitest';
 import type { Task } from '@open-walnut/core';
-import { resolveSelection, selectAskWalnutTasks as select } from '@/components/chat/ask-walnut-slot-model';
+import {
+  GENERAL_ASK_AGENT, agentOfTask, askProjectFor, resolveSelection, selectAgentTasks, toAskAgent,
+} from '@/components/chat/ask-walnut-slot-model';
 
 function task(over: Partial<Task> & { id: string }): Task {
   return {
@@ -41,10 +45,65 @@ function task(over: Partial<Task> & { id: string }): Task {
 const walnut = (id: string, over: Partial<Task> = {}) =>
   task({ id, walnut_agent: true, ...over });
 
-const PROJECT = 'Ask Walnut';
-const selectAskWalnutTasks = (tasks: Task[]) => select(tasks, PROJECT);
+const MENTOR = toAskAgent({ id: 'mentor', name: 'Mentor', description: 'Reflection and planning.' });
+const selectAskWalnutTasks = (tasks: Task[]) => selectAgentTasks(tasks, GENERAL_ASK_AGENT);
 
-describe('selectAskWalnutTasks', () => {
+describe('askProjectFor / toAskAgent', () => {
+  it("files the Personal AI under 'Ask Walnut' and any other agent under 'Ask <name>' (server twin: ask-agent.ts)", () => {
+    expect(askProjectFor({ id: 'general', name: 'whatever the registry says' })).toBe('Ask Walnut');
+    expect(askProjectFor({ id: 'mentor', name: 'Mentor' })).toBe('Ask Mentor');
+    expect(askProjectFor({ id: 'note-agent', name: ' Note Assistant ' })).toBe('Ask Note Assistant');
+    expect(askProjectFor({ id: 'x', name: '' })).toBe('Ask x');
+  });
+
+  it('folds a free-text agent name into a legal project name (no separators, no .., capped), same as the server', () => {
+    expect(askProjectFor({ id: 'ops', name: 'Ops/SRE' })).toBe('Ask Ops-SRE');
+    expect(askProjectFor({ id: 'ideas', name: 'Ideas.. drafts' })).toBe('Ask Ideas. drafts');
+    expect(askProjectFor({ id: 'long', name: 'x'.repeat(200) })).toBe(`Ask ${'x'.repeat(60)}`);
+    expect(askProjectFor({ id: 'slashes', name: '///' })).toBe('Ask ---');
+  });
+
+  it('names the general agent Walnut regardless of its registry name, and keeps a description only when there is one', () => {
+    expect(toAskAgent({ id: 'general', name: 'General' })).toEqual({ id: 'general', name: 'Walnut', project: 'Ask Walnut' });
+    expect(MENTOR).toEqual({ id: 'mentor', name: 'Mentor', description: 'Reflection and planning.', project: 'Ask Mentor' });
+  });
+});
+
+describe('selectAgentTasks — another agent', () => {
+  it("lists Mentor's asks: stamped agent_id OR filed under Ask Mentor, and NOT Walnut's", () => {
+    const tasks = [
+      walnut('w'),
+      walnut('m', { agent_id: 'mentor' }),
+      walnut('m-moved', { agent_id: 'mentor', project: 'Dev work' }),
+      task({ id: 'm-filed', project: 'ask mentor' }),
+      walnut('w-in-mentor-project', { project: 'Ask Mentor' }),
+      task({ id: 'plain' }),
+    ];
+    expect(selectAgentTasks(tasks, MENTOR).map((t) => t.id).sort())
+      .toEqual(['m', 'm-filed', 'm-moved', 'w-in-mentor-project']);
+    // Walnut's list excludes the stamped Mentor asks — the stamp is what keeps
+    // the two lists apart when both live under one project by hand.
+    expect(selectAskWalnutTasks(tasks).map((t) => t.id).sort()).toEqual(['w', 'w-in-mentor-project']);
+  });
+});
+
+describe('agentOfTask', () => {
+  const agents = [GENERAL_ASK_AGENT, MENTOR];
+  it('the stamp wins over the project; an unstamped ask is Walnut\'s', () => {
+    expect(agentOfTask(walnut('a', { agent_id: 'mentor', project: 'Ask Walnut' }), agents)?.id).toBe('mentor');
+    expect(agentOfTask(walnut('b', { project: 'Ask Mentor' }), agents)?.id).toBe('general');
+  });
+  it('falls back to the project for a plain task, and to null for nobody\'s task', () => {
+    expect(agentOfTask(task({ id: 'c', project: ' ask mentor ' }), agents)?.id).toBe('mentor');
+    expect(agentOfTask(task({ id: 'd', project: 'Dev work' }), agents)).toBeNull();
+  });
+  it('an ask stamped with an agent nobody knows any more falls back to its project, then null', () => {
+    expect(agentOfTask(walnut('e', { agent_id: 'gone', project: 'Ask Mentor' }), agents)?.id).toBe('mentor');
+    expect(agentOfTask(walnut('f', { agent_id: 'gone', project: 'Ask Gone' }), agents)).toBeNull();
+  });
+});
+
+describe('selectAgentTasks — Walnut', () => {
   it('keeps tasks born as asks AND tasks filed under the Ask Walnut project', () => {
     const tasks = [
       walnut('a'),

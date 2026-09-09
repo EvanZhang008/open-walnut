@@ -15,6 +15,7 @@ import { bus, EventNames } from '../event-bus.js';
 import type { Task, SessionEngine } from '../types.js';
 import { spillLargePromptToFile } from './quick-start-spill.js';
 import { isAcpEngine } from '../agents/engine-registry.js';
+import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, resolveAskAgent, stampedAgentId, type AskAgentRef } from './ask-agent.js';
 
 export interface QuickStartTaskMeta {
   /** Start the new task already marked unread. */
@@ -83,6 +84,14 @@ export interface QuickStartParams {
    * flags, which ACP engines have no channel for (route enforces).
    */
   walnutAgent?: boolean;
+  /**
+   * Which console agent a walnutAgent launch speaks to ('general' = the
+   * Personal AI, the default; 'mentor', 'note-agent', a config-defined id).
+   * Picks the persona, the project the task files under ("Ask <name>"), the
+   * placeholder title and the task's `agent_id` stamp — see ask-agent.ts.
+   * Unknown / non-console ids are a 400. Ignored without walnutAgent.
+   */
+  agentId?: string;
 }
 
 export class QuickStartError extends Error {
@@ -103,8 +112,9 @@ export function defaultSessionTaskTitle(cwd: string): string {
 }
 
 /** The placeholder an Ask Walnut launch mints instead of the cwd-derived one
- *  ("Session: .open-walnut" would name the data dir, which means nothing). */
-export const ASK_WALNUT_PLACEHOLDER_TITLE = 'Ask Walnut';
+ *  ("Session: .open-walnut" would name the data dir, which means nothing).
+ *  Another agent's ask wears ITS project name ("Ask Mentor") the same way. */
+export const ASK_WALNUT_PLACEHOLDER_TITLE = ASK_WALNUT_PROJECT;
 
 /**
  * THE placeholder gate for auto-titling: returns the placeholder this task
@@ -116,16 +126,23 @@ export const ASK_WALNUT_PLACEHOLDER_TITLE = 'Ask Walnut';
  * Try EVERY cwd the caller knows (cwd-rename-detector can move cwd after
  * launch). The Ask Walnut match is keyed on the walnut_agent flag, never the
  * bare string, so a user-typed "Ask Walnut" on an ordinary task is kept.
+ * Another agent's ask is minted titled after its project ("Ask Mentor"), so a
+ * walnut_agent task whose title still equals its "Ask …" project is wearing
+ * that placeholder — the project is the one stamp both names derive from
+ * (askProjectFor), which keeps this sync and registry-free.
  * Known limit: a walnut_agent task the user deliberately renames BACK to
  * exactly "Ask Walnut" is indistinguishable from the placeholder and may be
  * retitled — inherent to keying on the string.
  */
 export function matchPlaceholderTitle(
-  task: { title?: string; walnut_agent?: boolean },
+  task: { title?: string; walnut_agent?: boolean; project?: string },
   cwds: Array<string | undefined | null>,
 ): string | undefined {
   const title = task.title ?? '';
   if (task.walnut_agent && title === ASK_WALNUT_PLACEHOLDER_TITLE) return title;
+  // Case-insensitive: addTask canonicalises the project's casing to the
+  // registry row, while the title keeps the launch's spelling.
+  if (task.walnut_agent && title.startsWith('Ask ') && title.toLowerCase() === (task.project ?? '').trim().toLowerCase()) return title;
   return cwds.filter((c): c is string => !!c)
     .map(defaultSessionTaskTitle)
     .find((ph) => title === ph);
@@ -142,17 +159,23 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     source, requestTs = Date.now(), engine, preassignedSessionId, walnutAgent,
   } = params;
 
-  // "Ask Walnut": resolve the Personal AI's profile up front — the same bundle
+  // "Ask Walnut": resolve the agent's profile up front — the same bundle
   // (persona + standing memory + skills index + walnut MCP mount) and the same
   // chat-tuned effort a main-chat lane spawns with. Resolved BEFORE any task
   // write so a failure here fails the launch cleanly instead of leaving a task
   // whose session never got its persona.
   let walnutProfile: { profile: import('../types.js').SessionProfile; effort: import('../types.js').SessionEffort } | undefined;
+  let askAgent: AskAgentRef | undefined;
   if (walnutAgent) {
+    // A retry on an existing ask names no agent; the task's own stamp says
+    // whose persona it runs, so a Mentor ask is never resumed as Walnut.
+    const stamped = !params.agentId && existingTaskId ? await stampedAgentId(existingTaskId) : undefined;
+    askAgent = await resolveAskAgent(params.agentId ?? stamped);
+    if (!askAgent) throw new QuickStartError(`Unknown console agent "${params.agentId}"`, 400);
     const { getConfig } = await import('../config-manager.js');
     const { buildLaneProfile } = await import('./personal-ai-lane.js');
     const { getAskWalnutLaunchPrefs, resolveAskWalnutEffort } = await import('./ask-walnut-launch.js');
-    walnutProfile = await buildLaneProfile(await getConfig(), 'general');
+    walnutProfile = await buildLaneProfile(await getConfig(), askAgent.id);
     // The lane's medium is the FIRST-RUN default only: an effort the user picked
     // for an earlier Ask Walnut (in its picker, or via config) carries forward,
     // gated on the model this launch actually spawns being able to take it.
@@ -222,7 +245,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // Normal mode: create new task. Ask Walnut gets its own placeholder — the
     // generic one is "Session: <basename(cwd)>", which for WALNUT_HOME reads
     // "Session: .open-walnut" (the data dir's name means nothing to the user).
-    const placeholderTitle = walnutAgent ? ASK_WALNUT_PLACEHOLDER_TITLE : defaultSessionTaskTitle(cwd);
+    const placeholderTitle = askAgent ? askProjectFor(askAgent) : defaultSessionTaskTitle(cwd);
     const title = params.taskTitle?.trim() || placeholderTitle;
     // Folder → default project: when THIS launch creates the registry row (the
     // draft's folder-derived default, typically the folder's basename), the
@@ -293,6 +316,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         // THIS, never on the project name (an ordinary task filed under the
         // same project must not light up).
         ...(walnutAgent ? { walnut_agent: true } : {}),
+        // Whose ask (absent for the Personal AI): the drawer's per-agent list
+        // and the drift repair read it back.
+        ...(askAgent && askAgent.id !== GENERAL_AGENT_ID ? { agent_id: askAgent.id } : {}),
       }));
     } catch (err) {
       // Client-supplied project seed the registry rejects — a caller error, not

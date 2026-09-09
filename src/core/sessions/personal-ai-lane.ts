@@ -599,7 +599,9 @@ export async function refreshWalnutSessionProfile(sessionId: string): Promise<vo
     const { getTask } = await import('../task-manager.js');
     const task = await getTask(record.taskId).catch(() => null);
     if (!task?.walnut_agent) return;
-    const { profile } = await buildLaneProfile(await getConfig(), 'general');
+    // Rebuild the persona the task was launched with: an "Ask Mentor" must not
+    // be repaired into the Personal AI.
+    const { profile } = await buildLaneProfile(await getConfig(), task.agent_id || 'general');
     if (record.profile.systemPrompt === profile.systemPrompt) return;
     // Persona only. An Ask Walnut session's effort is the user's (its launch
     // memory or the session picker — see ask-walnut-launch), never the lane
