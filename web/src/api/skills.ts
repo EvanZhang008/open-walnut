@@ -4,7 +4,7 @@ export interface SkillInfo {
   dirName: string;
   name: string;
   description: string;
-  source: 'workspace' | 'walnut' | 'claude';
+  source: 'workspace' | 'walnut' | 'claude' | 'plugin';
   location: string;
   content: string;
   metadata?: Record<string, unknown>;

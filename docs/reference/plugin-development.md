@@ -257,6 +257,8 @@ export function activate(walnut: WalnutServerApi) {
 }
 ```
 
+`directory` is the ROOT ABOVE the skill folder: pass the directory that CONTAINS `<name>/SKILL.md` (the Mail base passes `agent-skills`, not `agent-skills/walnut-mail`). Passing the folder that holds `SKILL.md` registers without complaint and contributes nothing, so right after registering, the host probes the layout and logs a warning under the `plugin/<your-id>` subsystem: "Plugin skill directory is the skill folder itself; register its parent" when the directory itself holds a `SKILL.md`, and "Plugin skill directory holds no <name>/SKILL.md" when it holds neither. A directory that does not exist yet is never warned about, because creating it later is legitimate, and the categorized layout `<root>/<category>/<name>/SKILL.md` counts as correct. The registration itself always succeeds: the probe only tells you why nothing showed up.
+
 Either way the skill text is read before the model knows whether the tools exist (the management UI lists it regardless), so name the condition the tools depend on rather than assuming they are there. If you ship the directory outside `<pluginDir>/skills`, make sure your build copies it: the manifest-copy step only knows the names it is told.
 
 ### Ops

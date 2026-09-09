@@ -74,6 +74,9 @@ integrationsRouter.get('/settings', async (_req, res) => {
       tools: p.tools?.map(t => t.name) ?? [],
       hasApp: !!p.uiApp,
       hasSkills: !!p.hasSkills,
+      // A conventional skills/ dir and a runtime registry.skill() registration are
+      // different claims — a plugin can contribute skills with hasSkills false.
+      registeredSkills: !!p.registeredSkills,
     }));
 
   const unconfigured = getUnconfiguredPlugins().map(p => ({

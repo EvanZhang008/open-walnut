@@ -8,8 +8,10 @@ import type {
   PluginToolSpec,
   ProjectClaimFn,
 } from '../integration-types.js'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
 import type { IntegrationRegistry } from '../integration-registry.js'
-import type { PluginContext } from './plugin-context.js'
+import type { PluginContext, PluginLogger } from './plugin-context.js'
 import { PluginStorage, PluginSecretStore } from './plugin-storage.js'
 import { createPluginHttpRoute, type PluginRouteHandler } from './plugin-route-adapter.js'
 import { namespacePluginId, pluginOpName } from './ids.js'
@@ -331,6 +333,57 @@ function publicProviderOptions(options: AdapterCallOptions): PluginProviderCallO
     ...(options.betas ? { betas: [...options.betas] } : {}),
     ...(options.thinking ? { thinking: options.thinking } : {}),
   }
+}
+
+async function isFile(candidate: string): Promise<boolean> {
+  try {
+    return (await fsp.stat(candidate)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A registered skill directory is the ROOT ABOVE `<name>/SKILL.md`. Handing over the
+ * folder that holds SKILL.md registers happily, contributes nothing, and used to be
+ * silent at every layer, so probe the layout and say so.
+ *
+ * Deliberately fail-soft and off the registration path: async (never delays activate),
+ * never throws, and a MISSING directory says nothing because a plugin creating it later
+ * is legitimate. Accepts the flat and the `<category>/<name>` layouts the loader accepts,
+ * so a correct registration is never warned about.
+ */
+async function warnOnSkillDirLayout(
+  logger: PluginLogger,
+  pluginId: string,
+  definition: PluginSkillDefinition,
+): Promise<void> {
+  const directory = path.resolve(definition.directory)
+  let entries: string[]
+  try {
+    entries = await fsp.readdir(directory)
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (await isFile(path.join(directory, entry, 'SKILL.md'))) return
+    let nested: string[]
+    try {
+      nested = await fsp.readdir(path.join(directory, entry))
+    } catch {
+      continue
+    }
+    for (const child of nested) {
+      if (await isFile(path.join(directory, entry, child, 'SKILL.md'))) return
+    }
+  }
+  const isSkillFolderItself = await isFile(path.join(directory, 'SKILL.md'))
+  logger.warn(
+    isSkillFolderItself
+      ? 'Plugin skill directory is the skill folder itself; register its parent'
+      : 'Plugin skill directory holds no <name>/SKILL.md',
+    { pluginId, skillId: definition.id, directory },
+  )
 }
 
 export function createServerPluginApi(options: CreateServerPluginApiOptions) {
@@ -905,6 +958,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         // plugin's skills stay invisible until the next unrelated cache clear, and a
         // disabled plugin's skills keep being advertised.
         clearSkillsCache()
+        warnOnSkillDirLayout(context.logger, pluginId, definition).catch(() => undefined)
         return own(toDisposable(() => {
           registration.dispose()
           clearSkillsCache()

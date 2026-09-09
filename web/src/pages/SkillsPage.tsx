@@ -6,7 +6,7 @@ import { SkillForm } from '@/components/skills/SkillForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import type { SkillInfo } from '@/api/skills';
 
-type SourceFilter = 'all' | 'workspace' | 'walnut' | 'claude';
+type SourceFilter = 'all' | 'workspace' | 'walnut' | 'claude' | 'plugin';
 type StatusFilter = 'all' | 'enabled' | 'disabled';
 
 export function SkillsPage() {
@@ -44,6 +44,7 @@ export function SkillsPage() {
     workspace: skills.filter((s) => s.source === 'workspace').length,
     walnut: skills.filter((s) => s.source === 'walnut').length,
     claude: skills.filter((s) => s.source === 'claude').length,
+    plugin: skills.filter((s) => s.source === 'plugin').length,
     enabled: skills.filter((s) => s.enabled).length,
     disabled: skills.filter((s) => !s.enabled).length,
   }), [skills]);
@@ -106,7 +107,7 @@ export function SkillsPage() {
 
       <div className="skill-filters">
         <div className="skill-filter-group">
-          {(['all', 'workspace', 'walnut', 'claude'] as const).map((tab) => (
+          {(['all', 'workspace', 'walnut', 'claude', 'plugin'] as const).map((tab) => (
             <button
               key={tab}
               className={`skill-filter-tab${sourceFilter === tab ? ' active' : ''}`}

@@ -53,6 +53,7 @@ import {
   type DependencyRestore,
 } from './plugins/dependency-gate.js';
 import { validatePluginId } from './plugins/ids.js';
+import { listOwnedSkillDirRecords } from './plugins/skill-registry.js';
 import { CORE_SERVICE_OWNER, removeServicesOf } from './plugins/service-registry.js';
 // Only for the lifecycle announcement inside createPluginManager's onStateChange hook.
 import { bus } from './event-bus.js';
@@ -1511,6 +1512,9 @@ async function loadPlugin(
     uiApp,
     pluginDir,
     hasSkills,
+    // Live, not a snapshot: a plugin can register a skill dir after activate and
+    // dispose it when its capability goes away. Distinct from hasSkills on purpose.
+    get registeredSkills() { return listOwnedSkillDirRecords().some(r => r.owner === pluginId); },
   };
 
   if (isLocal) registry.replace(pluginId, registered);
@@ -1533,6 +1537,7 @@ async function loadPlugin(
     tools: tools.map(t => t.name),
     uiApp: uiApp?.entry,
     hasSkills,
+    registeredSkillDirs: listOwnedSkillDirRecords().filter(r => r.owner === pluginId).length,
   });
     },
   });
@@ -1697,6 +1702,7 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
     tools: loaded.flatMap(p => p.tools?.map(t => t.name) ?? []),
     apps: loaded.filter(p => p.uiApp).map(p => p.id),
     skillDirs: loaded.filter(p => p.hasSkills).map(p => p.id),
+    registeredSkillDirs: [...new Set(listOwnedSkillDirRecords().map(r => r.owner))],
   });
 }
 

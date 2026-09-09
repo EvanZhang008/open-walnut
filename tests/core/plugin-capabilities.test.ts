@@ -12,7 +12,8 @@
  *  - capabilities.ui.app validation drops a bad block WITHOUT unloading the plugin.
  *  - /api/apps lists the app, and /plugin-apps refuses traversal / non-app/ paths
  *    while serving a real file inside app/.
- *  - A plugin's skills/ dir joins BOTH skill-loader discovery scopes, last.
+ *  - A plugin's skills/ dir joins BOTH skill-loader discovery scopes, last, and a
+ *    runtime registry.skill dir is reported separately from hasSkills.
  *
  * Separate from external-plugin-loader.test.ts on purpose: that file is shared
  * ground, this one owns the v2 capability surface.
@@ -713,6 +714,39 @@ describe('plugin skills discovery', () => {
 
     const prompt = getPromptSearchDirs();
     expect(prompt[prompt.length - 1]).toBe(expected);
+  });
+
+  it('counts a runtime registry.skill dir without changing what hasSkills means', async () => {
+    const dir = pluginPath('runtime-skilled');
+    // The root is `agent-skills/`, NOT `skills/`: the convention must not find it, so
+    // hasSkills stays false while the registered skill is live and in the index.
+    const skillRoot = path.join(dir, 'agent-skills');
+    await fsp.mkdir(path.join(skillRoot, 'runtime-skill'), { recursive: true });
+    await fsp.writeFile(
+      path.join(skillRoot, 'runtime-skill', 'SKILL.md'),
+      '---\nname: runtime-skill\ndescription: Registered at activate\n---\n# body',
+    );
+    await writeManifest(dir, {
+      id: 'runtime-skilled',
+      name: 'Runtime Skilled',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(dir, 'dist'), { recursive: true });
+    await fsp.writeFile(
+      path.join(dir, 'dist', 'server.mjs'),
+      `export function activate(walnut) {\n  walnut.registry.skill({ id: 'runtime', directory: ${JSON.stringify(skillRoot)} });\n}\n`,
+    );
+
+    await load(globalRegistry);
+
+    const plugin = globalRegistry.get('runtime-skilled')!;
+    // Two different claims about two different directories — keep them apart.
+    expect(plugin.hasSkills).toBe(false);
+    expect(plugin.registeredSkills).toBe(true);
+    expect(getPluginSkillDirs()).toEqual([skillRoot]);
+    expect(getSearchDirs().at(-1)).toBe(skillRoot);
   });
 
   it('does not claim skills when the capability is declared but the dir is missing', async () => {

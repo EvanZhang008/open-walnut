@@ -396,6 +396,10 @@ export interface RegisteredPlugin {
   /** True when `<pluginDir>/skills/` exists (capability `skills`) — the skill
    *  loader appends it as a lowest-priority discovery source. */
   hasSkills?: boolean;
+  /** True when this plugin has at least one directory in the runtime skill registry
+   *  (`registry.skill`). Separate signal from hasSkills: a conditional skill has no
+   *  `skills/` dir and no manifest capability, yet is live and in the prompt index. */
+  registeredSkills?: boolean;
 }
 
 /** Plugin discovered on disk but not loaded because required config is missing.

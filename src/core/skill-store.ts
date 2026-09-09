@@ -11,6 +11,7 @@ import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR, SKILL_SETTING
 import {
   discoverSkills,
   getSearchDirs,
+  getPluginSkillDirs,
   parseFrontmatter,
   isEligible,
   clearSkillsCache,
@@ -18,11 +19,14 @@ import {
   type SkillType,
 } from './skill-loader.js';
 
+/** Where a skill's directory lives. One union, so the field and the resolver can't drift. */
+export type SkillSource = 'workspace' | 'walnut' | 'claude' | 'plugin';
+
 export interface SkillInfo {
   dirName: string;
   name: string;
   description: string;
-  source: 'workspace' | 'walnut' | 'claude';
+  source: SkillSource;
   location: string;
   content: string;
   /** Grouping category (directory under the skills root, or frontmatter override). */
@@ -68,7 +72,7 @@ function canonical(p: string): string {
   }
 }
 
-function resolveSource(skillDir: string): 'workspace' | 'walnut' | 'claude' {
+function resolveSource(skillDir: string): SkillSource {
   const dir = canonical(skillDir);
   // Specific roots first — path.resolve('skills') is cwd-relative and can
   // coincide with the walnut global dir, so the workspace check goes LAST.
@@ -76,6 +80,14 @@ function resolveSource(skillDir: string): 'workspace' | 'walnut' | 'claude' {
   if (dir.startsWith(canonical(BUILTIN_SKILLS_DIR) + path.sep)) return 'walnut';
   if (dir.startsWith(canonical(CLAUDE_SKILLS_DIR) + path.sep)) return 'claude';
   if (dir.startsWith(canonical(path.resolve('skills')) + path.sep)) return 'workspace';
+  // Plugin-contributed roots (manifest `<pluginDir>/skills` + every directory a
+  // plugin registered through `registry.skill`) BEFORE the fallback: without this
+  // a plugin's skill is reported as living in the user's own Claude store, and the
+  // Settings page offers to edit a file the plugin overwrites on its next update.
+  // Empty list on a plugin-free install, so this costs nothing there.
+  for (const root of getPluginSkillDirs()) {
+    if (dir.startsWith(canonical(root) + path.sep)) return 'plugin';
+  }
   return 'claude';
 }
 
@@ -204,6 +216,11 @@ export async function updateSkill(dirName: string, content: string): Promise<Ski
   if (source === 'workspace') {
     throw new Error('Cannot modify workspace skills');
   }
+  // The owning plugin ships that directory and replaces it on its next update, so an
+  // edit here is silently temporary. Both routers map "Cannot modify" to 403.
+  if (source === 'plugin') {
+    throw new Error('Cannot modify plugin skills');
+  }
 
   await fsp.writeFile(entry.file, content);
   clearSkillsCache();
@@ -222,6 +239,10 @@ export async function deleteSkill(dirName: string): Promise<void> {
   const source = resolveSource(entry.dir);
   if (source === 'workspace') {
     throw new Error('Cannot delete workspace skills');
+  }
+  // This would rm -rf inside an installed plugin's own directory.
+  if (source === 'plugin') {
+    throw new Error('Cannot delete plugin skills');
   }
 
   await fsp.rm(entry.dir, { recursive: true, force: true });

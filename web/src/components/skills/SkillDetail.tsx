@@ -20,7 +20,9 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
   const [refs, setRefs] = useState<RefFile[]>([]);
   const [refsOpen, setRefsOpen] = useState(false);
   const [refsLoaded, setRefsLoaded] = useState(false);
-  const isReadonly = skill.source === 'workspace';
+  // A plugin owns its skill directory and replaces the file on its next update, so the
+  // server refuses the write too — offering an editor here would promise a lasting edit.
+  const isReadonly = skill.source === 'workspace' || skill.source === 'plugin';
 
   // Only reset editor when switching to a different skill.
   // Do NOT depend on skill.content — refetches after toggle/update would

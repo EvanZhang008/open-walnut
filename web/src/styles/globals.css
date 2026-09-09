@@ -23336,6 +23336,10 @@ td.usage-share-col {
   background: rgba(52, 199, 89, 0.12);
   color: #34C759;
 }
+.skill-source-badge.plugin {
+  background: rgba(10, 132, 255, 0.12);
+  color: #0A84FF;
+}
 
 .skill-card-sizes,
 .skill-detail-sizes {
