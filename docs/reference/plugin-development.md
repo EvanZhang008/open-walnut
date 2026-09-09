@@ -421,7 +421,7 @@ export async function activate(walnut: WalnutServerApi) {
 }
 ```
 
-Plugin files live under `~/.open-walnut/plugin-data/<id>/`. That directory is machine-local and excluded from git sync. File methods reject traversal and write atomically. The private database runs in a worker, so a synchronous native SQLite call cannot block Walnut's event loop.
+Plugin files live under `~/.open-walnut/plugin-data/<id>/`. That directory is machine-local and excluded from git sync. File methods reject traversal and write atomically. The private database runs in a worker, so a synchronous native SQLite call cannot block Walnut's event loop. When the file does not exist yet, `readJson` and `updateJson` hand back a copy of the fallback you passed, so mutating what you read is safe even if that fallback is a shared constant.
 
 Credentials belong in `walnut.secrets`, never in `walnut.storage`, `manifest.json`, source code, synced config, logs, notifications, or task fields. Report key names when you need to show state, never values.
 
@@ -704,6 +704,8 @@ The REST API accepts `{ "url": "...", "ref": "..." }`, a `walnut_plugin_source` 
 A plugin that arrives needing another plugin comes back as `pendingDependencies` on the 201, and nothing else is installed. `POST /api/plugin-sources/<slug>/dependencies` installs that plan after the user has seen the source list (git and npm catalog entries only, three hops at most; an example entry returns its `walnut-plugin link` command instead). Turning off a plugin that others declare in `dependencies` answers 409 `{ code: "has-dependents", dependents }`; `POST /api/plugin-runtime/<id>/disable` with `{ "cascade": true }` turns it off anyway and the dependents move to `needs-dependency` without being switched off themselves.
 
 Because Walnut installs with lifecycle scripts disabled, your published package must already contain its built artifacts. A plugin that expects `postinstall` or `prepare` to build it will install and then fail to load.
+
+Discovery and reload are different operations: `POST /api/plugin-runtime/discover` only picks up a plugin id the host has not loaded yet, so a plugin that is already loaded keeps the module it was loaded from and the answer comes back with `alreadyLoaded: true` plus a `note` saying so. After you change the files of a plugin that is already running, call `POST /api/plugin-runtime/<id>/reload` instead, which is what `walnut-plugin dev` does on every save.
 
 ## Troubleshooting
 

@@ -67,6 +67,17 @@ export class PluginRuntimeRelayError extends Error {
   }
 }
 
+/**
+ * What a discover answers with: a lifecycle record plus the one fact the record itself
+ * cannot carry, because it is about the reload rather than the plugin. Discovery is
+ * ADDITIVE, so an id that was already loaded keeps the module it was loaded from and its
+ * `active` state says nothing about whether changed files were picked up. Optional
+ * because every other lifecycle answer omits it.
+ */
+export interface DiscoveredPluginRecord extends PluginLifecycleRecord {
+  alreadyLoaded?: boolean
+}
+
 export interface PrimaryPluginRuntimeCatalogue {
   plugins: PluginLifecycleRecord[]
   tombstones: PluginTombstone[]
@@ -146,7 +157,7 @@ function parseModuleInfo(value: unknown): PluginWebModuleInfo | null {
   }
 }
 
-function parseLifecycleRecord(value: unknown): PluginLifecycleRecord | null {
+function parseLifecycleRecord(value: unknown): DiscoveredPluginRecord | null {
   if (!value || typeof value !== 'object') return null
   const item = value as Record<string, unknown>
   if (
@@ -202,6 +213,8 @@ function parseLifecycleRecord(value: unknown): PluginLifecycleRecord | null {
     ...(missingDependencies.length ? { missingDependencies } : {}),
     ...(typeof item.reason === 'string' ? { reason: item.reason } : {}),
     ...(typeof item.error === 'string' ? { error: item.error } : {}),
+    // Carried across the relay so a replica's discover says the same thing the Mac's does.
+    ...(item.alreadyLoaded === true ? { alreadyLoaded: true } : {}),
   }
 }
 
@@ -485,7 +498,7 @@ export async function managePrimaryPlugin(
   pluginIdInput: string,
   operation: PluginManagementAction,
   payload?: { cascade?: boolean },
-): Promise<{ plugin?: PluginLifecycleRecord; ok?: true }> {
+): Promise<{ plugin?: DiscoveredPluginRecord; ok?: true }> {
   const pluginId = validPluginId(pluginIdInput)
   const outcome = await callPrimaryControl(
     'server.plugin-manage',

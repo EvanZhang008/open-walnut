@@ -1488,10 +1488,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     registry,
     list: () => getPluginLifecycleRecords(registry),
     discover: async (pluginId) => {
+      // pluginSoftReload is loadNewPlugins, which is ADDITIVE: an id that is already
+      // registered keeps the module it was loaded from. Answering only `active` therefore
+      // told somebody who had just copied new files in that their change was live when it
+      // was not. Read the ids BEFORE the reload; after it, every id looks the same.
+      const alreadyLoaded = getPluginLifecycleRecords(registry).some((record) => record.id === pluginId)
       await pluginSoftReload()
       const plugin = getPluginLifecycleRecords(registry).find((record) => record.id === pluginId)
       if (!plugin) throw new Error(`Plugin "${pluginId}" was not discovered`)
-      return plugin
+      return alreadyLoaded ? { ...plugin, alreadyLoaded: true } : plugin
     },
     reload: reloadPlugin,
     disable: (pluginId, opts) => runPluginMutation(async () => {

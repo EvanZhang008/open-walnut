@@ -99,6 +99,11 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const serviceWatchers = new Set<(change: ServiceChange) => void | Promise<void>>()
   const subscriptions = new Set<{ names: string[]; handler: (event: PluginEvent) => void | Promise<void> }>()
   const files = new Map<string, unknown>()
+  // The real `updateJson` holds a cross-process file lock across read + mutate + write.
+  // Without the same serialization here, two updates that await inside their mutation both
+  // read the pre-update value and the later write drops the earlier one, so a plugin's
+  // concurrency test passes against the fake and loses data in production.
+  const updateChains = new Map<string, Promise<unknown>>()
   const secrets = new Map<string, string>()
   let config = structuredClone(options.config ?? {})
   const controller = new AbortController()
@@ -308,9 +313,15 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       async readJson(name, fallback) { return structuredClone((files.get(name) as typeof fallback | undefined) ?? fallback) },
       async writeJson(name, value) { files.set(name, structuredClone(value)) },
       async updateJson(name, fallback, update) {
-        const next = await update(structuredClone((files.get(name) as typeof fallback | undefined) ?? fallback))
-        files.set(name, structuredClone(next))
-        return next
+        const run = (updateChains.get(name) ?? Promise.resolve()).then(async () => {
+          const next = await update(structuredClone((files.get(name) as typeof fallback | undefined) ?? fallback))
+          files.set(name, structuredClone(next))
+          return next
+        })
+        // The chain link is settled either way: one caller's failed mutation must not
+        // reject the next caller's update, which is what a bare `run` here would do.
+        updateChains.set(name, run.then(() => undefined, () => undefined))
+        return run
       },
       async readText(name) { return (files.get(name) as string | undefined) ?? null },
       async writeText(name, value) { files.set(name, value) },

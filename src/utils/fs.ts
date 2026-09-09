@@ -36,8 +36,41 @@ export async function writeJsonFile(
   }
 }
 
+let fallbackCloneWarned = false
+
 /**
- * Read and parse a JSON file. Returns fallback if file doesn't exist.
+ * Copy a fallback before handing it to a caller.
+ *
+ * A fallback is usually a shared object (a module-level `const EMPTY = { rows: [] }`),
+ * and the normal shape inside `updateJsonFile` is "mutate what you just read". Returning
+ * the fallback ITSELF made that mutation land on the shared object, so every later read
+ * of any missing file with the same fallback started from the poisoned value — data from
+ * one file appearing in another, for the rest of the process. The test fake in
+ * `@open-walnut/plugin-api/testing` always cloned, so no test could reproduce it.
+ *
+ * `structuredClone` rejects a value holding a function (and a class instance would come
+ * back as a plain object). A fallback like that is returned unchanged rather than turning
+ * a working read into a throw; the caller keeps the old aliasing behaviour, which is the
+ * lesser of the two problems.
+ */
+function safeClone<T>(fallback: T, filePath: string): T {
+  if (fallback === null || typeof fallback !== 'object') return fallback;
+  try {
+    return structuredClone(fallback);
+  } catch (err) {
+    if (!fallbackCloneWarned) {
+      fallbackCloneWarned = true;
+      log.web.debug('JSON fallback could not be cloned; returned by reference', {
+        filePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return fallback;
+  }
+}
+
+/**
+ * Read and parse a JSON file. Returns a COPY of the fallback if the file doesn't exist.
  * Throws on parse errors (corrupt/truncated files) to avoid silently
  * losing data — callers should handle this rather than accepting empty data.
  *
@@ -58,11 +91,11 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
   } catch (err: unknown) {
     // File doesn't exist → use fallback (normal first-run case)
     if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
-      return fallback;
+      return safeClone(fallback, filePath);
     }
     // Permission error, etc. → log and use fallback (matches previous behavior)
     log.web.warn('non-ENOENT error reading JSON file', { filePath, error: err instanceof Error ? err.message : String(err) });
-    return fallback;
+    return safeClone(fallback, filePath);
   }
 
   // File exists and was read — parse it. If it's corrupt, throw rather than
@@ -72,7 +105,7 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
   } catch (parseErr) {
     // Empty file is treated the same as missing (can happen after truncated write)
     if (content.trim().length === 0) {
-      return fallback;
+      return safeClone(fallback, filePath);
     }
 
     // Self-heal from git history (data dir only). Never swallows the failure:
@@ -113,6 +146,10 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
  * value is persisted; returning `undefined` means "mutated in place", so
  * `current` itself is persisted. The write goes through the atomic
  * `writeJsonFile`. Returns the persisted value.
+ *
+ * "FRESH copy" covers the missing-file case too: the read below hands `mutate`
+ * a copy of `fallback`, never `fallback` itself, so mutating in place cannot
+ * poison a shared fallback object for every later read (see `safeClone`).
  */
 export async function updateJsonFile<T>(
   filePath: string,

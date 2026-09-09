@@ -183,6 +183,37 @@ describe('plugin runtime routes', () => {
     expect(response.body.plugin).toMatchObject({ id: 'new-plugin', state: 'active' })
   })
 
+  it('says so when discovery could not have picked the caller\'s files up', async () => {
+    // Discovery is ADDITIVE: an id already registered keeps the module it was loaded from.
+    // Modelled the way the host's hook does it, by reading the loaded ids BEFORE the
+    // additive reload, because afterwards a new id and an old one look identical.
+    const loaded = new Set<string>()
+    const { app } = setup({
+      discover: async (pluginId: string) => {
+        const alreadyLoaded = loaded.has(pluginId)
+        loaded.add(pluginId)
+        return alreadyLoaded ? { ...record({ id: pluginId }), alreadyLoaded: true } : record({ id: pluginId })
+      },
+    })
+
+    const first = await request(app)
+      .post('/api/plugin-runtime/discover')
+      .send({ pluginId: 'new-plugin' })
+      .expect(200)
+    // A genuine first pickup carries no caveat at all.
+    expect(first.body.plugin.alreadyLoaded).toBeUndefined()
+    expect(first.body.note).toBeUndefined()
+
+    const again = await request(app)
+      .post('/api/plugin-runtime/discover')
+      .send({ pluginId: 'new-plugin' })
+      .expect(200)
+
+    // `active` on its own is what told people their rsynced change was live when it was not.
+    expect(again.body.plugin).toMatchObject({ id: 'new-plugin', state: 'active', alreadyLoaded: true })
+    expect(again.body.note).toBe('already loaded; use POST /api/plugin-runtime/<id>/reload to pick up changed files')
+  })
+
   it('validates discovery ids before scanning Plugin roots', async () => {
     const { app, deps } = setup()
 

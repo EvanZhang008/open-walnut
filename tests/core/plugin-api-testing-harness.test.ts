@@ -102,3 +102,45 @@ describe('createFakeWalnut services', () => {
     ])
   })
 })
+
+describe('createFakeWalnut storage.updateJson', () => {
+  it('serializes concurrent updates on one name, so a passing concurrency test means something', async () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+
+    // The real `updateJson` holds a file lock across read + mutate + write. An `await`
+    // inside the mutation is what a plugin actually does (an HTTP call, a db read); an
+    // unserialized fake lets both mutations read 0 and the second write drops the first,
+    // so the counter lands on 1 and the plugin author ships a lost update.
+    const order: string[] = []
+    const bump = (tag: string) => fake.api.storage.updateJson('counter.json', { count: 0 }, async (current) => {
+      order.push(`read:${tag}:${current.count}`)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      order.push(`write:${tag}:${current.count + 1}`)
+      return { count: current.count + 1 }
+    })
+
+    const [first, second] = await Promise.all([bump('a'), bump('b')])
+
+    expect(first).toEqual({ count: 1 })
+    expect(second).toEqual({ count: 2 })
+    expect(await fake.api.storage.readJson('counter.json', { count: -1 })).toEqual({ count: 2 })
+    // Submission order is preserved: the second caller never starts before the first ends.
+    expect(order).toEqual(['read:a:0', 'write:a:1', 'read:b:1', 'write:b:2'])
+  })
+
+  it('lets the next update run after one throws', async () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+
+    const failing = fake.api.storage.updateJson('counter.json', { count: 0 }, async () => {
+      throw new Error('the remote said no')
+    })
+    const following = fake.api.storage.updateJson('counter.json', { count: 0 }, async (current) => ({
+      count: current.count + 1,
+    }))
+
+    // The failure reaches ITS caller and nobody else's: a shared chain that forwarded the
+    // rejection would fail every later update in the test for someone else's reason.
+    await expect(failing).rejects.toThrow('the remote said no')
+    await expect(following).resolves.toEqual({ count: 1 })
+  })
+})

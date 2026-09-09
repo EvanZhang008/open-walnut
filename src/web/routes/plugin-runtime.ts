@@ -24,14 +24,22 @@ import {
   managePrimaryPlugin,
   PluginRuntimeRelayError,
   readPrimaryPluginWebModule,
+  type DiscoveredPluginRecord,
   type PluginManagementAction,
   type PrimaryPluginRuntimeCatalogue,
 } from './plugin-runtime-bridge.js'
 
+/**
+ * Discovery is additive, so being told `active` does not mean the caller's just-changed
+ * files are the ones running. Said in plain words because the usual caller is a person
+ * or a CLI that has this second to rsync a directory.
+ */
+const ALREADY_LOADED_NOTE = 'already loaded; use POST /api/plugin-runtime/<id>/reload to pick up changed files'
+
 export interface PluginRuntimeRouterDeps {
   registry: IntegrationRegistry
   list(): PluginLifecycleRecord[]
-  discover?(pluginId: string): Promise<PluginLifecycleRecord>
+  discover?(pluginId: string): Promise<DiscoveredPluginRecord>
   reload(pluginId: string): Promise<PluginLifecycleRecord>
   /** `cascade` blocks the plugins that depend on this one instead of refusing. */
   disable(pluginId: string, opts?: { cascade?: boolean }): Promise<PluginLifecycleRecord>
@@ -218,7 +226,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         : await deps.discover!(pluginId)
       if (!plugin) throw new PluginRuntimeRelayError('Primary did not return the discovered Plugin', 502)
       publishCloudChange(pluginId, 'discovered')
-      res.json({ plugin })
+      res.json({ plugin, ...(plugin.alreadyLoaded ? { note: ALREADY_LOADED_NOTE } : {}) })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       res.status(message.includes('not discovered') ? 404 : errorStatus(error)).json({ error: message })
