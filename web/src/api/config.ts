@@ -22,6 +22,36 @@ export function fetchInstallDir(): Promise<string | null> {
 }
 
 /**
+ * Whether an error notification's "Ask AI to fix" can start a repair session
+ * here, and in which source tree. `source: null` with `available: true` means
+ * the first click has to CLONE upstream first (minutes, once) — the button says
+ * so instead of looking hung. `available: false` carries a `reason` and the
+ * affordance simply isn't rendered (same posture as the Fix Walnut pill).
+ */
+export interface SelfRepairInfo {
+  available: boolean;
+  source: { dir: string; kind: 'running' | 'configured' | 'clone' } | null;
+  cloneDir: string;
+  repoUrl: string;
+  reason?: string;
+}
+
+/** Same page-lifetime cache rationale as installDir, with one exception: the
+ *  first repair on an npm install CLONES a source tree, which flips `source`
+ *  from null to a path. `startNotificationFix` drops the memo when its result
+ *  says `cloned`, so the next card stops promising a clone that already happened. */
+let _selfRepairPromise: Promise<SelfRepairInfo | null> | null = null;
+export function fetchSelfRepair(): Promise<SelfRepairInfo | null> {
+  _selfRepairPromise ??= apiGet<{ selfRepair?: SelfRepairInfo | null }>('/api/config')
+    .then(res => res.selfRepair ?? null)
+    .catch(() => { _selfRepairPromise = null; return null; });
+  return _selfRepairPromise;
+}
+export function invalidateSelfRepair(): void {
+  _selfRepairPromise = null;
+}
+
+/**
  * Notes vault root (cwd for Claude Code sessions started from /notes). null in
  * cloud mode. Same page-lifetime cache rationale as installDir.
  */

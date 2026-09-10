@@ -1254,12 +1254,24 @@ export interface Config {
     /** Show "UI ONLY" agent error messages. Default: false. */
     show_ui_only_agent_error?: boolean;
   };
+  /** "Ask AI to fix" on an error notification starts a coding session in
+   *  Walnut's own source. Resolution order: the checkout the server runs from,
+   *  then this directory, then `~/open-walnut` (cloned on first use when it
+   *  does not exist). Set this when Walnut is an npm install and you already
+   *  keep a clone somewhere else. Also honoured as env WALNUT_SOURCE_DIR. */
+  self_repair?: {
+    source_dir?: string;
+  };
   ui?: {
     /** How many session panels to show side-by-side: 'auto' (breakpoint-driven) or
      *  an explicit count as a decimal string — the UI offers '1'..'5'. Default: '2'.
      *  Out-of-range or non-numeric values are ignored by the client, which falls
      *  back to auto rather than rendering a broken strip. */
     session_panels?: 'auto' | `${number}`;
+    /** Show the task priority (!! / ! / ~) on rows, cards, detail views, menus
+     *  and filters. Default: false. Priority stays stored and sortable either way;
+     *  this only decides whether the UI draws it. */
+    show_priority?: boolean;
   };
   /** Audio capture configuration (system audio recording) */
   audio?: {

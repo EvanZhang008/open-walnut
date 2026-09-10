@@ -130,6 +130,18 @@ export interface NotificationRecord {
   count?: number;
   /** Latest occurrence (epoch ms). `timestamp` stays first-seen. */
   lastTimestamp?: number;
+
+  // ── Repair (operation-error only) ──
+  /** The coding session "Ask AI to fix" started for this error (routes/
+   *  notifications.ts). Survives folds: a re-fire is the same problem, and the
+   *  session working on it is still the place to go. */
+  fix?: NotificationFix;
+}
+
+export interface NotificationFix {
+  taskId: string;
+  sessionId?: string;
+  startedAt: number;
 }
 
 interface NotificationsStore {
@@ -394,6 +406,27 @@ export async function listNotifications(): Promise<{ feed: NotificationRecord[];
     const { notifications } = await readStore();
     return { feed: notifications, unreadCount: notifications.filter(n => !n.read).length };
   });
+}
+
+/** One record by its cross-layer identity (clients only reliably know the dedupKey). */
+export async function findNotification(dedupKey: string): Promise<NotificationRecord | null> {
+  const { notifications } = await readStore();
+  const found = notifications.find(n => n.dedupKey === dedupKey);
+  return found ? { ...found } : null;
+}
+
+/**
+ * Record the repair session started for an error. Returns the updated record
+ * (a shallow clone, for the caller's `notification:updated` broadcast), or null
+ * when the record was dismissed in the meantime.
+ */
+export async function attachNotificationFix(dedupKey: string, fix: NotificationFix): Promise<NotificationRecord | null> {
+  return withWriteLock(() => withStore((store) => {
+    const existing = store.notifications.find(n => n.dedupKey === dedupKey);
+    if (!existing) return null;
+    existing.fix = { ...fix };
+    return { ...existing };
+  }));
 }
 
 /**

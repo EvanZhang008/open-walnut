@@ -34,6 +34,8 @@ import {
 import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
 import { navigateToTarget } from '@/utils/open-session';
+import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
+import { startNotificationFix } from '@/api/notifications';
 import { log } from '@/utils/log';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { LetterEnvelopeRow } from '@/components/inbox/LetterEnvelopeRow';
@@ -64,6 +66,19 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   const [errorCategory, setErrorCategory] = useState<string | null>(null);
   const navigate = useNavigate();
   const indexStatus = useSearchIndexStatus(open, section === 'system');
+
+  // Can an error card offer "Ask AI to fix" here? Fetched on open (the /api/config
+  // read is memoized for the page lifetime), and absent by default so a cloud
+  // replica or a git-less npm install never renders a button that can only fail.
+  const [selfRepair, setSelfRepair] = useState<SelfRepairInfo | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    void fetchSelfRepair().then(setSelfRepair);
+  }, [open]);
+  const canFix = selfRepair?.available === true;
+  // Available but no checkout yet → the first click clones upstream, which takes
+  // minutes. The button says that while it runs instead of looking wedged.
+  const fixNeedsClone = canFix && selfRepair?.source === null;
 
   // Letters live in their OWN store (durable documents), so the rail reads them
   // from there instead of from the 200-entry feed — which can have dropped a
@@ -420,6 +435,8 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                       // API under one outage), so unlike a family block its
                       // header can't name the family — each card wears the chip.
                       showCategoryChip
+                      canFix={canFix}
+                      fixNeedsClone={fixNeedsClone}
                     />
                   </div>
                 ))}
@@ -460,6 +477,8 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                       onToggleGroup={toggleGroup}
                       onNavigate={onNavigate}
                       onDismissKey={key => dismissFeed([key])}
+                      canFix={canFix}
+                      fixNeedsClone={fixNeedsClone}
                     />
                   </div>
                 ))}
@@ -491,6 +510,8 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                   onDismissKey={key => dismissFeed([key])}
                   onOpenLetter={openLetter}
                   showCategoryChip={section === 'all'}
+                  canFix={canFix}
+                  fixNeedsClone={fixNeedsClone}
                 />
               </div>
             )}
@@ -618,6 +639,7 @@ function collapseSameOrigin(items: Notification[]): FeedGroup[] {
  */
 function FeedGroups({
   groups, expandedGroups, onToggleGroup, onNavigate, onDismissKey, onOpenLetter, showCategoryChip,
+  canFix, fixNeedsClone,
 }: {
   groups: FeedGroup[];
   expandedGroups: Set<string>;
@@ -628,6 +650,12 @@ function FeedGroups({
   onOpenLetter?: (letterId: string) => void;
   /** All-section only: name the family on an error card, since there is no header. */
   showCategoryChip?: boolean;
+  /** Whether an error card may offer "Ask AI to fix" (see the panel's selfRepair).
+   *  Passed as a plain boolean because FeedItem is memo'd — reading it from a
+   *  context inside would not re-render the card when the fetch lands. */
+  canFix?: boolean;
+  /** The first fix has to clone Walnut's source (minutes) — the button says so. */
+  fixNeedsClone?: boolean;
 }) {
   return (
     <>
@@ -660,6 +688,8 @@ function FeedGroups({
                   onDismiss={() => onDismissKey(n.dedupKey)}
                   {...(onOpenLetter ? { onOpenLetter } : {})}
                   showCategoryChip={showCategoryChip}
+                  canFix={canFix}
+                  fixNeedsClone={fixNeedsClone}
                 />
               )
             ))}
@@ -898,13 +928,20 @@ function ContextChips({ n }: { n: Notification }) {
   );
 }
 
+/** dedupKeys with an "Ask AI to fix" launch in flight, across card mounts. */
+const fixesInFlight = new Set<string>();
+
 /** Error / automation card: title, body, ×N fold badge, deep-link chips. */
-const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss, onOpenLetter, showCategoryChip }: {
+const FeedItem = memo(function FeedItem({
+  n, onNavigate, onDismiss, onOpenLetter, showCategoryChip, canFix, fixNeedsClone,
+}: {
   n: Notification;
   onNavigate: (to: string) => void;
   onDismiss: () => void;
   onOpenLetter?: (letterId: string) => void;
   showCategoryChip?: boolean;
+  canFix?: boolean;
+  fixNeedsClone?: boolean;
 }) {
   // Entries without a navigation target (e.g. plugin/system errors) expand on
   // click instead — otherwise a truncated error message is simply unreadable.
@@ -913,6 +950,18 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss, onOpenLetter
   // (which unclamps the human body) so unclamping a long sentence doesn't dump
   // JSON on the user, and reading the JSON doesn't force the body open.
   const [detailOpen, setDetailOpen] = useState(false);
+  // "Ask AI to fix" in flight / its failure text. Per card: two error cards can
+  // be handed to two repair sessions independently. The in-flight flag seeds
+  // from the module-level set so a card re-mounted mid-launch (panel closed and
+  // reopened during a minutes-long clone) still reads busy instead of offering
+  // a second start.
+  const [fixBusy, setFixBusy] = useState(() => fixesInFlight.has(n.dedupKey));
+  const [fixError, setFixError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const target = linkTargetOf(n);
   const count = n.count ?? 1;
   // Human title/body + the raw line for the toggle. `presentError` also repairs a
@@ -937,6 +986,43 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss, onOpenLetter
   const activate = letterId
     ? () => onOpenLetter?.(letterId)
     : target ? () => onNavigate(target) : () => setExpanded(v => !v);
+
+  // The repair session this error already has (server-owned `fix`). A record can
+  // carry a task without a session id (the launch answered late), so the task
+  // page is the fallback destination rather than a dead link.
+  const fixTarget = n.fix
+    ? (n.fix.sessionId ? `/sessions?id=${n.fix.sessionId}` : `/tasks/${n.fix.taskId}`)
+    : null;
+  // An error card is the one kind that can be handed to a coding session, and
+  // only where a source tree exists (canFix) or a session already ran (n.fix) —
+  // on a cloud replica or a git-less install the affordance simply isn't there.
+  const showFixActions = n.kind === 'operation-error' && (!!n.fix || !!canFix);
+
+  const startFix = async (restart: boolean) => {
+    if (fixBusy || fixesInFlight.has(n.dedupKey)) return;
+    fixesInFlight.add(n.dedupKey);
+    setFixBusy(true);
+    setFixError(null);
+    try {
+      const result = await startNotificationFix(n.dedupKey, restart ? { restart: true } : undefined);
+      log.info('notifications', 'repair session started', {
+        dedupKey: n.dedupKey, taskId: result.taskId, sessionId: result.sessionId, reused: result.reused,
+      });
+      // Only the card the user is still looking at may move them: a launch that
+      // finishes after they closed the panel and went back to work must not yank
+      // the page to the session. The record's `fix` (WS update) shows the way in.
+      if (!mounted.current) return;
+      // Closes the panel on the way (see onNavigate in the panel).
+      onNavigate(result.sessionId ? `/sessions?id=${result.sessionId}` : `/tasks/${result.taskId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('notifications', 'repair session failed to start', { dedupKey: n.dedupKey, error: message });
+      if (mounted.current) setFixError(message);
+    } finally {
+      fixesInFlight.delete(n.dedupKey);
+      if (mounted.current) setFixBusy(false);
+    }
+  };
 
   return (
     <div
@@ -995,6 +1081,56 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss, onOpenLetter
           {detailOpen && (
             <pre className="nfc-card-pre" onClick={(e) => e.stopPropagation()}>{presented.detail}</pre>
           )}
+        </div>
+      )}
+      {/* Hand the error to a coding session in Walnut's own source. Every click in
+          here stops propagation (the row itself is a click target that navigates
+          or expands), including the container's — a click on the row's padding
+          must not expand the card behind the buttons. */}
+      {showFixActions && (
+        <div
+          className="nfc-card-actions"
+          onClick={(e) => e.stopPropagation()}
+          // The row's own onKeyDown activates on Enter/Space and preventDefaults,
+          // which would swallow a focused button's keyboard activation.
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {fixTarget ? (
+            <>
+              <button
+                className="nfc-card-action nfc-fix-open"
+                data-testid="nfc-fix-open"
+                title="Open the repair session already working on this error"
+                onClick={(e) => { e.stopPropagation(); onNavigate(fixTarget); }}
+              >
+                Open fix session ↗
+              </button>
+              {/* Quiet secondary: the first session may have finished or gone
+                  wrong, and a fresh one is the only way forward from the card. */}
+              <button
+                className="nfc-card-action nfc-fix-restart"
+                data-testid="nfc-fix-restart"
+                title="Start a fresh repair session for this error"
+                disabled={fixBusy}
+                onClick={(e) => { e.stopPropagation(); void startFix(true); }}
+              >
+                {fixBusy ? 'Starting…' : 'Fix again'}
+              </button>
+            </>
+          ) : (
+            <button
+              className="nfc-card-action nfc-fix-start"
+              data-testid="nfc-fix-start"
+              title="Start a coding session in Walnut's source with this error as the brief"
+              disabled={fixBusy}
+              onClick={(e) => { e.stopPropagation(); void startFix(false); }}
+            >
+              {fixBusy
+                ? (fixNeedsClone ? 'Cloning Walnut source… (first time only)' : 'Starting…')
+                : '🔧 Ask AI to fix'}
+            </button>
+          )}
+          {fixError && <span className="nfc-fix-error">{fixError}</span>}
         </div>
       )}
       <ContextChips n={n} />

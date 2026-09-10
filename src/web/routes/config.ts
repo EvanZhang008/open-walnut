@@ -44,6 +44,7 @@ export function setStaticRootReporter(fn: () => WebAssetsReport): void {
 // provider keys / bearer tokens there would hand a phone token holder the
 // Bedrock credentials. On the trusted-LAN Mac it stays unmasked.
 import { redactConfig } from '../../core/config-redact.js'
+import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -98,7 +99,14 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // webAssets: reported only when this process serves them (production), so a
     // client or monitor can tell "the app is broken" from "the app is slow".
     const webAssets = staticRootReporter?.() ?? null
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets })
+    // selfRepair: whether an error notification's "Ask AI to fix" can start a
+    // session here, and in which source tree. Unlike installDir it stays
+    // available on an npm install (the first repair clones upstream); false only
+    // on a replica, without git, or when the clone path is taken by something
+    // else. Best-effort: a failed probe must not take /api/config down with it.
+    let selfRepair: Awaited<ReturnType<typeof getSelfRepairStatus>> | null = null
+    try { selfRepair = await getSelfRepairStatus() } catch { /* diagnostics only */ }
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair })
   } catch (err) {
     next(err)
   }

@@ -31087,6 +31087,54 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 .nfc-open-session:hover { text-decoration: underline; }
 
+/* ── Card action row ("Ask AI to fix" / "Open fix session") ──
+   Sits under the body + Details toggle and above the context chips: it is what
+   the user can DO about the error, so it reads after what the error says. Pills
+   rather than the perm card's full-width buttons — an error card's action is
+   optional, a permission's is the point of the card. */
+.nfc-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.nfc-card-action {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nfc-card-action:not(:disabled):hover { opacity: 0.9; text-decoration: underline; }
+
+.nfc-card-action:disabled { opacity: 0.6; cursor: default; }
+
+/* The primary of the pair — starting the repair is the card's main offer. */
+.nfc-fix-start { color: var(--accent); }
+
+/* …and the secondary is a plain text button: "Fix again" only matters once a
+   session already exists, so it must not compete with "Open fix session". */
+.nfc-fix-restart {
+  border: none;
+  padding: 3px 2px;
+  color: var(--fg-muted);
+}
+
+/* Why the click did nothing, on its own line under the buttons. */
+.nfc-fix-error {
+  flex-basis: 100%;
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--error, #d64545);
+}
+
 /* ── AskUserQuestion answer form (shared: panel card + permission toast) ── */
 
 .nfc-answer {

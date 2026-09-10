@@ -346,6 +346,12 @@ stage_dist() {
   # getVersion() walks UP from dist/cli.js for the nearest package.json; a stage
   # without one reports 0.0.0 and every version-gated builtin plugin turns off.
   cp "$REPO_ROOT/package.json" "$STAGE_DIR/package.json" || return 1
+  # WALNUT_INSTALL_DIR (constants.ts) walks the same way looking for a .git next
+  # to that package.json, which a stage never has: since staging landed, the
+  # server believed it was an npm install, so "Fix Walnut" hid and "Ask AI to
+  # fix" would have cloned upstream instead of repairing THIS checkout. The
+  # marker hands it the repo the stage was built from.
+  printf '%s\n' "$REPO_ROOT" > "$STAGE_DIR/.walnut-source-root" || return 1
 }
 
 # A stage that never became the running server is trash on exit (smoke failure,

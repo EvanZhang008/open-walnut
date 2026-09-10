@@ -445,18 +445,58 @@ export const DAEMON_BINARIES_DIR = (() => {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'daemon-binaries');
 })();
 
+/** package.json naming open-walnut next to a .git (a FILE in a git worktree; both are checkouts). */
+function isWalnutSourceCheckout(dir: string): boolean {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: string };
+    return pkg.name === 'open-walnut' && fs.existsSync(path.join(dir, '.git'));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Walnut's own source checkout, for the "Fix Walnut" quick-start entry.
- * Walk up from the bundle looking for package.json (name === 'open-walnut')
- * alongside a .git dir — a fixable *source* checkout, not an npm install or a
- * cloud bundle. null → the UI hides the Fix Walnut button entirely.
+ * Walnut's own source checkout, for the "Fix Walnut" quick-start entry and
+ * "Ask AI to fix" on an error notification. Walk up from the bundle looking for
+ * package.json (name === 'open-walnut') alongside a .git — a fixable *source*
+ * checkout, not an npm install or a cloud bundle. null → the UI hides the Fix
+ * Walnut button entirely.
+ *
+ * A production deploy runs the bundle from a STAGED copy on the temp volume
+ * (scripts/dev-prod.sh), which has the package.json but no .git; the stage
+ * carries a `.walnut-source-root` marker naming the repo it was built from, and
+ * that answer wins over the walk (validated, never trusted blindly).
  */
 export const WALNUT_INSTALL_DIR: string | null = (() => {
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     try {
+      const marker = path.join(dir, '.walnut-source-root');
+      if (fs.existsSync(marker)) {
+        const root = fs.readFileSync(marker, 'utf8').trim();
+        if (root && isWalnutSourceCheckout(root)) return root;
+      }
+    } catch {}
+    if (isWalnutSourceCheckout(dir)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+})();
+
+/**
+ * The directory the running Walnut package lives in, whatever it is: the
+ * source checkout (same as WALNUT_INSTALL_DIR), an npm install
+ * (`…/node_modules/open-walnut`), or a cloud bundle. Same walk as above minus
+ * the .git requirement. null only when no package.json names open-walnut.
+ */
+export const WALNUT_PACKAGE_ROOT: string | null = (() => {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    try {
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: string };
-      if (pkg.name === 'open-walnut' && fs.statSync(path.join(dir, '.git')).isDirectory()) return dir;
+      if (pkg.name === 'open-walnut') return dir;
     } catch {}
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -464,3 +504,6 @@ export const WALNUT_INSTALL_DIR: string | null = (() => {
   }
   return null;
 })();
+
+/** Upstream repository a self-repair session clones when no checkout exists. */
+export const WALNUT_REPO_URL = 'https://github.com/EvanZhang008/open-walnut.git';

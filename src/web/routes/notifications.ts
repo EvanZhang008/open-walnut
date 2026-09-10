@@ -9,9 +9,20 @@
  * and unread count survive a refresh. Store lives in core/notifications/store.ts.
  */
 
+import { randomUUID } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { listNotifications, markRead, dismissNotifications } from '../../core/notifications/store.js'
+import {
+  listNotifications, markRead, dismissNotifications, findNotification, attachNotificationFix,
+  type NotificationRecord,
+} from '../../core/notifications/store.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
+import { CLOUD_MODE, LOG_DIR, WALNUT_HOME, WALNUT_PACKAGE_ROOT, WALNUT_REPO_URL } from '../../constants.js'
+import { ensureWalnutSource, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
+import { buildNotificationFixMessage, fixTaskTitle } from '../../core/self-repair/fix-briefing.js'
+import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
+import { getVersion } from '../../core/version.js'
+import { broadcastEvent } from '../ws/handler.js'
+import { log } from '../../logging/index.js'
 
 export const notificationsRouter = Router()
 
@@ -91,3 +102,109 @@ notificationsRouter.post('/dismiss', async (req: Request, res: Response, next: N
     next(err)
   }
 })
+
+// POST /api/notifications/fix { dedupKey, restart? } — "Ask AI to fix": start a
+// coding session in Walnut's own source with this error as the brief. The task
+// files under the real 'Walnut' project (where the user's Walnut work lives),
+// never a parallel repair project. Addressed by dedupKey like dismiss: the id
+// a live WS card carries is frontend-local.
+//
+// Idempotent by default: a record that already has a repair returns it, so a
+// second click (or a second device) reopens the same session instead of
+// minting a duplicate; `restart: true` starts a fresh one. May take minutes
+// the FIRST time on an npm install (it clones upstream); the client sends a
+// matching timeout and the record still gains its `fix` if the browser gives
+// up, because the store write + WS update happen server-side.
+notificationsRouter.post('/fix', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { dedupKey, restart } = req.body as { dedupKey?: unknown; restart?: unknown }
+    if (typeof dedupKey !== 'string' || !dedupKey) {
+      res.status(400).json({ error: 'dedupKey is required' })
+      return
+    }
+    if (CLOUD_MODE) {
+      res.status(409).json({ error: 'Repairs start on the primary console, not on a cloud replica.' })
+      return
+    }
+    const record = await findNotification(dedupKey)
+    if (!record) {
+      res.status(404).json({ error: 'Notification not found' })
+      return
+    }
+    if (record.kind !== 'operation-error') {
+      res.status(400).json({ error: 'Only error notifications can be handed to a repair session' })
+      return
+    }
+    if (record.fix && restart !== true) {
+      res.json({ taskId: record.fix.taskId, sessionId: record.fix.sessionId, reused: true })
+      return
+    }
+
+    // `fix` is only written once the launch is done, and a first launch can sit
+    // in a clone for minutes: a second click, tab or device in that window would
+    // otherwise mint a second task and session for the same error. One launch
+    // per dedupKey at a time; later callers ride it and get `reused: true`.
+    const inFlight = fixInFlight.get(dedupKey)
+    if (inFlight && restart !== true) {
+      const done = await inFlight
+      res.json({ taskId: done.taskId, sessionId: done.sessionId, reused: true })
+      return
+    }
+    const launch = startRepair(dedupKey, record).finally(() => {
+      if (fixInFlight.get(dedupKey) === launch) fixInFlight.delete(dedupKey)
+    })
+    fixInFlight.set(dedupKey, launch)
+    const done = await launch
+    res.json({ ...done, reused: false })
+  } catch (err) {
+    if (err instanceof WalnutSourceError || err instanceof QuickStartError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
+interface RepairLaunch {
+  taskId: string
+  sessionId: string
+  startedAt: number
+  source: Awaited<ReturnType<typeof ensureWalnutSource>>['source']
+  cloned: boolean
+}
+
+const fixInFlight = new Map<string, Promise<RepairLaunch>>()
+
+async function startRepair(dedupKey: string, record: NotificationRecord): Promise<RepairLaunch> {
+  const { source, cloned } = await ensureWalnutSource()
+  const message = buildNotificationFixMessage(record, {
+    source, cloned,
+    version: getVersion(),
+    packageRoot: WALNUT_PACKAGE_ROOT,
+    dataDir: WALNUT_HOME,
+    logDir: LOG_DIR,
+    repoUrl: WALNUT_REPO_URL,
+  })
+  // Minted here so it rides the response and the client opens the column at
+  // once (same contract as quick-start's preassignedSessionId).
+  const sessionId = randomUUID()
+  const task = await quickStartSession({
+    message,
+    cwd: source.dir,
+    taskTitle: fixTaskTitle(record),
+    project: 'Walnut',
+    projectFromFolder: false,
+    // Same headless baseline as a fix-walnut launch with no client pick.
+    taskMeta: { pinTier: 'satellite' },
+    source: 'notification-fix',
+    requestTs: Date.now(),
+    preassignedSessionId: sessionId,
+  })
+  const fix = { taskId: task.id, sessionId, startedAt: Date.now() }
+  const updated = await attachNotificationFix(dedupKey, fix)
+  if (updated) broadcastEvent('notification:updated', updated)
+  log.notif.info('notification repair session started', {
+    dedupKey, taskId: task.id, sessionId, sourceDir: source.dir, sourceKind: source.kind, cloned,
+  })
+  return { ...fix, source, cloned }
+}

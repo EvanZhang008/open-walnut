@@ -50,8 +50,26 @@ sessionId/taskId > non-core subsystem root), so ad-hoc `log.error` calls join
 the system without ceremony; core-subsystem logs without ids stay keyless and
 fall to the debris sweep.
 
+## "Ask AI to fix" (repair from the card)
+
+Every error card offers "Ask AI to fix". It calls `POST /api/notifications/fix { dedupKey }`, which starts a Claude Code session in Walnut's own source with the record (title, message, Details line, occurrence count, `recoveryKey`, session/host context) as the brief, files the task under the `Walnut` project with title `Fix: <card title>`, and stores the session on the record (`fix`), so the card then shows "Open fix session" instead of starting a second one. The record keeps `fix` across folds.
+
+Where the session runs depends on how Walnut was installed (`src/core/self-repair/walnut-source.ts`):
+
+| Install | Source the session edits | Notes |
+|---|---|---|
+| git checkout run in place | that checkout (`WALNUT_INSTALL_DIR`) | the brief says the running server was built from this tree; the repo's CLAUDE.md workflow applies |
+| npm install, with your own clone | `self_repair.source_dir` in config.yaml (or env `WALNUT_SOURCE_DIR`) | must be a checkout: package.json named `open-walnut` next to `.git` |
+| npm install, nothing else | `~/open-walnut`, cloned from upstream on the first click (minutes) | the brief warns that the running Walnut is the npm package, not this tree, and gives `npm run web:build && npm install -g .` as the apply path; it must not run `dev:prod` or restart the running server |
+| cloud replica | not offered | repairs start on the primary console |
+
+The button is hidden when `GET /api/config` reports `selfRepair.available: false` (replica, no `git` on PATH, or `~/open-walnut` exists but is not a Walnut checkout; `selfRepair.reason` says which).
+
 ## Where things live
 
+- Repair: `src/core/self-repair/` (source resolution + clone, briefing text),
+  route in `src/web/routes/notifications.ts`, card action in
+  `web/src/components/common/NotificationPanel.tsx`
 - State + stamps: `src/core/notifications/store.ts` (`recoverNotifications`,
   `expireErrorNotifications`, `expireKeylessErrorNotifications`)
 - Key derivation: `src/core/notifications/log-error-bridge.ts`

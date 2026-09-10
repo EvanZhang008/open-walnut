@@ -137,6 +137,8 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     QUICK_START_MESSAGE_HARD_LIMIT: 2_000_000,
     // Deterministic in tests: no Fix-Walnut source dir unless a test opts in.
     WALNUT_INSTALL_DIR: null,
+    WALNUT_PACKAGE_ROOT: null,
+    WALNUT_REPO_URL: 'https://example.invalid/open-walnut.git',
     ...overrides,
   };
 }

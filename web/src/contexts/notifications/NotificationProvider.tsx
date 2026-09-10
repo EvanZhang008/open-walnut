@@ -128,6 +128,8 @@ export interface FeedRecord {
   lastTimestamp?: number;
   /** kind 'letter' only — which letter the envelope points at. */
   letterId?: string;
+  /** operation-error only — the repair session "Ask AI to fix" started. */
+  fix?: { taskId: string; sessionId?: string; startedAt: number };
 }
 
 /** Copy the enrichment fields off a wire record, omitting absent ones so a
@@ -147,6 +149,7 @@ function enrichmentOf(r: FeedRecord): Partial<Notification> {
     ...(r.sessionTitle ? { sessionTitle: r.sessionTitle } : {}),
     ...(r.project ? { project: r.project } : {}),
     ...(r.letterId ? { letterId: r.letterId } : {}),
+    ...(r.fix ? { fix: r.fix } : {}),
     ...(typeof r.count === 'number' ? { count: r.count } : {}),
     ...(typeof r.lastTimestamp === 'number' ? { lastTimestamp: r.lastTimestamp } : {}),
   };

@@ -98,6 +98,10 @@ export interface Notification {
   sessionTitle?: string;
   project?: string;
 
+  // ── Repair ──
+  /** the coding session Ask AI to fix started for this error; server-owned. */
+  fix?: { taskId: string; sessionId?: string; startedAt: number };
+
   // ── Occurrence folding (server-side upsert) ──
   /** occurrences folded into this record. Absent = 1. */
   count?: number;
