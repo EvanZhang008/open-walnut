@@ -15,7 +15,7 @@ import { initLongTaskMonitor } from './utils/longtask-monitor';
 import { initInputLatencyMonitor } from './utils/input-latency-monitor';
 import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
-import { selectionIntersects } from './utils/selection-guard';
+import { pressKeepsSelection, selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
@@ -75,6 +75,10 @@ document.addEventListener('mousedown', (e) => {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed) return;
   if (e.target instanceof Node && selectionIntersects(e.target)) return;
+  // …and never on a control that opts out (`data-keep-selection`): the mic, where
+  // the press IS the user acting on the passage they just selected. This handler
+  // was measured deselecting it the instant they reached for voice input.
+  if (pressKeepsSelection(e.target)) return;
   sel.removeAllRanges();
 }, true);
 

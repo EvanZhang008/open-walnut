@@ -52,6 +52,38 @@ export function pointerSelectingWithin(el: Element | null): boolean {
   return !!el && !!pointerDownTarget && el.contains(pointerDownTarget);
 }
 
+/**
+ * Attribute a control carries to say: a press here is the user ACTING on their
+ * selection, not dismissing it. Honoured by the instant-clear guard in `main.tsx`.
+ *
+ * The mic is the case this exists for. Someone selects a passage in a reply and
+ * reaches for voice input to ask about it — and the press deselected the passage
+ * before a single word was recorded (measured 2026-09-10: the selection was 33
+ * characters on mousemove and empty immediately after mousedown, pill gone with
+ * it). A control that opts out should also avoid taking FOCUS on the press, since
+ * focusing a button collapses the document selection in WebKit (Chromium keeps it,
+ * and a macOS click does not focus buttons unless Full Keyboard Access is on).
+ *
+ * Put it on the NARROWEST control that means it (matching is `closest()`, so a
+ * container hands the exemption to everything inside it). Kept alive across an
+ * unrelated press, a selection is not merely harmless: whatever reads it next —
+ * the dictation path anchors the composer to it — would be pointing at a passage
+ * the user has moved on from.
+ */
+export const KEEP_SELECTION_ATTR = 'data-keep-selection';
+
+/** Does this press land inside a control that opts out of the instant clear?
+ *
+ *  Fails closed without a DOM, like every predicate in this file: the module is
+ *  imported by files that also run under node-env vitest, where `Node`/`Element`
+ *  are not defined and a bare `instanceof` would throw. */
+export function pressKeepsSelection(target: EventTarget | null): boolean {
+  if (typeof Node === 'undefined' || typeof Element === 'undefined') return false;
+  if (!(target instanceof Node)) return false;
+  const el = target instanceof Element ? target : target.parentElement;
+  return !!el?.closest(`[${KEEP_SELECTION_ATTR}]`);
+}
+
 /** True when a non-collapsed selection intersects `node`. */
 export function selectionIntersects(node: Node | null): boolean {
   if (!node || typeof window === 'undefined') return false;

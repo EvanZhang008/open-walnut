@@ -75,6 +75,16 @@ interface ChatInputProps {
   sessionCommandsStatus?: { source: 'cli' | 'discovery'; degraded: boolean };
   /** Session-mode: control commands like /model are intercepted and trigger UI actions */
   onControlCommand?: (command: string) => void;
+  /**
+   * Dictated words are about to be written in here, which takes focus — and the
+   * browser answers a focus move by collapsing whatever the user had selected
+   * elsewhere on the page. Called just BEFORE that, on every dictation write, so a
+   * host that cares can act on the selection while it still exists (the session
+   * panel turns the selected passage into the composer's thread anchor, so speaking
+   * a question about a passage no longer loses the passage). Must be idempotent:
+   * a live draft calls it every couple of seconds.
+   */
+  onDictationInsert?: () => void;
   /** localStorage key for persisting draft text. When set, input value is saved on change (debounced) and restored on mount. */
   draftKey?: string;
   /** Shift+Tab handler — sessions use it to cycle the permission mode. */
@@ -117,7 +127,7 @@ interface ChatInputProps {
   onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
@@ -954,6 +964,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
    * only ever replace [start, start+length) and re-derive the tail each time.
    */
   const writeDictation = (text: string, isDraft: boolean) => {
+    // Last moment the page's selection still exists: the focus move below collapses
+    // it (in WebKit the mic press alone would have, which is why that press keeps
+    // its focus off the button). The host gets to keep the passage the user is
+    // dictating about before it goes; idempotent, so every draft can call it.
+    onDictationInsert?.();
     const el = textareaRef.current;
     const span = dictationSpanRef.current;
     // Fresh dictation: anchor at the caret, adding separators only once so the

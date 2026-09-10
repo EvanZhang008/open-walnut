@@ -29,7 +29,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { buildTextIndex, quoteFromRange, type TextQuote } from '@/utils/text-quote-anchor';
+import {
+  canAnchorQuote, captureSelectionQuote, selectionBody, selectionVisibleIn, type SelectionQuote,
+} from '@/utils/selection-quote';
+import { type TextQuote } from '@/utils/text-quote-anchor';
 import { copyTextRobust } from '@/utils/clipboard';
 import { ICON_PIN } from './MessageActionIcons';
 import { log } from '@/utils/log';
@@ -54,73 +57,16 @@ interface QuotePinSelectionBarProps {
   onAsk?: (target: QuotePinTarget) => void;
 }
 
-interface PillState {
+/** The captured passage (shared with the dictation path — see selection-quote.ts)
+ *  plus where to hang the pill. */
+interface PillState extends SelectionQuote {
   /** Viewport point the pill hangs above: the selection's FOCUS caret, i.e. where
    *  the gesture ended, so the pill is under the hand that just let go. */
   anchor: { x: number; y: number };
-  /**
-   * The row's id, when the passage sits in a row that HAS one. A streaming block
-   * that has not been told its message id yet is prose all the same: Copy needs
-   * no identity, so the pill still comes up and only Pin/Ask stand down.
-   */
-  msgId?: string;
-  role: 'user' | 'assistant' | 'system';
-  timestamp?: string;
-  /** Captured from the message's text index while the selection still exists. */
-  quote: TextQuote;
-  /** What the browser says was selected — what Copy puts on the clipboard. */
-  text: string;
 }
 
 function sameQuote(a: TextQuote, b: TextQuote): boolean {
   return a.exact === b.exact && a.prefix === b.prefix && a.suffix === b.suffix;
-}
-
-const EDITABLE = 'input, textarea, [contenteditable="true"], [contenteditable=""]';
-
-function roleOf(value: string | null | undefined): 'user' | 'assistant' | 'system' {
-  return value === 'user' || value === 'system' ? value : 'assistant';
-}
-
-/** The message body a selection lives in, or null when the selection is not one
- *  message's prose: both ends must sit in the SAME `.session-msg-content` inside
- *  this container, in the top document, outside any editable control.
- *
- *  A `[data-message-id]` ancestor is NOT required — a live streaming block is a
- *  message body before it is told its id, and the reader watching that answer
- *  arrive is exactly who wants to copy a line out of it. */
-function selectionBody(container: HTMLElement, selection: Selection): Element | null {
-  if (selection.isCollapsed || selection.rangeCount === 0) return null;
-  const { anchorNode, focusNode } = selection;
-  if (!anchorNode || !focusNode) return null;
-  // A rich-HTML island renders in an iframe: its selection lives in another
-  // document and cannot be anchored against this one's text index.
-  if (anchorNode.ownerDocument !== document || focusNode.ownerDocument !== document) return null;
-  const anchorEl = anchorNode.nodeType === Node.ELEMENT_NODE
-    ? (anchorNode as Element)
-    : anchorNode.parentElement;
-  const focusEl = focusNode.nodeType === Node.ELEMENT_NODE
-    ? (focusNode as Element)
-    : focusNode.parentElement;
-  if (!anchorEl || !focusEl) return null;
-  if (anchorEl.closest(EDITABLE) || focusEl.closest(EDITABLE)) return null;
-  const body = anchorEl.closest('.session-msg-content');
-  if (!body || body !== focusEl.closest('.session-msg-content')) return null;
-  if (!container.contains(body)) return null;
-  return body;
-}
-
-/** Is any part of the selection still inside the scroller's box? A passage the
- *  reader scrolled past has nothing left for a viewport-anchored pill to point
- *  at, and a pill clamped to the viewport edge would point at the wrong words. */
-function selectionVisibleIn(container: HTMLElement, selection: Selection): boolean {
-  if (selection.rangeCount === 0) return false;
-  const box = container.getBoundingClientRect();
-  const r = selection.getRangeAt(selection.rangeCount - 1).getBoundingClientRect();
-  if (!r.width && !r.height) return false;
-  // Both axes: a wide code block scrolls sideways inside a message, and the pill
-  // would otherwise be clamped back into the viewport over unrelated words.
-  return r.bottom > box.top && r.top < box.bottom && r.right > box.left && r.left < box.right;
 }
 
 /** Focus before anchor in document order = the user dragged (or shift-arrowed)
@@ -206,33 +152,23 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     const container = containerRef.current;
     const selection = typeof window !== 'undefined' ? window.getSelection() : null;
     if (!container || !selection) { setState(null); return; }
-    const body = selectionBody(container, selection);
-    if (!body) { setState(null); return; }
-    const text = selection.toString();
-    if (!text.trim()) { setState(null); return; }
+    // Cheap bails first, THEN the capture: `captureSelectionQuote` indexes the message
+    // body (~19ms on a long answer, which is why the scroll path below refuses to call
+    // it), and a selection with no focus rect has nowhere to hang a pill anyway.
+    if (!selectionBody(container, selection)) { setState(null); return; }
     const range = selection.getRangeAt(selection.rangeCount - 1);
     const anchor = focusPoint(selection, range);
     if (!anchor) { setState(null); return; }
-    const row = body.closest('[data-message-id]') as HTMLElement | null;
-    const msgId = row?.getAttribute('data-message-id') ?? undefined;
-    // Indexing ONE message body per gesture tick — a paragraph, so microseconds.
-    // The quote MUST come from the index rather than `text`: toString() serializes
-    // layout (block breaks become newlines, runs collapse), so its string does not
-    // exist in the index and the pin could never locate itself again.
-    const quote = quoteFromRange(buildTextIndex(body), range);
-    if (!quote) { setState(null); return; }
+    const captured = captureSelectionQuote(container, selection);
+    if (!captured) { setState(null); return; }
     setState((prev) => {
       const sameAnchor = !!prev && prev.anchor.x === anchor.x && prev.anchor.y === anchor.y;
-      if (prev && sameAnchor && prev.msgId === msgId && sameQuote(prev.quote, quote)) return prev;
+      if (prev && sameAnchor && prev.msgId === captured.msgId && sameQuote(prev.quote, captured.quote)) return prev;
       return {
+        ...captured,
         // Keep the previous anchor OBJECT when the point is unchanged: it is a
         // dependency of useMenuPlacement, which re-places on identity.
         anchor: sameAnchor ? prev!.anchor : anchor,
-        msgId,
-        role: roleOf(row?.getAttribute('data-msg-role')),
-        ...(row?.getAttribute('data-msg-ts') ? { timestamp: row.getAttribute('data-msg-ts')! } : {}),
-        quote,
-        text,
       };
     });
   }, [containerRef]);
@@ -357,15 +293,14 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
   // An anchor names its parent by the reply's row id, which only has to be STABLE
   // across parses: a real reply's msgId is the API message id (`msg_…`), never a
   // v4 uuid (verified live 2026-09-04), so gating on the uuid shape would hide Ask
-  // on every real transcript. Only a synthetic `queue-…` echo (a user line the
-  // parser re-emitted) can't be a parent. Assistant rows only: "ask about this"
-  // means asking about a REPLY.
+  // on every real transcript. `canAnchorQuote` holds that rule for both this pill
+  // and the dictation path, so they can never disagree about a passage.
   // A row with no id yet (a streaming block before its message_start id lands)
   // can hold neither a pin nor an anchor — both name their target by that id —
   // so the pill degrades to Copy rather than offering a button that would drop
   // the passage on the floor.
   const canPin = !!state.msgId;
-  const canAsk = !!onAsk && state.role === 'assistant' && !!state.msgId && !state.msgId.startsWith('queue-');
+  const canAsk = !!onAsk && canAnchorQuote(state);
 
   return createPortal(
     <div

@@ -291,6 +291,96 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Voice-input selection fixture (session-voice-selection.spec.ts): that spec
+        // WRITES a thread anchor to the session record (dictation carries the selected
+        // passage into the composer), so it gets its own record — an anchor left on a
+        // shared session makes a rail exist where another spec expects none.
+        id: 'pw-task-voicesel',
+        title: 'Voice selection fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-voicesel-session'],
+        active_session_ids: [],
+        session_id: 'pw-voicesel-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Second voice-input session: the live-reply test SENDS a turn, which
+        // appends to the session's stream file — a reply left behind is PERSISTED
+        // history for the other tests, and a drag onto finished text would pass for
+        // the wrong reason.
+        id: 'pw-task-voicesel2',
+        title: 'Voice selection fixture task 2',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-voicesel2-session'],
+        active_session_ids: [],
+        session_id: 'pw-voicesel2-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Third voice-input session: the sticky-anchor test also SENDS a turn (a
+        // sticky anchor is what the send path leaves behind), for the same reason as
+        // the second — its reply must not become another test's "live" block.
+        id: 'pw-task-voicesel3',
+        title: 'Voice selection fixture task 3',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-voicesel3-session'],
+        active_session_ids: [],
+        session_id: 'pw-voicesel3-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Fourth voice-input session: the tree-mode test has to CREATE a branch first
+        // (the Linear/Tree toggle only appears once a session has one), which means a
+        // send, which means its own session for the same reason as the two above.
+        id: 'pw-task-voicesel4',
+        title: 'Voice selection fixture task 4',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-voicesel4-session'],
+        active_session_ids: [],
+        session_id: 'pw-voicesel4-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Conversation-threads fixture (session-threads.spec.ts): the outline
         // transcript again under its own session, so thread anchors and pin resets
         // never touch the record the outline spec asserts on.
@@ -1161,12 +1251,15 @@ await fs.writeFile(
   //  · every message text is unique, so the outline's row label identifies exactly
   //    one row to jump to.
   //
-  // The SAME transcript is written six times, under six session ids with six
-  // uuid prefixes: `pw-pins-session` (0199aa…) for session-outline-rewind.spec.ts,
+  // The SAME transcript is written once per session id, each with its own uuid
+  // prefix: `pw-pins-session` (0199aa…) for session-outline-rewind.spec.ts,
   // `pw-quote-session` (0199cc…) for session-quote-pin.spec.ts,
   // `pw-threads-session` (0199bb…) for session-threads.spec.ts and
   // `pw-stream-select-session` (0199dd…), `pw-streamsel2-session` (0199de…) and
-  // `pw-streamsel3-session` (0199df…) for session-stream-selection.spec.ts. Pins and thread
+  // `pw-streamsel3-session` (0199df…) for session-stream-selection.spec.ts, and
+  // `pw-voicesel-session` (0199e0…), `pw-voicesel2-session` (0199e1…),
+  // `pw-voicesel3-session` (0199e2…) and `pw-voicesel4-session` (0199e3…) for
+  // session-voice-selection.spec.ts. Pins and thread
   // anchors are SERVER state on the session record, so two spec files sharing one
   // session rewrite each other's state under parallel workers (seen 2026-09-04:
   // the outline spec counted the quote spec's pin as a third tick, and the threads
@@ -1262,6 +1355,10 @@ await fs.writeFile(
   await fs.writeFile(path.join(jsonlDir, 'pw-stream-select-session.jsonl'), pinsTranscript('pw-stream-select-session', '0199dd'))
   await fs.writeFile(path.join(jsonlDir, 'pw-streamsel2-session.jsonl'), pinsTranscript('pw-streamsel2-session', '0199de'))
   await fs.writeFile(path.join(jsonlDir, 'pw-streamsel3-session.jsonl'), pinsTranscript('pw-streamsel3-session', '0199df'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-voicesel-session.jsonl'), pinsTranscript('pw-voicesel-session', '0199e0'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-voicesel2-session.jsonl'), pinsTranscript('pw-voicesel2-session', '0199e1'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-voicesel3-session.jsonl'), pinsTranscript('pw-voicesel3-session', '0199e2'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-voicesel4-session.jsonl'), pinsTranscript('pw-voicesel4-session', '0199e3'))
   // Changed-tab code-intel fixture (changed-code-intel.spec.ts): a session whose
   // JSONL records a Write of sync-controller.go — the Changed tab reconstructs
   // the diff from exactly these tool_use blocks, and the on-disk twin (written
@@ -1597,6 +1694,58 @@ await fs.writeFile(
         messageCount: 53,
         cwd: vscodeFixtureRoot,
         title: 'Streaming selection fixture session 3',
+      },
+      {
+        claudeSessionId: 'pw-voicesel-session',
+        taskId: 'pw-task-voicesel',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Voice selection fixture session',
+      },
+      {
+        claudeSessionId: 'pw-voicesel2-session',
+        taskId: 'pw-task-voicesel2',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Voice selection fixture session 2',
+      },
+      {
+        claudeSessionId: 'pw-voicesel3-session',
+        taskId: 'pw-task-voicesel3',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Voice selection fixture session 3',
+      },
+      {
+        claudeSessionId: 'pw-voicesel4-session',
+        taskId: 'pw-task-voicesel4',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Voice selection fixture session 4',
       },
       {
         claudeSessionId: 'pw-changed-session',

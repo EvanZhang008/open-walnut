@@ -14,6 +14,7 @@ import { useSttStatus } from '@/hooks/useSttStatus';
 import { fetchSttDetection, fetchVocab, addVocabWord, fetchRecordings, retranscribeRecording, MODEL_CATALOG, type GgmlModel, type VoiceRecording } from '@/api/stt';
 import { registerVoiceInsertTarget } from '@/utils/voice-status';
 import { log } from '@/utils/log';
+import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 
 interface MicButtonProps {
   /** Called with transcribed text */
@@ -70,12 +71,54 @@ function MicWaveform({ level }: { level: number }) {
 }
 
 export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md' }: MicButtonProps) {
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording } = useSpeechToText({
-    onTranscribe,
-    onDraft,
-    onRefine,
-    language,
-  });
+  /**
+   * Did this recording put any text anywhere? Tracked because the mic now KEEPS the
+   * user's selection (see the mousedown note below), and something has to release it
+   * when the recording produces nothing. Writing the text is normally what releases
+   * it: the write focuses the composer and the browser collapses the selection.
+   *
+   * These three refs are that bookkeeping, per press:
+   *  · `delivered` — a transcript, draft or refinement reached the consumer;
+   *  · `armed` — a press started a recording (so a dropdown insert, which delivers
+   *    text without a press, never triggers the release);
+   *  · `sawLive` — the recorder (or its transcribe step) actually ran, so the release
+   *    check cannot fire in the frame between the press and `isRecording` turning
+   *    true, which would clear the very selection this whole change exists to keep.
+   */
+  const delivered = useRef(false);
+  const armed = useRef(false);
+  const sawLive = useRef(false);
+  const sttOptions: Parameters<typeof useSpeechToText>[0] = {
+    onTranscribe: (text) => { delivered.current = true; onTranscribe(text); },
+    ...(onDraft ? { onDraft: (text: string) => { delivered.current = true; onDraft(text); } } : {}),
+    ...(onRefine
+      ? { onRefine: (final: string, provisional: string) => { delivered.current = true; onRefine(final, provisional); } }
+      : {}),
+    ...(language ? { language } : {}),
+  };
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording } = useSpeechToText(sttOptions);
+
+  /**
+   * A recording that ends without text must give the selection back.
+   *
+   * Four ordinary ways that happens: microphone permission denied, no sound
+   * detected, an empty transcription, a failed POST. In every one of them nothing
+   * ever writes into the composer, so nothing collapses the selection — and a
+   * selection lingering inside a STREAMING reply keeps that reply's html frozen
+   * (`useSelectionFrozen`) and auto-scroll paused, which reads as "the answer stopped
+   * mid-sentence" with no visible cause. Before the mic opted out of the instant
+   * clear, the press itself ended that; now this does, and only in the case where the
+   * user got nothing for it.
+   */
+  useEffect(() => {
+    if (isRecording || isTranscribing) { sawLive.current = true; return; }
+    if (!armed.current || !(sawLive.current || error)) return;
+    armed.current = false;
+    sawLive.current = false;
+    if (delivered.current) return;
+    log.info('stt', 'recording ended with no text — releasing the selection it was holding');
+    window.getSelection()?.removeAllRanges();
+  }, [isRecording, isTranscribing, error]);
   // Hand the parent a stable way to abandon a live recording.
   useEffect(() => {
     if (!controlRef) return;
@@ -343,7 +386,33 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       navigate('/settings#stt');
       return;
     }
+    // Arm the release bookkeeping on the press that STARTS a recording (the same
+    // click stops one, and stopping must not re-arm it).
+    if (!isRecording) {
+      armed.current = true;
+      delivered.current = false;
+      sawLive.current = false;
+    }
     void toggleRecording();
+  };
+
+  /**
+   * Reaching for the mic must not cost the user their text selection: they select a
+   * passage in a reply and dictate a question about it. What actually took it away
+   * was the instant-clear guard in `main.tsx`, which this button now opts out of
+   * (`data-keep-selection`) — that is the fix, and removing it puts the bug back.
+   *
+   * Dropping the press's FOCUS is a floor, not a proven fix, and the honest version
+   * of the measurement is: focusing a button collapses the document selection in
+   * WebKit (Chromium keeps it), but on macOS a click does not focus a button at all,
+   * so the press test passes in both engines without this line. It stays because
+   * "does a click focus a button" is a platform setting (macOS Full Keyboard Access
+   * turns it on), not an invariant — and this is the same trade the quote pill's
+   * buttons already make. Keyboard focus is untouched: only a pointer press is
+   * prevented, Tab still lands here.
+   */
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 0) e.preventDefault();
   };
 
   // Right-click opens the history/retry dropdown — a persistent entry point
@@ -366,7 +435,16 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
     <div className="mic-btn-wrapper" ref={wrapperRef}>
       <button
         className={btnClass}
+        // THE BUTTON ONLY, never the wrapper: the wrapper also holds this mic's
+        // dropdown (retry with another model, re-insert a past transcript), and those
+        // items write into the composer too. Opting the whole wrapper out of the
+        // instant-clear guard would keep a minutes-old selection alive across a menu
+        // press and let it become the anchor for a transcript that has nothing to do
+        // with it. Only the press that IS "dictate about this passage" keeps it.
+        // Spread from the constant the guard matches on, so the two cannot drift.
+        {...{ [KEEP_SELECTION_ATTR]: '' }}
         onClick={handleClick}
+        onMouseDown={handleMouseDown}
         onContextMenu={handleContextMenu}
         type="button"
         disabled={isDisabled}
