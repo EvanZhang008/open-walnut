@@ -33,8 +33,8 @@
  *     ProseMirror's clipboard carries a `text/html` flavour serialized from
  *     `renderHTML` — so pasting a copied image would otherwise parse the proxy
  *     URL straight into `attrs.src`, and the next save would write it to disk.
- *     (tiptap-markdown's `transformCopiedText` only owns the `text/plain`
- *     flavour, so it cannot cover this.)
+ *     (the markdown copy serializer in markdown-copy.ts only owns the
+ *     `text/plain` flavour, so it cannot cover this.)
  *
  * `baseDir` unset ⇒ every src is left exactly as authored, which is the Notes
  * vault's existing behaviour (its images are `/api/images/…` or `![[embeds]]`).

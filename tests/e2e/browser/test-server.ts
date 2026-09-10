@@ -1078,6 +1078,20 @@ await fs.writeFile(
     '',
   ].join('\n'),
 )
+// Copy-from-a-table fixture (file-markdown-copy.spec.ts): words selected inside
+// a cell used to copy as a one-cell table (`| words |` + `| --- |`).
+await fs.writeFile(
+  path.join(vscodeFixtureRoot, 'design-options.md'),
+  [
+    '# Design options',
+    '',
+    '| What | Cluster (recommended) | Functions |',
+    '| --- | --- | --- |',
+    '| Summary | Each plugin runs as a set of pods in its own namespace. Isolation between plugins is ours to build and prove. | One function per plugin. |',
+    '| Price | Memory headroom is paid once per node. | Paid per run. |',
+    '',
+  ].join('\n'),
+)
 // A second scrollable file, so the spec can prove offsets are per-FILE (switching
 // away and back must not carry file A's position onto file B).
 await fs.writeFile(

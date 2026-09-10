@@ -31,6 +31,7 @@ import { tableExtensions } from './extensions/table-kit';
 import { ListAutoJoin } from './extensions/list-auto-join';
 import { EmptyAwareTaskItem } from './extensions/empty-task-item';
 import { FenceCodeBlock } from './extensions/fence-code-block';
+import { MarkdownCopy } from './extensions/markdown-copy';
 import { findListItemType, indentListItem, outdentListItem } from './extensions/list-indent';
 import { insertImageFile } from './image-insert';
 import { normalizeForEditor } from './notes-content-preprocess';
@@ -268,8 +269,12 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
       Markdown.configure({
         html: true, // needed for <img> tags in markdown
         transformPastedText: true,
-        transformCopiedText: true,
+        // Copy-as-markdown is MarkdownCopy's: the shipped one serializes the
+        // open ancestors too, so words picked inside a table cell copied as a
+        // one-cell table.
+        transformCopiedText: false,
       }),
+      MarkdownCopy,
       TaskAwareLink.configure({
         openOnClick: false, // we handle clicks ourselves (task-link SPA routing + external new-tab)
         autolink: true, // auto-detect typed URLs as links

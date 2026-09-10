@@ -26,7 +26,7 @@ import {
   generateJSON,
   type Extensions,
 } from '@tiptap/core';
-import type { Node as PMNode } from '@tiptap/pm/model';
+import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
@@ -36,6 +36,7 @@ import { Markdown } from 'tiptap-markdown';
 
 import { tableExtensions } from '@/components/notes/extensions/table-kit';
 import { FenceCodeBlock } from '@/components/notes/extensions/fence-code-block';
+import { MarkdownCopy } from '@/components/notes/extensions/markdown-copy';
 import { TagNode } from '@/components/notes/extensions/tag-node';
 import { Callout } from '@/components/notes/extensions/callout-node';
 import { WikiEmbedNode } from '@/components/notes/extensions/wiki-embed-node';
@@ -78,8 +79,9 @@ export function buildNotesExtensions(): Extensions {
     Markdown.configure({
       html: true,
       transformPastedText: true,
-      transformCopiedText: true,
+      transformCopiedText: false,
     }),
+    MarkdownCopy,
     Link.configure({
       openOnClick: false,
       autolink: true,
@@ -106,6 +108,8 @@ export interface NotesMarkdownHarness {
   roundTrip(md: string): string;
   /** The resolved ProseMirror schema (for node-level deep-equal assertions). */
   schema: ReturnType<typeof getSchema>;
+  /** The production markdown serializer (takes a doc or any Fragment). */
+  serializer: { serialize(content: PMNode | Fragment): string };
 }
 
 /**
@@ -146,7 +150,7 @@ export function createNotesMarkdownHarness(): NotesMarkdownHarness {
   onBeforeCreate.call({ editor: fakeEditor, options: markdownExt.options });
   const md = fakeEditor.storage.markdown as {
     parser: { parse(content: string, opts?: { inline?: boolean }): string };
-    serializer: { serialize(doc: PMNode): string };
+    serializer: { serialize(content: PMNode | Fragment): string };
   };
 
   function mdToDoc(input: string): PMNode {
@@ -163,5 +167,5 @@ export function createNotesMarkdownHarness(): NotesMarkdownHarness {
     return docToMd(mdToDoc(md));
   }
 
-  return { mdToDoc, docToMd, roundTrip, schema };
+  return { mdToDoc, docToMd, roundTrip, schema, serializer: md.serializer };
 }
