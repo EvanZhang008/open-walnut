@@ -48,15 +48,18 @@ defineOp({
   name: 'session_send',
   title: 'Send a message to a session',
   description:
-    'THE way to talk to any session (yours never — no self-send). `to` accepts a session id, a unique id ' +
-    'prefix (>=4 chars), a task id (routes to that task\'s session), or a unique title substring. When ' +
-    'another session is the caller, the text is delivered as a fenced peer note that carries no user ' +
-    'authorization. The receiver is asked to reply BY DEFAULT, with a Walnut fallback notification if it ' +
+    'THE way to talk to any session (yours never — no self-send). When another session is the caller, the ' +
+    'text is delivered as a <walnut-message kind="peer-note"> envelope that carries no user authorization. ' +
+    'The receiver is asked to reply BY DEFAULT, with a Walnut fallback notification if it ' +
     'finishes without replying; pass expect_reply=false when you do not want an answer. To ANSWER such a request, call this op with ' +
     'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
     'A task with no session yet → 409: start one with session_start.',
   input: {
-    to: z.string().min(1).optional().describe('Session id / unique prefix, task id, or unique title substring (omit only with in_reply_to)'),
+    to: z.string().min(1).optional().describe(
+      'Who gets it: a task id or its session id. These name the SAME target: a task id routes to the '
+      + 'task\'s current session (an older session of the same task is archived), so either id reaches it. Also '
+      + 'accepted: a unique id prefix of 4+ chars, the `Title [8hex]` handle exactly as envelopes and '
+      + '`session_list` print it, or a unique case-insensitive title substring. Omit only with in_reply_to'),
     text: z.string().min(1).describe('Message text'),
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),

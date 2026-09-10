@@ -915,7 +915,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   // twins were string, 7 were array — the array ones carry image refs / long text like
   // "[Image #2] looks the side…"). Missing the array shape leaves those 7 enqueues un-skipped,
   // so the message renders twice. Extract the first text block for the array case.
-  const userTwinTexts: Array<{ index: number; content: string; claimed: boolean }> = [];
+  const userTwinTexts: Array<{ index: number; content: string; claimed: boolean; injected: boolean }> = [];
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'user') continue;
@@ -929,7 +929,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (tb) text = tb.text;
     }
     if (typeof text === 'string') {
-      userTwinTexts.push({ index: i, content: text, claimed: false });
+      userTwinTexts.push({ index: i, content: text, claimed: false, injected: isInjectedLine(raw) });
     }
   }
   const skipEnqueueIndices = new Set<number>();
@@ -939,8 +939,16 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     // Claim the earliest not-yet-claimed real user line within the lookahead window whose
     // text matches. Found → Pattern A (skip enqueue). None → Pattern B (emit synthetic msg).
     const wanted = raw.content.trim();
+    // A peer message from another Claude Code session is enqueued as the bare
+    // <cross-session-message> tag, but the CLI logs the user turn with its own
+    // framing around that tag ("Another Claude session sent a message: … "), so
+    // the twin CONTAINS the enqueue rather than equalling it. That framed line is
+    // always CLI-injected (isMeta), which keeps a human merely quoting the tag
+    // from being claimed as the twin.
+    const wrapped = wanted.startsWith('<cross-session-message');
     const twin = userTwinTexts.find(
-      u => !u.claimed && u.index > i && u.index - i <= PATTERN_A_LOOKAHEAD && u.content.trim() === wanted,
+      u => !u.claimed && u.index > i && u.index - i <= PATTERN_A_LOOKAHEAD
+        && (u.content.trim() === wanted || (wrapped && u.injected && u.content.includes(wanted))),
     );
     if (twin) {
       twin.claimed = true;

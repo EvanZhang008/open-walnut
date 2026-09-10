@@ -158,9 +158,10 @@ describe('notifyRequesterFallback — the settle wins exactly once', () => {
     expect(sid).toBe(ASKER);
     expect(opts.source).toBe('walnut-notify');
     const text = deliveredText();
-    expect(text).toContain(`[Walnut notification — ${rq.id}]`);
+    expect(text).toContain(`kind="notification"`);
+    expect(text).toContain(`request="${rq.id}"`);
     // The task title is embellishment on top of the settled row.
-    expect(text).toContain('"Run the migration"');
+    expect(text).toContain('about="Run the migration [sess-tar]"');
     expect(text).toContain('Its turn ended WITHOUT an explicit reply');
   });
 
@@ -221,8 +222,9 @@ describe('notifyRequesterFallback — a failure after the settle', () => {
     listTasksByIds.mockRejectedValue(new Error('task store unavailable'));
 
     expect(await notifyRequesterFallback(rq, 'completed')).toBe(true);
-    // Generic naming, but the notice is not lost.
-    expect(deliveredText()).toContain(`[Walnut notification — ${rq.id}]`);
+    // Generic naming (the bare handle), but the notice is not lost.
+    expect(deliveredText()).toContain(`request="${rq.id}"`);
+    expect(deliveredText()).toContain('about="[sess-tar]"');
   });
 });
 

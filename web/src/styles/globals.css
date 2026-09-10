@@ -3169,6 +3169,33 @@ select {
   overflow-wrap: anywhere;
 }
 
+/* Claude Code's transport address — disclosure only, same row shape as the
+   follow-up command above it. */
+.provenance-address {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.provenance-address-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+.provenance-address code {
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
 .provenance-raw {
   margin: 6px 0 0;
   padding: 8px;

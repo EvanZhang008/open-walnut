@@ -3,12 +3,13 @@
  *
  * One entry point (`performSessionSend`) absorbs what used to be three
  * surfaces: the old `session_send` op (plain enqueue by session id), the
- * `walnut peers send` gateway capability (fenced session→session notes), and
- * the resume half of `task_start` (send by TASK id into its live session).
- * The differences between them were never different message kinds — they were
- * delivery-layer properties (who is speaking → fence or not; how the target
- * was named → id vs task vs title), so they live here as properties, keyed on
- * the caller identity the transport already stamps (x-walnut-caller-sid).
+ * `walnut peers send` gateway capability (session→session notes in an
+ * envelope), and the resume half of `task_start` (send by TASK id into its live
+ * session). The differences between them were never different message kinds —
+ * they were delivery-layer properties (who is speaking → envelope or not; how
+ * the target was named → id vs task vs title), so they live here as properties,
+ * keyed on the caller identity the transport already stamps
+ * (x-walnut-caller-sid).
  *
  * Reply loop: expect_reply registers a pending row in session-requests.ts and
  * appends a Walnut-authored trailer telling the receiver the exact command to
@@ -21,6 +22,7 @@
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
+import { sessionHandle } from '../peers/walnut-message-tag.js';
 import { PeerThrottle, PEER_PENDING_CAP } from '../peers/peer-throttle.js';
 import { isSideThreadLane } from './side-thread-fork.js';
 import {
@@ -73,7 +75,7 @@ export interface SessionSendInput {
   /** Transport-stamped caller session id; undefined = the human's own CLI. */
   callerSid?: string;
   /** Transport-stamped host the calling CLI runs on — labels an ANONYMOUS
-   *  sender's fence honestly (a session caller's host comes from its record). */
+   *  sender's envelope honestly (a session caller's host comes from its record). */
   callerHost?: string;
 }
 
@@ -83,6 +85,10 @@ export interface SessionSendResult {
   targetSessionId: string;
   targetTitle: string | null;
   targetTaskId?: string;
+  /** The resolved target, in the shape `to` accepts back: `handle` is the
+   *  printed `Title [8hex]`, so a caller can address the same session again
+   *  without re-deriving anything. */
+  target: { handle: string; sessionId: string; taskId?: string };
   queueDepth?: number;
   /** Present when expect_reply registered a request. */
   requestId?: string;
@@ -127,14 +133,34 @@ function liveSessionsForTask(sessions: SessionRecord[]): SessionRecord[] {
   return sessions.filter((s) => !s.archived);
 }
 
+/** The `Title [8hex]` / `[8hex]` handle every envelope and session_list row
+ *  prints. The class is wider than hex because provider-issued session ids
+ *  (ACP engines) are not UUIDs and still get printed this way. */
+const PRINTED_HANDLE = /\[([0-9a-z][0-9a-z-]{3,})\]\s*$/i;
+
 /**
  * Resolve `to` → one target session.
+ * ⓪ printed `Title [8hex]` handle (exact id, then unique prefix; a bracketed
+ *   word that matches no session, e.g. `css [fade]`, falls through) →
  * ① exact session id → ② task id/unique prefix (its attached session) →
  * ③ unique session-id prefix (>=4) → ④ unique case-insensitive title substring.
  * A `to` that matches BOTH a task and a session at the same stage is ambiguous.
  */
 export async function resolveSendTarget(to: string): Promise<ResolvedTarget> {
   const candidates = await sendCandidates();
+
+  const printed = to.match(PRINTED_HANDLE)?.[1]?.toLowerCase();
+  if (printed) {
+    const byHandle = candidates.find((s) => s.claudeSessionId.toLowerCase() === printed)
+      ?? null;
+    if (byHandle) return { session: byHandle };
+    const hits = candidates.filter((s) => s.claudeSessionId.toLowerCase().startsWith(printed));
+    if (hits.length === 1) return { session: hits[0] };
+    if (hits.length > 1) {
+      throw ambiguous(to, hits.map((s) => ({ id: s.claudeSessionId, title: s.title, host: s.host })));
+    }
+    // No session owns that id: the brackets were part of a title, keep going.
+  }
 
   const exact = candidates.find((s) => s.claudeSessionId === to);
   if (exact) return { session: exact };
@@ -192,7 +218,7 @@ export async function resolveSendTarget(to: string): Promise<ResolvedTarget> {
   throw new SendError('unknown_target', `nothing matches "${to}" — a session id/prefix, task id, or unique title substring`, 404);
 }
 
-/** Caller classes the fence decision keys on. */
+/** Caller classes the envelope decision keys on. */
 export type CallerIdentity =
   | { kind: 'session'; record: SessionRecord }
   | { kind: 'external' }            // gateway 'external' or an unknown sid
@@ -273,10 +299,9 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw new SendError('self_send', 'target resolves to the calling session itself');
   }
 
-  // Fence + throttle apply exactly when the SPEAKER is not the human: another
-  // session (named fence) or an unidentified process (anonymous fence).
+  // Envelope + throttle apply exactly when the SPEAKER is not the human:
+  // another session (named peer-note) or an unidentified process (anonymous).
   const fenced = caller.kind !== 'human';
-  let enqueueText = text;
   if (fenced) {
     // An anonymous (env-less) caller is bucketed per HOST, not under one global
     // `external` key: otherwise a runaway agent on a dev box would throttle the
@@ -294,26 +319,11 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     if (queueDepth >= PEER_PENDING_CAP) {
       throw new SendError('queue_full', `session ${shortId(targetSid)} already has ${queueDepth} queued messages`, 429);
     }
-    enqueueText = buildPeerWrapper(text, caller.kind === 'session'
-      ? {
-        title: caller.record.title ?? 'untitled session',
-        shortId: shortId(caller.record.claudeSessionId),
-        host: displayHost(caller.record.host),
-      }
-      : {
-        title: 'external',
-        shortId: 'external',
-        // No transport host = genuinely unknown; never guess 'local' for an
-        // anonymous sender the way displayHost() does for tracked sessions.
-        host: input.callerHost?.trim()
-          ? displayHost(input.callerHost.trim().slice(0, 64))
-          : 'unknown',
-        anonymous: true,
-      });
   }
 
-  // expect_reply: register the pending row BEFORE delivery so the trailer can
-  // name a request id that already exists.
+  // expect_reply: register the pending row BEFORE the envelope is built (the
+  // request id rides INSIDE the open tag as `request="rq-…"`, not just in the
+  // trailer) and before delivery, so nothing ever names an id that does not exist.
   //
   // ON unless explicitly disabled. A session asking another session something
   // wants the answer; making that opt-in meant every forgotten flag silently
@@ -339,9 +349,34 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
         // routine session→session notes don't each become a "no reply" notice.
         implicit: input.expectReply === undefined,
       });
-      enqueueText = `${enqueueText}\n${buildReplyTrailer(request)}`;
     }
   }
+
+  let enqueueText = text;
+  if (fenced) {
+    enqueueText = buildPeerWrapper(text, caller.kind === 'session'
+      ? {
+        // No title → the handle is just `[8hex]`; never invent a name.
+        title: caller.record.title ?? '',
+        shortId: shortId(caller.record.claudeSessionId),
+        sessionId: caller.record.claudeSessionId,
+        taskId: caller.record.taskId,
+        host: displayHost(caller.record.host),
+        ...(request ? { requestId: request.id } : {}),
+      }
+      : {
+        title: '',
+        shortId: '',
+        // No transport host = genuinely unknown; never guess 'local' for an
+        // anonymous sender the way displayHost() does for tracked sessions.
+        host: input.callerHost?.trim()
+          ? displayHost(input.callerHost.trim().slice(0, 64))
+          : 'unknown',
+        anonymous: true,
+      });
+  }
+  // One `\n`, one line, and only when a request exists to answer.
+  if (request) enqueueText = `${enqueueText}\n${buildReplyTrailer(request)}`;
 
   const source = caller.kind === 'human' ? 'cli' : 'peer';
   const taskId = target.taskId ?? target.session.taskId;
@@ -352,10 +387,20 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
       busText: text, enqueueText, source, taskId, messageId: input.messageId,
     }));
   } catch (err) {
-    // The message never landed. A request row we just created would otherwise
-    // sit pending until its deadline, then the sweeper would tell the asker
-    // "no reply by your deadline" about a send that never happened — so drop it.
-    if (request) await deletePendingRequest(request.id);
+    // A rejected delivery never landed, so a request row we just created would
+    // otherwise sit pending until its deadline and the sweeper would tell the
+    // asker "no reply by your deadline" about a send that never happened. A
+    // TIMEOUT is different: withTimeout abandons the enqueue, it does not cancel
+    // it, so the envelope (carrying request="rq-…") may still arrive and the
+    // receiver's reply needs a row to land in. Leave that row to the sweeper.
+    const timedOut = err instanceof SendError && err.code === 'delivery_failed';
+    if (request && !timedOut) {
+      await deletePendingRequest(request.id).catch((e) => {
+        log.session.warn('session_send: could not drop the orphaned request row', {
+          requestId: request.id, error: e instanceof Error ? e.message : String(e),
+        });
+      });
+    }
     throw err;
   }
 
@@ -368,6 +413,11 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     targetSessionId: targetSid,
     targetTitle: target.session.title ?? null,
     ...(taskId ? { targetTaskId: taskId } : {}),
+    target: {
+      handle: sessionHandle(target.session.title, targetSid),
+      sessionId: targetSid,
+      ...(taskId ? { taskId } : {}),
+    },
     ...(request ? { requestId: request.id } : {}),
     ...(messageId ? { messageId } : {}),
   };
@@ -419,8 +469,11 @@ async function performReply(
   }
 
   const wrapped = buildReplyDeliveryText(request, {
-    title: caller.record.title ?? 'untitled session',
+    // No title → the handle is just `[8hex]`; never invent a name.
+    title: caller.record.title ?? '',
     shortId: shortId(caller.record.claudeSessionId),
+    sessionId: caller.record.claudeSessionId,
+    taskId: caller.record.taskId,
     host: displayHost(caller.record.host),
   }, text);
 
@@ -438,6 +491,12 @@ async function performReply(
     targetSessionId: request.fromSessionId,
     targetTitle: origin.title ?? null,
     ...(origin.taskId ? { targetTaskId: origin.taskId } : {}),
+    // The "target" of a reply is the asker it routed back to.
+    target: {
+      handle: sessionHandle(origin.title, request.fromSessionId),
+      sessionId: request.fromSessionId,
+      ...(origin.taskId ? { taskId: origin.taskId } : {}),
+    },
     repliedTo: id,
     ...(messageId ? { messageId } : {}),
   };

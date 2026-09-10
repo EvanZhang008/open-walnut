@@ -7,10 +7,11 @@
  *     substring) whose whole point is that an ambiguous handle is refused rather
  *     than guessed. A confident wrong answer here delivers someone's message to
  *     the wrong CLI, so every rung asserts both the hit and the refusal shape.
- *  2. Who is speaking decides whether the text is FENCED and throttled. The
+ *  2. Who is speaking decides whether the text is WRAPPED and throttled. The
  *     human's own words go through verbatim; a session's (or an unidentified
- *     process's) words are wrapped in the peer-note fence, which is what stops
- *     text from forging "your user says…" inside another session's stdin.
+ *     process's) words ride in a `<walnut-message kind="peer-note">` envelope,
+ *     whose body escaping is what stops text from forging "your user says…"
+ *     inside another session's stdin.
  *  3. The expect_reply / in_reply_to loop settles the ledger row BEFORE it
  *     delivers anything, and only the request's target may close it.
  *
@@ -55,6 +56,7 @@ import {
   resolveSendTarget,
 } from '../../src/core/sessions/session-send-core.js';
 import { PEER_PENDING_CAP } from '../../src/core/peers/peer-throttle.js';
+import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import { REQUESTS_FILE, getSessionRequest, settleNotified } from '../../src/core/session-requests.js';
 import type { SessionRecord } from '../../src/core/types.js';
 
@@ -232,6 +234,72 @@ describe('resolveSendTarget — the handle ladder', () => {
   });
 });
 
+describe('resolveSendTarget: the printed `Title [8hex]` handle', () => {
+  const SID = '9f3a2c1d-4b7e-4c1a-9d2e-0f1a2b3c4d5e';
+
+  beforeEach(() => {
+    sessions = [
+      rec(SID, { title: 'Fix auth fixture' }),
+      rec('bbbb1111-2222-3333', { title: 'Docs cleanup' }),
+    ];
+  });
+
+  it('accepts the handle exactly as an envelope printed it', async () => {
+    const resolved = await resolveSendTarget('Fix auth fixture [9f3a2c1d]');
+    expect(resolved.session.claudeSessionId).toBe(SID);
+  });
+
+  it('accepts a bare bracketed prefix, and tolerates trailing spaces', async () => {
+    expect((await resolveSendTarget('[9f3a2c1d]')).session.claudeSessionId).toBe(SID);
+    expect((await resolveSendTarget('[9f3a]')).session.claudeSessionId).toBe(SID);
+    expect((await resolveSendTarget('Fix auth fixture [9f3a]   ')).session.claudeSessionId).toBe(SID);
+  });
+
+  it('never consults tasks or titles for a bracketed handle', async () => {
+    tasks = [{ id: '9f3a2c1d', title: 'A task whose id looks like the hex' }];
+
+    const resolved = await resolveSendTarget('Fix auth fixture [9f3a2c1d]');
+    expect(resolved.session.claudeSessionId).toBe(SID);
+    // The bracketed hex IS a session id, so the task store is never asked and
+    // the printed title never becomes a substring search of its own.
+    expect(resolved.taskId).toBeUndefined();
+    expect(getTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bracketed prefix that matches two sessions', async () => {
+    sessions.push(rec('9f3a2c1d-9999-8888', { title: 'Other session, same prefix' }));
+
+    const err = await expectSendError(
+      resolveSendTarget('Fix auth fixture [9f3a]'), 'ambiguous_target', 400);
+    expect((err.detail?.candidates as unknown[])).toHaveLength(2);
+  });
+
+  it('404s a bracketed handle nothing matches', async () => {
+    await expectSendError(resolveSendTarget('Gone session [deadbeef]'), 'unknown_target', 404);
+  });
+
+  it('falls through to the title ladder when a bracketed hex WORD names no session', async () => {
+    sessions = [rec('cccc1111-2222', { title: 'css [fade] transitions' })];
+    // "fade" is all hex letters, but no session id starts with it: the brackets
+    // belong to the title, so a title match must still win over a hard 404.
+    const resolved = await resolveSendTarget('css [fade]');
+    expect(resolved.session.claudeSessionId).toBe('cccc1111-2222');
+  });
+
+  it('accepts a printed handle for a provider-issued (non-hex) session id', async () => {
+    sessions = [rec('sess-tar-provider-issued', { title: 'ACP session' })];
+    const resolved = await resolveSendTarget('ACP session [sess-tar]');
+    expect(resolved.session.claudeSessionId).toBe('sess-tar-provider-issued');
+  });
+
+  it('leaves a title that merely CONTAINS brackets to the title ladder', async () => {
+    sessions = [rec('cccc1111-2222', { title: 'Report [draft] cleanup' })];
+    // Not a handle: the bracket content is not hex at the end of the string.
+    const resolved = await resolveSendTarget('report [draft]');
+    expect(resolved.session.claudeSessionId).toBe('cccc1111-2222');
+  });
+});
+
 describe('resolveCaller', () => {
   it('classifies no sid as the human, a tracked sid as that session, anything else as external', async () => {
     sessions = [rec('sess-caller-1', { title: 'Caller' })];
@@ -248,8 +316,8 @@ describe('resolveCaller', () => {
   });
 });
 
-describe('performSessionSend — who is speaking decides the fence', () => {
-  it('delivers the human own words UNFENCED and untouched by the throttle', async () => {
+describe('performSessionSend — who is speaking decides the envelope', () => {
+  it('delivers the human own words BARE and untouched by the throttle', async () => {
     sessions = [rec('sess-target-1', { title: 'Target' })];
 
     const result = await performSessionSend({ to: 'sess-target-1', text: '  do the thing  ' });
@@ -258,6 +326,8 @@ describe('performSessionSend — who is speaking decides the fence', () => {
       delivery: 'queued',
       targetSessionId: 'sess-target-1',
       targetTitle: 'Target',
+      // The resolved target in the shape `to` accepts back.
+      target: { handle: 'Target [sess-tar]', sessionId: 'sess-target-1' },
       messageId: 'qm-dispatched',
     });
     const { sid, busText, opts } = dispatched();
@@ -270,27 +340,31 @@ describe('performSessionSend — who is speaking decides the fence', () => {
     expect(getQueue).not.toHaveBeenCalled();
   });
 
-  it('fences a session caller words and names the sender from its own record', async () => {
+  it('wraps a session caller words and names the sender from its own record', async () => {
     sessions = [
-      rec('sess-caller-1', { title: 'Migration worker', host: 'devbox' }),
+      rec('sess-caller-1', { title: 'Migration worker', host: 'devbox', taskId: 'task-11' }),
       rec('sess-target-1', { title: 'Target', taskId: 'task-77' }),
     ];
 
     const result = await performSessionSend({
-      to: 'sess-target-1', text: 'rows are migrated', callerSid: 'sess-caller-1',
+      to: 'sess-target-1', text: 'rows are migrated', callerSid: 'sess-caller-1', expectReply: false,
     });
 
     expect(result.targetTaskId).toBe('task-77');
+    expect(result.target).toEqual({
+      handle: 'Target [sess-tar]', sessionId: 'sess-target-1', taskId: 'task-77',
+    });
     const { busText, opts } = dispatched();
-    // The bus still carries the raw text; only the CLI-bound copy is fenced.
+    // The bus still carries the raw text; only the CLI-bound copy is wrapped.
     expect(busText).toBe('rows are migrated');
     expect(opts.source).toBe('peer');
-    const text = opts.enqueueMessage as string;
-    expect(text).toContain('[Peer session message]');
-    expect(text).toContain('From your user\'s other session "Migration worker"');
-    expect(text).toContain('(sess-cal, host: devbox)');
-    expect(text).toMatch(/---peer-note-[0-9a-f]{12}---/);
-    expect(text).toContain('rows are migrated');
+    const parsed = parseWalnutMessage(opts.enqueueMessage as string)!;
+    expect(parsed.kind).toBe('peer-note');
+    expect(parsed.attrs.from).toBe('Migration worker [sess-cal]');
+    expect(parsed.attrs['from-session']).toBe('sess-caller-1');
+    expect(parsed.attrs['from-task']).toBe('task-11');
+    expect(parsed.attrs.host).toBe('devbox');
+    expect(parsed.body).toBe('rows are migrated');
   });
 
   it('labels an anonymous caller by its transport host, and says unknown without one', async () => {
@@ -299,14 +373,17 @@ describe('performSessionSend — who is speaking decides the fence', () => {
     await performSessionSend({
       to: 'sess-target-1', text: 'from a script', callerSid: 'external', callerHost: 'devbox',
     });
-    const withHost = deliveredText(0);
-    expect(withHost).toContain('From an UNIDENTIFIED process on host devbox');
+    const withHost = parseWalnutMessage(deliveredText(0))!;
+    expect(withHost.attrs).toMatchObject({
+      from: 'unidentified process', host: 'devbox', anonymous: 'true',
+    });
+    // No tracked session behind it, so no id is printed for one.
+    expect(withHost.attrs['from-session']).toBeUndefined();
 
     await performSessionSend({
       to: 'sess-target-1', text: 'from another script', callerSid: 'external',
     });
-    const withoutHost = deliveredText(1);
-    expect(withoutHost).toContain('From an UNIDENTIFIED process on host unknown');
+    expect(parseWalnutMessage(deliveredText(1))!.attrs.host).toBe('unknown');
   });
 
   it('refuses a send that resolves to the calling session itself', async () => {
@@ -392,7 +469,9 @@ describe('performSessionSend — expect_reply', () => {
     await expect(getSessionRequest(result.requestId!)).resolves.toMatchObject({
       status: 'pending', fromSessionId: 'sess-caller-4', toSessionId: 'sess-target-1',
     });
-    expect(deliveredText()).toContain(`[Reply requested — ${result.requestId}]`);
+    expect(deliveredText()).toContain(`request="${result.requestId}"`);
+    expect(deliveredText()).toContain(`Reply when done: walnut tools call session_send `
+      + `'{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
   });
 
   it('the DEFAULT degrades to no request for the human — it must not 400 like an explicit true does', async () => {
@@ -404,7 +483,8 @@ describe('performSessionSend — expect_reply', () => {
 
     expect(result.requestId).toBeUndefined();
     expect(result.delivery).toBe('queued');
-    expect(deliveredText()).not.toContain('[Reply requested');
+    // No request → no trailer at all, and the human's text stays bare.
+    expect(deliveredText()).toBe('just deliver it');
   });
 
   it('expect_reply: false opts a session caller out of the default', async () => {
@@ -418,10 +498,12 @@ describe('performSessionSend — expect_reply', () => {
     });
 
     expect(result.requestId).toBeUndefined();
-    expect(deliveredText()).not.toContain('[Reply requested');
+    const text = deliveredText();
+    expect(text).not.toContain('request=');
+    expect(text).not.toContain('Reply when done');
   });
 
-  it('registers a pending row and appends the trailer OUTSIDE the peer fence', async () => {
+  it('registers a pending row, stamps the request in the tag, and adds ONE trailer line', async () => {
     sessions = [
       rec('sess-caller-4', { title: 'Asker', host: 'devbox' }),
       rec('sess-target-1', { title: 'Target', taskId: 'task-77' }),
@@ -442,13 +524,14 @@ describe('performSessionSend — expect_reply', () => {
     });
 
     const text = deliveredText();
-    const fenceClose = text.lastIndexOf('(end of peer note)');
-    const trailerAt = text.indexOf(`[Reply requested — ${result.requestId}]`);
-    expect(fenceClose).toBeGreaterThan(-1);
-    // Walnut speaks the trailer, so it must sit after the fence closes —
-    // inside it, the receiver is told to treat it as untrusted peer text.
-    expect(trailerAt).toBeGreaterThan(fenceClose);
-    expect(text).toContain(`"in_reply_to":"${result.requestId}"`);
+    const parsed = parseWalnutMessage(text)!;
+    expect(parsed.attrs.request).toBe(result.requestId);
+    expect(parsed.body).toBe('count the rows');
+    // Walnut speaks the trailer, so it sits OUTSIDE the envelope: exactly one
+    // newline after the closing tag, then exactly one line and nothing more.
+    expect(text).toBe(`${parsed.raw}\n`
+      + `Reply when done: walnut tools call session_send `
+      + `'{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
   });
 });
 
@@ -520,16 +603,25 @@ describe('performSessionSend — in_reply_to', () => {
       targetSessionId: ASKER,
       targetTitle: 'Asker',
       targetTaskId: 'task-asker',
+      // The reply's "target" is the asker it routed back to.
+      target: { handle: 'Asker [sess-ask]', sessionId: ASKER, taskId: 'task-asker' },
       repliedTo: rq.id,
     });
 
     const { sid, busText, opts } = dispatched();
     expect(sid).toBe(ASKER);
     expect(busText).toBe('Done: 412 rows moved.');
-    const text = opts.enqueueMessage as string;
-    expect(text).toContain(`[Session reply — ${rq.id}]`);
-    expect(text).toContain('(sess-tar, host: devbox)');
-    expect(text).toContain('Done: 412 rows moved.');
+    const parsed = parseWalnutMessage(opts.enqueueMessage as string)!;
+    expect(parsed.kind).toBe('reply');
+    expect(parsed.attrs.request).toBe(rq.id);
+    expect(parsed.attrs.from).toBe('Target [sess-tar]');
+    expect(parsed.attrs['from-session']).toBe(TARGET);
+    expect(parsed.attrs['from-task']).toBe('task-target');
+    expect(parsed.attrs.host).toBe('devbox');
+    expect(parsed.attrs.asked).toBe('count the rows');
+    expect(parsed.body).toBe('Done: 412 rows moved.');
+    // A reply is the answer: it never carries a trailer of its own.
+    expect(opts.enqueueMessage).toBe(parsed.raw);
   });
 
   it('accepts the target task id as proof of targeting when the session id differs', async () => {

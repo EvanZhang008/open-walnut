@@ -161,7 +161,8 @@ function clip(value: string, max: number): string {
  *  - `note` is what the human typed in their inbox — that part IS the user.
  *
  * Everything rides between two markers whose token is sha1 of the fenced payload
- * (same construction as buildPeerWrapper): the payload cannot contain its own
+ * (letters keep this fence; session envelopes moved to the walnut-message tag):
+ * the payload cannot contain its own
  * hash, so no span can close the fence early or forge a header outside it.
  * `note` is deliberately LAST, so a multi-line reply can only add lines that are
  * still visibly inside the fence.

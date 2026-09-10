@@ -13,8 +13,8 @@
  *  2. The delivery wrapper interpolates AGENT-authored text (letter subject,
  *     button label) into a message the origin session reads as its user talking,
  *     and the caller-sid header that decides WHICH session is spoofable. So the
- *     agent spans are one-lined, bounded and fenced between hash markers, the
- *     way buildPeerWrapper fences untrusted peer text.
+ *     agent spans are one-lined, bounded and fenced between hash markers (the
+ *     letter fence; session envelopes use the walnut-message tag instead).
  *
  *  3. index.json is read, parsed and rewritten on the server's event loop by
  *     every letter operation, so its resident fields (actions, task refs, the

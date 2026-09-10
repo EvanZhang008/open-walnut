@@ -11,10 +11,14 @@
  * This card inverts that: who + which task in the header, the other session's
  * words as the body, and every machine line folded into one disclosure.
  *
+ * It cards both the current `<walnut-message …>` tag and the pre-v2 prose shapes,
+ * plus Claude Code's own `<cross-session-message …>`; the parser normalizes all
+ * of them, so this file only ever reads a SessionEnvelope.
+ *
  * Two things it deliberately does NOT do:
- *  · It never re-parses the fenced body looking for structure. The body is the
- *    other session's untrusted text; the header comes only from framing outside
- *    the fence (that is the injection defence — see session-envelope.ts).
+ *  · It never re-parses the body looking for structure. The body is the other
+ *    session's untrusted text; the header comes only from attributes/framing
+ *    outside it (that is the injection defence — see session-envelope.ts).
  *  · It never invents a link. The 8-char short id becomes a clickable chip only
  *    when it resolves to exactly ONE live session (the same unique-prefix rule
  *    the server's session_send uses); otherwise it stays plain text.
@@ -30,6 +34,7 @@ import {
   type EnvelopeSegment,
   type SessionEnvelope,
   type SessionEnvelopePeer,
+  type SessionEnvelopeSource,
 } from './session-envelope';
 import { resolveRefInIndex } from '@/components/chat/session-mention';
 import {
@@ -64,7 +69,7 @@ interface ResolvedPeer {
  * unique-id-prefix rule the server applies, so a chip can never point at a
  * different session than a `session_send` with that same short id would reach.
  */
-function useResolvedPeer(peer: SessionEnvelopePeer): ResolvedPeer {
+function useResolvedPeer(peer: SessionEnvelopePeer, source?: SessionEnvelopeSource): ResolvedPeer {
   const candidates = useSyncExternalStore(
     subscribeSessionMentionIndex,
     getSessionMentionIndex,
@@ -74,11 +79,14 @@ function useResolvedPeer(peer: SessionEnvelopePeer): ResolvedPeer {
 
   const resolved = useMemo<ResolvedPeer>(() => {
     if (peer.anonymous) return { host: peer.host, ambiguous: false };
-    // The notification shape prints the target's FULL id — no prefix guessing.
+    // A Walnut envelope prints the target's FULL id — no prefix guessing.
     const exact = peer.sessionId
       ? candidates.find((c) => c.id === peer.sessionId)
       : undefined;
-    if (peer.sessionId) {
+    // Claude Code's `from-session` names a CLI session Walnut may not track at
+    // all, so it earns a link only by being IN the live index; a Walnut envelope's
+    // own id is authoritative even when the index has not caught up yet.
+    if (peer.sessionId && (exact || source !== 'claude-code')) {
       return {
         fullId: peer.sessionId,
         title: exact?.title || peer.title,
@@ -100,7 +108,7 @@ function useResolvedPeer(peer: SessionEnvelopePeer): ResolvedPeer {
     }
     const matches = candidates.filter((c) => c.id.startsWith(peer.shortId!)).length;
     return { title: peer.title, host: peer.host, ambiguous: matches > 1 };
-  }, [candidates, peer]);
+  }, [candidates, peer, source]);
 
   // Task id, best source first: the envelope printed one (notification shape) →
   // the session index → the WS-fed status store (fresher after a task move).
@@ -142,7 +150,9 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
 /** The other session: a clickable chip when resolved, plain text when not. */
 function PeerChips({ peer, resolved }: { peer: SessionEnvelopePeer; resolved: ResolvedPeer }) {
   const taskLabel = useTaskLabel(resolved.taskId);
-  const shortId = peer.shortId ?? resolved.fullId?.slice(0, 8);
+  // Last fallback: an id the envelope printed but the index could not confirm
+  // still names the sender, so it shows as a dim chip rather than disappearing.
+  const shortId = peer.shortId ?? resolved.fullId?.slice(0, 8) ?? peer.sessionId?.slice(0, 8);
   return (
     <div className="provenance-chips">
       {resolved.fullId && shortId ? (
@@ -195,14 +205,22 @@ function EnvelopeDetails({ envelope }: { envelope: SessionEnvelope }) {
           <CopyChip value={envelope.followUp} label="copy" title="Copy the follow-up command" />
         </div>
       )}
+      {/* Claude Code's transport address. Diagnostic only: it is not a Walnut id,
+          so it never becomes a chip or a link — it lives here or nowhere. */}
+      {envelope.source === 'claude-code' && envelope.peer.address && (
+        <div className="provenance-address">
+          <span className="provenance-address-label">Address</span>
+          <code>{envelope.peer.address}</code>
+        </div>
+      )}
       <pre className="provenance-raw">{envelope.raw}</pre>
     </details>
   );
 }
 
 function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; sessionCwd?: string }) {
-  const resolved = useResolvedPeer(envelope.peer);
-  const { kind, peer } = envelope;
+  const resolved = useResolvedPeer(envelope.peer, envelope.source);
+  const { kind, peer, source } = envelope;
 
   // A bare reply-requested trailer names no peer and carries no words — it is a
   // one-line instruction, so it gets a one-line row instead of a card.
@@ -210,7 +228,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
     return (
       <div className="provenance-card provenance-card-slim" data-envelope-kind={kind}>
         <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
-        <span className="provenance-label">{envelopeDirectionLabel(kind)}</span>
+        <span className="provenance-label">{envelopeDirectionLabel(kind, source)}</span>
         {envelope.requestId && <span className="provenance-rq">{envelope.requestId}</span>}
         <EnvelopeDetails envelope={envelope} />
       </div>
@@ -226,11 +244,14 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
       className="provenance-card"
       data-envelope-kind={kind}
       {...(peer.anonymous ? { 'data-anonymous': 'true' } : {})}
+      {...(source ? { 'data-envelope-source': source } : {})}
     >
       <div className="provenance-head">
         <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
         <span className="provenance-label">
-          {peer.anonymous ? 'Message from an unidentified process' : envelopeDirectionLabel(kind)}
+          {peer.anonymous
+            ? 'Message from an unidentified process'
+            : envelopeDirectionLabel(kind, source)}
         </span>
         {envelope.requestId && <span className="provenance-rq">{envelope.requestId}</span>}
       </div>

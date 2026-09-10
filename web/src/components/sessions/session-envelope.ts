@@ -2,8 +2,31 @@
  * Walnut session-envelope parser — pure, dependency-free, render-agnostic.
  *
  * When one session messages another, Walnut wraps the other session's words in a
- * machine-readable envelope before it reaches the receiving CLI's stdin. Four
- * shapes exist, all authored server-side and NEVER to be changed from here:
+ * machine-readable envelope before it reaches the receiving CLI's stdin.
+ *
+ * The CURRENT wire format (v2) is one tag per delivered message:
+ *
+ *     <walnut-message kind="peer-note" from="Title [8hex]" from-session="…" …>
+ *     BODY
+ *     </walnut-message>
+ *     Reply when done: walnut tools call session_send '{"in_reply_to":"rq-…",…}'
+ *
+ * Three kinds ride it: `peer-note` (another session's words), `reply` (the answer
+ * routed back to the asker) and `notification` (Walnut ending the wait itself).
+ * Attribute values are XML-escaped (`& " < >`); the BODY is verbatim except that
+ * every `<walnut-message` / `</walnut-message` in it has its `<` escaped to
+ * `&lt;`. That single rule is the anti-spoof guarantee: a body can never contain
+ * an open or close tag, so "from the open tag to the FIRST `\n</walnut-message>`"
+ * is the body, always, and no payload can promote itself to framing.
+ *
+ * Claude Code delivers its OWN peer messages as an injected user line: a
+ * `<cross-session-message …>` tag wrapped in two fixed pieces of CLI prose. That
+ * is parsed here too (source 'claude-code'): the tag is found at a line start,
+ * its body runs to the first close tag and is never scanned, and the framing prose
+ * is folded into the envelope's `raw` instead of being shown beside the card.
+ *
+ * LEGACY (below) is the pre-v2 prose the server no longer emits. Transcript JSONL
+ * is immutable history, so these four shapes must keep parsing forever:
  *
  *   1. `[Peer session message] From your user's other session "…" (id, host: …)`
  *      + a `---peer-note-<hash>---` fence          (src/core/peers/peer-wrapper.ts)
@@ -28,9 +51,10 @@
  *    in the safe direction: a payload that somehow contained the marker (a sha1
  *    fixed point) would make the body BIGGER, never let text escape it.
  *
- * A header whose shape is recognized but whose fence is broken aborts the whole
- * parse (`null` → the caller renders the raw text as it does today). Degrading
- * to plain text is always safe; guessing at a half-parsed envelope is not.
+ * An envelope whose shape is recognized but which is structurally broken (a tag
+ * that never closes, a broken fence) aborts the whole parse (`null` → the caller
+ * renders the raw text). Degrading to plain text is always safe; guessing at a
+ * half-parsed envelope is not.
  *
  * Not a security boundary: a HUMAN typing an envelope-shaped message by hand in
  * their own session still gets a card. That text is their own, carries no
@@ -40,12 +64,15 @@
 
 export type SessionEnvelopeKind = 'reply' | 'peer-note' | 'notification' | 'reply-request';
 
+/** Who framed the message: Walnut's own envelope, or Claude Code's native one. */
+export type SessionEnvelopeSource = 'walnut' | 'claude-code';
+
 export interface SessionEnvelopePeer {
   /** Short id as the server printed it (8 chars) — needs prefix resolution. */
   shortId?: string;
-  /** Full session id, when the envelope printed one (notification shape). */
+  /** Full session id, when the envelope printed one. */
   sessionId?: string;
-  /** Owning task id, when the envelope printed one (notification shape). */
+  /** Owning task id, when the envelope printed one. */
   taskId?: string;
   /** Title as printed. The server flattens + truncates at 80 chars, so this may
    *  end in an ellipsis; the UI prefers a resolved live title. */
@@ -54,10 +81,15 @@ export interface SessionEnvelopePeer {
   host?: string;
   /** peer-note only: an unidentified process, i.e. NO tracked session. */
   anonymous?: boolean;
+  /** Claude Code only: its transport address for the sender (`uds:…`). Diagnostic
+   *  detail for the raw disclosure, never a link. */
+  address?: string;
 }
 
 export interface SessionEnvelope {
   kind: SessionEnvelopeKind;
+  /** Absent means Walnut (every legacy prose shape). */
+  source?: SessionEnvelopeSource;
   /** rq-… correlation id, when the envelope carries one. */
   requestId?: string;
   /** The OTHER session: sender for reply/peer-note, target for notification. */
@@ -66,11 +98,12 @@ export interface SessionEnvelope {
   askedPreview?: string;
   /** The outcome sentence, verbatim (notification only) — this IS its content. */
   statusLine?: string;
-  /** The fenced payload: the other session's own words (reply + peer-note). */
+  /** The payload: the other session's own words (reply + peer-note). */
   body?: string;
-  /** The fence marker that delimited `body`. Diagnostics + tests. */
+  /** LEGACY only: the fence marker that delimited `body`. Diagnostics + tests. */
   marker?: string;
-  /** A `[Reply requested — rq-…]` trailer that rode along on this envelope. */
+  /** The reply-request trailer that rode along on this envelope (`Reply when
+   *  done: …` in v2, the 4-line `[Reply requested — rq-…]` block before it). */
   replyRequest?: { requestId: string; command?: string };
   /** The `walnut tools call …` line the envelope suggested, when it printed one. */
   followUp?: string;
@@ -200,6 +233,9 @@ interface ParseAt {
   envelope: SessionEnvelope;
   /** Index just past the envelope. */
   end: number;
+  /** Where the envelope really begins, when framing BEFORE the recognized opener
+   *  belongs to it (Claude Code's native shape). Defaults to the opener. */
+  start?: number;
 }
 
 /** JSON-ish `'{"key":"value"' → value` pull from a printed walnut command. */
@@ -330,8 +366,248 @@ function parseTrailerOnly(text: string, at: number): ParseAt | 'broken' {
   };
 }
 
+// ── v2: one `<walnut-message …>` tag per delivered message ───────────────────
+
+const TAG = '<walnut-message';
+const TAG_CLOSE = '\n</walnut-message>';
+/** A tag opener: the name, then whitespace before the first attribute. */
+const TAG_OPENER = /<walnut-message\s/g;
+const TAG_HEAD = /^<walnut-message\s/;
+/** `name="value"`. A value cannot hold a `"` — the serializer escapes it. */
+const ATTR = /([a-z][a-z0-9-]*)="([^"]*)"/g;
+/** The kinds the tag carries. Anything else degrades to raw text on purpose. */
+const TAG_KINDS = new Set(['peer-note', 'reply', 'notification']);
+/** `Title [8hex]` as `sessionHandle()` prints it (4+ so a short id still reads). */
+const HANDLE = /\[([0-9a-f]{4,})\]\s*$/i;
+/** The one line a peer-note with a `request` may be followed by. */
+const TAG_TRAILER = /^Reply when done: /;
+
+/** Reverse of the serializer's `escapeAttr` — `&amp;` LAST or it decodes twice. */
+function unescapeAttr(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+/** Reverse of the serializer's `escapeBody`, in reverse rule order: the tag
+ *  sequences first, then the extra `&amp;` the serializer adds to a body that
+ *  already held the escaped form (so the two can never collide on the wire). */
+function unescapeBody(body: string): string {
+  return body
+    .replace(/&lt;(\/?)(walnut-message)/gi, '<$1$2')
+    .replace(/&amp;lt;(\/?)(walnut-message)/gi, '&lt;$1$2');
+}
+
+/** First occurrence of a name wins: a repeated attribute cannot override it. */
+function parseAttrs(list: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  ATTR.lastIndex = 0;
+  for (let m = ATTR.exec(list); m; m = ATTR.exec(list)) {
+    if (!(m[1] in out)) out[m[1]] = unescapeAttr(m[2]);
+  }
+  return out;
+}
+
+/**
+ * Split a printed Walnut handle into its title and its id part. Walnut's own
+ * suffix IS a session-id prefix; Claude Code's `name [ref]` is NOT one, so that
+ * shape deliberately does not come through here.
+ */
+function splitHandle(handle: string | undefined): { title?: string; shortId?: string } {
+  if (!handle) return {};
+  const m = HANDLE.exec(handle);
+  if (!m) return { title: handle };
+  const title = handle.slice(0, m.index).trim();
+  return { ...(title ? { title } : {}), shortId: m[1] };
+}
+
+/** Next line-start index (>= from) where a tag opens, or -1. */
+function nextTagStart(text: string, from: number): number {
+  TAG_OPENER.lastIndex = from;
+  for (let m = TAG_OPENER.exec(text); m; m = TAG_OPENER.exec(text)) {
+    if (m.index === 0 || text[m.index - 1] === '\n') return m.index;
+  }
+  return -1;
+}
+
+/**
+ * Parse one `<walnut-message …>` tag starting at `at`.
+ *
+ * The open tag is ONE line ending in `>`, and the body runs to the FIRST
+ * `\n</walnut-message>` — which is safe precisely because the serializer escapes
+ * both tag sequences out of every body. A tag whose shape is recognized but which
+ * never closes (or carries a kind this build cannot render) is 'broken': the
+ * caller then renders the raw text, which is always safe.
+ */
+function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
+  const headEnd = lineEnd(text, at);
+  if (headEnd >= text.length) return 'broken';
+  const head = text.slice(at, headEnd).replace(/\r$/, '');
+  if (!head.endsWith('>')) return 'broken';
+  const attrs = parseAttrs(head.slice(TAG.length, head.length - 1));
+  const kind = attrs.kind;
+  if (!kind || !TAG_KINDS.has(kind)) return 'broken';
+
+  const bodyStart = headEnd + 1;
+  const closeAt = text.indexOf(TAG_CLOSE, bodyStart);
+  if (closeAt < 0) return 'broken';
+  const body = unescapeBody(text.slice(bodyStart, closeAt));
+  let end = closeAt + TAG_CLOSE.length;
+
+  // The single trailer line, and ONLY when the sender asked for a reply: without
+  // a request there is nothing to reply to, so a `Reply when done:` line is the
+  // human's own text and must stay in its own segment.
+  let replyRequest: SessionEnvelope['replyRequest'] | undefined;
+  if (kind === 'peer-note' && attrs.request && text[end] === '\n') {
+    const lineStart = end + 1;
+    const line = text.slice(lineStart, lineEnd(text, lineStart));
+    if (TAG_TRAILER.test(line)) {
+      replyRequest = { requestId: attrs.request, ...(findCommand(line) ? { command: findCommand(line) } : {}) };
+      end = lineEnd(text, lineStart);
+    }
+  }
+
+  // A notification is ABOUT a session; the other two come FROM one.
+  const notify = kind === 'notification';
+  const handle = notify ? attrs.about : attrs.from;
+  const sessionId = notify ? attrs['about-session'] : attrs['from-session'];
+  const taskId = notify ? attrs['about-task'] : attrs['from-task'];
+  const peer: SessionEnvelopePeer = attrs.anonymous === 'true'
+    // No tracked session behind the send: a host and nothing that reads as an id.
+    ? { ...(attrs.host ? { host: attrs.host } : {}), anonymous: true }
+    : {
+      ...splitHandle(handle),
+      ...(sessionId ? { sessionId } : {}),
+      ...(taskId ? { taskId } : {}),
+      ...(attrs.host ? { host: attrs.host } : {}),
+    };
+
+  // A notification's body opens with the outcome sentence — that IS its content,
+  // so it becomes `statusLine`. What follows is the `Next:` command block, which
+  // is machine instruction: it stays in `raw` (the disclosure) plus `followUp`,
+  // exactly where the pre-v2 notice put it, and never in the visible body.
+  const nl = body.indexOf('\n');
+  const statusLine = nl < 0 ? body : body.slice(0, nl);
+  const followUp = notify ? findCommand(nl < 0 ? '' : body.slice(nl + 1)) : undefined;
+
+  return {
+    end,
+    envelope: {
+      kind: kind as SessionEnvelopeKind,
+      source: 'walnut',
+      ...(attrs.request ? { requestId: attrs.request } : {}),
+      peer,
+      ...(attrs.asked ? { askedPreview: attrs.asked } : {}),
+      ...(notify ? { statusLine } : { body }),
+      ...(replyRequest ? { replyRequest } : {}),
+      ...(followUp ? { followUp } : {}),
+      raw: text.slice(at, end),
+    },
+  };
+}
+
+// ── Claude Code's own cross-session message ──────────────────────────────────
+
+const NATIVE_TAG = '<cross-session-message';
+const NATIVE_CLOSE = '\n</cross-session-message>';
+const NATIVE_OPENER = /<cross-session-message[\s>]/g;
+const NATIVE_HEAD = /^<cross-session-message[\s>]/;
+/**
+ * The CLI wraps its own tag in two fixed pieces of prose: one line above and one
+ * paragraph below. Matched as PREFIXES so a wording change costs the absorption
+ * (the prose shows as text) and never the parse.
+ */
+const NATIVE_FRAMING_BEFORE = /^Another Claude session sent a message/;
+const NATIVE_FRAMING_AFTER = /^This came from another Claude session/;
+
+/** The framing line directly above the tag, when it is there. */
+function absorbFramingBefore(text: string, at: number): number {
+  if (at === 0 || text[at - 1] !== '\n') return at;
+  const lineStart = text.lastIndexOf('\n', at - 2) + 1;
+  return NATIVE_FRAMING_BEFORE.test(text.slice(lineStart, at - 1)) ? lineStart : at;
+}
+
+/**
+ * The framing paragraph below the close tag, when it is there: from the first
+ * non-blank line after it to the next blank line or the end of the text. Anything
+ * that is not that paragraph stays outside the envelope and becomes its own text
+ * segment (a batched delivery can put real words after a peer message).
+ */
+function absorbFramingAfter(text: string, end: number): number {
+  let probe = end;
+  while (text[probe] === '\n') probe++;
+  if (probe === end) return end;
+  if (!NATIVE_FRAMING_AFTER.test(text.slice(probe, lineEnd(text, probe)))) return end;
+  let cursor = lineEnd(text, probe);
+  while (text[cursor] === '\n') {
+    const next = cursor + 1;
+    if (text.slice(next, lineEnd(text, next)) === '') break;
+    cursor = lineEnd(text, next);
+  }
+  return cursor;
+}
+
+/** Next line-start index (>= from) where a native tag opens, or -1. */
+function nextNativeStart(text: string, from: number): number {
+  NATIVE_OPENER.lastIndex = from;
+  for (let m = NATIVE_OPENER.exec(text); m; m = NATIVE_OPENER.exec(text)) {
+    if (m.index === 0 || text[m.index - 1] === '\n') return m.index;
+  }
+  return -1;
+}
+
+/**
+ * Claude Code delivers a peer message as an INJECTED user line: its own tag,
+ * wrapped in the CLI's fixed framing prose. Unlike the Walnut tag, the CLI does
+ * NOT escape its bodies, so a sender can put a `</cross-session-message>` line
+ * inside one. The body therefore runs to the LAST close tag in the message: a
+ * forged early close would otherwise let the rest of the body (say, a fake
+ * `<walnut-message>` from "Walnut") parse as a separate, trusted-looking card.
+ * The CLI delivers one native message per line, so the last close is the real
+ * one; a tag that never closes degrades to raw text.
+ *
+ * Two things this deliberately does NOT do. It does not read the `[ref]` inside a
+ * CLI name as a session-id prefix: those are the CLI's own disambiguation tokens
+ * and are NOT id prefixes (a live `fixture-96 [310819]` had session id
+ * `6c055e2b…`), so the ref stays inside the title verbatim and only `from-session`
+ * can produce a link. And it does not treat the framing prose as content: it is
+ * part of `raw`, never a text segment beside the card.
+ */
+function parseNativeTag(text: string, at: number): ParseAt | 'broken' {
+  const headEnd = lineEnd(text, at);
+  if (headEnd >= text.length) return 'broken';
+  const head = text.slice(at, headEnd).replace(/\r$/, '');
+  if (!head.endsWith('>')) return 'broken';
+  const closeAt = text.lastIndexOf(NATIVE_CLOSE);
+  if (closeAt < headEnd) return 'broken';
+
+  const attrs = parseAttrs(head.slice(NATIVE_TAG.length, head.length - 1));
+  const title = attrs['from-name'] || attrs.from;
+  const start = absorbFramingBefore(text, at);
+  const end = absorbFramingAfter(text, closeAt + NATIVE_CLOSE.length);
+  return {
+    start,
+    end,
+    envelope: {
+      kind: 'peer-note',
+      source: 'claude-code',
+      peer: {
+        ...(title ? { title } : {}),
+        ...(attrs['from-session'] ? { sessionId: attrs['from-session'] } : {}),
+        ...(attrs.from ? { address: attrs.from } : {}),
+      },
+      body: text.slice(headEnd + 1, closeAt),
+      raw: text.slice(start, end),
+    },
+  };
+}
+
 function parseAt(text: string, at: number): ParseAt | 'broken' | 'not-an-envelope' {
   const headLine = text.slice(at, lineEnd(text, at));
+  if (TAG_HEAD.test(headLine)) return parseWalnutTag(text, at);
+  if (NATIVE_HEAD.test(headLine)) return parseNativeTag(text, at);
   if (headLine.startsWith('[Session reply')) return parseReply(text, at, headLine);
   if (headLine.startsWith('[Peer session message]')) return parsePeerNote(text, at, headLine);
   if (headLine.startsWith('[Walnut notification')) return parseNotification(text, at, headLine);
@@ -347,21 +623,27 @@ function pushText(segments: EnvelopeSegment[], raw: string): void {
 /**
  * Split a message into ordinary text and Walnut envelopes, in order.
  *
- * Returns `null` when the text holds no envelope, or when one is recognized but
- * structurally broken — both mean "render exactly what you render today".
+ * Returns `null` when the text holds no envelope, which means "render exactly
+ * what you render today". A recognized envelope that is structurally broken
+ * (never closes, unknown kind) ends the scan: what was parsed before it keeps
+ * its cards, and everything from the broken opener onward is one raw text
+ * segment, so a batched delivery does not lose its good cards to one bad one.
  * A batched delivery joins several messages with a blank line, so more than one
  * envelope (and leading human text) is normal.
  */
 export function parseSessionEnvelopes(text: string): EnvelopeSegment[] | null {
-  if (!text || !text.includes('[')) return null;
+  if (!text) return null;
+  if (!text.includes('[') && !text.includes(TAG) && !text.includes(NATIVE_TAG)) return null;
   const segments: EnvelopeSegment[] = [];
   let pos = 0;
   let found = 0;
   while (pos < text.length) {
-    const at = nextHeaderStart(text, pos);
+    const starts = [nextTagStart(text, pos), nextNativeStart(text, pos), nextHeaderStart(text, pos)]
+      .filter((i) => i >= 0);
+    const at = starts.length > 0 ? Math.min(...starts) : -1;
     if (at < 0) break;
     const parsed = parseAt(text, at);
-    if (parsed === 'broken') return null;
+    if (parsed === 'broken') break;
     if (parsed === 'not-an-envelope') {
       // A bracketed lookalike in ordinary prose. Step past its line and keep
       // going; nothing was consumed, so no fenced region can be entered here.
@@ -370,7 +652,9 @@ export function parseSessionEnvelopes(text: string): EnvelopeSegment[] | null {
       pos = skip;
       continue;
     }
-    pushText(segments, text.slice(pos, at));
+    // An envelope may reach BACK over framing that belongs to it, but never over
+    // text an earlier segment already owns.
+    pushText(segments, text.slice(pos, Math.max(pos, parsed.start ?? at)));
     segments.push({ kind: 'envelope', envelope: parsed.envelope });
     found++;
     pos = parsed.end;
@@ -380,8 +664,25 @@ export function parseSessionEnvelopes(text: string): EnvelopeSegment[] | null {
   return segments;
 }
 
+/**
+ * True when a message is nothing BUT envelopes. This is the test for treating a
+ * CLI-injected line (skill dump, compaction summary, peer message) as a card: a
+ * skill dump that happens to quote an envelope still carries its own prose, so
+ * it fails this and stays a collapsed context row, where clicking to expand is
+ * the right affordance.
+ */
+export function isEnvelopeOnly(segments: EnvelopeSegment[] | null): segments is EnvelopeSegment[] {
+  return !!segments && segments.length > 0 && segments.every((s) => s.kind === 'envelope');
+}
+
 /** Human label for a kind — shared by the card and its aria labels. */
-export function envelopeDirectionLabel(kind: SessionEnvelopeKind): string {
+export function envelopeDirectionLabel(
+  kind: SessionEnvelopeKind,
+  source?: SessionEnvelopeSource,
+): string {
+  // Claude Code framed it, not Walnut: say so, so a reader knows which system
+  // routed the message and which session list the id belongs to.
+  if (source === 'claude-code') return 'Message from another Claude Code session';
   switch (kind) {
     case 'reply': return 'Reply from session';
     case 'peer-note': return 'Message from another session';

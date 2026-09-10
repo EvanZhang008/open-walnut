@@ -100,6 +100,25 @@ describe('parseSessionMessages — Pattern A/B mid-turn dedup', () => {
     expect(texts).toEqual(['Original prompt', 'mid-turn message']);
   });
 
+  it('cross-session peer message: the CLI frames the logged user turn around the enqueued tag → emitted ONCE (the framed twin)', () => {
+    // Live shape (Claude Code 2.1.258): SendMessage from another CLI session enqueues the
+    // bare tag; the user turn the CLI logs wraps it in its own prose and is isMeta.
+    const tag = '<cross-session-message from="uds:/tmp/cc-socks/11840.sock" from-name="marina-71" from-mode="bypass">\n'
+      + 'Native peer message test. Just acknowledge.\n</cross-session-message>';
+    const framed = `Another Claude session sent a message:\n${tag}\n\nThis came from another Claude session, not typed by your user.`;
+    const jsonl = build(
+      userStr('Original prompt'),
+      assistantText('READY'),
+      enqueue(tag),
+      JSON.stringify({ type: 'user', isMeta: true, timestamp: nextTs(), uuid: `u-${ts}`, message: { role: 'user', content: framed } }),
+      assistantText('Acknowledged.'),
+    );
+    const parsed = parseSessionMessages(jsonl).filter(m => m.role === 'user');
+    expect(parsed.filter(m => m.text.includes('<cross-session-message'))).toHaveLength(1);
+    expect(parsed[1].text).toBe(framed);
+    expect(parsed[1].injected).toBe(true);
+  });
+
   it('Pattern B: enqueue with NO real user twin (consumed mid-stream) → emitted as synthetic', () => {
     const jsonl = build(
       userStr('Original prompt'),

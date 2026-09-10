@@ -162,6 +162,26 @@ describe('mapResult-based writes render outcome + next from a server body', () =
     expect(r.outcome).toContain('2 session(s) listed, 1 of them working')
     expect(r.outcome).toContain('live process doing work')
   })
+
+  it('session_list rows carry the printed handle session_send accepts back', () => {
+    const op = listOps().find((o) => o.name === 'session_list')!
+    const r = op.mapResult!({
+      body: {
+        sessions: [
+          { id: '9f3a2c1d-4b7e-4c1a-9d2e-0f1a2b3c4d5e', title: 'Fix auth fixture', process_status: 'idle' },
+          { id: 'bbbb1111-2222-3333', process_status: 'idle' },
+          { process_status: 'idle' },
+        ],
+      },
+      args: {},
+    }) as { sessions: Array<Record<string, unknown>> }
+    expect(r.sessions[0].handle).toBe('Fix auth fixture [9f3a2c1d]')
+    // No title → the bare id handle; no id at all → no handle invented.
+    expect(r.sessions[1].handle).toBe('[bbbb1111]')
+    expect(r.sessions[2].handle).toBeUndefined()
+    // The rest of the row is passed through untouched.
+    expect(r.sessions[0].title).toBe('Fix auth fixture')
+  })
 })
 
 describe('task_create + start_session — create and dispatch in one call', () => {

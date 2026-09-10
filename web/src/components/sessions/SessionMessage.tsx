@@ -21,7 +21,7 @@ import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { BashToolCall } from './BashToolCall';
-import { parseSessionEnvelopes } from './session-envelope';
+import { isEnvelopeOnly, parseSessionEnvelopes } from './session-envelope';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { splitLeadingBanners } from './injected-banner';
 import { InjectedBannerRow } from './InjectedBannerRow';
@@ -1047,6 +1047,7 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
   return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
 }
 
+
 export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text, timestamp, tools: rawTools, thinking } = message;
   const tools = suppressTools ? undefined : rawTools;
@@ -1081,7 +1082,14 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   // Belt-and-suspenders prefix check catches histories parsed before the
   // server learned the injected flag (stale cache / old transcript exports).
   if (isUser && text
-    && (message.injected || text.startsWith('Base directory for this skill:'))) {
+    && (message.injected || text.startsWith('Base directory for this skill:'))
+    // Claude Code delivers another session's message as an INJECTED line. A line
+    // that is nothing but envelopes falls through to the ordinary path below, so
+    // the card gets the same wrapper, click delegation (task/session/file links)
+    // and context menu every other envelope has. Nothing-but is the test: a skill
+    // dump that quotes an envelope still has its own prose and stays collapsed.
+    // Parsing is pure (no hook, this is a conditional branch).
+    && !isEnvelopeOnly(parseSessionEnvelopes(text))) {
     return <InjectedContextRow text={text} />;
   }
 

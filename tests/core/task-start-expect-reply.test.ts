@@ -126,9 +126,11 @@ describe('startSessionForTask — expect_reply default', () => {
       toTaskId: 'task-1',
     });
     // The trailer must ride the FIRST message, or the new session never learns
-    // how to answer — the request row alone is invisible to it.
-    expect(firstMessage()).toContain(`[Reply requested — ${result.requestId}]`);
-    expect(firstMessage()).toContain(`"in_reply_to":"${result.requestId}"`);
+    // how to answer — the request row alone is invisible to it. A plain first
+    // message is not an envelope, so the trailer is the whole last line.
+    expect(firstMessage()).toBe('Fix the flake and report what changed.\n'
+      + `Reply when done: walnut tools call session_send `
+      + `'{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
     // The new session is told its own id up front (preassigned for claude).
     expect(result.sessionId).toBeTruthy();
   });
@@ -147,7 +149,7 @@ describe('startSessionForTask — expect_reply default', () => {
 
     expect(result.requestId).toBeUndefined();
     expect(firstMessage()).toBe('just start it');
-    expect(firstMessage()).not.toContain('[Reply requested');
+    expect(firstMessage()).not.toContain('Reply when done');
     expect(emitted).toHaveLength(1);
   });
 
@@ -159,7 +161,7 @@ describe('startSessionForTask — expect_reply default', () => {
     });
 
     expect(result.requestId).toBeUndefined();
-    expect(firstMessage()).not.toContain('[Reply requested');
+    expect(firstMessage()).not.toContain('Reply when done');
   });
 
   it('an EXPLICIT true from a non-session caller still fails loudly', async () => {

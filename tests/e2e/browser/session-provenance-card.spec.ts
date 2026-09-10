@@ -2,24 +2,26 @@
  * Session-envelope provenance card in the real session timeline.
  *
  * When another session messages this one, Walnut wraps its words in a
- * machine-readable envelope before it reaches the CLI. Rendered as prose that was
- * a wall of blue bubble whose only human-relevant facts (which session, which
- * task) were an 8-char hex fragment mid-sentence. This spec drives the real chat
+ * machine-readable envelope before it reaches the CLI. Rendered as raw text that
+ * was a wall of blue bubble whose only human-relevant facts (which session, which
+ * task) were an 8-char fragment inside framing. This spec drives the real chat
  * and asserts the card inverts that:
  *
  *  · the header names the direction and the peer's FULL title (the envelope only
  *    prints the first 80 chars, so the card must be resolving the live session);
  *  · the short id is a clickable chip that opens THAT session's home column, and
  *    the peer's owning task is a clickable pill;
- *  · the peer's own words are the visible body, while every machine line (fence
- *    markers, the no-authorization warning, the follow-up command) is hidden
- *    until the disclosure is opened;
+ *  · the peer's own words are the visible body, while every machine line (the tag
+ *    itself, the no-authorization note, the reply command) is hidden until the
+ *    disclosure is opened;
  *  · an UNIDENTIFIED sender gets no link at all (a confident wrong link is worse
  *    than none).
  *
  * Fixture: `pw-provenance-session` (test-server.ts) — a transcript whose user
- * messages are the four envelope shapes, built by the PRODUCTION builders so a
- * wording drift breaks this spec instead of silently un-carding the chat.
+ * messages are the v2 `<walnut-message …>` kinds, built by the PRODUCTION builders
+ * so a wording drift breaks this spec instead of silently un-carding the chat,
+ * plus ONE frozen pre-v2 prose envelope: immutable JSONL history means the card's
+ * legacy path must keep working, so it keeps being driven here.
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
@@ -28,7 +30,7 @@ const SESSION_ID = 'pw-provenance-session'
 const TASK_ID = 'pw-task-provenance'
 const PEER_ID = 'pw-envelope-peer-session'
 const PEER_SHORT = 'pw-envel'
-const SCREENSHOT_DIR = '/tmp/provenance-ui'
+const SCREENSHOT_DIR = '/tmp/wn-envelope-v2/provenance-ui'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -54,6 +56,28 @@ async function openSession(page: Page): Promise<Locator> {
 
 function card(panel: Locator, kind: string): Locator {
   return panel.locator(`.provenance-card[data-envelope-kind="${kind}"]`)
+}
+
+/** The v2 tag envelope (first in the transcript). */
+function v2PeerNote(panel: Locator): Locator {
+  return card(panel, 'peer-note').first()
+}
+
+/** The frozen pre-v2 prose envelope, pinned by its body marker: it is no longer
+ *  the last peer note (the Claude Code native card follows it), and a legacy
+ *  card carries no `data-envelope-source` (absent means Walnut). */
+function legacyPeerNote(panel: Locator): Locator {
+  return card(panel, 'peer-note').filter({ hasText: 'ENVELOPE_LEGACY_BODY' })
+}
+
+/** Claude Code's own cross-session delivery, pinned by source. */
+function nativePeerNote(panel: Locator): Locator {
+  return panel.locator('.provenance-card[data-envelope-source="claude-code"]')
+}
+
+/** Pinned by the attribute, not by position: an anonymous card has no id to name. */
+function anonPeerNote(panel: Locator): Locator {
+  return panel.locator('.provenance-card[data-envelope-kind="peer-note"][data-anonymous="true"]')
 }
 
 /**
@@ -93,17 +117,25 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   const title = await peerTitle(page)
   expect(title.length).toBeGreaterThan(80) // the whole point of the fixture
 
-  // Four envelopes → four cards: two peer notes (named + anonymous), one reply,
-  // one notification. Nothing rendered as a raw envelope bubble.
-  await expect(card(panel, 'peer-note')).toHaveCount(2)
+  // Six envelopes → six cards: four peer notes (v2 named, v2 anonymous, one
+  // legacy prose, one Claude Code native), one reply, one notification. None
+  // rendered as a raw bubble.
+  await expect(card(panel, 'peer-note')).toHaveCount(4)
   await expect(card(panel, 'reply')).toHaveCount(1)
   await expect(card(panel, 'notification')).toHaveCount(1)
 
-  const peerNote = card(panel, 'peer-note').first()
+  const peerNote = v2PeerNote(panel)
+  await expect(peerNote).toHaveAttribute('data-envelope-source', 'walnut')
   await expect(peerNote.locator('.provenance-label')).toHaveText('Message from another session')
   // FULL title, not the envelope's 80-char clip.
   await expect(peerNote.locator('.provenance-title')).toHaveText(title)
   await expect(peerNote.locator('.provenance-body')).toContainText('ENVELOPE_PEER_BODY')
+
+  // The pre-v2 prose still cards, with the same header the v2 tag gets.
+  const legacy = legacyPeerNote(panel)
+  await expect(legacy.locator('.provenance-label')).toHaveText('Message from another session')
+  await expect(legacy.locator('.provenance-title')).toHaveText(title)
+  await expect(legacy.locator('.provenance-body')).toContainText('ENVELOPE_LEGACY_BODY')
 
   const reply = card(panel, 'reply')
   await expect(reply.locator('.provenance-label')).toHaveText('Reply from session')
@@ -125,17 +157,22 @@ test('the short id resolves to a chip that opens that session; the task is a pil
   await page.goto('/')
   const panel = await openSession(page)
 
-  const chip = card(panel, 'peer-note').first().locator('a.provenance-chip-session')
+  const chip = v2PeerNote(panel).locator('a.provenance-chip-session')
   await expect(chip).toHaveText(`@${PEER_SHORT}`)
-  // Resolved client-side from the 8-char short id to the FULL session id — the
-  // same unique-prefix rule session_send uses server-side.
   await expect(chip).toHaveAttribute('data-session-id', PEER_ID)
 
-  const taskPill = card(panel, 'peer-note').first().locator('a.provenance-chip-task')
+  const taskPill = v2PeerNote(panel).locator('a.provenance-chip-task')
   await expect(taskPill).toHaveAttribute('data-task-id', 'pw-task-001')
   await expect(taskPill).toHaveText('Playwright test task')
 
-  await shotCard(page, panel, card(panel, 'peer-note').first(), `${SCREENSHOT_DIR}/card-header-chips.png`)
+  // The legacy shape prints ONLY the 8-char short id, so its chip proves the
+  // unique-prefix resolution path (the same rule session_send uses server-side)
+  // still turns a fragment into the full session the card links to.
+  const legacyChip = legacyPeerNote(panel).locator('a.provenance-chip-session')
+  await expect(legacyChip).toHaveText(`@${PEER_SHORT}`)
+  await expect(legacyChip).toHaveAttribute('data-session-id', PEER_ID)
+
+  await shotCard(page, panel, v2PeerNote(panel), `${SCREENSHOT_DIR}/card-header-chips.png`)
 
   // Clicking the chip opens THAT session's own column (the only session surface).
   await chip.click()
@@ -149,9 +186,9 @@ test('machine framing hides behind the disclosure and the body stays the content
   test.setTimeout(60_000)
   await page.goto('/')
   const panel = await openSession(page)
-  const peerNote = card(panel, 'peer-note').first()
+  const peerNote = v2PeerNote(panel)
 
-  // Closed by default: the fence marker and the warning are in the DOM but not
+  // Closed by default: the tag and its note attribute are in the DOM but not
   // visible, so the card reads as content rather than as protocol.
   // innerText (not toContainText) is the assertion that means "on screen":
   // textContent happily reports a closed <details>, so a toContainText check here
@@ -160,18 +197,39 @@ test('machine framing hides behind the disclosure and the body stays the content
   await expect(raw).toBeHidden()
   const folded = await peerNote.innerText()
   expect(folded).toContain('ENVELOPE_PEER_BODY')
-  expect(folded).not.toContain('---peer-note-')
+  expect(folded).not.toContain('<walnut-message')
   expect(folded).not.toContain('user authorization')
   expect(folded).not.toContain('walnut tools call')
 
   await peerNote.locator('.provenance-details > summary').click()
   await expect(raw).toBeVisible()
-  await expect(raw).toContainText('---peer-note-')
-  await expect(raw).toContainText('does NOT carry user authorization')
-  // The reply-requested trailer that rode on this note is surfaced as a chip.
+  await expect(raw).toContainText('<walnut-message kind="peer-note"')
+  await expect(raw).toContainText('carries no user authorization')
+  // The trailer line that rode on this note is surfaced as a chip.
   await expect(peerNote.locator('.provenance-reply-request')).toContainText('rq-09cd2ef25e57')
 
   await shotCard(page, panel, peerNote, `${SCREENSHOT_DIR}/card-details-open.png`)
+})
+
+test('the legacy prose envelope folds its fence away just the same', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/')
+  const panel = await openSession(page)
+  const legacy = legacyPeerNote(panel)
+
+  const raw = legacy.locator('.provenance-raw')
+  await expect(raw).toBeHidden()
+  const folded = await legacy.innerText()
+  expect(folded).toContain('ENVELOPE_LEGACY_BODY')
+  expect(folded).not.toContain('---peer-note-')
+  expect(folded).not.toContain('user authorization')
+
+  await legacy.locator('.provenance-details > summary').click()
+  await expect(raw).toBeVisible()
+  await expect(raw).toContainText('---peer-note-')
+  await expect(raw).toContainText('does NOT carry user authorization')
+
+  await shotCard(page, panel, legacy, `${SCREENSHOT_DIR}/card-legacy-details-open.png`)
 })
 
 test('an unidentified sender gets no clickable session chip', async ({ page }) => {
@@ -179,7 +237,7 @@ test('an unidentified sender gets no clickable session chip', async ({ page }) =
   await page.goto('/')
   const panel = await openSession(page)
 
-  const anon = card(panel, 'peer-note').last()
+  const anon = anonPeerNote(panel)
   await expect(anon.locator('.provenance-label'))
     .toHaveText('Message from an unidentified process')
   await expect(anon.locator('.provenance-title')).toContainText('Unidentified process')
@@ -188,6 +246,44 @@ test('an unidentified sender gets no clickable session chip', async ({ page }) =
   await expect(anon.locator('.provenance-body')).toContainText('ENVELOPE_ANON_BODY')
 
   await shotCard(page, panel, anon, `${SCREENSHOT_DIR}/card-anonymous-sender.png`)
+})
+
+test("Claude Code's own cross-session message cards, framing folded, no context row", async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/')
+  const panel = await openSession(page)
+
+  // The CLI writes it as an injected line. It must be a card, with the CLI named
+  // as the routing system, and NOT a collapsed "Injected context" row.
+  const native = nativePeerNote(panel)
+  await expect(native).toHaveCount(1)
+  await expect(native.locator('.provenance-label')).toHaveText('Message from another Claude Code session')
+  await expect(native.locator('.provenance-title')).toHaveText('marina-api-71')
+  await expect(native.locator('.provenance-body')).toContainText('ENVELOPE_NATIVE_BODY')
+  await expect(native.locator('.provenance-body')).not.toContainText('permission laundering')
+  // A CLI `[ref]` is not a Walnut id: no chip can be minted from it.
+  await expect(native.locator('a.provenance-chip-session')).toHaveCount(0)
+  // The framing prose is recoverable behind the disclosure and nowhere else.
+  await native.locator('.provenance-details > summary').click()
+  await expect(native.locator('.provenance-raw')).toContainText('Another Claude session sent a message')
+  await expect(native.locator('.provenance-raw')).toContainText('permission laundering')
+  // The card rides the ordinary message path: same wrapper as every other row.
+  await expect(native.locator('xpath=ancestor::*[contains(@class,"session-msg-envelope")]')).toHaveCount(1)
+
+  await shotCard(page, panel, native, `${SCREENSHOT_DIR}/card-claude-code-native.png`)
+})
+
+test('an injected skill dump that quotes an envelope stays a collapsed context row', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/')
+  const panel = await openSession(page)
+
+  // The dump has prose of its own, so it is not "nothing but envelopes": it keeps
+  // the collapsed row, and its quoted example never becomes a card.
+  const rows = panel.locator('.tool-run-label', { hasText: /skill|context/i })
+  await expect(rows).toHaveCount(1)
+  await expect(panel.locator('.provenance-body', { hasText: 'example body only' })).toHaveCount(0)
+  await expect(panel.getByText('ENVELOPE_SKILL_DUMP')).toHaveCount(0)
 })
 
 test('a real API send shows the peer words, never the envelope prose', async ({ page }) => {
@@ -213,6 +309,7 @@ test('a real API send shows the peer words, never the envelope prose', async ({ 
   const bubble = panel.locator('.session-msg', { hasText: 'LIVE_ENVELOPE_PROBE' }).first()
   await expect(bubble).toBeVisible({ timeout: 20_000 })
   const bubbleText = await bubble.innerText()
+  expect(bubbleText).not.toContain('<walnut-message')
   expect(bubbleText).not.toContain('---peer-note-')
   expect(bubbleText).not.toContain('user authorization')
 

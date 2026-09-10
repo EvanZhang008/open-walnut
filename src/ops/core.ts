@@ -13,6 +13,7 @@
  */
 
 import { z } from 'zod'
+import { sessionHandle } from '../core/peers/walnut-message-tag.js'
 import { defineOp } from './registry.js'
 
 // ── Reads (ported from the original MCP tools) ──────────────────────────────
@@ -52,7 +53,7 @@ defineOp({
   name: 'session_list',
   title: 'List Walnut coding sessions',
   description:
-    'The user\'s tracked AI coding sessions (id, title, owning task, host, process_status, ' +
+    'The user\'s tracked AI coding sessions (id, handle, title, owning task, host, process_status, ' +
     'model, message_count). Read-only — use it to see what else is running before starting work.',
   input: {
     status: z.enum(['running', 'idle', 'stopped', 'error']).optional().describe('Filter by process status'),
@@ -64,11 +65,23 @@ defineOp({
     const running = rows.filter((s) => (s as { process_status?: unknown }).process_status === 'running').length
     return {
       ...b,
+      // `handle` is derived HERE, not in the projection: the /sessions row shape
+      // is a frozen contract the phone also reads, and this is the only surface
+      // whose reader pastes a row straight back into session_send's `to`.
+      sessions: rows.map((s) => {
+        const row = s as Record<string, unknown>
+        const handle = sessionHandle(
+          typeof row.title === 'string' ? row.title : '',
+          typeof row.id === 'string' ? row.id : '',
+        )
+        return handle ? { ...row, handle } : row
+      }),
       // Reads change nothing, but this is where the task/session distinction is
       // easiest to teach: these rows are the things actually doing work.
       outcome: `${rows.length} session(s) listed, ${running} of them working right now. `
         + 'A session is a live process doing work; its task row is just the record it hangs on.',
-      next: 'Talk to one with session_send (never yourself), or start one for a task with session_start.',
+      next: 'Talk to one with session_send (never yourself): a row\'s `handle` pastes straight into `to`. '
+        + 'Or start one for a task with session_start.',
     }
   },
   tags: { readonly: true, remote: 'allow' },
