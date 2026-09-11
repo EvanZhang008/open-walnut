@@ -52,6 +52,25 @@ export const SIZE_TRIGGER_BYTES = 2 * 1024 * 1024 * 1024;
 export const DEBRIS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** `pre-rewrite-backup` (old chain parked by a history-rewrite adoption) max age. */
 export const BACKUP_BRANCH_MAX_AGE_DAYS = 14;
+/**
+ * Compaction's `backup-YYYYMMDD` branches max age. Each one is the WHOLE
+ * pre-compaction chain (commit-tree rewrote every commit, so it shares no commit
+ * with main), and while it exists gc can free nothing compaction dropped. One
+ * compaction cycle is long enough to notice a bad rewrite; the tree-hash check
+ * before the swap is the real safety net. 2026-09-10: two of these pinned 30,747
+ * commits / 71GB of blobs (1.3GB of them half-downloaded model files) on a repo
+ * whose live history was a third of that.
+ */
+export const COMPACTION_BACKUP_MAX_AGE_DAYS = 7;
+/**
+ * A size-triggered gc must have grown the pack dir by this much since the last
+ * completed run to fire again. Once a repo sits above SIZE_TRIGGER_BYTES for
+ * good (large tracked files, pinned history), "over the threshold" is true at
+ * every check; without this, each server restart spent 11 minutes of niced
+ * single-threaded repack that freed nothing (5 deploys → 3 gcs on 2026-09-10,
+ * one of them killed at the 30-minute budget, leaving 856MB of tmp_pack).
+ */
+export const SIZE_REGROWTH_RATIO = 1.1;
 /** Hard budget for one gc run — group-killed past this (see execGitGroup). */
 const GC_TIMEOUT_MS = 30 * 60_000;
 /** How often the scheduler re-evaluates whether maintenance is due. */
@@ -59,10 +78,12 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** Marker file (inside the git dir — per-repo, machine-local, never synced). */
 const LAST_RUN_FILE = 'walnut-last-maintenance';
 
+export type MaintenanceReason = 'interval' | 'size' | 'debris' | 'backup' | 'forced';
+
 export interface MaintenanceResult {
   repo: string;
   ran: boolean;
-  reason?: 'interval' | 'size' | 'debris' | 'forced';
+  reason?: MaintenanceReason;
   sweptFiles: number;
   packBytesBefore: number;
   packBytesAfter: number;
@@ -159,18 +180,47 @@ export function sweepGitDebris(gitDir: string, now = Date.now()): number {
   return swept;
 }
 
-function readLastRun(gitDir: string): number {
+/** What the marker remembers about the last runs. Exported for tests. */
+export interface LastRun {
+  /** Last COMPLETED run (0 = never). Drives the weekly interval. */
+  at: number;
+  /** Pack-dir bytes right after that run's gc; undefined for a pre-2026-09 marker. */
+  packBytesAfter?: number;
+  /** Last run that failed or was killed at its budget; undefined when the last run succeeded. */
+  failedAt?: number;
+}
+
+/** A failed gc holds the size trigger off for this long (the weekly interval still applies). */
+export const FAILED_GC_BACKOFF_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The marker is JSON now, but older installs wrote a bare ISO timestamp: read
+ * both, so an upgrade never looks like "never ran" and gcs on the spot. (The
+ * reverse direction, an LKG rollback to a build that still expects the bare
+ * string, parses the JSON as NaN → "never ran" and does ONE extra gc. Accepted.)
+ */
+export function readLastRun(gitDir: string): LastRun {
   try {
-    const t = Date.parse(fs.readFileSync(path.join(gitDir, LAST_RUN_FILE), 'utf-8').trim());
-    return Number.isFinite(t) ? t : 0;
+    const raw = fs.readFileSync(path.join(gitDir, LAST_RUN_FILE), 'utf-8').trim();
+    if (raw.startsWith('{')) {
+      const parsed = JSON.parse(raw) as { at?: unknown; packBytesAfter?: unknown; failedAt?: unknown };
+      const at = typeof parsed.at === 'number' ? parsed.at : Date.parse(String(parsed.at));
+      return {
+        at: Number.isFinite(at) ? at : 0,
+        packBytesAfter: typeof parsed.packBytesAfter === 'number' ? parsed.packBytesAfter : undefined,
+        failedAt: typeof parsed.failedAt === 'number' ? parsed.failedAt : undefined,
+      };
+    }
+    const t = Date.parse(raw);
+    return { at: Number.isFinite(t) ? t : 0 };
   } catch {
-    return 0;
+    return { at: 0 };
   }
 }
 
-function writeLastRun(gitDir: string): void {
+function writeLastRun(gitDir: string, run: LastRun): void {
   try {
-    fs.writeFileSync(path.join(gitDir, LAST_RUN_FILE), new Date().toISOString(), 'utf-8');
+    fs.writeFileSync(path.join(gitDir, LAST_RUN_FILE), JSON.stringify(run), 'utf-8');
   } catch { /* best-effort */ }
 }
 
@@ -194,12 +244,63 @@ export function staleQuarantineDirs(gitDir: string, now = Date.now()): number {
 /** Stale quarantine dirs above this force a maintenance pass regardless of pack size. */
 export const DEBRIS_COUNT_TRIGGER = 10;
 
-/** Why maintenance should run now, or null if it shouldn't. Exported for tests. */
-export function maintenanceDue(gitDir: string, now = Date.now()): 'interval' | 'size' | 'debris' | null {
-  if (packDirBytes(gitDir) >= SIZE_TRIGGER_BYTES) return 'size';
-  if (staleQuarantineDirs(gitDir, now) >= DEBRIS_COUNT_TRIGGER) return 'debris';
+/** Compaction's backup branch name → the UTC day it encodes, or null. */
+function backupNameDate(name: string): number | null {
+  const m = /^backup-(\d{4})(\d{2})(\d{2})$/.exec(name);
+  if (!m) return null;
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * Names of compaction backup branches whose encoded date is past the max age.
+ * Reads refs from disk (loose files, then packed-refs: gc packs them), so the
+ * scheduler can ask this without spawning git. Exported for tests.
+ */
+export function staleCompactionBackups(gitDir: string, now = Date.now()): string[] {
+  const names = new Set<string>();
+  try {
+    for (const e of fs.readdirSync(path.join(gitDir, 'refs', 'heads'))) {
+      if (/^backup-\d{8}$/.test(e)) names.add(e);
+    }
+  } catch { /* no loose heads */ }
+  try {
+    for (const line of fs.readFileSync(path.join(gitDir, 'packed-refs'), 'utf-8').split('\n')) {
+      const m = /^[0-9a-f]{40,64} refs\/heads\/(backup-\d{8})$/.exec(line.trim());
+      if (m) names.add(m[1]);
+    }
+  } catch { /* no packed-refs */ }
+  const maxAgeMs = COMPACTION_BACKUP_MAX_AGE_DAYS * 86_400_000;
+  return [...names].filter((n) => {
+    const d = backupNameDate(n);
+    return d !== null && now - d > maxAgeMs;
+  }).sort();
+}
+
+/**
+ * Why maintenance should run now, or null if it shouldn't. Exported for tests.
+ *
+ * The size trigger fires on GROWTH past the line, not on being past it: a repo
+ * the last gc left at 2.6GB has not changed at 2.6GB, and re-running the same
+ * gc against it can only produce the same 2.6GB. A marker without a recorded
+ * size (older build) counts as growth once, so the upgrade still gets one run.
+ * A gc that failed or was killed holds the size trigger off for a day: retrying
+ * the same doomed gc 10 minutes after every restart is the loop, not the fix.
+ *
+ * The backup trigger is the one cause of a too-large repo that is certain to be
+ * fixable: an aged compaction backup is dead weight by definition.
+ */
+export function maintenanceDue(gitDir: string, now = Date.now()): Exclude<MaintenanceReason, 'forced'> | null {
   const last = readLastRun(gitDir);
-  if (now - last >= MAINTENANCE_INTERVAL_DAYS * 86_400_000) return 'interval';
+  const pack = packDirBytes(gitDir);
+  const recentlyFailed = last.failedAt !== undefined && now - last.failedAt < FAILED_GC_BACKOFF_MS;
+  if (pack >= SIZE_TRIGGER_BYTES && !recentlyFailed) {
+    const floor = last.packBytesAfter;
+    if (floor === undefined || floor <= 0 || pack >= floor * SIZE_REGROWTH_RATIO) return 'size';
+  }
+  if (staleQuarantineDirs(gitDir, now) >= DEBRIS_COUNT_TRIGGER) return 'debris';
+  if (staleCompactionBackups(gitDir, now).length > 0 && !recentlyFailed) return 'backup';
+  if (now - last.at >= MAINTENANCE_INTERVAL_DAYS * 86_400_000) return 'interval';
   return null;
 }
 
@@ -248,6 +349,64 @@ async function expireBackupBranch(repoDir: string): Promise<void> {
 }
 
 /**
+ * Age out compaction's `backup-YYYYMMDD` branches (see
+ * COMPACTION_BACKUP_MAX_AGE_DAYS). Compaction itself only trims by COUNT, so
+ * without this the most recent pre-compaction chain lives forever on a repo
+ * that stops compacting (nothing to compact, or a remote that stays away).
+ *
+ * Age comes from the DATE IN THE NAME, i.e. when the recovery point was made,
+ * not from the tip's commit time: a repo idle for a week gets a backup whose
+ * tip is already "old" on the day it is created, and the tip rule would delete
+ * that recovery point at the very next pass. Same rule as the scheduler's
+ * `staleCompactionBackups`, so a branch this refuses to delete can never keep
+ * re-triggering a pass. Exported for tests.
+ */
+export async function expireCompactionBackups(repoDir: string, now = Date.now()): Promise<string[]> {
+  const expired: string[] = [];
+  for (const name of staleCompactionBackups(resolveGitDir(repoDir), now)) {
+    try {
+      await execGitGroup(`git branch -D ${name}`, { cwd: repoDir, timeout: 30_000 });
+      expired.push(name);
+      const ageDays = Math.round((now - (backupNameDate(name) ?? now)) / 86_400_000);
+      log.git.warn('git-maintenance expired compaction backup branch', { branch: name, ageDays });
+    } catch { /* raced with compaction deleting it — fine */ }
+  }
+  return expired;
+}
+
+/** `tmp_pack_*` names present in the pack dir right now. */
+function tmpPackNames(gitDir: string): Set<string> {
+  try {
+    return new Set(fs.readdirSync(path.join(gitDir, 'objects', 'pack')).filter((e) => e.startsWith('tmp_pack_')));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Remove the tmp_pack_* files OUR gc left behind when it was group-killed at
+ * its budget. The general sweep is age-gated at 24h because a young tmp_pack
+ * may belong to an in-flight fetch or push; but a file that did not exist
+ * before this gc started and appeared while it ran was written by that gc,
+ * and the gc is dead. Leaving it for the age gate meant an 856MB ghost sat
+ * in the pack dir for a day, counted by every size measurement (2026-09-10:
+ * it was what tipped the 3GB repo-size alert). Exported for tests.
+ */
+export function sweepKilledGcPacks(gitDir: string, before: Set<string>): number {
+  let swept = 0;
+  for (const name of tmpPackNames(gitDir)) {
+    if (before.has(name)) continue;
+    const p = path.join(gitDir, 'objects', 'pack', name);
+    try {
+      fs.unlinkSync(p);
+      swept++;
+      log.git.warn('git-maintenance removed the tmp pack of a killed gc', { path: p });
+    } catch { /* best-effort */ }
+  }
+  return swept;
+}
+
+/**
  * Maintain one repo: sweep debris → (worktree only) pause sync → gc → resume.
  *
  * `pauseSync` must be true for the WALNUT_HOME worktree — the 30s auto-commit
@@ -288,14 +447,24 @@ export async function maintainRepo(
     setCompactionInProgress(true);
     await waitForSyncSettled();
   }
+  const tmpPacksBefore = tmpPackNames(gitDir);
   try {
     await expireBackupBranch(repoDir);
+    await expireCompactionBackups(repoDir);
     await runGc(repoDir);
     result.ran = true;
-    writeLastRun(gitDir);
+    writeLastRun(gitDir, { at: Date.now(), packBytesAfter: packDirBytes(gitDir) });
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
     log.git.warn('git-maintenance gc failed', { repo: repoDir, error: result.error });
+    // Remember the failure so the size trigger backs off (see maintenanceDue);
+    // the completed-run fields are kept as they were.
+    const last = readLastRun(gitDir);
+    writeLastRun(gitDir, { ...last, failedAt: Date.now() });
+    // Only where this process holds the repo alone. On the bare hub nothing
+    // quiesces pushes, and an in-flight receive-pack writes tmp_pack_* under
+    // the same prefix; deleting that would fail the push mid-transfer.
+    if (mustPause) result.sweptFiles += sweepKilledGcPacks(gitDir, tmpPacksBefore);
   } finally {
     if (mustPause) setCompactionInProgress(false);
   }

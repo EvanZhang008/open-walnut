@@ -18,14 +18,21 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-gitmaint-tes
 import {
   sweepGitDebris,
   sweepDeployBundles,
+  sweepKilledGcPacks,
+  expireCompactionBackups,
+  staleCompactionBackups,
   maintenanceDue,
   maintainRepo,
+  readLastRun,
   resolveGitDir,
   packDirBytes,
   staleQuarantineDirs,
   SIZE_TRIGGER_BYTES,
+  SIZE_REGROWTH_RATIO,
   DEBRIS_MAX_AGE_MS,
   DEBRIS_COUNT_TRIGGER,
+  COMPACTION_BACKUP_MAX_AGE_DAYS,
+  FAILED_GC_BACKOFF_MS,
 } from '../../src/integrations/git-maintenance.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 
@@ -173,6 +180,151 @@ describe('maintenanceDue', () => {
 
   it('staleQuarantineDirs is safe on a repo with no objects dir', () => {
     expect(staleQuarantineDirs('/nonexistent/repo/.git')).toBe(0);
+  });
+
+  // 2026-09-10: a repo that gc cannot shrink below the trigger (pinned history,
+  // large tracked files) was "due by size" at every check, so every server
+  // restart re-ran an 11-minute gc that freed nothing, and one of them was
+  // killed at its budget. Size must mean GROWTH since the last run.
+  it('size trigger does not re-fire while the pack has not grown since the last run', async () => {
+    const bigPack = path.join(gitDir, 'objects', 'pack', 'pack-big.pack');
+    await fsp.mkdir(path.dirname(bigPack), { recursive: true });
+    const grow = async (bytes: number): Promise<void> => {
+      const fd = await fsp.open(bigPack, 'w');
+      await fd.truncate(bytes);
+      await fd.close();
+    };
+    await grow(SIZE_TRIGGER_BYTES + 1);
+    expect(maintenanceDue(gitDir)).toBe('size');
+
+    // The run leaves the pack exactly where it was (nothing to free).
+    const result = await maintainRepo(repo, { force: true });
+    expect(result.ran).toBe(true);
+    // The recorded floor is the whole pack dir (fake pack + the real one gc wrote).
+    const floor = readLastRun(gitDir).packBytesAfter!;
+    expect(floor).toBeGreaterThan(SIZE_TRIGGER_BYTES);
+    expect(maintenanceDue(gitDir)).toBeNull();
+
+    // A few percent of growth is still "the same repo"...
+    await grow(Math.floor(floor * 1.05));
+    expect(maintenanceDue(gitDir)).toBeNull();
+    // ...real regrowth past the ratio fires again.
+    await grow(Math.ceil(floor * SIZE_REGROWTH_RATIO) + 1);
+    expect(maintenanceDue(gitDir)).toBe('size');
+  });
+
+  it('reads the pre-JSON marker (bare ISO timestamp) as a real last run with no size on record', async () => {
+    const when = new Date(Date.now() - 60_000);
+    await fsp.writeFile(path.join(gitDir, 'walnut-last-maintenance'), when.toISOString());
+    const last = readLastRun(gitDir);
+    expect(last.at).toBe(when.getTime());
+    expect(last.packBytesAfter).toBeUndefined();
+    // No recorded size → one size-triggered run is still allowed after upgrade.
+    const bigPack = path.join(gitDir, 'objects', 'pack', 'pack-big.pack');
+    await fsp.mkdir(path.dirname(bigPack), { recursive: true });
+    const fd = await fsp.open(bigPack, 'w');
+    await fd.truncate(SIZE_TRIGGER_BYTES + 1);
+    await fd.close();
+    expect(maintenanceDue(gitDir)).toBe('size');
+  });
+});
+
+/** compaction's backup name for a day `daysAgo` before `now`. */
+function backupNameDaysAgo(daysAgo: number, now = Date.now()): string {
+  return `backup-${new Date(now - daysAgo * 86_400_000).toISOString().slice(0, 10).replace(/-/g, '')}`;
+}
+
+describe('expireCompactionBackups', () => {
+  // Compaction's backup-YYYYMMDD is the entire pre-compaction chain, disjoint
+  // from main; while it exists gc can free nothing compaction dropped.
+  it('deletes backup-* branches whose NAME date is past the max age and keeps fresh ones', async () => {
+    const old = backupNameDaysAgo(COMPACTION_BACKUP_MAX_AGE_DAYS + 2);
+    const fresh = backupNameDaysAgo(1);
+    // Every branch points at the same (old) tip: age must come from the name,
+    // not the commit. A repo idle for a week gets a backup whose tip is already
+    // old on the day compaction creates it, and that recovery point must live.
+    const oldEpoch = Math.floor(Date.now() / 1000) - 30 * 86_400;
+    execSync(`GIT_COMMITTER_DATE=@${oldEpoch} git commit -q --allow-empty -m old`, { cwd: repo, stdio: 'pipe' });
+    run(`git branch ${old} HEAD`, repo);
+    run(`git branch ${fresh} HEAD`, repo);
+    run('git branch pre-rewrite-backup HEAD', repo);
+    run('git branch backup-not-a-date HEAD', repo);
+
+    expect(staleCompactionBackups(gitDir)).toEqual([old]);
+    const expired = await expireCompactionBackups(repo);
+
+    expect(expired).toEqual([old]);
+    const branches = run('git branch --list', repo);
+    expect(branches).not.toContain(old);
+    expect(branches).toContain(fresh);
+    expect(branches).toMatch(/pre-rewrite-backup/);   // a different family, different rule
+    expect(branches).toMatch(/backup-not-a-date/);    // not compaction's shape — untouched
+    expect(staleCompactionBackups(gitDir)).toEqual([]);
+  });
+
+  it('finds a backup branch that gc has moved into packed-refs', async () => {
+    const old = backupNameDaysAgo(COMPACTION_BACKUP_MAX_AGE_DAYS + 2);
+    run(`git branch ${old} HEAD`, repo);
+    run('git pack-refs --all', repo);
+    expect(fs.existsSync(path.join(gitDir, 'refs', 'heads', old))).toBe(false);
+    expect(staleCompactionBackups(gitDir)).toEqual([old]);
+  });
+
+  it('is a no-op on a repo with no backup branches', async () => {
+    expect(await expireCompactionBackups(repo)).toEqual([]);
+  });
+
+  it('an aged backup makes maintenance due on its own, and the pass clears it', async () => {
+    await maintainRepo(repo, { force: true }); // stamp last-run = now
+    expect(maintenanceDue(gitDir)).toBeNull();
+    run(`git branch ${backupNameDaysAgo(COMPACTION_BACKUP_MAX_AGE_DAYS + 2)} HEAD`, repo);
+    expect(maintenanceDue(gitDir)).toBe('backup');
+    const result = await maintainRepo(repo, { pauseSync: true });
+    expect(result.reason).toBe('backup');
+    expect(result.ran).toBe(true);
+    expect(maintenanceDue(gitDir)).toBeNull();
+  });
+});
+
+describe('failed gc backoff', () => {
+  it('a recorded failure holds the size and backup triggers for a day but not the weekly interval', async () => {
+    const bigPack = path.join(gitDir, 'objects', 'pack', 'pack-big.pack');
+    await fsp.mkdir(path.dirname(bigPack), { recursive: true });
+    const fd = await fsp.open(bigPack, 'w');
+    await fd.truncate(SIZE_TRIGGER_BYTES + 1);
+    await fd.close();
+    run(`git branch ${backupNameDaysAgo(COMPACTION_BACKUP_MAX_AGE_DAYS + 2)} HEAD`, repo);
+    const now = Date.now();
+    const marker = path.join(gitDir, 'walnut-last-maintenance');
+
+    // A gc that was killed 10 minutes ago: neither fixable-by-gc trigger may re-fire yet.
+    await fsp.writeFile(marker, JSON.stringify({ at: now - 2 * 86_400_000, failedAt: now - 10 * 60_000 }));
+    expect(maintenanceDue(gitDir, now)).toBeNull();
+    // Yesterday's failure has aged out: size wins again.
+    await fsp.writeFile(marker, JSON.stringify({ at: now - 2 * 86_400_000, failedAt: now - FAILED_GC_BACKOFF_MS - 1 }));
+    expect(maintenanceDue(gitDir, now)).toBe('size');
+    // A failure never blocks the weekly attempt: a permanently failing gc still gets its interval run.
+    await fsp.writeFile(marker, JSON.stringify({ at: now - 8 * 86_400_000, failedAt: now - 10 * 60_000 }));
+    expect(maintenanceDue(gitDir, now)).toBe('interval');
+  });
+});
+
+describe('sweepKilledGcPacks', () => {
+  it('removes only the tmp packs that appeared during the killed gc', async () => {
+    const packDir = path.join(gitDir, 'objects', 'pack');
+    await fsp.mkdir(packDir, { recursive: true });
+    // A tmp pack that predates the gc may belong to a live fetch: keep it, however young.
+    await fsp.writeFile(path.join(packDir, 'tmp_pack_preexisting'), 'x');
+    const before = new Set(['tmp_pack_preexisting']);
+    // The 856MB ghost: written by the gc we group-killed, younger than the 24h age gate.
+    await fsp.writeFile(path.join(packDir, 'tmp_pack_fromKilledGc'), 'x');
+    run('git repack -a -d -q', repo);
+
+    expect(sweepKilledGcPacks(gitDir, before)).toBe(1);
+    expect(fs.existsSync(path.join(packDir, 'tmp_pack_fromKilledGc'))).toBe(false);
+    expect(fs.existsSync(path.join(packDir, 'tmp_pack_preexisting'))).toBe(true);
+    expect(fs.readdirSync(packDir).some((f) => f.endsWith('.pack'))).toBe(true);
+    expect(run('git fsck --no-progress', repo)).not.toMatch(/missing|error/i);
   });
 });
 

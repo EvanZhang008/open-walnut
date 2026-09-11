@@ -360,6 +360,36 @@ describe('git-compaction', () => {
       expect(backupBranches.length).toBeGreaterThanOrEqual(1);
     });
 
+    // 2026-09-10: two backup-* branches pinned 30,747 commits / 71GB of blobs on
+    // a repo whose live history was a third of that, and the gc at the end of
+    // compaction ran BEFORE the old backup was deleted, so nothing it pinned was
+    // ever reclaimed by the run that unpinned it.
+    it('keeps only the backup it just made, and its own gc reclaims what the previous one pinned', async () => {
+      for (let day = 60; day >= 1; day--) {
+        commitAt(repoDir, day, `content-${day}`);
+      }
+      // A previous compaction's backup: an otherwise unreachable chain with a
+      // blob nothing else references.
+      execSync('git checkout -q -b backup-20200101', { cwd: repoDir, stdio: 'pipe' });
+      fs.writeFileSync(path.join(repoDir, 'pinned-only-by-old-backup.bin'), 'x'.repeat(4096));
+      execSync('git add -A && git commit -q -m "old chain"', { cwd: repoDir, stdio: 'pipe' });
+      const pinnedBlob = execSync('git rev-parse HEAD:pinned-only-by-old-backup.bin', { cwd: repoDir, encoding: 'utf-8' }).trim();
+      execSync('git checkout -q main', { cwd: repoDir, stdio: 'pipe' });
+      fs.rmSync(path.join(repoDir, 'pinned-only-by-old-backup.bin'), { force: true });
+      execSync(`git cat-file -e ${pinnedBlob}`, { cwd: repoDir, stdio: 'pipe' });
+
+      const result = await compactGitHistory(repoDir);
+      expect(result.error).toBeUndefined();
+      expect(result.skipped).toBeUndefined();
+
+      const backups = execSync('git branch --list "backup-*"', { cwd: repoDir, encoding: 'utf-8' })
+        .split('\n').map((b) => b.trim()).filter(Boolean);
+      expect(backups).toHaveLength(1);
+      expect(backups[0]).not.toBe('backup-20200101');
+      // The old backup is gone AND the blob only it held was pruned by this run.
+      expect(() => execSync(`git cat-file -e ${pinnedBlob}`, { cwd: repoDir, stdio: 'pipe' })).toThrow();
+    });
+
     it('is idempotent — running twice does not corrupt', async () => {
       for (let day = 60; day >= 1; day--) {
         createAutoSaveCommits(repoDir, day, 3);

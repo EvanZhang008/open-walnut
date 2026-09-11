@@ -35,7 +35,32 @@ export const REGISTRY_MAX_ROWS = 200
 /** A snapshot with no control file is reaped once it is older than this. */
 export const NO_CONTROL_FILE_GRACE_MS = 60 * 60 * 1000
 
+/**
+ * The ONE directory shape this launcher creates: `open-walnut-<ppid>-` plus the
+ * six random characters mkdtemp appends. The reaper deletes nothing that does
+ * not have this exact shape, whether it came from the tmpdir scan or from a
+ * registry row.
+ *
+ * 2026-09-10: the scan used to accept any `open-walnut-` prefix, and the deploy
+ * script stages the live server's dist at `$TMPDIR/open-walnut-stage.<epoch>.<pid>`
+ * (its rollback snapshot at `open-walnut-lkg`). Neither has an ephemeral.json,
+ * so an hour after every deploy the age-out branch below deleted the running
+ * production server's web assets and worker modules. The reaper runs on every
+ * `web --ephemeral` launch AND inside the quick test tier, so `npm run
+ * test:quick` in any session took prod down (twice that day; the 2026-09-02
+ * four-hour 404 outage was very likely the same reaper).
+ */
+export const EPHEMERAL_DIR_RE = /^open-walnut-\d+-[A-Za-z0-9]{6}$/
+
+/** True when `dir`'s basename is a snapshot dir this launcher could have made. */
+export function isEphemeralSnapshotDir(dir: string): boolean {
+  return EPHEMERAL_DIR_RE.test(path.basename(dir))
+}
+
 export type RegistryRow = { dir: string, launcherPid: number, createdAt: number }
+
+/** Where the candidate scan looks; tests point it at a private directory. */
+export type ReapOptions = { tmpBase?: string }
 
 /** Registry lives at a fixed path so cleanup never depends on the current TMPDIR. */
 export function registryPath(walnutHome: string): string {
@@ -91,16 +116,16 @@ export function isProcessAlive(pid: number): boolean {
 
 /**
  * Candidate snapshot dirs: the registry (any TMPDIR, including ones this process
- * knows nothing about) UNION a scan of the current os.tmpdir() (dirs from builds
- * that predate the registry).
+ * knows nothing about) UNION a scan of the tmp base (dirs from builds that
+ * predate the registry). Only entries with the launcher's own directory shape
+ * qualify; everything else under the tmp base belongs to someone else.
  */
-function candidateDirs(walnutHome: string): Set<string> {
+function candidateDirs(walnutHome: string, tmpBase: string): Set<string> {
   const candidates = new Set<string>()
   for (const row of readRegistry(registryPath(walnutHome))) candidates.add(row.dir)
   try {
-    const tmpBase = os.tmpdir()
     for (const entry of fs.readdirSync(tmpBase)) {
-      if (entry.startsWith('open-walnut-')) candidates.add(path.join(tmpBase, entry))
+      if (EPHEMERAL_DIR_RE.test(entry)) candidates.add(path.join(tmpBase, entry))
     }
   } catch {
     // tmpdir unreadable — registry candidates still stand.
@@ -114,13 +139,19 @@ function candidateDirs(walnutHome: string): Set<string> {
  * A dir dies when its ephemeral.json names a pid that is gone, or when it never
  * got a control file and is past the grace period — that second case is the
  * launcher-was-killed-mid-copy case, which is what stranded 9.8G.
+ *
+ * Input floor: a candidate whose basename is not an ephemeral snapshot shape is
+ * never deleted, however it got into the set (a registry row is a hint written
+ * by an earlier build, not a licence to `rm -rf` whatever path it names). Such
+ * a row is dropped without touching the directory.
  */
-export function reapStaleEphemeralDirs(walnutHome: string): void {
+export function reapStaleEphemeralDirs(walnutHome: string, opts: ReapOptions = {}): void {
   const registryFile = registryPath(walnutHome)
   const rows = readRegistry(registryFile)
   const gone = new Set<string>()
 
-  for (const dir of candidateDirs(walnutHome)) {
+  for (const dir of candidateDirs(walnutHome, opts.tmpBase ?? os.tmpdir())) {
+    if (!isEphemeralSnapshotDir(dir)) { gone.add(dir); continue }
     try {
       if (!fs.statSync(dir).isDirectory()) { gone.add(dir); continue }
     } catch {
@@ -159,12 +190,12 @@ export function reapStaleEphemeralDirs(walnutHome: string): void {
  * Only counts dirs with an ephemeral.json whose PID is still alive.
  * Call AFTER reapStaleEphemeralDirs() so stale dirs are already cleaned.
  */
-export function countLiveEphemeralServers(walnutHome: string): number {
+export function countLiveEphemeralServers(walnutHome: string, opts: ReapOptions = {}): number {
   // Same candidate union as the reaper: a server started under a different TMPDIR
   // is still a live server competing for this machine, so counting only
   // os.tmpdir() would under-report and let the concurrency limit be exceeded.
   const livePids = new Set<number>()
-  for (const dir of candidateDirs(walnutHome)) {
+  for (const dir of candidateDirs(walnutHome, opts.tmpBase ?? os.tmpdir())) {
     try {
       const data = JSON.parse(fs.readFileSync(path.join(dir, 'ephemeral.json'), 'utf-8'))
       // Dedupe by pid: the registry and the tmpdir scan can name the same server.

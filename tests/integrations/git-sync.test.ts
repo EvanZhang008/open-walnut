@@ -254,6 +254,38 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     await expect(fsp.readFile(secretPath, 'utf-8')).resolves.toContain('"fixture"');
   });
 
+  // 2026-09-10: the hybrid-search model cache (613MB ONNX) had been auto-saved
+  // into the data repo since 08-26 and was the largest thing in a 3.4GB .git.
+  it('ignores and untracks the root models/ cache but leaves a notes/**/models folder alone', async () => {
+    initSync();
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');
+    const cachePath = path.join(tmpDir, 'models', 'vendor', 'embed', 'model_quantized.onnx');
+    const notePath = path.join(tmpDir, 'notes', 'ml', 'models', 'tradeoffs.md');
+    await fsp.mkdir(path.dirname(cachePath), { recursive: true });
+    await fsp.mkdir(path.dirname(notePath), { recursive: true });
+    await fsp.writeFile(cachePath, 'onnx-bytes');
+    await fsp.writeFile(notePath, '# models I compared\n');
+    execSync('git add -A && git commit -q -m "legacy: model cache tracked"', { cwd: tmpDir });
+
+    ensureCriticalIgnores();
+    const lines = (await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8')).split('\n');
+    expect(lines).toContain('/models/');
+    expect(lines).not.toContain('models/');
+
+    const untracked = ensureMachineLocalUntracked();
+    expect(untracked).toEqual(['models/vendor/embed/model_quantized.onnx']);
+    const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked).not.toContain('models/vendor/embed/model_quantized.onnx');
+    expect(tracked).toContain('notes/ml/models/tradeoffs.md');
+    // The cache stays on disk (it is a download, but re-downloading 600MB is not free).
+    await expect(fsp.readFile(cachePath, 'utf-8')).resolves.toBe('onnx-bytes');
+    // A NEW note in that folder is still picked up by the auto-save's add -A.
+    await fsp.writeFile(path.join(tmpDir, 'notes', 'ml', 'models', 'new.md'), 'new\n');
+    execSync('git add -A', { cwd: tmpDir });
+    expect(execSync('git diff --cached --name-only', { cwd: tmpDir, encoding: 'utf-8' }))
+      .toContain('notes/ml/models/new.md');
+  });
+
   // ── 2026-07-25 incident: a remote deletion of a TRACKED-but-ignored
   // config.yaml wiped the local file, taking the `stt:` section with it —
   // voice input went grey with "No STT engine configured".

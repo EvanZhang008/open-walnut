@@ -105,6 +105,10 @@ export function assertNotProductionPath(inputPath: string): void {
 /**
  * Detect if a path matches the ephemeral dir pattern: {tmpdir}/open-walnut-{PPID}-{random}
  * produced by runEphemeralLauncher() in src/commands/web.ts.
+ *
+ * Deliberately LOOSER than EPHEMERAL_DIR_RE in src/commands/ephemeral-registry.ts:
+ * this one rejects a leaked OPEN_WALNUT_HOME, where over-matching is the safe
+ * direction; that one gates `rm -rf`, where it is not. Do not unify them.
  */
 function isEphemeralTmpDir(inputPath: string): boolean {
   if (!/[\\/]open-walnut-[^\\/]+$/.test(inputPath)) return false

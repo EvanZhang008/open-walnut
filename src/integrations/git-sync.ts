@@ -653,6 +653,12 @@ cache/
 # from notes/. Binary, so git stores a FULL copy per change (no delta).
 .walnut-obsidian-search/
 
+# Hybrid-search embedding model download cache (src/core/search/wiring.ts). One
+# ~600MB ONNX file plus the partial .tmp files a download writes; every version
+# is a full binary copy in history. Re-downloaded on demand — never sync it.
+# ROOT-ANCHORED: a note folder called models/ inside notes/ is user content.
+/models/
+
 # Plugin-store clones and private Plugin state are machine-local.
 plugin-stores/
 plugin-data/
@@ -730,14 +736,31 @@ sessions.json.*
  *  - cloud-setup-job.json — in-flight cloud provisioning state, including the
  *    pairing code that doubles as the new instance's setup token. A live secret
  *    must never reach the sync history.
+ *  - models/ — the hybrid-search embedding model cache: a 613MB ONNX file that
+ *    the 30s auto-save committed on 2026-08-26 (plus eight partial-download
+ *    .tmp copies, 1.3GB), and that every commit since then has carried. Not
+ *    sensitive, but the single biggest thing in the data repo and regenerable
+ *    by a download, so an existing install needs the untrack pass too.
  *
  * These are also actively untracked (see ensureMachineLocalUntracked): being
  * gitignored on THIS box while still tracked in the index is the dangerous
  * state — see that function for the incident this prevents.
  */
 const CRITICAL_IGNORE_FILES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
-const CRITICAL_IGNORE_DIRS = ['plugin-data/', 'secrets/'];
-const CRITICAL_IGNORES = [...CRITICAL_IGNORE_FILES, ...CRITICAL_IGNORE_DIRS];
+/** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
+const CRITICAL_IGNORE_DIRS = ['models/', 'plugin-data/', 'secrets/'];
+/**
+ * The .gitignore LINE for a dir when it differs from the prefix. `models/` is
+ * root-anchored: a `models` folder inside notes/ is user content, and an
+ * unanchored rule would silently stop syncing every new note in it. The untrack
+ * matcher stays on the bare prefix because `ls-files` prints repo-relative paths
+ * (and git would take a leading `/` in that pathspec literally).
+ */
+const CRITICAL_IGNORE_LINES: Record<string, string> = { 'models/': '/models/' };
+const CRITICAL_IGNORES = [
+  ...CRITICAL_IGNORE_FILES,
+  ...CRITICAL_IGNORE_DIRS.map((dir) => CRITICAL_IGNORE_LINES[dir] ?? dir),
+];
 
 function criticalIgnoreTarget(file: string): { path: string; recursive: boolean } | null {
   if (CRITICAL_IGNORE_FILES.includes(file)) return { path: file, recursive: false };
@@ -2402,7 +2425,12 @@ export function checkRepoSize(repoDir = WALNUT_HOME): string | null {
   if (bytes < REPO_SIZE_WARN_BYTES) return null;
 
   const gb = (bytes / 1024 / 1024 / 1024).toFixed(1);
-  return `data repo .git has grown to ${gb}GB (threshold 3GB) — compaction may be failing; check open-walnut logs -s git`;
+  // Name the three things that have actually been behind this alert, in the
+  // order they were found (2026-09-10): a compaction that ran fine but left
+  // backup-* branches pinning the whole old chain, a large regenerable file
+  // that .gitignore missed, and a killed gc's tmp_pack_* counted as pack bytes.
+  // "compaction may be failing" sent the reader to the one layer that was OK.
+  return `data repo .git has grown to ${gb}GB (threshold 3GB): check for backup-* branches pinning old history, large tracked files, or tmp_pack_* debris; see open-walnut logs -s git`;
 }
 
 /** Test hook: reset the sentinel's throttle window. */

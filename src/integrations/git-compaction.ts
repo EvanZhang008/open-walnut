@@ -362,17 +362,21 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
       }
     }
 
-    // 8. Cleanup (non-fatal)
+    // 8. Delete old backup branches BEFORE the gc below, so the chain they
+    // pinned is unreferenced when `--prune=now` runs. Only the one this run
+    // just made survives: every backup is a complete, disjoint pre-compaction
+    // chain, so a second one doubles what gc can never free. git-maintenance
+    // ages the survivor out after COMPACTION_BACKUP_MAX_AGE_DAYS.
     writeState(repoDir, { phase: 'cleaning', backup: backupName, startedAt: new Date().toISOString() });
+    deleteOldBackups(repoDir, 1);
+
+    // 9. Cleanup (non-fatal)
     try {
       git('reflog expire --expire=now --all', opts);
       git('gc --prune=now', opts);
     } catch {
       // gc failure is non-fatal
     }
-
-    // 9. Delete old backup branches (keep latest 2)
-    deleteOldBackups(repoDir, 2);
 
     removeState(repoDir);
     return { before: commits.length, after: selected.length };

@@ -79,7 +79,11 @@ describe('checkRepoSize sentinel', () => {
 
     const warning = checkRepoSize(repoDir);
     expect(warning).toMatch(/3\.5GB/);
-    expect(warning).toMatch(/compaction may be failing/);
+    // Points at the causes that have actually produced this alert, not at the
+    // compaction layer (which was healthy each time).
+    expect(warning).toMatch(/backup-\* branches/);
+    expect(warning).toMatch(/tmp_pack_\* debris/);
+    expect(warning).not.toMatch(/compaction may be failing/);
   });
 
   it('self-throttles: second call within the window returns null', async () => {
