@@ -238,16 +238,15 @@ defineOp({
   name: 'task_create',
   title: 'Create a Walnut task',
   description:
-    'Record a task on the USER\'s to-do board. Call it only when the user asked to record or track ' +
-    'something, or when work is blocked on a decision or action only they can take; follow-up work ' +
-    'you found yourself is done in your own session, never filed here. Creating a task starts NOTHING: ' +
-    'a task is an inert record, and only a session ' +
-    'does work — so pass start_session=true when the work should begin now (one call: the task is ' +
-    'created, then a session is started on it), or call session_start yourself later. An omitted/empty ' +
-    'project means Inbox, and an unknown project name auto-creates its registry row. A new task lands ' +
-    'on the pinned board in the Satellite tier; pass focus_tier to put it straight into another tier, ' +
-    'or pinned=false to keep it off the board (pinning is human attention, never dispatch). The result ' +
-    'carries a `ref` tag plus `outcome` / `next`.',
+    'Add a task to the USER\'s board. Only when the user asked to record or track something, or when ' +
+    'work is blocked on a decision or action only they can take (say which in description). Follow-up ' +
+    'work you found yourself is done in your own session, never filed here. A task is an inert record: ' +
+    'creating one starts nothing. Pass start_session=true when the user wants the work to begin now ' +
+    '(one call: the task is created, then a session is started on it), or call session_start later. ' +
+    'An omitted/empty project means Inbox; an unknown project name creates its registry row. A new ' +
+    'task lands on the pinned board in the Satellite tier; pass focus_tier for another tier, or ' +
+    'pinned=false to keep it off the board (pinning is the user\'s attention, never dispatch). The ' +
+    'result carries a `ref` tag plus `outcome` / `next`.',
   input: {
     title: z.string().min(1).describe('Task title (required)'),
     project: z.string().optional().describe('Project name; omit or "" for the Inbox'),

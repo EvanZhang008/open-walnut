@@ -1,51 +1,46 @@
 ---
 name: walnut
 description: >-
-  Walnut is the user's personal AI for tasks, projects, memory, notes, coding
-  sessions, and search. Use for ANY question about Walnut itself or the data it
-  holds: server status, mode, or version; which task or session produced a
-  given commit; what is on the user's plate; creating, updating, completing,
-  searching, or recalling tasks, memory, and notes; starting a coding session
-  for a task, messaging a session that is already running, and getting its
-  answer back; handing finished work back for human review; sending the human a
-  letter (human inbox) when work finishes or a decision is needed. Triggers:
-  "add a task", "put that on my list", "what's on my plate", "did I write
-  anything about X", "which task/session did X", "start a session on this",
-  "tell that other session ...", and any cross-session messaging, instead of the
-  built-in ListAgents / SendMessage. Read
-  this BEFORE guessing subcommands, running --help, inspecting files, or
-  reaching for git: those guess, this gives the exact call. Works through the
-  `walnut` CLI over Bash (the same `walnut` command works inside managed sessions on any host), or the
-  Walnut MCP tools when mounted.
+  Walnut is the user's task and session tracking layer: the board of tasks and
+  projects they follow, the coding sessions started on those tasks, and their
+  memory, notes, and session history. Use it to read your own task, look up the
+  user's tasks, memory, notes, and past sessions, report where your task stands,
+  and message other sessions (never the built-in ListAgents / SendMessage).
+  Creating a task or starting a session happens only when the user explicitly
+  asks for it.
 ---
 
-# Walnut (tasks, search, sessions)
+# Walnut
 
-Walnut is the user's task + knowledge hub. **Tasks are the atom**:
-`Project → Task → Subtask`. Project is the only grouping layer; a task with no
-project lives in the **Inbox**. Two ways in — use whichever is available:
+Walnut is the user's tracking layer. It keeps the board of tasks and projects the
+user follows (`Project → Task → Subtask`; a task with no project sits in the
+**Inbox**), starts coding sessions on those tasks, and holds the user's memory,
+notes, and the history of every session. Everything in it belongs to the user:
+agents read it, report into it, and add to it only when asked.
 
-- **CLI** (`walnut`, alias `open-walnut`) over Bash — always available.
-- **MCP tools** (`task_create`, `task_list`, …) — available when the Walnut MCP
-  server is mounted in this session. Prefer these when present: structured
-  results, no shell quoting.
+## Which reader you are
 
-## The model in five lines (read this before any write)
+- **Walnut's own chat (the Personal AI).** You are the user's dispatcher. When
+  the user asks for work, you record it as a task and start a session on it;
+  when they ask a question, you answer from Walnut's data.
+- **A coding session.** You are one worker inside one task. The work itself
+  happens with your own tools (todo list, subagents, edits, tests). Walnut is
+  the layer above you: read your task and the user's data, report where your
+  task stands, answer other sessions.
 
-1. **A task is an inert record.** Creating, updating, pinning or re-tiering one
-   runs nothing. It is a row the human reads.
-2. **A session is the thing that works.** It is a live coding-agent process with
-   a working directory. Work happens only when a session exists.
-3. **Pin and focus tier are human attention, never dispatch.** Moving a task to
-   Focus does not start, schedule, or prioritize any execution.
-4. **So "make this happen" is always two nouns:** a task to hang it on, and a
-   session started on that task.
-5. **Tasks are the user's to-do list, not an agent notepad.** Follow-up work you
-   find while working (a missing test, a leak to investigate, a guard to add) is
-   yours to do now, in the session you are in. Create a task only when the user
-   asked to record or track something, or when the work is blocked on a decision
-   or action only the human can take (say which in `description`). Never end a
-   job by filing your leftovers as tasks.
+In both roles a task or a session exists because the user asked for it. Work you
+discover while working (a missing test, a leak to chase, a guard to add) is yours
+to do now, in the session you are in, never filed as a task for later.
+
+## Tasks and sessions
+
+1. **A task is an inert record.** Creating, updating, pinning, or re-tiering one
+   runs nothing; it is a row the user reads. Pin and focus tier are the user's
+   attention, never dispatch.
+2. **A session is what works.** It is a live coding-agent process with a working
+   directory, and work happens only while one exists. "Make this happen" is
+   therefore always two things: a task to hang it on and a session started on
+   that task.
 
 ```
 task_create            → a row exists, nothing runs
@@ -57,51 +52,36 @@ add context mid-flight             (do not poll; walnut wait only if blocked)
 the human is told it is ready to look at
 ```
 
-Every task/session write answers with **`outcome`** (what actually changed,
-including what did *not* happen) and **`next`** (the exact next call). Read those
-two fields instead of assuming: `task_create` says in words that no session is
-attached, and `task_pin_set` says pinning dispatched nothing.
+Every write answers with **`outcome`** (what changed, including what did *not*)
+and **`next`** (the exact next call). Read those two fields instead of assuming.
 
-## Start here: one command answers "what can I call?"
+## Calling it
 
-**Any Walnut question is an operation call. Never guess a subcommand, and never
-answer from `git` or a file read a question about the user's tasks, sessions, or
-commits.** The catalog below is generated from the live registry, so the op names
-in it always exist:
+The `walnut` CLI is on PATH in every session, on every host. Where a Walnut MCP
+server is mounted the same operations exist as tools; prefer those when present
+(structured results, no shell quoting). Every question about the user's tasks,
+sessions, or commits is an operation call: never a guess, and never a `git`
+command, because the commit-to-task mapping lives in Walnut's index, not in the
+repo. The catalog below is generated from the live registry, so every op named
+in it exists.
 
 ```bash
 walnut tools list                          # every op, with a one-line purpose
-walnut tools help search                   # one op's exact arguments
-walnut tools call walnut_status '{}'       # run it (~0.2s — every data command is this fast)
-walnut tools call <op> @/tmp/args.json     # read the payload from a file (required over ~128KB)
-walnut tools call <op> -                    # read the payload from stdin
+walnut tools help <op>                     # one op's exact arguments
+walnut tools call <op> '{json}'            # run it (~0.2s)
+walnut tools call <op> @/tmp/args.json     # payload from a file (required over ~128KB)
+walnut tools call <op> -                   # payload from stdin
 ```
 
-Measured cost of skipping this (2026-08-19 A/B): asked for the server mode, an
-agent ran `walnut --help`, guessed, and answered `mode=stdio` — wrong, and it had
-actually invoked the MCP server. `walnut tools call walnut_status '{}'` returns
-`{"mode":"LIVE","version":"0.3.2"}` in one call. When in doubt, `tools list`.
+Batch several calls into one Bash invocation. Every op is also an HTTP route on
+the local server (`tools help <op>` prints it), so
+`curl -s http://127.0.0.1:3456/api/v1/...` works too; no auth on the primary box.
 
-Batch several calls into ONE Bash invocation so you pay one round of tool
-overhead instead of three:
-
-```bash
-walnut tools call walnut_status '{}'; walnut tools call project_list '{}'; walnut tools call search '{"q":"registry","limit":3}'
-```
-
-Every op is also an HTTP route on the local server (`search` → `GET /search`,
-`task_list` → `GET /api/tasks` (server-root, the canonical composable query),
-`task_create` → `POST /tasks`, `walnut_status` →
-`GET /status`; `tools help <op>` prints the exact one), so
-`curl -s http://127.0.0.1:3456/api/v1/...` works too — no auth on the primary
-box. The CLI is the primary surface; both run the same registry, so they never
-disagree.
-
-### Recipes for the questions that get answered wrong
+### Recipes
 
 | Question | Do this |
 |---|---|
-| Which task/session produced commit `<sha>`? | `walnut tools call search '{"q":"<sha>"}'` — indexed commit SHAs resolve to the owning task AND session (`matchField: commit_sha`); take the FIRST hit, a commit can appear in forks. **Do NOT use `git log`**: the mapping lives in Walnut's index, not in the repo. |
+| Which task/session produced commit `<sha>`? | `walnut tools call search '{"q":"<sha>"}'`: indexed commit SHAs resolve to the owning task AND session (`matchField: commit_sha`); take the FIRST hit, a commit can appear in forks. Not `git log`: the mapping is not in the repo. |
 | Is the server up / which version? | `walnut tools call walnut_status '{}'` |
 | What did session `<id>` do? | `walnut tools call session_transcript '{"id":"<id>"}'` |
 | Get a task actually running | `walnut tools call session_start '{"task":"<id>","message":"..."}'`. A `409 session_exists` means it is already running: `session_send` to it. |
@@ -241,16 +221,17 @@ Example reply after creating a task:
 Do the same after completing one. Only emit the tag in natural-language text,
 never inside a tool argument or a code block.
 
-## When to use it: three verbs
+## Recording and starting work (on the user's ask)
 
-Work is recorded, started, and continued by three ops and nothing else. Pick by intent:
+The user asked for something to be recorded or done. Three ops cover it; pick by
+what they asked for:
 
-| Intent | Call | What it does |
+| The user wants | Call | What it does |
 |---|---|---|
-| Write it down, start nothing | `task_create` | Pure bookkeeping. No process, no cwd needed. |
-| Write it down AND start it | `task_create` with `"start_session": true` | One call: creates the task, then starts a session on it. If the start fails the task still exists and the result says so (`session_error` + the retry line), because a created task is not a failure. |
-| Get an existing task running | `session_start` | Opens a NEW session for an EXISTING task and sends the first message. Returns `sessionId`. |
-| Talk to work that already runs | `session_send` | The one way to message any session: yours never, someone else's always by handle. |
+| It written down, nothing started | `task_create` | Pure bookkeeping. No process, no cwd needed. |
+| It written down AND started | `task_create` with `"start_session": true` | One call: creates the task, then starts a session on it. If the start fails the task still exists and the result says so (`session_error` + the retry line), because a created task is not a failure. |
+| An existing task worked on | `session_start` | Opens a NEW session for an EXISTING task and sends the first message. Returns `sessionId`. |
+| Something told to running work | `session_send` | The one way to message any session: yours never, someone else's always by handle. |
 
 ```bash
 walnut tools call task_create  '{"title":"Fix the flaky auth test","project":"marina"}'
@@ -260,12 +241,11 @@ walnut tools call session_send  '{"to":"t_7d41c0a9","text":"The fixture moved to
 ```
 
 Default to plain `task_create` when the user is only recording something: a
-session is a real process with a real cost, so it starts when someone asked for
-work to start, not as a side effect of writing a note to self.
+session is a real process with a real cost, so it starts because the user asked
+for work to start, not as a side effect of writing something down.
 
 - Work the user did not ask to track, including follow-ups you discovered
-  yourself: just do it, however big. No op at all. A task is what the USER
-  wants on their board, never a place to park what you did not finish.
+  yourself: no op at all. Do it, however big, in the session you are in.
 - `session_start` needs a task first, so `task_create` then `session_start` is the normal pair. It resolves cwd from the task, its parent chain, then the project default, so pass `cwd` only to override that.
 - One task holds one live session. Starting a second one answers `409 session_exists` with `existing_session_id`: that is not a failure, it means the work is already running, so `session_send` to it instead.
 - `to` accepts a session id, a unique id prefix of 4 characters or more, a task id (routed to that task's session), or a unique title substring. A task with no session yet answers `409 task_has_no_session`, which is the signal to call `session_start`.
@@ -369,14 +349,10 @@ walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 
 ## Safety
 
-- **Read before write.** Search or list first; duplicates are the most common damage an agent does here.
-- **Say where the work stands.** Use `task_update phase=AGENT_COMPLETE` when it is done and ready to look at, and `COMPLETE` when it is finished. A blocked or parked task is just `TODO`. There is no human-vs-agent restriction on any phase.
-- **Never create tasks unprompted.** A task appears on the user's board because they asked for it, or because work is blocked on them. Your own follow-ups are done in your session, not filed.
-- **Never bulk-delete.** Delete a task only when the user explicitly asked for that specific deletion.
-- **Do not reopen or re-prioritize the user's tasks unprompted.** Changing
-  `status`, `priority`, or `project` is the user's call unless they asked.
-- One task per unit of work, with a title a human can scan later. Put detail in
-  `description`, not in the title.
-- A missing/unreachable server is not an error to work around: a tool that says
-  *Walnut server not running* means the user must start it
-  (`open-walnut web`) — report that instead of retrying in a loop.
+- **Read before write.** Search or list first; a duplicate is the most common damage an agent does here.
+- **Report where your task stands.** `task_update phase=AGENT_COMPLETE` when it is done and ready to look at, `COMPLETE` when it is finished. A blocked or parked task stays `TODO`. Any phase may be set by anyone.
+- **Nothing new on the board unprompted.** No task, no session, no hand-off to another session unless the user asked. Your own follow-ups are done in your session.
+- **Never bulk-delete.** Delete only the specific task the user named.
+- **Do not reopen, re-prioritize, or move the user's tasks unprompted.** `status`, `priority`, and `project` are the user's call.
+- One task per unit of work, titled so a human can scan it later; detail goes in `description`.
+- *Walnut server not running* means the user must start it (`open-walnut web`). Report that; do not retry in a loop.

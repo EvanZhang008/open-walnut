@@ -11,6 +11,7 @@ defineOp({
   title: 'Start a session for a task',
   description:
     'Start a NEW coding session for one existing task and send it the first message; returns the sessionId. ' +
+    'Only because the user asked for that work to start: never to hand off follow-ups you found yourself. ' +
     'Create the task first with task_create. If the task already has a live session this returns 409 with ' +
     'existing_session_id — talk to it with session_send instead. The new session reports back to YOUR ' +
     'session when it finishes BY DEFAULT (Walnut also notifies you if it ends without replying); pass ' +

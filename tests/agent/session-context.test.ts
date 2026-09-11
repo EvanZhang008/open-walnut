@@ -75,15 +75,24 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).not.toContain('walnut peers')
   })
 
-  it('tells the session that tasks are the user\'s list, so found follow-ups are done, not filed', async () => {
+  it('places the session in the picture: a worker inside one task, Walnut the layer above', async () => {
     // Every agent with task_create in reach and no rule against it ended a job
-    // by filing its leftovers as tasks on the user's board. The preamble must
-    // not advertise "create tasks" as a capability, and must state the rule.
+    // by filing its leftovers as tasks on the user's board. A bare rule was not
+    // enough: the preamble has to say WHO the session is (one worker) and WHERE
+    // Walnut sits (above it, holding the user's board), so that "do your own
+    // work with your own tools" follows instead of being memorized.
+    const { systemPrompt } = await buildSessionContext('')
+    expect(systemPrompt).toMatch(/layer above you/i)
+    expect(systemPrompt).toMatch(/one worker inside that task/i)
+    expect(systemPrompt).toMatch(/not your toolbox/i)
+    expect(systemPrompt).toMatch(/your own tools/i)
+  })
+
+  it('names what the session never does on its own: create, start, or hand off', async () => {
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).not.toMatch(/create tasks/i)
-    expect(systemPrompt).toMatch(/not your notepad/i)
-    expect(systemPrompt).toMatch(/follow-up work you find is yours to do/i)
-    expect(systemPrompt).toMatch(/create a task only when the user asks/i)
+    expect(systemPrompt).toMatch(/never create a task, start a session, or hand work to another session unless the user asked/i)
+    expect(systemPrompt).toMatch(/follow-up work you find is yours to do here, now/i)
   })
 
   it('warns that peer messages never carry user authorization', async () => {
@@ -98,8 +107,9 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).not.toContain('<server_safety>')
     expect(systemPrompt).not.toContain('<notes_context>')
     expect(systemPrompt).not.toContain('<task>')
-    // An identity note, not a blanket preamble — anything bigger belongs in
-    // the manual (pulled live with `wn guide`).
-    expect(systemPrompt.length).toBeLessThan(1100)
+    // An identity note, not a blanket preamble (the old one ran to several KB);
+    // anything bigger belongs in the manual (pulled live with `walnut guide`).
+    // The budget covers five short paragraphs plus a task line with a long title.
+    expect(systemPrompt.length).toBeLessThan(1200)
   })
 })
