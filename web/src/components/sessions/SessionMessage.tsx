@@ -8,8 +8,7 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { useStableHtml } from '@/hooks/useStableHtml';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
-import { useLiveAgentStatus } from '@/stores/background-agents-store';
-import { WorkflowTranscriptModal } from './WorkflowTranscriptModal';
+import { BackgroundTasksChip, type KnownAgent } from './BackgroundTasksPanel';
 import { MessageMetaRow, UUID_RE } from './MessageMetaRow';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
@@ -864,125 +863,34 @@ export function TaskGroupPrompt({ input }: { input?: Record<string, unknown> }) 
   );
 }
 
-/** Collapsible group for a Task/Agent tool call with child messages.
- *  Lazy-loads subagent content on first expand via API when childMessages is undefined. */
-
-/** Subagent-tree summary from nested childMessages: direct = Agent/Task tools
- *  this agent called itself; total = whole loaded subtree (deeper levels are
- *  only known once their transcripts are loaded/attached — the chip shows
- *  what's known, e.g. "2+2 agents" once the sync children are inline). */
-function countAgentTreeHistory(children: SessionHistoryMessage[] | null | undefined): { direct: number; total: number } {
-  let direct = 0;
-  let total = 0;
-  const walk = (msgs: SessionHistoryMessage[], depth: number) => {
-    for (const m of msgs) {
-      for (const t of m.tools ?? []) {
-        if (GROUPABLE_HISTORY_TOOLS.has(t.name)) {
-          total++;
-          if (depth === 0) direct++;
-          if (t.childMessages?.length) walk(t.childMessages, depth + 1);
-        }
-      }
-    }
-  };
-  if (children) walk(children, 0);
-  return { direct, total };
-}
-
-function TaskGroup({ tool, sessionId }: SessionToolCallProps) {
-  const [showTranscript, setShowTranscript] = useState(false);
-
+/** What the conversation knows about one Agent tool call, for the Background tasks panel. */
+export function knownAgentFromTool(tool: SessionHistoryTool): KnownAgent {
   const description = typeof tool.input?.description === 'string'
     ? tool.input.description
     : typeof tool.input?.prompt === 'string'
       ? (tool.input.prompt as string).slice(0, 80) + ((tool.input.prompt as string).length > 80 ? '...' : '')
       : tool.name;
-  const subagentType = typeof tool.input?.subagent_type === 'string' ? tool.input.subagent_type : '';
-  const modelChip = agentModelLabel(tool.input);
-  // The row's state follows the Background ledger while this session's live
-  // task set knows the agent (a background agent's tool_result is launch
-  // metadata written while it still runs, so result-presence alone would draw
-  // ✓ on a running agent — the 2026-09-08 report's ✓ card above a "60 tools"
-  // live box). ✓ needs proof the RUN is over: the ledger's terminal status, or
-  // the parser's bgTaskFinished stamp (a task-notification for background
-  // agents, the tool_result itself for sync ones — history-delta.ts uses the
-  // same stamp as "settled"). A launched agent with neither shows the neutral
-  // ▶ (no dot): its outcome is unknown here, e.g. a reload mid-run before the
-  // next ledger heartbeat.
-  const live = useLiveAgentStatus(sessionId, tool.toolUseId);
-  const liveRunning = live?.status === 'running' || live?.status === 'paused';
-  const liveFailed = live?.status === 'failed';
-  const liveDone = live != null && !liveRunning && !liveFailed;
-  const finished = liveDone || !!tool.bgTaskFinished;
+  return {
+    toolUseId: tool.toolUseId,
+    agentId: tool.agentId,
+    description,
+    subagentType: typeof tool.input?.subagent_type === 'string' ? tool.input.subagent_type : undefined,
+    // A background agent's tool_result is launch metadata written while it still
+    // runs, so result-presence is not "finished"; the parser's bgTaskFinished stamp
+    // is (task-notification for background agents, the settled tool_result for sync ones).
+    finished: !!tool.bgTaskFinished,
+    result: tool.result || undefined,
+    promptInput: tool.input,
+    preloaded: tool.childMessages?.length ? tool.childMessages : undefined,
+  };
+}
 
-  // Children the parser embedded under the tool (sync agents in some transcripts);
-  // everything else is read on demand by the transcript overlay.
-  const children = tool.childMessages;
-  const toolCount = children?.reduce((n, m) => n + (m.tools?.length ?? 0), 0) ?? 0;
-  // The ledger's tool_uses counter is the live number while the agent runs
-  // and stays the right number after it finishes (the badge must not vanish
-  // on completion); embedded children can only be equal or behind.
-  const shownToolCount = live?.toolUses != null ? Math.max(live.toolUses, toolCount) : toolCount;
-  const agentTree = countAgentTreeHistory(children);
-  // Something to read: a transcript to fetch, embedded children, or at least the result.
-  const readable = !!(tool.agentId || children?.length || tool.result);
-
-  // The whole row is ONE action, the same one the Background ledger's "View
-  // transcript" performs: open the subagent's conversation in the overlay. The
-  // row never unfolds in place — a subagent's transcript is not main-conversation
-  // content, and an in-chat dropdown read as "another agent" in the 2026-09-08
-  // report. The transcript has no truncation of its own: the overlay is the reader.
-  const openTranscript = useCallback(() => { if (readable) setShowTranscript(true); }, [readable]);
-  const closeTranscript = useCallback(() => setShowTranscript(false), []);
-
-  const metaParts = ['Agent'];
-  if (subagentType) metaParts.push(subagentType);
-  if (shownToolCount > 0) metaParts.push(`${shownToolCount} tool ${shownToolCount === 1 ? 'use' : 'uses'}`);
-
-  return (
-    <div className={`task-group ${liveRunning ? 'task-group--live' : ''} ${liveFailed ? 'task-group--error' : ''}`}>
-      <button
-        className="task-group-header"
-        onClick={openTranscript}
-        disabled={!readable}
-        title={readable ? 'Open the subagent transcript' : 'No transcript for this agent'}
-      >
-        <span className="task-group-icon">
-          {liveFailed ? '\u2717' : liveRunning ? '\u25B6' : finished ? '\u2713' : '\u25B6'}
-        </span>
-        <span className="task-group-label">{tool.name}</span>
-        {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
-        {modelChip && <span className="task-group-model">{modelChip}</span>}
-        <span className="task-group-description">{description}</span>
-        {agentTree.total > 0 && (
-          <span className="task-group-agent-count" title={`This agent spawned ${agentTree.direct} subagent${agentTree.direct !== 1 ? 's' : ''} directly${agentTree.total > agentTree.direct ? `; ${agentTree.total - agentTree.direct} more spawned deeper in the tree` : ''}`}>
-            ⑂ {agentTree.direct}{agentTree.total > agentTree.direct ? `+${agentTree.total - agentTree.direct}` : ''} agent{agentTree.total !== 1 ? 's' : ''}
-          </span>
-        )}
-        {shownToolCount > 0 && (
-          <span className="task-group-badge">{shownToolCount} tool{shownToolCount !== 1 ? 's' : ''}</span>
-        )}
-        {liveRunning && <span className="task-group-streaming-dot" />}
-        {readable && <span className="task-group-transcript">View transcript</span>}
-      </button>
-      {showTranscript && sessionId && (
-        <WorkflowTranscriptModal
-          sessionId={sessionId}
-          onClose={closeTranscript}
-          target={{
-            agentId: tool.agentId ?? tool.toolUseId ?? tool.name,
-            label: description,
-            meta: metaParts.join(' · '),
-            workflow: false,
-            live: liveRunning,
-            preloaded: tool.agentId ? undefined : children ?? undefined,
-            fallbackResult: tool.result || undefined,
-            promptInput: tool.input,
-          }}
-        />
-      )}
-    </div>
-  );
+/** A lone Agent tool (a call site that renders tools one at a time): still the chip,
+ *  never a card — the panel is where an agent is read. */
+function TaskGroup({ tool, sessionId }: SessionToolCallProps) {
+  const agents = useMemo(() => [knownAgentFromTool(tool)], [tool]);
+  if (!sessionId) return null;
+  return <BackgroundTasksChip sessionId={sessionId} agents={agents} />;
 }
 
 function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
@@ -1206,6 +1114,16 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
             const t = tools[i];
             if (isMergeableHistoryTool(t)) { run.push(t); continue; }
             flush();
+            // A burst of subagents (parallel Agent tool_use blocks) is ONE chip,
+            // "5 running tasks", never five rows — the panel lists them.
+            if (GROUPABLE_HISTORY_TOOLS.has(t.name) && sessionId) {
+              let j = i;
+              while (j < tools.length && GROUPABLE_HISTORY_TOOLS.has(tools[j].name)) j++;
+              const burst = tools.slice(i, j).map(knownAgentFromTool);
+              out.push(<BackgroundTasksChip key={t.toolUseId ?? `agents-${i}`} sessionId={sessionId} agents={burst} />);
+              i = j - 1;
+              continue;
+            }
             out.push(<SessionToolCall key={t.toolUseId ?? `solo-${i}`} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
           }
           flush();

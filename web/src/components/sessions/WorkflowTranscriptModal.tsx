@@ -85,9 +85,10 @@ export function TranscriptOverlay({
   );
 }
 
-export function WorkflowTranscriptModal({
-  target, sessionId, onClose,
-}: { target: TranscriptTarget; sessionId: string; onClose: () => void }) {
+/** The fetching reader for ONE agent's transcript, without a shell: the modal
+ *  below wraps it in the overlay; the Background tasks panel mounts it in its
+ *  detail column. Owns the cache/poll rules described in the file header. */
+export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget; sessionId: string }) {
   const [messages, setMessages] = useState<SessionHistoryMessage[] | null>(target.preloaded ?? null);
   const [loading, setLoading] = useState(false);
   // Distinct from an empty transcript: a fetch failure must NOT render the same as
@@ -100,6 +101,10 @@ export function WorkflowTranscriptModal({
   // is the one moment a cache hit would be wrong (it holds nothing, we never wrote one)
   // and a final fetch is owed.
   const wasLiveRef = useRef(live);
+
+  // Switching agents inside the panel: drop the previous agent's messages at once
+  // so the old transcript never shows under the new title while the fetch runs.
+  useEffect(() => { setMessages(target.preloaded ?? null); setFailed(false); }, [target.agentId, target.preloaded]);
 
   const preloaded = target.preloaded != null && !live;
   useEffect(() => {
@@ -150,7 +155,7 @@ export function WorkflowTranscriptModal({
   }, [sessionId, target.agentId, workflow, live, preloaded]);
 
   return (
-    <TranscriptOverlay title={target.label || target.agentId} meta={target.meta} live={live} onClose={onClose}>
+    <>
       {target.promptInput && <TaskGroupPrompt input={target.promptInput} />}
       {loading ? (
         <div className="wf-modal-loading">Loading transcript…</div>
@@ -164,8 +169,18 @@ export function WorkflowTranscriptModal({
           <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(target.fallbackResult.slice(0, 3000)) }} />
         </div>
       ) : (
-        <div className="wf-modal-loading">No transcript available</div>
+        <div className="wf-modal-loading">{live ? 'Waiting for the agent\u2019s first output…' : 'No transcript available'}</div>
       )}
+    </>
+  );
+}
+
+export function WorkflowTranscriptModal({
+  target, sessionId, onClose,
+}: { target: TranscriptTarget; sessionId: string; onClose: () => void }) {
+  return (
+    <TranscriptOverlay title={target.label || target.agentId} meta={target.meta} live={target.live === true} onClose={onClose}>
+      <TranscriptBody target={target} sessionId={sessionId} />
     </TranscriptOverlay>
   );
 }

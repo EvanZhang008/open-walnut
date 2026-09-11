@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo, type ReactNode } from 'react';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
@@ -6,7 +6,8 @@ import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream'
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { TranscriptOverlay } from './WorkflowTranscriptModal';
+import { BackgroundTasksChip, BackgroundTasksPanelHost, type KnownAgent } from './BackgroundTasksPanel';
+import { setLiveLanes } from '@/stores/background-panel-store';
 import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { typedUserText } from './injected-banner';
@@ -15,7 +16,7 @@ import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-un
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
-import { groupStreamingBlocks, groupLaneChildren, countAgentTree, isLaneChild, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
+import { groupStreamingBlocks, groupLaneChildren, collectLanes, isLaneChild, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
 import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
@@ -595,19 +596,12 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
   );
 });
 
-/** A streaming Task group — the Agent's one-line row at its spawn position while
- *  its tool_call is still in the streaming buffer. The row never unfolds in the
- *  chat: the subagent's live transcript is not main-conversation content (the
- *  Background ledger tracks the run), so clicking the row opens the same
- *  transcript overlay the ledger's "View transcript" opens, fed straight from the
- *  lane blocks already in the buffer (no fetch, no poll — it is the live stream).
- *  The moment history absorbs the tool_call, the persisted TaskGroup takes over
- *  at the same position — one row per agent, never a live twin at the tail.
- *
- *  `inOverlay`: this agent was spawned by the agent whose transcript is open.
- *  Inside the reader depth is content, so its row is inert and its own lane
- *  renders inline beneath it instead of opening a second overlay. */
-interface StreamingTaskGroupProps {
+/** A subagent's live lane, read out of the streaming buffer: its prompt, then its
+ *  blocks in order. Rendered inside the Background tasks panel (never in the chat):
+ *  this is the live stream itself, so the reader needs no fetch and no poll while
+ *  the agent runs. A nested Agent this agent spawned is one inert header line
+ *  with its own lane beneath it (depth is content inside the reader). */
+interface StreamingLaneProps {
   taskBlock: StreamingBlock & { type: 'tool_call' };
   childBlocks: StreamingBlock[];
   sessionId: string;
@@ -616,44 +610,20 @@ interface StreamingTaskGroupProps {
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
-  inOverlay?: boolean;
 }
 
-function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen, inOverlay }: StreamingTaskGroupProps) {
-  const [showTranscript, setShowTranscript] = useState(false);
-  const description = typeof taskBlock.input?.description === 'string'
-    ? taskBlock.input.description
-    : typeof taskBlock.input?.prompt === 'string'
-      ? (taskBlock.input.prompt as string).slice(0, 80) + ((taskBlock.input.prompt as string).length > 80 ? '...' : '')
-      : 'Task';
-  const subagentType = typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : '';
-  const modelChip = agentModelLabel(taskBlock.input);
-  const isDone = taskBlock.status === 'done';
-  const isError = taskBlock.status === 'error';
-  const toolCount = childBlocks.filter(b => b.type === 'tool_call').length;
-
-  // Nested view: direct children render flat; a nested Agent/Task spawned by
-  // THIS agent becomes an inner StreamingTaskGroup holding its own subtree
-  // (recursive — matches history rendering where childMessages nest per level).
+function StreamingLane({ taskBlock, childBlocks, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: StreamingLaneProps) {
   // childBlocks arrive root-flattened from groupStreamingBlocks; selfId lets
   // groupLaneChildren re-derive the per-level structure.
-  const selfId = taskBlock.toolUseId;
-  const showLane = inOverlay || showTranscript;
-  const nestedItems = showLane ? groupLaneChildren(selfId, childBlocks) : null;
-  // Header chip: "N subagents (M nested)" — the fan-out reads straight off the row.
-  const agentTree = countAgentTree(selfId, childBlocks);
-
-  const metaParts = ['Agent'];
-  if (subagentType) metaParts.push(subagentType);
-  if (toolCount > 0) metaParts.push(`${toolCount} tool ${toolCount === 1 ? 'use' : 'uses'}`);
-
-  const lane = (
+  const items = groupLaneChildren(taskBlock.toolUseId, childBlocks);
+  const isDone = taskBlock.status === 'done';
+  return (
     <>
       <TaskGroupPrompt input={taskBlock.input} />
-      {(nestedItems ?? []).map((item, ci) => {
+      {items.map((item, ci) => {
         if (item.kind === 'task-group') {
           return (
-            <StreamingTaskGroup
+            <NestedStreamingAgent
               key={`nested-${ci}`}
               taskBlock={item.taskBlock}
               childBlocks={item.childBlocks}
@@ -663,7 +633,6 @@ function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, ses
               onTaskClick={onTaskClick}
               onSessionClick={onSessionClick}
               onFileOpen={onFileOpen}
-              inOverlay
             />
           );
         }
@@ -676,41 +645,67 @@ function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, ses
       )}
     </>
   );
+}
 
+function NestedStreamingAgent(props: StreamingLaneProps) {
+  const { taskBlock, childBlocks } = props;
+  const isDone = taskBlock.status === 'done';
+  const isError = taskBlock.status === 'error';
+  const subagentType = typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : '';
+  const modelChip = agentModelLabel(taskBlock.input);
+  const toolCount = childBlocks.filter(b => b.type === 'tool_call').length;
   return (
-    <div className={`task-group ${isDone ? 'task-group--done' : ''} ${isError ? 'task-group--error' : ''} ${inOverlay ? 'task-group--nested' : ''}`}>
-      <button
-        className="task-group-header"
-        onClick={inOverlay ? undefined : () => setShowTranscript(true)}
-        disabled={inOverlay}
-        title={inOverlay ? undefined : 'Open the subagent transcript'}
-      >
-        <span className="task-group-icon">
-          {isError ? '✗' : isDone ? '✓' : '▶'}
+    <div className={`task-group task-group--nested ${isDone ? 'task-group--done' : ''} ${isError ? 'task-group--error' : ''}`}>
+      <div className="task-group-header">
+        <span className={`task-group-icon ${!isDone && !isError ? 'task-group-icon--running' : ''}`}>
+          {isError ? '✗' : isDone ? '✓' : <span className="task-group-streaming-dot" />}
         </span>
         <span className="task-group-label">{taskBlock.name}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
         {modelChip && <span className="task-group-model">{modelChip}</span>}
-        <span className="task-group-description">{description}</span>
-        {agentTree.total > 0 && (
-          <span className="task-group-agent-count" title={`This agent spawned ${agentTree.direct} subagent${agentTree.direct !== 1 ? 's' : ''} directly${agentTree.total > agentTree.direct ? `; ${agentTree.total - agentTree.direct} more spawned deeper in the tree` : ''}`}>
-            ⑂ {agentTree.direct}{agentTree.total > agentTree.direct ? `+${agentTree.total - agentTree.direct}` : ''} agent{agentTree.total !== 1 ? 's' : ''}
-          </span>
-        )}
+        <span className="task-group-description">{streamAgentDescription(taskBlock)}</span>
         {toolCount > 0 && (
           <span className="task-group-badge">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
         )}
-        {!isDone && !isError && <span className="task-group-streaming-dot" />}
-        {!inOverlay && <span className="task-group-transcript">View transcript</span>}
-      </button>
-      {inOverlay && <div className="task-group-body">{lane}</div>}
-      {!inOverlay && showTranscript && (
-        <TranscriptOverlay title={description} meta={metaParts.join(' · ')} live={!isDone && !isError} onClose={() => setShowTranscript(false)}>
-          {lane}
-        </TranscriptOverlay>
-      )}
+      </div>
+      <div className="task-group-body"><StreamingLane {...props} /></div>
     </div>
   );
+}
+
+function streamAgentDescription(taskBlock: StreamingBlock & { type: 'tool_call' }): string {
+  return typeof taskBlock.input?.description === 'string'
+    ? taskBlock.input.description
+    : typeof taskBlock.input?.prompt === 'string'
+      ? (taskBlock.input.prompt as string).slice(0, 80) + ((taskBlock.input.prompt as string).length > 80 ? '...' : '')
+      : 'Task';
+}
+
+/** What the chat knows about a streaming Agent tool_call, for the chip + panel:
+ *  identity and title from the input, done/failed from the block status. (Its live
+ *  lane reaches the panel separately, through the lane registry below.) */
+/** Same rule the history parser applies (session-history.ts, bgTaskFinished): a
+ *  SYNC agent (explicit run_in_background:false) blocks its turn, so its settled
+ *  tool_result proves the run is over; a BACKGROUND agent's tool_result is launch
+ *  metadata written while it still runs, so only the ledger can finish it. */
+function streamAgentSettled(taskBlock: StreamingBlock & { type: 'tool_call' }): boolean {
+  if (taskBlock.status === 'error') return true;
+  return taskBlock.input?.run_in_background === false && taskBlock.status === 'done';
+}
+
+function knownAgentFromStream(taskBlock: StreamingBlock & { type: 'tool_call' }): KnownAgent {
+  const failed = taskBlock.status === 'error';
+  const finished = streamAgentSettled(taskBlock);
+  return {
+    toolUseId: taskBlock.toolUseId,
+    description: streamAgentDescription(taskBlock),
+    subagentType: typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : undefined,
+    finished,
+    failed,
+    running: !finished,
+    result: taskBlock.result || undefined,
+    promptInput: taskBlock.input,
+  };
 }
 
 // Grouping semantics (task groups / consumed subagent lanes / hidden-parent
@@ -2989,6 +2984,46 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   for (let i = 0; i < blocks.length; i++) {
     if (isLaneChild(blocks[i])) consumedBlockIndices.add(i);
   }
+  // Every running agent's lane goes to the Background tasks panel's live-lane
+  // registry, anchor visible or not: a background agent's tool_call is absorbed by
+  // history seconds after the spawn while the agent runs on, and its reader must
+  // still be the stream, not a fetch. Published from an effect (never during
+  // render); the store swallows empty→empty publishes.
+  const streamLanes = collectLanes(blocks);
+  useEffect(() => {
+    if (!sessionId) return;
+    const renderers = new Map<string, () => ReactNode>();
+    for (const [rootId, lane] of streamLanes) {
+      const anchor = lane.anchor;
+      if (!anchor || streamAgentSettled(anchor)) continue;
+      renderers.set(rootId, () => (
+        <StreamingLane taskBlock={anchor} childBlocks={lane.children} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+      ));
+    }
+    setLiveLanes(sessionId, renderers);
+  });
+  useEffect(() => () => { if (sessionId) setLiveLanes(sessionId, new Map()); }, [sessionId]);
+  // A burst of Agent spawns (parallel tool_use blocks, or spawns with nothing but
+  // lane traffic between them) is ONE `N running tasks` chip in the chat — never a
+  // row per agent (the Background tasks panel lists them).
+  const agentChipStart = new Map<number, number[]>();
+  const agentChipMember = new Set<number>();
+  {
+    let open: number[] | null = null;
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.kind === 'block') {
+        const g = groupedByIndex.get(item.index);
+        if (g && g.kind === 'task-group') {
+          if (open) { open.push(i); agentChipMember.add(i); } else { open = [i]; agentChipStart.set(i, open); }
+          continue;
+        }
+        if (consumedBlockIndices.has(item.index)) continue;
+      }
+      if (isTransparentStreamItem(item)) continue;
+      open = null;
+    }
+  }
 
   const leadingStreamRunIndices: number[] = [];
   for (let i = 0; i < timeline.length; i++) {
@@ -3300,6 +3335,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           local UI state (expanded agent, open transcript modal, collapse override)
           can't leak from one session into the next. */}
       {!activeTeamTab && sessionId && <WorkflowProgress key={sessionId} sessionId={sessionId} />}
+      <BackgroundTasksPanelHost sessionId={sessionId} />
 
       {/* Main conversation — hidden when a team tab is active.
           Tree mode makes the container focusable so ↑/↓/←/→ can navigate threads;
@@ -3632,23 +3668,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               }
 
               if (item.kind === 'block') {
-                // Check if this block anchors a Task group (parent tool_call).
-                const grouped = groupedByIndex.get(item.index);
-                if (grouped && grouped.kind === 'task-group') {
+                // An Agent spawn burst renders as one chip at the first anchor.
+                if (agentChipMember.has(i)) return null;
+                const burst = agentChipStart.get(i);
+                if (burst) {
+                  const agents: KnownAgent[] = [];
+                  for (const k of burst) {
+                    const t = timeline[k];
+                    const g = t.kind === 'block' ? groupedByIndex.get(t.index) : undefined;
+                    if (g && g.kind === 'task-group') agents.push(knownAgentFromStream(g.taskBlock));
+                  }
                   const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
                   return (
                     <div key={`tg-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
                       <div className={isFirst ? 'session-msg-content' : ''}>
-                        <StreamingTaskGroup
-                          taskBlock={grouped.taskBlock}
-                          childBlocks={grouped.childBlocks}
-                          sessionId={sessionId}
-                          sessionCwd={sessionCwd}
-                          sessionHost={sessionHost}
-                          onTaskClick={onTaskClick}
-                          onSessionClick={onSessionClick}
-                          onFileOpen={onFileOpen}
-                        />
+                        <BackgroundTasksChip sessionId={sessionId} agents={agents} />
                       </div>
                     </div>
                   );

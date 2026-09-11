@@ -26,6 +26,7 @@ import { WorkflowGraph, StatusDot, fmtTokens, agentMeta } from './WorkflowGraph'
 import { phaseCounts, isAgentTask } from './workflow-layout';
 import { buildAgentMeta } from './background-ledger';
 import { WorkflowTranscriptModal, type TranscriptTarget } from './WorkflowTranscriptModal';
+import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
 
@@ -153,12 +154,9 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   const openTranscript = (a: WorkflowAgent) =>
     setTranscriptTarget({ agentId: a.agentId, label: a.label, model: a.model, meta: agentMeta(a) });
   const toggleAgent = (id: string) => setExpandedAgent(prev => (prev === id ? null : id));
-  // A plain background agent's taskId IS its subagent id, and workflow:false picks the
-  // flat transcript layout + the bare cache key the chat's TaskGroup already uses.
-  const openAgentTranscript = (t: BackgroundTask) => setTranscriptTarget({
-    agentId: t.taskId, label: t.description, meta: buildAgentMeta(t, Date.now()).join(' · '),
-    workflow: false, live: t.status === 'running',
-  });
+  // A plain background agent opens in the Background tasks panel (the same two-column
+  // reader the chat's chip opens), selected — the list on its left is this bar's rows.
+  const openAgentTranscript = (t: BackgroundTask) => openBackgroundPanel(sessionId, t.taskId);
 
   // `live`/`meta` must follow the AGENT, not the click that opened the modal: an agent
   // that finishes while the reader is open owes one final (cacheable) fetch, and the

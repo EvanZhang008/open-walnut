@@ -4180,6 +4180,135 @@ select {
   font-size: 13px;
 }
 
+/* ── Background tasks: the chat's chip + the two-column reader ─────────────────
+   The chat shows ONE chip per spawn burst (`✳ 5 running tasks`), never a row per
+   agent and never an in-place dropdown; the chip opens the panel. */
+.bg-tasks-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 4px 0;
+  padding: 4px 10px 4px 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.bg-tasks-chip:hover { background: var(--bg-tertiary); color: var(--fg); border-color: var(--fg-muted); }
+.bg-tasks-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  font-size: 11px;
+  line-height: 1;
+}
+.bg-tasks-chip-icon .task-group-streaming-dot { margin: 0; }
+.bg-tasks-chip--running { color: var(--fg); border-color: var(--accent-subtle-hover, rgba(0, 122, 255, 0.25)); }
+.bg-tasks-chip--done .bg-tasks-chip-icon { color: var(--success, #34C759); }
+.bg-tasks-chip--failed .bg-tasks-chip-icon { color: var(--error); }
+.bg-tasks-chip-label { white-space: nowrap; }
+
+.wf-modal--tasks { max-width: 1400px; width: 94vw; height: 92vh; }
+.bg-tasks-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 34%) 1fr;
+}
+.bg-tasks-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-tertiary);
+}
+.bg-tasks-section {
+  padding: 10px 6px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.bg-task-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 9px 10px;
+  text-align: left;
+  background: var(--card-bg, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.bg-task-row:hover { border-color: var(--fg-muted); }
+.bg-task-row--selected,
+.bg-task-row--selected:hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle, rgba(0, 122, 255, 0.06));
+}
+.bg-task-row-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+.bg-task-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bg-task-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding-left: 17px;
+}
+.bg-tasks-detail {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.bg-tasks-detail-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.bg-tasks-detail-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+.bg-tasks-detail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px;
+}
+/* The live lane is the stream itself; its blocks wear the chat's normal spacing. */
+.bg-tasks-live-lane { display: flex; flex-direction: column; gap: 4px; }
+
 /* ── Full-screen task detail (TaskDetailModal hosts TodoPanel's TaskDetailPane) ── */
 /* The pane is its own scroll container; inside the flex wf-modal shell it must flex
    to fill and allow its own overflow (min-height:0 lets the scroll region shrink). */
@@ -6401,6 +6530,11 @@ select {
   animation: pulse-dot 1.5s infinite;
   flex-shrink: 0;
 }
+
+/* The status slot holds the pulsing dot while the agent runs — never a triangle,
+   which reads as a disclosure control on a row that does not disclose. */
+.task-group-icon--running { display: inline-flex; align-items: center; justify-content: center; }
+.task-group-icon--running .task-group-streaming-dot { margin: 0; }
 
 /* The Agent row is ONE action (open the transcript overlay), spelled out at the
    row's end the way the Background ledger spells it, so the row cannot be

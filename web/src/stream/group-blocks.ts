@@ -161,3 +161,50 @@ export function countAgentTree(selfId: string, children: readonly StreamingBlock
   }
   return { direct, total };
 }
+
+/** One subagent lane as the stream holds it, keyed by the ROOT Agent tool_call. */
+export interface StreamLane {
+  /** The root anchor when it is in the buffer (visible or absorbed); absent when
+   *  the agent was spawned before this page loaded. */
+  anchor?: StreamingBlock & { type: 'tool_call' };
+  /** Every descendant block, root-flattened, in arrival order. */
+  children: StreamingBlock[];
+}
+
+/**
+ * Every lane in the buffer, regardless of whether its anchor renders — the
+ * Background tasks panel reads a running agent from here (it IS the live stream,
+ * nothing to fetch or poll), while the chat itself renders none of it. Unlike
+ * groupStreamingBlocks, a hidden (history-absorbed) anchor still owns its lane:
+ * absorption is about what the CHAT shows, and a background agent's tool_call is
+ * absorbed within seconds of the spawn while the agent runs on for minutes.
+ */
+export function collectLanes(blocks: readonly StreamingBlock[]): Map<string, StreamLane> {
+  const laneParentOf = new Map<string, string>();
+  const anchors = new Map<string, StreamingBlock & { type: 'tool_call' }>();
+  let hasLaneChildren = false;
+  for (const b of blocks) {
+    if (b.type === 'tool_call' && GROUPABLE_STREAM_TOOLS.has(b.name)) {
+      if (b.parentToolUseId) laneParentOf.set(b.toolUseId, b.parentToolUseId);
+      else anchors.set(b.toolUseId, b);
+    }
+    if (isLaneChild(b)) hasLaneChildren = true;
+  }
+  const lanes = new Map<string, StreamLane>();
+  if (!hasLaneChildren && anchors.size === 0) return lanes;
+  const resolveRoot = (pid: string): string => {
+    let cur = pid;
+    const seen = new Set<string>();
+    while (laneParentOf.has(cur) && !seen.has(cur)) { seen.add(cur); cur = laneParentOf.get(cur)!; }
+    return cur;
+  };
+  for (const [id, anchor] of anchors) lanes.set(id, { anchor, children: [] });
+  for (const b of blocks) {
+    if (!isLaneChild(b)) continue;
+    const root = resolveRoot((b as StreamingBlock & { parentToolUseId: string }).parentToolUseId);
+    const lane = lanes.get(root);
+    if (lane) lane.children.push(b);
+    else lanes.set(root, { children: [b] });
+  }
+  return lanes;
+}

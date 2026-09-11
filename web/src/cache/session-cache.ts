@@ -574,9 +574,10 @@ function registerGlobalListeners(): void {
 // Auto-register on import
 registerGlobalListeners();
 
-// ── Subagent content cache (lazy-loaded on TaskGroup expand) ───────────────
+// ── Subagent content cache (lazy-loaded when a transcript is read) ──────────
 // No invalidation on batch-completed: subagent content is expected to be complete
-// by the time users expand a TaskGroup (active subagents render via StreamingTaskGroup).
+// by the time a finished agent's transcript is opened in the Background tasks panel
+// (a running agent reads its live lane from the stream buffer, not this cache).
 // A page reload clears the cache if fresher data is needed.
 
 const MAX_SUBAGENT_CACHED = 50;
