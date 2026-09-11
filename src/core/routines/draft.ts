@@ -21,7 +21,7 @@ export type DraftResult =
   | { ok: true; draft: CronJobCreate }
   | { ok: false; error: string; raw?: string };
 
-function buildSystemPrompt(context: { hosts: string[]; models: string[] }): string {
+function buildSystemPrompt(context: { hosts: string[]; models: string[]; dataTools?: string[] }): string {
   const now = new Date();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const executorDocs = listExecutors()
@@ -39,13 +39,16 @@ Schema:
     | {"kind":"every","everyMs":<number>}                     // simple intervals
     | {"kind":"at","at":"<ISO datetime>"},                    // one-shot
   "executor": {
-    "type": "main-agent" | "walnut-agent" | "claude-code",
+    "type": "watcher" | "main-agent" | "walnut-agent" | "claude-code",
     "config": {
       "instructions": string,        // detailed, well-structured instructions for the run
       // claude-code only:
       "cwd": string,                 // required for claude-code — ask-like placeholder "/path/to/repo" if the user gave none
       "host": string,                // optional; one of the configured hosts below, omit for local
-      "model": string                // optional model id
+      "model": string,               // optional model id
+      // watcher only:
+      "tools": string,               // comma-separated data tool names from the list below; omit when none apply
+      "project": string              // project for tasks it creates; omit for the Inbox
     }
   }
 }
@@ -54,20 +57,25 @@ Executor types:
 ${executorDocs}
 
 Choosing the executor:
+- "check/watch X and tell me when …", anything that POLLS a source (mail, reviews, messages) → watcher
 - Coding/repo work, "run in <dir>", "on <host>" → claude-code
-- "tell me / remind me / message me" → main-agent
+- "tell me / remind me / message me" at a fixed time → main-agent
 - Standalone research/summary that reports back → walnut-agent
 
 Context:
 - Current datetime: ${now.toISOString()} (timezone: ${tz})
 - Configured remote hosts: ${context.hosts.length ? context.hosts.join(', ') : '(none — omit host)'}
 - Available models: ${context.models.length ? context.models.join(', ') : '(omit model)'}
+- Data tools a watcher can be given: ${context.dataTools?.length ? context.dataTools.join(', ') : '(none installed — omit tools)'}
 
 Rules:
 - Interpret times in the user's timezone (${tz}) and emit cron exprs with that tz.
 - "weekdays" → "* * 1-5" day-of-week; "every morning" → pick 9:00 unless told otherwise.
 - Write instructions as a clear briefing (numbered steps when multi-part), like a task you'd hand a capable assistant.
-- Keep name under 6 words.`;
+- Keep name under 6 words.
+- A watcher's instructions must say what to look at, what counts as worth acting on, what to IGNORE, and which outcome to use (a task, a notification, or a long-running session). Say explicitly that a run finding nothing should do nothing.
+- Only name data tools from the list above, exactly as spelled, and name as FEW as the job needs: every tool costs tokens on every run. Omit "tools" rather than inventing a name.
+- Prefer {"kind":"every"} for a watcher: polling is an interval, not a wall-clock time. Do not poll more often than every 5 minutes unless the user insisted.`;
 }
 
 /** Strip common LLM wrappers (markdown fences) and parse JSON. */
@@ -92,7 +100,7 @@ function parseDraftJson(raw: string): Record<string, unknown> | null {
 
 export async function draftRoutine(
   text: string,
-  context: { hosts: string[]; models: string[] },
+  context: { hosts: string[]; models: string[]; dataTools?: string[] },
 ): Promise<DraftResult> {
   if (!text.trim()) return { ok: false, error: 'empty request' };
 

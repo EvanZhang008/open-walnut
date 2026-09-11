@@ -63,6 +63,9 @@ export interface ExecutorFieldSpec {
   required?: boolean;
   placeholder?: string;
   optionsKey?: 'hosts' | 'models';
+  /** `number` fields only. Defaults to 1; set 0 where zero is a real setting
+   *  (a watcher's "never start a session" cap), or the input silently blocks it. */
+  min?: number;
 }
 
 export interface ExecutorDefinition {

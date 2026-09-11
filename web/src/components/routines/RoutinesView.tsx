@@ -32,6 +32,8 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
     setShowForm(true);
   }, []);
 
+  const handleManual = handleDraftFailed;
+
   const handleSave = useCallback(async (input: CreateRoutineInput) => {
     if (editing) {
       await update(editing.id, input);
@@ -59,7 +61,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
 
   return (
     <div className={`routines-view${compact ? ' routines-view-compact' : ''}`}>
-      <RoutineComposer onDraft={handleDraft} onDraftFailed={handleDraftFailed} />
+      <RoutineComposer onDraft={handleDraft} onDraftFailed={handleDraftFailed} onManual={handleManual} />
 
       {showForm && (
         <RoutineForm

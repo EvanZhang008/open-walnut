@@ -442,6 +442,22 @@ src/core/cron/
 
 `src/actions/`: File-based action discovery mirroring the agent registry pattern. Actions are discovered from two locations: built-in (`dist/actions/*.js`, compiled from `src/actions/*.ts`) and user (`~/.open-walnut/actions/*.mjs`). Each module exports `describe()` → `ActionDescriptor` and `run(ctx)` → `ActionResult { invoke, content?, image? }`. User actions override built-in actions with the same ID. Platform filtering via `descriptor.platform`. REST: `GET /api/cron/actions` lists discovered actions. Frontend: CronJobForm has an "Init Processor" checkbox with action dropdown (showing source badges), target agent, and model override fields.
 
+### Triggers: the `watcher` executor
+
+A trigger is a routine that LOOKS at something on every tick and only acts when there is something to act on, so the schedule says *when to look* while the user's own sentence says *what counts*. It is a fourth executor (`src/core/routines/executors/watcher.ts`) rather than a parallel system: the cron engine already dispatches any non-legacy executor through `runExecutor`, so `timer.ts` needs no changes and an event source can drive the same executor later.
+
+The engine is `runMicroAgent` (`src/model/micro-agent.ts`, in-process, haiku tier, 8 tool rounds), not a Claude Code session: a watcher fires hundreds of times a day and almost always finds nothing, so it cannot pay a CLI spawn per tick. The consequence is that a watcher never sees arbitrary MCP servers, because those only mount into spawned sessions; when it genuinely needs one, its outcome is `trigger_session` and the session it starts has the full CLI tool belt.
+
+A watcher gets NO data tools by default, and its `tools` field names them one at a time out of one pool: read-only Walnut tools plus installed plugin tools. That default is measured, not cautious. Every tool schema sits in the prefix of every model round, so handing over the whole read-only set for free cost 2,835 tokens a round (`task_query` 1,128 and `memory_notes_search` 997 alone were two thirds of it) against 159 tokens for the entire mail trio a triage watcher actually uses. With nothing named, one quiet run is ~1.2k tokens of prefix, which is roughly $13/month at a 10-minute interval and $2/month hourly. The cost decision therefore belongs to whoever names a tool, while the safety decision stays where it was: the read-only set is fail-closed, and a watcher can only ever name something already in it.
+
+Its tool belt is the only way it reaches the user (`watcher-tools.ts`): `trigger_seen` / `trigger_note` for memory, and `trigger_task` / `trigger_notify` / `trigger_session` for outcomes. Dedup is deliberately two layers, both in code. `trigger_seen(ids)` returns only the ids never looked at before, which is ADVISORY (a model that skips it wastes tokens); every outcome requires a stable `key` and is REFUSED when that key was already acted on, which is the guarantee. Same split the hook system uses: an instruction to the model is never the safety mechanism. The per-run outcome cap, the per-day session cap and the key check all live at the tool boundary, where the model has no say, because a background loop holding the ordinary `task_create` is exactly what once spawned near-duplicate tasks in a self-propagating loop (see the notes on the read-only set in `src/core/tools/read-only.ts`).
+
+Ordering inside an outcome tool is load-bearing: check budget, check key, DO the thing, then record it. A crash in between costs one duplicate the user can see and delete, where the other order costs a silent miss nobody notices.
+
+`trigger_session` keys a singleton on a TASK, not a session id, so the conversation keeps one home on the board while its session can die and be restarted (`getSessionsForTask` + `LIVE_STATUSES`, the same rule as `session_start`). Only starting counts against the daily cap; sending into one that already exists is the point of the feature.
+
+Watcher memory lives in `~/.open-walnut/routine-state/<jobId>.json` (`trigger-state.ts`), machine-local and gitignored for the same reason as `cron-state.json`: job definitions sync between machines, runtime state must not, and an LWW echo of another box's older `acted` map would un-remember an outcome and re-fire it. Deleting a routine deletes its state file, so a recycled id cannot inherit a stranger's seen set.
+
 ---
 
 ## Embedded Subagent System — Implementation

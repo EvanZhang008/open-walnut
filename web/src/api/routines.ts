@@ -57,6 +57,8 @@ export interface ExecutorFieldSpec {
   required?: boolean;
   placeholder?: string;
   optionsKey?: 'hosts' | 'models';
+  /** `number` fields only; defaults to 1. 0 where zero is a real setting. */
+  min?: number;
 }
 
 export interface ExecutorInfo {

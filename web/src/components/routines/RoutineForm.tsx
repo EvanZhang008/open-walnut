@@ -226,7 +226,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
         <input
           id={`routine-f-${f.name}`}
           type="number"
-          min="1"
+          min={String(f.min ?? 1)}
           value={typeof value === 'number' ? value : ''}
           onChange={(e) => setField(f.name, e.target.value ? Number(e.target.value) : undefined)}
         />

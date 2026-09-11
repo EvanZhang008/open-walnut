@@ -1385,7 +1385,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // engine still dispatches those two through its legacy paths, which own the
   // notification/announce plumbing); claude-code is dispatched via runExecutor.
   {
-    const { registerExecutor, createMainAgentExecutor, createWalnutAgentExecutor, createClaudeCodeExecutor } =
+    const { registerExecutor, createMainAgentExecutor, createWalnutAgentExecutor, createClaudeCodeExecutor, createWatcherExecutor } =
       await import('../core/routines/index.js')
     const cronDeps = cronService.getDeps()
     registerExecutor(createMainAgentExecutor({
@@ -1397,6 +1397,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       runIsolatedAgentJob: cronDeps.runIsolatedAgentJob,
     }))
     registerExecutor(createClaudeCodeExecutor())
+    // The watcher owns its own engine (an in-process micro-agent turn) and its
+    // own outcome wiring, so it needs no cron dep closures.
+    registerExecutor(createWatcherExecutor())
   }
 
   // -- Discover file-based cron actions --

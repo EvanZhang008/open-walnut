@@ -37,6 +37,45 @@ function mapCronError(err: unknown): never {
   throw err instanceof Error ? err : new Error(msg);
 }
 
+/**
+ * Run the executor's own validate() at SAVE time and write the result back.
+ *
+ * normalize() only does field hygiene that every executor shares (trim
+ * instructions, floor timeoutSeconds); it has no idea what a watcher's
+ * maxOutcomesPerRun means. Without this hook the only validate() call was in
+ * runExecutor(), so a routine with a missing required field or an out-of-range
+ * safety limit saved fine and failed on its first tick — an hour later, in a
+ * run-history line nobody is watching. The registry doc has always claimed
+ * create/update validates; this is that claim wired up.
+ *
+ * Two things it deliberately does:
+ *  - stores the VALIDATED config, so a clamped number (500 → 20) is what the
+ *    form shows afterwards rather than a value the run silently ignores, and
+ *  - rejects an unknown type by name, because a typo'd executor is otherwise a
+ *    routine that ticks forever and errors every time.
+ *
+ * It runs only on this REST/relay path, never on store load: revalidating on
+ * load would let a rule added later make an existing job unreadable.
+ */
+async function validateExecutorForSave(input: { executor?: unknown }): Promise<void> {
+  const ref = input.executor as { type?: string; config?: unknown } | undefined;
+  if (!ref || typeof ref.type !== 'string' || !ref.type) return;
+  const { getExecutor, listExecutors } = await import('./registry.js');
+  const def = getExecutor(ref.type);
+  if (!def) {
+    const known = listExecutors().map((e) => e.type).join(', ');
+    throw new SessionControlError(
+      `Unknown executor type '${ref.type}'${known ? ` — available: ${known}` : ''}`,
+      400,
+    );
+  }
+  const validated = def.validate(ref.config ?? {});
+  if (!validated.ok) {
+    throw new SessionControlError(`Invalid ${ref.type} config: ${validated.error}`, 400);
+  }
+  input.executor = { type: ref.type, config: validated.config };
+}
+
 export async function listRoutines(includeDisabled: boolean): Promise<{ jobs: unknown[] }> {
   const service = await requireCronService();
   return { jobs: await service.list({ includeDisabled }) };
@@ -59,6 +98,7 @@ export async function createRoutine(body: unknown): Promise<{ job: unknown }> {
   if (!input || !input.schedule) {
     throw new SessionControlError('Invalid input. Provide at least schedule and payload.', 400);
   }
+  await validateExecutorForSave(input);
   try {
     const job = await service.add(input);
     log.web.info('routine created via shared core', { jobId: job.id, name: job.name });
@@ -73,6 +113,7 @@ export async function patchRoutine(id: string, body: unknown): Promise<{ job: un
   const { normalizeCronJobPatch } = await import('../cron/index.js');
   const patch = normalizeCronJobPatch(body);
   if (!patch) throw new SessionControlError('Invalid patch input.', 400);
+  await validateExecutorForSave(patch);
   try {
     const job = await service.update(id, patch);
     log.web.info('routine updated via shared core', { jobId: id });
@@ -86,6 +127,10 @@ export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed:
   const service = await requireCronService();
   const result = await service.remove(id);
   if (!result.removed) throw new SessionControlError(`Cron job not found: ${id}`, 404);
+  // A watcher's memory outlives nothing: leaving it behind would make a
+  // recreated routine with a recycled id inherit a stranger's seen/acted sets.
+  const { deleteTriggerState } = await import('./trigger-state.js');
+  await deleteTriggerState(id);
   log.web.info('routine deleted via shared core', { jobId: id });
   return result;
 }
@@ -155,9 +200,18 @@ export async function draftRoutineFromText(text: unknown): Promise<{ draft: unkn
   const { getConfig } = await import('../config-manager.js');
   const config = await getConfig();
   const { SESSION_MODELS } = await import('../types.js');
+  // Exactly what a watcher's `tools` field may name (read-only Walnut tools +
+  // installed plugin tools), so the drafter can't invent one — that would
+  // produce a routine failing its first run with "unknown data tool".
+  let dataTools: string[] = [];
+  try {
+    const { getReadOnlyTools, getPluginTools } = await import('../../agent/tools.js');
+    dataTools = [...getReadOnlyTools(), ...getPluginTools()].map((t) => t.name);
+  } catch { /* degrade to no suggestions rather than failing the draft */ }
   const result = await draftRoutine(text, {
     hosts: Object.keys(config.hosts ?? {}),
     models: SESSION_MODELS.map((m) => m.id),
+    dataTools,
   });
   if (!result.ok) {
     log.web.warn('routine draft failed', { error: result.error });

@@ -47,11 +47,11 @@ afterAll(async () => {
 });
 
 describe('routines API', () => {
-  it('GET /api/routines/executors returns the three built-ins + options', async () => {
+  it('GET /api/routines/executors returns the four built-ins + options', async () => {
     const { status, json } = await get('/api/routines/executors');
     expect(status).toBe(200);
     const types = json.executors.map((e: any) => e.type).sort();
-    expect(types).toEqual(['claude-code', 'main-agent', 'walnut-agent']);
+    expect(types).toEqual(['claude-code', 'main-agent', 'walnut-agent', 'watcher']);
     // configSchema drives the dynamic form
     const cc = json.executors.find((e: any) => e.type === 'claude-code');
     expect(cc.configSchema.some((f: any) => f.name === 'cwd' && f.required)).toBe(true);
@@ -147,5 +147,146 @@ describe('routines API', () => {
   it('POST /api/routines/draft without text returns 400', async () => {
     const { status } = await post('/api/routines/draft', {});
     expect(status).toBe(400);
+  });
+});
+
+describe('watcher routines through the real API', () => {
+  async function createWatcher(config: Record<string, unknown>, name: string) {
+    return await post('/api/routines', {
+      name,
+      schedule: { kind: 'every', everyMs: 600_000 },
+      enabled: true,
+      executor: { type: 'watcher', config },
+    });
+  }
+
+  it('exposes a configSchema the routine form can render', async () => {
+    const { json } = await get('/api/routines/executors');
+    const w = json.executors.find((e: any) => e.type === 'watcher');
+    expect(w.configSchema.some((f: any) => f.name === 'instructions' && f.required)).toBe(true);
+    expect(w.configSchema.some((f: any) => f.name === 'model' && f.optionsKey === 'models')).toBe(true);
+    expect(w.configSchema.some((f: any) => f.name === 'sessionHost' && f.optionsKey === 'hosts')).toBe(true);
+    // Every field kind must be one the form knows how to draw.
+    const kinds = new Set(w.configSchema.map((f: any) => f.kind));
+    for (const k of kinds) expect(['text', 'textarea', 'select', 'number', 'path']).toContain(k);
+  });
+
+  it('creates one, and the stored config keeps the clamped safety numbers', async () => {
+    const { status, json } = await createWatcher({
+      instructions: 'Check unread mail. Task what needs a reply.',
+      maxOutcomesPerRun: 500,
+      timeoutSeconds: 120,
+    }, 'E2E watcher clamp');
+    expect(status).toBe(201);
+    expect(json.job.executor.config.maxOutcomesPerRun).toBe(20);
+    expect(json.job.executor.config.timeoutSeconds).toBe(120);
+  });
+
+  it('rejects a watcher with no instructions', async () => {
+    const { status } = await createWatcher({}, 'E2E watcher empty');
+    expect(status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('rejects a data tool that would shadow an outcome tool', async () => {
+    const { status } = await createWatcher(
+      { instructions: 'x', tools: 'trigger_task' }, 'E2E watcher clash');
+    expect(status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('run-now on a test server skips instead of calling a model', async () => {
+    // backgroundAiDisabled() is TRUE under vitest by design — asserting the skip
+    // is what proves an unattended watcher cannot fire a live model call here.
+    const { json: created } = await createWatcher(
+      { instructions: 'Check unread mail.' }, 'E2E watcher skip');
+    const runRes = await post(`/api/routines/${created.job.id}/run`, {});
+    expect(runRes.status).toBe(200);
+    const { json: jobRes } = await get(`/api/routines/${created.job.id}`);
+    expect(jobRes.job.state.lastStatus).toBe('ok');
+    expect(jobRes.job.state.lastError).toBeUndefined();
+  });
+
+  it('an unknown data tool fails the run with a message naming what exists', async () => {
+    const { json: created } = await createWatcher(
+      { instructions: 'x', tools: 'definitely_not_a_tool' }, 'E2E watcher bad tool');
+    await post(`/api/routines/${created.job.id}/run`, {});
+    const { json: jobRes } = await get(`/api/routines/${created.job.id}`);
+    // The tool check runs BEFORE the background-AI gate would skip, so a
+    // misconfigured watcher is loud even on a box that never calls models.
+    expect(jobRes.job.state.lastStatus).toBe('error');
+    expect(jobRes.job.state.lastError).toContain('unknown data tool');
+  });
+
+  it('deleting the routine deletes its watcher memory', async () => {
+    const { json: created } = await createWatcher(
+      { instructions: 'x' }, 'E2E watcher delete');
+    const { updateTriggerState, triggerStatePath } = await import('../../src/core/routines/trigger-state.js');
+    await updateTriggerState(created.job.id, (s) => { s.acted.k = Date.now(); });
+    const fs = await import('node:fs/promises');
+    await expect(fs.access(triggerStatePath(created.job.id))).resolves.toBeUndefined();
+
+    const res = await fetch(apiUrl(`/api/routines/${created.job.id}`), { method: 'DELETE' });
+    expect(res.status).toBe(204);
+    await expect(fs.access(triggerStatePath(created.job.id))).rejects.toThrow();
+  });
+});
+
+describe('save-time executor validation', () => {
+  async function patch(id: string, body: unknown): Promise<number> {
+    const res = await fetch(apiUrl(`/api/routines/${id}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return res.status;
+  }
+
+  it('names the executors that exist instead of accepting a typo', async () => {
+    // Without this, a typo'd type saves fine and then errors on every tick.
+    const { status, json } = await post('/api/routines', {
+      name: 'E2E typo executor',
+      schedule: { kind: 'every', everyMs: 600_000 },
+      executor: { type: 'wathcer', config: { instructions: 'x' } },
+    });
+    expect(status).toBe(400);
+    expect(JSON.stringify(json)).toContain('watcher');
+  });
+
+  it('refuses a PATCH that would break the config, leaving the stored job intact', async () => {
+    const { json: created } = await post('/api/routines', {
+      name: 'E2E patch guard',
+      schedule: { kind: 'every', everyMs: 600_000 },
+      executor: { type: 'watcher', config: { instructions: 'Check unread mail.' } },
+    });
+    expect(await patch(created.job.id, {
+      executor: { type: 'watcher', config: { instructions: '   ' } },
+    })).toBe(400);
+    const { json: after } = await get(`/api/routines/${created.job.id}`);
+    expect(after.job.executor.config.instructions).toBe('Check unread mail.');
+  });
+
+  it('clamps on PATCH too, so the form shows what the run will use', async () => {
+    const { json: created } = await post('/api/routines', {
+      name: 'E2E patch clamp',
+      schedule: { kind: 'every', everyMs: 600_000 },
+      executor: { type: 'watcher', config: { instructions: 'x' } },
+    });
+    expect(await patch(created.job.id, {
+      executor: { type: 'watcher', config: { instructions: 'x', maxOutcomesPerRun: 999 } },
+    })).toBe(200);
+    const { json: after } = await get(`/api/routines/${created.job.id}`);
+    expect(after.job.executor.config.maxOutcomesPerRun).toBe(20);
+  });
+
+  it('leaves a legacy create with no executor key alone', async () => {
+    // The executor is DERIVED from sessionTarget/payload inside the engine, so
+    // the save-time gate must not demand one up front.
+    const { status, json } = await post('/api/routines', {
+      name: 'E2E legacy untouched',
+      schedule: { kind: 'every', everyMs: 600_000 },
+      sessionTarget: 'main',
+      payload: { kind: 'systemEvent', text: 'ping' },
+    });
+    expect(status).toBe(201);
+    expect(json.job.executor.type).toBe('main-agent');
   });
 });

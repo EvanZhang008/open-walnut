@@ -635,6 +635,10 @@ session-message-queue.json
 # stale due time back from the other box and re-fires jobs (2026-08-04 storm).
 # Job DEFINITIONS (cron-jobs.json) still sync.
 cron-state.json
+# Watcher routine memory (what each watcher already saw and already acted on).
+# Machine-local for the same reason as cron-state.json: an LWW echo of another
+# box's older "acted" map would un-remember an outcome and re-fire it here.
+routine-state/
 # Reply-request ledger: deadlineAt is a machine-local due time and the whole
 # thing only means anything on the primary (the sweeper is !CLOUD_MODE). Syncing
 # it would let LWW roll a settled row back to pending and re-notify — same class

@@ -2,6 +2,8 @@ export { registerExecutor, getExecutor, listExecutors, clearExecutors, runExecut
 export { createMainAgentExecutor } from './executors/main-agent.js';
 export { createWalnutAgentExecutor } from './executors/walnut-agent.js';
 export { createClaudeCodeExecutor } from './executors/claude-code.js';
+export { createWatcherExecutor } from './executors/watcher.js';
+export type { WatcherExecutorConfig, WatcherExecutorDeps, WatcherEngine } from './executors/watcher.js';
 export type {
   ExecutorDefinition,
   ExecutorFieldSpec,
