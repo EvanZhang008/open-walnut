@@ -139,8 +139,22 @@ async function openCenterInbox(page: Page): Promise<Locator> {
 const rowFor = (host: Locator, subject: string): Locator =>
   host.locator('.hib-row').filter({ hasText: subject })
 
-const inboxChip = (panel: Locator): Locator =>
-  panel.locator('.session-action-chip').filter({ hasText: 'Inbox' })
+const moreMenu = (page: Page): Locator => page.locator('.task-kebab-menu:visible')
+
+async function openMoreActions(panel: Locator): Promise<Locator> {
+  await panel.getByRole('button', { name: 'More actions' }).click()
+  const menu = moreMenu(panel.page())
+  await expect(menu).toBeVisible({ timeout: 15_000 })
+  return menu
+}
+
+async function closeMoreActions(panel: Locator): Promise<void> {
+  await panel.getByRole('button', { name: 'More actions' }).click()
+  await expect(moreMenu(panel.page())).toHaveCount(0)
+}
+
+const inboxItem = (menu: Locator): Locator =>
+  menu.locator('.task-kebab-item').filter({ hasText: 'Inbox' })
 
 // ── 1. Two surfaces mounted at once: the reader over the rail list ──
 
@@ -263,22 +277,29 @@ test('a pin taken in the rail is already on the session Inbox tab, with no list 
     .toBe(readsBefore)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-session-tab-already-pinned.png` })
 
-  // ── And back the other way, same frame: the tab writes, the panel's own chip
-  //    badge (a separate subscriber) follows before the route answers ──
-  const badge = inboxChip(panel).locator('.session-action-chip-count')
+  // ── And back the other way, same frame: the tab writes, and the Inbox entry in
+  //    the ⋮ menu (a separate subscriber) follows before the route answers ──
+  const menu = await openMoreActions(panel)
+  const badge = inboxItem(menu).locator('.session-action-chip-count')
   await expect(badge).toHaveCount(0)
+  await closeMoreActions(panel)
 
   freezeInbox(gate)
   await paneRow.getByRole('button', { name: 'Mark unread' }).click()
 
+  // Straight back into the menu — that is the badge's only home now, and the write
+  // is still on hold, so whatever it shows came from the shared store.
+  await openMoreActions(panel)
   await expect(badge).toHaveText('1', { timeout: INSTANT_MS })
   await expect(paneRow).toHaveClass(/hib-unread/, { timeout: INSTANT_MS })
   await expect(pane.locator('.session-inbox-bar-sub')).toContainText('1 unread', { timeout: INSTANT_MS })
   expect(gate.writes, 'the unread POST is still held').toEqual([])
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/04-tab-unread-moved-chip-badge.png` })
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/04-tab-unread-moved-menu-badge.png` })
+  await closeMoreActions(panel)
 
   await expect.poll(() => gate.writes.length, { timeout: HOLD_MS * 4 }).toBeGreaterThanOrEqual(1)
   await page.waitForTimeout(1500)
+  await openMoreActions(panel)
   await expect(badge).toHaveText('1')
   await expect(paneRow).toHaveClass(/hib-unread/)
 

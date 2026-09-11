@@ -14,8 +14,8 @@
  *  - answering from the tab (not the overlay) records the decision, threads the
  *    human turn, and an agent reply grows that thread with no reload;
  *  - the list is this session's letters ONLY (an `external` letter and another
- *    session's letter belong to no session tab), and the chip's badge is honest
- *    while the tab is CLOSED.
+ *    session's letter belong to no session tab), and the ⋮ menu entry's badge is
+ *    honest while the tab is CLOSED.
  *
  * Isolation: every test starts its OWN real session, so its letter set is exactly
  * what it seeded and counts can be EXACT rather than floors — the fixture server
@@ -130,12 +130,26 @@ async function openSessionTabViaLetter(
   return sessionPanel
 }
 
-const inboxChip = (panel: Locator): Locator =>
-  panel.locator('.session-action-chip').filter({ hasText: 'Inbox' })
+const moreMenu = (page: Page): Locator => page.locator('.task-kebab-menu:visible')
 
-/** Chip badge as a NUMBER (0 when absent) — the count while the tab is closed. */
-async function chipBadge(panel: Locator): Promise<number> {
-  const badge = inboxChip(panel).locator('.session-action-chip-count')
+async function openMoreActions(panel: Locator): Promise<Locator> {
+  await panel.getByRole('button', { name: 'More actions' }).click()
+  const menu = moreMenu(panel.page())
+  await expect(menu).toBeVisible({ timeout: 15_000 })
+  return menu
+}
+
+async function closeMoreActions(panel: Locator): Promise<void> {
+  await panel.getByRole('button', { name: 'More actions' }).click()
+  await expect(moreMenu(panel.page())).toHaveCount(0)
+}
+
+const inboxItem = (menu: Locator): Locator =>
+  menu.locator('.task-kebab-item').filter({ hasText: 'Inbox' })
+
+/** Menu badge as a NUMBER (0 when absent) — the count while the tab is closed. */
+async function inboxBadge(menu: Locator): Promise<number> {
+  const badge = inboxItem(menu).locator('.session-action-chip-count')
   if (await badge.count() === 0) return 0
   return Number((await badge.textContent())?.replace('+', '') ?? 0)
 }
@@ -176,8 +190,11 @@ test('a letter opens in the session Inbox tab beside the live chat, and answerin
   await loadHome(page)
   const panel = await openSessionTabViaLetter(page, subject, sid)
 
-  // ── The tab is a peer of the other views: chip active, pane in the split ──
-  await expect(inboxChip(panel)).toHaveClass(/session-action-chip-active/, { timeout: 15_000 })
+  // ── The tab is a peer of the other views: menu entry on, pane in the split ──
+  const openedMenu = await openMoreActions(panel)
+  await expect(inboxItem(openedMenu)).toHaveClass(/task-kebab-item-active/, { timeout: 15_000 })
+  await expect(inboxItem(openedMenu)).toHaveAttribute('aria-pressed', 'true')
+  await closeMoreActions(panel)
   const pane = panel.locator('.session-inbox-pane')
   await expect(pane).toBeVisible({ timeout: 20_000 })
   await expect(pane.locator('.session-inbox-bar-title')).toHaveText('Inbox')
@@ -301,7 +318,7 @@ test('a letter opens in the session Inbox tab beside the live chat, and answerin
 
 // ── 2. The list is this session's letters, and the badge is honest when closed ──
 
-test('the tab lists only this session letters and the chip badge counts them while closed', async ({ page, request }) => {
+test('the tab lists only this session letters and the menu badge counts them while closed', async ({ page, request }) => {
   test.setTimeout(240_000)
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
@@ -361,12 +378,13 @@ test('the tab lists only this session letters and the chip badge counts them whi
 
   // Reading `alsoMine` above left exactly one unread: the unanswered decision.
   await expect(pane.locator('.hib-row').filter({ hasText: mine })).toHaveClass(/hib-unread/)
-  await expect.poll(() => chipBadge(panel), { timeout: 20_000, intervals: [300, 500] }).toBe(1)
+  const menu = await openMoreActions(panel)
+  await expect.poll(() => inboxBadge(menu), { timeout: 20_000, intervals: [300, 500] }).toBe(1)
   // An unanswered decision is a stronger signal than unread — the badge says so.
   // The CLASS is not the promise: this stylesheet lands before globals.css in the
   // bundle, so a single-class rule silently lost the colour tie-break and the
   // badge stayed accent-blue. Assert the RENDERED colour.
-  const badge = inboxChip(panel).locator('.session-action-chip-count')
+  const badge = inboxItem(menu).locator('.session-action-chip-count')
   await expect(badge).toHaveClass(/session-action-chip-count-warn/)
   const colors = await badge.evaluate((el) => {
     const root = getComputedStyle(document.documentElement)
@@ -381,10 +399,11 @@ test('the tab lists only this session letters and the chip badge counts them whi
   })
   expect(colors.bg, 'decision badge must render the warning colour').toBe(colors.warning)
   expect(colors.bg).not.toBe(colors.accent)
-  await expect(inboxChip(panel)).toHaveAttribute('title', /waiting on a decision/)
+  await expect(inboxItem(menu)).toHaveAttribute('title', /waiting on a decision/)
+  await closeMoreActions(panel)
 
   // READING a decision must not clear the badge — deciding later is the entire
-  // point of an async ask. Gated on unread alone, the chip went BARE here: the
+  // point of an async ask. Gated on unread alone, the entry went BARE here: the
   // agent was still blocked and the only remaining cue needed a hover.
   await pane.locator('.hib-row').filter({ hasText: mine }).click()
   await expect(pane.locator('.hib-reader-subject')).toHaveText(mine, { timeout: 20_000 })
@@ -392,27 +411,40 @@ test('the tab lists only this session letters and the chip badge counts them whi
   await pane.getByRole('button', { name: '← Letters' }).click()
   await expect(pane.locator('.hib-row').filter({ hasText: mine }))
     .not.toHaveClass(/hib-unread/, { timeout: 20_000 })
-  await expect.poll(() => chipBadge(panel), { timeout: 20_000, intervals: [300, 500] }).toBe(1)
+  await openMoreActions(panel)
+  await expect.poll(() => inboxBadge(menu), { timeout: 20_000, intervals: [300, 500] }).toBe(1)
   await expect(badge).toHaveClass(/session-action-chip-count-warn/)
 
   // ── The badge is live while the tab is CLOSED (that is the point of it) ──
-  await inboxChip(panel).click()
+  // Picking the entry both toggles the tab and closes the menu.
+  await inboxItem(menu).click()
+  await expect(menu).toHaveCount(0)
   await expect(panel.locator('.session-inbox-pane')).toHaveCount(0, { timeout: 15_000 })
-  await expect(inboxChip(panel)).not.toHaveClass(/session-action-chip-active/)
-  expect(await chipBadge(panel)).toBe(1)
+  await openMoreActions(panel)
+  await expect(inboxItem(menu)).not.toHaveClass(/task-kebab-item-active/)
+  await expect(inboxItem(menu)).toHaveAttribute('aria-pressed', 'false')
+  expect(await inboxBadge(menu)).toBe(1)
   await shot(page, 'tab-07-badge-with-tab-closed')
 
-  // A letter arriving with the tab closed still moves the badge, no click needed.
+  // A letter arriving with the tab closed still moves the badge, no click needed
+  // (the menu stays open across the send, so nothing re-opens it into place).
   await sendLetter(request, {
     subject: `PW TAB late ${NONCE}`,
     type: 'info',
     markdown: `Arrived while the tab was closed (${NONCE}).`,
     text: `Arrived while the tab was closed (${NONCE}).`,
   }, sid)
-  await expect.poll(() => chipBadge(panel), { timeout: 30_000, intervals: [500, 1000] }).toBe(2)
+  await expect.poll(() => inboxBadge(menu), { timeout: 30_000, intervals: [500, 1000] }).toBe(2)
 
-  // Re-opening the chip lands on the LIST (the letter was left, not parked).
-  await inboxChip(panel).click()
+  // Escape dismisses the menu — pinned HERE, with the tab already closed, because
+  // over an open tab the same key also exits fullscreen and takes the tab with it.
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+
+  // Re-picking the entry lands on the LIST (the letter was left, not parked).
+  await openMoreActions(panel)
+  await inboxItem(menu).click()
+  await expect(menu).toHaveCount(0)
   const reopened = panel.locator('.session-inbox-pane')
   await expect(reopened).toBeVisible({ timeout: 15_000 })
   await expect(reopened.locator('.hib-row')).toHaveCount(3, { timeout: 20_000 })
@@ -483,9 +515,11 @@ test('a pasted /sessions?tab=inbox&letter= URL lands on the letter in the sessio
   // The tab must still be open a beat later: the route settles underneath a column
   // opened from another page, and that used to close it (DEEP_LINK_SETTLE_MS in
   // SessionPanel). A one-shot assertion would have passed on the way past.
-  await expect(inboxChip(panel)).toHaveClass(/session-action-chip-active/, { timeout: 20_000 })
+  const menu = await openMoreActions(panel)
+  await expect(inboxItem(menu)).toHaveClass(/task-kebab-item-active/, { timeout: 20_000 })
   await page.waitForTimeout(3_000)
-  await expect(inboxChip(panel)).toHaveClass(/session-action-chip-active/)
+  await expect(inboxItem(menu)).toHaveClass(/task-kebab-item-active/)
+  await closeMoreActions(panel)
   expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])
   const pane = panel.locator('.session-inbox-pane')
   await expect(pane.locator('.hib-reader-subject')).toHaveText(subject, { timeout: 20_000 })

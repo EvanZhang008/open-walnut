@@ -22,11 +22,9 @@ import { SessionFileExplorer } from './SessionFileExplorer';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
 import { SessionCodeView } from './SessionCodeView';
-import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { SessionDiffView } from './SessionDiffView';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
-import { inboxChipTitle } from '@/components/inbox/session-letters';
 import {
   consumeSessionInboxLink, deepLinkFullscreenReassert, SESSION_INBOX_LINK_EVENT,
 } from '@/components/inbox/session-inbox-link';
@@ -93,8 +91,6 @@ import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/compos
  * letter is worse than one click on "show chat".
  */
 const SPLIT_MIN_WIDTH = 900;
-/** Pointer dwell on the Code chip before the VS Code ensure is prefetched. */
-const CODE_PREFETCH_DWELL_MS = 400;
 /** How long a hidden (kept-alive) VS Code view survives before it is unmounted. */
 const CODE_VIEW_HIDDEN_TTL_MS = 10 * 60_000;
 
@@ -878,10 +874,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // null = none open. Opening any view promotes the panel to fullscreen.
   const [activeView, setActiveView] = useState<SessionSplitView | null>(null);
   const splitOpen = activeView !== null;
-  // Inbox tab: the letters THIS session wrote to the human. The COUNT is read
-  // whether or not the tab is open — a badge that only appears once you open the
-  // tab can't tell you a letter is waiting. One shared fetch feeds every panel
-  // (useSessionLetters), so N columns are still one GET.
   const {
     unreadCount: letterUnread, decisionCount: letterDecisions, attentionCount: letterAttention,
   } = useSessionLetters(sessionId);
@@ -1020,8 +1012,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     }, CODE_VIEW_HIDDEN_TTL_MS);
     return () => clearTimeout(timer);
   }, [codeViewMounted, activeView, sessionId]);
-  const codeHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (codeHoverTimer.current) clearTimeout(codeHoverTimer.current); }, []);
   // Clicking a file path in the chat opens it in the SAME split layout as
   // Changed/Files/Terminal — file explorer + preview on the left, the live chat
   // in the resizable right column (replaces the old full-screen FileViewer modal).
@@ -1800,48 +1790,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             >
               Terminal
             </button>
-            {/* Inbox — peer of the other tabs. The badge counts THIS session's
-                letters that still want the human: unread OR waiting on a decision,
-                each letter once (a decision read-but-not-answered is the whole
-                point of an async ask, and gating on unread alone left the chip
-                bare while the agent was still blocked). Any unanswered decision in
-                the count turns the badge warning-coloured. */}
-            <button
-              className={`session-action-chip${activeView === 'inbox' ? ' session-action-chip-active' : ''}`}
-              onClick={() => toggleView('inbox')}
-              title={inboxChipTitle(letterAttention, letterUnread, letterDecisions)}
-            >
-              Inbox
-              {letterAttention > 0 && (
-                <span
-                  className={`session-action-chip-count${letterDecisions > 0 ? ' session-action-chip-count-warn' : ''}`}
-                >
-                  {letterAttention > 99 ? '99+' : letterAttention}
-                </span>
-              )}
-            </button>
-            <button
-              className={`session-action-chip${activeView === 'code' ? ' session-action-chip-active' : ''}`}
-              onClick={() => toggleView('code')}
-              // Hover = intent: warm the ensure (spawn/adopt + tunnel) so the
-              // click usually finds it already resolved. install=false inside.
-              // DWELL first: the chip sits at the end of the tab strip, so the
-              // pointer crosses it on the way to Files/Terminal. Each crossing
-              // used to fire a POST that the server answered in ~5s (remote
-              // host probe) and that, as a write, jumped the browser's 6-slot
-              // fetch queue — the Files tree the user actually clicked waited
-              // behind it (2026-09-02: "open Files, ~5s until it shows").
-              onMouseEnter={() => {
-                if (!sessionId) return;
-                codeHoverTimer.current = setTimeout(() => prefetchVscodeEmbed(sessionId), CODE_PREFETCH_DWELL_MS);
-              }}
-              onMouseLeave={() => {
-                if (codeHoverTimer.current) { clearTimeout(codeHoverTimer.current); codeHoverTimer.current = null; }
-              }}
-              title="Embedded VS Code in the session working directory — full-screen alongside the chat"
-            >
-              Code
-            </button>
             {/* Model pill + turn count moved out of the header (2026-07-25):
                 the pill now lives in the composer controls row (ComposerModelPill,
                 rendered in both ChatInput controlsSlot mode bars); the turn
@@ -1984,6 +1932,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                       host={session?.host}
                       hostname={session?.hostname}
                       archived={session?.archived}
+                      activeView={activeView}
+                      onToggleView={toggleView}
+                      unreadCount={letterUnread}
+                      decisionCount={letterDecisions}
+                      attentionCount={letterAttention}
                       notesOpen={notesOpen}
                       onToggleNotes={() => setNotesOpen(o => !o)}
                       messagesOpen={messagesOpen}

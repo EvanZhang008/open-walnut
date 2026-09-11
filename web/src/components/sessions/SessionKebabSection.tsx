@@ -10,6 +10,9 @@ import { useState, useRef, useEffect } from 'react';
 import { copyTextRobust } from '@/utils/clipboard';
 import { ICON_SEARCH, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
 import { openSessionInVscode } from './openSessionInVscode';
+import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
+import { inboxChipTitle } from '@/components/inbox/session-letters';
+import type { SessionSplitView } from './sessionSplitView';
 import {
   useSessionPanelMode,
   MIN_PANELS,
@@ -69,6 +72,11 @@ interface SessionKebabSectionProps {
   host?: string;
   hostname?: string;
   archived?: boolean;
+  activeView: SessionSplitView | null;
+  onToggleView: (view: SessionSplitView) => void;
+  unreadCount: number;
+  decisionCount: number;
+  attentionCount: number;
   // Notes / Msgs toggles (owned by the panel)
   notesOpen: boolean;
   onToggleNotes: () => void;
@@ -116,19 +124,57 @@ function CopyItem({ label, value, onAfter }: { label: string; value: string; onA
 }
 
 export function SessionKebabSection({
-  sessionId, cwd, host, hostname, archived,
+  sessionId, cwd, host, hostname, archived, activeView, onToggleView,
+  unreadCount, decisionCount, attentionCount,
   notesOpen, onToggleNotes, messagesOpen, onToggleMessages, msgCount,
   onRestart, restartBusy,
   onTerminate, terminateBusy,
   onInvestigate, investigating, investigateResult,
   onOpenVscodeError, onAfterAction,
 }: SessionKebabSectionProps) {
+  const codeHoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(codeHoverTimer.current), [sessionId]);
   const cdPrefix = cwd ? `cd ${cwd} && ` : '';
   const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
 
   return (
     <div className="task-kebab-section">
       <div className="task-kebab-section-label">Session</div>
+
+      <button
+        className={`task-kebab-item${activeView === 'inbox' ? ' task-kebab-item-active' : ''}`}
+        aria-pressed={activeView === 'inbox'}
+        onClick={(e) => { e.stopPropagation(); onToggleView('inbox'); onAfterAction?.(); }}
+        title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}
+      >
+        <span className="task-kebab-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 4h16l2 10v6H2v-6L4 4Z" />
+            <path d="M2 14h6l2 3h4l2-3h6" />
+          </svg>
+        </span>
+        <span>Inbox</span>
+        {attentionCount > 0 && (
+          <span className={`session-action-chip-count${decisionCount > 0 ? ' session-action-chip-count-warn' : ''}`}>
+            {attentionCount > 99 ? '99+' : attentionCount}
+          </span>
+        )}
+      </button>
+
+      <button
+        className={`task-kebab-item${activeView === 'code' ? ' task-kebab-item-active' : ''}`}
+        aria-pressed={activeView === 'code'}
+        onClick={(e) => { e.stopPropagation(); onToggleView('code'); onAfterAction?.(); }}
+        onMouseEnter={() => {
+          clearTimeout(codeHoverTimer.current);
+          codeHoverTimer.current = setTimeout(() => prefetchVscodeEmbed(sessionId), 400);
+        }}
+        onMouseLeave={() => clearTimeout(codeHoverTimer.current)}
+        title="Embedded VS Code in the session working directory"
+      >
+        <span className="task-kebab-icon">{ICON_VSCODE}</span>
+        <span>Code</span>
+      </button>
 
       <button
         className={`task-kebab-item${notesOpen ? ' task-kebab-item-active' : ''}`}
