@@ -60,7 +60,7 @@ export default defineConfig({
         'src/utils/display.ts',
         'src/utils/json-output.ts',
         'src/providers/claude-code-session.ts',
-        'src/agent/model.ts',
+        'src/model/model.ts',
         'src/core/types.ts',
       ],
       thresholds: {

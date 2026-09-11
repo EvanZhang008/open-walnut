@@ -22,7 +22,9 @@ const capturingAdapter: ProtocolAdapter = {
 };
 
 // resolveForCall() is private; intercept at the registry seam it depends on.
-vi.mock('../../src/agent/providers/registry.js', () => ({
+// Path is the model layer's real home (src/model/): model.ts imports the registry
+// directly, so a mock aimed at the src/agent/providers/ shim would never be seen.
+vi.mock('../../src/model/providers/registry.js', () => ({
   resolveProvider: vi.fn((providerName: string) => ({
     config: { api: providerName, region: 'us-east-1' },
     adapter: capturingAdapter,

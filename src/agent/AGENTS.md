@@ -6,6 +6,8 @@ providers, auth, retry, streaming, caching, tool modules).
 ## Essentials
 
 - Entry: `runAgentLoop()` in `src/agent/loop.ts`. Always streams (`sendMessageStream()`).
+- The model layer now lives in `src/model/` (`model.ts` + `providers/`); `src/agent/model.ts` and
+  `src/agent/providers/*.ts` are re-export shims that go away with this directory.
 - Providers are config (YAML), protocols are code: registry resolves `config.providers[name]` →
   adapter (`bedrock` | `anthropic-messages`). Legacy config falls back to Bedrock.
 - Prompt caching in `src/agent/cache.ts` — cache_control on system/tools/messages; volatile
