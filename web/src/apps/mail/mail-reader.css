@@ -13,8 +13,8 @@
  * edge without a divider, and it is the only honest way to render html mail, which is authored for
  * white.
  *
- * THE MEASURE. Everything the reader reads lives in one 760px column with 28px of air on each
- * side. `.mail-reader-column` is the column, and the header and the body both wear it, so the
+ * THE MEASURE. Everything the reader reads lives in one column of at most 1080px with 28px of air
+ * on each side; html mail is authored for a wide page, and a person with a wide window asked for it. `.mail-reader-column` is the column, and the header and the body both wear it, so the
  * subject, the sender and the first line of the body all start on the same vertical.
  */
 
@@ -52,7 +52,7 @@
 
 .mail-reader-column {
   width: 100%;
-  max-width: 760px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 0 28px;
 }
@@ -323,7 +323,7 @@
   overflow: auto;
   margin: 0;
   padding: 20px 24px;
-  max-width: 68ch;
+  max-width: 80ch;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
   font-size: 15px;
   line-height: 1.65;

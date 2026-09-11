@@ -33,8 +33,8 @@ import { expect, test, type FrameLocator, type Locator, type Page } from '@playw
 
 const SHOT_DIR = '/tmp/mail-slack-ui/design'
 
-/** The reading column is 760px wide including its 28px of side padding. */
-const COLUMN_MAX = 760
+/** The reading column is at most 1080px wide including its 28px of side padding. */
+const COLUMN_MAX = 1080
 
 interface Fixture {
   port: number

@@ -36,7 +36,7 @@
 .mail-compose-card {
   flex: 1;
   min-height: 0;
-  max-width: 760px;
+  max-width: 1080px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
