@@ -319,9 +319,11 @@ const apiServer = await startServer({ port: 0, dev: true })
  *
  * The setting is what the Apps tab reads, but boot ALSO calls startOutsideCollector(),
  * which on macOS compiles a Swift helper with `xcrun swiftc` and then spawns a process
- * that watches the real screen. A browser test must do neither. Writing the setting
- * once nothing is left to read it gives the tab `enabled: true, running: false` — a
- * state the tab has its own line for, and the one this fixture wants.
+ * that watches the real screen. A browser test must do neither. (helper-build.ts now
+ * refuses every native helper on an ephemeral server anyway; this ordering is what gives
+ * the tab its exact state.) Writing the setting once nothing is left to read it gives the
+ * tab `enabled: true, running: false` — a state the tab has its own line for, and the one
+ * this fixture wants.
  */
 const { updateConfig } = await import('../../../src/core/config-manager.js')
 await updateConfig({ time: { outside: { enabled: true } } })

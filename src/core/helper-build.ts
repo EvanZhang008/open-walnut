@@ -81,11 +81,37 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CLOUD_MODE, WALNUT_HOME } from '../constants.js';
+import { CLOUD_MODE, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 
-/** Why this box cannot have a given helper. Null means fine, or not tried yet. */
-export type HelperUnavailable = 'not_macos' | 'no_compiler' | 'compile_failed';
+/**
+ * Why this box cannot have a given helper. Null means fine, or not tried yet.
+ * `ephemeral`: this server runs from a throwaway data dir and refused on purpose
+ * (see {@link nativeHelpersAllowed}).
+ */
+export type HelperUnavailable = 'not_macos' | 'no_compiler' | 'compile_failed' | 'ephemeral';
+
+/**
+ * Whether this process may compile and run native helpers at all.
+ *
+ * An ephemeral server (Playwright fixture, `dev:ephemeral`, any `--_ephemeral-child`)
+ * gets a fresh WALNUT_HOME under the system temp dir, so its helper cache is a path
+ * nobody has ever seen. That matters because tccd remembers a grant for a bare
+ * executable BY PATH: a helper compiled into `$TMPDIR/walnut-mail-app-…/cache/` is a
+ * brand-new program, and the first `list` it runs puts the Calendars dialog on the
+ * user's screen. Measured on 2026-09-11: 29 dialogs in one afternoon, one per fixture
+ * boot, from browser specs that never looked at a calendar. The same shape would ask
+ * for Automation (walnut-activity) on a Time fixture.
+ *
+ * So a throwaway home never becomes a TCC subject. It reports `ephemeral`, and every
+ * consumer already degrades to its "helper unavailable" path (the one CI on Linux
+ * exercises). `WALNUT_NATIVE_HELPERS=1` is the explicit opt back in for someone who
+ * really wants a fixture to reach the real calendar.
+ */
+export function nativeHelpersAllowed(): boolean {
+  if (!IS_EPHEMERAL) return true;
+  return process.env.WALNUT_NATIVE_HELPERS === '1';
+}
 
 export interface HelperSpec {
   /** Base name, no version: `walnut-reader`. The cached file appends the version. */
@@ -302,6 +328,15 @@ export function ensureHelper(spec: HelperSpec, sourceFile: string): Promise<stri
 
 async function buildHelper(spec: HelperSpec, sourceFile: string): Promise<BuildOutcome> {
   if (process.platform !== 'darwin' || CLOUD_MODE) return { bin: null, reason: 'not_macos' };
+  // Before the cache lookup on purpose: even a helper that already sits in this temp
+  // dir must not run, because running it is what asks the user for the permission.
+  if (!nativeHelpersAllowed()) {
+    log.web.info('native helper skipped on an ephemeral server', {
+      helper: spec.name,
+      note: 'a helper under a temp data dir is a new TCC subject and would prompt; set WALNUT_NATIVE_HELPERS=1 to allow',
+    });
+    return { bin: null, reason: 'ephemeral' };
+  }
   const bin = cachedBinPath(spec);
   const src = helperSourcePath(sourceFile);
   const fingerprint = sourceFingerprint(spec, src);

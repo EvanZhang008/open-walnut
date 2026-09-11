@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../../constants.js';
 import { log } from '../../../logging/index.js';
-import { ensureHelper, olderHelperGenerations, type HelperSpec } from '../../helper-build.js';
+import { ensureHelper, helperFailure, olderHelperGenerations, type HelperSpec } from '../../helper-build.js';
 import { CalendarHelperError } from '../helper-error.js';
 import type {
   CalendarEvent,
@@ -183,10 +183,12 @@ async function runHelper<T>(args: string[], opts?: { currentOnly?: boolean }): P
   const current = await ensureHelper(HELPER_SPEC, 'walnut-calendar.swift');
   const bin = opts?.currentOnly ? current : (fallbackBin ?? current);
   if (!bin) {
-    throw new CalendarHelperError(
-      'Calendar helper unavailable (needs macOS + Xcode Command Line Tools for one-time compile).',
-      'not-configured'
-    );
+    // The compile message would send a fixture author to install Xcode for a helper
+    // that was refused on purpose.
+    const message = helperFailure(HELPER_SPEC.name) === 'ephemeral'
+      ? 'Calendar helper is not run on an ephemeral server (a temp data dir would re-prompt for Calendars); set WALNUT_NATIVE_HELPERS=1 to allow it.'
+      : 'Calendar helper unavailable (needs macOS + Xcode Command Line Tools for one-time compile).';
+    throw new CalendarHelperError(message, 'not-configured');
   }
   try {
     return await execHelper<T>(bin, args);
