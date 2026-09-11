@@ -27,7 +27,7 @@ import { ReferencePanel } from '@/components/common/ReferencePanel';
 import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
 import { fetchReferences, type ReferencesResponse } from '@/api/files';
 import {
-  DomSearchController, applyHighlights, clearHighlights, collectTextMatches,
+  DomSearchController, applyHighlights, collectTextMatches,
   wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH, SYMBOL_RE,
 } from '@/utils/dom-text-search';
 import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
@@ -1986,51 +1986,35 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     return () => window.removeEventListener('keydown', handler, true);
   }, [openSearch, hasSearchableDiff]);
 
-  // ── Select → highlight every exact match (same paint as the Files viewer) ──
-  // paintedRef: only clear the (document-global) highlight WE painted — another
-  // viewer instance may own the name right now.
-  const selMatchPaintedRef = useRef(false);
+  const clearSelectionMatchesRef = useRef<(() => void) | null>(null);
   const refreshDiffSelectionMatches = useCallback(() => {
-    const root = containerRef.current?.querySelector<HTMLElement>('.session-diff-main');
+    clearSelectionMatchesRef.current?.();
+    clearSelectionMatchesRef.current = null;
+    // 嵌套的文件预览自行管理选区，只扫描真正的 diff。
+    const root = containerRef.current?.querySelector<HTMLElement>('.session-diff-filepane');
     const sel = window.getSelection();
     const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString() : '';
     const t = text.trim();
     if (!root || !t || t.length < 3 || t.length > 200 || t.includes('\n')
-      || !sel || !sel.rangeCount || !root.contains(sel.getRangeAt(0).commonAncestorContainer)) {
-      if (selMatchPaintedRef.current) {
-        clearHighlights(window, HL_SELMATCH);
-        selMatchPaintedRef.current = false;
-      }
-      return;
-    }
-    applyHighlights(window, HL_SELMATCH, collectTextMatches(root, t, true, 2000, DIFF_SEARCH_SKIP));
-    selMatchPaintedRef.current = true;
+      || !sel || !root.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+    clearSelectionMatchesRef.current = applyHighlights(window, HL_SELMATCH, collectTextMatches(root, t, true, 2000, DIFF_SEARCH_SKIP));
   }, []);
-  // The paint must track the SELECTION, not our mouse-ups: clearing the
-  // selection by clicking in the chat pane (or selecting text in another
-  // component) never fires a mouse-up here, which left the old highlight
-  // stuck on screen. selectionchange fires for all of those; debounce it so
-  // drag-selection doesn't re-scan a whale diff every frame.
   useEffect(() => {
     let timer = 0;
-    const onSelChange = () => {
+    const onSelectionChange = () => {
+      clearSelectionMatchesRef.current?.();
+      clearSelectionMatchesRef.current = null;
       window.clearTimeout(timer);
       timer = window.setTimeout(refreshDiffSelectionMatches, 120);
     };
-    document.addEventListener('selectionchange', onSelChange);
+    document.addEventListener('selectionchange', onSelectionChange);
     return () => {
-      document.removeEventListener('selectionchange', onSelChange);
+      document.removeEventListener('selectionchange', onSelectionChange);
       window.clearTimeout(timer);
+      clearSelectionMatchesRef.current?.();
+      clearSelectionMatchesRef.current = null;
     };
-  }, [refreshDiffSelectionMatches]);
-  useEffect(() => () => { if (selMatchPaintedRef.current) clearHighlights(window, HL_SELMATCH); }, []);
-  // File switch replaces the pane DOM — drop paint that points into the old tree.
-  useEffect(() => {
-    if (selMatchPaintedRef.current) {
-      clearHighlights(window, HL_SELMATCH);
-      selMatchPaintedRef.current = false;
-    }
-  }, [selectedId]);
+  }, [refreshDiffSelectionMatches, selectedId, ghost?.file]);
 
   // ── Cmd/Ctrl+click identifier → reference search (right-docked panel) ──────
   const [refState, setRefState] = useState<{

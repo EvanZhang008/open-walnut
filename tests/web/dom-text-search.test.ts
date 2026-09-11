@@ -4,7 +4,7 @@
  * symbol charset shared with cmd+click reference lookup.
  */
 import { describe, it, expect } from 'vitest';
-import { findMatchOffsets, SYMBOL_RE } from '../../web/src/utils/dom-text-search';
+import { applyHighlights, findMatchOffsets, SYMBOL_RE } from '../../web/src/utils/dom-text-search';
 
 describe('findMatchOffsets', () => {
   it('finds all case-insensitive matches by default', () => {
@@ -50,6 +50,44 @@ describe('findMatchOffsets', () => {
 
   it('still folds ordinary accented text', () => {
     expect(findMatchOffsets('Café CAFÉ', 'café', false)).toEqual([0, 5]);
+  });
+});
+
+describe('applyHighlights cleanup', () => {
+  function browser() {
+    const highlights = new Map<string, Set<Range>>();
+    class Highlight extends Set<Range> {
+      constructor(...ranges: Range[]) { super(ranges); }
+    }
+    const win = { CSS: { highlights }, Highlight } as unknown as Window;
+    return { win, highlights };
+  }
+
+  it('removes only its own paint and keeps search highlights', () => {
+    const { win, highlights } = browser();
+    const range = {} as Range;
+    applyHighlights(win, 'walnut-search', [range]);
+    const clear = applyHighlights(win, 'walnut-selmatch', [range]);
+    expect([...highlights.get('walnut-selmatch')!]).toEqual([range]);
+    clear();
+    clear();
+    expect([...highlights.keys()]).toEqual(['walnut-search']);
+  });
+
+  it('an old viewer cannot erase a newer viewer with the same name', () => {
+    const { win, highlights } = browser();
+    const first = {} as Range;
+    const second = {} as Range;
+    const clearFirst = applyHighlights(win, 'walnut-selmatch', [first]);
+    const clearSecond = applyHighlights(win, 'walnut-selmatch', [second]);
+    clearFirst();
+    expect([...highlights.get('walnut-selmatch')!]).toEqual([second]);
+    clearSecond();
+    expect(highlights.has('walnut-selmatch')).toBe(false);
+  });
+
+  it('returns harmless cleanup when the highlight API is unavailable', () => {
+    expect(() => applyHighlights({} as Window, 'walnut-selmatch', [{} as Range])()).not.toThrow();
   });
 });
 

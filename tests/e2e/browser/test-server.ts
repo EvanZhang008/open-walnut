@@ -1092,6 +1092,9 @@ await fs.writeFile(
     '',
   ].join('\n'),
 )
+for (const browser of ['chromium', 'webkit']) {
+  await fs.writeFile(path.join(vscodeFixtureRoot, `selection-format-${browser}.md`), '# Selection formatting\n\nKeep watching this passage.\n')
+}
 // A second scrollable file, so the spec can prove offsets are per-FILE (switching
 // away and back must not carry file A's position onto file B).
 await fs.writeFile(

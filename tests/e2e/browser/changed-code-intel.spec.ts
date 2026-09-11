@@ -14,6 +14,7 @@
  * lines twice and double every count here.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { dragPhrase } from './selection-helpers'
 
 const SESSION_ID = 'pw-changed-session'
 const TASK_ID = 'pw-task-changed'
@@ -122,6 +123,8 @@ test('cmd+click opens references; a row opens in-tab context; Open in Files cros
   const { panel, diff } = await openChangedPanel(page)
 
   const pt = await centerOfText(page, DIFF_MAIN, 'HasSyncedForItems')
+  await page.mouse.dblclick(pt.x, pt.y)
+  await expect.poll(() => highlightSize(page, 'walnut-selmatch')).toBe(2)
   await page.keyboard.down(MOD)
   await page.mouse.click(pt.x, pt.y)
   await page.keyboard.up(MOD)
@@ -142,6 +145,12 @@ test('cmd+click opens references; a row opens in-tab context; Open in Files cros
   const ghostFlash = ghost.locator('.cm-jump-flash')
   await expect(ghostFlash).toBeVisible({ timeout: 10_000 })
   await expect(ghostFlash).toHaveText('HasSyncedForItems')
+  await page.evaluate(async () => { await document.fonts.ready })
+  await dragPhrase(page, `${DIFF_MAIN} .fv-source-editor .cm-content`, 'HasSyncedForItems')
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe('HasSyncedForItems')
+  // 等父面板的选区 debounce 执行，避免过早通过「没有高亮」的断言。
+  await page.waitForTimeout(200)
+  expect(await highlightSize(page, 'walnut-selmatch')).toBe(0)
 
   // The escape hatch: "Open in Files" leaves for the Files tab, same landing.
   await ghost.getByRole('button', { name: 'Open in Files' }).click()

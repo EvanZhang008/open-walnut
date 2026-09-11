@@ -164,12 +164,18 @@ export function collectTextMatches(
 }
 
 /** Register ranges under a highlight name in the given window's registry. */
-export function applyHighlights(win: Window, name: string, ranges: Range[]): void {
+export function applyHighlights(win: Window, name: string, ranges: Range[]): () => void {
   const cssAny = (win as unknown as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
   const HighlightCtor = (win as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
-  if (!cssAny?.highlights || !HighlightCtor) return; // API unavailable — count/jump still work
-  if (!ranges.length) { cssAny.highlights.delete(name); return; }
-  cssAny.highlights.set(name, new HighlightCtor(...ranges));
+  const registry = cssAny?.highlights;
+  if (!registry || !HighlightCtor) return () => {};
+  if (!ranges.length) { registry.delete(name); return () => {}; }
+  const highlight = new HighlightCtor(...ranges);
+  registry.set(name, highlight);
+  return () => {
+    // 只删除本次绘制，不能清掉其他面板随后接管的同名高亮。
+    if (registry.get(name) === highlight) registry.delete(name);
+  };
 }
 
 export function clearHighlights(win: Window, name: string): void {

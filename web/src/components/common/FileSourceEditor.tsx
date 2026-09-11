@@ -164,6 +164,7 @@ const editorTheme = EditorView.theme({
     color: 'var(--fg-muted)',
     opacity: '0.65',
   },
+  '&:not(.cm-focused) .cm-selectionMatch': { backgroundColor: 'transparent' },
   '.cm-activeLine': { backgroundColor: 'var(--bg-hover, rgba(127, 127, 127, 0.06))' },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--fg)' },
   '.cm-cursor': { borderLeftColor: 'var(--fg)' },

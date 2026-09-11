@@ -56,7 +56,7 @@ import { FileMarkdownEditor } from '@/components/common/FileMarkdownEditor';
 import { SelectionAskPill, selectionClientRect } from '@/components/common/SelectionAskPill';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
 import {
-  DomSearchController, applyHighlights, clearHighlights, collectTextMatches,
+  DomSearchController, applyHighlights, collectTextMatches,
   ensureHighlightStyles, wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH, SYMBOL_RE,
 } from '@/utils/dom-text-search';
 import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
@@ -1507,22 +1507,35 @@ export function FileContentView({
   // ── Select → highlight every exact match ───────────────────────────────────
   // DOM surfaces only: CodeMirror already does this via highlightSelectionMatches.
   // Painted with the Highlight API under the browser's own selection paint.
+  const clearSelectionMatchesRef = useRef<(() => void) | null>(null);
   const refreshSelectionMatches = useCallback(() => {
-    const rootEl = contentRef.current;
-    if (!rootEl) return;
-    const body = rootEl.querySelector<HTMLElement>('.fv-wysiwyg-editor, .fv-md-preview, .file-viewer-code');
-    if (!body) return;
+    clearSelectionMatchesRef.current?.();
+    clearSelectionMatchesRef.current = null;
+    const body = contentRef.current?.querySelector<HTMLElement>('.fv-wysiwyg-editor, .fv-md-preview, .file-viewer-code');
     const sel = window.getSelection();
     const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString() : '';
     const t = text.trim();
-    if (!t || t.length < 3 || t.length > 200 || t.includes('\n')
-      || !sel || !body.contains(sel.getRangeAt(0).commonAncestorContainer)) {
-      clearHighlights(window, HL_SELMATCH);
-      return;
-    }
-    applyHighlights(window, HL_SELMATCH, collectTextMatches(body, t, true, 2000));
+    if (!body || !t || t.length < 3 || t.length > 200 || t.includes('\n')
+      || !sel || !body.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+    clearSelectionMatchesRef.current = applyHighlights(window, HL_SELMATCH, collectTextMatches(body, t, true, 2000));
   }, []);
-  useEffect(() => () => { clearHighlights(window, HL_SELMATCH); }, [filePath]);
+  useEffect(() => {
+    let timer = 0;
+    const onSelectionChange = () => {
+      clearSelectionMatchesRef.current?.();
+      clearSelectionMatchesRef.current = null;
+      window.clearTimeout(timer);
+      // 拖选期间延后全文扫描，但选区消失时立即去掉旧颜色。
+      timer = window.setTimeout(refreshSelectionMatches, 120);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      document.removeEventListener('selectionchange', onSelectionChange);
+      window.clearTimeout(timer);
+      clearSelectionMatchesRef.current?.();
+      clearSelectionMatchesRef.current = null;
+    };
+  }, [refreshSelectionMatches, filePath, showSource]);
 
   // ── Cmd/Ctrl+click → reference lookup (DOM surfaces) ───────────────────────
   // CodeMirror detects its own (virtualized DOM — see FileSourceEditor); this
@@ -1886,12 +1899,8 @@ export function FileContentView({
       // Quote-to-ask for the READ-ONLY views (md preview of MDX, truncated
       // <pre>): DOM selection → pill. The editors report selections through
       // their own channels (CodeMirror onSelectText; WYSIWYG bubble-menu Ask),
-      // so this handler is off while an editor owns the body. Selection-match
-      // highlighting listens on every DOM surface (CM paints its own).
-      onMouseUp={(e) => {
-        refreshSelectionMatches();
-        if (onSelectCode && !editing) handleMouseUp(e);
-      }}
+      // so this handler is off while an editor owns the body.
+      onMouseUp={onSelectCode && !editing ? handleMouseUp : undefined}
       // Cmd/Ctrl+click identifier → references (DOM surfaces; CM self-detects).
       onMouseDown={onSymbolLookup ? handleContainerMouseDown : undefined}
       // Focus leaving an EDITOR lands a pending Live Edit write now instead of
