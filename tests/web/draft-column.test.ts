@@ -22,6 +22,7 @@ vi.mock('@/api/sessions', () => ({ peekWorkingDirs: peek }));
 
 const {
   applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, suggestDiff, restoreMetaAfterWalnut,
+  followProjectRegistryChange,
 } = await import('@/components/sessions/draft-column');
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
 
@@ -419,5 +420,41 @@ describe('restoreMetaAfterWalnut — leaving Ask Walnut undoes only what the mod
   it('is the identity without a stash (nothing was written)', () => {
     const meta = { ...base, pinTier: 'focus' as const, model: 'default' };
     expect(restoreMetaAfterWalnut(meta, undefined)).toBe(meta);
+  });
+});
+
+describe('followProjectRegistryChange — a remembered project follows its delete/rename', () => {
+  // A launcher column outlives the project it remembers (the tab lives for days).
+  // Launching with a stale name used to RE-CREATE the project server-side
+  // (2026-09-08); the server now refuses that write, and this keeps the pill from
+  // promising a destination the task will not reach.
+  it('a delete drops the remembered project (case-insensitively)', () => {
+    expect(followProjectRegistryChange({ project: 'Fix Walnut', projectSource: 'user' }, { kind: 'deleted', name: 'fix walnut' }))
+      .toEqual({ project: undefined, projectSource: undefined });
+  });
+
+  it('a delete of some OTHER project leaves the row alone', () => {
+    expect(followProjectRegistryChange({ project: 'Walnut', projectSource: 'user' }, { kind: 'deleted', name: 'Fix Walnut' }))
+      .toBeNull();
+  });
+
+  it('a rename moves the row to the new name and keeps its provenance', () => {
+    expect(followProjectRegistryChange({ project: 'Fix Walnut', projectSource: 'ai' }, { kind: 'renamed', from: 'fix walnut', to: 'Walnut' }))
+      .toEqual({ project: 'Walnut', projectSource: 'ai' });
+  });
+
+  it('a rename to an empty name is ignored (nothing to follow to)', () => {
+    expect(followProjectRegistryChange({ project: 'Fix Walnut', projectSource: 'user' }, { kind: 'renamed', from: 'Fix Walnut', to: '   ' }))
+      .toBeNull();
+  });
+
+  it('an empty draft has nothing to follow', () => {
+    expect(followProjectRegistryChange({ project: '', projectSource: undefined }, { kind: 'deleted', name: 'Fix Walnut' }))
+      .toBeNull();
+  });
+
+  it('a server-owned SEED project is never touched (it has no registry row to lose)', () => {
+    expect(followProjectRegistryChange({ project: 'Ask Walnut', projectSource: 'seed' }, { kind: 'deleted', name: 'Ask Walnut' }))
+      .toBeNull();
   });
 });

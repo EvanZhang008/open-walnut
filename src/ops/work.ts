@@ -166,6 +166,39 @@ defineOp({
 });
 
 defineOp({
+  name: 'project_delete',
+  title: 'Delete a project',
+  description:
+    'Delete a project. Its tasks fall back to the Inbox and the NAME IS TOMBSTONED: no background ' +
+    'writer (a provider pull, a session launch, task_create with the old name) can re-create it — only an ' +
+    'explicit project create re-opens it. A project claimed by a sync provider (ms-todo, jira) ' +
+    'refuses a plain delete with 409, because its remote container would otherwise keep pulling the ' +
+    'tasks back; pass remote=true to also delete the container on the provider side (irreversible). ' +
+    'Only call this when the user explicitly asked to delete the project.',
+  input: {
+    name: z.string().min(1).describe('Project name (exact, case-insensitive); Inbox cannot be deleted'),
+    remote: z.boolean().optional().describe(
+      'Also delete the remote container (ms-todo list, …) for a provider-claimed project. Irreversible. ' +
+      'Default false: a provider-claimed project then answers 409 and nothing changes'),
+  },
+  handler: async (args, call) => {
+    const query = args.remote === true ? '?remote=1' : '';
+    const result = await call('DELETE', `/projects/${encodeURIComponent(String(args.name))}${query}`) as
+      Record<string, unknown> | undefined;
+    const movedToInbox = typeof result?.movedToInbox === 'number' ? result.movedToInbox : 0;
+    const remoteDeleted = result?.remoteDeleted === true;
+    return withOutcome(
+      { ...(result ?? {}) },
+      `Project "${String(args.name)}" deleted${remoteDeleted ? ' here AND on the provider side' : ' (local registry)'}; `
+      + `${movedToInbox} task(s) moved to the Inbox. The name is tombstoned, so a sync pull or a stale `
+      + 'launcher cannot bring it back.',
+      'Nothing else is required. To re-open the name later, create the project explicitly (that is the only door back).',
+    );
+  },
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
   name: 'task_pin_set',
   title: 'Pin or unpin a task',
   description:

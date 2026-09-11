@@ -22,7 +22,8 @@ import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
-  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, restoreMetaAfterWalnut,
+  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, followProjectRegistryChange,
+  restoreMetaAfterWalnut,
   withDirLaunchMemory, launchDivergesFromDirMemory, projectForFolderPick, suggestDiff,
   type DraftColumn,
 } from '@/components/sessions/draft-column';
@@ -1190,6 +1191,28 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       return back;
     }));
   }, []);
+
+  // A launcher column remembers its project for as long as the tab lives, so a
+  // project deleted or renamed anywhere else (this tab, another tab, the CLI, the
+  // phone) leaves the pill pointing at a name that no longer exists. Launching
+  // with it is a WRITE the server now refuses — following the event keeps the
+  // pill honest instead of promising a destination the task won't reach.
+  useEvent('project:deleted', (data: unknown) => {
+    const name = ((data ?? {}) as { name?: string }).name?.trim();
+    if (!name) return;
+    setDraftColumns(prev => prev.map(d => {
+      const patch = followProjectRegistryChange(d, { kind: 'deleted', name });
+      return patch ? { ...d, ...patch } : d;
+    }));
+  });
+  useEvent('project:renamed', (data: unknown) => {
+    const { from, to } = (data ?? {}) as { from?: string; to?: string };
+    if (!from?.trim() || !to?.trim()) return;
+    setDraftColumns(prev => prev.map(d => {
+      const patch = followProjectRegistryChange(d, { kind: 'renamed', from, to });
+      return patch ? { ...d, ...patch } : d;
+    }));
+  });
 
   // One-time sweep of orphaned composer drafts. Draft ids are timestamped, so a
   // key from a previous page load can never be reached again — without this the

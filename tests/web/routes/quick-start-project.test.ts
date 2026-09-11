@@ -36,7 +36,7 @@ import express from 'express';
 import request from 'supertest';
 import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { _resetForTesting as resetTaskManager, getTask, getStoreProjects, getProjectMetadata, setProjectMetadata } from '../../../src/core/task-manager.js';
+import { _resetForTesting as resetTaskManager, getTask, getStoreProjects, getProjectMetadata, setProjectMetadata, ensureProject, deleteProject, renameProject } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -190,6 +190,36 @@ describe('POST /api/sessions/quick-start — project param', () => {
     expect(res.status).toBe(200);
     const meta = await getProjectMetadata('Roamer');
     expect(meta?.default_cwd ?? null).toBeNull();
+  });
+
+  it('a launch carrying a DELETED project files the task in the Inbox and does not re-create the row', async () => {
+    // The draft column remembers its last project for as long as the tab lives.
+    // 2026-09-08: a project deleted at 21:15 was re-created by a launch still
+    // carrying its name — the launch was a WRITE that minted the registry row.
+    await ensureProject('Fix Walnut', 'local');
+    await deleteProject('Fix Walnut');
+
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp', message: 'go', project: 'Fix Walnut', projectFromFolder: true });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task.project).toBe('');
+    expect(Object.keys(await getStoreProjects())).not.toContain('Fix Walnut');
+  });
+
+  it('a launch carrying a RENAMED project follows to the survivor', async () => {
+    await ensureProject('Old Name', 'local');
+    await renameProject('Old Name', 'New Name');
+
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp', message: 'go', project: 'Old Name' });
+
+    expect(res.status).toBe(200);
+    expect((await getTask(res.body.taskId)).project).toBe('New Name');
+    expect(Object.keys(await getStoreProjects())).not.toContain('Old Name');
   });
 
   it('fix-walnut intent overrides a client project seed', async () => {

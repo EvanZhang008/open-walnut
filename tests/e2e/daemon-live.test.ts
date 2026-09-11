@@ -19,7 +19,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import os from 'node:os'
 import { WebSocket } from 'ws'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -28,6 +27,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-live-test'))
 
 import { WALNUT_HOME } from '../../src/constants.js'
+import { copyConfigSections } from '../helpers/temp-home.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 
 const LIVE_HOST = process.env.WALNUT_LIVE_HOST
@@ -135,9 +135,11 @@ describeIf(`Live daemon tests (host: ${LIVE_HOST})`, () => {
       JSON.stringify({ version: 1, tasks: [] }),
     )
 
-    // Copy REAL config.yaml (has host definitions including WALNUT_LIVE_HOST)
-    const realConfig = path.join(os.homedir(), '.open-walnut', 'config.yaml')
-    await fsp.copyFile(realConfig, path.join(WALNUT_HOME, 'config.yaml'))
+    // ONLY the host definitions — never the whole config. Copying it wholesale
+    // also copies the user's provider CREDENTIALS, which is how a fixture task
+    // from a temp-home test server reached the user's real account and later
+    // resurrected a deleted project on the production box (2026-09-08).
+    await copyConfigSections(WALNUT_HOME, ['version', 'hosts', 'session_server'])
 
     // Start server on random port
     server = await startServer({ port: 0, dev: true })

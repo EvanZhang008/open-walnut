@@ -139,7 +139,12 @@ projectsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
       }
     }
 
-    const result = await ensureProject(name, (source as TaskSource | undefined) ?? 'local')
+    // `human: true` — this route IS the explicit human create, so it is the one
+    // door back from a project tombstone (see project-tombstones.ts). Every other
+    // writer that names a deleted project gets Inbox instead.
+    const result = await ensureProject(name, (source as TaskSource | undefined) ?? 'local', {
+      writer: 'POST /api/projects', human: true,
+    })
     res.status(result.created ? 201 : 200).json(result)
   } catch (err) {
     if (err instanceof ProjectSourceConflictError) {

@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import { WALNUT_HOME, CONFIG_FILE } from '../constants.js';
+import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
 import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
 import { getConfig, updatePluginConfig } from './config-manager.js';
@@ -1446,6 +1447,28 @@ async function loadPlugin(
   if (expectsSync && !builder.collected.sync) {
     log.error('Plugin did not call registerSync()', { id: pluginId, capabilities: effectiveCapabilities });
     throw new Error(`Plugin "${pluginId}" did not call registerSync()`);
+  }
+
+  // TEST/EPHEMERAL ISOLATION — a throwaway server must never write to the
+  // user's real provider account. The 2026-09-02 leak: a temp-home test server
+  // copied the real config.yaml for its `hosts` block, so its ms-todo plugin held
+  // live credentials, pushed a fixture task to the user's account, and created a
+  // remote list there; production later pulled that list back and resurrected a
+  // deleted project around it. Only SHIPPED integrations are gated (a test's own
+  // fixture plugin, written into the temp home's plugins/ dir, is not the leak and
+  // stays fully functional). Dropping `sync` makes the plugin not a task source
+  // (hasSync false → never polled, never claimed), while its routes/UI still load.
+  const isolationReason = isBuiltin && !isLocal && builder.collected.sync
+    ? remoteSyncIsolationReason()
+    : null;
+  if (isolationReason) {
+    log.warn('Plugin sync DISABLED — this server must not write to a real account', {
+      id: pluginId,
+      reason: isolationReason,
+      hint: 'set WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1 to opt in deliberately',
+    });
+    builder.collected.sync = null;
+    builder.collected.claim = null;
   }
 
   // A non-sync plugin still gets an inert sync stub so the many

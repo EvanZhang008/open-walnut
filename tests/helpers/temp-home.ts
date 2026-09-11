@@ -51,6 +51,44 @@ export async function createTempHome(prefix = 'walnut-test'): Promise<TempHome> 
 }
 
 /**
+ * Copy ONLY the named top-level sections out of the user's real config.yaml into
+ * a test WALNUT_HOME.
+ *
+ * NEVER `copyFile` the real config into a test home. The 2026-09-02 leak: the
+ * live-daemon tests copied it wholesale for its `hosts` block, which also handed
+ * their sync plugins the user's REAL provider credentials. A fixture task created
+ * against that server was pushed to the user's actual account and created a
+ * remote list there; days later the production server pulled that list back and
+ * re-created a project the user had deleted, with the fixture task inside it.
+ *
+ * `plugins`, `provider`/`providers`, `stt`, `push` and friends are therefore
+ * simply absent from the copy — a test that needs one must name it, in the open.
+ * (The plugin loader refuses remote-writing sync plugins in a test home anyway;
+ * these are two independent layers, and this one keeps the credentials off disk.)
+ *
+ * Returns the sections actually found, so a caller can assert on what it got.
+ */
+export async function copyConfigSections(
+  destHome: string,
+  sections: string[] = ['version', 'hosts', 'session_server'],
+): Promise<string[]> {
+  const yaml = await import('js-yaml');
+  const realPath = path.join(os.homedir(), '.open-walnut', 'config.yaml');
+  const raw = await fs.readFile(realPath, 'utf-8');
+  const parsed = (yaml.load(raw) ?? {}) as Record<string, unknown>;
+  const picked: Record<string, unknown> = {};
+  const found: string[] = [];
+  for (const key of sections) {
+    if (parsed[key] === undefined) continue;
+    picked[key] = parsed[key];
+    found.push(key);
+  }
+  await fs.mkdir(destHome, { recursive: true });
+  await fs.writeFile(path.join(destHome, 'config.yaml'), yaml.dump(picked), 'utf-8');
+  return found;
+}
+
+/**
  * Run a function with an isolated temp directory, auto-cleaning afterwards.
  */
 export async function withTempHome<T>(

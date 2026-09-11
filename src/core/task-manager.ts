@@ -26,6 +26,12 @@ import { runMigrationIfNeeded } from './task-db-migration.js';
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
+import {
+  clearProjectTombstone,
+  recordProjectTombstone,
+  resolveProjectWrite,
+  type ProjectWriteResolution,
+} from './project-tombstones.js';
 
 // CJK detection regex — used only for log enrichment so that "plugin not loaded"
 // warnings flag the cases that an external sync plugin's validateContent would
@@ -1042,16 +1048,76 @@ export function assertValidProjectName(name: string): string {
 }
 
 /**
+ * THE project choke point: what may a writer naming `requested` actually write?
+ *
+ * Every place that can MINT a registry row funnels through this (ensureProject,
+ * addTask, updateTask, addTaskFull), so a project the human deleted cannot grow
+ * back under its old name from ANY writer — a provider pull re-creating it from
+ * the surviving remote list is the bug the tombstone ledger exists for.
+ *
+ * Takes the registry SNAPSHOT the caller already holds (each mint site runs
+ * inside the store write lock) and answers with the name to use:
+ *   - `project: ''` + `blocked: true` → the project is gone; file into Inbox.
+ *   - `redirectedFrom` set → the name was renamed/merged away and `project` is
+ *     the survivor's canonical spelling.
+ *   - `registryKey` → the existing row this resolves to (undefined = a new row).
+ */
+function resolveProjectForRegistryWrite(
+  projects: Record<string, ProjectRecord>,
+  requested: string,
+  writer: string,
+): { project: string; registryKey?: string; redirectedFrom?: string; blocked: boolean } {
+  const findLiveRow = (name: string): string | undefined => {
+    const lower = (name ?? '').trim().toLowerCase();
+    if (!lower) return undefined;
+    return Object.keys(projects).find((k) => k.toLowerCase() === lower);
+  };
+  return applyProjectWriteDecision(resolveProjectWrite(requested, findLiveRow), findLiveRow, writer);
+}
+
+/** Shared tail of both resolver adapters (registry-map and SQL flavors). */
+function applyProjectWriteDecision(
+  decision: ProjectWriteResolution,
+  findLiveRow: (name: string) => string | undefined,
+  writer: string,
+): { project: string; registryKey?: string; redirectedFrom?: string; blocked: boolean } {
+  if (decision.kind === 'blocked') {
+    // Loud on purpose, and it names the WRITER: this line is how you find which
+    // surface keeps trying to resurrect a project the human removed.
+    log.task.warn('project write refused — that project was deleted', {
+      project: decision.from, writer, filedIn: 'Inbox',
+    });
+    return { project: '', blocked: true };
+  }
+  const project = decision.name;
+  if (decision.kind === 'redirect') {
+    log.task.info('project write followed a rename/merge', {
+      from: decision.from, to: project, writer,
+    });
+  }
+  return {
+    project,
+    registryKey: findLiveRow(project),
+    ...(decision.kind === 'redirect' ? { redirectedFrom: decision.from } : {}),
+    blocked: false,
+  };
+}
+
+/**
  * Lock-free registry upsert. Must be called with the write lock already held
  * (addTask does its whole create inside one lock; a nested ensureProject() would
  * self-deadlock). Returns the canonical spelling and whether it was just created
  * — the caller emits PROJECT_CREATED, since the bus must not be touched while a
  * transaction is open.
+ *
+ * Consults the tombstone ledger before minting: a deleted name resolves to Inbox
+ * (`name: ''`, `blocked: true`) and a renamed/merged one to its survivor.
  */
 function ensureProjectRowLocked(
   name: string,
   source: TaskSource,
-): { name: string; source: TaskSource; created: boolean } {
+  writer = 'ensureProject',
+): { name: string; source: TaskSource; created: boolean; redirectedFrom?: string; blocked?: boolean } {
   const trimmed = (name ?? '').trim();
   if (!trimmed) return { name: '', source: 'local', created: false };
   const db = getDb()!;
@@ -1068,19 +1134,29 @@ function ensureProjectRowLocked(
   // NOCASE PK is only the ASCII-case backstop.
   const rows = db.prepare('SELECT name, source FROM task_projects').all() as
     { name: string; source: string }[];
-  const lower = trimmed.toLowerCase();
-  const existing = rows.find((r) => r.name.trim().toLowerCase() === lower);
+  const findLiveRow = (candidate: string): string | undefined => {
+    const wanted = (candidate ?? '').trim().toLowerCase();
+    if (!wanted) return undefined;
+    return rows.find((r) => r.name.trim().toLowerCase() === wanted)?.name;
+  };
+  const decided = applyProjectWriteDecision(
+    resolveProjectWrite(trimmed, findLiveRow), findLiveRow, writer,
+  );
+  if (decided.blocked) return { name: '', source: 'local', created: false, blocked: true };
+  const effective = decided.project;
+  const redirect = decided.redirectedFrom ? { redirectedFrom: decided.redirectedFrom } : {};
+  const existing = rows.find((r) => r.name.trim().toLowerCase() === effective.toLowerCase());
   if (existing) {
-    return { name: existing.name, source: existing.source as TaskSource, created: false };
+    return { name: existing.name, source: existing.source as TaskSource, created: false, ...redirect };
   }
   const nextOrder = (db
     .prepare('SELECT COALESCE(MAX(order_index), -1) + 1 AS next FROM task_projects')
     .get() as { next: number }).next;
   db.prepare(
     'INSERT INTO task_projects (name, source, order_index) VALUES (?, ?, ?) ON CONFLICT(name) DO NOTHING',
-  ).run(trimmed, source, nextOrder);
-  log.task.info('project created', { project: trimmed, source });
-  return { name: trimmed, source, created: true };
+  ).run(effective, source, nextOrder);
+  log.task.info('project created', { project: effective, source });
+  return { name: effective, source, created: true, ...redirect };
 }
 
 function emitProjectCreated(name: string, source: TaskSource): void {
@@ -1116,20 +1192,62 @@ function emitPhaseChanged(task: Task, oldPhase: TaskPhase, source: string): void
  *
  * Emits PROJECT_CREATED only on a real first create (web project lists update
  * live). Inbox ('') is a no-op: it has no row by design.
+ *
+ * Tombstones (see project-tombstones.ts): a name the human DELETED resolves to
+ * Inbox — `{ name: '', blocked: true }` — and a renamed/merged one to its
+ * survivor (`redirectedFrom` says which name was followed). `opts.human: true`
+ * marks an EXPLICIT human create (POST /projects, the console's new-project
+ * gesture): it clears the tombstone first, which is the only way a removed
+ * project comes back. `opts.writer` labels the caller in the refusal log.
  */
 export async function ensureProject(
   name: string,
   source: TaskSource = 'local',
-): Promise<{ name: string; source: TaskSource; created: boolean }> {
+  opts?: { writer?: string; human?: boolean },
+): Promise<{
+  name: string; source: TaskSource; created: boolean;
+  redirectedFrom?: string; blocked?: boolean;
+}> {
   // Inbox short-circuits BEFORE shape validation: '' is the legal absence of a
   // project, never a row, never a directory.
   if (!(name ?? '').trim()) return { name: '', source: 'local', created: false };
   const trimmed = assertValidProjectName(name);
 
   await ensureInit();
-  const result = await withWriteLock(async () => ensureProjectRowLocked(trimmed, source));
+  const result = await withWriteLock(async () => {
+    // Inside the lock so the clear and the mint cannot interleave with a pull.
+    if (opts?.human) clearProjectTombstone(trimmed);
+    return ensureProjectRowLocked(trimmed, source, opts?.writer ?? 'ensureProject');
+  });
   if (result.created) emitProjectCreated(result.name, result.source);
   return result;
+}
+
+/**
+ * READ-ONLY twin of the choke point: what would a writer naming `name` get,
+ * without minting anything?
+ *
+ * For callers that must know the answer BEFORE they decide how to write — the
+ * session launcher resolves its (possibly stale) remembered project this way,
+ * because pre-creating the row would hand the name a 'local' claim and take it
+ * away from whichever provider would otherwise claim it.
+ *
+ * `blocked: true` = the project was deleted; the caller should fall back to Inbox.
+ */
+export async function resolveProjectForWrite(
+  name: string,
+  writer = 'unknown',
+): Promise<{ name: string; blocked: boolean; redirectedFrom?: string }> {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return { name: '', blocked: false };
+  await ensureInit();
+  const store = await readStore();
+  const decided = resolveProjectForRegistryWrite(store.projects ?? {}, trimmed, writer);
+  return {
+    name: decided.project,
+    blocked: decided.blocked,
+    ...(decided.redirectedFrom ? { redirectedFrom: decided.redirectedFrom } : {}),
+  };
 }
 
 /**
@@ -1171,6 +1289,10 @@ export async function renameProject(
     const now = new Date().toISOString();
     const fromLower = from.toLowerCase();
     const toLower = to.toLowerCase();
+    // A rename ONTO a removed name is a human gesture, so it re-opens that name
+    // (same door as an explicit create). Done before the registry work so the
+    // survivor is not itself tombstoned when writers start resolving to it.
+    clearProjectTombstone(to);
 
     const tasksToRename = store.tasks.filter((t) => (t.project || '').toLowerCase() === fromLower);
     const projects = store.projects ?? {};
@@ -1254,6 +1376,20 @@ export async function renameProject(
       store.projects = projects;
     } else {
       store.projects = { ...projects, [canonical]: { source: renameSource } };
+    }
+
+    // Tombstone the OLD name with a redirect to the survivor. Without it the old
+    // name is a free name again: a provider list still carrying it (the remote
+    // rename is best-effort and runs AFTER this lock) would re-mint the project
+    // on the next pull and split the tasks across two names.
+    if (fromLower !== toLower) {
+      recordProjectTombstone({
+        name: fromKey ?? from,
+        source: renameSource,
+        remoteListIds: remoteContainerIdsOf(tasksToRename),
+        redirectTo: canonical,
+        reason: merged ? 'merged' : 'renamed',
+      });
     }
 
     await writeStore(store);
@@ -1396,10 +1532,34 @@ async function migrateProjectInConfigLists(from: string, to: string | null): Pro
 }
 
 /**
+ * Every provider container id the given tasks live in, across ALL plugin ext
+ * blocks. Recorded on a project tombstone so a remote list that gets RENAMED
+ * after the removal is still recognized — the name half of the ledger would miss
+ * it. Scans every ext key on purpose: a LOCALLY-claimed project whose tasks were
+ * once synced still holds a provider's container id, and that exact shape (local
+ * project + surviving remote list of the same name) is the bug this fixes.
+ */
+function remoteContainerIdsOf(tasks: Task[]): string[] {
+  const ids = new Set<string>();
+  for (const task of tasks) {
+    for (const value of Object.values(task.ext ?? {})) {
+      if (!value || typeof value !== 'object') continue;
+      const listId = (value as Record<string, unknown>).list_id ?? (value as Record<string, unknown>).list;
+      if (typeof listId === 'string' && listId.trim()) ids.add(listId.trim());
+    }
+  }
+  return [...ids];
+}
+
+/**
  * Delete a project: its tasks fall back to Inbox ('') and the registry row goes
  * away. Both halves MUST land in ONE transaction — a half-applied delete leaves
  * tasks pointing at a project with no row — hence this lives in the storage
  * layer, not the route. Case-insensitive; throws /^No project / when unknown.
+ *
+ * ALSO writes a tombstone (project-tombstones.ts). Dropping the row alone is not
+ * a durable delete: any writer that names the project re-creates it, which is how
+ * a project deleted at 21:15 was back at 21:21 from the surviving remote list.
  */
 export async function deleteProject(project: string): Promise<{ movedToInbox: number }> {
   const name = (project ?? '').trim();
@@ -1415,6 +1575,16 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
     const affected = store.tasks.filter((t) => (t.project || '').toLowerCase() === lower);
     if (!key && affected.length === 0) throw new Error(`No project "${name}" found`);
 
+    const canonicalName = key ?? name;
+    const claim = (key ? projects[key].source : affected[0]?.source ?? 'local') as TaskSource;
+    // Written INSIDE the transaction: a tombstone that lands after the row is
+    // already gone leaves a window in which a sync tick can re-mint the project.
+    recordProjectTombstone({
+      name: canonicalName,
+      source: claim,
+      remoteListIds: remoteContainerIdsOf(affected),
+      reason: 'deleted',
+    });
     for (const task of affected) {
       task.project = '';
       task.updated_at = now;
@@ -1430,8 +1600,8 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
     return {
       movedToInbox: affected.length,
       taskIds: affected.map((t) => t.id),
-      canonical: key ?? name,
-      source: (key ? projects[key].source : affected[0]?.source ?? 'local') as TaskSource,
+      canonical: canonicalName,
+      source: claim,
     };
   });
 
@@ -1572,6 +1742,18 @@ export async function deleteProjectCascade(project: string): Promise<{
       ? Object.keys(projects).find((k) => k.toLowerCase() === survivorProject.toLowerCase()) ?? survivorProject
       : '';
     const affected = store.tasks.filter((t) => (t.project || '').toLowerCase() === lower);
+    // Tombstone the container even though the remote side is already gone: a
+    // push still in flight (or the user re-creating the list in the provider's
+    // app) can put a list of this name back, and without the tombstone the next
+    // pull would re-mint the project. 'grouping-removed' keeps the survivors, so
+    // it redirects there instead of blocking.
+    recordProjectTombstone({
+      name: record.name,
+      source: record.source,
+      remoteListIds: remoteContainerIdsOf(affected),
+      redirectTo: survivorKey || null,
+      reason: `cascade-${remoteResult.outcome}`,
+    });
     for (const task of affected) {
       if (survivorKey) {
         task.project = survivorKey; // binding kept — remote twin survives
@@ -1659,7 +1841,20 @@ export async function setProjectMetadata(
   // the same lock and would self-deadlock). Use the CANONICAL spelling it returns
   // for the lookup below: `WHERE name = ?` leans on NOCASE, which is ASCII-only,
   // so a unicode-case variant would otherwise miss its own row.
-  const { name } = await ensureProject(raw);
+  const { name, blocked, redirectedFrom } = await ensureProject(raw, 'local', { writer: 'setProjectMetadata' });
+  // Settings on a DELETED project are refused, not silently attached to Inbox
+  // (which has no row) or to a freshly re-minted row: a settings write is not
+  // the human re-creating the project. A renamed one follows to its survivor.
+  if (blocked) {
+    // `No project ` prefix on purpose: the routes map it to a 404, same as an
+    // unknown name (from the caller's side, a deleted project IS an unknown one).
+    throw new Error(
+      `No project "${raw}" — it was deleted. Re-create it before setting its metadata.`,
+    );
+  }
+  if (redirectedFrom) {
+    log.task.info('project metadata write followed a rename/merge', { from: redirectedFrom, to: name });
+  }
 
   const merged = await withWriteLock(async () => {
     const db = getDb()!;
@@ -2052,22 +2247,28 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // An explicit '' means "Inbox, on purpose" and must NOT fall through to the
     // config default (`??` alone can't express that — updateTask already honors
     // '' as Inbox, so create and update would otherwise disagree on the same value).
-    const requestedProject = (
+    const askedForProject = (
       input.project !== undefined
         ? input.project
         : (parentTask?.project ?? config.defaults.project ?? '')
     ).trim();
 
     const projects = store.projects ?? {};
-    const registryKey = requestedProject
-      ? Object.keys(projects).find((k) => k.toLowerCase() === requestedProject.toLowerCase())
-      : undefined;
+    const existingKeyFor = (n: string): string | undefined =>
+      Object.keys(projects).find((k) => k.toLowerCase() === n.trim().toLowerCase());
     // A name about to mint a NEW registry row must pass the shape gate here —
     // this store.projects write bypasses ensureProject, and the name later
     // becomes a path segment (memory/projects/<name>/). An EXISTING row is
-    // exempt so a legacy name that predates the validator stays usable.
-    if (requestedProject && !registryKey) assertValidProjectName(requestedProject);
-    // Canonical spelling wins so two casings can't split one project.
+    // exempt so a legacy name that predates the validator stays usable. Runs
+    // BEFORE the tombstone gate so a malformed name is still a 400, not a
+    // silent Inbox filing.
+    if (askedForProject && !existingKeyFor(askedForProject)) assertValidProjectName(askedForProject);
+    // Tombstone gate (the choke point): a deleted project resolves to Inbox, a
+    // renamed/merged one to its survivor. Canonical spelling wins so two casings
+    // can't split one project.
+    const decidedProject = resolveProjectForRegistryWrite(projects, askedForProject, 'addTask');
+    const requestedProject = decidedProject.project;
+    const registryKey = decidedProject.registryKey;
     const project = registryKey ?? requestedProject;
     const registrySource: TaskSource | undefined = registryKey ? projects[registryKey].source : undefined;
 
@@ -2079,7 +2280,9 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       const demanded = parentTask?.source ?? input.source;
       if (demanded && demanded !== 'local') {
         throw new Error(
-          `Cannot create a ${demanded} task in Inbox — provider-synced tasks need a project. Pass a project name.`,
+          decidedProject.blocked
+            ? `Cannot create a ${demanded} task in "${askedForProject}" — that project was deleted, and a provider-synced task cannot live in the Inbox. Re-create the project first if you want it back.`
+            : `Cannot create a ${demanded} task in Inbox — provider-synced tasks need a project. Pass a project name.`,
         );
       }
       source = 'local';
@@ -3347,14 +3550,26 @@ export async function updateTask(
   // provider-sourced task moved there migrates to source='local'.
   let createdProject: { name: string; source: TaskSource } | undefined;
   if (updates.project !== undefined) {
-    const requested = updates.project.trim();
+    const asked = updates.project.trim();
     const projects = store.projects ?? {};
-    const registryKey = requested
-      ? Object.keys(projects).find((k) => k.toLowerCase() === requested.toLowerCase())
-      : undefined;
+    const keyFor = (n: string): string | undefined =>
+      Object.keys(projects).find((k) => k.toLowerCase() === n.trim().toLowerCase());
     // Same shape gate as addTask: only a name minting a NEW row is validated
     // (the store.projects write below bypasses ensureProject).
-    if (requested && !registryKey) assertValidProjectName(requested);
+    if (asked && !keyFor(asked)) assertValidProjectName(asked);
+    // Tombstone gate. A move onto a DELETED project keeps the task where it is
+    // rather than dropping it into Inbox: an unwanted move would also strip a
+    // provider task's remote binding (Inbox is local-only), which is a far bigger
+    // side effect than refusing a move to a project that no longer exists.
+    const decided = resolveProjectForRegistryWrite(projects, asked, 'updateTask');
+    if (asked && decided.blocked) {
+      log.task.warn('project move refused — target project was deleted', {
+        taskId: task.id, target: asked, keptIn: task.project || 'Inbox',
+      });
+      delete (updates as { project?: string }).project;
+    }
+    const requested = decided.blocked ? (task.project || '') : decided.project;
+    const registryKey = keyFor(requested);
     const newProject = registryKey ?? requested;  // canonical spelling wins
     let assigned = false;
     const projectChanged = newProject.toLowerCase() !== (task.project || '').toLowerCase();
@@ -6129,19 +6344,31 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
   // Pull-guard, re-keyed to the project registry: a sync pull must not create a
   // task inside a project another provider owns (e.g. ms-todo rows landing in a
   // project reserved for a different plugin). Inbox is local-only by rule.
-  const incomingProject = (taskData.project ?? '').trim();
+  const pulledProject = (taskData.project ?? '').trim();
   // Retired grouping names ('Quick Start'/'Inbox') are Inbox, never projects —
   // same rule as routePulledListToProject. Without this, a provider whose
   // remote side still carries the retired tag re-mints the registry row here
   // on every pull (observed 2026-08-05: 7 tasks + a claimed 'Quick Start' row
   // resurrected minutes after the v5 data repair deleted them).
-  if (incomingProject &&
-      (isRetiredQuickStartGroup(incomingProject) || isLegacyInboxGroup(incomingProject))) {
+  if (pulledProject &&
+      (isRetiredQuickStartGroup(pulledProject) || isLegacyInboxGroup(pulledProject))) {
     throw new Error(
-      `addTaskFull: refusing to create task "${taskData.title}" under retired group "${incomingProject}" — ` +
+      `addTaskFull: refusing to create task "${taskData.title}" under retired group "${pulledProject}" — ` +
       `that name is Inbox now, and provider-synced tasks need a real project`,
     );
   }
+  // Tombstone gate — the SAME rule, for a project the human deleted rather than
+  // one the v5 migration retired. A pull naming it must not re-mint the row (that
+  // is exactly how a project deleted at 21:15 came back at 21:21); a renamed one
+  // is followed to its survivor.
+  const pullDecision = resolveProjectForRegistryWrite(store.projects ?? {}, pulledProject, 'sync-pull');
+  if (pulledProject && pullDecision.blocked) {
+    throw new Error(
+      `addTaskFull: refusing to create task "${taskData.title}" under deleted project "${pulledProject}" — ` +
+      `that project was removed here; re-create it if you want this item back`,
+    );
+  }
+  const incomingProject = pullDecision.project;
   if (!incomingProject) {
     if (taskData.source !== 'local') {
       throw new Error(

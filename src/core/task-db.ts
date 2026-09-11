@@ -483,6 +483,25 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS task_remote_links_unconfirmed
     ON task_remote_links(remote_source, state, remote_delete_confirmed)
     WHERE state = 'deleted' AND remote_delete_confirmed = 0;
+
+  -- Project tombstone / redirect ledger: which project names the human removed,
+  -- and where a renamed/merged one went. Consulted by the ONE place a registry
+  -- row can be minted, so a deleted project cannot grow back under its old name
+  -- from ANY writer — a provider pull re-creating it from the surviving remote
+  -- list is the bug this exists for (2026-09-08: deleted 21:15, back 21:21).
+  -- redirect_to NULL = gone (writers get Inbox); set = follow to the survivor.
+  -- remote_list_ids: JSON array of provider container ids, so a remote list
+  -- RENAMED after the removal is still recognized (the name half would miss it).
+  -- Identity is case-insensitive, with the same accepted ASCII-vs-Unicode
+  -- asymmetry as task_projects: the JS side is the enforcer, NOCASE the backstop.
+  CREATE TABLE IF NOT EXISTS task_project_tombstones (
+    name            TEXT PRIMARY KEY COLLATE NOCASE,
+    source          TEXT NOT NULL DEFAULT 'local',
+    remote_list_ids TEXT,
+    redirect_to     TEXT,
+    reason          TEXT,
+    deleted_at      TEXT NOT NULL
+  );
 `;
 
 /**

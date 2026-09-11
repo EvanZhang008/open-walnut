@@ -27,6 +27,7 @@ import {
   findTaskByExtId,
 } from '../core/task-manager.js';
 import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask, recordRemoteLink } from '../core/task-remote-links.js';
+import { findProjectTombstoneByRemoteListId, learnProjectTombstoneRemoteIds } from '../core/project-tombstones.js';
 import type { Config } from '../core/types.js';
 
 // ── Plugin-system helpers ──
@@ -957,7 +958,7 @@ function isStoreUnavailableError(err: unknown): boolean {
  * Only called for lists that actually have items to import, so an empty remote
  * list never manufactures a registry row.
  */
-async function ensureProjectForList(listDisplayName: string): Promise<string | null> {
+async function ensureProjectForList(listDisplayName: string, listId?: string): Promise<string | null> {
   // Same routing rule as the v5 migration: a 'Quick Start' trailing segment or a
   // whole-name 'Inbox' list is Inbox ('') locally, which a provider can never
   // claim → skip the list rather than resurrect the retired grouping name as a
@@ -968,15 +969,66 @@ async function ensureProjectForList(listDisplayName: string): Promise<string | n
     return null;
   }
   try {
+    // Container-id half of the tombstone ledger, checked BEFORE the name: a list
+    // RENAMED remotely after the project was deleted here wears a name no
+    // tombstone knows, while its id is the retired container's. Without this the
+    // rename alone would resurrect the project on the next pull.
+    if (listId) {
+      const byId = findProjectTombstoneByRemoteListId('ms-todo', listId);
+      if (byId && !byId.redirect_to) {
+        log.web.warn('ms-todo: remote list belongs to a DELETED project — not importing', {
+          list: listDisplayName, listId, project: byId.name,
+          hint: 'delete or rename this list in Microsoft To-Do to stop it being pulled',
+        });
+        return null;
+      }
+      if (byId?.redirect_to) {
+        log.web.info('ms-todo: remote list belongs to a renamed project — importing into the survivor', {
+          list: listDisplayName, listId, from: byId.name, to: byId.redirect_to,
+        });
+      }
+    }
     // The EXISTING row always wins (spelling AND claim) — a pull can never
-    // re-claim a project another provider owns.
-    const { name, source } = await ensureProject(parsed, 'ms-todo');
-    if (source !== 'ms-todo') {
-      log.web.debug('ms-todo: project claimed by another source, skipping list', {
-        project: name, source, list: listDisplayName,
+    // re-claim a project another provider owns. `blocked` = the human deleted
+    // this project; the remote list outliving it must not bring it back.
+    const { name, source, blocked, redirectedFrom } = await ensureProject(parsed, 'ms-todo', {
+      writer: 'ms-todo-pull',
+    });
+    if (blocked) {
+      // Remember the container id on the tombstone so the cheap id check above
+      // catches it even after the user renames the list remotely. Id only: the
+      // pull is not the human and must not rewrite what the human's delete said.
+      if (listId) learnProjectTombstoneRemoteIds(parsed, [listId]);
+      log.web.warn('ms-todo: list maps to a DELETED project — not importing', {
+        list: listDisplayName, listId, project: parsed,
       });
       return null;
     }
+    if (source !== 'ms-todo') {
+      // A WARN, not a debug line. `source === 'local'` is the unlinked state that
+      // started the 2026-09-08 incident: a remote list and a local project wearing
+      // the same name with nothing joining them, so every pull skips the list
+      // forever and the delete that follows only removes the local half. It was a
+      // debug line, which meant nobody could see it. The reconciler escalates a
+      // standing mismatch to a notification (noteRefusals); this is the trail that
+      // names the LIST, which is what the human has to act on.
+      log.web.warn(
+        source === 'local'
+          ? 'ms-todo: list name matches a LOCAL project — not importing (nothing links the two)'
+          : 'ms-todo: list maps to a project claimed by another source — not importing',
+        {
+          project: name, claimedBy: source, list: listDisplayName, listId,
+          hint: source === 'local'
+            ? 'rename the local project or the remote list, or delete the list in Microsoft To-Do'
+            : undefined,
+        },
+      );
+      return null;
+    }
+    // A redirected list must NOT touch the survivor's alias: repointing the
+    // survivor's pushes at the retired list is how a rename forks the user's
+    // lists in two (renameProject already left the alias where it belongs).
+    if (redirectedFrom) return name;
     // Case-insensitive: list resolution lowercases, so a spelling-only
     // difference is the same remote list and needs no alias.
     if (listDisplayName.toLowerCase() === name.toLowerCase()) return name;
@@ -1021,11 +1073,26 @@ async function ensureProjectForList(listDisplayName: string): Promise<string | n
  * the same remote list, just renamed. Returns the canonical project name, or
  * null when the new name maps to nothing importable.
  */
-async function syncProjectAliasAfterRename(listDisplayName: string): Promise<string | null> {
+async function syncProjectAliasAfterRename(listDisplayName: string, listId?: string): Promise<string | null> {
   const parsed = routePulledListToProject(listDisplayName);
   if (!parsed) return null;
   try {
-    const { name, source } = await ensureProject(parsed, 'ms-todo');
+    // A renamed list whose project was DELETED here must not come back under its
+    // new name either — the id half of the tombstone ledger is what sees that.
+    if (listId && findProjectTombstoneByRemoteListId('ms-todo', listId)?.redirect_to === null) {
+      log.web.warn('ms-todo: renamed remote list belongs to a DELETED project — not importing', {
+        list: listDisplayName, listId,
+      });
+      return null;
+    }
+    const { name, source, blocked } = await ensureProject(parsed, 'ms-todo', { writer: 'ms-todo-list-rename' });
+    if (blocked) {
+      if (listId) learnProjectTombstoneRemoteIds(parsed, [listId]);
+      log.web.warn('ms-todo: renamed list maps to a DELETED project — not importing', {
+        list: listDisplayName, listId, project: parsed,
+      });
+      return null;
+    }
     if (source !== 'ms-todo') return null;
     // Written even when it equals the project name: an alias identical to the
     // name resolves to the same list, so no separate "clear the alias" state is
@@ -1492,7 +1559,7 @@ export async function fullPullAllTasks(): Promise<Array<{
     // it. Also yields the canonical spelling, so two lists differing only in case
     // can't split one project. null = this list is not ours to import.
     if (allTasks.length === 0) continue;
-    const listProject = await ensureProjectForList(list.displayName);
+    const listProject = await ensureProjectForList(list.displayName, list.id);
     if (listProject === null) continue;
 
     for (const msTask of allTasks) {
@@ -1705,7 +1772,7 @@ export async function reconcilePulledTasks(
   // Also the canonical spelling, so two lists differing only in case can't split
   // one project. null = the list maps to no importable project (Inbox, or a
   // project another provider owns) — skip it wholesale.
-  const listProject = await ensureProjectForList(list.displayName);
+  const listProject = await ensureProjectForList(list.displayName, list.id);
   if (listProject === null) {
     log.web.debug('reconcilePulledTasks: skipped list (no importable project)', {
       listName: list.displayName, tasks: msTasks.length,
@@ -1908,7 +1975,7 @@ export async function deltaPull(
     if (oldName && oldName !== list.displayName) {
       // List was renamed — move its tasks to the new project and re-point the
       // project's remote_list alias at the new display name.
-      const project = await syncProjectAliasAfterRename(list.displayName);
+      const project = await syncProjectAliasAfterRename(list.displayName, list.id);
       projectByListId.set(list.id, project);
       if (project === null) continue;
       for (const task of msLocalTasks) {
@@ -1945,7 +2012,7 @@ export async function deltaPull(
     }
     let project = projectByListId.get(taskListId);
     if (project === undefined) {
-      project = await ensureProjectForList(currentListName);
+      project = await ensureProjectForList(currentListName, taskListId);
       projectByListId.set(taskListId, project);
     }
     if (project === null) continue;

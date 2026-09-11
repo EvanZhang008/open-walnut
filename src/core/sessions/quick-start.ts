@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { log } from '../../logging/index.js';
-import { addTask, getTask, updateTask, getCustomTiers, ensureProject, setProjectMetadata, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
+import { addTask, getTask, updateTask, getCustomTiers, ensureProject, resolveProjectForWrite, setProjectMetadata, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task, SessionEngine } from '../types.js';
@@ -182,7 +182,12 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const remembered = await getAskWalnutLaunchPrefs();
     walnutProfile.effort = resolveAskWalnutEffort(remembered.effort, model, walnutProfile.effort);
   }
-  const project = params.project?.trim() ?? '';
+  // `let`, not const: a launcher can carry a project name the human has since
+  // DELETED (the draft column remembers its last pick for as long as the tab
+  // lives). The registry resolves that to Inbox — or to the survivor of a
+  // rename — and the launch must use whatever it decided, for the task, the
+  // session record and the folder stamp alike.
+  let project = params.project?.trim() ?? '';
   // Captured at creation: "the caller did not file this task anywhere" is the
   // gate for the auto-organize pass at the end. Reading task.project later
   // would race the pass's own write on a retry.
@@ -256,10 +261,29 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // row does get created moments before addTask would have anyway; a rare
     // addTask failure leaves an empty (idempotently reusable) project behind,
     // which is harmless next to failing the launch on a registry race.
+    // A launcher can carry a project the human has since DELETED — the draft
+    // column remembers its last pick for as long as the tab lives, and that is
+    // how a project deleted at 21:15 was re-created by a launch at 19:35 the
+    // same evening. Resolve first (read-only): a removed project becomes Inbox,
+    // a renamed one follows to its survivor. Deliberately NOT a create — minting
+    // the row here with a 'local' claim would take the name away from whichever
+    // provider would otherwise claim it.
+    if (project) {
+      const resolved = await resolveProjectForWrite(project, `${source}:launch`);
+      if (resolved.blocked) {
+        log.web.warn(`${source}: launch project was deleted — filing the task in the Inbox`, { project });
+        project = '';
+      } else {
+        if (resolved.name !== project) {
+          log.web.info(`${source}: launch project resolved`, { from: project, to: resolved.name });
+        }
+        project = resolved.name;
+      }
+    }
     let projectIsNew = false;
     if (project && params.projectFromFolder) {
       try {
-        projectIsNew = (await ensureProject(project)).created;
+        projectIsNew = (await ensureProject(project, 'local', { writer: `${source}:launch` })).created;
       } catch (err) {
         // Same 400 mapping as addTask below — ensureProject runs the name gate.
         if (err instanceof InvalidProjectNameError) throw new QuickStartError(err.message, 400);

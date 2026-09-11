@@ -104,7 +104,11 @@ projectsV1Router.post('/projects', async (req: Request, res: Response, next: Nex
     }
     const tm = await import('../../core/task-manager.js')
     try {
-      const result = await tm.ensureProject(name, (source as import('../../core/types.js').TaskSource | undefined) ?? 'local')
+      // `human: true` — an explicit create is the ONE way back from a project
+      // tombstone (see project-tombstones.ts).
+      const result = await tm.ensureProject(name, (source as import('../../core/types.js').TaskSource | undefined) ?? 'local', {
+        writer: 'POST /api/v1/projects', human: true,
+      })
       res.status(result.created ? 201 : 200).json(result)
     } catch (err) {
       if (await sendProjectError(res, err)) return

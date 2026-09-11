@@ -19,6 +19,7 @@ import {
   ensureProject,
   InvalidProjectNameError,
   isPushInflight,
+  isRetiredSentinelTitle,
   updateTasksBulk,
 } from './task-manager.js';
 import { bus, EventNames } from './event-bus.js';
@@ -59,11 +60,50 @@ interface ReconcileDiffResult {
   unchanged: number;
 }
 
+// ── Apply outcome ──
+
+/**
+ * Why a project name could not take the write. Each one means the remote item
+ * was NOT imported (create) or NOT moved (update) — the item stays remote-only
+ * and the same refusal repeats on every cycle until a human changes something.
+ */
+type RefusalReason =
+  /** The human deleted this project here; the ledger refuses to re-mint it. */
+  | 'deleted-project'
+  /** The remote container's name matches a LOCAL-source project — the unlinked
+   *  state: two things with one name and no link between them. */
+  | 'local-project'
+  /** Another provider owns the project row. */
+  | 'other-provider'
+  /** A retired grouping name (quick-start group / legacy Inbox). */
+  | 'retired-name';
+
+/** What the apply pass ACTUALLY did, as opposed to what the diff intended. */
+interface ApplyOutcome {
+  adopted: number;
+  created: number;
+  updated: number;
+  removed: number;
+  /** Remote items refused by a project gate, by project name. */
+  refusals: Map<string, { reason: RefusalReason; items: number; claimedBy?: string }>;
+}
+
 // ── SyncReconciler ──
+
+/**
+ * Consecutive full reconciles a project may be refused before the refusal is
+ * escalated from a warn to `log.error` (which the notification bridge turns into
+ * ONE deduped card for the human). 3 ≈ 1.5h at the 30-min cadence: long enough
+ * that a mid-rename blip stays quiet, short enough that the 14-hour silent loop
+ * of 2026-09-08 could not happen again.
+ */
+const REFUSAL_ESCALATE_TICKS = 3;
 
 export class SyncReconciler {
   private stateCache = new Map<string, ReconcileState>();
   private isFirstTick = new Map<string, boolean>();
+  /** `${pluginId}:${lower(project)}` → consecutive full reconciles refused. */
+  private refusalStreaks = new Map<string, number>();
 
   constructor() {
     fs.mkdirSync(SYNC_DIR, { recursive: true });
@@ -102,12 +142,24 @@ export class SyncReconciler {
     log.web.info(`sync-reconciler: starting full reconcile`, { pluginId: plugin.id, trigger: this.getTriggerReason(state, opts, first) });
 
     try {
-      const remoteItems = await plugin.sync.fullPull(ctx);
-      if (!remoteItems) {
+      const pulled = await plugin.sync.fullPull(ctx);
+      if (!pulled) {
         log.web.debug('sync-reconciler: fullPull returned null/undefined, skipping', { pluginId: plugin.id });
         this.saveState(plugin.id, state);
         return;
       }
+      // Retired `.metadata*` sentinel twins are dropped BEFORE the diff, not at
+      // write time. addTasksBulk refuses them anyway, so leaving them in made
+      // every cycle report `created: 3` for rows that were never written — a
+      // counter that lies about the one number this log line exists to report.
+      const remoteItems = pulled.filter((item) => {
+        if (!isRetiredSentinelTitle(item.title ?? (item.fields.title as string | undefined))) return true;
+        log.web.debug('sync-reconciler: dropped retired .metadata sentinel from full pull', {
+          pluginId: plugin.id, title: item.title, remoteId: item.remoteId,
+        });
+        return false;
+      });
+      const sentinelsDropped = pulled.length - remoteItems.length;
 
       // Safety guard: empty result when we previously had items
       if (remoteItems.length === 0 && state.lastFullPullCount > 5) {
@@ -139,7 +191,8 @@ export class SyncReconciler {
       const diff = this.computeDiff(localTasks, remoteItems, plugin);
 
       // Apply changes
-      await this.applyDiff(diff, ctx, plugin.id);
+      const outcome = await this.applyDiff(diff, ctx, plugin.id);
+      this.noteRefusals(plugin.id, outcome.refusals);
 
       // Update state on success
       state.deltaEpoch = 0;
@@ -148,13 +201,26 @@ export class SyncReconciler {
       state.updatedAt = new Date().toISOString();
       this.saveState(plugin.id, state);
 
+      // Every count here is what LANDED, never what the diff intended. The
+      // 2026-09-08 log reported `created: 15` on every cycle for 14 hours while
+      // writing nothing: 3 were sentinels and 12 were refused by a project gate,
+      // and the intent-shaped counter hid both. When intent and outcome differ,
+      // the difference gets its OWN field so the gap is readable, not inferred.
+      const refusedItems = [...outcome.refusals.values()].reduce((n, r) => n + r.items, 0);
       log.web.info('sync-reconciler: full reconcile complete', {
         pluginId: plugin.id,
         remoteCount: remoteItems.length,
-        created: diff.toCreate.length,
-        updated: diff.toUpdate.length,
-        removed: diff.toRemove.length,
+        created: outcome.created,
+        updated: outcome.updated,
+        removed: outcome.removed,
         unchanged: diff.unchanged,
+        ...(outcome.adopted > 0 ? { adopted: outcome.adopted } : {}),
+        ...(diff.toCreate.length !== outcome.created ? { createsIntended: diff.toCreate.length } : {}),
+        ...(diff.toUpdate.length !== outcome.updated ? { updatesIntended: diff.toUpdate.length } : {}),
+        ...(sentinelsDropped > 0 ? { sentinelsDropped } : {}),
+        ...(refusedItems > 0
+          ? { refusedItems, refusedProjects: [...outcome.refusals.keys()] }
+          : {}),
       });
     } catch (err) {
       log.web.error('sync-reconciler: full reconcile failed', {
@@ -344,9 +410,16 @@ export class SyncReconciler {
     diff: ReconcileDiffResult,
     ctx: SyncPollContext,
     pluginId: string,
-  ): Promise<void> {
+  ): Promise<ApplyOutcome> {
     const source = `${pluginId}-reconcile`;
     let changeCount = 0;
+    const outcome: ApplyOutcome = { adopted: 0, created: 0, updated: 0, removed: 0, refusals: new Map() };
+    /** Count this item against the project that refused it (for the caller's log). */
+    const noteRefusal = (project: string, reason: RefusalReason, claimedBy?: string): void => {
+      const entry = outcome.refusals.get(project);
+      if (entry) entry.items++;
+      else outcome.refusals.set(project, { reason, items: 1, ...(claimedBy ? { claimedBy } : {}) });
+    };
 
     // addTasksBulk/updateTasksBulk skip the create-time validation chain by
     // design, so this is the one bulk path that could write `tasks.project`
@@ -358,42 +431,78 @@ export class SyncReconciler {
     // Resolution per name: valid + unclaimed/same-claim → canonical spelling;
     // claim conflict → 'conflict' (create skipped, update keeps local project);
     // shape-invalid → '' (field dropped, row keeps its current project).
-    const ensuredProjects = new Map<string, string | 'conflict'>(); // lower(name) → canonical
+    //
+    // A 'conflict' is REPORTED, not just skipped: the same items are refused on
+    // every cycle until a human intervenes, so the resolution is cached WITH its
+    // reason and each refused item is counted (see noteRefusal / noteRefusals).
+    type Resolution = string | { conflict: RefusalReason; claimedBy?: string };
+    const ensuredProjects = new Map<string, Resolution>(); // lower(name) → canonical | refusal
     const resolveProject = async (fields: Partial<Task>): Promise<'ok' | 'conflict'> => {
       const name = (fields.project ?? '').trim();
       if (!name) return 'ok';
-      // Retired grouping names are Inbox, and Inbox can't hold provider tasks —
-      // same pull-side rule as routePulledListToProject. Without this, a remote
-      // task still tagged with the retired name resurrects it as a claimed
-      // project on every full pull (the v5 repair deleted these rows once).
-      if (isRetiredQuickStartGroup(name) || isLegacyInboxGroup(name)) {
-        log.web.warn('sync-reconciler: remote task grouped under a retired name — not imported/moved', {
-          pluginId, project: name,
-        });
-        return 'conflict';
-      }
       const key = name.toLowerCase();
-      let canonical = ensuredProjects.get(key);
-      if (canonical === undefined) {
-        try {
-          const ensured = await ensureProject(name, pluginId as Task['source']);
-          canonical = ensured.source === pluginId ? ensured.name : 'conflict';
-          if (canonical === 'conflict') {
-            log.web.warn('sync-reconciler: remote task targets a project claimed by another provider', {
-              pluginId, project: name, claimedBy: ensured.source,
-            });
-          }
-        } catch (err) {
-          if (!(err instanceof InvalidProjectNameError)) throw err;
-          log.web.warn('sync-reconciler: invalid project name from remote — leaving project unchanged', {
+      let resolution = ensuredProjects.get(key);
+      if (resolution === undefined) {
+        // Retired grouping names are Inbox, and Inbox can't hold provider tasks —
+        // same pull-side rule as routePulledListToProject. Without this, a remote
+        // task still tagged with the retired name resurrects it as a claimed
+        // project on every full pull (the v5 repair deleted these rows once).
+        if (isRetiredQuickStartGroup(name) || isLegacyInboxGroup(name)) {
+          log.web.warn('sync-reconciler: remote task grouped under a retired name — not imported/moved', {
             pluginId, project: name,
           });
-          canonical = '';
+          resolution = { conflict: 'retired-name' };
+        } else {
+          try {
+            const ensured = await ensureProject(name, pluginId as Task['source'], {
+              writer: `${pluginId}-reconcile`,
+            });
+            if (ensured.blocked) {
+              // The human deleted this project. The remote container may still
+              // exist, and re-minting the row from it is exactly the resurrection
+              // the tombstone ledger refuses (2026-09-08).
+              log.web.warn('sync-reconciler: remote task targets a DELETED project — not imported/moved', {
+                pluginId, project: name,
+              });
+              resolution = { conflict: 'deleted-project' };
+            } else if (ensured.source === pluginId) {
+              resolution = ensured.name;
+            } else if (ensured.source === 'local') {
+              // The UNLINKED STATE, and the shape that started the 2026-09-08
+              // incident: a remote container and a LOCAL project wearing the same
+              // name, with nothing joining them. Every pull refuses these items
+              // (a provider task cannot live in a local-claimed project) and the
+              // refusal used to be invisible, so the mismatch survived 14 hours
+              // and a delete that only removed the local half. Binding the
+              // project to the container automatically is NOT the answer — that
+              // would start pushing the user's local tasks into a remote account
+              // nobody asked to sync — so this stays a report, escalated by
+              // noteRefusals when it keeps happening.
+              log.web.warn('sync-reconciler: remote container matches a LOCAL project — items stay remote-only', {
+                pluginId, project: name, remoteItems: 1,
+              });
+              resolution = { conflict: 'local-project' };
+            } else {
+              log.web.warn('sync-reconciler: remote task targets a project claimed by another provider', {
+                pluginId, project: name, claimedBy: ensured.source,
+              });
+              resolution = { conflict: 'other-provider', claimedBy: ensured.source };
+            }
+          } catch (err) {
+            if (!(err instanceof InvalidProjectNameError)) throw err;
+            log.web.warn('sync-reconciler: invalid project name from remote — leaving project unchanged', {
+              pluginId, project: name,
+            });
+            resolution = '';
+          }
         }
-        ensuredProjects.set(key, canonical);
+        ensuredProjects.set(key, resolution);
       }
-      if (canonical === 'conflict') return 'conflict';
-      if (canonical) fields.project = canonical;
+      if (typeof resolution !== 'string') {
+        noteRefusal(name, resolution.conflict, resolution.claimedBy);
+        return 'conflict';
+      }
+      if (resolution) fields.project = resolution;
       else delete fields.project;
       return 'ok';
     };
@@ -423,6 +532,7 @@ export class SyncReconciler {
           bus.emit(EventNames.TASK_UPDATED, { task }, [], { source });
         }
         changeCount += changed.length;
+        outcome.adopted = changed.length;
       } catch (err) {
         log.web.warn('sync-reconciler: bulk adopt failed', {
           pluginId, batchSize: adoptPatches.length,
@@ -473,6 +583,16 @@ export class SyncReconciler {
           bus.emit(EventNames.TASK_CREATED, { task }, [], { source });
         }
         changeCount += created.length;
+        outcome.created = created.length;
+        // addTasksBulk applies its own refusals (retired sentinel titles, rows
+        // whose project row vanished mid-batch). A silent gap here is how a
+        // reconcile can look busy while writing nothing, so say it out loud.
+        if (created.length !== creates.length) {
+          log.web.warn('sync-reconciler: the store refused some creates', {
+            pluginId, offered: creates.length, written: created.length,
+            titles: creates.slice(0, 5).map((c) => c.title),
+          });
+        }
       } catch (err) {
         log.web.warn('sync-reconciler: bulk create failed', {
           pluginId,
@@ -533,6 +653,7 @@ export class SyncReconciler {
           bus.emit(EventNames.TASK_UPDATED, { task }, [], { source });
         }
         changeCount += changed.length;
+        outcome.updated = changed.length;
       } catch (err) {
         log.web.warn('sync-reconciler: bulk update failed', {
           pluginId,
@@ -579,6 +700,7 @@ export class SyncReconciler {
             });
           }
           changeCount += deleted.length;
+          outcome.removed = deleted.length;
         } catch (err) {
           log.web.warn('sync-reconciler: bulk delete failed', {
             pluginId,
@@ -601,6 +723,51 @@ export class SyncReconciler {
         ['web-ui'],
         { source: `${pluginId}-reconcile-batch` },
       );
+    }
+    return outcome;
+  }
+
+  /**
+   * Turn a repeated project refusal into something the human sees.
+   *
+   * One refused cycle is noise (a rename mid-pull, a project deleted seconds
+   * ago). The SAME refusal on cycle after cycle is a standing mismatch that will
+   * never resolve itself — which is exactly what ran unnoticed for 14 hours on
+   * 2026-09-08 while the log cheerfully reported the refused items as `created`.
+   * At REFUSAL_ESCALATE_TICKS the warn becomes a `log.error`, which the
+   * notification bridge collapses into ONE deduped card per project.
+   */
+  private noteRefusals(
+    pluginId: string,
+    refusals: ApplyOutcome['refusals'],
+  ): void {
+    const seen = new Set<string>();
+    for (const [project, info] of refusals) {
+      const key = `${pluginId}:${project.toLowerCase()}`;
+      seen.add(key);
+      const streak = (this.refusalStreaks.get(key) ?? 0) + 1;
+      this.refusalStreaks.set(key, streak);
+      // Escalate ONCE per standing mismatch (not every cycle): the card exists to
+      // tell the human something needs a decision, not to count cycles.
+      if (streak !== REFUSAL_ESCALATE_TICKS) continue;
+      log.web.error('Task sync cannot import a remote list', {
+        pluginId,
+        project,
+        reason: info.reason,
+        ...(info.claimedBy ? { claimedBy: info.claimedBy } : {}),
+        items: info.items,
+        consecutiveReconciles: streak,
+        remedy: info.reason === 'local-project'
+          ? `A list named "${project}" exists in ${pluginId} and a LOCAL project here shares that name, with no link between them. Rename one of the two, or delete the list in the provider's app.`
+          : info.reason === 'deleted-project'
+            ? `You deleted the project "${project}" here, but its list still exists in ${pluginId}. Delete the list there, or re-create the project to take the items back.`
+            : `The project "${project}" is claimed by ${info.claimedBy ?? 'another provider'}, so ${pluginId} items cannot be filed under it.`,
+      });
+    }
+    // A refusal that stopped happening must not keep an old streak alive — the
+    // next occurrence starts a fresh count (and can escalate again).
+    for (const key of [...this.refusalStreaks.keys()]) {
+      if (key.startsWith(`${pluginId}:`) && !seen.has(key)) this.refusalStreaks.delete(key);
     }
   }
 

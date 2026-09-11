@@ -31,6 +31,7 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 - Project is the only grouping layer. Empty project means Inbox.
 - A task has one current session slot. Continue that work instead of creating another task.
 - Project execution defaults live in project metadata. Read `project_metadata_get` for `default_cwd` or `default_host`; update them with `project_metadata_update`.
+- Deleting a project (`project_delete`) is durable: the name is tombstoned, so a provider pull, a stale session launcher, or a `task_create` naming it files into the Inbox instead of re-creating it. Only an explicit project create re-opens the name. A provider-claimed project (ms-todo, jira) refuses a plain delete with 409; pass `remote: true` to also delete its remote container, otherwise the container keeps pulling the tasks back.
 - Pin state and focus tier are separate. Pin first, then set a tier. Satellite is the default tier and is stored as no explicit `focus_tier` value.
 - A task you or the user creates lands on the pinned board in Satellite by default. Pass `pinned: false` only for work that is not expected within about a month; search recovers it later. Automated importers (external sessions, provider sync, routine runs) stay unpinned.
 

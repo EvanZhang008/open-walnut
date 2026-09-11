@@ -844,14 +844,24 @@ Tasks are the USER's to-do list. Create one only when the user asked to record o
               return `Error: unknown source "${source}". Valid sources: ${valid.join(', ')}.`;
             }
           }
-          const result = await ensureProject(name, source);
+          // An explicit `create type=project` call is an intentional, attributable
+          // act (the user asked for it in the conversation), so it counts as the
+          // human door back from a project tombstone — unlike a background writer
+          // naming a deleted project, which now files into the Inbox instead. Say
+          // so in the reply: re-opening a project the user deleted is worth a line.
+          const { getProjectTombstone } = await import('../core/project-tombstones.js');
+          const wasRemoved = getProjectTombstone(name);
+          const result = await ensureProject(name, source, { writer: 'agent:create', human: true });
           if (!result.created) {
             return `Project "${result.name}" already exists (source: ${result.source}).`;
           }
+          const revivedNote = wasRemoved
+            ? `\nNote: this project had been deleted (${wasRemoved.deleted_at}) — creating it here re-opens the name.`
+            : '';
 
           // Prompt AI to confirm working directory with the user
           const metadata = await getProjectMetadata(result.name);
-          let response = `Project created: "${result.name}" (source: ${result.source})`;
+          let response = `Project created: "${result.name}" (source: ${result.source})${revivedNote}`;
           if (!metadata?.default_cwd) {
             const { PROJECTS_MEMORY_DIR } = await import('../constants.js');
             const { default: path } = await import('node:path');

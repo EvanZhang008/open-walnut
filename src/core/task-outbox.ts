@@ -304,7 +304,11 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
     let primarySource = 'local';
     if (snapshotProject) {
       try {
-        const ensured = await tm.ensureProject(snapshotProject, 'local');
+        const ensured = await tm.ensureProject(snapshotProject, 'local', { writer: 'cloud-outbox' });
+        // Take the name the registry decided on, not the phone's spelling: it is
+        // the canonical casing, and for a project deleted here it is Inbox ('')
+        // or the survivor of a rename — the replica has no way to know either.
+        snapshotProject = ensured.name;
         primarySource = ensured.source;
       } catch (err) {
         if (!(err instanceof tm.InvalidProjectNameError)) throw err;
@@ -389,8 +393,19 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
   if (typeof patch.project === 'string' && patch.project.trim()
       && patch.project.trim().toLowerCase() !== (existing.project || '').trim().toLowerCase()) {
     try {
-      const ensured = await tm.ensureProject(patch.project.trim(), 'local');
-      patch.project = ensured.name; // canonical spelling wins
+      const requested = patch.project.trim();
+      const ensured = await tm.ensureProject(requested, 'local', { writer: 'cloud-outbox' });
+      if (ensured.blocked) {
+        // The project was deleted on the primary after the replica took its
+        // snapshot. Moving the task into Inbox on the strength of a stale phone
+        // op would be a data change nobody asked for — keep it where it is.
+        log.task.warn('task-op: project move dropped — target project was deleted here', {
+          opId: op.opId, project: requested, keptIn: existing.project || 'Inbox',
+        });
+        delete patch.project;
+      } else {
+        patch.project = ensured.name; // canonical spelling (or rename survivor) wins
+      }
     } catch (err) {
       if (!(err instanceof tm.InvalidProjectNameError)) throw err;
       log.task.warn('task-op: invalid project name on update — keeping current project', {

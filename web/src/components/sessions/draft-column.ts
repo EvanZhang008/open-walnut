@@ -349,6 +349,45 @@ export function projectForFolderPick(
 }
 
 /**
+ * Follow a project DELETE or RENAME onto a draft row.
+ *
+ * A launcher column lives as long as the tab does (days, in the Mac app), so the
+ * project it remembers can be one the human has since deleted or renamed
+ * somewhere else. Launching with that stale name is a WRITE: the server used to
+ * re-create the project from it, which is how a project deleted at 21:15 was back
+ * at 19:35 the same evening (2026-09-08). The server now refuses that write; this
+ * keeps the pill honest so the user isn't told the task is going somewhere it
+ * isn't.
+ *
+ * Driven by the EVENT, never by "this name is missing from the project list": a
+ * draft holding an unknown name is normally the user TYPING a new project, which
+ * the launcher is allowed to create.
+ *
+ * Returns the fields to patch, or null when this row is unaffected.
+ *  · deleted → the project is dropped (the launch files into Inbox).
+ *  · renamed → the row follows to the new name, keeping its provenance.
+ *  · a 'seed' project is left alone: those are server-owned names (the per-agent
+ *    "Ask …" project), which have no registry row until the first ask exists.
+ */
+export function followProjectRegistryChange(
+  draft: Pick<DraftColumn, 'project' | 'projectSource'>,
+  change: { kind: 'deleted'; name: string } | { kind: 'renamed'; from: string; to: string },
+): { project?: string; projectSource?: DraftProjectSource } | null {
+  const current = (draft.project ?? '').trim();
+  if (!current) return null;
+  if (draft.projectSource === 'seed') return null;
+  const lower = current.toLowerCase();
+  if (change.kind === 'deleted') {
+    if (lower !== change.name.trim().toLowerCase()) return null;
+    return { project: undefined, projectSource: undefined };
+  }
+  if (lower !== change.from.trim().toLowerCase()) return null;
+  const to = change.to.trim();
+  if (!to) return null;
+  return { project: to, projectSource: draft.projectSource };
+}
+
+/**
  * Fold a background parse of the composer text into a draft row.
  *
  * The ownership rule, one place: the AI may only write a field NOBODY ELSE has
