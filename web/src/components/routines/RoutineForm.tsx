@@ -157,6 +157,26 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const setField = (fieldName: string, value: unknown) =>
     setConfig((prev) => ({ ...prev, [fieldName]: value }));
 
+  /**
+   * A watcher POLLS, so its natural trigger is an interval, not a wall clock:
+   * the form's own default (weekdays 9:00) would make a hand-built mail watcher
+   * look at the inbox once a day. The drafter already knows this rule, so the
+   * manual path has to know it too.
+   *
+   * Only ever rewrites a trigger the user has NOT touched: switching executor
+   * must never silently move a schedule they picked, and a drafted routine
+   * already arrives with its own schedule.
+   */
+  function pickExecutor(next: string) {
+    setExecutorType(next);
+    if (next !== 'watcher') return;
+    setTrigger((prev) => (
+      JSON.stringify(prev) === JSON.stringify(defaultTrigger())
+        ? { ...prev, preset: 'custom', customKind: 'every', everyMin: 10 }
+        : prev
+    ));
+  }
+
   const schedule = useMemo(() => triggerToSchedule(trigger), [trigger]);
   const headerLine = useMemo(() => {
     if (!schedule) return 'Select a trigger';
@@ -407,7 +427,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
               {executors.map((ex) => (
                 <label key={ex.type} className="cron-form-radio" title={ex.description}>
                   <input type="radio" name="routine-executor" checked={executorType === ex.type}
-                    onChange={() => setExecutorType(ex.type)} />
+                    onChange={() => pickExecutor(ex.type)} />
                   <span>{ex.label}</span>
                 </label>
               ))}

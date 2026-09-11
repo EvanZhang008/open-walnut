@@ -55,7 +55,8 @@ test('builds a watcher routine by hand and stores exactly what the form showed',
       'Check my unread mail. Task anything needing a reply. Ignore newsletters. Nothing new means do nothing.',
     )
 
-    // Polling is an interval, so exercise Custom → Interval rather than a clock.
+    // Picking Watcher already defaults the trigger to an interval; drive the
+    // controls anyway, so the explicit path stays covered on its own.
     await form.getByRole('tab', { name: 'Custom' }).click()
     await form.locator('input[type="radio"][name="routine-custom-kind"]').nth(1).check()
     await form.getByLabel('Interval minutes').fill('10')
@@ -103,6 +104,28 @@ test('a watcher with no instructions is refused in the form, not on the server',
   await form.getByRole('button', { name: 'Create' }).click()
   await expect(form.locator('.cron-form-error')).toContainText('What to watch is required')
   await expect(form).toBeVisible()
+  await form.getByRole('button', { name: 'Cancel' }).click()
+})
+
+test('picking Watcher turns an untouched trigger into an interval, and leaves a chosen one alone', async ({ page }) => {
+  // A poll is an interval, not a wall clock. The form's default is weekdays
+  // 9:00, which would make a hand-built mail watcher look once a day.
+  await openRoutines(page)
+  await page.getByRole('button', { name: 'Build it myself' }).click()
+  const form = page.locator('.routine-modal')
+  await expect(form.locator('.routine-trigger-header')).toContainText('weekdays')
+
+  await form.locator('label.cron-form-radio', { hasText: 'Watcher' }).locator('input').check()
+  await expect(form.locator('.routine-trigger-header')).toContainText('every 10 min')
+  await expect(form.getByLabel('Interval minutes')).toHaveValue('10')
+
+  // But a schedule the user picked must survive the executor switch.
+  await form.getByRole('tab', { name: 'Daily' }).click()
+  await expect(form.locator('.routine-trigger-header')).toContainText('every day at 9:00 AM')
+  await form.locator('label.cron-form-radio', { hasText: 'Main Agent' }).locator('input').check()
+  await form.locator('label.cron-form-radio', { hasText: 'Watcher' }).locator('input').check()
+  await expect(form.locator('.routine-trigger-header')).toContainText('every day at 9:00 AM')
+
   await form.getByRole('button', { name: 'Cancel' }).click()
 })
 
