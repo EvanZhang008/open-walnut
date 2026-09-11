@@ -208,6 +208,17 @@ describe('the quoted original', () => {
     expect(quote).toContain('\n>\n');
   });
 
+  it('formats a machine timestamp in the header slot as prose and never writes an empty address', () => {
+    // A display-name-only provider hands an ISO stamp where a Date header would be, and a sender
+    // with no address at all: the line must read like something a person wrote.
+    const quote = quoteMarkdown({
+      message: { ...MESSAGE, sentAtHeader: '2026-09-09T10:21:03-07:00', from: { name: 'Harbour Notices', address: '' } },
+    });
+    expect(quote).not.toContain('2026-09-09T');
+    expect(quote).toMatch(/^On .*2026.*, Harbour Notices wrote:$/);
+    expect(quote).not.toContain('<>');
+  });
+
   it('attributes an html-only original without inventing a quote for it', () => {
     const quote = quoteMarkdown({ message: MESSAGE });
     // One line, the attribution, and NOT a single quoted line: this console has no html-to-text

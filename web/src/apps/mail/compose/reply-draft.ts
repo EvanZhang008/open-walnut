@@ -134,15 +134,31 @@ export function bodyWithQuote(typed: string, quote: string | null): string {
 
 function senderLine(message: ReplyTargetMessage): string {
   const from = message.from;
-  if (!from) return 'the sender';
-  return from.name?.trim() ? `${from.name.trim()} <${from.address}>` : from.address;
+  const name = from?.name?.trim() ?? '';
+  const address = from?.address?.trim() ?? '';
+  if (!name && !address) return 'the sender';
+  // A provider that names people without an address (a display-name-only listing) must not
+  // produce `Name <>`, which reads as a broken address to the person receiving the reply.
+  if (!address) return name;
+  return name ? `${name} <${address}>` : address;
 }
 
-/** The original's own `Date` header when it kept one, a local stamp otherwise. */
+/** A machine timestamp (`2026-09-09T10:21:03-07:00`), which is not a `Date` header a person wrote. */
+const ISO_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+
+/**
+ * The original's own `Date` header when it kept one, a local stamp otherwise.
+ *
+ * A header is quoted verbatim only when it is the RFC form a mail client wrote; a provider that
+ * hands an ISO timestamp in that slot gets it formatted like the no-header case, because an
+ * attribution line is prose and a person never writes `On 2026-09-09T10:21:03-07:00, …`.
+ */
 function stamp(message: ReplyTargetMessage): string {
-  if (message.sentAtHeader?.trim()) return message.sentAtHeader.trim();
-  if (!Number.isFinite(message.sentAt) || message.sentAt <= 0) return '';
-  return new Date(message.sentAt).toLocaleString(undefined, {
+  const header = message.sentAtHeader?.trim() ?? '';
+  if (header && !ISO_STAMP.test(header)) return header;
+  const at = header ? Date.parse(header) : message.sentAt;
+  if (!Number.isFinite(at) || at <= 0) return '';
+  return new Date(at).toLocaleString(undefined, {
     weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
   });
 }

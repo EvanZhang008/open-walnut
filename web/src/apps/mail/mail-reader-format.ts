@@ -103,3 +103,23 @@ export function looksLikeCode(text: string): boolean {
   }
   return marked / lines.length >= 0.4;
 }
+
+/**
+ * Whether there is anything to render, whatever the declared format says.
+ *
+ * An html part counts only when something in it would paint: text outside `<head>`, `<style>`
+ * and `<script>`, or an image. A provider can hand over a complete document whose every cell was
+ * stripped on its way here (seen live: a 1 KB newsletter shell of nested empty tables), and a
+ * frame showing that is a white card with nothing on it, which reads as a broken reader.
+ */
+export function hasBodyContent(body: { html?: string; text?: string }): boolean {
+  if (body.text?.trim()) return true;
+  const html = body.html ?? '';
+  if (!html.trim()) return false;
+  if (/<img\b/i.test(html)) return true;
+  const visible = html
+    .replace(/<(head|style|script|title)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;|&#160;|\s/g, '');
+  return visible.length > 0;
+}

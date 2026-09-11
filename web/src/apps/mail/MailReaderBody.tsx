@@ -13,11 +13,11 @@
 import { useMemo } from 'react';
 import { LinkifiedText } from '@/components/common/LinkifiedText';
 import { truncatedNotice } from './mail-format';
-import { looksLikeCode } from './mail-reader-format';
 import { allowRemoteImagesForOpenMessage, retryOpenMessageBody } from './mail-actions';
 import type { MailOpenMessage } from './mail-store';
 import { buildMailBodyFrame } from './mail-sanitize';
 import { MAIL_IFRAME_SANDBOX } from './mail-html';
+import { hasBodyContent, looksLikeCode } from './mail-reader-format';
 import { ImageIcon } from './mail-icons';
 
 export function MailReaderBody({ open }: { open: MailOpenMessage }) {
@@ -72,7 +72,11 @@ export function MailReaderBody({ open }: { open: MailOpenMessage }) {
   if (!hasBodyContent(body)) {
     return (
       <div className="mail-reader-body mail-reader-column">
-        <p className="mail-pane-empty" data-testid="mail-body-empty">No text content.</p>
+        <p className="mail-pane-empty" data-testid="mail-body-empty">
+          {body.html?.trim()
+            ? 'This message arrived with no readable content: its markup has no text and no images.'
+            : 'No text content.'}
+        </p>
       </div>
     );
   }
@@ -141,11 +145,6 @@ function Notice({ testId, text }: { testId: string; text: string }) {
       </div>
     </div>
   );
-}
-
-/** Whether there is anything to render, whatever the declared format says. */
-function hasBodyContent(body: { html?: string; text?: string }): boolean {
-  return !!(body.html?.trim() || body.text?.trim());
 }
 
 /** The plugin answers with a provider error CODE; a code is not an explanation. */

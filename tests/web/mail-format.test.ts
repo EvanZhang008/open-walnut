@@ -84,3 +84,18 @@ describe('senderLabel', () => {
     expect(senderLabel(undefined)).toBe('Unknown sender');
   });
 });
+
+describe('hasBodyContent', () => {
+  it('counts an html part only when something in it would paint', async () => {
+    const { hasBodyContent } = await import('../../web/src/apps/mail/mail-reader-format');
+    // A complete document whose every cell was stripped on the way here: nested empty tables, a
+    // title, a style block. Nothing paints, so it is an empty body, not a blank frame.
+    const shell = '<!DOCTYPE html><html><head><title>Weekly</title><style>td{color:red}</style></head>'
+      + '<body style="background:#f1f4f7"><div><table><tbody><tr></tr></tbody></table></div>&nbsp;\n</body></html>';
+    expect(hasBodyContent({ html: shell })).toBe(false);
+    expect(hasBodyContent({ html: shell.replace('<tr></tr>', '<tr><td>Fares</td></tr>') })).toBe(true);
+    expect(hasBodyContent({ html: shell.replace('<tr></tr>', '<tr><td><img src="cid:logo"></td></tr>') })).toBe(true);
+    expect(hasBodyContent({ html: '   ', text: '' })).toBe(false);
+    expect(hasBodyContent({ text: 'plain' })).toBe(true);
+  });
+});
