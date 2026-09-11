@@ -19,6 +19,9 @@ import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
 export interface LiveAgentStatus {
   status: string; // running | completed | failed | stopped | paused
   toolUses?: number;
+  /** Server clock at the first task_started (set once; the lane's working
+   *  indicator counts its elapsed from here). */
+  startedAt?: number;
 }
 
 const bySession = new Map<string, Map<string, LiveAgentStatus>>();
@@ -47,10 +50,10 @@ export function publishLiveAgents(sessionId: string, tasks: readonly BackgroundT
   for (const t of tasks) {
     if (!t.toolUseId) continue;
     const old = prev?.get(t.toolUseId);
-    if (old && old.status === t.status && old.toolUses === t.toolUses) {
+    if (old && old.status === t.status && old.toolUses === t.toolUses && old.startedAt === t.startedAt) {
       next.set(t.toolUseId, old);
     } else {
-      next.set(t.toolUseId, { status: t.status, toolUses: t.toolUses });
+      next.set(t.toolUseId, { status: t.status, toolUses: t.toolUses, startedAt: t.startedAt });
       changed = true;
     }
   }

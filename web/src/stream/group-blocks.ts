@@ -44,6 +44,41 @@ export function isLaneChild(b: StreamingBlock): boolean {
   return (b.type === 'tool_call' || b.type === 'text' || b.type === 'thinking') && !!b.parentToolUseId;
 }
 
+/** A `calling` tool_call with no input and no result: the stale placeholder an
+ *  early content_block_start left in old stream buffers. It renders nothing; the
+ *  real block with populated input arrives from the final assistant line. */
+export function isGhostToolBlock(b: StreamingBlock): boolean {
+  return b.type === 'tool_call'
+    && b.status === 'calling'
+    && (!b.input || Object.keys(b.input).length === 0)
+    && !b.result;
+}
+
+/** A block that produces no DOM: empty text/thinking (a live tail that has not
+ *  received tokens yet, a signature-only thinking artifact) or a ghost tool_call.
+ *  Transparent blocks neither render nor split a merged run. */
+export function isTransparentBlock(b: StreamingBlock): boolean {
+  if ((b.type === 'text' || b.type === 'thinking') && !b.content.trim()) return true;
+  return isGhostToolBlock(b);
+}
+
+/** True when a streaming tool_call merges into a muted "Ran N commands ›" run.
+ *  Only COMPLETED generic tool_calls merge — a still-calling tool stays a full
+ *  card so the user watches it live; it collapses into the run when done.
+ *  Agent anchors, plan cards, plan writes and ghosts never merge. */
+export function isMergeableToolBlock(b: StreamingBlock): b is StreamingBlock & { type: 'tool_call' } {
+  if (b.type !== 'tool_call') return false;
+  if (b.status === 'calling') return false;
+  if (GROUPABLE_STREAM_TOOLS.has(b.name)) return false;
+  if (b.name === 'ExitPlanMode') return false;
+  if (b.name === 'Write' && typeof b.input?.file_path === 'string'
+    && b.input.file_path.includes('.claude/plans/')) return false;
+  // Empty input and no result, whatever the status: a placeholder with nothing
+  // to show, never counted in a run's summary.
+  if (!b.result && (!b.input || Object.keys(b.input).length === 0)) return false;
+  return true;
+}
+
 export function groupStreamingBlocks(blocks: StreamingBlock[], hidden?: Set<number>): GroupedStreamItem[] {
   // Find groupable tool_call blocks (Task, Agent). Only MAIN-LANE ones are
   // group anchors — a groupable tool_call that itself carries parentToolUseId

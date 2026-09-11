@@ -13,9 +13,13 @@
  * tell which was current.
  *
  * The shape now (Claude Code desktop parity): the chat shows ONE chip per spawn
- * burst (`N running tasks`), never a card per agent, never an in-place dropdown;
- * the chip and the ledger's "View transcript" both open the two-column Background
- * tasks panel (agents on the left, the selected agent's transcript on the right).
+ * burst (`● Agent  explore  opus  <title>  Running  16 tools`; a burst of several
+ * reads `3 agents … 2 running · 1 done`), never a card per agent, never an in-place
+ * dropdown; the chip and the pinned Background bar both open the two-column
+ * Background tasks panel (agents on the left, the selected agent's transcript on
+ * the right). The reader draws the transcript with the MAIN chat's rows: finished
+ * tools fold into one "Ran N commands ›" run, a tool still executing is the
+ * in-flight card, and a running lane ends in the "… is working…" indicator.
  *
  * Asserts (real React components in a real browser):
  *   1. main text interrupted by a subagent text line stays ONE contiguous block
@@ -24,9 +28,10 @@
  *   3. late lane lines with no anchor in the stream render NOWHERE (no box,
  *      no flat text)
  *   4. the pic-1 shape — Agent row already in history + live lane blocks —
- *      shows exactly ONE chip, the ledger carries the run, both open the panel
- *   5. three parallel spawns are one `3 running tasks` chip; the panel lists all
- *      three and switches the reader on click
+ *      shows exactly ONE chip; the pinned Background bar is one line whose click
+ *      opens the same panel (no caret, no in-place list)
+ *   5. three parallel spawns are one `3 agents … 3 running` chip; the panel lists
+ *      all three and switches the reader on click
  *   6. the panel survives the turn end: history absorbs the Agent tool_calls, the
  *      streaming chip is replaced by the history chip, and the open panel stays
  */
@@ -53,10 +58,6 @@ async function waitForWs(page: Page) {
     return ws && ws.readyState === WebSocket.OPEN;
   }, null, { timeout: 10000 });
 }
-
-/** Placeholder for the ledger's "View transcript" control — set to the class the
- *  AgentRow renders (see WorkflowProgress.tsx). */
-const TRANSCRIPT_BUTTON = '.wf-agent-row-transcript';
 
 async function mockHistory(page: Page, base: unknown[]) {
   await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
@@ -177,7 +178,11 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     //    main-conversation content, so nothing of it is on screen.
     const chip = history.locator('.bg-tasks-chip');
     await expect(chip).toHaveCount(1);
-    await expect(chip).toHaveText(/1 running task/);
+    // The chip carries what the old per-agent card carried: type, title, state.
+    await expect(chip.locator('.bg-tasks-chip-label')).toHaveText('Agent');
+    await expect(chip.locator('.task-group-agent-type')).toHaveText('explore');
+    await expect(chip.locator('.bg-tasks-chip-desc')).toHaveText('explore pricing');
+    await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('Running');
     await expect(chip.locator('.task-group-streaming-dot')).toHaveCount(1);
     await expect(history.locator('.task-group')).toHaveCount(0);
     await expect(history.locator('.task-group-chevron')).toHaveCount(0);
@@ -195,8 +200,35 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(rows.first().locator('.bg-task-row-name')).toHaveText('explore pricing');
     await expect(panel.locator('.bg-tasks-section')).toHaveText(['Running']);
     await expect(panel.locator('.bg-tasks-detail-title')).toHaveText('explore pricing');
-    await expect(panel.locator('.bg-tasks-detail')).toContainText('Now I have the two distinct enums.');
-    await expect(panel.locator('.bg-tasks-detail')).toContainText('grep enum');
+    const detail = panel.locator('.bg-tasks-detail');
+    await expect(detail).toContainText('Now I have the two distinct enums.');
+    await expect(detail).toContainText('grep enum');
+    // The reader uses the main chat's rows: the still-running Bash is the
+    // in-flight card (never folded into a run), and the live lane ends in the
+    // working indicator, named after the agent.
+    await expect(detail.locator('.chat-tool-block-calling')).toHaveCount(1);
+    await expect(detail.locator('.chat-tool-block-calling .chat-tool-block-calling-dot')).toHaveCount(1);
+    await expect(detail.locator('.tool-run-row')).toHaveCount(0);
+    await expect(detail.locator('.session-working-indicator')).toHaveCount(1);
+    await expect(detail.locator('.session-working-label')).toHaveText('explore agent is working…');
+    // Two more commands finish: the reader folds them into ONE "Ran 2 commands ›"
+    // run (same merge the main chat applies), the in-flight one stays a card.
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'toolu_sub_bash_2', input: { command: 'ls src' }, parentToolUseId: PARENT,
+    });
+    await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'toolu_sub_bash_2', result: 'a.ts' });
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'toolu_sub_bash_3', input: { command: 'cat a.ts' }, parentToolUseId: PARENT,
+    });
+    await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'toolu_sub_bash_3', result: 'export {}' });
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'Read', toolUseId: 'toolu_sub_read', input: { file_path: '/tmp/x.md' }, parentToolUseId: PARENT,
+    });
+    await expect(detail.locator('.tool-run-row .tool-run-label')).toHaveText(['Ran 2 commands']);
+    await expect(detail).not.toContainText('ls src');
+    await detail.locator('.tool-run-toggle').click();
+    await expect(detail).toContainText('ls src');
+    await expect(detail).toContainText('cat a.ts');
     await expect(history).not.toContainText('Now I have the two distinct enums.');
     await page.keyboard.press('Escape');
     await expect(panel).toHaveCount(0);
@@ -312,31 +344,34 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
         tokens: 61234, toolUses: 60, durationMs: 95000, startedAt: Date.now() - 95000, isBackgrounded: true,
       }],
     });
+    // The pinned Background bar is ONE line and ONE button: counts + tokens, no
+    // caret, no in-place list. Clicking it opens the same panel the chip opens.
     const ledger = page.locator('.wf-card');
     await expect(ledger).toHaveCount(1);
-    await expect(ledger.locator('.wf-card-title')).toContainText('Background');
+    await expect(ledger).toHaveClass(/wf-card--bar/);
+    await expect(ledger.locator('.wf-card-title')).toHaveText('Background');
     await expect(ledger.locator('.wf-card-running')).toContainText('1 running');
-    await ledger.locator('.wf-card-collapse').click();
-    const row = ledger.locator('.wf-agent-row');
-    await expect(row).toHaveCount(1);
-    await expect(row).toHaveClass(/wf-agent-row-running/);
-    await expect(row.locator('.wf-agent-row-name')).toContainText('Find other insights needing audit log');
-    await expect(row.locator('.wf-agent-row-meta')).toContainText('60 tool uses');
-    await expect(row.locator('.wf-agent-row-meta')).toContainText('61k tokens');
-    // The chat chip mirrors the ledger: running, pulsing.
-    await expect(chip).toHaveText(/1 running task/);
+    await expect(ledger.locator('.wf-card-tokens')).toContainText('61k tok');
+    await expect(ledger.locator('.wf-card-caret')).toHaveCount(0);
+    await expect(ledger.locator('.wf-agent-row')).toHaveCount(0);
+    await expect(page.locator('.wf-card-tasks')).toHaveCount(0);
+    // The chat chip mirrors the ledger: running, pulsing, with the ledger's tool count
+    // and the agent's model from the tool input.
+    await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('Running');
+    await expect(chip.locator('.task-group-model')).toHaveText('opus');
+    await expect(chip.locator('.task-group-badge')).toHaveText('60 tools');
     await expect(chip.locator('.task-group-streaming-dot')).toHaveCount(1);
 
-    // Drill-in from the ledger opens the panel on that agent.
-    await expect(row.locator(TRANSCRIPT_BUTTON)).toHaveCount(1);
-    await row.locator(TRANSCRIPT_BUTTON).click();
+    await ledger.click();
     const panel = page.locator('.wf-modal--tasks');
     await expect(panel).toHaveCount(1);
     const rows = panel.locator('.bg-task-row');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toHaveClass(/bg-task-row-running/);
     await expect(rows.first()).toHaveClass(/bg-task-row--selected/);
+    await expect(rows.first().locator('.bg-task-row-name')).toContainText('Find other insights needing audit log');
     await expect(rows.first().locator('.bg-task-row-meta')).toContainText('60 tool uses');
+    await expect(rows.first().locator('.bg-task-row-meta')).toContainText('61k tokens');
     // While the agent runs, the reader IS the live lane from the stream buffer (no
     // fetch, no poll): the 60 probes and the narration the chat refused to show.
     await expect(panel.locator('.bg-tasks-live-lane')).toHaveCount(1);
@@ -344,6 +379,12 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(panel.locator('.bg-tasks-detail')).toContainText('Lane narration that must stay off the main conversation.');
     await expect(panel.locator('.bg-tasks-detail')).not.toContainText('Transcript line from the running agent.');
     await expect(panel.locator('.bg-tasks-detail-head .wf-modal-live')).toHaveCount(1);
+    // 60 still-calling probes are 60 in-flight cards (a calling tool never folds),
+    // and the lane ends in the working indicator clocked from the ledger's start.
+    await expect(panel.locator('.bg-tasks-detail .tool-run-row')).toHaveCount(0);
+    await expect(panel.locator('.bg-tasks-detail .chat-tool-block-calling')).toHaveCount(60);
+    await expect(panel.locator('.bg-tasks-detail .session-working-label')).toHaveText('explore agent is working…');
+    await expect(panel.locator('.bg-tasks-detail .session-working-meta')).toContainText(/9[4-9]s|1m 3[0-9]s/);
     await page.keyboard.press('Escape');
     await expect(panel).toHaveCount(0);
     // The chat chip is the SAME action: one panel, nothing unfolds in the chat.
@@ -364,9 +405,10 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
         tokens: 70000, toolUses: 64, durationMs: 120000, startedAt: Date.now() - 120000, endedAt: Date.now(),
       }],
     });
-    await expect(row).toHaveClass(/wf-agent-row-completed/);
     await expect(ledger.locator('.wf-card-running')).toHaveCount(0);
-    await expect(chip).toHaveText(/1 task done/);
+    await expect(ledger.locator('.wf-card-count')).toContainText('1/1 agents');
+    await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('Done');
+    await expect(chip.locator('.task-group-badge')).toHaveText('64 tools');
     await expect(chip.locator('.task-group-streaming-dot')).toHaveCount(0);
     await expect(chip.locator('.bg-tasks-chip-icon')).toHaveText('✓');
     // Reopen: the finished agent is listed under Finished, and its reader is now the
@@ -376,9 +418,10 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(panel.locator('.bg-tasks-live-lane')).toHaveCount(0);
     await expect(panel.locator('.bg-tasks-detail')).toContainText('Transcript line from the running agent.');
     await expect(panel.locator('.bg-tasks-detail-head .wf-modal-live')).toHaveCount(0);
+    await expect(panel.locator('.bg-tasks-detail .session-working-indicator')).toHaveCount(0);
   });
 
-  test('three parallel spawns are ONE `3 running tasks` chip; the panel lists all three and switches the reader', async ({ page }) => {
+  test('three parallel spawns are ONE `3 agents` chip; the panel lists all three and switches the reader', async ({ page }) => {
     const base = [
       { role: 'user', text: 'Fan out', timestamp: '2026-01-01T00:00:00.000Z' },
       { role: 'assistant', text: 'Spawning three explorers.', timestamp: '2026-01-01T00:00:01.000Z' },
@@ -411,7 +454,10 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
 
     const chip = history.locator('.bg-tasks-chip');
     await expect(chip).toHaveCount(1);
-    await expect(chip).toHaveText(/3 running tasks/);
+    await expect(chip.locator('.bg-tasks-chip-label')).toHaveText('3 agents');
+    await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('3 running');
+    await expect(chip.locator('.task-group-agent-type')).toHaveText(['explore']);
+    await expect(chip.locator('.bg-tasks-chip-desc')).toHaveText(names.join(' · '));
     await expect(history.locator('.task-group')).toHaveCount(0);
     for (let i = 0; i < 3; i++) await expect(history).not.toContainText(`Narration from explorer ${i}.`);
 
@@ -432,7 +478,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
 
     // The sync explorer's result lands: the chip counts down and the panel moves it to Finished.
     await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'toolu_fan_2', result: 'done' });
-    await expect(chip).toHaveText(/2 running tasks/);
+    await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('2 running · 1 done');
     await expect(panel.locator('.bg-tasks-section')).toHaveText(['Running', 'Finished']);
     await page.keyboard.press('Escape');
     await expect(panel).toHaveCount(0);
@@ -472,7 +518,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
       sessionId: SESSION_ID, delta: 'Live words from explorer 1.', msgId: 'msg_hand_1', parentToolUseId: 'toolu_hand_1',
     });
     const chip = col.locator('.bg-tasks-chip');
-    await expect(chip).toHaveText(/2 running tasks/);
+    await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('2 running');
     await chip.click();
     const panel = page.locator('.wf-modal--tasks');
     const rows = panel.locator('.bg-task-row');

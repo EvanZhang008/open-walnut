@@ -27,7 +27,8 @@ import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
-import { SessionMessage, TaskGroupPrompt } from './SessionMessage';
+import { TaskGroupPrompt } from './SessionMessage';
+import { LaneHistoryTimeline } from './LaneTimeline';
 import type { ReactNode } from 'react';
 import { ICON_CLOSE } from '../common/Icons';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -59,6 +60,14 @@ export interface TranscriptTarget {
   fallbackResult?: string;
   /** The Agent tool's input, for the collapsed "Prompt & settings" row on top. */
   promptInput?: Record<string, unknown>;
+  /** false = `agentId` is not an id the transcript endpoint can read (a
+   *  toolUseId standing in for an agent the parser never identified): show what
+   *  the caller holds and never fetch. Default true. */
+  fetchable?: boolean;
+  /** When a live agent started (ledger clock), for the working indicator's elapsed. */
+  startedAt?: number;
+  /** Who is working, for the indicator ("Explore agent"). */
+  agentLabel?: string;
 }
 
 /** The overlay shell every transcript reader shares: title row (label, live dot,
@@ -106,9 +115,10 @@ export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget
   // so the old transcript never shows under the new title while the fetch runs.
   useEffect(() => { setMessages(target.preloaded ?? null); setFailed(false); }, [target.agentId, target.preloaded]);
 
-  const preloaded = target.preloaded != null && !live;
+  const preloaded = (target.preloaded != null && !live) || target.fetchable === false;
   useEffect(() => {
     // Embedded children ARE the transcript for a finished agent; nothing to fetch.
+    // An unfetchable target (no real agent id) shows the caller's data or its result.
     if (preloaded) return;
     let cancelled = false;
     const cacheKey = workflow ? `wf:${target.agentId}` : target.agentId;
@@ -162,7 +172,7 @@ export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget
       ) : failed ? (
         <div className="wf-modal-loading">Failed to load transcript. Close and reopen to retry.</div>
       ) : messages && messages.length > 0 ? (
-        messages.map((m, i) => <SessionMessage key={i} message={m} sessionId={sessionId} />)
+        <LaneHistoryTimeline messages={messages} sessionId={sessionId} live={live} startedAt={target.startedAt} agentLabel={target.agentLabel} />
       ) : target.fallbackResult ? (
         <div className="task-group-result">
           <div className="task-group-result-label">Result</div>

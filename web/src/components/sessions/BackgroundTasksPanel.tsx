@@ -27,6 +27,7 @@ import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
 import { isAgentTask } from './workflow-layout';
 import { buildAgentMeta, fmtElapsed, rowElapsedMs } from './background-ledger';
 import { StatusDot } from './WorkflowGraph';
+import { agentModelLabel } from './SessionMessage';
 import { TranscriptBody } from './WorkflowTranscriptModal';
 import { ICON_CLOSE } from '../common/Icons';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -207,6 +208,9 @@ export function BackgroundTasksPanel({
         preloaded: selected.agentId ? undefined : selected.known?.preloaded,
         fallbackResult: selected.known?.result || undefined,
         promptInput: selected.known?.promptInput,
+        fetchable: !!selected.agentId,
+        startedAt: selected.task?.startedAt,
+        agentLabel: selected.subagentType ? `${selected.subagentType} agent` : 'Agent',
       }
     : null;
   const detailLive = !!liveLane || target?.live === true;
@@ -271,22 +275,34 @@ export function BackgroundTasksPanel({
 
 /** Sum of what the live ledger says about a set of agents, with the conversation's
  *  own settled/unsettled knowledge as the fallback for agents the ledger never saw. */
-function summarize(agents: KnownAgent[], live: ReadonlyMap<string, LiveAgentStatus>): { running: number; failed: number; done: number } {
-  let running = 0; let failed = 0; let done = 0;
+function summarize(agents: KnownAgent[], live: ReadonlyMap<string, LiveAgentStatus>): { running: number; failed: number; done: number; toolUses: number } {
+  let running = 0; let failed = 0; let done = 0; let toolUses = 0;
   for (const a of agents) {
-    const s = a.toolUseId ? live.get(a.toolUseId)?.status : undefined;
+    const entry = a.toolUseId ? live.get(a.toolUseId) : undefined;
+    const s = entry?.status;
+    toolUses += entry?.toolUses ?? 0;
     if (s === 'running' || s === 'paused' || s === 'pending' || (s == null && a.running && !a.finished)) running++;
     else if (s === 'failed' || a.failed) failed++;
     else if (s != null || a.finished) done++;
     // else: outcome unknown here (reload, no heartbeat yet) — counted in neither.
   }
-  return { running, failed, done };
+  return { running, failed, done, toolUses };
 }
 
-/** `✳ 5 running tasks` — the ONLY thing the chat shows for a burst of subagents
- *  (Claude Code desktop parity). One chip per spawn burst; click opens the panel
- *  (owned by the session's `BackgroundTasksPanelHost`) with the burst's first agent
- *  selected. Never a per-agent row, never a dropdown. */
+/** Distinct non-empty values, in first-seen order. */
+function distinct(values: (string | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const v of values) if (v && !out.includes(v)) out.push(v);
+  return out;
+}
+
+/** `● Agent  general-purpose  opus  Check the messaging code …  Running  16 tools` —
+ *  the ONLY thing the chat shows for a burst of subagents (Claude Code desktop
+ *  parity): one row per spawn burst carrying what the old per-agent card carried
+ *  (type, model, title, tool count, state), never a card per agent and never a
+ *  dropdown. A burst of several agents reads `3 agents`, the distinct types and
+ *  models, the titles joined, and `2 running · 1 done`. Click opens the panel (owned
+ *  by the session's `BackgroundTasksPanelHost`) with the burst's first agent selected. */
 export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; agents: KnownAgent[] }) {
   const live = useLiveAgentsForSession(sessionId);
   const chipKey = agents[0]?.toolUseId ?? agents[0]?.agentId ?? agents[0]?.description ?? '';
@@ -295,26 +311,29 @@ export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; 
   useEffect(() => { if (sessionId && chipKey) registerKnownAgents(sessionId, chipKey, agents); });
   useEffect(() => () => { if (sessionId && chipKey) unregisterKnownAgents(sessionId, chipKey); }, [sessionId, chipKey]);
   const n = agents.length;
-  const { running, failed, done } = summarize(agents, live);
-  const plural = (k: number) => (k === 1 ? '' : 's');
-  const label = running > 0
-    ? `${running} running task${plural(running)}`
-    : failed > 0
-      ? `${n} task${plural(n)} · ${failed} failed`
-      : done === n
-        ? `${n} task${plural(n)} done`
-        : `${n} background task${plural(n)}`;
+  const { running, failed, done, toolUses } = summarize(agents, live);
   const state = running > 0 ? 'running' : failed > 0 ? 'failed' : done === n ? 'done' : 'idle';
+  const types = distinct(agents.map(a => a.subagentType));
+  const models = distinct(agents.map(a => agentModelLabel(a.promptInput)));
+  const titles = agents.map(a => a.description).filter(Boolean).join(' · ');
+  const status = n === 1
+    ? (state === 'running' ? 'Running' : state === 'failed' ? 'Failed' : state === 'done' ? 'Done' : '')
+    : [running > 0 && `${running} running`, done > 0 && `${done} done`, failed > 0 && `${failed} failed`].filter(Boolean).join(' · ');
   return (
     <button
       className={`bg-tasks-chip bg-tasks-chip--${state}`}
       onClick={() => openBackgroundPanel(sessionId, agents[0]?.toolUseId ?? agents[0]?.agentId)}
-      title="Open background tasks"
+      title={`${titles}\nOpen background tasks`}
     >
       <span className="bg-tasks-chip-icon">
         {state === 'running' ? <span className="task-group-streaming-dot" /> : state === 'failed' ? '✗' : state === 'done' ? '✓' : '○'}
       </span>
-      <span className="bg-tasks-chip-label">{label}</span>
+      <span className="bg-tasks-chip-label">{n === 1 ? 'Agent' : `${n} agents`}</span>
+      {types.map(t => <span key={t} className="task-group-agent-type" title="Subagent type">{t}</span>)}
+      {models.map(m => <span key={m} className="task-group-model" title="Model">{m}</span>)}
+      <span className="bg-tasks-chip-desc">{titles}</span>
+      {status && <span className="bg-tasks-chip-status">{status}</span>}
+      {toolUses > 0 && <span className="task-group-badge">{toolUses} tool{toolUses === 1 ? '' : 's'}</span>}
     </button>
   );
 }

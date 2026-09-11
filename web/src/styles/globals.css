@@ -3673,6 +3673,29 @@ select {
   padding: 2px 8px;
   border-radius: 8px;
 }
+/* Background mode: the whole card is ONE line and ONE button that opens the
+   Background tasks panel — no caret, nothing unfolds in place. */
+.wf-card--bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 24px);
+  padding: 7px 12px;
+  background: var(--bg-tertiary);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.wf-card--bar:hover { background: var(--bg); border-color: var(--fg-muted); }
+.wf-card--bar .wf-card-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; }
+.wf-card--bar .wf-card-icon .task-group-streaming-dot { margin: 0; }
+.wf-card--live .wf-card-title { color: var(--accent); }
+.wf-card-open { font-size: 11px; color: var(--accent); white-space: nowrap; flex: none; }
+.wf-card-tokens ~ .wf-card-open { margin-left: 8px; }
+.wf-card-count ~ .wf-card-open { margin-left: auto; }
 .wf-card-running { color: var(--accent); }
 .wf-card-failed { color: var(--warning); }
 .wf-card-tokens { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
@@ -3715,25 +3738,6 @@ select {
   max-height: 240px;
   overflow-y: auto;
 }
-/* Section labels splitting background Agents from plain Tasks (legacy mode) */
-.wf-section-label {
-  padding: 4px 12px 2px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-}
-.wf-task {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-}
-.wf-task:last-child { border-bottom: none; }
 .wf-task-dot { font-size: 10px; line-height: 1; flex: none; }
 .wf-task-dot-running { color: var(--accent); animation: session-pulse 1.4s ease-in-out infinite; }
 .wf-task-dot-done { color: #34c759; }
@@ -3741,86 +3745,19 @@ select {
 .wf-task-dot-stopped { color: var(--fg-muted); }
 .wf-task-dot-paused { color: var(--fg-muted); }
 .wf-task-dot-pending { font-size: 9px; }
-.wf-task-name {
-  font-weight: 500;
-  color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 200px;
-  flex: none;
-}
-.wf-task-activity {
-  color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
-}
-.wf-task-tokens { margin-left: auto; font-size: 11px; color: var(--fg-muted); flex: none; }
-.wf-task-completed .wf-task-name,
-.wf-task-stopped .wf-task-name { color: var(--fg-muted); }
-
-/* ── Background AGENT ledger row (Claude Code "Background tasks" parity) ──
-   Two lines: title + subagent-type chip, then the muted numbers / activity / transcript
-   link. Wraps instead of overflowing — this panel lives in a narrow session column. */
-.wf-agent-row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 12px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-}
-.wf-agent-row:last-child { border-bottom: none; }
-.wf-agent-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.wf-agent-row-name {
-  font-weight: 500;
-  color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
-}
-.wf-agent-row-completed .wf-agent-row-name,
-.wf-agent-row-stopped .wf-agent-row-name { color: var(--fg-muted); }
-.wf-agent-row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 6px;
-  /* Align the meta under the title, past the status dot. */
-  padding-left: 18px;
-  font-size: 11px;
-  color: var(--fg-muted);
-  min-width: 0;
-}
+/* Meta segments of a Background tasks panel row (`Agent · 58s · 64k tokens · …`).
+   Separators are CSS so the row builder stays a pure list of text segments. */
 .wf-agent-row-meta-item {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Separators are CSS so the row builder stays a pure list of text segments. */
 .wf-agent-row-meta-item + .wf-agent-row-meta-item::before {
   content: '·';
   margin-right: 6px;
   opacity: 0.6;
 }
-.wf-agent-row-transcript {
-  margin-left: auto;
-  padding: 0;
-  font-size: 11px;
-  color: var(--accent);
-  background: none;
-  border: none;
-  cursor: pointer;
-  white-space: nowrap;
-  flex: none;
-}
-.wf-agent-row-transcript:hover { text-decoration: underline; }
 
 /* ── Dynamic-workflow rich view: script, phases, clickable agent rows ── */
 .wf-script-toggle {
@@ -4181,36 +4118,67 @@ select {
 }
 
 /* ── Background tasks: the chat's chip + the two-column reader ─────────────────
-   The chat shows ONE chip per spawn burst (`✳ 5 running tasks`), never a row per
-   agent and never an in-place dropdown; the chip opens the panel. */
+   The chat shows ONE row per spawn burst (`● Agent  type  model  title  Running
+   16 tools`), never a card per agent and never an in-place dropdown; the row opens
+   the panel. It wears the old agent header's accent tint so a spawn still reads as
+   a spawn, and the title takes the remaining width. */
 .bg-tasks-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
   margin: 4px 0;
-  padding: 4px 10px 4px 8px;
+  padding: 5px 10px 5px 8px;
   font-size: 12px;
-  color: var(--fg-muted);
-  background: none;
+  text-align: left;
+  color: var(--fg-secondary);
+  background: var(--accent-subtle, rgba(0, 122, 255, 0.06));
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.bg-tasks-chip:hover { background: var(--bg-tertiary); color: var(--fg); border-color: var(--fg-muted); }
+.bg-tasks-chip:hover { background: var(--accent-subtle-hover, rgba(0, 122, 255, 0.12)); color: var(--fg); border-color: var(--fg-muted); }
 .bg-tasks-chip-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 12px;
+  width: 14px;
+  flex-shrink: 0;
   font-size: 11px;
   line-height: 1;
+  color: var(--accent);
 }
 .bg-tasks-chip-icon .task-group-streaming-dot { margin: 0; }
-.bg-tasks-chip--running { color: var(--fg); border-color: var(--accent-subtle-hover, rgba(0, 122, 255, 0.25)); }
+.bg-tasks-chip-label {
+  flex-shrink: 0;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.bg-tasks-chip-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bg-tasks-chip-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.bg-tasks-chip--running { border-color: var(--accent-subtle-hover, rgba(0, 122, 255, 0.25)); }
+.bg-tasks-chip--running .bg-tasks-chip-status { color: var(--accent); }
+.bg-tasks-chip--done { background: rgba(52, 199, 89, 0.06); }
+.bg-tasks-chip--done:hover { background: rgba(52, 199, 89, 0.12); }
 .bg-tasks-chip--done .bg-tasks-chip-icon { color: var(--success, #34C759); }
-.bg-tasks-chip--failed .bg-tasks-chip-icon { color: var(--error); }
-.bg-tasks-chip-label { white-space: nowrap; }
+.bg-tasks-chip--failed .bg-tasks-chip-icon,
+.bg-tasks-chip--failed .bg-tasks-chip-status { color: var(--error); }
+.bg-tasks-chip--idle .bg-tasks-chip-icon { color: var(--fg-muted); }
 
 .wf-modal--tasks { max-width: 1400px; width: 94vw; height: 92vh; }
 .bg-tasks-body {
