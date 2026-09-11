@@ -36,6 +36,21 @@ export const SEEN = '\\Seen';
  */
 export const DRAFTS_MAILBOX = '__walnut_drafts__';
 
+/**
+ * The provider's OWN drafts mailbox, when it keeps one.
+ *
+ * There is one Drafts row per account and it shows both kinds: the drafts composed in this console
+ * (the plugin's database, with their approval state) and, underneath them, the folder a phone or a
+ * webmail tab wrote into. Two rows both called Drafts, one glyph apart, was the console asking the
+ * human to remember which was which.
+ *
+ * Only the FIRST such mailbox: the role is single by contract, and a provider that reported two
+ * would otherwise put a second Drafts row back in the folder list.
+ */
+export function serverDraftsMailbox(rows: MailboxDto[] | undefined): MailboxDto | null {
+  return rows?.find((one) => one.role === 'drafts') ?? null;
+}
+
 export interface MailStand {
   title: string;
   detail: string;

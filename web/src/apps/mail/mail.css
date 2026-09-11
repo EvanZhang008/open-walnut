@@ -409,6 +409,78 @@
   text-transform: none;
 }
 
+/* The unread count, as the control it should always have been. Off it is the old label with a
+   hover; on it is accent filled, which is the one state a filter has to be unmistakable about,
+   because a list that is hiding rows and does not say so reads as lost mail. */
+.mail-unread-chip {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mail-unread-chip:hover { background: var(--accent-subtle); }
+
+/* White on the accent, exactly as the mailbox badge above draws the same fact. */
+.mail-unread-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.mail-unread-chip.on:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+/* The filter hid everything: one line, and the way back on the same line. */
+.mail-unread-empty {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* A group inside one list: the two halves of the merged Drafts row. Sticky, so scrolling a long
+   list never leaves a row without the header that says which half it belongs to. The list pane's
+   own tone, or the rows would show through it. */
+.mail-rows-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px 5px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.mail-rows-group-name { font-weight: 700; color: var(--fg-secondary); }
+
+.mail-rows-group-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.mail-rows-group-count::before {
+  content: '·';
+  margin-right: 6px;
+  opacity: 0.7;
+}
+
 .mail-search-meta {
   margin: 0;
   padding: 6px 12px;

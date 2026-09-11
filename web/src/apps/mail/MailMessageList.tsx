@@ -16,7 +16,8 @@ import {
   openMailMessage,
   runMailSearch,
 } from './mail-actions';
-import { DRAFTS_MAILBOX, type MailSnapshot } from './mail-store';
+import { DRAFTS_MAILBOX, serverDraftsMailbox, type MailSnapshot } from './mail-store';
+import { readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
 import { MailDraftsList } from './compose/MailDraftsList';
 import { AttachmentIcon, BackIcon, SearchIcon } from './mail-icons';
 
@@ -28,20 +29,33 @@ interface Props {
 
 export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
   const [draft, setDraft] = useState('');
-  const selectedKey = snapshot.selected
-    ? `${snapshot.selected.accountId}/${snapshot.selected.mailboxId}`
-    : '';
+  const accountId = snapshot.selected?.accountId ?? '';
+  const mailboxId = snapshot.selected?.mailboxId ?? '';
+  const [unreadOnly, setUnreadOnly] = useState(() => readUnreadOnly(accountId, mailboxId));
   // Switching mailbox drops the search MODE in the store, so leaving the words in the box would
-  // show a query next to results that are not its results.
-  useEffect(() => { setDraft(''); }, [selectedKey]);
+  // show a query next to results that are not its results. The unread filter is REMEMBERED per
+  // mailbox instead of dropped, and this is also the first paint's answer: the console picks its
+  // mailbox after the accounts land, so the initial state above ran with nothing selected.
+  useEffect(() => {
+    setDraft('');
+    setUnreadOnly(readUnreadOnly(accountId, mailboxId));
+  }, [accountId, mailboxId]);
   const search = snapshot.search;
   const rows = search.active ? search.messages : snapshot.messages;
   const busy = search.active ? search.loading : snapshot.listLoading;
   // Walnut's own drafts, not a provider folder: a virtual mailbox id selects them (see the store).
   const draftsView = !search.active && snapshot.selected?.mailboxId === DRAFTS_MAILBOX;
+  // The provider's drafts folder, whose page is what `snapshot.messages` holds while the merged
+  // Drafts row is open. Absent means the row has only this console's own drafts.
+  const serverDrafts = draftsView && snapshot.selected
+    ? serverDraftsMailbox(snapshot.mailboxes[snapshot.selected.accountId])
+    : null;
 
   const clear = () => { setDraft(''); clearMailSearch(); };
-  const section = search.active ? null : sectionOf(snapshot, draftsView, rows);
+  const section = search.active ? null : sectionOf(snapshot, draftsView, rows, !!serverDrafts);
+  const filtering = unreadOnly && !search.active && !draftsView;
+  const visible = filtering ? rows.filter((one) => keepWhileFiltering(one, snapshot)) : rows;
+  const showAll = () => { setUnreadOnly(false); writeUnreadOnly(accountId, mailboxId, false); };
 
   return (
     <section className="mail-list-pane" data-testid="mail-message-list">
@@ -101,9 +115,31 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
       {section && (
         <p className="mail-list-section" data-testid="mail-list-section">
           <span className="mail-list-section-name">{section.name}</span>
-          <span className="mail-list-section-count">{section.count}</span>
-          {section.unread > 0 && (
-            <span className="mail-list-section-unread">{section.unread} unread</span>
+          {/* `8 of 43` while the filter is on, because this count exists to be checkable by
+              looking: a bare 43 over eight visible rows is the one number a reader would call a
+              bug. */}
+          <span className="mail-list-section-count">
+            {filtering ? `${visible.length} of ${section.count}` : section.count}
+          </span>
+          {/* The unread count is a CONTROL, not a label: it was the only place the number appeared
+              and there was no way to act on it. Kept on screen while the filter is on even at zero
+              unread, or turning the last one read would take the way out with it. */}
+          {!draftsView && (section.unread > 0 || unreadOnly) && (
+            <button
+              type="button"
+              className={`mail-unread-chip${unreadOnly ? ' on' : ''}`}
+              data-testid="mail-unread-filter"
+              data-on={unreadOnly}
+              aria-pressed={unreadOnly}
+              title={unreadOnly ? 'Show every message again' : 'Show only unread messages'}
+              onClick={() => {
+                const next = !unreadOnly;
+                setUnreadOnly(next);
+                writeUnreadOnly(accountId, mailboxId, next);
+              }}
+            >
+              {section.unread} unread{unreadOnly ? ' · showing' : ''}
+            </button>
           )}
         </p>
       )}
@@ -113,10 +149,10 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
 
       <div className="mail-rows">
         {draftsView ? (
-          <MailDraftsList
-            drafts={snapshot.drafts[snapshot.selected!.accountId] ?? []}
-            openDraftId={snapshot.composer?.draftId ?? null}
-            loading={snapshot.draftsLoading}
+          <DraftsSections
+            snapshot={snapshot}
+            serverName={serverDrafts ? serverDrafts.name : null}
+            serverRows={serverDrafts ? rows : []}
           />
         ) : !snapshot.selected && !search.active ? (
           <p className="mail-pane-empty" data-testid="mail-no-mailbox">
@@ -128,7 +164,19 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
               : search.active ? 'Nothing matched. Cached search only sees mail Walnut has already fetched.'
                 : 'No mail in this folder yet.'}
           </p>
-        ) : rows.map((message) => (
+        ) : visible.length === 0 ? (
+          <p className="mail-pane-empty mail-unread-empty" data-testid="mail-unread-empty">
+            <span>No unread messages</span>
+            <button
+              type="button"
+              className="mail-text-btn"
+              data-testid="mail-unread-show-all"
+              onClick={showAll}
+            >
+              Show all
+            </button>
+          </p>
+        ) : visible.map((message) => (
           <MailRow
             key={`${message.accountId} ${message.messageId}`}
             message={message}
@@ -153,6 +201,70 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
   );
 }
 
+/**
+ * Whether a row stays on screen while "only unread" is on.
+ *
+ * Unread, or the message the person is READING. Marking a mail read is what opening it does, and a
+ * row that disappears from under the pointer in the same click is the confident wrong answer: it
+ * takes the reply and the make-a-task buttons with it and leaves no way back. It goes when they
+ * select another row, which is the moment they are done with it.
+ */
+function keepWhileFiltering(message: MailMessageDto, snapshot: MailSnapshot): boolean {
+  return isUnread(message.flags) || snapshot.open?.messageId === message.messageId;
+}
+
+/**
+ * The merged Drafts row's list: what was written HERE, then what the provider is holding.
+ *
+ * One row in the folder list, two sections here, because they are genuinely two things: the first
+ * are this console's drafts with their approval state and are editable, the second are whatever
+ * another device left in the server's Drafts folder and open in the reader like any other message.
+ * With no drafts folder on the provider there is one section and nothing on screen says "server".
+ */
+function DraftsSections({ snapshot, serverName, serverRows }: {
+  snapshot: MailSnapshot;
+  serverName: string | null;
+  serverRows: MailMessageDto[];
+}) {
+  const drafts = snapshot.drafts[snapshot.selected!.accountId] ?? [];
+  const local = (
+    <MailDraftsList
+      drafts={drafts}
+      openDraftId={snapshot.composer?.draftId ?? null}
+      loading={snapshot.draftsLoading}
+    />
+  );
+  if (!serverName) return local;
+  return (
+    <>
+      <GroupHeader group="written-here" name="Written here" count={drafts.length} />
+      {local}
+      <GroupHeader group="on-the-server" name="On the server" count={serverRows.length} />
+      {serverRows.length === 0 ? (
+        <p className="mail-pane-empty" data-testid="mail-server-drafts-empty">
+          {snapshot.listLoading ? 'Loading…' : `Nothing in the ${serverName} folder on the server.`}
+        </p>
+      ) : serverRows.map((message) => (
+        <MailRow
+          key={`${message.accountId} ${message.messageId}`}
+          message={message}
+          showMailbox={false}
+          selected={snapshot.open?.messageId === message.messageId}
+        />
+      ))}
+    </>
+  );
+}
+
+function GroupHeader({ group, name, count }: { group: string; name: string; count: number }) {
+  return (
+    <p className="mail-rows-group" data-testid="mail-drafts-group" data-group={group}>
+      <span className="mail-rows-group-name">{name}</span>
+      <span className="mail-rows-group-count">{count}</span>
+    </p>
+  );
+}
+
 interface Section { name: string; count: number; unread: number }
 
 /**
@@ -163,12 +275,19 @@ interface Section { name: string; count: number; unread: number }
  * human can check by looking, and "Load older" is what says there are more. Null when nothing is
  * selected: there is no folder to name yet.
  */
-function sectionOf(snapshot: MailSnapshot, draftsView: boolean, rows: MailMessageDto[]): Section | null {
+function sectionOf(
+  snapshot: MailSnapshot,
+  draftsView: boolean,
+  rows: MailMessageDto[],
+  hasServerDrafts: boolean,
+): Section | null {
   const selected = snapshot.selected;
   if (!selected) return null;
   if (draftsView) {
+    // Both halves, so the header still counts the rows below it: with a server section the local
+    // count alone would repeat "Written here" one line further up and describe a third of the list.
     const drafts = snapshot.drafts[selected.accountId] ?? [];
-    return { name: 'Drafts', count: drafts.length, unread: 0 };
+    return { name: 'Drafts', count: drafts.length + (hasServerDrafts ? rows.length : 0), unread: 0 };
   }
   const mailbox = (snapshot.mailboxes[selected.accountId] ?? [])
     .find((one) => one.mailboxId === selected.mailboxId);

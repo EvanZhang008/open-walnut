@@ -43,8 +43,10 @@ import {
   run,
   sameSelection,
   selectionKey,
+  serverDraftsMailbox,
   standIn,
   store,
+  type MailSelection,
 } from './mail-store';
 
 // ── reads ──
@@ -95,16 +97,27 @@ function loadMailboxesFor(accountId: string, force = false): Promise<void> {
  */
 function ensureSelection(): void {
   const state = store.state;
-  if (state.selected && state.mailboxes[state.selected.accountId]?.some(
-    (mailbox) => mailbox.mailboxId === state.selected!.mailboxId,
-  )) return;
+  // The Drafts row is virtual, so it is never in a provider's mailbox list: comparing it against
+  // that list said "gone" and moved the human back to the inbox on the next mailbox refresh, which
+  // any sync event triggers. It is alive for as long as its ACCOUNT is.
+  const selected = state.selected;
+  if (selected) {
+    const alive = selected.mailboxId === DRAFTS_MAILBOX
+      ? state.accounts.some((account) => account.accountId === selected.accountId)
+      : state.mailboxes[selected.accountId]?.some((mailbox) => mailbox.mailboxId === selected.mailboxId);
+    if (alive) return;
+  }
   const preferred = store.preferAccount;
   const order = preferred
     ? [...state.accounts].sort((a, b) => (a.accountId === preferred ? -1 : b.accountId === preferred ? 1 : 0))
     : state.accounts;
   for (const account of order) {
     const mailboxes = state.mailboxes[account.accountId] ?? [];
-    const target = mailboxes.find((mailbox) => mailbox.role === 'inbox') ?? mailboxes[0];
+    // Never the drafts folder: it has no row of its own any more (the merged Drafts row is what
+    // reaches it), so opening on it would leave the folder list with nothing highlighted.
+    const target = mailboxes.find((mailbox) => mailbox.role === 'inbox')
+      ?? mailboxes.find((mailbox) => mailbox.role !== 'drafts')
+      ?? mailboxes[0];
     if (!target) continue;
     if (preferred === account.accountId) store.preferAccount = null;
     selectMailbox(account.accountId, target.mailboxId);
@@ -126,18 +139,44 @@ export function selectMailbox(accountId: string, mailboxId: string): void {
   void loadMailMessages();
 }
 
+/**
+ * Which PROVIDER mailbox a selection reads its page from.
+ *
+ * Every selection is its own answer except the Drafts row, which is virtual: asking the messages
+ * route for `__walnut_drafts__` would be a request for a folder no provider has. That row shows the
+ * drafts route's own rows AND, when the provider keeps a drafts folder, that folder's page. Null
+ * means there is no page to read, only this console's drafts.
+ */
+function pageMailboxOf(selection: MailSelection): string | null {
+  if (selection.mailboxId !== DRAFTS_MAILBOX) return selection.mailboxId;
+  return serverDraftsMailbox(store.state.mailboxes[selection.accountId])?.mailboxId ?? null;
+}
+
 export function loadMailMessages(force = false): Promise<void> {
   const selection = store.state.selected;
   if (!selection) return Promise.resolve();
-  // The Drafts row is a virtual mailbox: no provider has it, and asking the messages route for it
-  // would be a request for a folder that does not exist. Its rows come from the drafts route.
-  if (selection.mailboxId === DRAFTS_MAILBOX) return loadMailDrafts(force);
+  if (selection.mailboxId === DRAFTS_MAILBOX) {
+    const mailboxId = pageMailboxOf(selection);
+    // Two stores, so two reads: the drafts this console wrote, and the provider's drafts folder.
+    const local = loadMailDrafts(force);
+    if (!mailboxId) {
+      // No server folder to show. Any page left from another mailbox has to go, or its rows would
+      // appear under a section header that does not describe them.
+      if (store.state.messages.length > 0) patch({ messages: [], nextBefore: null });
+      return local;
+    }
+    return Promise.all([local, loadMessagePage(selection, mailboxId, force)]).then(() => undefined);
+  }
+  return loadMessagePage(selection, selection.mailboxId, force);
+}
+
+function loadMessagePage(selection: MailSelection, mailboxId: string, force: boolean): Promise<void> {
   return run(`messages:${selectionKey(selection)}`, async () => {
     patch({ listLoading: true, listError: null });
     try {
       const page = await listMailMessages({
         accountId: selection.accountId,
-        mailboxId: selection.mailboxId,
+        mailboxId,
         limit: PAGE_SIZE,
       });
       // The human may have moved to another mailbox while this was in flight.
@@ -162,12 +201,14 @@ export function loadOlderMailMessages(): Promise<void> {
   const selection = store.state.selected;
   const before = store.state.nextBefore;
   if (!selection || before === null) return Promise.resolve();
+  const mailboxId = pageMailboxOf(selection);
+  if (!mailboxId) return Promise.resolve();
   return run(`older:${selectionKey(selection)}:${before}`, async () => {
     patch({ olderLoading: true });
     try {
       const page = await listMailMessages({
         accountId: selection.accountId,
-        mailboxId: selection.mailboxId,
+        mailboxId,
         limit: PAGE_SIZE,
         before,
       });
@@ -508,9 +549,11 @@ export function onMailEvent(name: string, data: unknown): void {
     void loadAccounts(true);
     if (payload.accountId) void loadMailboxesFor(payload.accountId, true);
     const selection = store.state.selected;
+    // The page on screen, by the mailbox it was READ from: with the Drafts row open that is the
+    // provider's drafts folder, so a sync of that folder is news for this pane too.
     const mine = selection
       && (!payload.accountId || payload.accountId === selection.accountId)
-      && (!payload.mailboxId || payload.mailboxId === selection.mailboxId);
+      && (!payload.mailboxId || payload.mailboxId === pageMailboxOf(selection));
     if (mine) void loadMailMessages(true);
   }
 }

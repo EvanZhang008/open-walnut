@@ -6,10 +6,10 @@
  * to prevent. `auth-required` also says what fixes it, because polling has stopped for that
  * account until a human acts and no amount of waiting or clicking refresh will change that.
  */
-import { useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
 import { ContextMenu } from '@/components/common/ContextMenu';
-import { DRAFTS_MAILBOX, type MailSelection } from './mail-store';
+import { DRAFTS_MAILBOX, serverDraftsMailbox, type MailSelection } from './mail-store';
 import { requestMailRefresh, selectMailbox } from './mail-actions';
 import { sendMailDigest } from './mail-task-actions';
 import { openMailComposer } from './compose/compose-actions';
@@ -41,6 +41,18 @@ function menuPointFor(event: ReactMouseEvent<HTMLElement>): { x: number; y: numb
   if (event.clientX > 0 || event.clientY > 0) return { x: event.clientX, y: event.clientY };
   const box = event.currentTarget.getBoundingClientRect();
   return { x: box.left, y: box.bottom };
+}
+
+/**
+ * The folder rows with the Drafts row put back where the provider's own Drafts folder was.
+ *
+ * A splice rather than an append: the server lists an account's folders inbox first and then by
+ * name (Inbox, Archive, Drafts, Junk, Sent), so appending the merged row would move Drafts past
+ * Sent and reorder a list the person already knows. An account whose provider keeps no drafts
+ * folder gets the row last, which is where it has always been.
+ */
+function withDraftsRow(rows: ReactNode[], at: number, draftsRow: ReactNode): ReactNode[] {
+  return [...rows.slice(0, at), draftsRow, ...rows.slice(at)];
 }
 
 const STATE_LABEL: Record<string, string> = {
@@ -129,7 +141,11 @@ export function MailAccountsPane({
 
       <div className="mail-accounts-scroll">
         {accounts.map((account) => {
-          const rows = mailboxes[account.accountId] ?? [];
+          const all = mailboxes[account.accountId] ?? [];
+          // The provider's own Drafts folder leaves the list: the ONE Drafts row below reaches it,
+          // in the place that folder held, so the order a person knows their mailbox by is kept.
+          const rows = all.filter((mailbox) => mailbox.role !== 'drafts');
+          const draftsAt = serverDraftsMailbox(all) ? all.findIndex((one) => one.role === 'drafts') : rows.length;
           const stateLabel = account.state === 'active' ? null : STATE_LABEL[account.state] ?? account.state;
           return (
             <section className="mail-account" key={account.accountId} data-account-id={account.accountId}>
@@ -156,12 +172,15 @@ export function MailAccountsPane({
                 </p>
               )}
 
-              {rows.length === 0 && (
+              {/* `all`, not the filtered rows: an account whose only folder is Drafts has been
+                  listed, and the merged row below is showing it. */}
+              {all.length === 0 && (
                 <p className="mail-account-hint">No folders yet. The first sync lists them.</p>
               )}
 
               <ul className="mail-mailboxes">
-                {rows.map((mailbox) => {
+                {withDraftsRow(
+                  rows.map((mailbox) => {
                     const active = selected?.accountId === account.accountId
                       && selected.mailboxId === mailbox.mailboxId;
                     return (
@@ -188,20 +207,22 @@ export function MailAccountsPane({
                         </button>
                       </li>
                     );
-                  })}
-
-                {/* The Drafts row is Walnut's own, not the provider's: these drafts live in the
-                    plugin's database with their approval state, which a provider's own Drafts
-                    folder knows nothing about. */}
-                <li>
-                  <DraftsRow
-                    accountId={account.accountId}
-                    drafts={drafts[account.accountId] ?? []}
-                    active={selected?.accountId === account.accountId
-                      && selected.mailboxId === DRAFTS_MAILBOX}
-                    onPicked={onPicked}
-                  />
-                </li>
+                  }),
+                  draftsAt,
+                  /* ONE Drafts row for both kinds. Walnut's own drafts live in the plugin's
+                     database with their approval state, which a provider's Drafts folder knows
+                     nothing about; the folder holds what another device wrote. The row opens a
+                     list with a section for each. */
+                  <li key="walnut-drafts">
+                    <DraftsRow
+                      accountId={account.accountId}
+                      drafts={drafts[account.accountId] ?? []}
+                      active={selected?.accountId === account.accountId
+                        && selected.mailboxId === DRAFTS_MAILBOX}
+                      onPicked={onPicked}
+                    />
+                  </li>,
+                )}
               </ul>
             </section>
           );

@@ -146,11 +146,23 @@ const MESSAGES = [
  *
  * Everything here is invented, under `example.com`, and nothing resolves.
  */
-if (process.env.MAIL_FIXTURE_DENSE === '1') MESSAGES.push(...denseMessages());
+const dense = process.env.MAIL_FIXTURE_DENSE === '1';
+if (dense) MESSAGES.push(...denseMessages(), ...denseExtras());
 
+/**
+ * The dense set also keeps the two folders a work account always has and this fixture had not: a
+ * DRAFTS folder (the provider holding drafts written on another device, next to Walnut's own) and a
+ * JUNK folder, which is empty and is here for its POSITION. The server lists folders inbox first
+ * then by name, so Junk is what makes "the merged Drafts row sits where the provider's folder was"
+ * a claim a run can fail. Dense only: the other specs count the rows of the plain set.
+ */
 const MAILBOXES = [
   { mailboxId: 'INBOX', name: 'Inbox', role: 'inbox' },
   { mailboxId: 'Archive', name: 'Archive', role: 'archive' },
+  ...(dense ? [
+    { mailboxId: 'Drafts', name: 'Drafts', role: 'drafts' },
+    { mailboxId: 'Junk', name: 'Junk', role: 'spam' },
+  ] : []),
 ];
 
 /** Read state, as a server holds it. Seeded from the canned envelopes. */
@@ -621,6 +633,73 @@ function denseMessages() {
     unreadAtFirstSight: false,
     ...message,
   }));
+}
+
+/**
+ * What the dense set holds outside the inbox: two drafts in the PROVIDER's Drafts folder, as a
+ * phone or a webmail tab leaves them, and one unread mail in Archive.
+ *
+ * The drafts are READ (a draft is not unread mail), so their folder carries no badge, and their
+ * subjects are deliberately unlike any inbox subject, because the specs pick rows by their words.
+ * They open in the reader like any other cached message, since that folder is read only here.
+ *
+ * The Archive mail is the SMALL folder with something unread in it: "only unread" hiding every row
+ * is a state the console has to answer well, and a folder with one unread mail is the only way a
+ * run reaches it by reading mail rather than by forty clicks.
+ */
+function denseExtras() {
+  const me = { name: 'You', address: 'you@example.com' };
+  return [
+    {
+      messageId: 'Archive:1:5',
+      rfcMessageId: '<archive-5@example.com>',
+      mailboxId: 'Archive',
+      from: { name: 'Ines Duarte', address: 'ines.duarte@example.com' },
+      to: [me],
+      subject: 'Filed: the mooring fee receipts',
+      snippet: 'Filed for the quarter. Nothing needed unless the auditor asks.',
+      sentAt: now - 20 * 24 * HOUR,
+      sentAtHeader: new Date(now - 20 * 24 * HOUR).toUTCString(),
+      attachments: [],
+      body: { format: 'text', text: 'Filed for the quarter. Nothing needed unless the auditor asks.' },
+      unreadAtFirstSight: true,
+    },
+    {
+      messageId: 'Drafts:1:7',
+      rfcMessageId: '<draft-7@example.com>',
+      mailboxId: 'Drafts',
+      from: me,
+      to: [{ name: 'Marta Silva', address: 'marta.silva@example.com' }],
+      subject: 'Started on the pontoon handover notes',
+      snippet: 'Half written on the train. The ramp measurements are still missing.',
+      sentAt: now - 30 * HOUR,
+      sentAtHeader: new Date(now - 30 * HOUR).toUTCString(),
+      attachments: [],
+      body: {
+        format: 'text',
+        text: 'Half written on the train.\n\nThe ramp measurements are still missing, and the'
+          + ' chandlery has not confirmed the temporary berth.',
+      },
+      unreadAtFirstSight: false,
+    },
+    {
+      messageId: 'Drafts:1:6',
+      rfcMessageId: '<draft-6@example.com>',
+      mailboxId: 'Drafts',
+      from: me,
+      to: [{ name: 'Ferry Ticket Office', address: 'tickets@example.com' }],
+      subject: 'Question about the ten trip book, unfinished',
+      snippet: 'Do the old books stay valid after the fares change?',
+      sentAt: now - 52 * HOUR,
+      sentAtHeader: new Date(now - 52 * HOUR).toUTCString(),
+      attachments: [],
+      body: {
+        format: 'text',
+        text: 'Do the old ten trip books stay valid after the fares change on the first?',
+      },
+      unreadAtFirstSight: false,
+    },
+  ];
 }
 
 /**
