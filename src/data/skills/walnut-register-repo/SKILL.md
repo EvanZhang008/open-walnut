@@ -32,7 +32,7 @@ Write the YAML to `~/.open-walnut/repositories/{slug}.yaml`:
 name: Project Name
 description: >-
   1-3 sentences. Specific about what it does, not generic.
-  This shows in listings and the main agent's system prompt.
+  This is what the Repositories page and every listing shows.
 tech_stack: [Lang, Framework, DB, ...]
 hosts:
   local:
@@ -57,7 +57,7 @@ common_commands: |
 ```
 
 **Required**: name, description, hosts (at least one with path)
-**Important**: overview and architecture — these get injected into every Claude Code session working on this repo. Make them genuinely useful.
+**Important**: overview and architecture. Nothing injects them into a session automatically, so write them for a person, and for the agent that reads the profile on purpose when a task names a repo it does not know. Anything a session must know unprompted belongs in that repo's own `AGENTS.md` / `CLAUDE.md` or in a skill.
 
 The complete YAML format spec with examples is in `references/yaml-format.md` next to this SKILL.md file.
 

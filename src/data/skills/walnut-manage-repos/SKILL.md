@@ -10,36 +10,35 @@ description: >-
 
 # Manage Repositories
 
-You manage repository profiles using the `file_*` tools with the `repos/` URI prefix.
-Repository data is stored as YAML files in `~/.open-walnut/repositories/`.
+Repository profiles are YAML files in `~/.open-walnut/repositories/`, one per repo, served
+by the `/api/repositories` routes. Reach them through the `api` operation, which is the
+passthrough for an endpoint with no named operation of its own.
 
 ## Available Operations
 
 ### List all repositories
 ```
-file_list prefix='repos'
+walnut tools call api '{"method":"GET","path":"/api/repositories"}'
 ```
 
 ### Read a repository's full profile
 ```
-file_read source='repos/{name}'
+walnut tools call api '{"method":"GET","path":"/api/repositories/{slug}"}'
 ```
 
-### Create a new repository
+### Create or replace a repository
+A POST replaces the whole file, so send the complete YAML, not a fragment.
 ```
-file_write source='repos/{name}' content='...'
+walnut tools call api '{"method":"POST","path":"/api/repositories/{slug}","body":{"content":"name: …\n…"}}'
 ```
 
 ### Edit an existing repository
-```
-file_read source='repos/{name}'   # get content_hash first
-file_edit source='repos/{name}' old_content='...' new_content='...' content_hash='...'
-```
+Read it first and edit the text you got back, then POST the whole thing. Editing the file
+directly with your own Read/Edit tools works too, and is easier for a long profile.
 
 ### Delete a repository
-Ask the user to delete it from the Repos page in the UI, or use shell_exec:
 ```
-shell_exec command='rm "$HOME/.open-walnut/repositories/{name}.yaml"'
+walnut tools call api '{"method":"DELETE","path":"/api/repositories/{slug}"}'
 ```
 
 ## YAML Format
@@ -64,7 +63,7 @@ architecture: |
   Frontend: React SPA with Vite (web/src/)
   Backend: Express REST API (src/web/)
   Storage: SQLite via better-sqlite3
-  Key dirs: src/core/ (business logic), src/agent/ (AI integration)
+  Key dirs: src/core/ (business logic), src/model/ (model calls)
 architecture_notes: |
   Frontend: React SPA (web/src/)
   Backend: Node.js + Express (src/)
@@ -95,13 +94,18 @@ When user asks to add/register a repository:
 1. Ask for the repo name and path (or infer from context)
 2. Ask for description and tech stack
 3. Generate the YAML content
-4. Write with `file_write source='repos/{slug}'`
+4. POST it to `/api/repositories/{slug}` through the `api` operation
 5. Confirm creation and show the profile
 
 The slug (filename) should be lowercase, hyphenated (e.g., "my-project").
 
-## Context Injection
+## Where a profile is read
 
-Registered repositories are automatically:
-- Listed in the main agent system prompt (name + description + hosts)
-- Matched by CWD when starting Claude Code sessions — matched repos inject architecture/commands as `<repository_context>` into the session
+A profile is data, not an automatic prompt injection. Nothing puts it into a session's
+system prompt: it is served to the Repositories page in Settings and to the library API,
+and it is read on request through the `api` operation above, which is how you should reach
+it when a task names a repo you do not know.
+
+So write a profile for a human and for an on-demand read, and put anything a session must
+know unprompted in that repo's own `AGENTS.md` / `CLAUDE.md` or in a skill, which the
+session does load.

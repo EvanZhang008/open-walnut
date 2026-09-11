@@ -11,13 +11,12 @@ import type { AgentDefinition } from '../../web/src/api/agents.js'
  *  2. A refused write rolls back — including a delete, which must go back to the
  *     position it came from.
  *  3. The list and the form metadata load separately (the homepage must not pay
- *     for three catalogues it never renders), each shared across callers.
+ *     for catalogues it never renders), each shared across callers.
  */
 
 const mocks = vi.hoisted(() => ({
   fetchAgents: vi.fn(),
   fetchAgent: vi.fn(),
-  fetchToolNames: vi.fn(),
   fetchAvailableModels: vi.fn(),
   fetchAvailableSkills: vi.fn(),
   createAgentDef: vi.fn(),
@@ -30,7 +29,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/api/agents', () => ({
   fetchAgents: mocks.fetchAgents,
   fetchAgent: mocks.fetchAgent,
-  fetchToolNames: mocks.fetchToolNames,
   fetchAvailableModels: mocks.fetchAvailableModels,
   fetchAvailableSkills: mocks.fetchAvailableSkills,
   createAgentDef: mocks.createAgentDef,
@@ -79,7 +77,7 @@ describe('agents store', () => {
     void loadAgents()
     expect(mocks.fetchAgents).toHaveBeenCalledTimes(1)
     // Nothing pulled the form catalogues in with the list.
-    expect(mocks.fetchToolNames).not.toHaveBeenCalled()
+    expect(mocks.fetchAvailableModels).not.toHaveBeenCalled()
     expect(mocks.fetchAvailableSkills).not.toHaveBeenCalled()
 
     held.resolve([agent()])
@@ -88,11 +86,10 @@ describe('agents store', () => {
     expect(getAgentsSnapshot().agentsLoaded).toBe(true)
     expect(getAgentsSnapshot().metaLoaded).toBe(false)
 
-    mocks.fetchToolNames.mockResolvedValue(['task_create'])
     mocks.fetchAvailableModels.mockResolvedValue(['model-a'])
     mocks.fetchAvailableSkills.mockResolvedValue([{ dirName: 's', name: 'S', description: 'd' }])
     await loadAgentMeta()
-    expect(getAgentsSnapshot().toolNames).toEqual(['task_create'])
+    expect(getAgentsSnapshot().availableModels).toEqual(['model-a'])
     expect(getAgentsSnapshot().metaLoaded).toBe(true)
   })
 

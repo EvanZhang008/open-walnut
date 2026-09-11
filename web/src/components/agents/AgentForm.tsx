@@ -4,121 +4,10 @@ import type { AgentDefinition, AgentStatefulConfig, CreateAgentInput, UpdateAgen
 interface AgentFormProps {
   agent?: AgentDefinition;        // undefined = create, defined = edit
   cloneFrom?: AgentDefinition;    // pre-fill from clone source
-  toolNames: string[];
   availableModels?: string[];
   skillsMeta?: SkillMeta[];
   onSave: (input: CreateAgentInput | UpdateAgentInput) => Promise<void>;
   onCancel: () => void;
-}
-
-type ToolMode = 'all' | 'allow' | 'deny';
-
-// Tool categories for the picker
-const TOOL_CATEGORIES: Record<string, string[]> = {
-  Task: ['task_query', 'task_get', 'task_create', 'task_update', 'task_delete', 'task_search'],
-  Memory: ['memory_notes_search'],
-  Sessions: ['session_list', 'session_summary', 'session_start', 'session_send', 'session_history', 'session_update', 'session_import'],
-  Config: ['config_get', 'config_update'],
-  Files: ['file_read', 'file_write', 'file_edit', 'file_list', 'file_glob', 'file_grep'],
-  Execution: ['shell_exec'],
-  Integration: ['integration_slack', 'integration_tts'],
-  Web: ['web_search', 'web_fetch'],
-  Cron: ['cron_list', 'cron_manage'],
-  Agents: ['agent_list', 'agent_get', 'agent_create', 'agent_update', 'agent_delete'],
-};
-
-function ToolPicker({ value, onChange, toolNames }: { value: string[]; onChange: (tools: string[]) => void; toolNames: string[] }) {
-  const [filter, setFilter] = useState('');
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-
-  // Group tools into categories; uncategorized goes to "Other"
-  const categorized = useMemo(() => {
-    const assigned = new Set(Object.values(TOOL_CATEGORIES).flat());
-    const other = toolNames.filter((t) => !assigned.has(t));
-    const cats = { ...TOOL_CATEGORIES };
-    if (other.length > 0) cats['Other'] = other;
-    return cats;
-  }, [toolNames]);
-
-  const filteredCategories = useMemo(() => {
-    if (!filter.trim()) return categorized;
-    const q = filter.toLowerCase();
-    const result: Record<string, string[]> = {};
-    for (const [cat, tools] of Object.entries(categorized)) {
-      const matched = tools.filter((t) => t.toLowerCase().includes(q));
-      if (matched.length > 0) result[cat] = matched;
-    }
-    return result;
-  }, [categorized, filter]);
-
-  const selected = new Set(value);
-
-  function toggle(tool: string) {
-    if (selected.has(tool)) {
-      onChange(value.filter((t) => t !== tool));
-    } else {
-      onChange([...value, tool]);
-    }
-  }
-
-  function removeSelected(tool: string) {
-    onChange(value.filter((t) => t !== tool));
-  }
-
-  function toggleCategory(cat: string) {
-    setCollapsed((prev) => ({ ...prev, [cat]: !prev[cat] }));
-  }
-
-  return (
-    <div className="tool-picker">
-      <input
-        type="text"
-        className="tool-picker-filter"
-        placeholder="Filter tools..."
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-      />
-      {value.length > 0 && (
-        <div className="tool-picker-selected">
-          <span className="tool-picker-selected-label">Selected ({value.length}):</span>
-          {value.map((t) => (
-            <span key={t} className="tool-picker-chip" onClick={() => removeSelected(t)}>
-              {t} &times;
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="tool-picker-categories">
-        {Object.entries(filteredCategories).map(([cat, tools]) => (
-          <div key={cat} className="tool-picker-category">
-            <button
-              type="button"
-              className="tool-picker-category-header"
-              onClick={() => toggleCategory(cat)}
-            >
-              <span>{collapsed[cat] ? '▸' : '▾'}</span>
-              <span>{cat}</span>
-              <span className="text-muted">({tools.length})</span>
-            </button>
-            {!collapsed[cat] && (
-              <div className="tool-picker-tools">
-                {tools.map((tool) => (
-                  <label key={tool} className="tool-picker-tool">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(tool)}
-                      onChange={() => toggle(tool)}
-                    />
-                    <span>{tool}</span>
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function SkillsPicker({ skillsMeta, selectedSkills, onChangeSkills, skillFilter, onChangeFilter }: {
@@ -232,7 +121,7 @@ const CONTEXT_SOURCE_DEFS: { id: ContextSourceId; label: string; auto: boolean; 
   { id: 'main_daily_log', label: 'Main Agent Daily Log', auto: false, defaultBudget: 3000, description: "General agent's daily activity logs (read-only)" },
 ];
 
-export function AgentForm({ agent, cloneFrom, toolNames, availableModels = [], skillsMeta = [], onSave, onCancel }: AgentFormProps) {
+export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta = [], onSave, onCancel }: AgentFormProps) {
   const source = cloneFrom || agent;
   const isEdit = !!agent;
 
@@ -246,8 +135,6 @@ export function AgentForm({ agent, cloneFrom, toolNames, availableModels = [], s
   const [maxToolRounds, setMaxToolRounds] = useState<number | ''>('');
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [toolMode, setToolMode] = useState<ToolMode>('all');
-  const [selectedTools, setSelectedTools] = useState<string[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [skillFilter, setSkillFilter] = useState('');
   const [hasStateful, setHasStateful] = useState(false);
@@ -290,16 +177,6 @@ export function AgentForm({ agent, cloneFrom, toolNames, availableModels = [], s
     setMaxToolRounds(source.max_tool_rounds ?? '');
     setWorkingDirectory(source.working_directory ?? '');
     setSystemPrompt(source.system_prompt ?? '');
-    if (source.allowed_tools?.length) {
-      setToolMode('allow');
-      setSelectedTools(source.allowed_tools);
-    } else if (source.denied_tools?.length) {
-      setToolMode('deny');
-      setSelectedTools(source.denied_tools);
-    } else {
-      setToolMode('all');
-      setSelectedTools([]);
-    }
     // Initialize context sources from agent definition
     if (source.context_sources?.length) {
       setContextSources((prev) => {
@@ -378,8 +255,6 @@ export function AgentForm({ agent, cloneFrom, toolNames, availableModels = [], s
       ...(maxToolRounds !== '' ? { max_tool_rounds: Number(maxToolRounds) } : {}),
       ...(runner === 'cli' && workingDirectory.trim() ? { working_directory: workingDirectory.trim() } : {}),
       ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
-      ...(toolMode === 'allow' && selectedTools.length ? { allowed_tools: selectedTools } : {}),
-      ...(toolMode === 'deny' && selectedTools.length ? { denied_tools: selectedTools } : {}),
       ...(ctxSources.length > 0 ? { context_sources: ctxSources } : {}),
       ...(runner === 'embedded' && selectedSkills.length > 0 ? { skills: selectedSkills } : {}),
       ...(stateful ? { stateful } : {}),
@@ -626,34 +501,6 @@ export function AgentForm({ agent, cloneFrom, toolNames, availableModels = [], s
             </div>
           </div>
         )}
-
-        {/* Section 6: Tool Access */}
-        <div className="agent-form-section">
-          <div className="form-group">
-            <label>Tool Access</label>
-            <div className="agent-form-radio-group">
-              <label className="agent-form-radio">
-                <input type="radio" name="toolMode" value="all" checked={toolMode === 'all'} onChange={() => { setToolMode('all'); setSelectedTools([]); }} />
-                <span>All tools</span>
-              </label>
-              <label className="agent-form-radio">
-                <input type="radio" name="toolMode" value="allow" checked={toolMode === 'allow'} onChange={() => setToolMode('allow')} />
-                <span>Allow list (only these tools)</span>
-              </label>
-              <label className="agent-form-radio">
-                <input type="radio" name="toolMode" value="deny" checked={toolMode === 'deny'} onChange={() => setToolMode('deny')} />
-                <span>Deny list (all except these)</span>
-              </label>
-            </div>
-          </div>
-          {toolMode !== 'all' && (
-            <ToolPicker
-              value={selectedTools}
-              onChange={setSelectedTools}
-              toolNames={toolNames}
-            />
-          )}
-        </div>
 
         {/* Section 6: Skills (embedded only) */}
         {runner === 'embedded' && skillsMeta.length > 0 && (

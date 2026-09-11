@@ -54,7 +54,7 @@ interface ChainTask {
 
 /**
  * Simulate the host/cwd resolution chain from the start_session tool.
- * Mirrors src/agent/tools.ts resolveSessionContext, extracted for testing.
+ * Mirrors the resolveSessionContext chain in claude-code-session.ts, extracted for testing.
  */
 async function resolveHostAndCwd(
   task: ChainTask | null,

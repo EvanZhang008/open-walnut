@@ -12,7 +12,7 @@ type FilterTab = 'all' | 'builtin' | 'config';
 const isConsoleAgent = (a: AgentDefinition) => a.id === 'general' || a.console === true;
 
 export function AgentsPage() {
-  const { agents, toolNames, availableModels, skills, loading, error, create, update, remove, clone } = useAgents();
+  const { agents, availableModels, skills, loading, error, create, update, remove, clone } = useAgents();
   const [filter, setFilter] = useState<FilterTab>('all');
   const [showForm, setShowForm] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentDefinition | undefined>(undefined);
@@ -96,7 +96,6 @@ export function AgentsPage() {
           <AgentForm
             agent={editingAgent}
             cloneFrom={cloningFrom}
-            toolNames={toolNames}
             availableModels={availableModels}
             skillsMeta={skills}
             onSave={handleSave}

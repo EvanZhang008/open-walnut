@@ -114,7 +114,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | PATCH | `/api/v1/conversations/:id` | Rename/pin a Personal AI conversation |
 | DELETE | `/api/v1/conversations/:id` | Delete a conversation (main is protected) |
 | POST | `/api/v1/conversations/:id/stop` | Stop the agent's active turn(s) |
-| POST | `/api/v1/conversations/:id/answer` | Answer a pending structured question |
+| POST | `/api/v1/conversations/:id/answer` | Retired: always `409 conflict` (nothing can hold a question) |
 | GET | `/api/v1/search` | Global search: tasks/memory/sessions (501 on REPLICA) |
 | GET | `/api/v1/notes/search` | Hybrid notes search (string leg only on REPLICA) |
 | GET | `/api/v1/memory/browse` | Memory source tree (metadata only) |
@@ -394,9 +394,12 @@ control frame. Nothing about the request shape changes for the client.
 
 When the relay is unusable (bridge down, primary's server down, a primary that
 predates the relay) or an attachment cannot be handed over (too large, or the
-primary's host refuses it), the turn ends with the SSE `error` frame. There is no
-second engine to answer with, so a clear failure is the honest outcome: retry once
-the primary is reachable. A turn is never relayed with only some of its pictures.
+primary's host refuses it), the turn ends with the SSE `error` frame carrying
+"Walnut's primary is unreachable; the replica cannot answer on its own. Try again
+when the primary is back." There is no second engine to answer with, so a clear
+failure is the honest outcome: retry once the primary is reachable, and note that
+nothing is written on the replica for a turn it could not relay. A turn is never
+relayed with only some of its pictures.
 The additive `engine` field on the terminal frame reports which engine answered
 (`"claude-code"`); it is informational only.
 
@@ -1072,7 +1075,10 @@ an id outside `[A-Za-z0-9_-]`.
 
 ### Personal AI conversation management (additive, Wave 1 2026-08)
 
-Class A everywhere (the REPLICA runs its own Personal AI). `agentId` is accepted
+Class A everywhere: these endpoints only touch the conversation records, which each
+box keeps locally, so a REPLICA renames, deletes, and stops against its own copies
+(and a replica has no lane session to interrupt, so `stopped` is `0` there). Answering
+a turn is a different matter, and always the primary's job. `agentId` is accepted
 like the other conversation endpoints (absent → `general`).
 
 - `PATCH /api/v1/conversations/:id` body `{ "title"? | "pinned"? }` →
@@ -1080,15 +1086,21 @@ like the other conversation endpoints (absent → `general`).
 - `DELETE /api/v1/conversations/:id` → `204`. The MAIN conversation (receives
   notifications + cron) is never deletable → `409 conflict`.
 - `POST /api/v1/conversations/:id/stop` → `200 { "stopped": N,
-  "questionCancelled": boolean }` — aborts ALL of the agent's active turns
-  (WS- and REST-initiated; REST clients have no per-socket identity, and for
-  a single-user Personal AI that is what "stop" means) and cancels any pending
-  structured question. Harmless no-op (`stopped: 0`) when nothing is running.
-- `POST /api/v1/conversations/:id/answer` body `{ "answers": { "<header>":
-  "<value>", … } }` → `200 { "ok": true }` — answers a pending structured
-  question (the `user_ask` tool), unblocking the agent's turn. Mirrors the
-  web `chat:answer-question`: the answers are persisted as a user entry and
-  broadcast live. No pending question → `409 conflict`.
+  "questionCancelled": boolean }`: interrupts the conversation's lane session,
+  which is what "stop" means for a single-user Personal AI (REST clients have no
+  per-socket identity, so there is nothing narrower to stop). `stopped` is a
+  NUMBER: `1` when a session was interrupted, `0` when there was nothing to
+  interrupt. `questionCancelled` is always `false`. Both keys stay on the wire
+  because installed iOS builds decode them as non-optional.
+- `POST /api/v1/conversations/:id/answer` stays mounted and now always answers
+  `409 { "error": { "code": "conflict", "message": "This conversation has no question to answer — send the text as an ordinary message instead" } }`.
+  An unknown conversation id still answers `404 not_found` first, because the route
+  resolves the conversation before refusing, exactly as before. Nothing can be
+  pending any more: structured questions were raised by a tool that no longer
+  exists. The route is kept because a v1 path never disappears, and because
+  the installed iOS client already reads a 409 here as "the question is gone, keep
+  my text" and deliberately does not report the answer as delivered, while a 404
+  reads to it as a broken server.
 
 ### Search, memory, notifications, favorites (additive, Wave 1 2026-08)
 
@@ -1428,8 +1440,8 @@ on each box) — identical behavior on a REPLICA.
 
 ### Personal AI additions (additive, Wave 2 2026-08): active pointer + chat stats/clear
 
-Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
-`general`).
+Class A: local conversation state on each box, not the answering engine. `agentId` as
+usual (absent → `general`).
 
 - `PUT /api/v1/conversations/active` body `{ "conversationId", "agentId"? }`
   → `200 { "activeConversationId" }`. This is SERVER state, not client UI
@@ -1450,7 +1462,7 @@ Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
     `/sessions/:id/model-options`, `/model`, `/effort`, and `/controls` endpoints
     all work on it (they resolve by session RECORD, so a lane session is not
     excluded the way it is from `GET /sessions`). This is how a client puts a
-    model pill on the main-agent chat. The field stays on the wire so a client can
+    model pill on the Personal AI chat. The field stays on the wire so a client can
     badge it; older servers may also answer `"in-process"`, which now means the
     same thing as no session (see the next bullet).
   - `sessionId: null` means the lane has no session YET (a conversation with no
@@ -1588,7 +1600,8 @@ Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
   path.
 - `POST /api/v1/chat/compact?agentId=&conversationId=` → `{ "ok",
   "async": true }` or `{ "ok", "alreadyRunning": true }` — fire-and-forget
-  background compaction. Class A (the replica compacts its own Personal AI).
+  background compaction. Class A: this compacts the stored conversation history
+  each box holds, one model call and no tools, so either box can run it.
 - `GET /api/v1/memory/telemetry` → `{ "stores", "note" }` — write-path
   evidence per memory entry (age, revision churn, provenance).
   `POST /api/v1/memory/daily-log/compact` body `{ "date"?, "threshold"?,

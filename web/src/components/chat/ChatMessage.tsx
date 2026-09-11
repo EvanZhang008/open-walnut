@@ -14,7 +14,6 @@ import { useShowPriority } from '@/hooks/useShowPriority';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { useSelectionFrozen } from '@/utils/selection-guard';
 import { useStableHtml } from '@/hooks/useStableHtml';
-import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
 import { SuggestSegments, useSuggestSegments } from './SuggestSegments';
 import { RichMarkdown } from './RichBlocks';
@@ -1238,34 +1237,6 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
                     case 'tool_call': {
                       // Render create_subagent as SubagentBlock
                       if (block.name === 'subagent_create') return <SubagentBlock key={i} block={block} />;
-                      // Render user_ask as inline status (popover handled by MainPage)
-                      if (block.name === 'user_ask') {
-                        const questions = parseAskQuestionInput(block.input)
-                        if (questions) {
-                          if (block.status === 'calling') {
-                            return (
-                              <div key={i} className="question-inline-pending">
-                                <span className="question-inline-icon">&#x2753;</span>
-                                Agent is asking you a question...
-                              </div>
-                            )
-                          }
-                          // Answered — compact summary
-                          const summary = questions.map((q, qi) => {
-                            const k = q.header ?? String(qi)
-                            // Try to extract answer from result text
-                            const resultText = block.result ?? ''
-                            const match = resultText.match(new RegExp(`${k}:\\s*(.+?)(?:\\s*[·|]|$)`))
-                            return `${k}: ${match?.[1]?.trim() ?? '...'}`
-                          }).join(' · ')
-                          return (
-                            <div key={i} className="question-inline-answered">
-                              <span className="question-inline-icon">&#x2713;</span>
-                              Answered: {summary}
-                            </div>
-                          )
-                        }
-                      }
                       return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={handleFileOpen} />;
                     }
                     case 'text':

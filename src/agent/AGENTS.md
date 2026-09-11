@@ -1,16 +1,11 @@
-# Agent System — Quick Reference
+# src/agent/ — shims only
 
-**Full implementation details: `.claude/skills/walnut-agent-loop/SKILL.md`** (loop internals,
-providers, auth, retry, streaming, caching, tool modules).
+Nothing lives here any more. Every file except `session-context.ts` is a one-line re-export of
+its new home, kept so an in-flight caller keeps compiling; the directory goes away with them.
 
-## Essentials
-
-- Entry: `runAgentLoop()` in `src/agent/loop.ts`. Always streams (`sendMessageStream()`).
-- The model layer now lives in `src/model/` (`model.ts` + `providers/`); `src/agent/model.ts` and
-  `src/agent/providers/*.ts` are re-export shims that go away with this directory.
-- Providers are config (YAML), protocols are code: registry resolves `config.providers[name]` →
-  adapter (`bedrock` | `anthropic-messages`). Legacy config falls back to Bedrock.
-- Prompt caching in `src/agent/cache.ts` — cache_control on system/tools/messages; volatile
-  content goes in the message tail, never in system (breaks the cache prefix).
-- Tools return `string | ToolContentBlock[]` (text + base64 image blocks); display callbacks
-  always get a safe string. Tool modules live one-per-file under `src/agent/tools/`.
+- model layer (`sendMessage`, providers, catalog, adapters) → `src/model/` (the shims still here)
+- tool types → `src/model/tools.ts`; the micro-agent tool loop → `src/model/micro-agent.ts`
+- read-only tools (rendered from the op registry) → `src/core/tools/read-only.ts`;
+  plugin-contributed tools → `src/core/plugins/plugin-tools.ts`
+- context sources → `src/core/context-sources.ts`; working memory → `src/core/memory/`;
+  persona sections → `src/core/sessions/persona-sections.ts`; overview maintainer → `src/core/`

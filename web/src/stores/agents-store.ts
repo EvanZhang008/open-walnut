@@ -17,7 +17,6 @@ import { log } from '@/utils/log';
 
 export interface AgentsSnapshot {
   agents: AgentDefinition[];
-  toolNames: string[];
   availableModels: string[];
   skills: SkillMeta[];
   /** The list has resolved once (`[]` is a real answer, not "still loading"). */
@@ -27,7 +26,7 @@ export interface AgentsSnapshot {
 }
 
 let snapshot: AgentsSnapshot = {
-  agents: [], toolNames: [], availableModels: [], skills: [],
+  agents: [], availableModels: [], skills: [],
   agentsLoaded: false, metaLoaded: false, error: null,
 };
 const subscribers = new Set<() => void>();
@@ -81,18 +80,17 @@ export function loadAgents(force = false): Promise<void> {
   return listInflight;
 }
 
-/** Tool names, models and skills — only the /agents form needs these. */
+/** Models and skills — only the /agents form needs these. */
 export function loadAgentMeta(): Promise<void> {
   if (metaInflight) return metaInflight;
   if (snapshot.metaLoaded) return Promise.resolve();
   metaInflight = (async () => {
     try {
-      const [toolNames, availableModels, skills] = await Promise.all([
-        agentsApi.fetchToolNames(),
+      const [availableModels, skills] = await Promise.all([
         agentsApi.fetchAvailableModels(),
         agentsApi.fetchAvailableSkills(),
       ]);
-      setSnapshot({ toolNames, availableModels, skills, metaLoaded: true });
+      setSnapshot({ availableModels, skills, metaLoaded: true });
     } catch (err) {
       log.warn('agents', 'agent metadata load failed', { error: String(err).slice(0, 200) });
       setSnapshot({ metaLoaded: true, error: err instanceof Error ? err.message : String(err) });
@@ -179,7 +177,7 @@ export async function cloneAgentDefinition(id: string, newId: string, newName?: 
 /** Tests only: forget everything the store learned. */
 export function __resetAgentsStore(): void {
   snapshot = {
-    agents: [], toolNames: [], availableModels: [], skills: [],
+    agents: [], availableModels: [], skills: [],
     agentsLoaded: false, metaLoaded: false, error: null,
   };
   subscribers.clear();

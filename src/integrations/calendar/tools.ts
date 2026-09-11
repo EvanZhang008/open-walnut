@@ -10,7 +10,7 @@
  *
  * Date contract: tz-less LOCAL ISO — "2026-08-05T09:00:00" or "2026-08-05".
  */
-import type { ToolDefinition } from '../../agent/tools.js';
+import type { ToolDefinition } from '../../model/tools.js';
 import { calendarErrorCode } from './api.js';
 import type { CalendarService } from './service.js';
 

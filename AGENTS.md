@@ -3,7 +3,7 @@
 > **ACP reference implementation:** https://github.com/agentclientprotocol/claude-agent-acp (public).
 > **References**: [ARCHITECTURE.md](./ARCHITECTURE.md) | per-directory `AGENTS.md` files are
 > concise quick-references; the **deep implementation details live in skills** (auto-discovered,
-> load on demand): `walnut-core-internals` (src/core/), `walnut-agent-loop` (src/agent/),
+> load on demand): `walnut-core-internals` (src/core/),
 > `walnut-web-frontend` (web/src/), `walnut-testing` (tests/), `walnut-ops` (incidents + src/logging/).
 > Load the matching skill before non-trivial work in that area.
 > **Important docs:** browse [`docs/`](./docs/README.md) first; model work starts with
@@ -141,10 +141,11 @@ scripts/walnut-sandbox.sh status | stop          # health | stop+wipe
   via `tsup`, but if you edit server code and forget to rebuild, the sandbox runs STALE server logic.
   A `400 invalid beta flag` on `chat` while `test` passes is the classic symptom of a stale `dist`
   (an old build that still sent the removed `extended-cache-ttl` beta). Rebuild (`npx tsup`) and re-run.
-- **Verified-good provider behavior (do NOT "fix"):** the Personal AI does NOT send `extended-cache-ttl`
-  to Bedrock — the 1h cache is GA and rides `cache_control.ttl:'1h'` directly (`src/agent/cache.ts`,
-  `DEFAULT_TTL='1h'`). opus-4-8 uses `thinking:{type:'adaptive'}` + the `interleaved-thinking` beta.
-  This combo + a `~/.aws` profile is confirmed working end-to-end against real Bedrock.
+- **Verified-good provider behavior (do NOT "fix"):** Walnut does NOT send `extended-cache-ttl`
+  to Bedrock — sending it answers `400 invalid beta flag`, and the 1h cache is GA anyway
+  (`cache_control.ttl:'1h'` rides through verbatim; see `EXTENDED_CACHE_TTL_BETA` in
+  `src/model/providers/defaults.ts`). opus-4-8 uses `thinking:{type:'adaptive'}` + the
+  `interleaved-thinking` beta. This combo + a `~/.aws` profile is confirmed working end-to-end.
 
 ## What Is Walnut
 
@@ -314,7 +315,7 @@ death).
 
 | Subsystem | Entry point | Details |
 |---|---|---|
-| Agent loop & tools | `src/agent/` | skill `walnut-agent-loop` + [src/agent/AGENTS.md](./src/agent/AGENTS.md) |
+| Model calls (providers, catalog) | `src/model/` | `sendMessage` + provider adapters; `src/agent/` is re-export shims only |
 | Core (tasks/sessions data) | `src/core/` | skill `walnut-core-internals` + [src/core/AGENTS.md](./src/core/AGENTS.md) |
 | Sessions (local + SSH) | `src/providers/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Session daemon (twins) | `src/providers/daemon-standalone.ts` + `daemon-source.ts` | "Remote Session Daemon" section above |

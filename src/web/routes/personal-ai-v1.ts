@@ -1,13 +1,12 @@
 /**
  * /api/v1 Personal AI conversation management (additive) — rename/pin, delete,
- * stop, and structured-question answers. Mirrors the web console's
- * conversations REST routes + the WS `chat:stop` / `chat:answer-question`
- * RPCs with equivalent semantics (no new behavior).
+ * stop. Mirrors the web console's conversations REST routes + the WS `chat:stop`
+ * RPC with equivalent semantics (no new behavior).
  *
  *   PATCH  /conversations/:id { title? | pinned? } → { conversation }
  *   DELETE /conversations/:id                      → 204 (main conversation → 409)
  *   POST   /conversations/:id/stop                 → { stopped, questionCancelled }
- *   POST   /conversations/:id/answer { answers }   → { ok: true }
+ *   POST   /conversations/:id/answer               → 409 (RETIRED, see below)
  *   PUT    /conversations/active { conversationId } → { activeConversationId }
  *   GET    /chat/stats?agentId&conversationId      → conversation size stats
  *   GET    /chat/engine?agentId&conversationId     → { engine, sessionId?, switchable? }
@@ -25,10 +24,17 @@
  * primary cannot be reached they answer 503 `primary_unreachable` — never this
  * box's own state, which would describe a box that will not answer.
  *
- * Stop semantics: the WS chat keys AbortControllers per client socket; a REST
- * client has no socket identity, so stop aborts ALL of the agent's active
- * turns via core/agent-abort-registry.ts (both WS- and REST-initiated turns
- * register there). For a single-user Personal AI that IS the "stop" the phone means.
+ * Stop semantics: a turn is answered by a `claude` CLI session bound to the
+ * conversation (its lane), so stopping it means interrupting that session — the
+ * one path that reaches the process doing the work, and the same one the WS
+ * `chat:stop` takes. A conversation with no lane record has nothing to stop.
+ *
+ * Questions: a conversation turn can no longer hold a structured question (the
+ * tool that asked one is gone), so `/answer` is a mounted refusal rather than a
+ * missing route — a v1 path never disappears, and 409 is the one answer the
+ * phone already handles correctly (the question is gone, and it keeps the typed
+ * or dictated text instead of reporting it delivered). `questionCancelled` on
+ * /stop stays present and is always false for the same reason.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -550,21 +556,14 @@ personalAiV1Router.delete('/conversations/:id', async (req: Request, res: Respon
 })
 
 // POST /api/v1/conversations/:id/stop → { stopped, questionCancelled }
-// Aborts ALL of the agent's active turns (see the header comment for why
-// agent-level, not per-socket) and cancels any pending user_ask question —
-// the same pair of effects as the WS `chat:stop`.
+// The turn lives in a `claude` CLI, which no AbortController can reach — the
+// stop IS the lane interrupt (canonical bus path, never a signal). Same effect
+// as the WS `chat:stop`.
 personalAiV1Router.post('/conversations/:id/stop', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveConversation(req, res)
     if (!ids) return
     const { agentId, conversationId } = ids
-    const { abortAgentTurns } = await import('../../core/agent-abort-registry.js')
-    const { hasPendingQuestion, cancelQuestion } = await import('../../core/agent-question.js')
-    const questionCancelled = hasPendingQuestion(agentId)
-    const stopped = abortAgentTurns(agentId)
-    cancelQuestion(agentId)
-    // Lane engine: the work lives in a `claude` CLI, which no AbortController can
-    // reach — interrupt the lane session too (canonical bus path, never a signal).
     // Unconditional: resolves null when this conversation has no lane record.
     let laneInterrupted: string | null = null
     try {
@@ -576,54 +575,34 @@ personalAiV1Router.post('/conversations/:id/stop', async (req: Request, res: Res
         agentId, conversationId, error: err instanceof Error ? err.message : String(err),
       })
     }
+    // `stopped` counts what was actually interrupted, so the client is never told
+    // a turn was stopped when nothing was running. Both keys and both types stay
+    // frozen (the phone decodes `stopped: Int`, `questionCancelled: Bool`);
+    // nothing can hold a structured question any more, so that one is always false.
+    const stopped = laneInterrupted ? 1 : 0
     log.web.info('Personal AI turn stopped via api-v1', {
-      agentId, conversationId, stopped, questionCancelled,
-      laneSessionId: laneInterrupted ?? undefined,
+      agentId, conversationId, stopped, laneSessionId: laneInterrupted ?? undefined,
     })
-    // Response shape stays frozen ({ stopped, questionCancelled }) — the lane id
-    // is logged, not added to the contract.
-    res.json({ stopped, questionCancelled })
+    res.json({ stopped, questionCancelled: false })
   } catch (err) {
     next(err)
   }
 })
 
-// POST /api/v1/conversations/:id/answer { answers: Record<string,string> }
-// Answer a pending structured question (user_ask tool) — mirrors the WS
-// `chat:answer-question`: persists the answers as a UI entry, broadcasts the
-// history update, and unblocks the agent loop. 409 when nothing is pending.
+// POST /api/v1/conversations/:id/answer → 409 always. RETIRED, still mounted.
+//
+// A conversation turn has no structured question to answer any more, but the
+// route stays on the frozen surface: an older phone build that still offers the
+// answer composer must get a decidable reply, not a 404 it reads as "the server
+// is broken". 409 is what its answer path already treats as "the question is
+// gone, keep my text" — the honest outcome here.
 personalAiV1Router.post('/conversations/:id/answer', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // Still resolve, so a bad agent/conversation id is a 404 exactly as before.
     const ids = await resolveConversation(req, res)
     if (!ids) return
-    const { agentId, conversationId } = ids
-    const answers = req.body?.answers
-    if (
-      answers === null || typeof answers !== 'object' || Array.isArray(answers)
-      || Object.keys(answers).length === 0
-      || !Object.values(answers).every((v) => typeof v === 'string')
-    ) {
-      sendError(res, 400, 'bad_request', 'answers must be a non-empty object of string values')
-      return
-    }
-    const { hasPendingQuestion, submitAnswers } = await import('../../core/agent-question.js')
-    if (!hasPendingQuestion(agentId)) {
-      sendError(res, 409, 'conflict', 'No pending question for this agent')
-      return
-    }
-    // Persist the user's answers as a UI-only chat entry (same as chat.ts).
-    const chatHistory = await import('../../core/chat-history.js')
-    const answerLines = Object.entries(answers as Record<string, string>)
-      .map(([k, v]) => `${k}: ${v}`).join('\n')
-    await chatHistory.addNotification({ role: 'user', content: answerLines, agentId, conversationId })
-    broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
-      entry: { role: 'user', content: answerLines, source: 'question-answer' },
-      agentId,
-      conversationId,
-    })
-    submitAnswers(answers as Record<string, string>, agentId)
-    log.web.info('Personal AI question answered via api-v1', { agentId, conversationId, answerCount: Object.keys(answers).length })
-    res.json({ ok: true })
+    sendError(res, 409, 'conflict',
+      'This conversation has no question to answer — send the text as an ordinary message instead')
   } catch (err) {
     next(err)
   }

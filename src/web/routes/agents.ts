@@ -10,7 +10,7 @@ import {
   updateAgent,
   deleteAgent,
 } from '../../core/agent-registry.js'
-import { getToolSchemas } from '../../agent/tools.js'
+import { getToolSchemas } from '../../core/tools/read-only.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus } from '../../core/event-bus.js'
 import { listAvailableSkills } from '../../core/skill-loader.js'

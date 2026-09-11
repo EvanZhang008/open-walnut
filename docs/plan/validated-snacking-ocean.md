@@ -5,6 +5,11 @@
 > index ([`src/lib/hybrid-search/README.md`](../../src/lib/hybrid-search/README.md)), so the
 > QMD sections below (two instances, `qmdScore × sourceWeight × temporalDecay`, the reranker and
 > query-expansion models) describe a system that no longer exists. Do not build on them.
+>
+> **Superseded again (2026-09-11):** every `src/agent/…` path below is gone with the in-process agent
+> loop. Walnut runs no agent loop: an AI turn is a Claude Code CLI session, the persona lives in
+> `src/core/sessions/`, single model calls live in `src/model/`, memory code in `src/core/memory/`,
+> and the memory tools are operations in `src/ops/`. Dream consolidation is deleted outright.
 
 ---
 

@@ -1,16 +1,15 @@
 /**
- * E2E tests for enhanced get_session_history — plan_only, pagination, summarize.
+ * E2E tests for reading a session's history and its plan over REST.
  *
- * What's real: Express server, event bus, session-tracker, session-history parsing,
- * REST endpoints, agent tool execution.
+ * What's real: Express server, event bus, session-tracker, session-history
+ * parsing, REST endpoints.
  * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs).
  *
  * Tests verify:
- *   1. plan_only mode — extracts plan from a completed plan-test session
- *   2. pagination mode — reverse paginated session history via tool
- *   3. summarize mode — returns config guidance when no agent configured
- *   4. REST /api/sessions/:id/history still works after refactor
- *   5. Parameter validation via tool
+ *   1. Plan extraction from a completed plan session (Write + ExitPlanMode)
+ *   2. A session with no plan answers 404 with a readable reason
+ *   3. GET /api/sessions/:id/history returns the parsed messages
+ *   4. A live session started through the WS RPC lands in history
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -24,7 +23,6 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME, CLAUDE_HOME, SESSIONS_FILE } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { executeTool } from '../../src/agent/tools.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
@@ -243,133 +241,23 @@ afterAll(async () => {
 
 // ── Tests ──
 
-describe('get_session_history — plan_only', () => {
+describe('REST /api/sessions/:id/plan — plan extraction', () => {
   it('extracts plan content from a session with Write + ExitPlanMode', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'plan-sess-001',
-      plan_only: true,
-    })
-    expect(result).toContain('# E2E Plan')
-    expect(result).toContain('## Step 1')
-    expect(result).toContain('Implement feature')
-    expect(result).toContain('## Step 2')
-    expect(result).toContain('Write tests')
+    const res = await fetch(apiUrl('/api/sessions/plan-sess-001/plan'))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { content: string }
+    expect(body.content).toContain('# E2E Plan')
+    expect(body.content).toContain('## Step 1')
+    expect(body.content).toContain('Implement feature')
+    expect(body.content).toContain('## Step 2')
+    expect(body.content).toContain('Write tests')
   })
 
-  it('returns descriptive error when session has no plan', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'regular-sess-001',
-      plan_only: true,
-    })
-    expect(result).toContain('No plan found')
-  })
-})
-
-describe('get_session_history — pagination', () => {
-  it('returns newest messages on page 1', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'long-sess-001',
-      page_size: 5,
-      page: 1,
-    })
-    const parsed = JSON.parse(result)
-
-    expect(parsed.pagination.total).toBe(20)
-    expect(parsed.pagination.totalPages).toBe(4)
-    expect(parsed.pagination.page).toBe(1)
-    expect(parsed.messages).toHaveLength(5)
-    // Page 1 = newest → message 19, 18, 17, 16, 15
-    expect(parsed.messages[0].text).toContain('Message number 19')
-    expect(parsed.messages[4].text).toContain('Message number 15')
-  })
-
-  it('returns older messages on page 2', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'long-sess-001',
-      page_size: 5,
-      page: 2,
-    })
-    const parsed = JSON.parse(result)
-
-    expect(parsed.messages).toHaveLength(5)
-    expect(parsed.messages[0].text).toContain('Message number 14')
-    expect(parsed.messages[4].text).toContain('Message number 10')
-  })
-
-  it('returns remaining messages on last page', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'long-sess-001',
-      page_size: 5,
-      page: 4,
-    })
-    const parsed = JSON.parse(result)
-
-    expect(parsed.messages).toHaveLength(5)
-    expect(parsed.messages[0].text).toContain('Message number 4')
-    expect(parsed.messages[4].text).toContain('Message number 0')
-  })
-})
-
-describe('get_session_history — summarize', () => {
-  it('returns a summary or error (falls back to default model when no agent configured)', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'regular-sess-001',
-      summarize: true,
-    })
-    // With credentials: returns an LLM-generated summary. Without: returns an error message.
-    // Either way, result should be a non-empty string.
-    expect(result.length).toBeGreaterThan(10)
-    expect(typeof result).toBe('string')
-  })
-})
-
-describe('get_session_history — parameter validation', () => {
-  it('rejects plan_only + summarize', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'any',
-      plan_only: true,
-      summarize: true,
-    })
-    expect(result).toContain('mutually exclusive')
-  })
-
-  it('rejects page without page_size', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'any',
-      page: 2,
-    })
-    expect(result).toContain('page requires page_size')
-  })
-
-  it('rejects page_size < 1', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'any',
-      page_size: 0,
-    })
-    expect(result).toContain('page_size must be >= 1')
-  })
-
-  it('rejects plan_only + page_size', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'any',
-      plan_only: true,
-      page_size: 5,
-    })
-    expect(result).toContain('cannot be combined with pagination')
-  })
-})
-
-describe('get_session_history — default mode (no new params)', () => {
-  it('returns full history with budget truncation unchanged', async () => {
-    const result = await executeTool('session_history', {
-      session_id: 'regular-sess-001',
-    })
-    const parsed = JSON.parse(result)
-
-    expect(parsed).toHaveLength(4)
-    expect(parsed[0].role).toBe('user')
-    expect(parsed[0].text).toBe('Fix the bug')
-    expect(parsed[3].text).toBe('A null pointer dereference.')
+  it('answers 404 with a readable reason when the session has no plan', async () => {
+    const res = await fetch(apiUrl('/api/sessions/regular-sess-001/plan'))
+    expect(res.status).toBe(404)
+    const body = await res.json() as { error: string }
+    expect(body.error).toMatch(/no plan/i)
   })
 })
 

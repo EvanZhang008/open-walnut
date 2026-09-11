@@ -1,12 +1,17 @@
 /**
- * E2E tests for session slot management fixes:
- *   1. start_session auto-archives stopped sessions for the same task
- *   2. start_session auto-archives error sessions for the same task
- *   3. Triage sessions do NOT block start_session
- *   4. checkSessionLimit skips error and embedded/sdk sessions
+ * E2E tests for the 1-task-1-session slot rule:
+ *   1. A terminal (stopped / error) session does NOT block a new start
+ *   2. A live session DOES block it, with the live session's id in the body
+ *   3. checkSessionLimit skips error and embedded/sdk sessions
  *
- * Uses a real server with mock CLI for the start_session tests (Tests 1-3),
- * and direct session-tracker calls for the checkSessionLimit test (Test 4).
+ * Tests 1-2 go through POST /api/v1/tasks/:id/start (the route behind the
+ * session_start op) on a real server; test 3 calls session-tracker directly.
+ *
+ * They deliberately post a RELATIVE cwd, which the route refuses with 400 —
+ * AFTER the slot check. So 409 means "the slot was taken" and 400 means "the
+ * slot was free", and no session is ever spawned: a spawned session would still
+ * be settling its process_status while test 3 counts running sessions, which
+ * made that count flap by one.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -17,10 +22,8 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { executeTool } from '../../src/agent/tools.js';
 import {
   createSessionRecord,
-  getSessionByClaudeId,
   updateSessionRecord,
   checkSessionLimit,
 } from '../../src/core/session-tracker.js';
@@ -32,6 +35,16 @@ let port: number;
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`;
+}
+
+/** Ask the start route for a session, with a cwd it will refuse (see header). */
+async function startSession(taskId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await fetch(apiUrl(`/api/v1/tasks/${taskId}/start`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'Continue working', cwd: 'not/absolute' }),
+  });
+  return { status: res.status, body: await res.json() as Record<string, unknown> };
 }
 
 async function createTask(title: string, opts: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -61,115 +74,51 @@ afterAll(async () => {
 });
 
 // ══════════════════════════════════════════════════════════════════
-// Tests 1-2: Auto-archive terminal sessions (stopped / error)
+// Tests 1-2: which sessions occupy the task's slot
 // ══════════════════════════════════════════════════════════════════
 
-describe('start_session auto-archives terminal sessions', () => {
-  it('stopped session is auto-archived and new session is NOT blocked', async () => {
-    // Create a task via REST API
-    const task = await createTask('Stopped session auto-archive test', { category: 'Test' });
+describe('POST /tasks/:id/start — the slot rule', () => {
+  it('a stopped session does not occupy the slot', async () => {
+    const task = await createTask('Stopped session slot test', { category: 'Test' });
     const taskId = task.id as string;
 
-    // Create a stopped session record for this task and link it to the task slot
-    const stoppedSession = await createSessionRecord('stopped-sess-001', taskId, 'Test', '/tmp', {
-      pid: 99990,
-    });
-    await updateSessionRecord(stoppedSession.claudeSessionId, {
-      process_status: 'stopped',
-    });
-
-    // Link the session to the task slot so the task thinks it has a session
+    const stopped = await createSessionRecord('stopped-sess-001', taskId, 'Test', '/tmp', { pid: 99990 });
+    await updateSessionRecord(stopped.claudeSessionId, { process_status: 'stopped' });
     const { linkSessionSlot } = await import('../../src/core/task-manager.js');
     await linkSessionSlot(taskId, 'stopped-sess-001', 'exec');
 
-    // Call start_session — should auto-archive the stopped session and NOT block
-    const result = await executeTool('session_start', {
-      task_id: taskId,
-      title: 'New session after stopped',
-      prompt: 'Continue working',
-    }) as string;
-
-    // The tool should NOT return a blocked response.
-    // It may fail downstream (no cwd resolved), but the archiving happens first.
-    expect(result).not.toContain('"blocked"');
-    expect(result).not.toContain('already has a session');
-
-    // Verify the old session was archived with the correct reason
-    const archived = await getSessionByClaudeId('stopped-sess-001');
-    expect(archived).not.toBeNull();
-    expect(archived!.archived).toBe(true);
-    expect(archived!.archive_reason).toBe('auto_cleared_for_new_session');
+    const { status, body } = await startSession(taskId);
+    // Past the slot check, refused only on the deliberately relative cwd.
+    expect(status).toBe(400);
+    expect(JSON.stringify(body)).toContain('absolute');
   });
 
-  it('error session is auto-archived and new session is NOT blocked', async () => {
-    // Create a task via REST API
-    const task = await createTask('Error session auto-archive test', { category: 'Test' });
+  it('an error session does not occupy the slot', async () => {
+    const task = await createTask('Error session slot test', { category: 'Test' });
     const taskId = task.id as string;
 
-    // Create an error session record for this task
-    const errorSession = await createSessionRecord('error-sess-001', taskId, 'Test', '/tmp', {
-      pid: 99991,
-    });
-    await updateSessionRecord(errorSession.claudeSessionId, {
-      process_status: 'error',
-    });
-
-    // Link the session to the task slot
+    const errored = await createSessionRecord('error-sess-001', taskId, 'Test', '/tmp', { pid: 99991 });
+    await updateSessionRecord(errored.claudeSessionId, { process_status: 'error' });
     const { linkSessionSlot } = await import('../../src/core/task-manager.js');
     await linkSessionSlot(taskId, 'error-sess-001', 'exec');
 
-    // Call start_session — should auto-archive the error session and NOT block
-    const result = await executeTool('session_start', {
-      task_id: taskId,
-      title: 'New session after error',
-      prompt: 'Retry the work',
-    }) as string;
-
-    // Should NOT be blocked
-    expect(result).not.toContain('"blocked"');
-    expect(result).not.toContain('already has a session');
-
-    // Verify the old error session was archived
-    const archived = await getSessionByClaudeId('error-sess-001');
-    expect(archived).not.toBeNull();
-    expect(archived!.archived).toBe(true);
-    expect(archived!.archive_reason).toBe('auto_cleared_for_new_session');
+    const { status, body } = await startSession(taskId);
+    expect(status).toBe(400);
+    expect(JSON.stringify(body)).toContain('absolute');
   });
-});
 
-// ══════════════════════════════════════════════════════════════════
-// Test 3: Triage sessions do NOT block start_session
-// ══════════════════════════════════════════════════════════════════
-
-describe('start_session skips triage sessions', () => {
-  it('triage session does NOT block start_session', async () => {
-    // Create a task via REST API
-    const task = await createTask('Triage no-block test', { category: 'Test' });
+  it('a running session occupies the slot and its id comes back in the 409', async () => {
+    const task = await createTask('Running session slot test', { category: 'Test' });
     const taskId = task.id as string;
 
-    // Create a triage session (embedded, type: triage, running) for this task
-    await createSessionRecord('triage-sess-001', taskId, 'Test', '/tmp', {
-      pid: 99992,
-      provider: 'embedded',
-      type: 'triage',
-    });
+    await createSessionRecord('running-sess-001', taskId, 'Test', '/tmp', { pid: 99993 });
+    const { linkSessionSlot } = await import('../../src/core/task-manager.js');
+    await linkSessionSlot(taskId, 'running-sess-001', 'exec');
 
-    // Call start_session — triage session should be skipped in the per-task check
-    const result = await executeTool('session_start', {
-      task_id: taskId,
-      title: 'New session with triage running',
-      prompt: 'Start working',
-    }) as string;
-
-    // Should NOT be blocked by the triage session
-    expect(result).not.toContain('"blocked"');
-    expect(result).not.toContain('already has a session');
-
-    // Verify the triage session was NOT archived (left as-is)
-    const triageSession = await getSessionByClaudeId('triage-sess-001');
-    expect(triageSession).not.toBeNull();
-    expect(triageSession!.archived).toBeFalsy();
-    expect(triageSession!.process_status).toBe('running');
+    const { status, body } = await startSession(taskId);
+    expect(status).toBe(409);
+    // The caller needs the live id to be able to send into it instead.
+    expect(JSON.stringify(body)).toContain('running-sess-001');
   });
 });
 

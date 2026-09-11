@@ -327,8 +327,8 @@ export default function register(api) {
   });
 });
 
-describe('plugin tools reach the Personal AI tool set', () => {
-  it('getToolSchemas appends the plugin tool and executeTool dispatches to it', async () => {
+describe('plugin tools reach an in-process tool belt', () => {
+  it('getToolSchemas appends the plugin tool and it executes', async () => {
     const dir = pluginPath('agent-tool');
     await writeManifest(dir, { id: 'agent-tool', name: 'Agent Tool', capabilities: { tools: {} } });
     await writePluginTs(dir, `
@@ -342,33 +342,33 @@ export default function register(api) {
 }
 `);
 
-    // Import lazily: src/agent/tools.ts pulls in a large chunk of core, and only
-    // this test needs it.
-    const { getToolSchemas, executeTool, getPluginTools, tools: builtinTools } =
-      await import('../../src/agent/tools.js');
+    // Import lazily: the tool belt pulls the whole op registry in, and only this
+    // test needs it.
+    const { getToolSchemas, getReadOnlyTools } = await import('../../src/core/tools/read-only.js');
+    const { getPluginTools } = await import('../../src/core/plugins/plugin-tools.js');
 
+    const coreNames = getReadOnlyTools().map(t => t.name);
     const before = getToolSchemas();
     expect(before.map(t => t.name)).not.toContain('agent_tool_shout');
-    // Nothing registered yet ⇒ the prompt-cached prefix is EXACTLY the static list.
-    expect(before.length).toBe(builtinTools.length);
+    // Nothing registered yet ⇒ the belt is EXACTLY the core read-only ops.
+    expect(before.length).toBe(coreNames.length);
 
     await load(globalRegistry);
     expect(globalRegistry.has('agent-tool')).toBe(true);
 
     const after = getToolSchemas();
     expect(after.map(t => t.name)).toContain('agent_tool_shout');
-    // Appended, never interleaved: the static prefix bytes are untouched.
-    expect(after.slice(0, builtinTools.length).map(t => t.name))
-      .toEqual(builtinTools.map(t => t.name));
-    expect(getPluginTools().map(t => t.name).filter((name) => name.startsWith('agent_tool_')))
-      .toEqual(['agent_tool_shout']);
+    // Appended, never interleaved: the core prefix stays in its own order.
+    expect(after.slice(0, coreNames.length).map(t => t.name)).toEqual(coreNames);
 
-    expect(await executeTool('agent_tool_shout', { text: 'hi' })).toBe('HI');
+    const shout = getPluginTools().find(t => t.name === 'agent_tool_shout');
+    expect(shout).toBeDefined();
+    expect(await shout!.execute({ text: 'hi' })).toBe('HI');
   });
 
-  it('a built-in tool name always wins over a plugin tool', async () => {
-    const { tools: builtinTools, getPluginTools } = await import('../../src/agent/tools.js');
-    const builtinName = builtinTools[0].name;
+  it('a core op name always wins over a plugin tool', async () => {
+    const { getPluginTools } = await import('../../src/core/plugins/plugin-tools.js');
+    const coreName = 'task_get';
 
     // Register by hand: the loader would namespace the name away from the collision.
     globalRegistry.register('collider', {
@@ -381,18 +381,65 @@ export default function register(api) {
       migrations: [],
       httpRoutes: [],
       tools: [{
-        name: builtinName,
+        name: coreName,
         description: 'Shadowing attempt',
         input_schema: { type: 'object', properties: {} },
         execute: async () => 'shadowed',
       }],
     });
 
-    expect(getPluginTools().map(t => t.name)).not.toContain(builtinName);
+    expect(getPluginTools().map(t => t.name)).not.toContain(coreName);
+  });
+
+  it('a plugin publishing the same name as a tool AND an op keeps the op, without a shadow warning', async () => {
+    // The mail plugin does exactly this for every tool. The old guard compared
+    // against ALL op names, so each of its tools "shadowed" its own op and the
+    // belt came back empty, with one warning per tool per watcher tick.
+    const { getPluginTools } = await import('../../src/core/plugins/plugin-tools.js');
+    const { getToolSchemas } = await import('../../src/core/tools/read-only.js');
+    const { definePluginOp } = await import('../../src/ops/registry.js');
+    const { z } = await import('zod');
+    const { log } = await import('../../src/logging/index.js');
+    const warn = vi.spyOn(log.agent, 'warn');
+
+    const name = 'twice_list';
+    const disposable = definePluginOp('twice', {
+      name,
+      title: 'List',
+      description: 'Lists things',
+      input: { q: z.string().optional() },
+      handler: async () => ({ ok: true }),
+      tags: { readonly: true, remote: 'allow' },
+    });
+    globalRegistry.register('twice', {
+      id: 'twice',
+      name: 'Twice',
+      config: {},
+      sync: {} as never,
+      hasSync: false,
+      capabilities: ['tools'],
+      migrations: [],
+      httpRoutes: [],
+      tools: [{
+        name,
+        description: 'Same thing as a tool',
+        input_schema: { type: 'object', properties: {} },
+        execute: async () => 'via tool',
+      }],
+    });
+    try {
+      expect(getPluginTools().map(t => t.name)).not.toContain(name);
+      expect(warn.mock.calls.some(([msg]) => String(msg).includes('shadows'))).toBe(false);
+      // The belt still offers the name once, through the op.
+      expect(getToolSchemas().filter(t => t.name === name)).toHaveLength(1);
+    } finally {
+      await disposable.dispose();
+      warn.mockRestore();
+    }
   });
 
   it('plugin tools are NOT in the read-only allowlist', async () => {
-    const { READ_ONLY_TOOL_NAMES } = await import('../../src/agent/tools.js');
+    const { READ_ONLY_TOOL_NAMES } = await import('../../src/core/tools/read-only.js');
     expect([...READ_ONLY_TOOL_NAMES].some(n => n.startsWith('agent_tool_'))).toBe(false);
   });
 });

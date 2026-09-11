@@ -705,6 +705,17 @@ export function pluginToolName(pluginId: string, name: string): string {
   return name.startsWith(prefix) ? name : `${prefix}${name}`;
 }
 
+/** Plugins already warned about agentContext — once each, not once per load. */
+const agentContextWarned = new Set<string>();
+
+/** Say it in the plugin's own log channel: the text it just handed us is collected
+ *  and then read by nothing, and the author is the only one who can fix that. */
+function warnAgentContextDeprecated(pluginId: string, logger: { warn: (msg: string, meta?: Record<string, unknown>) => void }): void {
+  if (agentContextWarned.has(pluginId)) return;
+  agentContextWarned.add(pluginId);
+  logger.warn('registerAgentContext is deprecated and reaches no model — register a skill instead', { plugin: pluginId });
+}
+
 function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<string, unknown>): PluginApiBuilder {
   const pluginLogger = createSubsystemLogger(`plugin/${manifest.id}`);
 
@@ -741,6 +752,7 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
     },
 
     registerAgentContext(snippet: string) {
+      warnAgentContextDeprecated(manifest.id, pluginLogger);
       collected.agentContext = snippet;
     },
 

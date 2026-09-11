@@ -249,7 +249,7 @@ export interface RegisteredUiApp {
 }
 
 // ── PluginToolSpec: plugin-contributed Personal AI tool (capability `tools`) ──
-// Structurally compatible with src/agent/tools.ts ToolDefinition. Declared here
+// Structurally compatible with src/model/tools.ts ToolDefinition. Declared here
 // rather than imported so core keeps no dependency (not even a type one) on the
 // agent layer — integration-types.ts is a leaf that task-manager and the whole
 // core tree import.
@@ -335,6 +335,8 @@ export interface PluginApi {
   registerSync(sync: IntegrationSync): void;
   registerSourceClaim(fn: ProjectClaimFn, opts?: { priority?: number }): void;
   registerDisplay(meta: DisplayMeta): void;
+  /** @deprecated No consumer: a session reads skills, so this text reaches no
+   *  model. Register a skill instead. The loader logs one warning per plugin. */
   registerAgentContext(snippet: string): void;
   registerMigration(fn: MigrateFn): void;
   registerHttpRoute(route: HttpRoute): void;
@@ -376,6 +378,7 @@ export interface RegisteredPlugin {
   capabilities?: string[];
   claim?: { fn: ProjectClaimFn; priority: number };
   display?: DisplayMeta;
+  /** @deprecated Collected but read by nothing — see registerAgentContext. */
   agentContext?: string;
   migrations: MigrateFn[];
   httpRoutes: HttpRoute[];

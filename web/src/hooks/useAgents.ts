@@ -21,7 +21,6 @@ import {
 
 interface UseAgentsReturn {
   agents: AgentDefinition[];
-  toolNames: string[];
   availableModels: string[];
   skills: SkillMeta[];
   loading: boolean;
@@ -49,7 +48,6 @@ export function useAgents(): UseAgentsReturn {
 
   return {
     agents: shared.agents,
-    toolNames: shared.toolNames,
     availableModels: shared.availableModels,
     skills: shared.skills,
     // Only the FIRST resolve blocks the page. A refresh after a write must not

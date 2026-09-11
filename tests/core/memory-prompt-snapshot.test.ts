@@ -116,16 +116,16 @@ describe('refresh policy', () => {
 
   it('the NEXT turn boundary adopts the agent\'s own mid-turn write', async () => {
     // This is why the policy is "freeze until write-by-self, adopted at the next
-    // boundary" and not "freeze forever": the background-review fork's whole job
-    // is writing memory, and a permanent freeze would discard that learning.
+    // boundary" and not "freeze forever": a turn that writes memory mid-flight is
+    // exactly the case a permanent freeze would discard the learning from.
     const scope = 'general:conv-1';
     await store.add(entry('Rule A'));
     store.beginPromptTurn(scope);
-    await store.add(entry('Reviewed', 'lesson from the review fork'));
-    expect(store.renderForPrompt(scope)).not.toContain('lesson from the review fork');
+    await store.add(entry('Reviewed', 'lesson from the turn'));
+    expect(store.renderForPrompt(scope)).not.toContain('lesson from the turn');
 
     store.beginPromptTurn(scope); // next real turn
-    expect(store.renderForPrompt(scope)).toContain('lesson from the review fork');
+    expect(store.renderForPrompt(scope)).toContain('lesson from the turn');
   });
 
   it('explicit invalidate thaws immediately, without waiting for a boundary', async () => {

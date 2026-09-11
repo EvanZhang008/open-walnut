@@ -48,7 +48,6 @@ export const SLOW_TEST_FILES = [
   'tests/providers/daemon-transport-unit.test.ts', // 3s
   'tests/providers/remote-session-manager-session-state.test.ts', // 2s
   'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout
-  'tests/agent/tools/exec-tool.test.ts', // real shell subprocesses + a 1s timeout case
   'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
   'tests/integration/cloud-setup-e2e.test.ts', // real cloud-mode HTTP server + git sync
 
@@ -82,7 +81,6 @@ export const SLOW_TEST_FILES = [
   'tests/unit/subagent-poller.test.ts', // 15s
   'tests/core/session-hooks-triage-debounce.test.ts', // 9s
   'tests/core/plugin-sources.test.ts', // 3s
-  'tests/agent/loop-newmessages.test.ts', // 2s
 ] as const
 
 /**

@@ -34,12 +34,6 @@ import {
   runWorkingMemoryUpdate,
   trackToolCall as trackWmToolCall,
 } from '../../core/memory/working-memory-updater.js'
-import {
-  hasPendingQuestion,
-  submitTextAnswer,
-  submitAnswers,
-  cancelQuestion,
-} from '../../core/agent-question.js'
 
 /**
  * Track usage for the compaction summarizer.
@@ -597,7 +591,6 @@ export function registerChatRpc(): void {
   registerMethod('chat:stop', async (payload: unknown) => {
     const { agentId: stopAgentId, conversationId: stopConvId } = (payload ?? {}) as { agentId?: string; conversationId?: string }
     const effectiveAgentId = stopAgentId ? validateAgentId(stopAgentId) : 'general'
-    cancelQuestion(effectiveAgentId) // Also cancel any pending structured question
     // The turn runs in a `claude` CLI, which no AbortController can reach —
     // interrupt the lane's session through the canonical bus path. Unconditional:
     // the lookup is one indexed sqlite read and resolves null for a conversation
@@ -617,27 +610,6 @@ export function registerChatRpc(): void {
     }
   })
 
-  // Answer structured questions from the QuestionCard UI
-  registerMethod('chat:answer-question', async (payload: unknown) => {
-    const { answers, agentId: ansAgentId, conversationId: ansConvId } = payload as { answers: Record<string, string>; agentId?: string; conversationId?: string }
-    const effectiveAgentId = ansAgentId ? validateAgentId(ansAgentId) : 'general'
-    const conversationId = ansConvId ? validateConversationId(ansConvId) : await getActiveConversationId(effectiveAgentId)
-    if (!hasPendingQuestion(effectiveAgentId)) {
-      log.web.warn('chat:answer-question received but no pending question', { agentId: effectiveAgentId })
-      return
-    }
-    log.web.info('chat:answer-question received', { answerCount: Object.keys(answers).length, agentId: effectiveAgentId })
-    // Persist user's answers as a UI-only chat entry
-    const answerLines = Object.entries(answers).map(([k, v]) => `${k}: ${v}`).join('\n')
-    await chatHistory.addNotification({ role: 'user', content: answerLines, agentId: effectiveAgentId, conversationId })
-    broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
-      entry: { role: 'user', content: answerLines, source: 'question-answer' },
-      agentId: effectiveAgentId,
-      conversationId,
-    })
-    submitAnswers(answers, effectiveAgentId)
-  })
-
   registerMethod('chat', async (payload: unknown) => {
     const { message, taskContext, images, imageRefs, source: payloadSource, mode, planModeFirst, planModeOff, agentId: payloadAgentId, conversationId: payloadConvId } = payload as ChatPayload
     const agentId = payloadAgentId ? validateAgentId(payloadAgentId) : 'general'
@@ -645,23 +617,6 @@ export function registerChatRpc(): void {
     const conversationId = payloadConvId ? validateConversationId(payloadConvId) : await getActiveConversationId(agentId)
     const chatSource = payloadSource === 'quick-start' ? 'quick-start' as const : undefined
     log.web.info('chat message received', { taskId: taskContext?.id, messageLength: message.length, imageCount: (imageRefs?.length ?? 0) || (images?.length ?? 0), source: payloadSource ?? 'chat', agentId, conversationId })
-
-    // ── Intercept: if this agent is waiting for a question answer, route here ──
-    // Something is already waiting on an answer, not on a new turn: enqueueing one
-    // would hold the single turn slot while the waiter never resolves. Resolve the
-    // pending question directly instead.
-    if (hasPendingQuestion(agentId)) {
-      log.web.info('routing chat message to pending user_ask', { messageLength: message.length, agentId })
-      // Persist the user's answer as a UI-only entry so it appears in chat history
-      await chatHistory.addNotification({ role: 'user', content: message, agentId, conversationId })
-      broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
-        entry: { role: 'user', content: message, source: 'question-answer' },
-        agentId,
-        conversationId,
-      })
-      submitTextAnswer(message, agentId)
-      return
-    }
 
     // Pre-process images outside the queue (save to disk, prepare base64 blocks).
     // This avoids holding the queue while doing disk I/O for image uploads.

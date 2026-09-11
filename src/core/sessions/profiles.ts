@@ -8,7 +8,7 @@
  */
 
 import path from 'node:path'
-import { buildRoleSection, buildWorkModesSection } from '../../agent/context.js'
+import { buildRoleSection, buildWorkModesSection } from './persona-sections.js'
 import type { SessionProfile } from '../types.js'
 
 /**

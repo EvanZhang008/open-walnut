@@ -1,5 +1,15 @@
 # Remove the main agent: every conversation with Walnut is a task-backed session
 
+## Outcome
+
+What shipped went further than this plan: `src/agent/` is gone, not kept. The plan assumed the in-process agent loop would survive for its eight non-chat users (P3 says "`src/agent/` stays", and the kept-verbatim table lists it), and each of those users was moved instead. Every AI turn Walnut runs is now a Claude Code CLI session: the Ask Walnut chat, a routine's isolated job (`walnut-agent` executor), an agent a `run_agent` hook dispatches, heartbeat, and cron. Action agents (`initProcessor.targetAgent`) are dropped, and a stored job that still names one is recorded as a failed run naming the `claude-code` executor as the replacement.
+
+The single model calls that never needed a tool loop moved to `src/model/` (`sendMessage` / `sendMessageStream`, the provider registry, the model catalog, the protocol adapters). They serve Settings, voice transcription, session titles, quick parses, working-memory updates, compaction summaries, and the overview maintainer. The one in-process tool loop left is `runMicroAgent` (`src/model/micro-agent.ts`), used only by the routine watcher executor with read-only Walnut ops plus allowlisted plugin tools, because a watcher runs hundreds of times a day and cannot pay a CLI spawn per tick.
+
+Also different from the plan: `config.agent.provider` is gone as designed, and so are the in-process-only keys `agent.cache`, `agent.model`, `agent.session_summarizer_agent`, `agent.session_triage_agent`, and `agent.background_review`; dream consolidation and `src/core/dream.ts` are deleted rather than replaced; `walnut chat` is deleted (the REPL is `claude`, the one-shot is `walnut tools call`); and a cloud replica with the primary unreachable answers an iOS chat turn with an SSE `error` frame instead of any degraded local answer.
+
+Read the rest of this document as the plan it was, not as a description of the code.
+
 ## Executive summary
 
 Walnut drops the "main agent" (the Personal AI lane, its conversations, and its private chat history). The only way to talk to Walnut becomes an **Ask Walnut session**: an ordinary claude-code session that carries the Walnut persona profile, is bound to a task flagged `walnut_agent: true`, and lives under the `Ask Walnut` project. The home page keeps a chat slot, but that slot is now the regular `SessionPanel` over the selected Ask Walnut task, with one addition: a ≡ button leading its title row opens a drawer of the asks to switch between (a search box on top, `New chat` at the bottom, the Claude app's sidebar shape). Proactive work (routines, heartbeat, future triggers) starts an ad hoc session instead of writing into a hidden conversation. Memory stops depending on a long-lived agent: every session appends observations, and a scheduled consolidation session distills them into `MEMORY.md` and `USER.md` under the existing budgets.

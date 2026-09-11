@@ -73,8 +73,7 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 |---|---|---|---|
 | **Node.js** | >= 22 | [nodejs.org](https://nodejs.org/) or `nvm install 22` | Runtime for the server and frontend build |
 | **npm** | (comes with Node.js) | — | Package manager for dependencies |
-| **Claude Code CLI** | Latest | `npm install -g @anthropic-ai/claude-code` | Required for coding sessions (chat, tasks, and memory work without it) |
-| **API Key** | — | See [Provider Configuration](#provider-configuration) | Either an Anthropic API key or AWS Bedrock credentials |
+| **Claude Code CLI** | Latest | `npm install -g @anthropic-ai/claude-code` | Every AI turn is a `claude` session: the home page chat, coding sessions, scheduled routines, and the agents a session hook dispatches |
 | **Disk space** | ~2 GB free | — | For the embedding model (~1.16 GB) and search index |
 
 > **Native modules**: Open Walnut uses `better-sqlite3` (for search index) and `sharp` (for image processing). Both ship prebuilt binaries for macOS, Linux, and Windows — no compiler needed in most cases. If prebuilds fail on your platform, you may need Python 3 and a C++ compiler (`xcode-select --install` on macOS, `build-essential` on Ubuntu).
@@ -110,21 +109,22 @@ export PATH="$HOME/.local/node22/bin:$PATH"   # add to your shell profile too
 | Dependency | How to install | Why | Without it |
 |---|---|---|---|
 | **Git** | macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`, or [git-scm.com](https://git-scm.com/) | Cloning the repo, and auto-backup of `~/.open-walnut/` every 30 seconds | The npm install route needs no git. Data is still saved locally, just not version-controlled. |
+| **Provider key** | See [Provider Configuration](#provider-configuration) | Sends the small background single calls (session titles, summaries, voice cleanup, quick parses) to Anthropic, Bedrock, or another provider instead of your Claude Code login | Those calls go through Claude Code, which is the default. Chat, coding sessions, and routines never read a key. |
 | **Bun** | [bun.sh](https://bun.sh/) | Prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Claude Code sessions still work: the daemon deploys from source instead, and `npm start` says so and carries on. Non-Claude providers that go over ACP need the worker bundle, so install Bun and re-run `npm run build:daemon` before using those. Not needed at all with the npm install route, which ships the bundle prebuilt. |
 
 ### One AI login: Claude Code
 
-Open Walnut uses AI in three places, and by default all three run on the Claude Code you already have:
+Open Walnut uses AI in three places, and by default all three run on the Claude Code you already have. Every AI turn with tools is a `claude` session; Walnut has no agent loop of its own.
 
 | What | How it runs | How to authenticate |
 |---|---|---|
 | **Ask Walnut** (the Walnut agent, on the home page) | A long-lived `claude` session | Run `claude` once in your terminal and sign in |
-| **Coding sessions** | Separate `claude` CLI processes | Same login |
-| **Background helpers** (summaries, titles, subagents) | Short `claude -p` calls | Same login, when Claude Code is installed |
+| **Coding sessions, routines, hook-dispatched agents** | Separate `claude` CLI processes | Same login |
+| **Background single calls** (titles, summaries, voice cleanup, quick parses) | One short model call each, no tools | Same login by default, or a provider key |
 
 Claude Code brings its own login, whatever kind it is: an Anthropic account, Bedrock (`CLAUDE_CODE_USE_BEDROCK=1` in `~/.claude/settings.json`), or Vertex. Walnut inherits it as-is and never asks for a key of its own. The first-run banner names what it found ("Walnut runs on your Claude Code, signed in with Bedrock (us-west-2)").
 
-Settings → Ask Walnut Provider is the one place this is chosen, and it means exactly one thing: what Ask Walnut runs on. Pick Claude Code (the default) and Ask Walnut is a `claude` session; pick any other provider and Ask Walnut runs in the built-in agent loop calling that provider directly, with the background helpers following along. Coding sessions use your Claude Code either way. The paths below set up such a provider.
+Settings → Ask Walnut Provider is the one place this is chosen, and it means exactly one thing: where the background single calls go. Ask Walnut and every other session run on Claude Code no matter what you pick, so choosing a provider here never changes who answers you in the chat: it changes which model writes your session titles, the compaction summaries, the voice transcript cleanup, and the small parses behind the draft forms. The paths below set up such a provider.
 
 ---
 
@@ -142,7 +142,7 @@ This installs both backend and frontend dependencies. The first `npm start` will
 
 ## Provider Configuration (optional)
 
-With Claude Code installed there is nothing to configure: it is the default provider for Ask Walnut and everything behind it. The paths below are for running Ask Walnut on a provider directly instead (Settings → Ask Walnut Provider, or `agent.main_provider` in `~/.open-walnut/config.yaml`). Choose **one**.
+With Claude Code installed there is nothing to configure: it is the default provider for the background single calls too. The paths below are for sending those calls to a provider directly instead (Settings → Ask Walnut Provider, or `agent.main_provider` in `~/.open-walnut/config.yaml`). Choose **one**.
 
 ### Path A: Anthropic API key
 
@@ -194,7 +194,7 @@ providers:
 
 ### Verify Your Setup
 
-After starting the server (`npm start`), open [http://localhost:3456](http://localhost:3456) and type "hello" in the chat. If the agent replies, your provider is configured correctly.
+After starting the server (`npm start`), open [http://localhost:3456](http://localhost:3456) and go to Settings → Ask Walnut Provider, then press Test Connection on the provider you configured. A green result means the key, region, and model are all usable. The home page chat is not the test for this: it runs on Claude Code either way.
 
 ---
 
@@ -360,7 +360,7 @@ Active sessions stream in real-time. You can:
 
 ## Chatting with the Agent
 
-The home page chat (`/`) is your primary interface. The agent has 30+ tools and can:
+The home page chat (`/`) is your primary interface. Every conversation there is a `claude` session bound to its own task, so it has Claude Code's full tool belt plus Walnut's own operations, mounted as an MCP server. It can:
 
 - **Manage tasks** — create, query, update, complete, and organize tasks
 - **Search memory** — find information across your notes, daily logs, and session summaries
@@ -373,9 +373,9 @@ The home page chat (`/`) is your primary interface. The agent has 30+ tools and 
 
 Click a task in the Todo panel to set it as your **focused task**. The agent sees the task's full context (description, subtasks, notes, project memory) with every message you send. This makes conversations much more productive — no need to re-explain what you're working on.
 
-### Inline Subagents
+### Helper Agents
 
-The agent can spawn lightweight subagents for quick AI-assisted tasks without creating a full session. These appear as collapsible boxes in the chat. Useful for things like "summarize this file" or "draft a commit message."
+A conversation delegates side work to Claude Code's own agents, and the chat shows a chip with how many are running; opening it gives a Background tasks panel with each one's transcript. Your named agents (the `/agents` page) are dispatched by session hooks rather than from the chat: a `run_agent` hook starts a fresh `claude` session carrying that agent's persona, which shows up on the board like any other session.
 
 ---
 
@@ -398,7 +398,7 @@ Open Walnut accumulates knowledge over time. The more you use it, the smarter it
 
 ### Working Memory
 
-Working memory is a real-time scratchpad that the agent maintains during conversations. It has 7 structured sections — Active Focus, User Requests, Decisions & Rationale, Struggles & Breakthroughs, Session Status, Open Threads, and Learnings. The agent updates it continuously as you chat, so context survives even when conversation history gets compacted. Working memory snapshots are archived to `memory/compaction/` automatically.
+Working memory is a scratchpad Walnut keeps for the conversation you are in. It has 7 structured sections: Active Focus, User Requests, Decisions & Rationale, Struggles & Breakthroughs, Session Status, Open Threads, and Learnings. Once a chat turn grows past a size threshold, Walnut asks the model for a rewritten file in one call and saves it only when every section is present and inside its budget, so context survives even when conversation history gets compacted. Working memory snapshots are archived to `memory/compaction/` automatically.
 
 ### Searching Memory
 
@@ -458,7 +458,7 @@ Or configure via the Settings page. Three schedule types:
 | `every` | `30m`, `2h`, `1d` | Recurring interval |
 | `cron` | `0 9 * * 1-5` (+ timezone) | Complex schedules (cron expression) |
 
-Cron jobs can trigger agent turns (the agent runs a task) or system events.
+Each job picks an executor, and every executor that thinks runs a `claude` session: `main-agent` sends the instructions into your Ask Walnut conversation, `walnut-agent` starts a fresh Personal AI session of its own with its own task, and `claude-code` starts a coding session in a directory you name (local or on a remote host).
 
 ### Skills
 
@@ -598,8 +598,12 @@ walnut lists create <name>          # Create a new list
 walnut lists rename <id> <name>     # Rename a list
 walnut lists delete <id>            # Delete a list
 
+# Operations (what sessions and agents call)
+walnut tools list                   # Catalog: name + one-line summary
+walnut tools help <op>              # Parameters and call syntax for one operation
+walnut tools call <op> '{json}'     # Run one operation, print its JSON result
+
 # Other
-walnut chat                         # Chat with agent in terminal
 walnut auth                         # Authenticate with external services
 walnut sync                         # Sync with external integrations
 walnut logs                         # View recent logs
@@ -609,6 +613,9 @@ walnut logs --json                  # Raw JSON output
 
 All commands support `--json` for structured output.
 
+There is no `walnut chat`. For a terminal conversation run `claude`, which is where every
+Walnut session runs anyway; for a single machine-readable answer use `walnut tools call`.
+
 ---
 
 ## Troubleshooting
@@ -617,11 +624,11 @@ All commands support `--json` for structured output.
 
 **Symptoms**: You type a message but get no response, or see an error.
 
-**Fixes**:
-1. Check your API key: `echo $ANTHROPIC_API_KEY` (should not be empty)
-2. Check server logs: `walnut logs -s agent` for error details
-3. If using Bedrock, verify your AWS credentials: `aws sts get-caller-identity`
-4. Check `~/.open-walnut/config.yaml` for provider configuration errors
+**Fixes**: the chat is a `claude` session, so start with Claude Code, not with a key.
+1. Verify Claude Code CLI: `claude --version`, then run `claude` once and check it answers
+2. Check session logs: `walnut logs -s session` for the spawn and the error it reported
+3. Check the session panel's own status pill: a red one names the failure (bad cwd, host unreachable, session limit reached)
+4. Only if titles and summaries are also failing, check the provider behind the background single calls: `~/.open-walnut/config.yaml`, and Settings → Ask Walnut Provider → Test Connection
 
 ### Session fails to start
 

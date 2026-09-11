@@ -95,12 +95,12 @@ describe('session mode registry', () => {
     expect(VALID_SESSION_MODE_IDS.has('bypassPermissions')).toBe(false) // CLI value, not an id
   })
 
-  it('exposes every mode to the Personal AI session tools (no hardcoded subset)', () => {
-    // task_session_create and session_resume each hardcoded their own subset
-    // (['plan','bypass'] and ['bypass','accept','plan']), so the Personal AI could
-    // not request modes the UI offered. Both now derive from the registry.
-    const src = read('src/agent/tools.ts')
-    expect(src).toContain('enum: SESSION_MODE_ENUM')
+  it('exposes every mode to the session ops (no hardcoded subset)', () => {
+    // Two session tools each hardcoded their own subset (['plan','bypass'] and
+    // ['bypass','accept','plan']), so a caller could not request modes the UI
+    // offered. The ops that replaced them derive their enum from the registry.
+    const src = read('src/ops/work.ts')
+    expect(src).toContain("z.enum(SESSION_MODE_IDS)")
     expect(src).not.toMatch(/enum:\s*\['plan',\s*'bypass'\]/)
     expect(src).not.toMatch(/enum:\s*\['bypass',\s*'accept',\s*'plan'\]/)
   })

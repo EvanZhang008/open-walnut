@@ -59,6 +59,9 @@ import type {
   ProtocolAdapter,
 } from '../../agent/providers/types.js'
 
+/** Plugins already warned about agentContext — once each, not once per reload. */
+const agentContextWarned = new Set<string>()
+
 interface ContributionCollector {
   sync: IntegrationSync | null
   claim: { fn: ProjectClaimFn; priority: number } | null
@@ -940,6 +943,12 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
       agentContext(text: string) {
         if (!text.trim()) throw new Error('Plugin agent context must not be empty')
+        // Collected, then read by nothing: a session gets its instructions from
+        // skills. Warned once per plugin because only the author can fix it.
+        if (!agentContextWarned.has(pluginId)) {
+          agentContextWarned.add(pluginId)
+          context.logger.warn('registry.agentContext is deprecated and reaches no model — register a skill instead')
+        }
         contextSnippets.push(text.trim())
         contributions.agentContext = contextSnippets.join('\n')
         return own(toDisposable(() => {

@@ -2,8 +2,8 @@
  * /api/v1 Personal AI conversation management (Wave 1) — personal-ai-v1.ts. Bare
  * express + supertest against the real conversations store on an isolated
  * temp home. Verifies rename/pin PATCH, the main-conversation delete guard,
- * stop (agent-abort-registry + pending-question cancel), answer semantics
- * (persist + broadcast + submit), and the frozen error shape.
+ * stop (the conversation's lane session is what gets interrupted), and the frozen
+ * error shape.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -26,8 +26,6 @@ import { personalAiV1Router } from '../../../src/web/routes/personal-ai-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { createConversation, getMainConversationId, listConversations } from '../../../src/core/conversations.js'
-import { registerAgentTurnAbort } from '../../../src/core/agent-abort-registry.js'
-import { waitForAnswers, hasPendingQuestion, cancelQuestion } from '../../../src/core/agent-question.js'
 
 function createApp() {
   const app = express()
@@ -41,11 +39,9 @@ beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   broadcastMock.mockReset()
-  cancelQuestion('general') // clear any pending question left by a prior test
 })
 
 afterEach(async () => {
-  cancelQuestion('general')
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -98,77 +94,53 @@ describe('DELETE /api/v1/conversations/:id', () => {
 })
 
 describe('POST /api/v1/conversations/:id/stop', () => {
-  it('aborts every registered turn for the agent and reports the count', async () => {
-    const meta = await createConversation('general')
-    const c1 = new AbortController()
-    const c2 = new AbortController()
-    registerAgentTurnAbort('general', c1)
-    registerAgentTurnAbort('general', c2)
-
-    const res = await request(createApp()).post(`/api/v1/conversations/${meta.id}/stop`)
-    expect(res.status).toBe(200)
-    expect(res.body.stopped).toBe(2)
-    expect(c1.signal.aborted).toBe(true)
-    expect(c2.signal.aborted).toBe(true)
-  })
-
-  it('cancels a pending user_ask question and reports it', async () => {
-    const meta = await createConversation('general')
-    const { promise } = waitForAnswers([{ question: 'Pick one?' }], 'general')
-    promise.catch(() => { /* cancellation rejects — expected */ })
-    expect(hasPendingQuestion('general')).toBe(true)
-
-    const res = await request(createApp()).post(`/api/v1/conversations/${meta.id}/stop`)
-    expect(res.status).toBe(200)
-    expect(res.body.questionCancelled).toBe(true)
-    expect(hasPendingQuestion('general')).toBe(false)
-  })
-
-  it('stop with nothing active is a harmless no-op (0 stopped)', async () => {
+  // A turn is answered by the conversation's lane session, so the only thing
+  // stop can interrupt is that session. No lane record yet ⇒ nothing to stop,
+  // and `stopped` has to say so rather than claim a turn was cut short.
+  it('reports 0 stopped when the conversation has no lane session', async () => {
     const meta = await createConversation('general')
     const res = await request(createApp()).post(`/api/v1/conversations/${meta.id}/stop`)
     expect(res.status).toBe(200)
     expect(res.body.stopped).toBe(0)
+  })
+
+  it('keeps both frozen response keys and their types', async () => {
+    const meta = await createConversation('general')
+    const res = await request(createApp()).post(`/api/v1/conversations/${meta.id}/stop`)
+    // The phone decodes `stopped: Int` + `questionCancelled: Bool`, both required:
+    // dropping a key or changing a type breaks its stop button, not just a label.
+    expect(typeof res.body.stopped).toBe('number')
     expect(res.body.questionCancelled).toBe(false)
+  })
+
+  it('404 not_found for an unknown conversation', async () => {
+    const res = await request(createApp()).post('/api/v1/conversations/conv-does-not-exist/stop')
+    expect(res.status).toBe(404)
+    expect(res.body.error.code).toBe('not_found')
   })
 })
 
-describe('POST /api/v1/conversations/:id/answer', () => {
-  it('resolves the pending question with the submitted answers', async () => {
-    const meta = await createConversation('general')
-    const { promise } = waitForAnswers([{ question: 'Deploy now?', header: 'Deploy' }], 'general')
-
-    const res = await request(createApp())
-      .post(`/api/v1/conversations/${meta.id}/answer`)
-      .send({ answers: { Deploy: 'yes' } })
-    expect(res.status).toBe(200)
-    expect(res.body).toEqual({ ok: true })
-    await expect(promise).resolves.toEqual({ Deploy: 'yes' })
-    // Mirrors chat:answer-question — the answers land in history live.
-    expect(broadcastMock).toHaveBeenCalledWith(
-      'chat:history-updated',
-      expect.objectContaining({
-        entry: expect.objectContaining({ role: 'user', source: 'question-answer' }),
-      }),
-    )
-  })
-
-  it('409 conflict when no question is pending', async () => {
+describe('POST /api/v1/conversations/:id/answer — retired, still mounted', () => {
+  // A v1 path never disappears. Nothing can hold a structured question any more,
+  // so the honest answer is a refusal the phone already handles (it keeps the
+  // typed/dictated text instead of reporting it delivered) — never a 404, which
+  // an older build reads as "the server is broken".
+  it('409 conflict for a real conversation', async () => {
     const meta = await createConversation('general')
     const res = await request(createApp())
       .post(`/api/v1/conversations/${meta.id}/answer`)
-      .send({ answers: { q: 'a' } })
+      .send({ answers: { Answer: 'yes' } })
     expect(res.status).toBe(409)
     expect(res.body.error.code).toBe('conflict')
+    expect(res.body.error.message).toMatch(/no question to answer/i)
   })
 
-  it('400 for a malformed answers payload', async () => {
-    const meta = await createConversation('general')
-    for (const bad of [{}, { answers: {} }, { answers: 'text' }, { answers: { k: 42 } }]) {
-      const res = await request(createApp()).post(`/api/v1/conversations/${meta.id}/answer`).send(bad)
-      expect(res.status).toBe(400)
-      expect(res.body.error.code).toBe('bad_request')
-    }
+  it('still 404s an unknown conversation rather than refusing it', async () => {
+    const res = await request(createApp())
+      .post('/api/v1/conversations/conv-does-not-exist/answer')
+      .send({ answers: { Answer: 'yes' } })
+    expect(res.status).toBe(404)
+    expect(res.body.error.code).toBe('not_found')
   })
 })
 

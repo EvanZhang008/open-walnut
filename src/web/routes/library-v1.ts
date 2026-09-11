@@ -66,7 +66,7 @@ function agentWriteRefused(res: Response): boolean {
 // MUST be registered before /:id-shaped agent routes ("meta" is not an id).
 libraryV1Router.get('/agents/meta/tools', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { getToolSchemas } = await import('../../agent/tools.js')
+    const { getToolSchemas } = await import('../../core/tools/read-only.js')
     res.json({ tools: getToolSchemas().map((t) => t.name) })
   } catch (err) {
     next(err)

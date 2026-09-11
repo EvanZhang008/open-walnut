@@ -6,8 +6,8 @@
  *   (registry default_cwd) → ⑤ project memory dir (single level: memory/projects/<proj>,
  *   'inbox' for a task with no project)
  *
- * The chain itself lives in three lock-stepped copies (src/agent/tools.ts
- * resolveSessionContext + two in claude-code-session.ts) and is not exported, so
+ * The chain itself lives in two lock-stepped copies (resolveSessionContext in
+ * claude-code-session.ts) and is not exported, so
  * these tests replicate it against the real task-manager / registry.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'

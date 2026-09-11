@@ -6,23 +6,21 @@
 
 ## Architecture Diagram
 
-Event Bus is the backbone. Producers push events in; subscribers react. The Agent uses tools to read/write the Core data layer, which calls into integrations.
+Event Bus is the backbone. Producers push events in; subscribers react. Every AI turn is a Claude Code session, and a session reaches the Core data layer by calling Walnut's operations over the Walnut MCP server; Core calls into integrations.
 
 ```
   Event Producers (push)              Event Bus                 Subscribers (react)
 ┌─────────────────────┐        ┌─────────────────┐        ┌─────────────────────────┐
 │ Claude Code hooks   │──emit─▶│                 │◀──sub──│  Web GUI (React SPA)    │
-│  (on-stop,on-compact│        │                 │◀──sub──│  TUI (terminal)         │
-│ Cron jobs           │──emit─▶│   Event Bus     │◀──sub──│  CLI                    │
-│ MS To-Do sync       │──emit─▶│                 │        │                         │
-│ Core mutations      │──emit─▶│  pub/sub        │◀──sub──│  Main Agent             │
-│ Chat / Web GUI      │──emit─▶│  dest routing   │        │  (reacts to events,     │
-│                     │        │  coalescing     │◀──sub──│   can trigger actions)  │
-└─────────────────────┘        └─────────────────┘        │  Session Runner         │
-                                                          │  (spawns claude -p)     │
-                                                          └────────────┬────────────┘
+│  (on-stop,on-compact│        │                 │◀──sub──│  Session hooks          │
+│ Cron jobs           │──emit─▶│   Event Bus     │◀──sub──│  Subagent runner        │
+│ MS To-Do sync       │──emit─▶│                 │        │  (a session per         │
+│ Core mutations      │──emit─▶│  pub/sub        │        │   run_agent hook)       │
+│ Sessions / Web GUI  │──emit─▶│  dest routing   │◀──sub──│  Session Runner         │
+│                     │        │  coalescing     │        │  (spawns claude -p)     │
+└─────────────────────┘        └─────────────────┘        └────────────┬────────────┘
                                                                        │
-                                                            Agent uses tools (~30)
+                                                        Sessions call Walnut ops
                                                                        │
                                                                        ▼
                                                           ┌────────────────────────┐
@@ -47,30 +45,39 @@ Event Bus is the backbone. Producers push events in; subscribers react. The Agen
                                                           └────────────────────────┘
 ```
 
-## Agent Loop Diagram
+## AI Turn Diagram
+
+There is no in-process agent loop. A Personal AI turn is a message written into a live
+Claude Code session, and the CLI owns the tool loop, the context window, and the transcript.
 
 ```
-User message
+User message in the Ask Walnut chat
      │
      ▼
-buildSystemPrompt()              ◀── memory context + skills + config
+runLaneTurn()                    ◀── src/core/sessions/lane-turn.ts
      │
      ▼
-prepareWithCache()               ◀── prompt caching (Bedrock)
+lane session for this conversation
+     │                           ◀── persona from buildLaneProfile(): role section,
+     │                               standing memory, skills index, walnut MCP mount
+     ▼
+daemon writes the message to the CLI's FIFO stdin
      │
      ▼
-sendMessage() to Bedrock         ◀── model: claude-opus-4-6
-     │
+claude -p --output-format stream-json
+     │                           ◀── the CLI runs its own tool rounds, compacts its
+     │                               own context, writes its own transcript JSONL
      ▼
-Extract response blocks
+JsonlTailer → bus: SESSION_TEXT_DELTA / SESSION_TOOL_USE / SESSION_RESULT
      │
-     ├── text blocks → return to user
+     ├── streamed to the browser and to /api/v1 SSE clients
      │
-     └── tool_use blocks ──▶ executeTool() ──▶ tool_result
-                                                    │
-                                              feed back to model
-                                              (loop, max 300 rounds)
+     └── the turn's answer is persisted in chat history for the human record
 ```
+
+The same launch path serves every other AI turn Walnut runs: `quickStartSession({
+walnutAgent: true })` for a routine's isolated job and for an agent a `run_agent` hook
+dispatches, and an ordinary coding session for the `claude-code` executor.
 
 ## Session Start Diagram
 
@@ -109,22 +116,25 @@ Extract response blocks
 ## Subagent Flow Diagram
 
 ```
-Main Agent ──▶ start_subagent tool ──▶ bus: SUBAGENT_START
+run_agent hook action ──▶ bus: SUBAGENT_START
                                               │
                                      SubagentRunner listens
-                                     (semaphore: max 20 concurrent)
+                                     (semaphore: max 20 launches)
                                               │
                                               ▼
                                      resolves AgentDefinition
-                                     builds custom system prompt + tools
                                               │
                                               ▼
-                                     runAgentLoop() (same code as main agent)
+                                     quickStartSession({ walnutAgent: true,
+                                       agentId, preassignedSessionId: runId })
                                               │
                                      ┌────────┴────────┐
                                      ▼                 ▼
-                              SUBAGENT_RESULT    SUBAGENT_ERROR
-                              → main-ai          → main-ai
+                              SUBAGENT_STARTED   SUBAGENT_ERROR
+                                              │
+                                     a real session on the board:
+                                     its own task, its own transcript,
+                                     `subagent:send` = a session send
 ```
 
 ## Web GUI Diagram
@@ -148,7 +158,7 @@ Browser (React SPA)                    Server (Express 5)
 
 ## Concurrency & File Locking
 
-JSON data stores (`tasks.json`, `sessions.json`, `chat-history.json`, `config.yaml`) are written by multiple concurrent callers: REST routes, agent loop, cron jobs, session runner, health monitor, and Claude Code hook child processes.
+JSON data stores (`tasks.json`, `sessions.json`, `chat-history.json`, `config.yaml`) are written by multiple concurrent callers: REST routes, MCP ops called by sessions, cron jobs, session runner, health monitor, and Claude Code hook child processes.
 
 **Two-layer write protection** prevents lost-update races:
 
@@ -165,9 +175,9 @@ JSON data stores (`tasks.json`, `sessions.json`, `chat-history.json`, `config.ya
 | `cron-jobs.json` | Yes (own lock) | No | No hook writes to this file |
 | SQLite stores | N/A | N/A | SQLite has its own locking |
 
-3. **Main Agent Turn Queue** (`enqueueMainAgentTurn` in `src/web/agent-turn-queue.ts`) — serializes all main-agent turns that share `chat-history.json` (WS chat, cron main-session). Max concurrency = 1. Callers with independent history (isolated cron, subagents, compaction summarizer) bypass the queue. Session triage runs as a dedicated subagent (not through the main turn queue).
+3. **Personal AI Turn Queue** (`enqueueMainAgentTurn` in `src/web/agent-turn-queue.ts`): serializes the turns that share one conversation's `chat-history.json` entries (WS chat, a `main-agent` cron job, heartbeat, triage). Max concurrency = 1. Callers with independent history (a routine's isolated session, hook-dispatched agents, the compaction summarizer) bypass the queue.
 
-4. **Token Budget Guard** (`guardBudget` in `src/agent/token-budget.ts`) — checks full API payload (system + tools + messages) against 168K budget before each model call (round 1 + every 5th round). If over budget, `emergencyTrim` drops oldest messages while preserving role alternation and tool_use/tool_result pairs.
+Nothing guards a token budget any more: the CLI owns each session's context window and compacts it itself, so there is no Walnut-side payload to trim.
 
 ---
 
@@ -230,7 +240,7 @@ There is exactly ONE field and one spelling: read `task.unread`, write `{ unread
 
 ### How the agent uses memory
 
-When the agent's system prompt is built (`src/agent/context.ts`), it includes:
+A Personal AI session's persona is built when the session starts (`buildLaneProfile` in `src/core/sessions/personal-ai-lane.ts`, section builders in `src/core/sessions/persona-sections.ts`) and carries a standing-memory block (`buildLaneMemoryContext`):
 1. **Global memory** — full content of `MEMORY.md`
 2. **All project summaries** — YAML frontmatter from every project's `MEMORY.md`
 3. **Recent daily logs** — most-recent-first, within a 10k token budget (90-day lookback). Oversized days are truncated by entry boundary (newest entries kept) rather than skipped entirely.
@@ -239,26 +249,28 @@ When the agent needs to find something specific, it uses `task_search` / `memory
 
 ---
 
-## Agent System — Internals
+## Model Layer: Internals
 
+`src/model/` holds every direct model call Walnut makes. It has no tool loop and no conversation state: `sendMessage` / `sendMessageStream` take a system prompt plus messages and return one answer. Callers are Settings (connection tests, the model catalog), voice transcription, session titles, quick parses behind the draft forms, working-memory updates, compaction summaries, and the overview maintainer.
+
+- **Files**: `model.ts` (the two entry points) and `providers/` (`registry.ts`, `model-catalog.ts`, `retry.ts`, and one adapter per protocol: Anthropic Messages, Bedrock, OpenAI Chat, Google Generative AI, Ollama, and the `claude` CLI).
+- **Provider choice**: `agent.main_provider` names the provider, `agent.main_model` and `agent.fast_model` name the models, and the default provider is the `claude` CLI, so an install with no key still gets titles and summaries. There is no engine switch: which provider is configured never changes who answers a chat turn.
 - **Auth**: Bearer token from `config.yaml` → `AWS_BEARER_TOKEN_BEDROCK` env → AWS credential chain. Auto-retry on 403.
-- **Streaming**: Always uses `sendMessageStream()`. Max 300 tool rounds. Auto-continues on `max_tokens` (up to 3x).
-- Tools can return text or image content blocks (base64 images for vision model perception).
-- **Image compression** (`src/utils/image-compress.ts`): `compressForApi(buffer, mimeType)` auto-compresses images to fit Bedrock's 5 MB base64 limit. Strategy: GIF→WebP (preserves animation), others→JPEG quality 85→30, then halve dimensions up to 3×. Called by `read_file` tool (vision reads) and `hydrateImagePaths()` (chat history). `MAX_BASE64_BYTES = 5_000_000` is exported for consistent guard checks across callers. Requires `sharp` npm package.
+- **Image compression** (`src/utils/image-compress.ts`): `compressForApi(buffer, mimeType)` auto-compresses images to fit Bedrock's 5 MB base64 limit. Strategy: GIF→WebP (preserves animation), others→JPEG quality 85→30, then halve dimensions up to 3×. Called by `hydrateImagePaths()` (chat history) and the image REST routes. `MAX_BASE64_BYTES = 5_000_000` is exported for consistent guard checks across callers. Requires `sharp` npm package.
 
-### What the agent knows
+The one exception is `runMicroAgent` (`src/model/micro-agent.ts`): a small self-contained loop over `sendMessage` that executes tool calls for a bounded number of rounds. Only the routine watcher executor uses it, and only with read-only Walnut ops plus allowlisted plugin tools. See the watcher section below for why that one case cannot pay a CLI spawn.
 
-The system prompt (`src/agent/context.ts`) gives the agent:
+### What the Personal AI knows
+
+Its session persona (`buildLaneProfile`) carries:
 - User's name and current date/time
 - All project summaries (names, descriptions)
 - Recent daily activity logs (10k token budget)
 - Global memory content
-- Available skills
-- Full tool descriptions
+- The skills index
+- The Walnut MCP mount, which is how it reaches tasks, memory, search, and sessions
 
-This means the agent has context on **all your tasks, all your projects, and your recent activity** — whether work or personal.
-
-See `src/agent/AGENTS.md` for retry/abort/caching/subagent internals.
+This means the agent has context on **all your tasks, all your projects, and your recent activity**, whether work or personal. Tool schemas are the CLI's own plus the MCP ops; Walnut does not assemble a tool list for a turn.
 
 ---
 
@@ -281,7 +293,7 @@ Before injecting skills into the prompt, each skill is checked:
 - `requires.env`: Are required env vars set?
 - `requires.platform`: Does the OS match? (darwin, linux, win32)
 
-Only eligible skills appear in the system prompt as `<available_skills>` XML. The agent reads the SKILL.md of the most relevant skill before responding.
+Only eligible skills appear in the session persona as `<available_skills>` XML, and the agent reads the SKILL.md of the most relevant one before responding. The persona's index deliberately covers only the first two locations plus the shipped `dist/data/skills/`: `~/.claude/skills/` is the CLI's own store, which the CLI discovers natively, so injecting it again would duplicate its context. Management and read scope still covers all four, so a Claude-store skill stays listable and readable (`WALNUT_PERSONAL_AI_CLAUDE_SKILLS=1` opts back in).
 
 ---
 
@@ -411,7 +423,7 @@ A pluggable hook system that reacts to session bus events. Replaces hardcoded tr
 
 ## Heartbeat System — Implementation
 
-**Checklist CRUD**: AI tools `get_heartbeat_checklist` / `update_heartbeat_checklist` (in `src/agent/tools/heartbeat-tools.ts`) and REST endpoints `GET/PUT /api/heartbeat/checklist` (in `src/web/routes/heartbeat.ts`) both use shared `readHeartbeatChecklist()` / `writeHeartbeatChecklist()` from `src/heartbeat/checklist-io.ts`. Settings page (`web/src/pages/SettingsPage.tsx`) has a textarea editor for HEARTBEAT.md.
+**Checklist CRUD**: REST endpoints `GET/PUT /api/heartbeat/checklist` (in `src/web/routes/heartbeat.ts`) use `readHeartbeatChecklist()` / `writeHeartbeatChecklist()` from `src/heartbeat/checklist-io.ts`. Settings page (`web/src/pages/SettingsPage.tsx`) has a textarea editor for HEARTBEAT.md. A heartbeat run is a lane turn, so its own edits go through the session, not through a Walnut-side tool.
 
 **Key files**: `src/heartbeat/` (types, runner, checklist-io, barrel), `src/web/routes/heartbeat.ts` (REST), `src/web/server.ts` (integration), `web/src/hooks/useChat.ts` (WS handler), `web/src/components/chat/ChatMessage.tsx` (rendering), `web/src/styles/globals.css` (styling).
 
@@ -436,11 +448,11 @@ src/core/cron/
 
 ### Init Processor
 
-`InitProcessor`: Optional pre-step that runs a file-based action before the payload. Configured via `job.initProcessor` with fields: `actionId`, `timeoutSeconds?`. Target agent and model are now job-level fields (`job.targetAgent`, `job.targetAgentModel`). Two execution modes in `timer.ts`: (1) `job.targetAgent` set → action output piped to a subagent directly (terminal, supports multimodal image+text), (2) no targetAgent → action output injected as context into the payload text/message. Legacy `payload.kind === 'action'` jobs are auto-migrated to `initProcessor` + job-level fields on store load (`store.ts`) and via backward-compat normalization (`normalize.ts`). `job.tag` provides stable job identification (e.g. `'screenshot-track'`).
+`InitProcessor`: Optional pre-step that runs a file-based action before the payload. Configured via `job.initProcessor` with fields: `actionId`, `timeoutSeconds?`. One execution mode in `timer.ts`: the action output is injected as context into the payload text/message (with `invokeAgent: false`, the action result IS the run and nothing is injected). `targetAgent` / `targetAgentModel` used to pipe that output straight into an action agent running inside the server; there are no in-process agents any more, so a job that still carries `targetAgent` is recorded as a FAILED run whose error names the replacement ("action agents were removed; use the claude-code executor"). Failing loud is the point: a job that looks like it ran while doing nothing is worse than one that says why it didn't. Legacy `payload.kind === 'action'` jobs are auto-migrated to `initProcessor` + job-level fields on store load (`store.ts`) and via backward-compat normalization (`normalize.ts`). `job.tag` provides stable job identification (e.g. `'screenshot-track'`).
 
 ### Action System
 
-`src/actions/`: File-based action discovery mirroring the agent registry pattern. Actions are discovered from two locations: built-in (`dist/actions/*.js`, compiled from `src/actions/*.ts`) and user (`~/.open-walnut/actions/*.mjs`). Each module exports `describe()` → `ActionDescriptor` and `run(ctx)` → `ActionResult { invoke, content?, image? }`. User actions override built-in actions with the same ID. Platform filtering via `descriptor.platform`. REST: `GET /api/cron/actions` lists discovered actions. Frontend: CronJobForm has an "Init Processor" checkbox with action dropdown (showing source badges), target agent, and model override fields.
+`src/actions/`: File-based action discovery mirroring the agent registry pattern. Actions are discovered from two locations: built-in (`dist/actions/*.js`, compiled from `src/actions/*.ts`) and user (`~/.open-walnut/actions/*.mjs`). Each module exports `describe()` → `ActionDescriptor` and `run(ctx)` → `ActionResult { invoke, content?, image? }`. User actions override built-in actions with the same ID. Platform filtering via `descriptor.platform`. REST: `GET /api/cron/actions` lists discovered actions. Frontend: CronJobForm has an "Init Processor" checkbox with an action dropdown (showing source badges).
 
 ### Triggers: the `watcher` executor
 
@@ -460,16 +472,20 @@ Watcher memory lives in `~/.open-walnut/routine-state/<jobId>.json` (`trigger-st
 
 ---
 
-## Embedded Subagent System — Implementation
+## Named Agents: Implementation
 
-**How it works**: `SubagentRunner.init()` subscribes as `'subagent-runner'` on the bus. On `SUBAGENT_START`, it resolves the agent definition, acquires a semaphore slot, loads context sources (if `taskId` present and agent has `context_sources` config), builds a custom system prompt and tool set, and calls `runAgentLoop()` with `cacheConfig: false`. Results are emitted back to the main agent via `SUBAGENT_RESULT`. Usage is tracked per-run with `source: 'subagent'`.
+**How it works**: `SubagentRunner.init()` subscribes as `'subagent-runner'` on the bus. On `SUBAGENT_START` (emitted only by a hook's `run_agent` action) it resolves the agent definition, waits for a launch slot, and calls `quickStartSession({ walnutAgent: true, agentId, preassignedSessionId: runId })`. A run IS a session: the run id is the session id the CLI adopts, so the run shows up in the session tree, streams through the normal session pipeline, and its transcript is the session's own JSONL. `subagent:send` is a `performSessionSend` into that session, and `SUBAGENT_STARTED` / `SUBAGENT_ERROR` report the launch. Usage is tracked by the session pipeline, not by the runner.
+
+Two consequences worth stating: the semaphore counts LAUNCHES, not concurrent agents (a start is a whole-store task write plus a spawn; once spawned, the session is the session machinery's to schedule), and the runner's in-memory ledger holds metadata only, because progress and completion live on the session record every session surface already reads.
 
 **Key files**:
-- `src/core/agent-registry.ts` — manages agent definitions from 3 sources: builtin ("general", "session-triage"), config-defined (`config.yaml`), runtime-created (`agents.json`). **Builtin override**: editing a builtin agent auto-creates a config entry with the same ID that shadows it (`overrides_builtin: true`); deleting the override restores the original builtin.
-- `src/providers/subagent-runner.ts` — `SubagentRunner` class, subscribes to bus events, manages runs with semaphore-limited concurrency (max 20)
-- `src/agent/subagent-context.ts` — builds system prompts and filtered tool sets for subagents
-- `src/agent/context-sources.ts` — `loadContextSources()` — injects task/project/memory context into subagent system prompts
-- `src/agent/tools/agent-crud-tools.ts` — CRUD tools for managing agent definitions
+- `src/core/agent-registry.ts`: manages agent definitions from 3 sources: builtin ("general", "session-triage"), config-defined (`config.yaml`), runtime-created (`agents.json`). **Builtin override**: editing a builtin agent auto-creates a config entry with the same ID that shadows it (`overrides_builtin: true`); deleting the override restores the original builtin.
+- `src/providers/subagent-runner.ts`: the `SubagentRunner` class, subscribes to bus events, tracks runs, caps concurrent launches (max 20)
+- `src/core/sessions/ask-agent.ts`: resolves which console agent a launch belongs to and which `Ask <name>` project it is filed under
+- `src/core/sessions/profiles.ts` + `persona-sections.ts`: the persona a launched session carries
+- `src/core/context-sources.ts`: `loadContextSources()` injects task/project/memory context into an agent's persona
+
+An agent definition's `allowed_tools` / `denied_tools` are NOT enforced for these runs: a Claude Code session gets the CLI's own tools plus the Walnut MCP mount, and Walnut cannot subtract from that. The one place a tool allowlist still binds is a routine watcher, and that lists its tools in its own executor config, not in an agent definition.
 
 ### Turn-complete triage (no subagent anymore)
 
@@ -481,7 +497,7 @@ There is **no** triage subagent. The old summarizer subagent was removed: the se
 
 `project_memory` reads the **legacy** `memory/projects/<project>/MEMORY.md` store (the project-only migration flattened the old `<category>/<project>/` layout, merging on collision). The 2026-07 unification moved project knowledge to skills and stopped writing here, but did not migrate the existing files — so this source still returns real content for pre-migration projects and nothing for anything newer. It is read-only; put new project knowledge in a skill.
 
-Context sources are **read-only** injection at invocation time. `stateful` config is **read+write** persistent memory across invocations. An agent can have both. `stateful.memory_project` supports `{auto}`, resolved at runtime to the task's `{project}` (or `inbox` when the task has none).
+Context sources are **read-only** injection at launch time. `stateful.memory_project` no longer injects a read-write memory file: the writer was the in-process loop's own tool set. What survives is the directory: `agent-registry.ts` still creates `memory/projects/<project>/` for an agent configured with one (`{auto}` resolves to the task's project, or `inbox` when it has none), and a launched session writes there through the memory ops like any other session.
 
 ---
 
@@ -510,7 +526,7 @@ See `src/logging/AGENTS.md` for code examples, log levels, and redaction pattern
 - `tracker.ts` — `UsageTracker` class with `record()`, `getSummary()`, `getDailyCosts()`, `getBySource()`, `getByModel()`, `getRecentRecords()`, `prune()`. Uses parameterized SQL queries.
 - `index.ts` — Barrel + singleton `usageTracker` instance (lazy DB init).
 
-**Instrumentation**: Every `usageTracker.record()` call is wrapped in `try/catch` to prevent non-critical tracking failures from crashing the agent loop. Call sites: web chat, CLI chat (interactive + one-shot), compaction, subagent runner, image tool, cron agent turns, session triage, session:result handler.
+**Instrumentation**: Every `usageTracker.record()` call is wrapped in `try/catch` so a tracking failure never fails the work it was measuring. Call sites: the `session:result` handler (which bills a lane turn as `chat` and every other session as `session`, using the CLI's own reported cost), the compaction summarizer, the overview maintainer, the AI task search, and `runMicroAgent`. Sessions therefore report a real dollar cost while the one-shot model calls report tokens.
 
 **REST API**: `src/web/routes/usage.ts` — 6 GET endpoints: `/api/usage/summary`, `/api/usage/daily`, `/api/usage/by-source`, `/api/usage/by-model`, `/api/usage/recent`, `/api/usage/pricing`.
 
@@ -534,13 +550,14 @@ See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task 
 
 `open-walnut add|tasks|done|recall|projects|sessions|start|tools` are HTTP clients of the running server's `/api/v1` facade (`src/utils/api-client.ts`; base URL `OPEN_WALNUT_API_URL`, default `http://127.0.0.1:3456`). They used to import `core/task-manager` and write SQLite from the CLI process, which made every invocation a SECOND WRITER racing the server — two processes each holding a stale in-memory store delete each other's rows. The server is now the single writer; localhost requests bypass auth, so no token plumbing is needed.
 
-- **One interface, one rule (2026-08-20):** the bin shim (`bin/open-walnut.js`) routes every DATA command above to the slim `dist/cli-fast.js` entry (~75KB, ~0.2s total), because their real work is one local HTTP request and the full bundle costs ~0.5s of boot first (tsup builds `dist/cli.js` as one unsplit 6.3MB file that eagerly loads the web-server graph). Process-owning/interactive commands (`web`, `mcp`, `chat`, `sync`, `backup`, `logs`, `device`, `lists`, `subtask`, `session-server`) stay on the full entry — they live seconds-to-forever, so boot cost is irrelevant. Humans and agents share the same path; the split is by what the command does, not who runs it. The `LITE` set in the bin shim mirrors `LITE_COMMANDS` in `src/cli-fast.ts` — keep in sync.
+- **One interface, one rule (2026-08-20):** the bin shim (`bin/open-walnut.js`) routes every DATA command above to the slim `dist/cli-fast.js` entry (~75KB, ~0.2s total), because their real work is one local HTTP request and the full bundle costs ~0.5s of boot first (tsup builds `dist/cli.js` as one unsplit 6.3MB file that eagerly loads the web-server graph). Process-owning/interactive commands (`web`, `mcp`, `sync`, `backup`, `logs`, `device`, `lists`, `subtask`, `session-server`) stay on the full entry: they live seconds-to-forever, so boot cost is irrelevant. Humans and agents share the same path; the split is by what the command does, not who runs it. The `LITE` set in the bin shim mirrors `LITE_COMMANDS` in `src/cli-fast.ts`, keep in sync.
 - Task-mutating commands (`add`, `done`) print a `<task-ref id="…" label="…"/>` line so an AI session running them through Bash can cite the task (the web UI renders these as clickable pills). `--json` carries the same string in a `ref` field. Tag construction lives in `taskRefTag()` (`src/utils/entity-refs.ts`), next to the regex that parses it back.
 - Server down → ONE friendly line ("start it with: open-walnut web") + exit 1, never a stack trace (`reportApiError`).
 - `WALNUT_CLI_DIRECT=1` is the rollback lever: each data command falls back to its original in-process path. Those legacy implementations live together in `src/commands/direct-commands.ts` and are installed at boot ONLY by the full entry (`src/cli.ts`) through the `src/commands/direct-registry.ts` seam — a data command file must never name the direct module, or the bundler inlines core/task-manager into the slim bundle and re-inflates every call (this is measured: one literal import = 75KB → 6.3MB). The bin shim routes `WALNUT_CLI_DIRECT=1` invocations to the full entry. Anything that must run against an isolated temp store (the `tests/commands/*` CLI-subprocess tests) MUST set it — otherwise the child talks to production :3456; tests importing command modules directly must also call `installDirect()` first (the registry fails loud instead of silently writing to prod).
 - `open-walnut start <task_id>` posts to `POST /api/v1/tasks/:id/start` so the SESSION_START emit happens in the process that owns the session-runner. Core: `src/core/sessions/task-start.ts` (shared with the direct path). `POST /api/v1/sessions` can't serve this — its body requires an absolute `cwd`, while `start` names only a task and lets the runner resolve cwd from the task/project chain.
 - `open-walnut done` posts to `POST /api/v1/tasks/:id/complete`, NOT `PATCH {status:'done'}`: only `completeTask()` auto-unpins from the Focus bar and awaits the external-sync push.
-- Out of scope (still direct, by design): `chat`, `web`, `logs`, `sync`, `auth`, `device`, `dashboard`, `session-server`, and the legacy `subtask`/`lists` stubs.
+- Out of scope (still direct, by design): `web`, `logs`, `sync`, `auth`, `device`, `dashboard`, `session-server`, and the legacy `subtask`/`lists` stubs.
+- There is no `chat` command. A terminal conversation is `claude` itself, and one machine-readable answer is `walnut tools call <op>`; a REPL that talked to a Walnut-side agent loop has nothing left to talk to.
 
 ---
 

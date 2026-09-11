@@ -32,7 +32,7 @@ The complete executable example is [examples/plugins/walnut-demo](../../examples
 
 ## What a plugin can add
 
-One plugin can contribute any mix of: a native React App in the console, Settings sections, owner-scoped CSS, Tools for the Personal AI, Skills, slash Commands, Hooks, Cron actions, Agents, model Providers, HTTP routes, WebSocket methods, Services other plugins build on, task sync with its display metadata, and its own storage, secrets, and timers.
+One plugin can contribute any mix of: a native React App in the console, Settings sections, owner-scoped CSS, Ops that sessions and the CLI call, Tools for routine watchers, Skills, slash Commands, Hooks, Cron actions, Agents, model Providers, HTTP routes, WebSocket methods, Services other plugins build on, task sync with its display metadata, and its own storage, secrets, and timers.
 
 There is no fixed dashboard, no dashboard page, and no panel grid. The unit of plugin UI is an App.
 
@@ -221,8 +221,8 @@ Limits worth knowing before you write the loop: at most 30 letters per plugin pe
 
 Every local id is validated and namespaced by the host. Register a Tool with a local name matching `/^[a-z0-9_]+$/`, such as `status`; Walnut exposes it to the model as `<normalized_plugin_id>_<local_name>`, such as `my_plugin_status`. The host folds punctuation in the Plugin id to underscores and does not add the prefix twice. Other ids surface as `<pluginId>:<localId>`.
 
-- `tool`: a Personal AI tool with a JSON input schema.
-- `op`: a named operation other code can call by name. See Ops below.
+- `tool`: a tool with a JSON input schema, for the in-process loops that still take a tool list. Today that means routine watchers, which allowlist plugin tools by name. It is NOT how you reach a session: sessions call ops.
+- `op`: a named operation other code can call by name, and the way a plugin exposes work to sessions. See Ops below.
 - `hook`: one or more typed session or task hook points.
 - `cronAction`: an action a routine can invoke.
 - `wsMethod`: a namespaced browser RPC method.
@@ -230,7 +230,7 @@ Every local id is validated and namespaced by the host. Register a Tool with a l
 - `provider`: a runtime model provider adapter.
 - `command`: a namespaced slash command whose `content` is sent to the Personal AI.
 - `skill`: an extra absolute directory holding one or more `SKILL.md` files.
-- `agentContext`: a short, stable prompt addition. Keep this rare, because it rides every turn.
+- `agentContext`: **deprecated, reaches no model.** It fed a system prompt Walnut no longer builds; register a skill instead. The call still succeeds so plugin loading never breaks, and each plugin that uses it gets one warning per load.
 - `sync`, `sourceClaim`, `display`, `migration`, `extIndex`: task integration registration.
 
 A plugin can also ship a conventional `skills/` directory with no `registry.skill` call at all. Those skills join discovery below workspace, user, and shipped Walnut skills, so a local copy of the same name still wins.
@@ -263,7 +263,7 @@ Either way the skill text is read before the model knows whether the tools exist
 
 ### Ops
 
-An op is a named operation in the host's one catalogue, the same catalogue `walnut.ops.call` reads. Register one when another plugin, your own web App, or an HTTP client should be able to invoke a capability by name; register a Tool instead when the audience is the Personal AI's tool list. Ops are named `<normalized_plugin_id>_<local_name>` with an underscore, not a colon, and a final name that already belongs to a built-in op is refused rather than allowed to shadow it.
+An op is a named operation in the host's one catalogue, the same catalogue `walnut.ops.call` reads. **This is how a plugin exposes work to AI**, because every AI turn Walnut runs is a Claude Code session and a session reaches Walnut through ops, over the Walnut MCP mount or `walnut tools call`. `walnut.registry.op` lands on `definePluginOp` in `src/ops/registry.ts`, which owns the naming and the ownership check. Register a Tool instead only for the in-process loops that take a tool list, which today means routine watchers. Ops are named `<normalized_plugin_id>_<local_name>` with an underscore, not a colon, and a final name that already belongs to a built-in op is refused rather than allowed to shadow it.
 
 ```ts compile=ops
 import type { WalnutServerApi } from '@open-walnut/plugin-api/server'

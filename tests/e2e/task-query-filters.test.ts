@@ -1,15 +1,16 @@
 /**
- * E2E: the composable task query — REST (`GET /api/tasks`) and the agent
- * `task_query` tool against ONE real server + real SQLite.
+ * E2E: the composable task query over REST (`GET /api/tasks`) against ONE real
+ * server + real SQLite. REST is the only implementation now: every agent-facing
+ * surface reaches this query through the `task_list` op, which is a loopback call
+ * to this same route.
  *
  * What this locks down (the drift risks the shared query module exists to kill):
  *  1. pinned + complete + last-6-hours picks exactly the one fixture that has
  *     all three properties (the combination that used to be unexpressible).
  *  2. project + updated-in-last-24h combines an attribution and a time window.
- *  3. REST and the tool return the SAME ordered ids for the same query.
- *  4. The tool KEEPS its legacy default of hiding COMPLETE; REST does not.
- *  5. Invalid enum / limit / conflicting time window → 400 with { error }.
- *  6. full / slim / minimal projections return identical ID sets.
+ *  3. COMPLETE is never hidden without an explicit state filter.
+ *  4. Invalid enum / limit / conflicting time window → 400 with { error }.
+ *  5. full / slim / minimal projections return identical ID sets.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -20,7 +21,6 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-query-e
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { executeTool } from '../../src/agent/tools.js';
 import { addTask, updateTaskRaw } from '../../src/core/task-manager.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -53,12 +53,6 @@ async function getError(qs: string): Promise<string> {
   const body = await res.json() as { error?: string };
   expect(typeof body.error).toBe('string');
   return body.error!;
-}
-
-async function toolTasks(params: Record<string, unknown>): Promise<Record<string, unknown>[]> {
-  const raw = await executeTool('task_query', params);
-  if (!raw.startsWith('[')) return [];
-  return JSON.parse(raw) as Record<string, unknown>[];
 }
 
 /**
@@ -119,7 +113,7 @@ async function seedFixtures(): Promise<void> {
     {
       label: 'inboxTagged',
       title: 'Inbox task with tags',
-      raw: { phase: 'AGENT_COMPLETE', tags: ['urgent', 'home'], created_at: iso(10 * HOUR), updated_at: iso(9 * HOUR) },
+      raw: { phase: 'NEED_ACTION', tags: ['urgent', 'home'], created_at: iso(10 * HOUR), updated_at: iso(9 * HOUR) },
     },
   ];
 
@@ -285,89 +279,20 @@ describe('projection parity', () => {
   });
 });
 
-describe('tool ↔ REST parity', () => {
-  it('returns the same ordered ids for the same query', async () => {
-    const rest = await getTasks('?pinned=true&projects=Marina&sort=updated_desc');
-    const tool = await toolTasks({
-      where: { pinned: true, project: 'Marina', completion: ['todo', 'in_progress', 'complete'] },
-      sort: 'updated_desc',
-    });
-    expect(rest.map((t) => t.id)).toEqual(tool.map((t) => t.id));
-    expect(rest).toHaveLength(3);
-  });
-
-  it('agrees on the pinned + complete + last 6 hours result', async () => {
-    const rest = await getTasks('?pinned=true&completion=complete&time_basis=updated&last_hours=6');
-    const tool = await toolTasks({
-      where: {
-        pinned: true,
-        completion: ['complete'],
-        time: { basis: 'updated', last_n_hours: 6 },
-      },
-    });
-    expect(tool.map((t) => t.id)).toEqual(rest.map((t) => t.id));
-    expect(tool).toHaveLength(1);
-  });
-
-  it('agrees on sort=priority ordering', async () => {
-    const rest = await getTasks('?sort=priority');
-    const tool = await toolTasks({
-      where: { completion: ['todo', 'in_progress', 'complete'] },
-      sort: 'priority',
-    });
-    expect(tool.map((t) => t.id)).toEqual(rest.map((t) => t.id));
-    // The immediate-priority fixture leads.
-    expect(tool[0].id).toBe(ids.acmeRecent);
-  });
-});
-
-describe('agent tool legacy behavior', () => {
-  it('hides COMPLETE by default but includes it once a state filter is given', async () => {
-    const defaulted = await toolTasks({});
-    const defaultedIds = new Set(defaulted.map((t) => t.id));
-    expect(defaultedIds.has(ids.pinnedCompleteRecent)).toBe(false);
-    expect(defaultedIds.has(ids.pinnedActiveRecent)).toBe(true);
-
-    const explicitPhase = await toolTasks({ where: { phase: 'COMPLETE' } });
-    expect(explicitPhase.map((t) => t.id)).toContain(ids.pinnedCompleteRecent);
-    const explicitStatus = await toolTasks({ where: { status: 'done' } });
-    expect(explicitStatus.map((t) => t.id)).toContain(ids.pinnedCompleteRecent);
-    const explicitCompletion = await toolTasks({ where: { completion: ['complete'] } });
-    expect(explicitCompletion.map((t) => t.id)).toContain(ids.pinnedCompleteRecent);
-  });
-
-  it('includes status, pinned and timestamps in every compact row', async () => {
-    const [row] = await toolTasks({ where: { project: 'Marina', completion: ['complete'], pinned: true } });
-    expect(row).toMatchObject({ status: 'done', pinned: true });
-    expect(typeof row.created_at).toBe('string');
-    expect(typeof row.updated_at).toBe('string');
-    expect(typeof row.completed_at).toBe('string');
-  });
-
-  it('keeps parent_task_id as a PREFIX match (tool-only compat)', async () => {
-    const { task: child } = await addTask({ title: 'Child of Acme task', project: 'Acme' });
-    await updateTaskRaw(child.id, { parent_task_id: ids.acmeRecent });
-    const prefix = ids.acmeRecent.slice(0, 6);
-    const rows = await toolTasks({ where: { parent_task_id: prefix } });
-    expect(rows.map((t) => t.id)).toEqual([child.id]);
-    // REST is exact-match only: the same prefix returns nothing there.
-    expect(await getTasks(`?parent_task_id=${prefix}`)).toEqual([]);
-    expect((await getTasks(`?parent_task_id=${ids.acmeRecent}`)).map((t) => t.id)).toEqual([child.id]);
-  });
-
-  it('reports a bad query as a readable tool error, not a throw', async () => {
-    const result = await executeTool('task_query', { where: { completion: ['finished'] } });
-    expect(result).toMatch(/^Error: /);
-    expect(await executeTool('task_query', { limit: 0 })).toMatch(/^Error: .*limit/i);
-  });
-
-  it('still answers the entity-level project summary', async () => {
-    const raw = await executeTool('task_query', { type: 'project' });
-    const projects = JSON.parse(raw) as Array<{ name: string; todo: number; done: number }>;
-    const acme = projects.find((p) => p.name === 'Acme');
+describe('project counts', () => {
+  it('the project registry counts the seeded fixtures per project', async () => {
+    const res = await fetch(apiUrl('/api/projects'));
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      projects: Array<{ name: string; counts: { todo: number; active: number; done: number } }>
+    };
+    const acme = body.projects.find((p) => p.name === 'Acme');
     expect(acme).toBeDefined();
-    expect(acme!.done).toBe(0);
-    const marina = projects.find((p) => p.name === 'Marina');
-    expect(marina!.done).toBe(3);
+    // Both Acme fixtures are TODO, so nothing is done there …
+    expect(acme!.counts.done).toBe(0);
+    expect(acme!.counts.todo).toBe(2);
+    // … while Marina holds the three COMPLETE fixtures.
+    const marina = body.projects.find((p) => p.name === 'Marina');
+    expect(marina!.counts.done).toBe(3);
   });
 });

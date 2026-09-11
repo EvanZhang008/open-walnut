@@ -5,7 +5,7 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
 
 ## Essentials
 
-- Tiers: unit (`tests/core|agent`) → integration (`tests/web/routes`, supertest) → e2e
+- Tiers: unit (`tests/core|model`) → integration (`tests/web/routes`, supertest) → e2e
   (`tests/e2e`, real server on port 0) → browser (`tests/e2e/browser`, Playwright) → live
   (`*.live.test.ts`, real APIs, opt-in via `WALNUT_LIVE_TEST=1`).
 - **Live cloud journeys** (`tests/e2e/cloud-mobile-journey.live.test.ts`): run via

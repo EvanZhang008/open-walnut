@@ -1826,7 +1826,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // Reset working memory updater state on server startup to clear stale state
   {
-    const { resetUpdaterState } = await import('../agent/working-memory-updater.js')
+    const { resetUpdaterState } = await import('../core/memory/working-memory-updater.js')
     resetUpdaterState()
   }
 

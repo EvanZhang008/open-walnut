@@ -21,7 +21,6 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME, workingMemoryFile } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { memoryNotesSearchTool } from '../../src/agent/tools/memory-notes-search-tool.js';
 import {
   resetSearchV2IndexForTests,
   sweepSearchV2Files,
@@ -34,12 +33,16 @@ function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`;
 }
 
-/** Run the tool and parse its JSON rows ([] for "No results found."). */
+/** Search the way every surface does now: the server's own /api/search route. */
 async function searchRows(
-  params: Record<string, unknown>,
-): Promise<Array<{ source: string; title: string; snippet: string; filepath: string }>> {
-  const raw = await memoryNotesSearchTool.execute(params);
-  return raw === 'No results found.' ? [] : JSON.parse(raw as string);
+  query: string,
+  types?: string,
+): Promise<Array<{ type: string; title: string; snippet?: string; path?: string; filepath?: string }>> {
+  const qs = new URLSearchParams({ q: query, ...(types ? { types } : {}) });
+  const res = await fetch(apiUrl(`/api/search?${qs.toString()}`));
+  expect(res.status).toBe(200);
+  const data = await res.json() as { results?: Array<Record<string, unknown>> };
+  return (data.results ?? []) as Array<{ type: string; title: string; snippet?: string; path?: string; filepath?: string }>;
 }
 
 beforeAll(async () => {
@@ -115,18 +118,14 @@ describe('Category 7: Integration Tests', () => {
   // ── 7.2 End-to-End: Seed -> Index -> Search -> Get ──
 
   it('7.2: full pipeline from seed to search to get', async () => {
-    // Step 1: Search for the kubernetes topic
-    const searchResults = await searchRows({ queries: ['pod autoscaling'] });
+    const searchResults = await searchRows('pod autoscaling', 'memory');
     expect(searchResults.length).toBeGreaterThan(0);
 
-    // Step 2: Verify the search result contains the kubernetes topic
     const topResult = searchResults.find((r) =>
-      r.filepath.includes('kubernetes') || r.snippet.includes('Kubernetes'),
+      `${r.path ?? r.filepath ?? ''}`.includes('kubernetes')
+      || `${r.title}${r.snippet ?? ''}`.includes('Kubernetes'),
     );
     expect(topResult).toBeDefined();
-
-    // Step 3: Verify the snippet contains relevant seeded content
-    expect(topResult!.snippet).toMatch(/Kubernetes|pod|autoscaling|HPA|VPA/i);
   });
 
   // ── 7.3 Working Memory NOT Visible in Search ──
@@ -135,32 +134,23 @@ describe('Category 7: Integration Tests', () => {
     // The volatile scratchpad lives under conversations/, which is not one of
     // the indexed roots (memory/, notes/, skills/) — so it can never leak into
     // recall no matter what the user typed into it.
-    const results = await searchRows({ queries: ['unique_wm_marker_12345'] });
+    const results = await searchRows('unique_wm_marker_12345');
 
     const wmResult = results.find((r) =>
-      r.snippet.includes('unique_wm_marker_12345'),
+      `${r.title}${r.snippet ?? ''}${r.path ?? r.filepath ?? ''}`.includes('unique_wm_marker_12345'),
     );
     expect(wmResult).toBeUndefined();
   });
 
   // ── 7.4 Global MEMORY.md in Search ──
 
-  it('7.4: global MEMORY.md appears in search as source=memory_global', async () => {
-    // Search for the unique marker in global memory
-    const results = await searchRows({
-      queries: ['xylophone_quantum_entanglement_test_marker'],
-      sources: ['memory_global'],
-    });
-
+  it('7.4: global MEMORY.md is reachable through search', async () => {
+    const results = await searchRows('xylophone_quantum_entanglement_test_marker', 'memory');
     expect(results.length).toBeGreaterThan(0);
 
-    // The tool recovers the legacy bucket name from the file path.
-    const globalResult = results.find((r) => r.source === 'memory_global');
+    const globalResult = results.find((r) =>
+      `${r.path ?? r.filepath ?? ''}`.endsWith('MEMORY.md'),
+    );
     expect(globalResult).toBeDefined();
-    expect(globalResult!.filepath.endsWith('MEMORY.md')).toBe(true);
-    // The snippet must show the matched text. It is a BOUNDED window now
-    // (~40 chars of context either side), so a 42-char marker gets clipped at
-    // the tail — assert the match is present, not that the window is unbounded.
-    expect(globalResult!.snippet).toContain('xylophone_quantum_entanglement');
   });
 });

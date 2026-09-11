@@ -49,7 +49,7 @@ describe('GET /api/agents', () => {
 });
 
 describe('GET /api/agents/meta/tools', () => {
-  it('returns tool names', async () => {
+  it('returns the read-only op names', async () => {
     const app = createApp();
     const res = await request(app).get('/api/agents/meta/tools');
 
@@ -57,8 +57,12 @@ describe('GET /api/agents/meta/tools', () => {
     expect(res.body.tools).toBeDefined();
     expect(Array.isArray(res.body.tools)).toBe(true);
     expect(res.body.tools.length).toBeGreaterThan(0);
-    expect(res.body.tools).toContain('task_query');
-    expect(res.body.tools).toContain('task_search');
+    // The vocabulary is the op registry's, not the retired agent tools' —
+    // `task_query`/`task_search` were that older naming.
+    expect(res.body.tools).toContain('task_list');
+    expect(res.body.tools).toContain('search');
+    // Read-only means read-only: no write op may be advertised here.
+    expect(res.body.tools).not.toContain('task_create');
   });
 });
 

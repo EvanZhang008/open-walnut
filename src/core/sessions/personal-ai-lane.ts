@@ -400,7 +400,7 @@ export async function buildLaneProfile(
     const { getAgent } = await import('../agent-registry.js');
     const agentDef = await getAgent(agentId);
     if (!agentDef) throw new Error(`Agent '${agentId}' not found`);
-    const { loadContextSources } = await import('../../agent/context-sources.js');
+    const { loadContextSources } = await import('../context-sources.js');
     const contextBlock = await loadContextSources(agentDef, {}).catch(() => '');
     profile = consoleAgentProfile(agentDef, skillsIndex, contextBlock);
   }

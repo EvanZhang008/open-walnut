@@ -7,7 +7,10 @@ scores that carry no word coverage) are exactly what this study kept working aro
 why Walnut now runs its own index: [`src/lib/hybrid-search/README.md`](../../../src/lib/hybrid-search/README.md).
 Everything below still describes real product behavior (the split interactive/agent search, the
 structured identifier lane, serialized index mutations), so treat it as the reasoning trail, not as
-a map of today's code.
+a map of today's code. Two more things moved since: Walnut has no in-process agent loop, so every
+`src/agent/…` path here (including the links at the end of `04-implementation.md`) is gone, and the
+`task_search` / `memory_notes_search` tools are now operations in `src/ops/` that a Claude Code
+session calls.
 
 This directory records the investigation that changed Walnut's task and session
 search from a slow, race-prone interaction into a split search architecture:

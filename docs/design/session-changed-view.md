@@ -1,7 +1,7 @@
 # Session "Changed" View — Implementation & Progress
 
 A GitHub-style file-diff review for a single session, shown full-screen with the
-session's own chat relocated to the right so you can ask the **main agent** about
+session's own chat relocated to the right so you can ask **that session** about
 any line directly.
 
 > Plan: `~/.claude/plans/plan-session-changed-review-tab.md`
@@ -23,8 +23,8 @@ any line directly.
   rendered.
 - **Select any code in the diff → "Ask about this" pill → it pre-fills the existing
   chat input** with `About <file>:<line> \`code\`: `. You add a question and hit the
-  normal Send — it goes to the **same main agent** (full context, hot prompt cache).
-  No fork, no new agent, no side-question.
+  normal Send: it goes to the **same session** (full context, warm CLI process).
+  No fork, no new session, no side-question.
 - **Click a line (gutter or code cell) → a comment box** with TWO send options
   (the GitHub PR-review model):
   - **Add comment** (default) — *records* the comment to a pending review batch.
@@ -32,10 +32,10 @@ any line directly.
     and accumulates **across files** as you keep reviewing. A sticky **review bar**
     at the bottom shows the count with **Copy all** (copies the whole composed
     review to the clipboard) and **Submit review** (sends the entire batch to the
-    main agent as one message). Nothing is sent until you submit.
-  - **Send now** — fires *that one* comment to the main agent immediately
+    session as one message). Nothing is sent until you submit.
+  - **Send now**: fires *that one* comment to the session immediately
     (`Re: <file>:L<n> \`code\`\n\n<note>`), bypassing the batch.
-  - Both options send through the **same main agent** (no fork). Keyboard:
+  - Both options send through the **same session** (no fork). Keyboard:
     ⌘/Ctrl+Enter = Add, ⌘/Ctrl+Shift+Enter = Send now, Esc = cancel.
   - The batch is per-session and lives in the panel (not persisted); switching
     sessions clears it.

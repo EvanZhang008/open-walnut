@@ -1,11 +1,10 @@
 /**
- * E2E tests for the Main Agent Turn Queue and Token Budget Guard.
+ * E2E tests for the Main Agent Turn Queue.
  *
  * Verifies:
  * 1. Turn queue serializes concurrent main-agent turns
  * 2. Queue status is queryable
- * 3. Token budget guard trims messages when over budget
- * 4. Cron timer error propagation
+ * 3. Cron timer error propagation
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
@@ -101,131 +100,6 @@ describe('Agent Turn Queue', () => {
 
     await Promise.all([p1, p2, p3]);
     expect(order).toEqual([1, 2, 3]);
-  });
-});
-
-describe('Token Budget Guard', () => {
-  let guardBudget: typeof import('../../src/agent/token-budget.js').guardBudget;
-  let emergencyTrim: typeof import('../../src/agent/token-budget.js').emergencyTrim;
-
-  beforeEach(async () => {
-    const mod = await import('../../src/agent/token-budget.js');
-    guardBudget = mod.guardBudget;
-    emergencyTrim = mod.emergencyTrim;
-  });
-
-  it('returns messages unchanged when within budget', async () => {
-    const messages = [
-      { role: 'user', content: 'hello' },
-      { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
-    ] as any[];
-
-    const result = await guardBudget({
-      system: 'You are a helpful assistant.',
-      tools: [],
-      messages,
-      budget: 100_000, // Very generous budget
-    });
-
-    expect(result.trimmed).toBe(false);
-    expect(result.messages).toBe(messages); // Same reference = no copy
-  });
-
-  it('trims messages when over budget', async () => {
-    // Use varied words that don't compress well in BPE
-    const words = 'the quick brown fox jumps over a lazy dog while exploring complex algorithms ';
-    const bigContent = words.repeat(500); // ~37K chars of varied text = ~10K+ tokens
-    const messages = [
-      { role: 'user', content: bigContent },
-      { role: 'assistant', content: [{ type: 'text', text: bigContent }] },
-      { role: 'user', content: bigContent },
-      { role: 'assistant', content: [{ type: 'text', text: bigContent }] },
-      { role: 'user', content: bigContent },
-      { role: 'assistant', content: [{ type: 'text', text: bigContent }] },
-      { role: 'user', content: 'latest question' },
-      { role: 'assistant', content: [{ type: 'text', text: 'latest answer' }] },
-    ] as any[];
-
-    const result = await guardBudget({
-      system: 'You are a helper.',
-      tools: [],
-      messages,
-      budget: 20_000, // Small budget — forces trim
-    });
-
-    expect(result.trimmed).toBe(true);
-    expect(result.messages.length).toBeLessThan(messages.length);
-    // The latest messages should be preserved
-    const lastMsg = result.messages[result.messages.length - 1] as any;
-    expect(lastMsg.content[0].text).toBe('latest answer');
-  });
-
-  it('returns trimmed=true and reduced message count when over budget', async () => {
-    const words = 'the quick brown fox jumps over a lazy dog while exploring complex algorithms ';
-    const bigContent = words.repeat(500);
-    const messages = [
-      { role: 'user', content: bigContent },
-      { role: 'assistant', content: [{ type: 'text', text: bigContent }] },
-      { role: 'user', content: bigContent },
-      { role: 'assistant', content: [{ type: 'text', text: bigContent }] },
-      { role: 'user', content: 'hi' },
-      { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
-    ] as any[];
-
-    const result = await guardBudget({
-      system: 'system',
-      tools: [],
-      messages,
-      budget: 5_000,
-    });
-
-    expect(result.trimmed).toBe(true);
-    expect(result.messages.length).toBeLessThan(messages.length);
-    // First message in trimmed result must be a user message (valid alternation)
-    expect((result.messages[0] as any).role).toBe('user');
-  });
-
-  it('emergencyTrim preserves minimum messages', () => {
-    const messages = [
-      { role: 'user', content: 'a' },
-      { role: 'assistant', content: [{ type: 'text', text: 'b' }] },
-    ] as any[];
-
-    // Even with 0 target, should keep at least 4 (but we only have 2)
-    const result = emergencyTrim(messages, 0);
-    expect(result.length).toBe(2); // Can't go below what we have
-  });
-
-  it('emergencyTrim prefers non-tool_result starts when possible', () => {
-    // Create enough messages that the trimmer has room to skip tool_result starts
-    const messages = [
-      { role: 'user', content: 'old question' },
-      { role: 'assistant', content: [{ type: 'text', text: 'old answer' }] },
-      { role: 'user', content: 'question 2' },
-      { role: 'assistant', content: [
-        { type: 'text', text: 'thinking' },
-        { type: 'tool_use', id: 't1', name: 'task_search', input: {} },
-      ]},
-      { role: 'user', content: [
-        { type: 'tool_result', tool_use_id: 't1', content: 'result' },
-      ]},
-      { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
-      { role: 'user', content: 'follow-up' },
-      { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
-      { role: 'user', content: 'another q' },
-      { role: 'assistant', content: [{ type: 'text', text: 'another a' }] },
-    ] as any[];
-
-    // Budget large enough to keep ~6 messages but not all 10
-    const result = emergencyTrim(messages, 500);
-    // Verify the result has fewer messages than the original
-    expect(result.length).toBeLessThan(messages.length);
-    // The trimmed result should start on a user text message, not a tool_result
-    const first = result[0] as any;
-    if (first.role === 'user' && Array.isArray(first.content)) {
-      const hasToolResult = first.content.some((b: any) => b.type === 'tool_result');
-      expect(hasToolResult).toBe(false);
-    }
   });
 });
 

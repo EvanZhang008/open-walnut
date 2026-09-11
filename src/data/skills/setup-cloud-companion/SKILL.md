@@ -169,9 +169,9 @@ curl -s ${WALNUT_SERVER_URL:-http://localhost:3456}/api/cloud-setup/job
 ```
 
 **Each poll must be its own separate short command, roughly 30s apart.** Do
-not write a `sleep`/`while` loop inside a single call: `shell_exec` is capped at
-600s (default 120s), so a loop that waits out a 10-minute first boot gets killed
-mid-wait and you lose the thread — while the job itself keeps running fine.
+not write a `sleep`/`while` loop inside a single call: a shell call has a timeout
+(two minutes by default), so a loop that waits out a 10-minute first boot gets
+killed mid-wait and you lose the thread, while the job itself keeps running fine.
 Polling is cheap and the job is authoritative, so a dropped poll costs nothing.
 
 Between polls, narrate transitions in the user's language, not step ids: "the VM

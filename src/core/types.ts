@@ -728,16 +728,6 @@ export interface TaskGroupRecord {
   hidden?: boolean;
 }
 
-export interface CacheConfig {
-  enabled?: boolean;
-  pruneEnabled?: boolean;
-  pruneOptions?: {
-    keepLastNTurns?: number;
-    softTrimThreshold?: number;
-    softTrimKeep?: number;
-  };
-}
-
 export type ContextSourceId =
   | 'task_details' | 'project_memory' | 'project_task_list'
   | 'global_memory' | 'daily_log' | 'session_history' | 'conversation_log'

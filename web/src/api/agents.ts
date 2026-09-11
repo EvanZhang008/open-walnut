@@ -57,11 +57,6 @@ export async function fetchAgent(id: string): Promise<AgentDefinition> {
   return res.agent;
 }
 
-export async function fetchToolNames(): Promise<string[]> {
-  const res = await apiGet<{ tools: string[] }>('/api/agents/meta/tools');
-  return res.tools;
-}
-
 export async function fetchAvailableModels(): Promise<string[]> {
   const res = await apiGet<{ models: string[] }>('/api/agents/meta/models');
   return res.models;

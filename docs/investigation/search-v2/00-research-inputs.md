@@ -1,6 +1,6 @@
 # Search v2: research inputs
 
-Digest of three deep-research passes (2026-08-18): a dependency/requirements inventory of the current QMD integration, a market scan of embedded hybrid-search options (with live benchmarks on this Mac), and an architecture design with a prototype validated on the real corpus. This file is the input for the design/plan session. Benchmark scratch scripts referenced at the bottom.
+Digest of three deep-research passes (2026-08-18): a dependency/requirements inventory of the QMD integration as it was then, a market scan of embedded hybrid-search options (with live benchmarks on this Mac), and an architecture design with a prototype validated on the real data. This file is the input for the design/plan session, so read the numbers as measurements taken on that date, not as today's code. Two things it names are gone: QMD itself (search runs on `src/lib/hybrid-search/`) and the in-process agent loop, so `src/agent/loop.ts` and its skill prefetch no longer exist. Benchmark scratch scripts referenced at the bottom.
 
 ## The failure that started this
 

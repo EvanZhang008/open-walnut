@@ -654,6 +654,11 @@ export interface RegistryService {
     handler: (params: Record<string, unknown>) => Promise<CronActionResult>,
   ): Disposable
   hook(definition: PluginHookDefinition): Disposable
+  /**
+   * @deprecated No consumer: a session reads skills, so this text reaches no
+   * model. Ship a `skill` instead. Still accepted (and still collected) so a
+   * plugin that calls it keeps loading.
+   */
   agentContext(text: string): Disposable
   command(definition: PluginCommandDefinition): Disposable
   skill(definition: PluginSkillDefinition): Disposable

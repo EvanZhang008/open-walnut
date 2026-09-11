@@ -260,7 +260,7 @@ export type WorkingMemoryRunner = (prompt: string) => Promise<string>;
  * cheap extraction.
  */
 export const runWorkingMemoryUpdate: WorkingMemoryRunner = async (prompt) => {
-  const { sendMessage } = await import('../../agent/model.js');
+  const { sendMessage } = await import('../../model/model.js');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPDATE_TIMEOUT_MS);
   try {

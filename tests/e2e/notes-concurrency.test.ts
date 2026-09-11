@@ -5,7 +5,7 @@
  * 1. content_hash is returned on read and write (global + v2 notes)
  * 2. Optimistic locking: PUT with stale expectedHash → 409 Conflict
  * 3. PUT without expectedHash still works (backward compat)
- * 4. WebSocket notes:updated event is emitted when agent writes via files_edit/files_write
+ * 4. WebSocket notes:updated event is emitted on a note write
  * 5. Full race condition simulation
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
@@ -145,13 +145,18 @@ describe('Notes v2 — content_hash', () => {
     expect(body.updatedAt).toBeTruthy();
   });
 
-  it('PUT content returns new contentHash on success', async () => {
+  it('PUT content returns the hash of the BYTES it wrote', async () => {
     const { status, body } = await apiPut('/api/notes-v2/content/test-put.md', {
       content: '# Created\n',
     });
     expect(status).toBe(200);
     expect(body.ok).toBe(true);
-    expect(body.contentHash).toBe(computeContentHash('# Created\n'));
+    // A create stamps an id into frontmatter, so the hash is of the stamped
+    // file, not of the text the caller sent. Hash the file to prove the client
+    // is handed a lock it can actually present on its next write.
+    const written = await fs.readFile(path.join(NOTES_DIR, 'test-put.md'), 'utf-8');
+    expect(body.contentHash).toBe(computeContentHash(written));
+    expect(body.id).toBeTruthy();
     expect(body.updatedAt).toBeTruthy();
   });
 
@@ -167,7 +172,9 @@ describe('Notes v2 — content_hash', () => {
     });
     expect(status).toBe(200);
     expect(body.ok).toBe(true);
-    expect(body.contentHash).toBe(computeContentHash('# V2'));
+    const written = await fs.readFile(filePath, 'utf-8');
+    expect(written).toContain('# V2');
+    expect(body.contentHash).toBe(computeContentHash(written));
   });
 
   it('PUT with stale expectedHash returns 409', async () => {
@@ -198,131 +205,35 @@ describe('Notes v2 — content_hash', () => {
   });
 });
 
-// ── WebSocket notes:updated event (via files tools) ──
+// ── WebSocket notes:updated event ──
 
-describe('notes:updated event via files tools', () => {
+describe('notes:updated event', () => {
   afterEach(async () => {
     const { bus } = await import('../../src/core/event-bus.js');
-    for (const name of ['test-notes-write', 'test-notes-edit', 'test-notes-named', 'test-no-notes-event']) {
-      try { bus.unsubscribe(name); } catch {}
-    }
+    try { bus.unsubscribe('test-notes-event'); } catch {}
   });
 
-  it('files_write on notes/global emits notes:updated via bus', async () => {
+  it('a note write emits notes:updated carrying the new contentHash', async () => {
+    // Every writer (the UI, an agent through the note_write op, the CLI) reaches
+    // this one route, so this is the single place the event can be proven.
     const { bus } = await import('../../src/core/event-bus.js');
-    const { filesWriteTool, filesReadTool } = await import('../../src/agent/tools/files-tools.js');
-
-    const events: Array<{ name: string; data: unknown }> = [];
-    // Use global subscriber to capture events regardless of destinations
-    bus.subscribe('test-notes-write', (event) => {
-      if (event.name === 'notes:updated') {
-        events.push({ name: event.name, data: event.data });
-      }
+    const events: Array<Record<string, unknown>> = [];
+    bus.subscribe('test-notes-event', (event) => {
+      if (event.name === 'notes:updated') events.push(event.data as Record<string, unknown>);
     }, { global: true });
 
-    // Seed global notes
-    await fs.writeFile(GLOBAL_NOTES_FILE, '', 'utf-8');
-
-    // Read first to get hash
-    const readResult = await filesReadTool.execute({ source: 'notes/global' });
-    const readParsed = JSON.parse(readResult as string);
-
-    // Write via files_write
-    await filesWriteTool.execute({
-      source: 'notes/global',
-      content: '# Updated by agent',
-      content_hash: readParsed.content_hash,
+    const { status, body } = await apiPut('/api/notes-v2/content/test-event.md', {
+      content: '# Written by a tool\n',
     });
+    expect(status).toBe(200);
 
     expect(events.length).toBe(1);
-    expect((events[0].data as any).source).toBe('notes/global');
-    expect((events[0].data as any).contentHash).toBe(
-      computeContentHash('# Updated by agent')
-    );
-
-    bus.unsubscribe('test-notes-write');
-  });
-
-  it('files_edit on notes/global emits notes:updated via bus', async () => {
-    const { bus } = await import('../../src/core/event-bus.js');
-    const { filesEditTool, filesReadTool } = await import('../../src/agent/tools/files-tools.js');
-
-    const events: Array<{ name: string; data: unknown }> = [];
-    bus.subscribe('test-notes-edit', (event) => {
-      if (event.name === 'notes:updated') {
-        events.push({ name: event.name, data: event.data });
-      }
-    }, { global: true });
-
-    // Seed with known content
-    await fs.writeFile(GLOBAL_NOTES_FILE, '# Old Title\nBody text', 'utf-8');
-
-    // Read to get hash
-    const readResult = await filesReadTool.execute({ source: 'notes/global' });
-    const readParsed = JSON.parse(readResult as string);
-
-    // Edit via files_edit
-    await filesEditTool.execute({
-      source: 'notes/global',
-      old_content: '# Old Title',
-      new_content: '# New Title',
-      content_hash: readParsed.content_hash,
-    });
-
-    expect(events.length).toBe(1);
-    expect((events[0].data as any).source).toBe('notes/global');
-
-    const disk = await fs.readFile(GLOBAL_NOTES_FILE, 'utf-8');
-    expect(disk).toBe('# New Title\nBody text');
-
-    bus.unsubscribe('test-notes-edit');
-  });
-
-  it('files_write on notes/{name} emits notes:updated via bus', async () => {
-    const { bus } = await import('../../src/core/event-bus.js');
-    const { filesWriteTool } = await import('../../src/agent/tools/files-tools.js');
-
-    const events: Array<{ name: string; data: unknown }> = [];
-    bus.subscribe('test-notes-named', (event) => {
-      if (event.name === 'notes:updated') {
-        events.push({ name: event.name, data: event.data });
-      }
-    }, { global: true });
-
-    await filesWriteTool.execute({
-      source: 'notes/my-note',
-      content: '# My Named Note',
-    });
-
-    expect(events.length).toBe(1);
-    expect((events[0].data as any).source).toBe('notes/my-note');
-    expect((events[0].data as any).contentHash).toBe(
-      computeContentHash('# My Named Note')
-    );
-
-    bus.unsubscribe('test-notes-named');
-  });
-
-  it('files_write on memory source does NOT emit notes:updated', async () => {
-    const { bus } = await import('../../src/core/event-bus.js');
-    const { filesWriteTool } = await import('../../src/agent/tools/files-tools.js');
-
-    const events: Array<{ name: string; data: unknown }> = [];
-    bus.subscribe('test-no-notes-event', (event) => {
-      if (event.name === 'notes:updated') {
-        events.push({ name: event.name, data: event.data });
-      }
-    }, { global: true });
-
-    await filesWriteTool.execute({
-      source: 'memory/daily',
-      content: 'some log entry',
-      mode: 'append',
-    });
-
-    expect(events.length).toBe(0);
-
-    bus.unsubscribe('test-no-notes-event');
+    // The event names the note the way every subscriber keys on it: vault path
+    // without the .md extension.
+    expect(events[0].source).toBe('notes/test-event');
+    // The hash on the wire is the one the writer was just handed, so a listener
+    // can recognise its own write instead of reloading over it.
+    expect(events[0].contentHash).toBe(body.contentHash);
   });
 });
 
