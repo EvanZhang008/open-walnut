@@ -363,7 +363,11 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 
 ## E2E-First Development
 
-**Before writing ANY code, design E2E verification first.**
+**开发开始时必须实际调用 `/plan-develop-test-verify-review-commit`，不能只复述流程。** 若当前环境没有该 skill，明确说明并执行本节的等价验收要求，不假称已经调用。仅修改文档或配置时按实际影响验证，不为无 UI 改动启动浏览器。
+
+**写代码前先列验收场景，主 agent 对最终结果负责。** 测试必须覆盖目标界面的真实使用路径与数据密度，以及相关的边界、并发、失败和恢复路径；不适用项说明原因。Mac app 的网页问题必须验证 WebKit，不能只测 Chromium。
+
+**主 agent 必须亲自完成关键操作与证据检查。** 子 agent 可以协助，但其报告、简单文本样例、类型检查、测试进程已启动或部署成功，都不能代替用户流程验收。修复后重跑原始复现与相关回归，并确认验收的是最终构建；还有失败、未测关键场景或后台测试未结束时，只报告进度或阻塞，不能宣布完成。工具无法显示截图时明确说明，不把 DOM 检查说成肉眼审图。
 
 - Bug fix: Playwright repro → fix → verify same flow → commit
 - Feature: define E2E scenarios → implement → build → Playwright verify → commit
