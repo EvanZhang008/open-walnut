@@ -233,7 +233,7 @@ export async function getAccessToken(): Promise<string> {
   }
 
   throw new Error(
-    'Not authenticated with Microsoft To-Do. Run "open-walnut auth" to sign in.',
+    'Not authenticated with Microsoft To-Do. Run "walnut auth" to sign in.',
   );
 }
 

@@ -84,7 +84,7 @@ async function runTodoSync(globals: GlobalOptions): Promise<{ ran: boolean; resu
 
     if (!status.authenticated) {
       if (!globals.json) {
-        console.log(chalk.yellow('  To-Do: not authenticated.') + ' Run: open-walnut auth');
+        console.log(chalk.yellow('  To-Do: not authenticated.') + ' Run: walnut auth');
       }
       return { ran: false, result: { todo: 'not_authenticated' } };
     }
