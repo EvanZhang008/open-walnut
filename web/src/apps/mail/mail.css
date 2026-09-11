@@ -35,6 +35,12 @@
   grid-template-columns: 232px 336px minmax(0, 1fr);
 }
 
+/* The reader is the pane that needs the room, and the window also holds the app's sidebar, so the
+   two left columns give some back before the drill breakpoint takes over (see MailApp.tsx). */
+@media (max-width: 1360px) {
+  .mail-console { grid-template-columns: 204px 300px minmax(0, 1fr); }
+}
+
 .mail-console > * {
   min-width: 0;
   min-height: 0;
@@ -45,15 +51,21 @@
 
 .mail-console > :last-child { border-right: none; }
 
+/* Three tones, so the console has a shape before anything is in it: the folders and the reader are
+   trays (`--bg-secondary`), the message column is the page. The reader's tone is what lets a mail
+   body sit on white paper in the dark theme without looking like a hole in the app. */
+.mail-accounts-pane { background: var(--bg-secondary); }
+.mail-list-pane { background: var(--bg); }
+
 /* ── shared pane furniture ── */
 
 .mail-pane-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 9px 10px;
   border-bottom: 1px solid var(--border);
-  min-height: 44px;
+  min-height: 46px;
 }
 
 .mail-pane-title {
@@ -81,6 +93,27 @@
 .mail-icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 .mail-icon-btn:disabled { opacity: 0.5; cursor: default; }
 
+/* The console's icon action: a 32px round hover target with its meaning in `title`. Shared by the
+   reader's toolbar and the composer's head, so it lives with the rest of the pane furniture. */
+.mail-round-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.mail-round-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.mail-round-btn:active:not(:disabled) { background: var(--bg-tertiary); }
+.mail-round-btn:disabled { opacity: 0.35; cursor: default; }
+
 .mail-text-btn {
   border: none;
   background: none;
@@ -103,11 +136,13 @@
 
 .mail-task-slot {
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 6px;
-  /* The error text can be a whole sentence from the server, and this row is a flex line of
+  gap: 4px;
+  /* The error text can be a whole sentence from the server, and this sits in a row of round
      buttons: without a bound it pushes Reply and Reply all off the pane. */
-  max-width: 320px;
+  max-width: 260px;
 }
 
 .mail-task-error {
@@ -176,8 +211,11 @@
   margin: 0;
   padding: 8px 12px;
   font-size: 12px;
+  line-height: 1.45;
   color: var(--fg-secondary);
-  background: var(--bg-secondary);
+  /* The pane it sits in is already `--bg-secondary`, so the note needs the next tone up or it is
+     an invisible notice. */
+  background: var(--bg-tertiary);
 }
 
 .mail-account { padding: 4px 8px 12px; }
@@ -296,20 +334,80 @@
 
 /* ── message list ── */
 
-.mail-search { flex: 1; display: flex; }
+/* The glyph sits INSIDE the field (it is what a search box looks like everywhere else), so the
+   field is the positioning context and the input carries the left padding for it. */
+.mail-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.mail-search-glyph {
+  position: absolute;
+  left: 9px;
+  display: inline-flex;
+  color: var(--fg-muted);
+  pointer-events: none;
+}
 
 .mail-search-input {
   width: 100%;
-  padding: 5px 9px;
+  padding: 6px 9px 6px 28px;
   font-size: 13px;
   color: var(--fg);
   background: var(--bg-secondary);
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 8px;
   outline: none;
 }
 
+.mail-search-input::placeholder { color: var(--fg-muted); }
 .mail-search-input:focus { border-color: var(--accent); background: var(--bg); }
+.mail-search:focus-within .mail-search-glyph { color: var(--accent); }
+
+/* ── the folder header ── */
+
+.mail-list-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 12px 5px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.mail-list-section-name {
+  font-weight: 700;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-list-section-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.mail-list-section-count::before {
+  content: '·';
+  margin-right: 6px;
+  opacity: 0.7;
+}
+
+.mail-list-section-unread {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
 
 .mail-search-meta {
   margin: 0;
@@ -338,30 +436,52 @@
   overflow-y: auto;
 }
 
+/* One row is three lines with a tight rhythm: who, what, and the first words of it. The 2px accent
+   bar of a selected row is an INSET SHADOW rather than a border, so the row's height and the text's
+   left edge never move when the selection lands on it. */
 .mail-row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   width: 100%;
-  padding: 9px 12px;
+  min-width: 0;
+  padding: 10px 12px;
   border: none;
   border-bottom: 1px solid var(--border);
   background: none;
   text-align: left;
   cursor: pointer;
+  transition: background 0.12s ease;
 }
 
 .mail-row:hover { background: var(--bg-hover); }
-.mail-row.selected { background: var(--accent-subtle); }
+
+.mail-row.selected {
+  background: var(--accent-subtle);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 
 .mail-row-top {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 7px;
+  min-width: 0;
+}
+
+/* Unread, as a dot rather than only as weight: a bold name next to another bold name is a
+   comparison, a dot is a fact. */
+.mail-row-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translateY(-1px);
 }
 
 .mail-row-from {
   flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: var(--fg-secondary);
   overflow: hidden;
@@ -370,15 +490,18 @@
 }
 
 .mail-row-time {
+  flex: 0 0 auto;
   font-size: 11px;
   color: var(--fg-muted);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .mail-row-subject {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   font-size: 13px;
   color: var(--fg);
   overflow: hidden;
@@ -386,10 +509,19 @@
   white-space: nowrap;
 }
 
-.mail-row-clip { color: var(--fg-muted); display: inline-flex; }
+.mail-row-subject-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-row-clip { flex: 0 0 auto; color: var(--fg-muted); display: inline-flex; }
 
 .mail-row-snippet {
+  min-width: 0;
   font-size: 12px;
+  line-height: 1.4;
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -406,9 +538,10 @@
   font-size: 10px;
 }
 
-/* Unread is the one thing a list must never be subtle about. */
-.mail-row.unread .mail-row-from,
-.mail-row.unread .mail-row-subject { font-weight: 700; color: var(--fg); }
+/* Unread is the one thing a list must never be subtle about: the SENDER carries the weight (that
+   is the column the eye scans) and the subject stays readable rather than shouting too. */
+.mail-row.unread .mail-row-from { font-weight: 700; color: var(--fg); }
+.mail-row.unread .mail-row-subject { font-weight: 600; color: var(--fg); }
 
 .mail-load-older {
   padding: 10px;

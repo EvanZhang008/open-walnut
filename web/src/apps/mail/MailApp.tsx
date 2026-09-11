@@ -28,8 +28,14 @@ import './mail-compose.css';
  * a drill down and back does not refetch or lose the reader's opted-in images).
  */
 
-/** Below this the three panes cannot all be readable, so the console drills instead. */
-const NARROW_QUERY = '(max-width: 899px)';
+/**
+ * Below this the three panes cannot all be readable, so the console drills instead.
+ *
+ * 1100 rather than 900: the window holds the app's own 240px sidebar as well, so at 900 the reader
+ * was left with under 100px of column, and a mail reader that narrow is not a smaller version of
+ * the design, it is a different one. Three panes need about 1100px before the reader has a measure.
+ */
+const NARROW_QUERY = '(max-width: 1099px)';
 
 /**
  * A way out of a dead end.
@@ -200,6 +206,7 @@ export function MailApp(props: AppComponentProps) {
           <ComposerPanel
             composer={mail.composer}
             mailboxes={mail.mailboxes[mail.composer.accountId] ?? []}
+            drafts={mail.drafts[mail.composer.accountId] ?? []}
             narrow={narrow}
             canSend={canSendFrom(mail.providers, mail.composer.accountId, mail.accounts)}
             cannotSendTitle={CANNOT_SEND_TITLE}

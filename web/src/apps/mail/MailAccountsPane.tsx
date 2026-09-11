@@ -68,8 +68,9 @@ export function MailAccountsPane({
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(null);
   return (
     <aside className="mail-accounts-pane" data-testid="mail-accounts-pane">
+      {/* No pane title: the folders are directly below and name themselves, and the 232px head has
+          three controls to fit. The primary action gets the room instead. */}
       <div className="mail-pane-head">
-        <span className="mail-pane-title">Mailboxes</span>
         <button
           type="button"
           className="mail-compose-new"

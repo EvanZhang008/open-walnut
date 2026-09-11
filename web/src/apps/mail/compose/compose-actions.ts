@@ -38,7 +38,7 @@ import {
   scheduleComposerSave,
 } from './compose-autosave';
 import { chipsOf } from './mail-address';
-import { quoteMarkdown, replyPrefill } from './reply-draft';
+import { forwardQuote, forwardSubject, quoteMarkdown, replyPrefill } from './reply-draft';
 import {
   isComposingPhase,
   phaseOf,
@@ -186,6 +186,43 @@ export function openMailReplyComposer(input: {
         save: 'saving',
       });
     },
+    () => { markComposerDirty(); scheduleComposerSave(0); },
+  );
+}
+
+/**
+ * Forward: the message, carried over, with nobody in `To` yet.
+ *
+ * It is NOT a reply, and the difference is in the one field this composer leaves unset: `replyTo`
+ * is what makes the server copy `In-Reply-To`/`References` from the cached message, and a forward
+ * that carried those would file somebody else's thread under a mail they never answered. The
+ * original travels as the quote (`forwardQuote`), which is real body text, so what the recipient
+ * gets is what the composer shows.
+ *
+ * The draft is created at open, like a reply, because a forward already holds content nobody typed.
+ */
+export function openMailForwardComposer(input: {
+  accountId: string;
+  message: MailMessageDto;
+  /** The plain-text half of the open body, when there is one. */
+  bodyText?: string;
+}): Promise<void> {
+  return handOver(
+    () => newComposer(input.accountId, {
+      intent: 'forward',
+      fields: {
+        to: [],
+        cc: [],
+        bcc: [],
+        subject: forwardSubject(input.message.subject),
+        body: '',
+      },
+      quote: forwardQuote({
+        message: input.message,
+        ...(input.bodyText ? { text: input.bodyText } : {}),
+      }),
+      save: 'saving',
+    }),
     () => { markComposerDirty(); scheduleComposerSave(0); },
   );
 }

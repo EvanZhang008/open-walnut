@@ -22,6 +22,7 @@ import {
   countRemoteImages,
   hardenMailHtml,
   mailFrameCsp,
+  replaceCidImages,
 } from '../../web/src/apps/mail/mail-html';
 
 /** The CSP directive list out of a built document. */
@@ -107,6 +108,38 @@ describe('buildMailSrcdoc', () => {
     const body = '<img src="https://example.invalid/pixel.png">';
     expect(csp(buildMailSrcdoc(body, { allowRemoteImages: false }))).not.toMatch(/https?:/);
     expect(csp(buildMailSrcdoc(body, { allowRemoteImages: true }))).toContain('https:');
+  });
+
+  /**
+   * The frame is PAPER, in both of the app's themes.
+   *
+   * The reset used to follow the OS colour scheme (dark text turning light over a transparent
+   * page), which left the SENDER's own colours where they were: a newsletter's blue headings on a
+   * black field, which is what made the reader look broken. Html mail is authored for white, so the
+   * frame declares white and says so to the browser with `color-scheme`.
+   */
+  it('renders the body on white paper whatever the app theme is', () => {
+    const document = buildMailSrcdoc('<p>hi</p>', { allowRemoteImages: false });
+    expect(document).toContain('color-scheme: light');
+    expect(document).toContain('background: #fff');
+    // The two halves of the old theme-aware hack. Either one coming back re-opens the bug.
+    expect(document).not.toContain('prefers-color-scheme');
+    expect(document).not.toContain('background: transparent');
+  });
+
+  /**
+   * A fixed-width newsletter table has to fit the paper in WEBKIT too, which is the engine the Mac
+   * app renders in. `max-width: 100%` is enough for Chromium and does nothing for a table box in
+   * WebKit, so the same mail lost its last two columns behind an overlay scrollbar. Measured at a
+   * 432px paper: 720px wide in WebKit against 384px in Chromium, and 384px in both once the declared
+   * width is dropped.
+   */
+  it('lets a fixed-width table shrink to the paper, and leaves a full-width shell alone', () => {
+    const document = buildMailSrcdoc('<table width="720"><tr><td>x</td></tr></table>', { allowRemoteImages: false });
+    expect(document).toContain("table[width]:not([width$='%'])");
+    expect(document).toContain('width: auto !important');
+    // The scope is the point: a percentage width is a shell asking to fill the paper.
+    expect(document).not.toContain('table[width] {');
   });
 
   it('adds nothing of its own that reads like a dangerous URL', () => {
@@ -195,6 +228,58 @@ describe('hardenMailHtml', () => {
     expect(kept).toContain('color: #333');
     expect(kept).toContain('margin: 0');
     expect(kept).toContain('background-image: none');
+  });
+});
+
+/**
+ * An image that points INTO the message (a `cid:` part) can never arrive: this console serves no
+ * attachment bytes, and the frame's policy could not fetch them if it did. So the browser painted
+ * its broken-image glyph in the middle of the prose, which reads as a broken reader rather than as
+ * "this picture is in the attachment".
+ */
+describe('an attachment-referencing image becomes a chip', () => {
+  it('keeps the alt text the sender wrote for exactly this case', () => {
+    const kept = hardenMailHtml('<p><img src="cid:masthead.42@mail.invalid" alt="Ferry masthead"></p>');
+    expect(kept).not.toContain('<img');
+    expect(kept).toContain('<span class="walnut-cid-image">Ferry masthead</span>');
+  });
+
+  it('says what it is when there is no alt text', () => {
+    expect(replaceCidImages("<img src='cid:part1'>")).toBe('<span class="walnut-cid-image">inline image</span>');
+    expect(replaceCidImages('<IMG SRC="CID:part1" WIDTH="20">')).toContain('inline image');
+    expect(replaceCidImages('<img alt="  " src="cid:part1">')).toContain('inline image');
+  });
+
+  it('replaces every one of them, wherever they sit', () => {
+    const table = '<table><tr><td><img src="cid:a" alt="one"></td>'
+      + '<td><img src="cid:b" alt="two"></td></tr></table>';
+    const kept = replaceCidImages(table);
+    expect(kept).toContain('>one</span>');
+    expect(kept).toContain('>two</span>');
+    expect(kept).not.toContain('<img');
+  });
+
+  it('leaves every other image alone, including the ones that do arrive', () => {
+    for (const img of [
+      '<img src="data:image/png;base64,AAAA" alt="dot">',
+      '<img src="https://cdn.example.invalid/hero.png" alt="hero">',
+      '<img src="/relative/logo.png">',
+      // The SVG element is not an `<img>`, and its local href fetches nothing.
+      '<svg><image href="data:image/png;base64,AAAA"></image></svg>',
+    ]) {
+      expect(replaceCidImages(img)).toBe(img);
+    }
+  });
+
+  it('escapes markup an alt attribute may legally carry', () => {
+    const kept = replaceCidImages('<img src="cid:a" alt="a<b & c">');
+    expect(kept).toContain('a&lt;b & c');
+    expect(kept).not.toContain('<b');
+  });
+
+  it('is not counted as a remote image, before or after', () => {
+    const body = '<img src="cid:inline1"><img src="https://cdn.example.invalid/hero.png">';
+    expect(countRemoteImages(hardenMailHtml(body))).toBe(1);
   });
 });
 

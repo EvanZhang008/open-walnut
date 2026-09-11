@@ -43,7 +43,7 @@ export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
             <span className="mail-row-time">{formatMailTime(draft.updatedAt)}</span>
           </span>
           <span className="mail-row-subject">
-            {draft.subject || '(no subject)'}
+            <span className="mail-row-subject-text">{draft.subject || '(no subject)'}</span>
             <span className={`mail-draft-pill state-${draft.state}`} data-testid="mail-draft-pill">
               {DRAFT_STATE_LABEL[draft.state]}
             </span>

@@ -5,9 +5,23 @@
  *
  * The frame's own inner styles are NOT here. Those live in `mail-html.ts`, because they are
  * serialized into the sandboxed document and this stylesheet cannot reach inside it.
+ *
+ * Two ideas hold this pane together.
+ *
+ * THE DESK AND THE PAPER. The pane is a desk (`--bg-secondary`, which is Apple's own tray grey in
+ * light and near black in dark) and the body sits on a white card. That is what gives a mail an
+ * edge without a divider, and it is the only honest way to render html mail, which is authored for
+ * white.
+ *
+ * THE MEASURE. Everything the reader reads lives in one 760px column with 28px of air on each
+ * side. `.mail-reader-column` is the column, and the header and the body both wear it, so the
+ * subject, the sender and the first line of the body all start on the same vertical.
  */
 
-.mail-reader-pane { overflow: hidden; }
+.mail-reader-pane {
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
 
 /* Nothing selected: the invitation sits in the middle of the pane, like every other empty state
    in the app, rather than clinging to the top edge of a tall blank column. */
@@ -16,105 +30,399 @@
   place-items: center;
 }
 
+.mail-reader-nothing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg-muted);
+}
+
+.mail-reader-nothing-glyph { opacity: 0.4; }
+
+.mail-reader-nothing-text {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.mail-reader-back-bar { background: var(--bg); }
+
+/* ── the reading column ── */
+
+.mail-reader-column {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 28px;
+}
+
+@media (max-width: 900px) {
+  .mail-reader-column { padding: 0 18px; }
+}
+
+/* ── the header ── */
+
 .mail-reader-head {
-  padding: 14px 18px 10px;
-  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  padding-top: 24px;
+  padding-bottom: 16px;
+}
+
+.mail-reader-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .mail-reader-subject {
-  margin: 0 0 6px;
-  font-size: 17px;
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+  padding-top: 2px;
+  font-size: 20px;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
   color: var(--fg);
   overflow-wrap: anywhere;
 }
 
-.mail-reader-people {
+/* The toolbar. `flex-wrap` is not decoration: at 900px the three panes leave this one under
+   100px wide, and a fixed row of round targets would push the pane's own scroll width out. */
+.mail-reader-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ── the person ── */
+
+.mail-reader-sender {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.mail-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  /* The hue comes from the address (see mail-reader-format.ts); the ring keeps a mid-tone circle
+     from dissolving into either theme's surface. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  user-select: none;
+}
+
+.mail-reader-identity {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
+  gap: 4px 8px;
 }
 
-.mail-reader-from { font-weight: 600; color: var(--fg-secondary); }
-.mail-reader-address { color: var(--fg-muted); overflow-wrap: anywhere; }
-.mail-reader-date { margin-left: auto; color: var(--fg-muted); white-space: nowrap; }
+.mail-reader-from {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
 
-.mail-reader-to {
-  margin: 4px 0 0;
+.mail-reader-address {
   font-size: 12px;
   color: var(--fg-muted);
   overflow-wrap: anywhere;
 }
 
+.mail-reader-when {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.mail-reader-date {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.mail-reader-details-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mail-reader-details-btn svg { transition: transform 0.15s ease; }
+.mail-reader-details-btn.open svg { transform: rotate(180deg); }
+.mail-reader-details-btn:hover { text-decoration: underline; }
+
+/* Fourteen recipients is a real message, so the block is bounded and scrolls itself rather than
+   taking the paper's height with it.
+   WHERE IT CUTS is arithmetic, for the same reason the attachment strip's cap is. A scroll box clips
+   at its PADDING box, so content bleeds through padding-bottom and only a border can hold it back:
+   with `padding: 10px` top and bottom, 132px and then 128px both left the seventh address sliced
+   along its x-height in WebKit, which makes a working scroll box look like a rendering bug. The
+   bottom gutter is therefore a transparent BORDER (the background paints under it, so it reads as
+   padding), and the visible strip is `10 + 6 * 18`: the top padding plus six line boxes, since 12px
+   text at a 1.5 line-height is exactly 18px. */
+.mail-reader-detail-rows {
+  margin: 10px 0 0;
+  padding: 10px 12px 0;
+  border-bottom: 10px solid transparent;
+  max-height: 128px;
+  overflow-y: auto;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mail-reader-detail-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.mail-reader-detail-row + .mail-reader-detail-row { margin-top: 4px; }
+.mail-reader-detail-rows dt { color: var(--fg-muted); }
+.mail-reader-detail-rows dd { margin: 0; color: var(--fg-secondary); overflow-wrap: anywhere; }
+
+/* ── attachments ── */
+
+/* TWO ROWS, and the cap is arithmetic rather than a guess: `26 + 6 + 26`, the card height twice
+   plus the gap. A round number here (76px was tried) cuts the third row in half, and half a card is
+   the kind of detail that makes a whole screen look broken. Past two rows it scrolls, which is what
+   a message with nine attachments needs, instead of taking the body's height with it. */
 .mail-attachments {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 10px 0 0;
+  margin: 12px 0 0;
   padding: 0;
+  max-height: 58px;
+  overflow-y: auto;
 }
 
 .mail-attachment {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
+  gap: 6px;
+  height: 26px;
+  max-width: 240px;
+  padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 11px;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 11.5px;
   color: var(--fg-secondary);
 }
 
+.mail-attachment-glyph { display: inline-flex; color: var(--fg-muted); }
+
+.mail-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-attachment-size { flex: 0 0 auto; color: var(--fg-muted); }
+
+/* ── the body ── */
+
 .mail-reader-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  padding-bottom: 22px;
+}
+
+/* PAPER. White in both themes, and its own colours, because everything inside it is a document
+   somebody else wrote (see MailReaderBody.tsx). `overflow: hidden` is what makes the radius clip
+   the frame in the corners. */
+.mail-paper {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  color: #1d1d1f;
+  box-shadow: var(--card-shadow);
 }
 
 .mail-blocked-images {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 18px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--fg-secondary);
+  gap: 8px;
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(60, 60, 67, 0.12);
+  background: #f7f7f9;
+  font-size: 11.5px;
+  color: #4b4b50;
 }
+
+.mail-blocked-glyph { display: inline-flex; color: #86868b; }
+.mail-blocked-text { flex: 1; min-width: 0; }
+
+/* A control ON the paper: the app's accent would be the only theme-aware thing on a white card. */
+.mail-paper-btn {
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #0a5bd5;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mail-paper-btn:hover { text-decoration: underline; }
 
 .mail-html-frame {
-  flex: 1;
-  min-height: 320px;
+  flex: 1 1 auto;
+  min-height: 240px;
   width: 100%;
   border: none;
-  background: transparent;
+  background: #fff;
 }
 
+/* Plain text is PROSE by default. Only a printout (indented lines, box drawing) keeps the fixed
+   pitch, because that is the case where the pitch carries the meaning. */
 .mail-body-text {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   margin: 0;
-  padding: 14px 18px;
-  font: 13px/1.6 var(--font-mono);
-  color: var(--fg);
+  padding: 20px 24px;
+  max-width: 68ch;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  color: #1d1d1f;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.mail-body-notice {
-  padding: 18px;
+.mail-body-text[data-shape='code'] {
+  max-width: none;
+  font-family: var(--font-mono);
   font-size: 13px;
+  line-height: 1.6;
+  color: #2c2c30;
+  overflow-wrap: normal;
+}
+
+.mail-body-text .linkified-url { color: #0a5bd5; }
+
+.mail-body-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--fg-secondary);
 }
 
 .mail-body-footnote {
-  margin: 0;
-  padding: 8px 18px 14px;
+  margin: 8px 0 0;
   font-size: 11px;
   color: var(--fg-muted);
+}
+
+/* ── waiting ── */
+
+.mail-skeleton { gap: 10px; }
+
+.mail-skeleton-bar {
+  height: 11px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 0%,
+    var(--bg-hover) 50%,
+    var(--bg-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  animation: mail-skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+.mail-reader-head.mail-skeleton .mail-skeleton-bar + .mail-skeleton-bar { margin-top: 10px; }
+.mail-skeleton-bar.w-subject { height: 18px; width: 62%; }
+.mail-skeleton-bar.w-name { width: 120px; }
+.mail-skeleton-bar.w-address { width: 190px; height: 9px; }
+.mail-skeleton-bar.w-body { width: 100%; }
+.mail-skeleton-bar.w-body-short { width: 48%; }
+
+.mail-reader-head.mail-skeleton { padding-bottom: 20px; }
+
+.mail-skeleton-sender {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 20px;
+}
+
+.mail-skeleton-circle {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+}
+
+.mail-skeleton-lines { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+
+.mail-paper.mail-skeleton {
+  display: block;
+  padding: 20px 24px;
+}
+
+.mail-paper.mail-skeleton .mail-skeleton-bar {
+  background: linear-gradient(90deg, #ededf0 0%, #f7f7f9 50%, #ededf0 100%);
+  background-size: 200% 100%;
+}
+
+.mail-paper.mail-skeleton .mail-skeleton-bar + .mail-skeleton-bar { margin-top: 12px; }
+
+@keyframes mail-skeleton-sweep {
+  from { background-position: 140% 0; }
+  to { background-position: -40% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mail-skeleton-bar { animation: none; }
 }

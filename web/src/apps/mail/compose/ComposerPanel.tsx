@@ -6,6 +6,12 @@
  * narrow viewport it is the whole screen with a back control, which is the same drill the reader
  * uses.
  *
+ * It is ONE CARD, on the same desk and the same 760px measure as the message it answers, so a reply
+ * visibly belongs to what is on screen behind it. Inside the card: a titled head, a stacked form of
+ * hairline rows with no boxed inputs, the body as the rest of the card, and a footer whose primary
+ * control is Send. The head and the footer hold their edges; only the form and the body scroll,
+ * so a long mail can never push the send button out of reach.
+ *
  * The body is a plain `<textarea>` holding markdown, and the server renders the html. No rich
  * editor in v1: a WYSIWYG surface would have to agree with the server's renderer about what it
  * produced, and two renderers disagreeing is how a mail loses half its formatting.
@@ -14,11 +20,12 @@
  * when the draft is saved), so showing it is honest; making it editable would mean the human could
  * silently rewrite what somebody else wrote and send it back to them as a quote.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
-import type { MailboxDto } from '@/api/mail';
-import { BackIcon } from '../mail-icons';
-import type { MailComposer } from '../mail-store';
+import type { MailDraftDto, MailboxDto } from '@/api/mail';
+import { BackIcon, ClipIcon, SentIcon, TrashIcon } from '../mail-icons';
+import { selectMailbox } from '../mail-actions';
+import { DRAFTS_MAILBOX, type MailComposer } from '../mail-store';
 import { AddressChipsField } from './AddressChipsField';
 import { SendStatusCard } from './SendStatusCard';
 import {
@@ -29,18 +36,18 @@ import {
 } from './compose-actions';
 import { askMailOnPhone, discardMailComposerDraft, sendMailNow } from './compose-send';
 import { hasInvalidAddress } from './mail-address';
+import { isOpenDraft } from './send-status';
 
 interface Props {
   composer: MailComposer;
   mailboxes: MailboxDto[];
+  /** This account's drafts, for the count chip that leads back to them. */
+  drafts: MailDraftDto[];
   narrow: boolean;
   /** False when the account's provider declares no send. The card is still reachable. */
   canSend: boolean;
   cannotSendTitle: string;
 }
-
-/** The body starts at eight rows, which is a short mail rather than a comment box. */
-const MIN_BODY_ROWS = 8;
 
 const SAVE_TEXT: Record<MailComposer['save'], string> = {
   clean: '',
@@ -56,15 +63,43 @@ const SAVE_TEXT: Record<MailComposer['save'], string> = {
 /** A draft that is on its way or gone is never offered a send button again. */
 const NO_SEND_PHASES = ['sending', 'sent', 'discarded'];
 
-export function ComposerPanel({ composer, mailboxes, narrow, canSend, cannotSendTitle }: Props) {
+function titleOf(composer: MailComposer): string {
+  if (composer.intent === 'forward') return 'Forward';
+  return composer.replyTo ? 'Reply' : 'New message';
+}
+
+/**
+ * Whether throwing this draft away is worth asking about.
+ *
+ * The BODY is the human's own writing, so any of it means ask. For a reply or a forward, nothing
+ * else counts: the recipients, the subject and the quote were written by this console, and asking
+ * "are you sure" about text nobody typed trains people to click through the dialog that matters.
+ */
+function needsDiscardConfirm(composer: MailComposer): boolean {
+  const { fields } = composer;
+  if (fields.body.trim()) return true;
+  if (composer.replyTo || composer.intent === 'forward') return false;
+  return !!fields.subject.trim()
+    || fields.to.length + fields.cc.length + fields.bcc.length > 0;
+}
+
+export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, cannotSendTitle }: Props) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const inbox = mailboxes.find((one) => one.role === 'inbox')?.mailboxId;
   const showing = composer.mode === 'status' ? 'status' : 'edit';
+  // Other drafts, not this one: a chip that counts the draft you are looking at is a number that
+  // never means anything.
+  const others = drafts.filter((one) => isOpenDraft(one) && one.draftId !== composer.draftId).length;
+
+  const askDiscard = () => {
+    if (needsDiscardConfirm(composer)) setConfirmDiscard(true);
+    else void discardMailComposerDraft();
+  };
 
   return (
     <section className="mail-composer-pane" data-testid="mail-composer" data-mode={showing}>
-      <div className="mail-pane-head">
-        {narrow && (
+      {narrow && (
+        <div className="mail-pane-head mail-composer-back-bar">
           <button
             type="button"
             className="mail-icon-btn"
@@ -74,44 +109,74 @@ export function ComposerPanel({ composer, mailboxes, narrow, canSend, cannotSend
           >
             <BackIcon />
           </button>
-        )}
-        <span className="mail-pane-title">
-          {composer.replyTo ? 'Reply' : 'New message'}
-        </span>
-        {showing === 'edit' && composer.draftId && (
-          <button
-            type="button"
-            className="mail-text-btn"
-            data-testid="mail-composer-show-status"
-            onClick={showMailComposerStatus}
-          >
-            Status
-          </button>
-        )}
-        <button
-          type="button"
-          className="mail-text-btn"
-          data-testid="mail-composer-close"
-          onClick={() => { void closeMailComposer(); }}
-        >
-          Close
-        </button>
-      </div>
-
-      {showing === 'status' ? (
-        <SendStatusCard
-          composer={composer}
-          inboxMailboxId={inbox}
-          onDiscard={() => setConfirmDiscard(true)}
-        />
-      ) : (
-        <ComposerForm
-          composer={composer}
-          canSend={canSend}
-          cannotSendTitle={cannotSendTitle}
-          onDiscard={() => setConfirmDiscard(true)}
-        />
+        </div>
       )}
+
+      <div className="mail-compose-shell">
+        <div className="mail-compose-card">
+          <div className="mail-compose-card-head">
+            <span className="mail-compose-title">{titleOf(composer)}</span>
+            {others > 0 && (
+              <button
+                type="button"
+                className="mail-compose-drafts-chip"
+                data-testid="mail-compose-drafts-chip"
+                title="Open the drafts waiting on this account"
+                onClick={() => selectMailbox(composer.accountId, DRAFTS_MAILBOX)}
+              >
+                {others === 1 ? '1 draft' : `${others} drafts`}
+              </button>
+            )}
+            {showing === 'edit' && composer.draftId && (
+              <button
+                type="button"
+                className="mail-text-btn"
+                data-testid="mail-composer-show-status"
+                onClick={showMailComposerStatus}
+              >
+                Status
+              </button>
+            )}
+            {showing === 'edit' && (
+              <button
+                type="button"
+                className="mail-round-btn danger"
+                data-testid="mail-compose-discard"
+                disabled={composer.busy}
+                title="Discard this draft"
+                aria-label="Discard this draft"
+                onClick={askDiscard}
+              >
+                <TrashIcon size={15} />
+              </button>
+            )}
+            <button
+              type="button"
+              className="mail-round-btn"
+              data-testid="mail-composer-close"
+              title="Close the composer, keeping the draft"
+              aria-label="Close the composer"
+              onClick={() => { void closeMailComposer(); }}
+            >
+              <span className="mail-compose-close-glyph" aria-hidden="true">&times;</span>
+            </button>
+          </div>
+
+          {showing === 'status' ? (
+            <SendStatusCard
+              composer={composer}
+              inboxMailboxId={inbox}
+              onDiscard={askDiscard}
+            />
+          ) : (
+            <ComposerForm
+              composer={composer}
+              canSend={canSend}
+              cannotSendTitle={cannotSendTitle}
+            />
+          )}
+        </div>
+      </div>
 
       {confirmDiscard && (
         <ConfirmDialog
@@ -128,115 +193,131 @@ export function ComposerPanel({ composer, mailboxes, narrow, canSend, cannotSend
   );
 }
 
-function ComposerForm({ composer, canSend, cannotSendTitle, onDiscard }: {
+function ComposerForm({ composer, canSend, cannotSendTitle }: {
   composer: MailComposer;
   canSend: boolean;
   cannotSendTitle: string;
-  onDiscard: () => void;
 }) {
   const { fields } = composer;
   const invalid = hasInvalidAddress([...fields.to, ...fields.cc, ...fields.bcc]);
   const sendable = canSend && !invalid && !composer.busy && !NO_SEND_PHASES.includes(composer.status.phase);
   const sendTitle = canSend
-    ? (invalid ? 'Fix the addresses in red first' : undefined)
+    ? (invalid ? 'Fix the addresses in red first' : 'Send this message now (⌘↩)')
     : cannotSendTitle;
 
+  // ⌘↩ from anywhere in the form, which is what the Send button's title promises. A shortcut
+  // advertised in a tooltip and implemented nowhere is the confident wrong answer this repo bans.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return;
+    if (!sendable) return;
+    event.preventDefault();
+    void sendMailNow();
+  };
+
   return (
-    <>
-      <div className="mail-compose-fields">
-        {/* A new message needs a recipient first; a reply already has one, so its caret goes to
-            the body. Two fields racing for focus would decide it by mount order. */}
-        <AddressChipsField
-          label="To"
-          name="to"
-          chips={fields.to}
-          autoFocus={!composer.replyTo}
-          onChange={(to) => setMailComposerFields({ to })}
-        />
-        {composer.showCc && (
+    <div className="mail-compose-form" onKeyDown={onKeyDown}>
+      <div className="mail-compose-scroll">
+        <div className="mail-compose-rows">
+          {/* A new message needs a recipient first; a reply already has one, so its caret goes to
+              the body. Two fields racing for focus would decide it by mount order. */}
           <AddressChipsField
-            label="Cc"
-            name="cc"
-            chips={fields.cc}
-            onChange={(cc) => setMailComposerFields({ cc })}
+            label="To"
+            name="to"
+            chips={fields.to}
+            autoFocus={!composer.replyTo}
+            onChange={(to) => setMailComposerFields({ to })}
+            trailing={(!composer.showCc || !composer.showBcc) ? (
+              <span className="mail-compose-reveals">
+                {!composer.showCc && (
+                  <button type="button" className="mail-text-btn" data-testid="mail-compose-add-cc" onClick={() => toggleMailComposerField('showCc')}>
+                    Cc
+                  </button>
+                )}
+                {!composer.showBcc && (
+                  <button type="button" className="mail-text-btn" data-testid="mail-compose-add-bcc" onClick={() => toggleMailComposerField('showBcc')}>
+                    Bcc
+                  </button>
+                )}
+              </span>
+            ) : undefined}
           />
-        )}
-        {composer.showBcc && (
-          <AddressChipsField
-            label="Bcc"
-            name="bcc"
-            chips={fields.bcc}
-            onChange={(bcc) => setMailComposerFields({ bcc })}
-          />
-        )}
-        <div className="mail-compose-toggles">
-          {!composer.showCc && (
-            <button type="button" className="mail-text-btn" data-testid="mail-compose-add-cc" onClick={() => toggleMailComposerField('showCc')}>
-              Add Cc
-            </button>
+          {composer.showCc && (
+            <AddressChipsField
+              label="Cc"
+              name="cc"
+              chips={fields.cc}
+              onChange={(cc) => setMailComposerFields({ cc })}
+            />
           )}
-          {!composer.showBcc && (
-            <button type="button" className="mail-text-btn" data-testid="mail-compose-add-bcc" onClick={() => toggleMailComposerField('showBcc')}>
-              Add Bcc
-            </button>
+          {composer.showBcc && (
+            <AddressChipsField
+              label="Bcc"
+              name="bcc"
+              chips={fields.bcc}
+              onChange={(bcc) => setMailComposerFields({ bcc })}
+            />
           )}
+
+          <div className="mail-compose-field">
+            <label className="mail-compose-label" htmlFor="mail-compose-subject">Subject</label>
+            <input
+              id="mail-compose-subject"
+              className="mail-compose-input mail-compose-subject"
+              data-testid="mail-compose-subject"
+              type="text"
+              value={fields.subject}
+              onChange={(event) => setMailComposerFields({ subject: event.target.value })}
+            />
+          </div>
         </div>
 
-        <div className="mail-compose-field">
-          <label className="mail-compose-label" htmlFor="mail-compose-subject">Subject</label>
-          <input
-            id="mail-compose-subject"
-            className="mail-compose-input"
-            data-testid="mail-compose-subject"
-            type="text"
-            value={fields.subject}
-            onChange={(event) => setMailComposerFields({ subject: event.target.value })}
-          />
-        </div>
+        <BodyArea
+          value={fields.body}
+          autoFocus={!!composer.replyTo}
+          onChange={(body) => setMailComposerFields({ body })}
+        />
+
+        {composer.quote && (
+          <div className="mail-compose-quote" data-testid="mail-compose-quote">
+            <span className="mail-compose-quote-label">
+              {composer.intent === 'forward' ? 'Forwarded below your note' : 'Quoted below your reply'}
+            </span>
+            <pre className="mail-compose-quote-text">{composer.quote}</pre>
+          </div>
+        )}
+
+        {composer.notice && (
+          <p className="mail-compose-notice" data-testid="mail-compose-notice">{composer.notice}</p>
+        )}
       </div>
 
-      <BodyArea
-        value={fields.body}
-        autoFocus={!!composer.replyTo}
-        onChange={(body) => setMailComposerFields({ body })}
-      />
-
-      {composer.quote && (
-        <div className="mail-compose-quote" data-testid="mail-compose-quote">
-          <span className="mail-compose-quote-label">Quoted below your reply</span>
-          <pre className="mail-compose-quote-text">{composer.quote}</pre>
-        </div>
-      )}
-
-      <p className="mail-compose-attachments" data-testid="mail-compose-attachments">
-        Attachments are not supported yet
-      </p>
-
-      {composer.notice && (
-        <p className="mail-compose-notice" data-testid="mail-compose-notice">{composer.notice}</p>
-      )}
-
       <div className="mail-compose-footer">
-        <span className="mail-compose-save" data-testid="mail-compose-save" data-state={composer.save}>
-          {SAVE_TEXT[composer.save]}
+        <span className="mail-compose-status">
+          <span className="mail-compose-save" data-testid="mail-compose-save" data-state={composer.save}>
+            {SAVE_TEXT[composer.save]}
+          </span>
+          <span className="mail-compose-hint">Markdown is rendered on send</span>
         </span>
-        <button
-          type="button"
-          className="mail-compose-btn danger"
-          data-testid="mail-compose-discard"
-          disabled={composer.busy}
-          onClick={onDiscard}
-        >
-          Discard
-        </button>
         {!NO_SEND_PHASES.includes(composer.status.phase) && (
           <>
+            {/* Drawn and disabled: the send contract carries no attachment part yet, and a control
+                that cannot do what it appears to offer is worse than a control that says so. */}
+            <button
+              type="button"
+              className="mail-round-btn"
+              data-testid="mail-compose-attachments"
+              disabled
+              title="Attachments are coming"
+            >
+              <ClipIcon size={15} />
+              <span className="mail-visually-hidden">Attachments are not supported yet</span>
+            </button>
             <button
               type="button"
               className="mail-compose-btn"
               data-testid="mail-compose-ask"
               disabled={!sendable}
-              title={sendTitle}
+              title={canSend ? 'Ask for approval on the phone before this goes out' : cannotSendTitle}
               onClick={() => { void askMailOnPhone(); }}
             >
               Ask on phone
@@ -249,21 +330,22 @@ function ComposerForm({ composer, canSend, cannotSendTitle, onDiscard }: {
               title={sendTitle}
               onClick={() => { void sendMailNow(); }}
             >
-              {composer.busy ? 'Sending…' : 'Send now'}
+              <SentIcon size={14} />
+              {composer.busy ? 'Sending…' : 'Send'}
             </button>
           </>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
 /**
- * The body: eight rows to start, growing with what is in it.
+ * The body: the rest of the card, growing with what is in it.
  *
  * `useLayoutEffect` rather than an effect, because a height applied after paint is a visible jump on
- * every keystroke. The max height lives in the css, so a long mail scrolls inside the field instead
- * of pushing the footer off the pane.
+ * every keystroke. There is no max height any more: the card's own scroll area holds it, so a long
+ * mail scrolls the form rather than growing a second scrollbar inside the field.
  */
 function BodyArea({ value, autoFocus, onChange }: {
   value: string;
@@ -284,9 +366,8 @@ function BodyArea({ value, autoFocus, onChange }: {
       ref={ref}
       className="mail-compose-body"
       data-testid="mail-compose-body"
-      rows={MIN_BODY_ROWS}
       value={value}
-      placeholder="Write your message. Markdown works."
+      placeholder="Write your message"
       onChange={(event) => onChange(event.target.value)}
     />
   );

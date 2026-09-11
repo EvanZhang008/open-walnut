@@ -128,6 +128,15 @@ export interface MailComposer {
   quote: string | null;
   /** The message being answered, by cache handle. The SERVER copies the threading headers. */
   replyTo: { accountId: string; messageId: string } | null;
+  /**
+   * What the human asked for, for the card's title alone.
+   *
+   * A forward is not a reply and deliberately carries no `replyTo` (it must not inherit the
+   * original's threading headers), so the title cannot be derived from the fields: a forward and a
+   * blank message look identical from here, and calling a forward "New message" hides which of the
+   * two the click produced. Absent means a new message.
+   */
+  intent?: 'forward';
   showCc: boolean;
   showBcc: boolean;
   /**

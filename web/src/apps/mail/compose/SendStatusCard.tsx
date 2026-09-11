@@ -7,7 +7,7 @@
  * the Sent folder can settle it, so a Try again here is an invitation to send the same mail twice.
  * The server refuses that retry with a 409; this is the half that never offers it.
  */
-import { DraftsIcon } from '../mail-icons';
+import { AlertCircleIcon, CheckCircleIcon, ClockIcon, DraftsIcon } from '../mail-icons';
 import { selectMailbox } from '../mail-actions';
 import type { MailComposer } from '../mail-store';
 import {
@@ -27,6 +27,18 @@ interface Props {
   onDiscard: () => void;
 }
 
+/**
+ * The phase as one mark, so the card is read before it is read: a green tick means gone, a red ring
+ * means it is not, a clock means somebody has to answer. `unknown` gets the RED ring rather than a
+ * clock, because a send whose fate the transport never reported is not "in progress".
+ */
+function PhaseGlyph({ phase }: { phase: MailComposer['status']['phase'] }) {
+  if (phase === 'sent') return <CheckCircleIcon size={24} />;
+  if (phase === 'failed' || phase === 'unknown') return <AlertCircleIcon size={24} />;
+  if (phase === 'waiting' || phase === 'sending') return <ClockIcon size={24} />;
+  return <DraftsIcon size={22} />;
+}
+
 export function SendStatusCard({ composer, inboxMailboxId, onDiscard }: Props) {
   const { status, busy } = composer;
   const backToInbox = () => {
@@ -36,7 +48,7 @@ export function SendStatusCard({ composer, inboxMailboxId, onDiscard }: Props) {
 
   return (
     <div className="mail-send-status" data-testid="mail-send-status" data-phase={status.phase}>
-      <div className="mail-send-status-icon" aria-hidden="true"><DraftsIcon size={22} /></div>
+      <div className="mail-send-status-icon" aria-hidden="true"><PhaseGlyph phase={status.phase} /></div>
       <h3 className="mail-send-status-headline" data-testid="mail-send-headline">
         {statusHeadline(status)}
       </h3>

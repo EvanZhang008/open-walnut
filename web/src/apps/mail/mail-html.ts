@@ -55,20 +55,40 @@ export function mailFrameCsp(allowRemoteImages: boolean): string {
  * message, and a comment mentioning a dangerous scheme by name reads like the body carrying one
  * (the read spec asserts on the whole document and caught exactly that).
  *
- * The one rule worth explaining is the last: an anchor whose href was stripped, because it was a
- * script URL, must stop looking like a live link. A blue word that does nothing is the confident
- * wrong answer this repo bans.
+ * THE BODY RENDERS ON PAPER, in both of the app's themes: `color-scheme: light` and a white
+ * background, never the app's dark surface. HTML mail is authored for white, and the theme-aware
+ * version of this reset (dark text turning light over a transparent page) is what put a sender's
+ * own blue headings on a black page and made the reader look broken.
+ *
+ * Three rules worth explaining. An anchor whose href was stripped, because it was a script URL, must
+ * stop looking like a live link: a blue word that does nothing is the confident wrong answer this
+ * repo bans. `walnut-cid-image` is the chip an attachment-referencing image becomes, because this
+ * console has no route that serves attachment bytes, so the picture can never arrive.
+ *
+ * And the table rule is a WEBKIT rule, which is to say it is a Mac app rule. Newsletters are built
+ * as tables with a fixed pixel width (`<table width="720">` is the classic shape). Chromium clamps
+ * those with `max-width: 100%`; WebKit does not apply max-width to a table box at all, so the same
+ * mail overflowed the paper and the last two columns were cut off with an overlay scrollbar nobody
+ * sees. Measured at a 432px paper: WebKit laid the table out at 720px and the document scrolled to
+ * 744, while Chromium reflowed it to 384. Dropping the declared width lets the auto table algorithm
+ * fit the paper in both engines. It is scoped to a NON-percentage width on purpose: `width="100%"`
+ * is a shell table asking to fill the paper, which is already the right answer.
  */
 const FRAME_RESET = `<style>
-  :root { color-scheme: light dark; }
-  body { margin: 0; padding: 2px 2px 16px; font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #1d1d1f; background: transparent; overflow-wrap: break-word; }
-  @media (prefers-color-scheme: dark) { body { color: #f5f5f7; } }
+  :root { color-scheme: light; }
+  html { background: #fff; }
+  body { margin: 0; padding: 20px 24px; font: 15px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #1d1d1f; background: #fff; overflow-wrap: break-word; }
   img, table, pre { max-width: 100%; }
+  img { height: auto; }
   pre { overflow-x: auto; white-space: pre-wrap; }
   table { border-collapse: collapse; }
-  blockquote { margin: 0 0 0 12px; padding-left: 10px; border-left: 2px solid rgba(128,128,128,0.4); }
-  a { color: #0a84ff; }
+  table[width]:not([width$='%']) { width: auto !important; }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.2em 0 0.5em; }
+  p, ul, ol, table { margin: 0 0 1em; }
+  blockquote { margin: 0 0 1em 12px; padding-left: 12px; border-left: 2px solid rgba(60,60,67,0.22); color: #4b4b50; }
+  a { color: #0a5bd5; }
   a:not([href]) { color: inherit; text-decoration: none; cursor: default; }
+  span.walnut-cid-image { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 10px; border: 1px solid rgba(60,60,67,0.22); border-radius: 999px; background: #f2f2f5; color: #6e6e73; font-size: 12px; line-height: 1.5; vertical-align: middle; }
 </style>`;
 
 /**
@@ -162,11 +182,14 @@ function attrValue(assignment: string | undefined): string {
  * is a whole `<html>` document, nested inside the frame's own document, gets silently
  * rearranged by the parser, and the policy meta can end up after the content it governs.
  *
+ * The last pass is not about safety at all: an image that points at an attachment part is turned
+ * into a chip, because nothing can serve those bytes (see `replaceCidImages`).
+ *
  * A body that carries nothing hostile comes back byte-identical.
  */
 export function hardenMailHtml(raw: string): string {
   if (!raw) return '';
-  return raw
+  return replaceCidImages(raw
     // Comments first: a conditional comment can hide markup from a later pass.
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<!doctype[^>]*>/gi, '')
@@ -208,7 +231,38 @@ export function hardenMailHtml(raw: string): string {
       const tidy = kept.trim();
       const closing = whole.startsWith('</') ? '</' : '<';
       return `${closing}${name}${tidy ? ` ${tidy}` : ''}>`;
-    });
+    }));
+}
+
+/** One `<img>` element, whatever its attributes hold (a quoted value may contain `>`). */
+const IMG_ELEMENT = /<img\b((?:"[^"]*"|'[^']*'|[^>"'])*)>/gi;
+
+/** An `src` that points at an attachment part rather than at a file or a URL. */
+const CID_SRC = /\ssrc\s*=\s*(?:"\s*cid:|'\s*cid:|cid:)/i;
+
+const ALT_ATTR = /\salt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+
+/**
+ * An image the frame can never resolve becomes a chip that says so.
+ *
+ * A `cid:` source names a part of the MIME message, and this console serves no attachment bytes,
+ * so the browser paints its broken-image glyph: a torn page in the middle of the prose that reads
+ * as "the reader is broken" rather than as "this picture lives in the attachment". The alt text is
+ * what the sender wrote for exactly this case, so it is the chip's label when there is one.
+ *
+ * It is NOT counted anywhere. `cid:` was never part of "N remote images blocked" (the bytes are
+ * already on this machine, so there is nothing to opt into), and a chip is not an image either.
+ */
+export function replaceCidImages(html: string): string {
+  return html.replace(IMG_ELEMENT, (whole, attrs: string) => {
+    if (!CID_SRC.test(attrs)) return whole;
+    const alt = ALT_ATTR.exec(attrs);
+    const label = (alt?.[1] ?? alt?.[2] ?? alt?.[3] ?? '').trim() || 'inline image';
+    // `<` and `>` only: an attribute value may legally hold a bare `<`, while `&amp;` is already
+    // an entity and escaping the ampersand again would print the escape.
+    const text = label.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<span class="walnut-cid-image">${text}</span>`;
+  });
 }
 
 const IMG_TAG = /<img\b[^>]*>/gi;

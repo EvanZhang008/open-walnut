@@ -42,6 +42,41 @@ export function markReadIfAllowed(message: MailMessageDto): Promise<void> {
     });
 }
 
+/**
+ * The reader's own read-flag control: mark the open message read, or unread again.
+ *
+ * The same four numbers as the automatic path, moved the same way and put back the same way, which
+ * is why it shares `applySeen` rather than repeating it. Gated on the PROVIDER's declared
+ * capability, because a provider that cannot move the flag answers 409 and the mailbox would drift
+ * from what every other mail client shows.
+ *
+ * Marking unread does NOT stop the automatic mark: reopening the message reads it again, which is
+ * what every mail client does. Unread here means "leave it on my list", and the list is what it
+ * changes.
+ */
+export function setOpenMessageRead(read: boolean): Promise<void> {
+  const open = store.state.open;
+  const message = open?.message;
+  if (!message) return Promise.resolve();
+  const provider = store.state.providers.find((one) => one.id === providerIdOf(message.accountId));
+  if (!provider?.capabilities.markRead) return Promise.resolve();
+  if (message.flags.includes(SEEN) === read) return Promise.resolve();
+
+  applySeen(message, read);
+  return markMailMessageRead(message.accountId, message.messageId, read)
+    .then((answer) => { replaceMessage(answer.message); })
+    .catch((error) => {
+      const failure = mailFailure(error);
+      applySeen(message, !read);
+      log.warn('mail', 'read flag refused, rolling the badge back', {
+        accountId: message.accountId,
+        messageId: message.messageId,
+        code: failure.code,
+        error: failure.message,
+      });
+    });
+}
+
 function withSeen(message: MailMessageDto, seen: boolean): MailMessageDto {
   const flags = message.flags.filter((flag) => flag !== SEEN);
   return { ...message, flags: seen ? [...flags, SEEN] : flags };

@@ -18,7 +18,7 @@ import {
 } from './mail-actions';
 import { DRAFTS_MAILBOX, type MailSnapshot } from './mail-store';
 import { MailDraftsList } from './compose/MailDraftsList';
-import { AttachmentIcon, BackIcon } from './mail-icons';
+import { AttachmentIcon, BackIcon, SearchIcon } from './mail-icons';
 
 interface Props {
   snapshot: MailSnapshot;
@@ -41,6 +41,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
   const draftsView = !search.active && snapshot.selected?.mailboxId === DRAFTS_MAILBOX;
 
   const clear = () => { setDraft(''); clearMailSearch(); };
+  const section = search.active ? null : sectionOf(snapshot, draftsView, rows);
 
   return (
     <section className="mail-list-pane" data-testid="mail-message-list">
@@ -60,6 +61,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           className="mail-search"
           onSubmit={(event) => { event.preventDefault(); void runMailSearch(draft); }}
         >
+          <span className="mail-search-glyph" aria-hidden="true"><SearchIcon size={13} /></span>
           <input
             className="mail-search-input"
             data-testid="mail-search-input"
@@ -89,6 +91,19 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
                 </span>
               )}
             </>
+          )}
+        </p>
+      )}
+
+      {/* Which folder these rows are, and how many of them there are. The middle pane used to open
+          with an unlabelled column of messages, so a mailbox with three mails and one that had not
+          finished loading looked the same. */}
+      {section && (
+        <p className="mail-list-section" data-testid="mail-list-section">
+          <span className="mail-list-section-name">{section.name}</span>
+          <span className="mail-list-section-count">{section.count}</span>
+          {section.unread > 0 && (
+            <span className="mail-list-section-unread">{section.unread} unread</span>
           )}
         </p>
       )}
@@ -138,6 +153,32 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
   );
 }
 
+interface Section { name: string; count: number; unread: number }
+
+/**
+ * The folder header: which mailbox this column is, how many rows are loaded, and how many of them
+ * are unread.
+ *
+ * The count is the ROWS ON SCREEN rather than the provider's total, because that is the number a
+ * human can check by looking, and "Load older" is what says there are more. Null when nothing is
+ * selected: there is no folder to name yet.
+ */
+function sectionOf(snapshot: MailSnapshot, draftsView: boolean, rows: MailMessageDto[]): Section | null {
+  const selected = snapshot.selected;
+  if (!selected) return null;
+  if (draftsView) {
+    const drafts = snapshot.drafts[selected.accountId] ?? [];
+    return { name: 'Drafts', count: drafts.length, unread: 0 };
+  }
+  const mailbox = (snapshot.mailboxes[selected.accountId] ?? [])
+    .find((one) => one.mailboxId === selected.mailboxId);
+  return {
+    name: mailbox?.name || selected.mailboxId,
+    count: rows.length,
+    unread: rows.filter((one) => isUnread(one.flags)).length,
+  };
+}
+
 function MailRow({ message, selected, showMailbox }: {
   message: MailMessageDto;
   selected: boolean;
@@ -154,11 +195,14 @@ function MailRow({ message, selected, showMailbox }: {
       onClick={() => { void openMailMessage(message.accountId, message.messageId); }}
     >
       <span className="mail-row-top">
+        {unread && <span className="mail-row-dot" aria-hidden="true" />}
         <span className="mail-row-from">{senderLabel(message.from)}</span>
         <span className="mail-row-time">{formatMailTime(message.sentAt)}</span>
       </span>
       <span className="mail-row-subject">
-        {message.subject || '(no subject)'}
+        {/* Its own span, so the ellipsis has a block to happen in: the row's subject line is a flex
+            container, and a bare text node there is an anonymous item that clips without one. */}
+        <span className="mail-row-subject-text">{message.subject || '(no subject)'}</span>
         {message.attachments.length > 0 && (
           <span className="mail-row-clip" aria-label="has attachments"><AttachmentIcon /></span>
         )}

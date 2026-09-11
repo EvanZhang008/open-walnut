@@ -21,6 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { makeTaskFromMessage } from './mail-task-actions';
+import { TaskIcon } from './mail-icons';
 import type { MailOpenMessage } from './mail-store';
 
 export function MailTaskButton({ open }: { open: MailOpenMessage }) {
@@ -30,13 +31,14 @@ export function MailTaskButton({ open }: { open: MailOpenMessage }) {
     <div className="mail-task-slot">
       <button
         type="button"
-        className="mail-compose-btn"
+        className={`mail-round-btn${open.taskBusy ? ' busy' : ''}`}
         data-testid="mail-make-task"
         disabled={open.taskBusy || !open.message}
-        title="Make a Walnut task from this message"
+        title={open.taskBusy ? 'Making a task…' : 'Make a Walnut task from this message'}
+        aria-label="Make a Walnut task from this message"
         onClick={() => { void makeTaskFromMessage(open.accountId, open.messageId); }}
       >
-        {open.taskBusy ? 'Making…' : 'Make a task'}
+        <TaskIcon size={15} />
       </button>
       {open.taskError && (
         <span className="mail-task-error" data-testid="mail-task-error">{open.taskError}</span>

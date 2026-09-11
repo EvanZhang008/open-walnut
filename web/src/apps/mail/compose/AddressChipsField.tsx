@@ -10,7 +10,7 @@
  * repaired: the composer refuses to send while one exists, which is the one moment a typo is cheap
  * to fix.
  */
-import { useState, type ClipboardEvent, type KeyboardEvent } from 'react';
+import { useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { chipLabel, withChips, type AddressChip } from './mail-address';
 
 interface Props {
@@ -20,12 +20,19 @@ interface Props {
   chips: AddressChip[];
   onChange: (chips: AddressChip[]) => void;
   autoFocus?: boolean;
+  /**
+   * Controls that belong to this row, at its right end (the Cc and Bcc reveals on `To`).
+   *
+   * A sibling of the chips box rather than a child of it: inside, a row of fourteen recipients
+   * would wrap the toggles onto a line of their own, halfway across the field.
+   */
+  trailing?: ReactNode;
 }
 
 /** The keys that end a recipient. Tab is here so keyboard-only entry never eats an address. */
 const COMMIT_KEYS = new Set(['Enter', ',', ';', 'Tab']);
 
-export function AddressChipsField({ label, name, chips, onChange, autoFocus }: Props) {
+export function AddressChipsField({ label, name, chips, onChange, autoFocus, trailing }: Props) {
   const [text, setText] = useState('');
 
   const commit = (raw: string): boolean => {
@@ -99,6 +106,7 @@ export function AddressChipsField({ label, name, chips, onChange, autoFocus }: P
           onBlur={() => commit(text)}
         />
       </div>
+      {trailing && <span className="mail-compose-row-trailing">{trailing}</span>}
     </div>
   );
 }

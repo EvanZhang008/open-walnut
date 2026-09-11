@@ -106,8 +106,114 @@ export function ReplyAllIcon({ size = 14 }: IconProps) {
   </>);
 }
 
+export function ForwardIcon({ size = 14 }: IconProps) {
+  return frame(size, <>
+    <path d="M15 5l6 6-6 6" />
+    <path d="M21 11h-9a8 8 0 0 0-8 8" />
+  </>);
+}
+
 export function BackIcon({ size = 14 }: IconProps) {
   return frame(size, <path d="M15 5l-7 7 7 7" />);
+}
+
+export function ChevronIcon({ size = 12 }: IconProps) {
+  return frame(size, <path d="M6 9l6 6 6-6" />);
+}
+
+export function SearchIcon({ size = 14 }: IconProps) {
+  return frame(size, <>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="M16 16l4.5 4.5" />
+  </>);
+}
+
+/** Make a task: a box with a tick, which is what a Walnut todo row looks like. */
+export function TaskIcon({ size = 15 }: IconProps) {
+  return frame(size, <>
+    <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
+    <path d="M8 12.2l2.8 2.8L16.5 9" />
+  </>);
+}
+
+/** Mark unread: a sealed envelope. */
+export function EnvelopeIcon({ size = 15 }: IconProps) {
+  return frame(size, <>
+    <rect x="3" y="5.5" width="18" height="13" rx="2" />
+    <path d="M3.5 7l8.5 6 8.5-6" />
+  </>);
+}
+
+/** Mark read: the same envelope, opened. */
+export function EnvelopeOpenIcon({ size = 15 }: IconProps) {
+  return frame(size, <>
+    <path d="M3 10.5L12 4l9 6.5V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    <path d="M3.5 10.8l8.5 5.7 8.5-5.7" />
+  </>);
+}
+
+/** The one action this console does not have yet, drawn so the gap is visible and honest. */
+export function ClipIcon({ size = 15 }: IconProps) {
+  return frame(size, <path d="M21 11.5l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7" />);
+}
+
+export function ImageIcon({ size = 15 }: IconProps) {
+  return frame(size, <>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+    <circle cx="9" cy="10" r="1.6" />
+    <path d="M4.5 17l4.5-4.5 3.5 3 3-2.5 4.5 4" />
+  </>);
+}
+
+export function DocumentIcon({ size = 15 }: IconProps) {
+  return frame(size, <>
+    <path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z" />
+    <path d="M14 3.5v5h5" />
+  </>);
+}
+
+export function SheetIcon({ size = 15 }: IconProps) {
+  return frame(size, <>
+    <rect x="4" y="4" width="16" height="16" rx="2.5" />
+    <path d="M4 10h16M4 15h16M10 4v16" />
+  </>);
+}
+
+export function ArchiveBoxIcon({ size = 15 }: IconProps) {
+  return frame(size, <>
+    <rect x="4" y="4" width="16" height="16" rx="2.5" />
+    <path d="M10 4v6l2-1.5 2 1.5V4" />
+  </>);
+}
+
+export function CheckCircleIcon({ size = 22 }: IconProps) {
+  return frame(size, <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M7.8 12.4l2.9 2.9 5.5-6" />
+  </>);
+}
+
+export function AlertCircleIcon({ size = 22 }: IconProps) {
+  return frame(size, <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7.5v5.5" />
+    <path d="M12 16.4h.01" />
+  </>);
+}
+
+export function ClockIcon({ size = 22 }: IconProps) {
+  return frame(size, <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5.4l3.4 2" />
+  </>);
+}
+
+/** The reader with nothing in it: an open envelope with a page rising out of it. */
+export function ReaderEmptyIcon({ size = 34 }: IconProps) {
+  return frame(size, <>
+    <path d="M3 9.5l9-6 9 6V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    <path d="M3.5 10l8.5 5.6 8.5-5.6" />
+  </>);
 }
 
 export function AttachmentIcon({ size = 13 }: IconProps) {

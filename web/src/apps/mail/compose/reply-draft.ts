@@ -44,6 +44,33 @@ export function replySubject(subject: string): string {
   return /^re:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`;
 }
 
+/** `Fwd:` once, whatever the original already carried. */
+export function forwardSubject(subject: string): string {
+  const trimmed = (subject ?? '').trim();
+  if (!trimmed) return 'Fwd:';
+  return /^fwd:/i.test(trimmed) ? trimmed : `Fwd: ${trimmed}`;
+}
+
+/**
+ * The original, carried over: a header block and then its text, NOT `>` quoted.
+ *
+ * A forward hands somebody the message rather than answering it, so the original is content, not a
+ * quotation, and the block above it is the part a reader needs to make sense of what follows.
+ *
+ * An html-only original contributes no text, exactly as in a reply, and for the same reason: this
+ * console has no html-to-text pass, and inventing one would put a guess in somebody's outgoing
+ * mail. The header block then stands alone, and the composer shows it, so nothing is hidden.
+ */
+export function forwardQuote(input: { message: ReplyTargetMessage; text?: string }): string {
+  const head = ['--- Forwarded message ---', `From: ${senderLine(input.message)}`];
+  const when = stamp(input.message);
+  if (when) head.push(`Date: ${when}`);
+  const subject = input.message.subject?.trim();
+  if (subject) head.push(`Subject: ${subject}`);
+  const body = (input.text ?? '').replace(/\r\n/g, '\n').trimEnd();
+  return body ? `${head.join('\n')}\n\n${body}` : head.join('\n');
+}
+
 /**
  * Who a reply goes to.
  *

@@ -135,6 +135,19 @@ const MESSAGES = [
   },
 ];
 
+/**
+ * `MAIL_FIXTURE_DENSE=1` adds forty more messages to the inbox.
+ *
+ * A design cannot be judged against four short mails. This set is the density the console has to
+ * survive: a table-heavy newsletter with the sender's own colours, an inline image whose bytes
+ * nothing serves, a six-thousand-word plain-text mail, a 120-character subject, fourteen recipients
+ * with nine attachments, a non-Latin subject and body, quoted reply history, and a long tail of
+ * ordinary mail. It is a FLAG because the read, write and task specs count on the four.
+ *
+ * Everything here is invented, under `example.com`, and nothing resolves.
+ */
+if (process.env.MAIL_FIXTURE_DENSE === '1') MESSAGES.push(...denseMessages());
+
 const MAILBOXES = [
   { mailboxId: 'INBOX', name: 'Inbox', role: 'inbox' },
   { mailboxId: 'Archive', name: 'Archive', role: 'archive' },
@@ -383,6 +396,268 @@ const inboundSpec = {
     if (at >= 0) inboundAccounts.splice(at, 1);
   },
 };
+
+/**
+ * The dense inbox: six shaped messages and thirty-four ordinary ones.
+ *
+ * Every string is local to this function, so the module can be read top to bottom without it, and
+ * every timestamp is derived (never random) so two runs produce the same list and a screenshot can
+ * be compared with the last one.
+ */
+function denseMessages() {
+  const you = [{ name: 'You', address: 'you@example.com' }];
+  const at = (hours) => now - hours * HOUR;
+
+  const NEWSLETTER = [
+    '<div style="font-family: Georgia, \'Times New Roman\', serif; color: #22223b">',
+    '<h1 style="color: #3a0ca3; margin: 0 0 4px">Harbour Ferry Weekly</h1>',
+    // A literal separator rather than `&middot;`: the plugin's snippet builder strips tags without
+    // decoding entities, so the list row would show the escape instead of the character.
+    '<p style="color: #4a4e69; margin: 0 0 18px">Issue 42 · timetable, fares, and the winter works</p>',
+    '<img src="cid:masthead.42@fixture.example.com" alt="Harbour Ferry masthead" width="560" height="90">',
+    '<h2 style="color: #7209b7">Timetable</h2>',
+    '<table border="1" cellpadding="8" cellspacing="0" width="720" style="border-color: #dcdcea">',
+    '<tr style="background: #f1f1fb"><th align="left">Route</th><th align="left">First</th>'
+      + '<th align="left">Last</th><th align="left">Every</th><th align="left">Fare</th></tr>',
+    ...[
+      ['North Quay to Marina', '05:40', '23:10', '20 min', '2.40'],
+      ['Marina to North Quay', '05:55', '23:25', '20 min', '2.40'],
+      ['North Quay to Sandhill', '06:10', '22:40', '30 min', '3.10'],
+      ['Sandhill to Marina', '06:35', '22:05', '30 min', '3.10'],
+      ['Marina to Long Reef', '07:00', '21:30', '45 min', '4.60'],
+      ['Long Reef to Sandhill', '07:25', '21:00', '45 min', '4.60'],
+      ['Night service, all stops', '23:40', '01:20', '60 min', '5.20'],
+      ['Sunday loop, all stops', '08:00', '20:00', '40 min', '3.80'],
+    ].map(([route, first, last, every, fare]) => (
+      `<tr><td>${route}</td><td>${first}</td><td>${last}</td><td>${every}</td><td>${fare}</td></tr>`
+    )),
+    '</table>',
+    '<h2 style="color: #7209b7">Fares from the first of the month</h2>',
+    '<table border="1" cellpadding="8" cellspacing="0" width="720" style="border-color: #dcdcea">',
+    '<tr style="background: #f1f1fb"><th align="left">Ticket</th><th align="left">Now</th>'
+      + '<th align="left">Then</th></tr>',
+    ...[
+      ['Single, short hop', '2.40', '2.55'],
+      ['Single, full route', '4.60', '4.80'],
+      ['Ten trip book', '21.00', '22.50'],
+      ['Monthly pass', '68.00', '71.00'],
+      ['Bicycle', '0.90', '1.00'],
+      ['Child under twelve', 'free', 'free'],
+    ].map(([ticket, before, after]) => `<tr><td>${ticket}</td><td>${before}</td><td>${after}</td></tr>`),
+    '</table>',
+    '<h3 style="color: #b5179e">Winter works</h3>',
+    '<p>The Sandhill pontoon is lifted for repair between the ninth and the twenty-second. Boats'
+      + ' berth at the temporary ramp beside the chandlery, which is a four minute walk south.</p>',
+    '<p>Crews are on the pier from six in the morning. The waiting room stays open, the ticket'
+      + ' window does not, so buy on board or use the machine at the top of the steps.</p>',
+    '<p><img src="https://static.example.com/ferry-open.gif" width="1" height="1" alt=""></p>',
+    '<p style="font-size: 12px; color: #8d99ae">You are on this list because you bought a monthly'
+      + ' pass. Reply with the word stop and the list forgets you.</p>',
+    '</div>',
+  ].join('');
+
+  const QUOTED_REPLY = [
+    'Thursday morning works. I will bring the printed plan and the two spare keys.',
+    '',
+    'On Tue, 3 Jun 2026 at 09:12, Marta Silva <marta.silva@example.com> wrote:',
+    '> Could we move the walkthrough to Thursday? The dock crew is only there',
+    '> before noon, and I would rather not do this twice.',
+    '>',
+    '> On Mon, 2 Jun 2026 at 17:40, Owen Blake <owen.blake@example.com> wrote:',
+    '> > Wednesday afternoon is booked for the crane, so any day but that one.',
+    '> > The plan is in the folder, second drawer.',
+  ].join('\n');
+
+  const CJK_BODY = [
+    '各位同事：',
+    '',
+    '冬季施工從本月九日開始，沙丘碼頭的浮橋會吊起維修，臨時斜坡在船具店旁邊，步行約四分鐘。',
+    '售票窗口不開，請上船購票或使用階梯頂端的機器。',
+    '',
+    'お知らせ: 冬季工事の期間中、夜間の便は一時間おきになります。ご不便をおかけします。',
+    '',
+    '謝謝，',
+    '林 家瑜',
+  ].join('\n');
+
+  const wide = [
+    'Please look over the winter timetable before Friday so the print shop has a whole day',
+    'to set it. The fares table is the one that changed, and the night service is the one',
+    'everybody asks about.',
+    '',
+    'The pontoon lift is booked, the crane is booked, and the chandlery has agreed to the',
+    'temporary ramp. Nothing else is settled.',
+  ].join('\n');
+
+  const shaped = [
+    {
+      messageId: 'INBOX:1:120',
+      from: { name: 'Harbour Ferry Weekly', address: 'weekly@example.com' },
+      to: you,
+      subject: 'Harbour Ferry Weekly, issue 42: winter timetable and the new fares',
+      snippet: 'Issue 42: timetable, fares, and the winter works. The Sandhill pontoon is lifted for repair between the ninth and the twenty-second.',
+      sentAt: at(3),
+      attachments: [{ id: '2', filename: 'winter-timetable.pdf', mimeType: 'application/pdf', bytes: 284_517 }],
+      body: { format: 'html', html: NEWSLETTER },
+      unreadAtFirstSight: true,
+    },
+    {
+      messageId: 'INBOX:1:119',
+      from: { name: 'Priya Raman', address: 'priya.raman@example.com' },
+      to: you,
+      subject: 'The long version of the harbour report, as promised',
+      snippet: 'Everything we went through on the pier, written out, with the links at the end of each part.',
+      sentAt: at(4),
+      attachments: [],
+      body: { format: 'text', text: longPlainBody() },
+    },
+    {
+      messageId: 'INBOX:1:118',
+      from: { name: 'Sandhill Pontoon Works Coordination Group', address: 'works@example.com' },
+      to: you,
+      subject: 'Winter works on the Sandhill pontoon, the temporary ramp beside the chandlery, and what the crews need from the ticket office before the ninth',
+      snippet: 'The pontoon is lifted on the ninth. The temporary ramp opens the same morning and the ticket window stays shut all month.',
+      sentAt: at(6),
+      attachments: [],
+      body: { format: 'text', text: wide },
+      unreadAtFirstSight: true,
+    },
+    {
+      messageId: 'INBOX:1:117',
+      from: { name: 'Owen Blake', address: 'owen.blake@example.com' },
+      to: [
+        ...you,
+        ...[
+          'marta.silva', 'priya.raman', 'jonas.holm', 'aiko.tanaka', 'noor.haddad', 'tomas.vega',
+          'ruth.okafor', 'ines.duarte', 'kai.lindberg', 'sofia.marek', 'dmitri.ivanov', 'lucia.ferrer',
+          'hannah.wolfe',
+        ].map((one) => ({ address: `${one}@example.com` })),
+      ],
+      cc: [{ name: 'Dock Office', address: 'dock.office@example.com' }],
+      subject: 'Everything the crane crew signed off, in nine files',
+      snippet: 'Attached: the lift plan, the two surveys, the fare table, the ramp drawing, and the four photographs.',
+      sentAt: at(7),
+      attachments: [
+        { id: '2', filename: 'lift-plan-final.pdf', mimeType: 'application/pdf', bytes: 1_204_880 },
+        { id: '3', filename: 'survey-north-quay.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes: 48_112 },
+        { id: '4', filename: 'survey-sandhill.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes: 51_884 },
+        { id: '5', filename: 'fares-from-the-first.csv', mimeType: 'text/csv', bytes: 2_104 },
+        { id: '6', filename: 'temporary-ramp-drawing-revision-c.png', mimeType: 'image/png', bytes: 903_221 },
+        { id: '7', filename: 'pontoon-underside.jpg', mimeType: 'image/jpeg', bytes: 2_418_007 },
+        { id: '8', filename: 'pontoon-cleat.jpg', mimeType: 'image/jpeg', bytes: 1_902_664 },
+        { id: '9', filename: 'notes-from-the-walk.docx', mimeType: 'application/msword', bytes: 22_940 },
+        { id: '10', filename: 'photographs.zip', mimeType: 'application/zip', bytes: 7_331_002 },
+      ],
+      body: { format: 'text', text: 'All nine are in the folder as well, in case the mail refuses them.' },
+    },
+    {
+      messageId: 'INBOX:1:116',
+      from: { name: '林 家瑜', address: 'chia.yu.lin@example.com' },
+      to: you,
+      subject: '冬季施工安排與夜間班次調整のお知らせ',
+      snippet: '冬季施工從本月九日開始，沙丘碼頭的浮橋會吊起維修。',
+      sentAt: at(8),
+      attachments: [{ id: '2', filename: '冬季施工計畫.pdf', mimeType: 'application/pdf', bytes: 143_220 }],
+      body: { format: 'text', text: CJK_BODY },
+      unreadAtFirstSight: true,
+    },
+    {
+      messageId: 'INBOX:1:115',
+      from: { name: 'Marta Silva', address: 'marta.silva@example.com' },
+      to: [...you, { address: 'owen.blake@example.com' }],
+      subject: 'Re: Dock walkthrough on Thursday',
+      snippet: 'Thursday morning works. I will bring the printed plan and the two spare keys.',
+      sentAt: at(9),
+      attachments: [],
+      body: { format: 'text', text: QUOTED_REPLY },
+    },
+  ];
+
+  const senders = [
+    ['Jonas Holm', 'jonas.holm'], ['Aiko Tanaka', 'aiko.tanaka'], ['Noor Haddad', 'noor.haddad'],
+    ['Tomas Vega', 'tomas.vega'], ['Ruth Okafor', 'ruth.okafor'], ['Ines Duarte', 'ines.duarte'],
+    ['Kai Lindberg', 'kai.lindberg'], ['Sofia Marek', 'sofia.marek'], ['Lucia Ferrer', 'lucia.ferrer'],
+    ['Hannah Wolfe', 'hannah.wolfe'], ['Ferry Ticket Office', 'tickets'], ['Chandlery', 'chandlery'],
+  ];
+  const subjects = [
+    'Crane slot moved to the afternoon', 'Two spare keys for the waiting room',
+    'Fare machine at the top of the steps', 'Night service, one boat an hour',
+    'Bicycle racks on the Marina ramp', 'Print shop wants the tables by Friday',
+    'Sunday loop, four crews or five', 'Life jackets counted and signed',
+    'Waiting room heater, again', 'Pontoon paint arrived early',
+    'Sandhill steps are slippery at low water', 'Timetable proof, second pass',
+    'Long Reef mooring fees for the quarter', 'Radio check missed on the night boat',
+    'Ramp handrail bolts', 'Ticket book stock is down to eleven',
+    'Lost property, one green coat',
+  ];
+  const filler = [];
+  for (let index = 0; index < 34; index += 1) {
+    const [name, local] = senders[index % senders.length];
+    const subject = subjects[index % subjects.length];
+    const day = index + 1;
+    filler.push({
+      messageId: `INBOX:1:${100 - index}`,
+      from: { name, address: `${local}@example.com` },
+      to: you,
+      subject: index % 7 === 3 ? `Re: ${subject}` : subject,
+      snippet: `${subject}. Nothing needed today unless the weather turns.`,
+      sentAt: now - day * 24 * HOUR - (index % 5) * HOUR,
+      attachments: index % 6 === 2
+        ? [{ id: '2', filename: `note-${day}.pdf`, mimeType: 'application/pdf', bytes: 12_000 + index * 511 }]
+        : [],
+      body: {
+        format: 'text',
+        text: `${subject}.\n\nThe crews are on the pier from six. Details are on the board`
+          + ` beside the ticket window, and the plan is at https://example.com/harbour/plan-${day}.`,
+      },
+      unreadAtFirstSight: index % 11 === 1,
+    });
+  }
+
+  return [...shaped, ...filler].map((message) => ({
+    rfcMessageId: `<${message.messageId.replace(/:/g, '-')}@example.com>`,
+    mailboxId: 'INBOX',
+    sentAtHeader: new Date(message.sentAt).toUTCString(),
+    unreadAtFirstSight: false,
+    ...message,
+  }));
+}
+
+/**
+ * Six thousand words of prose with links in it, built rather than pasted.
+ *
+ * Deterministic on purpose (no random): the reader's screenshots are compared between runs and
+ * between engines, so the same words have to land in the same place every time.
+ */
+function longPlainBody() {
+  const words = ('harbour ferry timetable pontoon crane fare ramp chandlery quay marina sandhill reef'
+    + ' crew mooring tide slipway handrail waiting room ticket machine winter morning boat pier'
+    + ' survey drawing folder plan notice board weather').split(' ');
+  const paragraphs = [];
+  let made = 0;
+  let cursor = 0;
+  let part = 1;
+  while (made < 6000) {
+    const sentences = [];
+    for (let line = 0; line < 4; line += 1) {
+      const length = 12 + ((cursor + line) % 9);
+      const picked = [];
+      for (let index = 0; index < length; index += 1) {
+        picked.push(words[(cursor + index * 3) % words.length]);
+        cursor += 1;
+      }
+      made += picked.length;
+      sentences.push(`${picked.join(' ')}.`);
+    }
+    paragraphs.push(sentences.join(' '));
+    if (paragraphs.length % 6 === 0) {
+      paragraphs.push(`Part ${part} is written up at https://example.com/harbour/part-${part}`);
+      part += 1;
+      made += 8;
+    }
+  }
+  return `Everything from the pier, written out.\n\n${paragraphs.join('\n\n')}\n\nPriya`;
+}
 
 export function activate(walnut) {
   const base = walnut.services.require('mail:base');
