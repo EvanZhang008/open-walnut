@@ -28946,6 +28946,22 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   margin-top: 4px;
 }
 
+/* A flow sibling between the header and the split (error banner, messages
+   summary) is itself pushed below the glass header (see the `+` rule near the
+   glass material below), so everything after it already starts under that
+   sibling: the split and the history must NOT pad for the header a second time.
+   Doing so left a blank band the height of the header under every error banner
+   (2026-09-11). */
+.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-split.is-changed-open {
+  padding-top: 0;
+}
+.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body .session-history {
+  padding-top: 12px;
+}
+.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body > :first-child:not(.session-history) {
+  margin-top: 4px;
+}
+
 /* ── Session composer card: G4 floating card (radius + shadow always) ── */
 .session-panel-input .chat-input-box {
   border-radius: 20px;
