@@ -106,7 +106,32 @@ function buildEmbedderConfig(): EmbedderConfig | undefined {
   // Model cache OUTSIDE node_modules: the transformers.js default cache dir
   // lives inside the package, so every `npm ci` silently discarded the 129MB
   // model and the next search re-downloaded it inside the web server.
-  return { ...model, workerPath, cacheDir: path.join(WALNUT_HOME, 'models') };
+  return { ...model, workerPath, cacheDir: embedModelCacheDir() };
+}
+
+/**
+ * Where the embedding model lives: `<WALNUT_HOME>/cache/models`. `cache/` is
+ * the data repo's one machine-local directory that git-sync already ignores,
+ * so a re-downloadable 600MB model can never ride the 30s auto-commit into
+ * history again (it did from a root-level `models/` for two weeks, 2026-09).
+ * The old location is moved over once, so no re-download on upgrade.
+ */
+export function embedModelCacheDir(home = WALNUT_HOME): string {
+  const dir = path.join(home, 'cache', 'models');
+  const legacy = path.join(home, 'models');
+  if (!fs.existsSync(dir) && fs.existsSync(legacy)) {
+    try {
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      fs.renameSync(legacy, dir);
+      log.memory.info('search-v2: moved embedding model cache under cache/', { from: legacy, to: dir });
+    } catch (err) {
+      log.memory.warn('search-v2: could not move legacy model cache — using the old path', {
+        from: legacy, to: dir, error: err instanceof Error ? err.message : String(err),
+      });
+      return legacy;
+    }
+  }
+  return dir;
 }
 
 let handle: SearchIndex | null = null;

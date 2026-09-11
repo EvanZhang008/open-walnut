@@ -6,12 +6,15 @@
  * singleton index lands in a throwaway search.sqlite.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { EventBus, EventNames } from '../../src/core/event-bus.js';
 import { MEMORY_DIR } from '../../src/constants.js';
 import { addTask, updateTask } from '../../src/core/task-manager.js';
 import {
+  embedModelCacheDir,
   getSearchV2Index,
   isSearchV2Enabled,
   resetSearchV2IndexForTests,
@@ -149,5 +152,30 @@ describe('sweepSearchV2Files', () => {
     const third = await sweepSearchV2Files();
     expect(third.removed).toBeGreaterThanOrEqual(1);
     expect(index.getDoc('memory', file)).toBeNull();
+  });
+});
+
+describe('embedModelCacheDir', () => {
+  it('lives under the ignored cache/ dir and moves a legacy root models/ over exactly once', async () => {
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-embed-cache-'));
+    try {
+      // Fresh install: nothing to migrate, the path is simply cache/models.
+      expect(embedModelCacheDir(home)).toBe(path.join(home, 'cache', 'models'));
+      expect(fs.existsSync(path.join(home, 'cache', 'models'))).toBe(false);
+
+      // Upgrade from a root-level models/ (the layout that leaked into git).
+      await fsp.mkdir(path.join(home, 'models', 'onnx-community', 'm'), { recursive: true });
+      await fsp.writeFile(path.join(home, 'models', 'onnx-community', 'm', 'model.onnx'), 'weights');
+      expect(embedModelCacheDir(home)).toBe(path.join(home, 'cache', 'models'));
+      expect(fs.existsSync(path.join(home, 'models'))).toBe(false);
+      expect(await fsp.readFile(path.join(home, 'cache', 'models', 'onnx-community', 'm', 'model.onnx'), 'utf-8')).toBe('weights');
+
+      // Both present (a stale root dir reappearing): the cache/ copy wins, the root dir is left alone.
+      await fsp.mkdir(path.join(home, 'models'), { recursive: true });
+      expect(embedModelCacheDir(home)).toBe(path.join(home, 'cache', 'models'));
+      expect(fs.existsSync(path.join(home, 'models'))).toBe(true);
+    } finally {
+      await fsp.rm(home, { recursive: true, force: true });
+    }
   });
 });

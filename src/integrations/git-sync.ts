@@ -113,6 +113,48 @@ export function setCompactionInProgress(v: boolean): void {
 }
 
 /**
+ * Operator pause marker: `<gitdir>/walnut-sync-paused.json` holding
+ * `{ "until": "<ISO time>", "reason": "..." }`. While it is active every
+ * auto-commit, sync tick, scheduled compaction and gc stands down, so a human
+ * (or a script) can rewrite the data repo's history in place with nothing
+ * else moving `main` underneath. It lives in .git/ so it is never part of the
+ * tree, and it MUST carry an expiry: a marker without a valid future `until`
+ * is ignored and removed, so a forgotten or malformed file can never silently
+ * stop the user's backups for good.
+ */
+export const SYNC_PAUSE_MARKER = 'walnut-sync-paused.json';
+let lastPauseLogAt = 0;
+
+export function syncPauseReason(gitDir = path.join(WALNUT_HOME, '.git')): string | null {
+  const file = path.join(gitDir, SYNC_PAUSE_MARKER);
+  let raw: string;
+  try { raw = fs.readFileSync(file, 'utf-8'); } catch { return null; }
+  let until = NaN;
+  let reason = 'operator pause';
+  try {
+    const parsed = JSON.parse(raw) as { until?: unknown; reason?: unknown };
+    until = typeof parsed.until === 'string' ? Date.parse(parsed.until) : NaN;
+    if (typeof parsed.reason === 'string' && parsed.reason) reason = parsed.reason;
+  } catch { /* malformed → expired below */ }
+  if (!Number.isFinite(until) || until <= Date.now()) {
+    log.git.warn('git-sync pause marker expired or malformed — removing it and resuming', { file });
+    try { fs.unlinkSync(file); } catch { /* best-effort */ }
+    return null;
+  }
+  const now = Date.now();
+  if (now - lastPauseLogAt > 5 * 60_000) {
+    lastPauseLogAt = now;
+    log.git.info('git-sync paused by operator marker', { reason, until: new Date(until).toISOString() });
+  }
+  return reason;
+}
+
+/** True while compaction owns the repo OR an operator pause marker is active. */
+export function isSyncPaused(): boolean {
+  return compactionInProgress || syncPauseReason() !== null;
+}
+
+/**
  * Resolves when no sync() is in flight. The parent calls this before forking
  * the compaction worker so a mid-flight pull/push can't interleave with the
  * history rewrite (the flag only stops NEW ticks, not one already running).
@@ -1774,8 +1816,8 @@ export async function sync(): Promise<{ pulled: number; pushed: number; conflict
   // Compaction pause must gate sync() too, not just commitIfDirty(): syncInner
   // runs its own `add -A` + commit, so an unpaused tick would still move `main`
   // mid-rewrite and fail the tree verification.
-  if (compactionInProgress) {
-    log.git.debug('git-sync skipped — history compaction in progress');
+  if (isSyncPaused()) {
+    log.git.debug('git-sync skipped — history compaction or operator pause in progress');
     return { pulled: 0, pushed: 0, conflicts: 0 };
   }
   if (syncInflight) {
@@ -2445,7 +2487,7 @@ export function resetRepoSizeCheckForTest(): void {
  * run git ops against the same repo, e.g. orphaned server processes).
  */
 export async function commitIfDirty(): Promise<boolean> {
-  if (compactionInProgress) return false;
+  if (isSyncPaused()) return false;
   // Disk latch: a commit writes loose objects; on a critically-full disk it
   // dies mid-lock with ENOSPC (2026-08-12 cloud outage). Local edits stay on
   // disk and are committed as soon as the watermark clears.

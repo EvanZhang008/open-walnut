@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
@@ -21,6 +22,10 @@ import {
   clearStaleLock,
   isLockContention,
   hardenGitConfigPerms,
+  commitIfDirty,
+  isSyncPaused,
+  syncPauseReason,
+  SYNC_PAUSE_MARKER,
 } from '../../src/integrations/git-sync.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { bus } from '../../src/core/event-bus.js';
@@ -162,6 +167,45 @@ describe('sync', () => {
 
     const status = getSyncStatus();
     expect(status.pendingChanges).toBe(0);
+  });
+});
+
+describe('operator pause marker (.git/walnut-sync-paused.json)', () => {
+  const marker = () => path.join(tmpDir, '.git', SYNC_PAUSE_MARKER);
+
+  it('holds every auto-commit and sync while the marker is in the future', async () => {
+    initSync();
+    await fsp.writeFile(marker(), JSON.stringify({ until: new Date(Date.now() + 60_000).toISOString(), reason: 'history rewrite' }));
+    await fsp.writeFile(path.join(tmpDir, 'edit-during-pause.txt'), 'data');
+
+    expect(syncPauseReason()).toBe('history rewrite');
+    expect(isSyncPaused()).toBe(true);
+    expect(await commitIfDirty()).toBe(false);
+    expect(await sync()).toEqual({ pulled: 0, pushed: 0, conflicts: 0 });
+    // The edit is still on disk and still uncommitted: nothing was lost, only deferred.
+    expect(getSyncStatus().pendingChanges).toBe(1);
+    expect(fs.existsSync(marker())).toBe(true);
+  });
+
+  it('ignores and removes an expired marker so backups resume on their own', async () => {
+    initSync();
+    await fsp.writeFile(marker(), JSON.stringify({ until: new Date(Date.now() - 1000).toISOString() }));
+    await fsp.writeFile(path.join(tmpDir, 'after-expiry.txt'), 'data');
+
+    expect(syncPauseReason()).toBeNull();
+    expect(fs.existsSync(marker())).toBe(false);
+    expect((await sync()).pushed).toBe(1);
+  });
+
+  it('treats a marker without a valid until as expired (a typo must not stop backups)', async () => {
+    initSync();
+    await fsp.writeFile(marker(), '{"reason":"forgot the expiry"}');
+    expect(isSyncPaused()).toBe(false);
+    expect(fs.existsSync(marker())).toBe(false);
+
+    await fsp.writeFile(marker(), 'not json at all');
+    expect(isSyncPaused()).toBe(false);
+    expect(fs.existsSync(marker())).toBe(false);
   });
 });
 

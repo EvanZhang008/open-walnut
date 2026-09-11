@@ -40,7 +40,7 @@ import {
   execGitGroup,
   setCompactionInProgress,
   waitForSyncSettled,
-  compactionInProgress,
+  isSyncPaused,
 } from './git-sync.js';
 import { log } from '../logging/index.js';
 
@@ -438,10 +438,11 @@ export async function maintainRepo(
 
   const mustPause = opts.pauseSync === true;
   if (mustPause) {
-    if (compactionInProgress) {
-      // Compaction owns the repo right now (it runs its own gc at the end) —
-      // stand down entirely rather than queueing a second heavy rewrite.
-      log.git.info('git-maintenance skipped — history compaction in progress');
+    if (isSyncPaused()) {
+      // Compaction (or an operator rewriting history under a pause marker)
+      // owns the repo right now — stand down entirely rather than queueing a
+      // second heavy rewrite or a gc against a repo mid-filter.
+      log.git.info('git-maintenance skipped — history compaction or operator pause in progress');
       return result;
     }
     setCompactionInProgress(true);

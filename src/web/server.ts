@@ -2455,7 +2455,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // set it, ticks kept moving `main` mid-rewrite and every run failed
         // tree verification for 9 days straight (the repo regrew to 6.5GB and
         // its pushes CPU-starved the cloud companion, 2026-08 incident).
-        const { setCompactionInProgress, waitForSyncSettled } = await import('../integrations/git-sync.js')
+        const { setCompactionInProgress, waitForSyncSettled, syncPauseReason } = await import('../integrations/git-sync.js')
+        const pausedBy = syncPauseReason()
+        if (pausedBy) {
+          // An operator holds the repo (in-place history rewrite); the daily
+          // timer tries again tomorrow, the startup attempt is simply skipped.
+          log.git.info('git compaction skipped — operator pause marker active', { reason: pausedBy })
+          return
+        }
         setCompactionInProgress(true)
         await waitForSyncSettled() // a tick already in flight still moves main — let it drain first
         const child = fork(workerPath, [], { stdio: 'ignore' })
