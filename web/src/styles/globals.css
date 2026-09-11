@@ -6402,6 +6402,23 @@ select {
   flex-shrink: 0;
 }
 
+/* The Agent row is ONE action (open the transcript overlay), spelled out at the
+   row's end the way the Background ledger spells it, so the row cannot be
+   mistaken for an in-place dropdown. */
+.task-group-transcript {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.task-group-header:hover .task-group-transcript { text-decoration: underline; }
+.task-group-header:disabled { cursor: default; }
+.task-group-header:disabled:hover { background: var(--accent-subtle, rgba(0, 122, 255, 0.06)); }
+/* An agent nested inside an open transcript: its row is a heading, its lane
+   renders beneath it (depth is content inside the reader). */
+.task-group--nested { margin: 8px 0; }
+.task-group--nested .task-group-header { cursor: default; }
+
 .task-group-body {
   padding: 4px 8px 8px;
   border-top: 1px solid var(--border);

@@ -1,24 +1,25 @@
 /**
- * WorkflowTranscriptModal — full-screen reader for one dynamic-workflow subagent's
- * complete transcript.
+ * WorkflowTranscriptModal — full-screen reader for one subagent's complete transcript.
  *
- * The inline accordion in WorkflowProgress shows only the prompt + result preview;
- * the full per-agent conversation (subagents/workflows/<run>/agent-<id>.jsonl) is too
- * long for that cramped box. This opens it in a large overlay (≈90vw×90vh) so it's
- * actually readable — reusing the app's modal infra (useModalOverlay = Escape +
- * ref-counted scroll lock) and portal-to-body, the same pattern as ConfirmDialog /
- * the session fullscreen.
+ * This overlay is THE place a subagent's conversation is read, from every entry:
+ * the Background ledger's "View transcript", the Agent row in the chat (persisted
+ * or still streaming), and a dynamic workflow's agent node. The chat never unfolds
+ * a subagent inline (the 2026-09-08 "is this the previous agent or the current
+ * one?" report came from a chat row that looked like a dropdown and expanded the
+ * whole subagent into the main conversation). Reuses the app's modal infra
+ * (useModalOverlay = Escape + ref-counted scroll lock) and portals to body, the
+ * same pattern as ConfirmDialog / the session fullscreen.
  *
- * Lazy-fetches on mount via the subagent history endpoint and caches per agentId. A
- * WORKFLOW subagent is namespaced `wf:` so it can't collide with a flat Task/Team
- * subagent id; a plain Agent-tool subagent (`workflow: false`, the Background panel's
- * ledger rows) uses the bare agentId — the SAME key the chat's TaskGroup lazy-load
- * writes, so the two surfaces share one fetch.
+ * `TranscriptOverlay` is the bare shell (header + scrolling body) for callers that
+ * already hold the content (the streaming Agent row renders its live lane blocks);
+ * `WorkflowTranscriptModal` is the fetching variant.
  *
- * A LIVE target (`live: true`, the agent is still running) polls every 5s and never
- * writes the cache: a running agent's transcript is partial, and seeding the shared key
- * with it would pin the truncated version in the chat too. The final fetch + cache write
- * happens when the agent finishes while the modal is open.
+ * Fetch + cache: a WORKFLOW subagent is namespaced `wf:` so it can't collide with a
+ * flat Task/Team subagent id; a plain Agent-tool subagent (`workflow: false`) uses
+ * the bare agentId. A LIVE target (the agent is still running) polls and never
+ * writes the cache: a running agent's transcript is partial, and seeding the shared
+ * key with it would pin the truncated version everywhere. The final fetch + cache
+ * write happens when the agent finishes while the modal is open.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -26,10 +27,12 @@ import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
-import { SessionMessage } from './SessionMessage';
+import { SessionMessage, TaskGroupPrompt } from './SessionMessage';
+import type { ReactNode } from 'react';
 import { ICON_CLOSE } from '../common/Icons';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
+import { renderMarkdownWithRefs } from '@/utils/markdown';
 
 /** How often a still-running agent's transcript is re-read while the modal is
  *  open. Each poll is a full read + parse of the agent's JSONL on the server
@@ -47,13 +50,45 @@ export interface TranscriptTarget {
   workflow?: boolean;
   /** The agent is still running → poll, and don't cache a partial transcript. */
   live?: boolean;
+  /** Transcript the caller already holds (history embedded the subagent's
+   *  messages under the Agent tool): shown as-is, no fetch. */
+  preloaded?: SessionHistoryMessage[];
+  /** The Agent tool's result text — shown when there is no transcript to read
+   *  (an old session whose subagent file is gone, or an agent whose id the
+   *  parser never learned). */
+  fallbackResult?: string;
+  /** The Agent tool's input, for the collapsed "Prompt & settings" row on top. */
+  promptInput?: Record<string, unknown>;
+}
+
+/** The overlay shell every transcript reader shares: title row (label, live dot,
+ *  meta, close) over a scrolling body. Escape and backdrop click close it. */
+export function TranscriptOverlay({
+  title, meta, live, onClose, children,
+}: { title: string; meta?: string; live?: boolean; onClose: () => void; children: ReactNode }) {
+  useModalOverlay(onClose);
+  return createPortal(
+    <div className="wf-modal-overlay" onClick={onClose}>
+      <div className="wf-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="wf-modal-header">
+          <span className="wf-modal-title">{title}</span>
+          {live && <span className="wf-modal-live" title="Agent still running — refreshing while open">{'●'}</span>}
+          {meta && <span className="wf-modal-meta">{meta}</span>}
+          <button className="wf-modal-close" onClick={onClose} aria-label="Close transcript" title="Close (Esc)">
+            {ICON_CLOSE}
+          </button>
+        </div>
+        <div className="wf-modal-body">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 export function WorkflowTranscriptModal({
   target, sessionId, onClose,
 }: { target: TranscriptTarget; sessionId: string; onClose: () => void }) {
-  useModalOverlay(onClose);
-  const [messages, setMessages] = useState<SessionHistoryMessage[] | null>(null);
+  const [messages, setMessages] = useState<SessionHistoryMessage[] | null>(target.preloaded ?? null);
   const [loading, setLoading] = useState(false);
   // Distinct from an empty transcript: a fetch failure must NOT render the same as
   // "this agent produced nothing" — otherwise a backend/network error silently looks
@@ -66,7 +101,10 @@ export function WorkflowTranscriptModal({
   // and a final fetch is owed.
   const wasLiveRef = useRef(live);
 
+  const preloaded = target.preloaded != null && !live;
   useEffect(() => {
+    // Embedded children ARE the transcript for a finished agent; nothing to fetch.
+    if (preloaded) return;
     let cancelled = false;
     const cacheKey = workflow ? `wf:${target.agentId}` : target.agentId;
     const justFinished = wasLiveRef.current && !live;
@@ -109,32 +147,25 @@ export function WorkflowTranscriptModal({
       load(false);
     }, LIVE_POLL_MS);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [sessionId, target.agentId, workflow, live]);
+  }, [sessionId, target.agentId, workflow, live, preloaded]);
 
-  return createPortal(
-    <div className="wf-modal-overlay" onClick={onClose}>
-      <div className="wf-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="wf-modal-header">
-          <span className="wf-modal-title">{target.label || target.agentId}</span>
-          {live && <span className="wf-modal-live" title="Agent still running — refreshing while open">{'●'}</span>}
-          {target.meta && <span className="wf-modal-meta">{target.meta}</span>}
-          <button className="wf-modal-close" onClick={onClose} aria-label="Close transcript" title="Close (Esc)">
-            {ICON_CLOSE}
-          </button>
+  return (
+    <TranscriptOverlay title={target.label || target.agentId} meta={target.meta} live={live} onClose={onClose}>
+      {target.promptInput && <TaskGroupPrompt input={target.promptInput} />}
+      {loading ? (
+        <div className="wf-modal-loading">Loading transcript…</div>
+      ) : failed ? (
+        <div className="wf-modal-loading">Failed to load transcript. Close and reopen to retry.</div>
+      ) : messages && messages.length > 0 ? (
+        messages.map((m, i) => <SessionMessage key={i} message={m} sessionId={sessionId} />)
+      ) : target.fallbackResult ? (
+        <div className="task-group-result">
+          <div className="task-group-result-label">Result</div>
+          <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(target.fallbackResult.slice(0, 3000)) }} />
         </div>
-        <div className="wf-modal-body">
-          {loading ? (
-            <div className="wf-modal-loading">Loading transcript…</div>
-          ) : failed ? (
-            <div className="wf-modal-loading">Failed to load transcript. Close and reopen to retry.</div>
-          ) : messages && messages.length > 0 ? (
-            messages.map((m, i) => <SessionMessage key={i} message={m} sessionId={sessionId} />)
-          ) : (
-            <div className="wf-modal-loading">No transcript available</div>
-          )}
-        </div>
-      </div>
-    </div>,
-    document.body,
+      ) : (
+        <div className="wf-modal-loading">No transcript available</div>
+      )}
+    </TranscriptOverlay>
   );
 }

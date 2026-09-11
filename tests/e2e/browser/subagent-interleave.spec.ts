@@ -180,10 +180,22 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(taskGroup.locator('.task-group-body')).toHaveCount(0);
     await expect(history).not.toContainText('Now I have the two distinct enums.');
     await expect(history).not.toContainText('grep enum');
-    // 3. Opening the card is the drill-in: narration + the Bash call live inside.
+    // 3. The row is not a dropdown: clicking it opens the transcript OVERLAY
+    //    (the same reader the ledger's "View transcript" opens), fed from the
+    //    live lane blocks. Nothing unfolds inside the conversation.
+    await expect(taskGroup.locator('.task-group-chevron')).toHaveCount(0);
+    await expect(taskGroup.locator('.task-group-transcript')).toHaveText('View transcript');
     await taskGroup.locator('.task-group-header').click();
-    await expect(taskGroup.locator('.task-group-body')).toContainText('Now I have the two distinct enums.');
-    await expect(taskGroup.locator('.task-group-body')).toContainText('grep enum');
+    const overlay = page.locator('.wf-modal');
+    await expect(overlay).toHaveCount(1);
+    await expect(overlay.locator('.wf-modal-title')).toContainText('explore pricing');
+    await expect(overlay.locator('.wf-modal-live')).toHaveCount(1);
+    await expect(overlay).toContainText('Now I have the two distinct enums.');
+    await expect(overlay).toContainText('grep enum');
+    await expect(taskGroup.locator('.task-group-body')).toHaveCount(0);
+    await expect(history).not.toContainText('Now I have the two distinct enums.');
+    await page.keyboard.press('Escape');
+    await expect(overlay).toHaveCount(0);
   });
 
   test('late subagent lines with NO anchor in the stream render nowhere: no box, no flat text', async ({ page }) => {
@@ -315,6 +327,16 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await row.locator(TRANSCRIPT_BUTTON).click();
     await expect(page.locator('.wf-modal')).toContainText('Transcript line from the running agent.');
     await expect(page.locator('.wf-modal-header .wf-modal-live')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.wf-modal')).toHaveCount(0);
+    // The chat row is the SAME action: no chevron, no in-place body, one overlay.
+    await expect(cards.first().locator('.task-group-chevron')).toHaveCount(0);
+    await cards.first().locator('.task-group-header').click();
+    await expect(page.locator('.wf-modal-title')).toContainText('Find other insights needing audit log');
+    await expect(page.locator('.wf-modal')).toContainText('Transcript line from the running agent.');
+    await expect(page.locator('.wf-modal-header .wf-modal-live')).toHaveCount(1);
+    await expect(cards.first().locator('.task-group-body')).toHaveCount(0);
+    await expect(history).not.toContainText('Transcript line from the running agent.');
     await page.keyboard.press('Escape');
     await expect(page.locator('.wf-modal')).toHaveCount(0);
 

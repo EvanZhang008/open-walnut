@@ -6,6 +6,7 @@ import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream'
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { TranscriptOverlay } from './WorkflowTranscriptModal';
 import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { typedUserText } from './injected-banner';
@@ -594,12 +595,18 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
   );
 });
 
-/** A streaming Task group — the Agent's compact row at its spawn position while
- *  its tool_call is still in the streaming buffer. Renders COLLAPSED: the
- *  subagent's live transcript is not main-conversation content (the Background
- *  ledger tracks the run; the transcript is one click away here or there). The
- *  moment history absorbs the tool_call, the persisted TaskGroup takes over at
- *  the same position — one card per agent, never a live twin at the tail. */
+/** A streaming Task group — the Agent's one-line row at its spawn position while
+ *  its tool_call is still in the streaming buffer. The row never unfolds in the
+ *  chat: the subagent's live transcript is not main-conversation content (the
+ *  Background ledger tracks the run), so clicking the row opens the same
+ *  transcript overlay the ledger's "View transcript" opens, fed straight from the
+ *  lane blocks already in the buffer (no fetch, no poll — it is the live stream).
+ *  The moment history absorbs the tool_call, the persisted TaskGroup takes over
+ *  at the same position — one row per agent, never a live twin at the tail.
+ *
+ *  `inOverlay`: this agent was spawned by the agent whose transcript is open.
+ *  Inside the reader depth is content, so its row is inert and its own lane
+ *  renders inline beneath it instead of opening a second overlay. */
 interface StreamingTaskGroupProps {
   taskBlock: StreamingBlock & { type: 'tool_call' };
   childBlocks: StreamingBlock[];
@@ -609,10 +616,11 @@ interface StreamingTaskGroupProps {
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
+  inOverlay?: boolean;
 }
 
-function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: StreamingTaskGroupProps) {
-  const [open, setOpen] = useState(false);
+function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen, inOverlay }: StreamingTaskGroupProps) {
+  const [showTranscript, setShowTranscript] = useState(false);
   const description = typeof taskBlock.input?.description === 'string'
     ? taskBlock.input.description
     : typeof taskBlock.input?.prompt === 'string'
@@ -630,16 +638,53 @@ function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, ses
   // childBlocks arrive root-flattened from groupStreamingBlocks; selfId lets
   // groupLaneChildren re-derive the per-level structure.
   const selfId = taskBlock.toolUseId;
-  const nestedItems = open ? groupLaneChildren(selfId, childBlocks) : null;
-  // Header chip: "N subagents (M nested)" — visible without expanding, so the
-  // user can read the fan-out (e.g. 2 direct + 2 spawned deeper = 4 total)
-  // straight off the top-level box.
+  const showLane = inOverlay || showTranscript;
+  const nestedItems = showLane ? groupLaneChildren(selfId, childBlocks) : null;
+  // Header chip: "N subagents (M nested)" — the fan-out reads straight off the row.
   const agentTree = countAgentTree(selfId, childBlocks);
 
+  const metaParts = ['Agent'];
+  if (subagentType) metaParts.push(subagentType);
+  if (toolCount > 0) metaParts.push(`${toolCount} tool ${toolCount === 1 ? 'use' : 'uses'}`);
+
+  const lane = (
+    <>
+      <TaskGroupPrompt input={taskBlock.input} />
+      {(nestedItems ?? []).map((item, ci) => {
+        if (item.kind === 'task-group') {
+          return (
+            <StreamingTaskGroup
+              key={`nested-${ci}`}
+              taskBlock={item.taskBlock}
+              childBlocks={item.childBlocks}
+              sessionId={sessionId}
+              sessionCwd={sessionCwd}
+              sessionHost={sessionHost}
+              onTaskClick={onTaskClick}
+              onSessionClick={onSessionClick}
+              onFileOpen={onFileOpen}
+              inOverlay
+            />
+          );
+        }
+        return (
+          <StreamingBlockView key={ci} block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+        );
+      })}
+      {childBlocks.length === 0 && !isDone && (
+        <div className="task-group-empty">Working...</div>
+      )}
+    </>
+  );
+
   return (
-    <div className={`task-group ${open ? 'task-group--open' : ''} ${isDone ? 'task-group--done' : ''} ${isError ? 'task-group--error' : ''}`}>
-      <button className="task-group-header" onClick={() => setOpen(p => !p)}>
-        <span className="task-group-chevron">{open ? '▼' : '▶'}</span>
+    <div className={`task-group ${isDone ? 'task-group--done' : ''} ${isError ? 'task-group--error' : ''} ${inOverlay ? 'task-group--nested' : ''}`}>
+      <button
+        className="task-group-header"
+        onClick={inOverlay ? undefined : () => setShowTranscript(true)}
+        disabled={inOverlay}
+        title={inOverlay ? undefined : 'Open the subagent transcript'}
+      >
         <span className="task-group-icon">
           {isError ? '✗' : isDone ? '✓' : '▶'}
         </span>
@@ -652,38 +697,17 @@ function StreamingTaskGroup({ taskBlock, childBlocks, sessionId, sessionCwd, ses
             ⑂ {agentTree.direct}{agentTree.total > agentTree.direct ? `+${agentTree.total - agentTree.direct}` : ''} agent{agentTree.total !== 1 ? 's' : ''}
           </span>
         )}
-        {!open && toolCount > 0 && (
+        {toolCount > 0 && (
           <span className="task-group-badge">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
         )}
         {!isDone && !isError && <span className="task-group-streaming-dot" />}
+        {!inOverlay && <span className="task-group-transcript">View transcript</span>}
       </button>
-      {open && (
-        <div className="task-group-body">
-          <TaskGroupPrompt input={taskBlock.input} />
-          {(nestedItems ?? []).map((item, ci) => {
-            if (item.kind === 'task-group') {
-              return (
-                <StreamingTaskGroup
-                  key={`nested-${ci}`}
-                  taskBlock={item.taskBlock}
-                  childBlocks={item.childBlocks}
-                  sessionId={sessionId}
-                  sessionCwd={sessionCwd}
-                  sessionHost={sessionHost}
-                  onTaskClick={onTaskClick}
-                  onSessionClick={onSessionClick}
-                  onFileOpen={onFileOpen}
-                />
-              );
-            }
-            return (
-              <StreamingBlockView key={ci} block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-            );
-          })}
-          {childBlocks.length === 0 && !isDone && (
-            <div className="task-group-empty">Working...</div>
-          )}
-        </div>
+      {inOverlay && <div className="task-group-body">{lane}</div>}
+      {!inOverlay && showTranscript && (
+        <TranscriptOverlay title={description} meta={metaParts.join(' · ')} live={!isDone && !isError} onClose={() => setShowTranscript(false)}>
+          {lane}
+        </TranscriptOverlay>
       )}
     </div>
   );

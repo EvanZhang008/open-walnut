@@ -9,8 +9,7 @@ import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLa
 import { useStableHtml } from '@/hooks/useStableHtml';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { useLiveAgentStatus } from '@/stores/background-agents-store';
-import { fetchSubagentHistory } from '@/api/sessions';
-import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
+import { WorkflowTranscriptModal } from './WorkflowTranscriptModal';
 import { MessageMetaRow, UUID_RE } from './MessageMetaRow';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
@@ -853,8 +852,6 @@ export function TaskGroupPrompt({ input }: { input?: Record<string, unknown> }) 
 
 /** Collapsible group for a Task/Agent tool call with child messages.
  *  Lazy-loads subagent content on first expand via API when childMessages is undefined. */
-const TASK_GROUP_INITIAL = 10;
-const TASK_GROUP_LOAD_MORE = 20;
 
 /** Subagent-tree summary from nested childMessages: direct = Agent/Task tools
  *  this agent called itself; total = whole loaded subtree (deeper levels are
@@ -878,14 +875,8 @@ function countAgentTreeHistory(children: SessionHistoryMessage[] | null | undefi
   return { direct, total };
 }
 
-function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
-  const [open, setOpen] = useState(false);
-  const [lazyChildren, setLazyChildren] = useState<SessionHistoryMessage[] | null>(null);
-  const [loadingChildren, setLoadingChildren] = useState(false);
-  const [innerOffset, setInnerOffset] = useState(0);
-  // Subscribe pill titles (the inline renderMarkdownWithRefs below) — the memo
-  // boundary at MergedHistoryToolRun would otherwise freeze them.
-  useEntityLabelsVersion();
+function TaskGroup({ tool, sessionId }: SessionToolCallProps) {
+  const [showTranscript, setShowTranscript] = useState(false);
 
   const description = typeof tool.input?.description === 'string'
     ? tool.input.description
@@ -894,7 +885,7 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
       : tool.name;
   const subagentType = typeof tool.input?.subagent_type === 'string' ? tool.input.subagent_type : '';
   const modelChip = agentModelLabel(tool.input);
-  // The card's state follows the Background ledger while this session's live
+  // The row's state follows the Background ledger while this session's live
   // task set knows the agent (a background agent's tool_result is launch
   // metadata written while it still runs, so result-presence alone would draw
   // ✓ on a running agent — the 2026-09-08 report's ✓ card above a "60 tools"
@@ -910,56 +901,40 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
   const liveDone = live != null && !liveRunning && !liveFailed;
   const finished = liveDone || !!tool.bgTaskFinished;
 
-  // Resolved children: inline (already attached) or lazy-loaded
-  const children = tool.childMessages ?? lazyChildren;
+  // Children the parser embedded under the tool (sync agents in some transcripts);
+  // everything else is read on demand by the transcript overlay.
+  const children = tool.childMessages;
   const toolCount = children?.reduce((n, m) => n + (m.tools?.length ?? 0), 0) ?? 0;
   // The ledger's tool_uses counter is the live number while the agent runs
   // and stays the right number after it finishes (the badge must not vanish
-  // on completion); a lazy-loaded transcript can only be equal or behind.
+  // on completion); embedded children can only be equal or behind.
   const shownToolCount = live?.toolUses != null ? Math.max(live.toolUses, toolCount) : toolCount;
   const agentTree = countAgentTreeHistory(children);
+  // Something to read: a transcript to fetch, embedded children, or at least the result.
+  const readable = !!(tool.agentId || children?.length || tool.result);
 
-  const handleToggle = useCallback(async () => {
-    if (!open && !children && !loadingChildren && tool.agentId && sessionId) {
-      // Check frontend cache first
-      const cached = getSubagentCache(sessionId, tool.agentId);
-      if (cached) {
-        setLazyChildren(cached);
-      } else {
-        // Lazy-load from backend
-        setLoadingChildren(true);
-        try {
-          const result = await fetchSubagentHistory(sessionId, tool.agentId);
-          setLazyChildren(result.messages);
-          // Only a proven-finished run is cacheable: the ledger's transcript
-          // reader shares this key, and a partial transcript cached here would
-          // be served as the final one after the agent completes.
-          if (tool.bgTaskFinished) setSubagentCache(sessionId, tool.agentId, result.messages);
-          log.info('session', `lazy-loaded subagent ${tool.agentId}: ${result.messages.length} msgs`);
-        } catch (err) {
-          log.warn('session', 'failed to lazy-load subagent', { agentId: tool.agentId, error: String(err) });
-        } finally {
-          setLoadingChildren(false);
-        }
-      }
-    }
-    setOpen(p => !p);
-  }, [open, children, loadingChildren, tool.agentId, sessionId]);
+  // The whole row is ONE action, the same one the Background ledger's "View
+  // transcript" performs: open the subagent's conversation in the overlay. The
+  // row never unfolds in place — a subagent's transcript is not main-conversation
+  // content, and an in-chat dropdown read as "another agent" in the 2026-09-08
+  // report. The transcript has no truncation of its own: the overlay is the reader.
+  const openTranscript = useCallback(() => { if (readable) setShowTranscript(true); }, [readable]);
+  const closeTranscript = useCallback(() => setShowTranscript(false), []);
 
-  // Tail truncation: show most recent tool calls first (most relevant activity)
-  // Inner truncation: only show last TASK_GROUP_INITIAL + innerOffset children
-  const allChildren = children ?? [];
-  const innerLimit = TASK_GROUP_INITIAL + innerOffset;
-  const innerStart = Math.max(0, allChildren.length - innerLimit);
-  const visibleChildren = allChildren.slice(innerStart);
-  const hiddenCount = innerStart;
+  const metaParts = ['Agent'];
+  if (subagentType) metaParts.push(subagentType);
+  if (shownToolCount > 0) metaParts.push(`${shownToolCount} tool ${shownToolCount === 1 ? 'use' : 'uses'}`);
 
   return (
-    <div className={`task-group ${open ? 'task-group--open' : ''} ${liveRunning ? 'task-group--live' : ''} ${liveFailed ? 'task-group--error' : ''}`}>
-      <button className="task-group-header" onClick={handleToggle}>
-        <span className="task-group-chevron">{open ? '\u25BC' : '\u25B6'}</span>
+    <div className={`task-group ${liveRunning ? 'task-group--live' : ''} ${liveFailed ? 'task-group--error' : ''}`}>
+      <button
+        className="task-group-header"
+        onClick={openTranscript}
+        disabled={!readable}
+        title={readable ? 'Open the subagent transcript' : 'No transcript for this agent'}
+      >
         <span className="task-group-icon">
-          {loadingChildren ? '\u23F3' : liveFailed ? '\u2717' : liveRunning ? '\u25B6' : finished ? '\u2713' : '\u25B6'}
+          {liveFailed ? '\u2717' : liveRunning ? '\u25B6' : finished ? '\u2713' : '\u25B6'}
         </span>
         <span className="task-group-label">{tool.name}</span>
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
@@ -970,40 +945,27 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
             ⑂ {agentTree.direct}{agentTree.total > agentTree.direct ? `+${agentTree.total - agentTree.direct}` : ''} agent{agentTree.total !== 1 ? 's' : ''}
           </span>
         )}
-        {!open && shownToolCount > 0 && (
+        {shownToolCount > 0 && (
           <span className="task-group-badge">{shownToolCount} tool{shownToolCount !== 1 ? 's' : ''}</span>
         )}
         {liveRunning && <span className="task-group-streaming-dot" />}
+        {readable && <span className="task-group-transcript">View transcript</span>}
       </button>
-      {open && (
-        <div className="task-group-body">
-          <TaskGroupPrompt input={tool.input} />
-          {loadingChildren ? (
-            <div className="task-group-loading">Loading subagent history...</div>
-          ) : allChildren.length > 0 ? (
-            <>
-              {hiddenCount > 0 && (
-                <button
-                  className="session-show-earlier-btn"
-                  onClick={() => setInnerOffset(p => p + TASK_GROUP_LOAD_MORE)}
-                >
-                  Show {Math.min(hiddenCount, TASK_GROUP_LOAD_MORE)} earlier tool calls
-                  <span className="session-show-earlier-count">({hiddenCount} hidden)</span>
-                </button>
-              )}
-              {visibleChildren.map((child, ci) => (
-                <SessionMessage key={innerStart + ci} message={child} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-              ))}
-            </>
-          ) : tool.result ? (
-            <div className="task-group-result">
-              <div className="task-group-result-label">Result</div>
-              <StableMarkdownBody text={tool.result.slice(0, 3000)} />
-            </div>
-          ) : (
-            <div className="task-group-empty">No subagent data available</div>
-          )}
-        </div>
+      {showTranscript && sessionId && (
+        <WorkflowTranscriptModal
+          sessionId={sessionId}
+          onClose={closeTranscript}
+          target={{
+            agentId: tool.agentId ?? tool.toolUseId ?? tool.name,
+            label: description,
+            meta: metaParts.join(' · '),
+            workflow: false,
+            live: liveRunning,
+            preloaded: tool.agentId ? undefined : children ?? undefined,
+            fallbackResult: tool.result || undefined,
+            promptInput: tool.input,
+          }}
+        />
       )}
     </div>
   );
