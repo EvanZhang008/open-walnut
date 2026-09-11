@@ -1,7 +1,7 @@
 /**
  * /api/v1 facade integration tests — real startServer({ port: 0 }) with an
  * isolated temp OPEN_WALNUT_HOME (constants mock, same bootstrap pattern as
- * setup.test.ts). Only the agent loop is mocked.
+ * setup.test.ts).
  *
  * Covers: status shape, conversation CRUD + message turn + SSE streaming,
  * 409 on a concurrent turn, Last-Event-ID / mid-turn replay, notes CRUD with
@@ -14,42 +14,9 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-test'))
 
-// ── Agent loop mock: emits 2 text deltas, optionally pausing after the first
-//    (lets tests join the SSE stream mid-turn / hold a turn active). ──
-const mockState = vi.hoisted(() => ({
-  gate: null as Promise<void> | null,
-  onFirstDelta: null as (() => void) | null,
-}))
-
-vi.mock('../../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async (
-    userContent: string | unknown[],
-    history: Array<{ role: string; content: unknown }>,
-    callbacks: { onTextDelta?: (d: string) => void },
-  ) => {
-    callbacks.onTextDelta?.('Hello ')
-    mockState.onFirstDelta?.()
-    if (mockState.gate) await mockState.gate
-    callbacks.onTextDelta?.('world')
-    const userMsg = {
-      role: 'user',
-      content: typeof userContent === 'string'
-        ? [{ type: 'text', text: userContent }]
-        : userContent,
-    }
-    const aiMsg = { role: 'assistant', content: [{ type: 'text', text: 'Hello world' }] }
-    return {
-      messages: [...history, userMsg, aiMsg],
-      newMessages: [userMsg, aiMsg],
-      response: 'Hello world',
-      aborted: false,
-    }
-  }),
-}))
-
 import path from 'node:path'
 import yaml from 'js-yaml'
-import { WALNUT_HOME, IMAGES_DIR, LOG_DIR, CONFIG_FILE, conversationFile } from '../../../src/constants.js'
+import { WALNUT_HOME, LOG_DIR, CONFIG_FILE } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { resetIndexBootstrap } from '../../../src/web/routes/notes-v2.js'
 import {
@@ -69,76 +36,6 @@ function apiUrl(path: string): string {
   return `http://localhost:${port}${path}`
 }
 
-// ── Minimal SSE client over fetch ──
-
-interface SseEvt { id?: number; event: string; data: Record<string, unknown> }
-
-interface SseConn {
-  events: SseEvt[]
-  waitFor: (pred: (e: SseEvt) => boolean, timeoutMs?: number) => Promise<SseEvt>
-  close: () => void
-}
-
-async function connectSse(url: string, headers?: Record<string, string>): Promise<SseConn> {
-  const controller = new AbortController()
-  const res = await fetch(url, { headers, signal: controller.signal })
-  if (res.status !== 200 || !res.body) {
-    controller.abort()
-    throw new Error(`SSE connect failed: ${res.status}`)
-  }
-  const events: SseEvt[] = []
-  const waiters: Array<{ pred: (e: SseEvt) => boolean; resolve: (e: SseEvt) => void }> = []
-
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  void (async () => {
-    try {
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let sep: number
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          let id: number | undefined
-          let event = ''
-          let data = ''
-          for (const line of frame.split('\n')) {
-            if (line.startsWith(':')) continue // comment / ping
-            if (line.startsWith('id: ')) id = Number(line.slice(4))
-            else if (line.startsWith('event: ')) event = line.slice(7)
-            else if (line.startsWith('data: ')) data = line.slice(6)
-          }
-          if (!event) continue
-          const evt: SseEvt = { id, event, data: data ? JSON.parse(data) : {} }
-          events.push(evt)
-          for (let i = waiters.length - 1; i >= 0; i--) {
-            if (waiters[i].pred(evt)) {
-              waiters[i].resolve(evt)
-              waiters.splice(i, 1)
-            }
-          }
-        }
-      }
-    } catch { /* aborted */ }
-  })()
-
-  return {
-    events,
-    waitFor: (pred, timeoutMs = 10_000) => {
-      const existing = events.find(pred)
-      if (existing) return Promise.resolve(existing)
-      return new Promise<SseEvt>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('SSE waitFor timed out')), timeoutMs)
-        waiters.push({ pred, resolve: (e) => { clearTimeout(timer); resolve(e) } })
-      })
-    },
-    close: () => controller.abort(),
-  }
-}
-
 async function createConversation(): Promise<string> {
   const res = await fetch(apiUrl('/api/v1/conversations'), {
     method: 'POST',
@@ -154,11 +51,11 @@ async function createConversation(): Promise<string> {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
-  // The turns here run the MOCKED in-process loop (see the loop.js mock above). The
-  // default engine is the claude-code lane, which would try to spawn a real CLI and
-  // never answer the SSE, so pin the engine this file is about.
+  // Nothing here sends a chat turn: a turn would spawn a real `claude` CLI through
+  // the lane. The lane path is covered by api-v1-lane-messages.test.ts with a fake
+  // session-runner.
   await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true })
-  await fs.writeFile(CONFIG_FILE, yaml.dump({ agent: { provider: 'walnut-agent' } }), 'utf-8')
+  await fs.writeFile(CONFIG_FILE, yaml.dump({}), 'utf-8')
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   if (!addr || typeof addr === 'string') throw new Error('no port')
@@ -196,192 +93,7 @@ describe('GET /api/v1/status', () => {
   })
 })
 
-describe('conversations + messages + SSE', () => {
-  it('create → list → send message → SSE events → messages persisted', async () => {
-    mockState.gate = null
-    const convId = await createConversation()
-
-    // List contains it, most-recent first shape.
-    const listRes = await fetch(apiUrl('/api/v1/conversations?limit=10'))
-    expect(listRes.status).toBe(200)
-    const list = await listRes.json() as Array<{ id: string; updatedAt: string; messageCount: number }>
-    expect(list.some((c) => c.id === convId)).toBe(true)
-
-    // Open the SSE stream BEFORE sending.
-    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
-    try {
-      const sendRes = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'hi walnut' }),
-      })
-      expect(sendRes.status).toBe(202)
-      const { turnId } = await sendRes.json() as { turnId: string }
-      expect(typeof turnId).toBe('string')
-
-      const end = await sse.waitFor((e) => e.event === 'message-end')
-      expect(end.data.turnId).toBe(turnId)
-      expect(end.data.fullText).toBe('Hello world')
-
-      const start = sse.events.find((e) => e.event === 'message-start')
-      expect(start?.data.turnId).toBe(turnId)
-      const deltas = sse.events.filter((e) => e.event === 'text-delta').map((e) => e.data.delta)
-      expect(deltas).toEqual(['Hello ', 'world'])
-      // Monotonic seq ids
-      const ids = sse.events.map((e) => e.id!)
-      expect([...ids].sort((a, b) => a - b)).toEqual(ids)
-
-      // Messages endpoint shows the user + assistant messages.
-      const msgsRes = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages?limit=50`))
-      expect(msgsRes.status).toBe(200)
-      const msgs = await msgsRes.json() as Array<{ role: string; text: string; kind?: string }>
-      const plain = msgs.filter((m) => !m.kind)
-      expect(plain.some((m) => m.role === 'user' && m.text === 'hi walnut')).toBe(true)
-      expect(plain.some((m) => m.role === 'assistant' && m.text === 'Hello world')).toBe(true)
-    } finally {
-      sse.close()
-    }
-  }, 20_000)
-
-  it('409 turn_active on a concurrent turn for the same conversation', async () => {
-    const convId = await createConversation()
-    let release!: () => void
-    mockState.gate = new Promise<void>((r) => { release = r })
-    const firstDelta = new Promise<void>((r) => { mockState.onFirstDelta = r })
-
-    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
-    try {
-      const first = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'first' }),
-      })
-      expect(first.status).toBe(202)
-      await firstDelta // the turn is now mid-flight, blocked on the gate
-
-      const second = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'second' }),
-      })
-      expect(second.status).toBe(409)
-      const body = await second.json() as { error: { code: string; message: string } }
-      expect(body.error.code).toBe('turn_active')
-
-      release()
-      await sse.waitFor((e) => e.event === 'message-end')
-
-      // After the turn ends the slot frees up again.
-      mockState.gate = null
-      mockState.onFirstDelta = null
-      const third = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'third' }),
-      })
-      expect(third.status).toBe(202)
-      await sse.waitFor((e) => e.event === 'message-end' && sse.events.filter((x) => x.event === 'message-end').length >= 2)
-    } finally {
-      mockState.gate = null
-      mockState.onFirstDelta = null
-      sse.close()
-    }
-  }, 20_000)
-
-  it('emits a queued SSE event when another turn holds the agent queue', async () => {
-    // Two DIFFERENT conversations share the 'general' agent queue — the
-    // second turn is accepted (202) but waits; the client must see `queued`
-    // on its stream so the pre-message-start silence doesn't read as a freeze.
-    const convA = await createConversation()
-    const convB = await createConversation()
-    let release!: () => void
-    mockState.gate = new Promise<void>((r) => { release = r })
-    const firstDelta = new Promise<void>((r) => { mockState.onFirstDelta = r })
-
-    const sseB = await connectSse(apiUrl(`/api/v1/conversations/${convB}/stream`))
-    try {
-      const first = await fetch(apiUrl(`/api/v1/conversations/${convA}/messages`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'long turn on A' }),
-      })
-      expect(first.status).toBe(202)
-      await firstDelta // A's turn is mid-flight, holding the queue
-
-      mockState.onFirstDelta = null
-      const second = await fetch(apiUrl(`/api/v1/conversations/${convB}/messages`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'queued turn on B' }),
-      })
-      expect(second.status).toBe(202)
-
-      const queued = await sseB.waitFor((e) => e.event === 'queued')
-      expect(typeof queued.data.turnId).toBe('string')
-      expect(typeof queued.data.position).toBe('number')
-      // B has NOT started yet — no message-start before A releases.
-      expect(sseB.events.some((e) => e.event === 'message-start')).toBe(false)
-
-      release()
-      mockState.gate = null
-      await sseB.waitFor((e) => e.event === 'message-end')
-      expect(sseB.events.some((e) => e.event === 'message-start')).toBe(true)
-    } finally {
-      mockState.gate = null
-      mockState.onFirstDelta = null
-      sseB.close()
-    }
-  }, 20_000)
-
-  it('replays the current turn to a late joiner and honors Last-Event-ID', async () => {
-    const convId = await createConversation()
-    let release!: () => void
-    mockState.gate = new Promise<void>((r) => { release = r })
-    const firstDelta = new Promise<void>((r) => { mockState.onFirstDelta = r })
-
-    const sendRes = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: 'replay me' }),
-    })
-    expect(sendRes.status).toBe(202)
-    await firstDelta // 1 delta already emitted, no SSE client was connected
-
-    // Late joiner (no Last-Event-ID) → ring buffer replays the turn so far.
-    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
-    try {
-      const replayed = await sse.waitFor((e) => e.event === 'text-delta')
-      expect(replayed.data.delta).toBe('Hello ')
-      expect(sse.events.some((e) => e.event === 'message-start')).toBe(true)
-
-      release()
-      mockState.gate = null
-      mockState.onFirstDelta = null
-      await sse.waitFor((e) => e.event === 'message-end')
-      const deltas = sse.events.filter((e) => e.event === 'text-delta').map((e) => e.data.delta)
-      expect(deltas).toEqual(['Hello ', 'world'])
-
-      // Reconnect with Last-Event-ID of the first delta → only later events replay.
-      const firstDeltaId = sse.events.find((e) => e.event === 'text-delta')!.id!
-      const sse2 = await connectSse(
-        apiUrl(`/api/v1/conversations/${convId}/stream`),
-        { 'Last-Event-ID': String(firstDeltaId) },
-      )
-      try {
-        await sse2.waitFor((e) => e.event === 'message-end')
-        expect(sse2.events.some((e) => e.event === 'message-start')).toBe(false)
-        const deltas2 = sse2.events.filter((e) => e.event === 'text-delta').map((e) => e.data.delta)
-        expect(deltas2).toEqual(['world'])
-      } finally {
-        sse2.close()
-      }
-    } finally {
-      mockState.gate = null
-      mockState.onFirstDelta = null
-      sse.close()
-    }
-  }, 20_000)
-
+describe('conversations + messages', () => {
   it('404 with the frozen error shape for an unknown conversation', async () => {
     for (const [method, path, body] of [
       ['GET', '/api/v1/conversations/conv-does-not-exist/messages', undefined],
@@ -411,72 +123,6 @@ describe('conversations + messages + SSE', () => {
     expect(json.error.code).toBe('bad_request')
   })
 
-  it('accepts images: saves files to the images dir + persists path-based blocks', async () => {
-    mockState.gate = null
-    const convId = await createConversation()
-
-    const before = await fs.readdir(IMAGES_DIR).catch(() => [] as string[])
-
-    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
-    try {
-      const sendRes = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: 'what is in this image?',
-          images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }],
-        }),
-      })
-      expect(sendRes.status).toBe(202)
-      await sse.waitFor((e) => e.event === 'message-end')
-    } finally {
-      sse.close()
-    }
-
-    // A new file landed in the images dir.
-    const after = await fs.readdir(IMAGES_DIR)
-    expect(after.length).toBeGreaterThan(before.length)
-
-    // The persisted user entry carries a lightweight path-based image block
-    // (base64 was swapped for { type:'image', path } — transcript stays small).
-    const raw = JSON.parse(await fs.readFile(conversationFile('general', convId), 'utf-8')) as {
-      entries: Array<{ role: string; content: unknown }>
-    }
-    const userEntry = raw.entries.find((e) =>
-      e.role === 'user' && Array.isArray(e.content)
-      && (e.content as Array<{ type: string }>).some((b) => b.type === 'image'),
-    )
-    expect(userEntry).toBeDefined()
-    const imgBlock = (userEntry!.content as Array<Record<string, unknown>>).find((b) => b.type === 'image')!
-    expect(typeof imgBlock.path).toBe('string')
-    expect(imgBlock.path as string).toContain(IMAGES_DIR)
-    expect(imgBlock).not.toHaveProperty('source') // no base64 blob persisted
-  }, 20_000)
-
-  it('accepts empty text when an image is present; empty text + no images still 400', async () => {
-    mockState.gate = null
-    const convId = await createConversation()
-
-    const withImage = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: '', images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }] }),
-    })
-    expect(withImage.status).toBe(202)
-
-    // Wait for the turn to finish so the queue frees up before the next send.
-    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
-    try { await sse.waitFor((e) => e.event === 'message-end') } finally { sse.close() }
-
-    const noImage = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: '   ', images: [] }),
-    })
-    expect(noImage.status).toBe(400)
-    const json = await noImage.json() as { error: { code: string } }
-    expect(json.error.code).toBe('bad_request')
-  }, 20_000)
 })
 
 describe('notes', () => {

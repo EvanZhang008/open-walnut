@@ -48,12 +48,6 @@ import { mockLocalDaemonReader } from '../../helpers/mock-local-daemon-reader.js
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-lane-messages'))
 vi.mock('../../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
 
-// No test here posts a turn; the mock exists so a regression that starts one
-// can never reach a real provider.
-vi.mock('../../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async () => ({ messages: [], newMessages: [], response: '', aborted: false })),
-}))
-
 import {
   WALNUT_HOME, CLAUDE_HOME, conversationFile, conversationIndexFile,
 } from '../../../src/constants.js'

@@ -2,16 +2,12 @@
  * Agent task search — orchestration: gates, cache, in-flight dedup, the
  * concurrency slot gate, and the engine seam.
  *
- * Default engine is a claude -p CHILD (user decision 2026-08-28: run on
- * Claude Code so the work can ride the CLI's own credential/subscription),
- * but a SLIM one: replaced system prompt, Bash-only, --bare, neutral cwd
- * (32.5k -> 3.6k tokens vs the stock shell), sonnet, server-side seed
- * search injected into the prompt, and its stream translated into the same
- * live progress events. The in-process runAgentLoop engine remains behind
- * WALNUT_AGENT_SEARCH_ENGINE=inprocess (measured faster: no subprocess, no
- * per-search `walnut` CLI spawn — see the benchmark in the memory notes).
- * The seam (pattern: ReviewRunner in background-review.ts) keeps the swap
- * caller-invisible in both directions.
+ * The engine is a claude -p CHILD (user decision 2026-08-28: run on Claude
+ * Code so the work can ride the CLI's own credential/subscription), but a SLIM
+ * one: replaced system prompt, Bash-only, --bare, neutral cwd (32.5k -> 3.6k
+ * tokens vs the stock shell), sonnet, server-side seed search injected into the
+ * prompt, and its stream translated into live progress events. The seam stays
+ * injectable so a test can script an answer without a child process.
  *
  * NOTE: backgroundAiDisabled() gates this feature, so it is OFF on every test
  * server (vitest/Playwright fixtures) and under WALNUT_DISABLE_BACKGROUND_AI=1
@@ -29,7 +25,6 @@ import { log } from '../logging/index.js';
 import {
   AGENT_SEARCH_PROMPT_V,
   SYSTEM_PROMPT,
-  SYSTEM_PROMPT_TOOL_LOOP,
   buildUserPrompt,
   normalizeQueryKey,
   parseAgentAnswer,
@@ -63,9 +58,9 @@ export interface AgentSearchEngineOptions {
   system: string;
   model: string;
   timeoutMs: number;
-  /** Raw (trimmed) query — the in-process engine pre-runs it as seed results. */
+  /** Raw (trimmed) query — the engine pre-runs it as seed results. */
   query?: string;
-  /** Client-chosen id: when set, the in-process engine emits live
+  /** Client-chosen id: when set, the engine emits live
    *  'search-agent:progress' events (mini-session lines in the panel). */
   progressId?: string;
 }
@@ -85,22 +80,6 @@ const CLI_ENGINE_MODEL = 'sonnet';
 // 50s (502). A completed slow answer beats a timeout. Route wall 90s,
 // client wall 95s keep the ordering.
 const CLI_ENGINE_TIMEOUT_MS = 80_000;
-// 45s, not 30: a hard query legitimately runs seed + 2 variant rounds + the
-// answer turn (~35s of sonnet round-trips; a live 3-round run hit 30.8s and
-// 502'd). The route's 60s deadline and the client's 65s stay the outer walls.
-const IN_PROCESS_TIMEOUT_MS = 45_000;
-// 2 tool rounds max — exactly the contract in SYSTEM_PROMPT_TOOL_LOOP (seed is
-// pre-run; at most two batched variant rounds). More is the model wandering,
-// and at slow-Bedrock hours (~10s/round measured) a third round races the 45s
-// timeout. Exhaustion falls into the loop's final no-tools call, which the
-// prompt requires to be the JSON answer.
-const IN_PROCESS_MAX_ROUNDS = 2;
-
-/** claude -p is the default (user decision: ride Claude Code's credential);
- *  WALNUT_AGENT_SEARCH_ENGINE=inprocess opts into the in-process loop. */
-function useCliEngine(): boolean {
-  return process.env.WALNUT_AGENT_SEARCH_ENGINE !== 'inprocess';
-}
 
 type ProgressData = { kind: 'seed' | 'search' | 'search_done' | 'answering'; q?: string; count?: number };
 
@@ -117,7 +96,7 @@ function makeProgress(progressId: string | undefined): (data: ProgressData) => v
 
 /** Pre-run the raw query server-side and append the rows to the prompt, so
  *  the engine's first model round already has results (common case: answer
- *  with zero tool calls). Shared by both engines. */
+ *  with zero tool calls). */
 async function appendSeedResults(
   prompt: string,
   query: string | undefined,
@@ -215,7 +194,6 @@ async function claudeCliEngine(
 // snippet length are capped tighter than the UI's instant lane.
 const SEARCH_ROW_LIMIT = 8;
 const SNIPPET_CAP = 240;
-const ANSWER_MAX_TOKENS = 2000;
 
 type SearchRows = Awaited<ReturnType<typeof import('./search.js')['search']>>;
 
@@ -245,80 +223,6 @@ async function serializeRows(rows: SearchRows): Promise<string> {
       score: Math.round(r.score * 100) / 100,
     };
   }));
-}
-
-async function inProcessEngine(
-  userPrompt: string,
-  options: AgentSearchEngineOptions,
-): Promise<{ response: string; model?: string; costUsd?: number }> {
-  const { runMicroAgent } = await import('../agent/micro-agent.js');
-  const { search } = await import('./search.js');
-
-  const progress = makeProgress(options.progressId);
-
-  const searchTool = {
-    name: 'search',
-    // Read-only ⇒ a batch of variant searches executes concurrently in the
-    // loop (one search latency instead of N; the prompt tells the model to
-    // batch its variants in one reply).
-    parallelSafe: true,
-    description: 'Search the user\'s Walnut tasks and session transcripts. Returns JSON rows with phase + updated date; a row with type "session" carries taskId = the task that OWNS that transcript. Batch query variants as parallel calls in one reply.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        q: { type: 'string', description: 'Search terms — one query per call' },
-      },
-      required: ['q'],
-    },
-    execute: async (params: Record<string, unknown>) => {
-      const q = String(params.q ?? '').trim();
-      if (!q) return 'Error: empty query';
-      const rows = await search(q, { types: ['task', 'session'], limit: SEARCH_ROW_LIMIT });
-      return await serializeRows(rows);
-    },
-  };
-
-  const prompt = await appendSeedResults(userPrompt, options.query, progress);
-
-  const qByToolUse = new Map<string, string>();
-  let answering = false;
-  const result = await runMicroAgent({
-    system: options.system,
-    userMessage: prompt,
-    tools: [searchTool],
-    tier: 'sonnet',
-    // Quality floor per user decision is sonnet; env overrides for experiments.
-    model: process.env.WALNUT_AGENT_SEARCH_MODEL?.trim() || undefined,
-    maxTokens: ANSWER_MAX_TOKENS,
-    maxToolRounds: IN_PROCESS_MAX_ROUNDS,
-    timeoutMs: options.timeoutMs,
-    usageSource: 'task-search-agent',
-    callbacks: {
-      onToolCall: (toolName, input, toolUseId) => {
-        if (toolName !== 'search') return;
-        // Text before a tool call was preamble, not the answer — re-arm the
-        // 'answering' latch so the REAL answer turn emits it again (the panel
-        // drops the stale line when this 'search' event arrives).
-        answering = false;
-        const q = String((input as { q?: unknown }).q ?? '');
-        qByToolUse.set(toolUseId, q);
-        progress({ kind: 'search', q });
-      },
-      onToolResult: (toolName, result, toolUseId) => {
-        if (toolName !== 'search') return;
-        let count: number | undefined;
-        try { count = (JSON.parse(result) as unknown[]).length; } catch { /* row count is decoration */ }
-        progress({ kind: 'search_done', q: qByToolUse.get(toolUseId), count });
-      },
-      onTextDelta: () => {
-        if (answering) return;
-        answering = true;
-        progress({ kind: 'answering' });
-      },
-    },
-  });
-  if (result.aborted) throw new Error(`AI search timed out after ${options.timeoutMs}ms`);
-  return { response: result.response, model: result.model };
 }
 
 const MAX_CONCURRENT_CALLS = 2;
@@ -395,9 +299,9 @@ async function inner(
   if (backgroundAiDisabled()) {
     throw new AgentSearchError('AI search is disabled in this environment', 503, { code: 'ai_disabled' });
   }
-  // Only the CLI engine needs the claude binary; the in-process default and
-  // injected engines (tests) must not be blocked by a CLI-less machine.
-  const cliEngine = !opts.engine && useCliEngine();
+  // Only the real child needs the claude binary; an injected engine (tests)
+  // must not be blocked by a CLI-less machine.
+  const cliEngine = !opts.engine;
   if (cliEngine) {
     cliAvailable ??= resolveClaudeCliExecutable() !== null;
     if (!cliAvailable) {
@@ -409,8 +313,8 @@ async function inner(
   const t0 = Date.now();
   let answer: { response: string; model?: string; costUsd?: number };
   try {
-    const engine = opts.engine ?? (cliEngine ? claudeCliEngine : inProcessEngine);
-    // CLI child searches via curl on the RUNNING server's own address (tens
+    const engine = opts.engine ?? claudeCliEngine;
+    // The child searches via curl on the RUNNING server's own address (tens
     // of ms) instead of spawning a walnut CLI process per query; falls back
     // to the walnut-CLI prompt when the address isn't known yet (tests).
     let cliSystem = SYSTEM_PROMPT;
@@ -422,9 +326,9 @@ async function inner(
       } catch { /* fallback prompt still works via PATH */ }
     }
     answer = await engine(buildUserPrompt(trimmed), {
-      system: cliEngine ? cliSystem : SYSTEM_PROMPT_TOOL_LOOP,
+      system: cliSystem,
       model: CLI_ENGINE_MODEL,
-      timeoutMs: opts.timeoutMs ?? (cliEngine ? CLI_ENGINE_TIMEOUT_MS : IN_PROCESS_TIMEOUT_MS),
+      timeoutMs: opts.timeoutMs ?? CLI_ENGINE_TIMEOUT_MS,
       query: trimmed,
       ...(opts.progressId ? { progressId: opts.progressId } : {}),
     });
@@ -488,7 +392,7 @@ async function inner(
  * Fire-and-forget, idempotent, and a no-op when the lane is disabled.
  */
 export function prewarmAgentSearchChild(): void {
-  if (!useCliEngine() || backgroundAiDisabled()) return;
+  if (backgroundAiDisabled()) return;
   cliAvailable ??= resolveClaudeCliExecutable() !== null;
   if (!cliAvailable) return;
   void (async () => {

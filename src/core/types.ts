@@ -816,74 +816,11 @@ export interface AgentRun {
   history?: unknown[];
 }
 
-/**
- * Engine that answers a Personal AI chat turn (`config.agent.provider`). NOT the model
- * provider (`config.provider.type`) — that one picks credentials/API, this one
- * picks who runs the loop.
- */
-export type AgentEngineProvider = 'walnut-agent' | 'claude-code';
-
-/** Runtime allowlist for route/config validation of `agent.provider`. */
-export const VALID_AGENT_ENGINE_PROVIDERS: ReadonlySet<string> = new Set<AgentEngineProvider>([
-  'walnut-agent',
-  'claude-code',
-]);
-
-/**
- * The engine Ask Walnut runs on when the AI provider is Claude Code, which is the
- * default provider whenever `claude` is installed. When `agent.provider` is unset,
- * resolveAgentEngineProvider derives the engine from the provider (any other
- * provider → 'walnut-agent', the loop that can call it), so this constant is the
- * default in the ordinary case, not an unconditional one.
- *
- * 'claude-code' since 2026-08-28. The in-process loop needs Bedrock credentials
- * of its own, which an install configured for the CLI simply does not keep — so
- * defaulting to it turned every config-read hiccup into "Could not load
- * credentials from any providers" on a box whose chat was working fine a minute
- * earlier. The lane engine rides the credentials the `claude` CLI already owns
- * (the minimum-Claude decision), so it is the only default that can answer on a
- * fresh install.
- */
-export const DEFAULT_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'claude-code';
-
-/**
- * Where an UNRECOGNIZED `agent.provider` value degrades. Kept as a separate
- * constant from the default so the two can diverge again if the in-process loop
- * ever needs to be the safe harbour.
- *
- * Also 'claude-code': a typo in a hand-edited config used to route the user onto
- * an engine that CANNOT answer on a CLI-only install, which reads as a
- * credential outage rather than as the typo it is. An unrecognized value is
- * logged loudly by resolveAgentEngineProvider instead of being absorbed by the
- * engine choice.
- */
-export const FALLBACK_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'claude-code';
-
 export interface AgentConfig {
-  model?: string;
   region?: string;
   maxTokens?: number;
-  cache?: CacheConfig;
   subagent?: SubagentGlobalConfig;
   agents?: Omit<AgentDefinition, 'source'>[];
-  /**
-   * Which ENGINE answers a Personal AI chat turn. Unrelated to `config.provider.type`
-   * (the model/credential provider).
-   *
-   *   - 'walnut-agent' (default): the in-process agent loop (`runAgentLoop`).
-   *   - 'claude-code': the turn is delivered to a daemon-managed `claude` CLI
-   *     session bound to the conversation's lane (see core/sessions/personal-ai-lane.ts).
-   *
-   * Default keeps today's behavior exactly; flipping it is opt-in.
-   */
-  provider?: AgentEngineProvider;
-  /** Agent ID to use for session summarization (defined in config.yaml agent.agents[]). */
-  session_summarizer_agent?: string;
-  /** LEGACY: agentId recognised when classifying turn-complete summary events.
-   *  The triage subagent was deleted (2026-07) — session self-report + deterministic
-   *  PHASE_SIGNAL lookup replaced it — so this no longer selects any agent; it only
-   *  affects event classification in server.ts. */
-  session_triage_agent?: string;
   /**
    * Triage throttling. Turn-complete triage trailing-debounces by `debounce_minutes`
    * (default 4) so a burst of interactive turns collapses into one end-of-interaction
@@ -911,15 +848,6 @@ export interface AgentConfig {
   language?: string;
   /** Default provider name for the main agent. Maps to config.providers[name]. */
   main_provider?: string;
-  /**
-   * Background self-review: every N clean Personal AI turns, fork the conversation
-   * (same cache prefix) and let the Personal AI review the window for skill/memory updates.
-   * The counter resets when the Personal AI used skill_manage itself during the window.
-   */
-  background_review?: {
-    enabled?: boolean;   // default: true
-    interval?: number;   // default: 10 turns
-  };
 }
 
 export interface Config {

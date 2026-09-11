@@ -2,9 +2,9 @@
  * Routines API — canonical /api/routines surface.
  *
  * A routine is a cron job + an `executor` ref (which decides where the
- * instructions run: main-agent / walnut-agent / claude-code). Legacy
- * sessionTarget/payload fields still exist on the wire for back-compat but
- * the UI reads/writes `executor`.
+ * instructions run; `claude-code` is the one the UI offers). A stored job may
+ * still name a retired executor type, and legacy sessionTarget/payload fields
+ * still exist on the wire for back-compat, but the UI reads/writes `executor`.
  */
 
 import { apiGet, apiPost, apiPatch, apiDelete } from './client';

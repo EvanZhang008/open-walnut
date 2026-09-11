@@ -1,5 +1,5 @@
 /**
- * /api/v1 × engine selection (`config.agent.provider`) — the MOBILE surface's fork.
+ * /api/v1 × the lane session — the MOBILE surface's turn contract.
  *
  * The iOS client has exactly ONE channel per conversation (its SSE stream) and
  * unlocks the composer on `message-end`. So unlike the web chat RPC — which can
@@ -7,19 +7,16 @@
  * own stream — a lane turn fired from mobile must be AWAITED and translated back
  * onto the frozen SSE contract. What's asserted here is exactly that contract:
  *
- *   - flag OFF (default) → the in-process loop runs, no lane is touched
- *   - flag ON            → the lane receives the message, the loop is never called,
- *                          and the stream still carries message-start → text-delta
- *                          → message-end{turnId, fullText}
- *   - flag ON + failure  → SSE `error` (a client that never sees it stays locked)
+ *   - the lane receives the message, and the stream still carries message-start →
+ *     text-delta → message-end{turnId, fullText}
+ *   - a lane failure → SSE `error` (a client that never sees it stays locked)
  *   - GET /messages      → the answer is readable back (the phone's only history)
  *   - a second POST mid-turn → 409 turn_active (the lane turn holds the guard too)
  *
  * What's real: Express server, the api-v1 router + SSE channels, chat history,
- * session records, the lane modules. What's mocked: constants.js (temp dir), the
- * agent loop (spy), and the 'session-runner' bus subscriber — a fake that answers a
- * lane turn with synthetic session:text-delta + session:result and NEVER spawns a
- * `claude`.
+ * session records, the lane modules. What's mocked: constants.js (temp dir) and the
+ * 'session-runner' bus subscriber — a fake that answers a lane turn with synthetic
+ * session:text-delta + session:result and NEVER spawns a `claude`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -28,22 +25,6 @@ import yaml from 'js-yaml'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-lane-test'))
-
-const runAgentLoop = vi.fn(async (userContent: string | unknown[], history: unknown[]) => ({
-  messages: [
-    ...(history as Array<{ role: string; content: unknown }>),
-    { role: 'user', content: typeof userContent === 'string' ? [{ type: 'text', text: userContent }] : userContent },
-    { role: 'assistant', content: [{ type: 'text', text: 'in-process response' }] },
-  ],
-  newMessages: [
-    { role: 'user', content: typeof userContent === 'string' ? [{ type: 'text', text: userContent }] : userContent },
-    { role: 'assistant', content: [{ type: 'text', text: 'in-process response' }] },
-  ],
-  response: 'in-process response',
-  aborted: false,
-}))
-
-vi.mock('../../../src/agent/loop.js', () => ({ runAgentLoop }))
 
 import type { Server as HttpServer } from 'node:http'
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js'
@@ -244,8 +225,17 @@ async function getMessages(convId: string): Promise<V1Message[]> {
   return await res.json() as V1Message[]
 }
 
+/** Wait for the lane spawn this turn triggers (SESSION_START recorded by the fake runner). */
+async function waitForLaneStart(timeoutMs = 10_000): Promise<SessionStartEvent> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (started.length > 0) return started[0]
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  throw new Error('the lane never started')
+}
+
 beforeEach(() => {
-  runAgentLoop.mockClear()
   started = []
   sent = []
   laneMode = 'result'
@@ -263,29 +253,7 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-describe('agent.provider unset (default) → in-process loop', () => {
-  it('runs runAgentLoop and never creates a lane session', async () => {
-    await boot({})
-    const convId = await createConv()
-    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
-    try {
-      const res = await postMessage(convId, 'hi walnut')
-      expect(res.status).toBe(202)
-
-      const end = await sse.waitFor((e) => e.event === 'message-end')
-      expect(end.data.fullText).toBe('in-process response')
-      expect(runAgentLoop).toHaveBeenCalledTimes(1)
-      expect(started).toHaveLength(0)
-
-      const { getSessionByLane } = await import('../../../src/core/session-tracker.js')
-      expect(await getSessionByLane(`chat:general:${convId}`)).toBeNull()
-    } finally {
-      sse.close()
-    }
-  }, 20_000)
-})
-
-describe("agent.provider = 'claude-code' → lane session", () => {
+describe('a mobile turn runs in the conversation lane session', () => {
   it('keeps the SSE contract: message-start → text-delta → message-end{fullText}', async () => {
     await boot({ provider: 'claude-code' })
     const convId = await createConv()
@@ -311,8 +279,7 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(order.indexOf('message-start')).toBeLessThan(order.indexOf('text-delta'))
       expect(order.indexOf('text-delta')).toBeLessThan(order.indexOf('message-end'))
 
-      // The turn ran on the lane, not in-process.
-      expect(runAgentLoop).not.toHaveBeenCalled()
+      // One lane spawn carried the turn.
       expect(started).toHaveLength(1)
       expect(started[0].lane).toBe(`chat:general:${convId}`)
       expect(started[0].message).toContain('plan my week')
@@ -337,7 +304,6 @@ describe("agent.provider = 'claude-code' → lane session", () => {
 
       expect(started).toHaveLength(1)
       expect(sent.map((s) => s.message)).toEqual(['two'])
-      expect(runAgentLoop).not.toHaveBeenCalled()
     } finally {
       sse.close()
     }
@@ -373,10 +339,9 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(typeof err.data.message).toBe('string')
       expect(err.data.message as string).toMatch(/did not answer/i)
       expect(sse.events.some((e) => e.event === 'message-end')).toBe(false)
-      expect(runAgentLoop).not.toHaveBeenCalled()
 
-      // The failure is persisted the same way the in-process catch persists it, so
-      // it lands in Notifications and NOT in the mobile feed.
+      // A failed turn is persisted as a notification, so it lands in Notifications
+      // and NOT in the mobile feed.
       const msgs = await getMessages(convId)
       expect(msgs.some((m) => m.text.includes('[Error:'))).toBe(false)
     } finally {
@@ -400,7 +365,10 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(body.error.code).toBe('turn_active')
 
       // Release the first turn by answering it, then the slot frees up.
-      const sid = started[0].preassignedSessionId!
+      // `message-start` is emitted BEFORE the lane is resolved, so it does not
+      // prove the spawn happened yet — under machine load the lane's own awaits
+      // (session store, locks) land well after the 409 comes back.
+      const sid = (await waitForLaneStart()).preassignedSessionId!
       bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, result: 'late answer', isError: false },
         ['main-ai', 'session-runner'], { source: 'test' })
       await sse.waitFor((e) => e.event === 'message-end')

@@ -2,8 +2,6 @@ import { useMemo } from 'react';
 import type { ContextInspectorResponse } from '@/api/context';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { ContextSection } from './ContextSection';
-import { ToolCard } from './ToolCard';
-import { ApiMessageBlock } from './ApiMessageBlock';
 
 interface ContextInspectorPanelProps {
   data: ContextInspectorResponse | null;
@@ -118,19 +116,20 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
   if (!data) return null;
 
   const { sections, totalTokens } = data;
-  const isLane = data.engine === 'claude-code';
+  const isClaudeCode = data.engine === 'claude-code';
 
   return (
     <div className="context-inspector">
       <div className="context-inspector-header">
         <span className="context-inspector-title">Agent Context Inspector</span>
-        {isLane && (
-          <span className="context-token-badge" title="Ask Walnut sessions run in a Claude Code session; this shows the selected session's launch config.">
-            Claude Code engine
-          </span>
-        )}
+        <span
+          className="context-token-badge"
+          title="A chat turn runs in a coding-agent session; this shows that session's launch config."
+        >
+          {isClaudeCode ? 'Claude Code engine' : `${data.engine ?? 'unknown'} engine`}
+        </span>
         <span className="context-token-badge context-token-badge-total">
-          {isLane ? 'System prompt' : 'Total'}: ~{totalTokens.toLocaleString()} tokens
+          System prompt: ~{totalTokens.toLocaleString()} tokens
         </span>
         <button
           className="btn btn-sm"
@@ -145,13 +144,11 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
       <div className="context-inspector-body">
         <ContextSection title="Model Config" tokens={sections.modelConfig.tokens}>
           <pre className="context-pre">
-            {isLane
-              ? `model: ${sections.modelConfig.content.model}\nsession: ${sections.modelConfig.content.region}`
-              : `model: ${sections.modelConfig.content.model}\nmax_tokens: ${sections.modelConfig.content.max_tokens}\nregion: ${sections.modelConfig.content.region}`}
+            {`model: ${sections.modelConfig.content.model}\nsession: ${sections.modelConfig.content.region}`}
           </pre>
         </ContextSection>
 
-        <ContextSection title={isLane ? 'Persona Prompt (launch --append-system-prompt)' : 'Role & Rules'} tokens={sections.roleAndRules.tokens}>
+        <ContextSection title="Persona Prompt (launch --append-system-prompt)" tokens={sections.roleAndRules.tokens}>
           <ContextMarkdown content={sections.roleAndRules.content} />
         </ContextSection>
 
@@ -159,96 +156,9 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
           <SkillsIndexView content={sections.skills.content} />
         </ContextSection>
 
-        <ContextSection title="Compaction Summary" tokens={sections.compactionSummary.tokens}>
-          <ContextMarkdown content={sections.compactionSummary.content} fallback="(No compaction yet)" />
+        <ContextSection title="Global Memory (MEMORY.md)" tokens={sections.globalMemory.tokens}>
+          <ContextMarkdown content={sections.globalMemory.content} fallback="(Empty)" />
         </ContextSection>
-
-        <ContextSection title="Projects" tokens={sections.taskProjects.tokens}>
-          <ContextMarkdown content={sections.taskProjects.content} fallback="(No active tasks)" />
-        </ContextSection>
-
-        {sections.recentTasks && (
-          <ContextSection title="Recent Tasks" tokens={sections.recentTasks.tokens}>
-            <ContextMarkdown content={sections.recentTasks.content} fallback="(No recent tasks)" />
-          </ContextSection>
-        )}
-
-        {/* Non-General agents: show split memory sections */}
-        {sections.agentMemory && (
-          <ContextSection title="Agent Memory" tokens={sections.agentMemory.tokens}>
-            <ContextMarkdown content={sections.agentMemory.content} fallback="(No agent memory yet)" />
-          </ContextSection>
-        )}
-        {sections.mainAgentMemory && (
-          <ContextSection title="Main Agent Memory (read-only)" tokens={sections.mainAgentMemory.tokens}>
-            <ContextMarkdown content={sections.mainAgentMemory.content} fallback="(Empty)" />
-          </ContextSection>
-        )}
-        {/* General agent: user profile (USER.md) + global memory (MEMORY.md) */}
-        {!sections.agentMemory && (
-          <>
-            <ContextSection title="User Profile (USER.md)" tokens={sections.userProfile.tokens}>
-              <ContextMarkdown content={sections.userProfile.content} fallback="(No user profile yet)" />
-            </ContextSection>
-            <ContextSection title="Global Memory (MEMORY.md)" tokens={sections.globalMemory.tokens}>
-              <ContextMarkdown content={sections.globalMemory.content} fallback="(Empty)" />
-            </ContextSection>
-          </>
-        )}
-
-        {sections.notesContext.content && (
-          <ContextSection title="Notes Context" tokens={sections.notesContext.tokens}>
-            <ContextMarkdown content={sections.notesContext.content} />
-          </ContextSection>
-        )}
-
-        {/* Non-General agents: show split daily log sections */}
-        {sections.agentDailyLogs && (
-          <ContextSection title="Agent Daily Logs" tokens={sections.agentDailyLogs.tokens}>
-            <ContextMarkdown content={sections.agentDailyLogs.content} fallback="(No agent activity)" />
-          </ContextSection>
-        )}
-        {sections.mainAgentDailyLogs && (
-          <ContextSection title="Main Agent Daily Logs (read-only)" tokens={sections.mainAgentDailyLogs.tokens}>
-            <ContextMarkdown content={sections.mainAgentDailyLogs.content} fallback="(No recent activity)" />
-          </ContextSection>
-        )}
-        {/* General agent: single daily logs section */}
-        {!sections.agentDailyLogs && (
-          <ContextSection title="Daily Logs" tokens={sections.dailyLogs.tokens}>
-            <ContextMarkdown content={sections.dailyLogs.content} fallback="(No recent activity)" />
-          </ContextSection>
-        )}
-
-        {/* Lane engine: the CLI owns tools + transcript — hollow lists here would
-            just repeat the old engine's shape with zeros. */}
-        {!isLane && (
-          <>
-            <ContextSection title="Tools" tokens={sections.tools.tokens} count={sections.tools.count}>
-              <div className="context-tools-list">
-                {sections.tools.content.map((tool) => (
-                  <ToolCard key={tool.name} tool={tool} />
-                ))}
-              </div>
-            </ContextSection>
-
-            <ContextSection
-              title="API Messages"
-              tokens={sections.apiMessages.tokens}
-              count={sections.apiMessages.count}
-            >
-              <div className="context-messages-list">
-                {sections.apiMessages.content.length === 0 ? (
-                  <div className="text-sm text-muted" style={{ padding: 8 }}>(No messages yet)</div>
-                ) : (
-                  sections.apiMessages.content.map((msg, i) => (
-                    <ApiMessageBlock key={i} message={msg} index={i} />
-                  ))
-                )}
-              </div>
-            </ContextSection>
-          </>
-        )}
       </div>
     </div>
   );

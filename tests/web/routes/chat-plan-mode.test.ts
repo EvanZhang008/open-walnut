@@ -6,8 +6,15 @@
  * - mode: 'plan', planModeFirst: true => [PLAN MODE] prefix
  * - No mode flags => no prefix injected
  *
- * What's real: Express server, WebSocket RPC, chat handler routing.
- * What's mocked: constants.js (temp dir), agent loop (captures userContent).
+ * The signal rides the message TEXT delivered into the conversation's lane
+ * session, so what is captured here is that message: the lane is the one thing a
+ * turn reaches, and a prefix that never made it onto the wire never reached the
+ * model either.
+ *
+ * What's real: Express server, WebSocket RPC, chat handler routing, the lane
+ * modules. What's mocked: constants.js (temp dir) and the 'session-runner' bus
+ * subscriber (a fake that records SESSION_START, answers with a synthetic
+ * session:result, and NEVER spawns a `claude`).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -15,36 +22,69 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants())
 
-// Capture the userContent argument passed to runAgentLoop
-let capturedUserContent: string | unknown[] = ''
-
-vi.mock('../../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async (userContent: string | unknown[], history: unknown[]) => {
-    capturedUserContent = userContent
-    return {
-      messages: [
-        ...(history as Array<{ role: string; content: unknown }>),
-        {
-          role: 'user',
-          content: typeof userContent === 'string'
-            ? [{ type: 'text', text: userContent }]
-            : userContent,
-        },
-        { role: 'assistant', content: [{ type: 'text', text: 'mock response' }] },
-      ],
-      response: 'mock response',
-      aborted: false,
-    }
-  }),
-}))
-
 import type { Server as HttpServer } from 'node:http'
 import WebSocket from 'ws'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
+import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
+import type { SessionStartEvent } from '../../../src/core/event-types.js'
+import { markProcessing, removeProcessed } from '../../../src/core/session-message-queue.js'
 
 let server: HttpServer
 let port: number
+/** SESSION_START events the fake runner saw — one per lane spawn. */
+let started: SessionStartEvent[] = []
+
+/** The message text the turn delivered into the lane. */
+function laneMessage(): string {
+  if (started.length === 0) throw new Error('the turn never reached a lane')
+  return started[0].message ?? ''
+}
+
+/**
+ * Consume a session's queued messages the way a real delivery would. Tracked so
+ * teardown can await it: a message left 'pending' when the server goes down is
+ * what the local daemon's reconnect redelivery would cold-`--resume` into a REAL
+ * `claude` spawn.
+ */
+const inFlightDrains = new Set<Promise<void>>()
+
+function drainQueue(sessionId: string): void {
+  const p = (async () => {
+    try {
+      const batch = await markProcessing(sessionId)
+      if (batch.length > 0) await removeProcessed(sessionId, batch.map((m) => m.id))
+    } catch { /* the store may be torn down between tests */ }
+  })()
+  inFlightDrains.add(p)
+  void p.finally(() => inFlightDrains.delete(p))
+}
+
+/**
+ * Fake session-runner: records starts, drains sends, answers each turn with a
+ * synthetic session:result (the chat RPC AWAITS the lane turn, so a runner that
+ * never answers hangs the RPC to its timeout), and never spawns anything.
+ * Replacing the subscriber by NAME displaces the real runner startServer added.
+ */
+function installFakeRunner(): void {
+  bus.subscribe('session-runner', (event: BusEvent) => {
+    let sid: string | undefined
+    if (event.name === EventNames.SESSION_START) {
+      const d = event.data as SessionStartEvent
+      started.push(d)
+      sid = d.preassignedSessionId
+    } else if (event.name === EventNames.SESSION_SEND) {
+      sid = (event.data as { sessionId: string }).sessionId
+    }
+    if (!sid) return
+    drainQueue(sid)
+    const sessionId = sid
+    setTimeout(() => {
+      bus.emit(EventNames.SESSION_RESULT, { sessionId, result: 'lane answer', isError: false },
+        ['main-ai', 'session-runner'], { source: 'session-runner' })
+    }, 5)
+  })
+}
 
 function connectWs(): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -86,17 +126,21 @@ const PLAN_MODE_REMINDER =
 
 describe('Chat RPC plan mode signal injection', () => {
   beforeEach(async () => {
-    capturedUserContent = ''
+    started = []
     await fs.rm(WALNUT_HOME, { recursive: true, force: true })
     await fs.mkdir(WALNUT_HOME, { recursive: true })
     server = await startServer({ port: 0, dev: true })
     const addr = server.address()
     port = typeof addr === 'object' && addr ? addr.port : 0
+    installFakeRunner()
   })
 
   afterEach(async () => {
+    // Let every fake delivery finish draining BEFORE the server goes down.
+    await Promise.allSettled([...inFlightDrains])
     await stopServer()
     await new Promise((r) => setTimeout(r, 100))
+    bus.clear()
     await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
   })
 
@@ -108,9 +152,7 @@ describe('Chat RPC plan mode signal injection', () => {
         planModeOff: true,
       })
 
-      // capturedUserContent should be a string with EXECUTION_MODE_MESSAGE prefix
-      expect(typeof capturedUserContent).toBe('string')
-      const content = capturedUserContent as string
+      const content = laneMessage()
       expect(content).toContain(EXECUTION_MODE_MESSAGE)
       expect(content.startsWith(EXECUTION_MODE_MESSAGE)).toBe(true)
       // The original message should follow after the prefix
@@ -132,8 +174,7 @@ describe('Chat RPC plan mode signal injection', () => {
         planModeFirst: true,
       })
 
-      expect(typeof capturedUserContent).toBe('string')
-      const content = capturedUserContent as string
+      const content = laneMessage()
       expect(content.startsWith('[PLAN MODE]')).toBe(true)
       // Should contain the original message
       expect(content).toContain('think about this')
@@ -154,8 +195,7 @@ describe('Chat RPC plan mode signal injection', () => {
         mode: 'plan',
       })
 
-      expect(typeof capturedUserContent).toBe('string')
-      const content = capturedUserContent as string
+      const content = laneMessage()
       // Should NOT start with [PLAN MODE] (that's only for planModeFirst)
       expect(content.startsWith('[PLAN MODE]')).toBe(false)
       // Should contain the original message
@@ -177,8 +217,7 @@ describe('Chat RPC plan mode signal injection', () => {
         message: 'just a normal message',
       })
 
-      expect(typeof capturedUserContent).toBe('string')
-      const content = capturedUserContent as string
+      const content = laneMessage()
       // Should be just the message, no prefixes or suffixes
       expect(content).toBe('just a normal message')
       expect(content).not.toContain('[PLAN MODE]')

@@ -136,10 +136,10 @@ describe('Context Inspector — conversation scoping (regression)', () => {
 
 describe('/compact — conversation scoping (regression)', () => {
   // We exercise the core compact() with a mock summarizer rather than the REST
-  // /compact endpoint: the endpoint wires createCompactionCallbacks → runAgentLoop,
-  // which calls the real Bedrock LLM (no creds in test env). smart-compaction.test.ts
-  // uses the same pattern. This still proves the fix's essence — that compaction
-  // honors conversationId and only touches the targeted conversation.
+  // /compact endpoint: the endpoint's summarizer is a real model call (no creds in
+  // the test env). smart-compaction.test.ts uses the same pattern. This still
+  // proves the fix's essence — that compaction honors conversationId and only
+  // touches the targeted conversation.
   it('compact(conversationId=X) compacts X only, leaving a sibling conversation untouched', async () => {
     const smallMsgsBefore = (await chatHistory.getApiMessages('general', convSmall)).length;
 

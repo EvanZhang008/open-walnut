@@ -248,38 +248,11 @@ describe('POST /api/v1/chat/compact (Wave 3)', () => {
  * is a process the user never asked for — so minting became an explicit request.
  *
  * The lane session is not spawned here (that needs a session runner), so these
- * assert the ROUTING: which shape each engine answers with, and that the POST
- * refuses outright when the box is not on the lane engine.
+ * assert the ROUTING: the shape the GET answers with, and that both halves 404 a
+ * conversation that does not exist.
  */
 describe('GET/POST /api/v1/chat/engine — the model pill\'s two halves', () => {
-  /** Point the config at one engine. */
-  async function setEngine(provider: 'walnut-agent' | 'claude-code'): Promise<void> {
-    const yaml = await import('js-yaml')
-    const { CONFIG_FILE } = await import('../../../src/constants.js')
-    await fs.writeFile(CONFIG_FILE, yaml.dump({
-      version: 1, user: {}, defaults: { priority: 'none' },
-      agent: { provider, main_model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' },
-    }), 'utf-8')
-  }
-
-  it('GET reports in-process + the config model, and the POST refuses to mint', async () => {
-    await setEngine('walnut-agent')
-    const meta = await createConversation('general', 'in-process chat')
-
-    const info = await request(createApp()).get(`/api/v1/chat/engine?conversationId=${meta.id}`)
-    expect(info.status).toBe(200)
-    expect(info.body.engine).toBe('in-process')
-    expect(info.body.sessionId).toBeNull()
-    // The model is reported so the pill can SHOW it, never switch it.
-    expect(info.body.model).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0')
-
-    // 409, not a silently-minted orphan CLI: the in-process loop has no lane.
-    const minted = await request(createApp()).post(`/api/v1/chat/engine/session?conversationId=${meta.id}`)
-    expect(minted.status).toBe(409)
-  })
-
-  it('GET reports the lane engine with no session before the first turn', async () => {
-    await setEngine('claude-code')
+  it('GET reports the lane with no session before the first turn', async () => {
     const meta = await createConversation('general', 'lane chat')
 
     const info = await request(createApp()).get(`/api/v1/chat/engine?conversationId=${meta.id}`)
@@ -287,10 +260,12 @@ describe('GET/POST /api/v1/chat/engine — the model pill\'s two halves', () => 
     expect(info.body.engine).toBe('lane')
     // Null is the state the POST exists to resolve — the GET never mints.
     expect(info.body.sessionId).toBeNull()
+    // `switchable` is OMITTED rather than false while there is no session, so no
+    // existing client's decode moves.
+    expect(info.body.switchable).toBeUndefined()
   })
 
   it('both halves 404 an unknown conversation rather than inventing one', async () => {
-    await setEngine('claude-code')
     expect((await request(createApp()).get('/api/v1/chat/engine?conversationId=conv-ghost')).status).toBe(404)
     expect((await request(createApp()).post('/api/v1/chat/engine/session?conversationId=conv-ghost')).status).toBe(404)
   })

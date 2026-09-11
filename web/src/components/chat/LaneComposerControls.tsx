@@ -42,8 +42,8 @@ interface LaneComposerControlsProps {
   /** Engine backing the lane (from useLaneSession). Default 'claude'. */
   engine?: SessionEngine;
   /** Provided ONLY while the conversation is empty: picking another provider
-   *  re-mints the lane session on that engine (useLaneSession.swapEngine).
-   *  Absent → the other providers render greyed + locked, like a live session. */
+   *  re-mints the lane session on that engine. Absent → the other providers render
+   *  greyed + locked, like a live session. No caller passes it today. */
   onProviderSwitch?: (provider: ProviderId) => void;
 }
 

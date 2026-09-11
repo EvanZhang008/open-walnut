@@ -8,49 +8,29 @@ export interface ContextSection<T = string> {
 
 export interface ModelConfig {
   model: string;
-  max_tokens: number;
+  /** Host + cwd of the session, one line ("local · cwd /Users/…"). */
   region: string;
-}
-
-export interface ToolSchema {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-}
-
-export interface ApiMessage {
-  role: string;
-  content: unknown;
 }
 
 export interface ContextInspectorResponse {
   /**
-   * Which engine this context belongs to. Absent = in-process loop (legacy).
+   * Which engine this context belongs to.
    *
    * Open-ended string, not a two-value union: a named session reports the engine
    * off its OWN record, so any registered coding-agent engine ('codex', …) can
    * appear here. Only 'claude-code' unlocks the Claude Code readings.
    */
   engine?: string;
+  /**
+   * Only what the session was really given. Tools, the message transcript and
+   * compaction all live inside the session CLI, so they have no section here — a
+   * zeroed one would read as "the model got none of that".
+   */
   sections: {
     modelConfig: ContextSection<ModelConfig>;
     roleAndRules: ContextSection;
     skills: ContextSection;
-    compactionSummary: ContextSection;
-    taskProjects: ContextSection;
-    /** Recent-task ledger (General agent only). */
-    recentTasks?: ContextSection;
-    userProfile: ContextSection;
     globalMemory: ContextSection;
-    notesContext: ContextSection;
-    dailyLogs: ContextSection;
-    tools: ContextSection<ToolSchema[]>;
-    apiMessages: ContextSection<ApiMessage[]>;
-    // Non-General agent split sections
-    agentMemory?: ContextSection;
-    mainAgentMemory?: ContextSection;
-    agentDailyLogs?: ContextSection;
-    mainAgentDailyLogs?: ContextSection;
   };
   totalTokens: number;
 }
@@ -58,9 +38,9 @@ export interface ContextInspectorResponse {
 /**
  * Read the launch context of one conversation.
  *
- * `sessionId` names a claude-code session directly — what an Ask Walnut
- * conversation IS. `agentId`/`conversationId` is the legacy console-agent form;
- * with neither, the server answers for the configured default.
+ * `sessionId` names a session directly — what an Ask Walnut conversation IS.
+ * `agentId`/`conversationId` is the console-agent lane form; with neither, the
+ * server answers for the agent's active conversation.
  */
 export async function fetchAgentContext(
   agentId?: string, conversationId?: string, sessionId?: string,

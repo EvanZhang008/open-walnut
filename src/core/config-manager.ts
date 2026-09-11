@@ -1,18 +1,14 @@
 import fs from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
-import { CLOUD_MODE, CONFIG_FILE } from '../constants.js';
+import { CONFIG_FILE } from '../constants.js';
 import {
   VALID_PRIORITIES,
-  FALLBACK_AGENT_ENGINE_PROVIDER,
-  VALID_AGENT_ENGINE_PROVIDERS,
-  type AgentEngineProvider,
   type Config,
   type PushTokenEntry,
   type TaskPriority,
 } from './types.js';
 import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
-import { CLAUDE_CLI_PROVIDER, resolveMainProviderName } from '../agent/providers/default-provider.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
 
 const DEFAULT_CONFIG: Config = {
@@ -25,67 +21,11 @@ const DEFAULT_CONFIG: Config = {
   // so this never re-routes an established setup.
   defaults: { priority: 'none', platform: 'local' },
   provider: { type: 'claude-code' },
-  // Which ENGINE answers a Personal AI chat turn is NOT defaulted here: it follows
-  // the AI provider (Settings → AI Provider) — see resolveAgentEngineProvider().
   // getConfig() spreads the parsed file OVER these defaults at the TOP level, so
-  // anything put in this object is dropped by any config.yaml with an `agent:`
-  // section; the resolver is what actually applies the rule.
+  // anything put in this object is dropped by any config.yaml that has an `agent:`
+  // section at all. Per-key defaults belong at their reader.
   agent: {},
 };
-
-/**
- * The engine that answers a Personal AI chat turn (what "Ask Walnut" runs on).
- *
- * The AI provider (Settings → AI Provider, `agent.main_provider`, defaulting to
- * Claude Code when `claude` is installed) is the user's ONE choice; the engine
- * follows it: Claude Code → 'claude-code' (a lane-bound `claude` session, which
- * carries the CLI's own login); any other provider → 'walnut-agent' (the
- * in-process loop calling that provider directly). An explicit `agent.provider`
- * is an advanced override and is honored verbatim; the Settings radio writes it
- * in step with the provider so the two never disagree.
- *
- * Read through this rather than `config.agent?.provider` directly: getConfig()
- * merges the parsed YAML over DEFAULT_CONFIG at the top level only, so a user
- * config with an `agent:` section sees no defaults — and an unknown string from
- * a hand-edited file must degrade to a real engine, never to "no engine".
- *
- * A config-read hiccup that drops `agent:` (2026-08-28) still lands on the
- * engine this box can run: with no `main_provider` the provider rule looks at
- * whether `claude` is installed, so a CLI-only Mac stays on the lane engine and a
- * key-only box stays on the loop. `claudeInstalled` is injectable for tests.
- *
- * A CLOUD REPLICA always answers 'walnut-agent' regardless of config: it has no
- * session runner and no `claude` CLI, so the lane engine is not something it can
- * be configured INTO. Its phone turns reach the lane by being relayed to the
- * primary (routes/chat-turn-relay.ts); this value governs only the local
- * fallback that runs when the relay is unavailable, and that fallback has to be
- * an engine this box can actually execute. Keeping the constraint here rather
- * than at the seven call sites means a replica cannot be pushed onto an engine
- * it can't run by a synced config or a flipped default.
- */
-export function resolveAgentEngineProvider(config: Config, claudeInstalled?: boolean): AgentEngineProvider {
-  if (CLOUD_MODE) return 'walnut-agent';
-  const raw = config.agent?.provider;
-  if (typeof raw === 'string' && VALID_AGENT_ENGINE_PROVIDERS.has(raw)) {
-    return raw as AgentEngineProvider;
-  }
-  // Unset → follow the AI provider, silently: that is the ordinary state of a
-  // config that never touched the setting. Anything ELSE present but
-  // unrecognized is a typo in a file a human edited, and it must be audible —
-  // absorbing it is how an engine surprise became a "credential" error report.
-  if (raw === undefined) {
-    const main = claudeInstalled === undefined
-      ? resolveMainProviderName(config)
-      : resolveMainProviderName(config, claudeInstalled);
-    return main === CLAUDE_CLI_PROVIDER ? 'claude-code' : 'walnut-agent';
-  }
-  log.session.warn('config-manager: agent.provider is not a known engine — using the fallback', {
-    value: typeof raw === 'string' ? raw : `<${typeof raw}>`,
-    using: FALLBACK_AGENT_ENGINE_PROVIDER,
-    valid: [...VALID_AGENT_ENGINE_PROVIDERS].join(', '),
-  });
-  return FALLBACK_AGENT_ENGINE_PROVIDER;
-}
 
 // ── One-time config migration: category removal (project-only model) ────────
 
@@ -245,12 +185,11 @@ async function readRawConfigContent(): Promise<string | null> {
  *
  * `fs.writeFile` truncates first and writes after, so a concurrent reader can
  * observe a HALF file — and half a config.yaml is worse than none, because it
- * still parses. The `agent:` section sits at line 12 of a 281-line file, so a
- * reader landing in that window got valid YAML with no `agent.provider` and the
- * Personal AI silently answered on the in-process engine (observed
- * 2026-08-28 06:03: one relayed turn resolved `walnut-agent` while every other
- * turn that day resolved `claude-code`, and no unreadable-config error was
- * logged because nothing ever threw).
+ * still parses. The `agent:` section sits near the top of a ~280-line file, so a
+ * reader landing in that window got valid YAML with the whole section missing and
+ * silently ran on defaults, with no unreadable-config error logged because nothing
+ * ever threw (observed 2026-08-28 06:03, where the missing section sent one turn
+ * to a provider whose credentials this box does not keep).
  *
  * Temp lives in the SAME directory so the rename is a same-filesystem atomic
  * swap (an EXDEV across /tmp would fall back to copy, reopening the window).
@@ -319,12 +258,11 @@ export async function getConfig(): Promise<Config> {
     if (firstRun) log.session.info('config-manager: no config.yaml and no backup — first run, using defaults', detail);
     else log.session.error('config-manager: config.yaml UNREADABLE and backup did not cover it — falling back to DEFAULTS. Machine-local settings (hosts/plugins/stt/provider) are missing until this is fixed.', detail);
     const defaultModels = (MODEL_CATALOG.bedrock ?? []).map(m => m.id);
-    // Spread DEFAULT_CONFIG.agent — do NOT replace the object. Replacing it
-    // dropped `provider`, so the chat engine resolved to the default rather
-    // than the configured one: on 2026-08-28 06:03 one relayed turn answered on
-    // the in-process loop, reached for Bedrock credentials that this box does
-    // not keep, and the phone showed "Could not load credentials from any
-    // providers" — a config-read hiccup surfacing as a credential error.
+    // Spread DEFAULT_CONFIG.agent — do NOT replace the object, so a key added to
+    // the defaults keeps surviving this path. Dropping one here reads to the user
+    // as an unrelated outage: on 2026-08-28 06:03 a lost `agent:` section sent one
+    // turn at credentials this box does not keep, and the phone reported "Could
+    // not load credentials from any providers".
     return {
       ...DEFAULT_CONFIG,
       agent: { ...DEFAULT_CONFIG.agent, available_models: defaultModels, main_model: defaultModels[0] },

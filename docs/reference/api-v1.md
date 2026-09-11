@@ -189,7 +189,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | DELETE | `/api/v1/notes/folder/*path` | Recursive folder delete (client must confirm) |
 | PUT | `/api/v1/conversations/active` | Switch the Personal AI's active conversation pointer |
 | GET | `/api/v1/chat/stats` | Conversation size stats (messages + token estimate) |
-| GET | `/api/v1/chat/engine` | Which engine answers a conversation + its lane session id (read-only; never mints) |
+| GET | `/api/v1/chat/engine` | The lane session id answering a conversation (read-only; never mints) |
 | POST | `/api/v1/chat/clear` | Clear a Personal AI conversation |
 | POST | `/api/v1/chat/compact` | Fire-and-forget background compaction |
 | GET | `/api/v1/agents/meta/tools\|skills\|models` | Agent-editor dropdown catalogs |
@@ -380,25 +380,25 @@ Turns share the exact same per-agent serialization queue as the web UI's
 WebSocket chat — a REST turn and a WS turn can never interleave on one
 conversation, and turns fired from mobile also stream into the web UI.
 
-**Which engine answers (cloud companion).** A chat turn always runs on the
-engine the PRIMARY box is configured for (`agent.provider`), even when the phone
-is talking to the cloud replica: the replica relays the turn to the primary and
-forwards the primary's stream back onto this conversation's SSE channel, because
-the replica has no session runner and could otherwise only answer with its own
-in-process fallback loop. Clients need no change for this.
+**Where the turn runs (cloud companion).** A chat turn is answered by the
+conversation's `claude` session on the PRIMARY box, even when the phone is talking
+to the cloud replica: the replica relays the turn to the primary and forwards the
+primary's stream back onto this conversation's SSE channel. It has to, because a
+turn needs a session runner and the `claude` CLI, and the replica has neither.
+Clients need no change for this.
 
 Image turns relay too. The bytes travel on the image lane (the same narrow
 host-side save a session attachment uses), and only the resulting host paths ride
 the relay call, so the picture reaches the primary's model without a multi-MB
 control frame. Nothing about the request shape changes for the client.
 
-Degraded case: when the relay is unusable (bridge down, primary's server down, a
-primary that predates the relay) or an attachment cannot be handed over (too
-large, or the primary's host refuses it), the replica answers the WHOLE turn from
-its own loop instead of failing, and stamps the additive `engine` field on the
-terminal frame (`"walnut-agent-fallback"`). A turn is never relayed with only
-some of its pictures. `engine` is informational only — ignore it unless you want
-to show the degradation.
+When the relay is unusable (bridge down, primary's server down, a primary that
+predates the relay) or an attachment cannot be handed over (too large, or the
+primary's host refuses it), the turn ends with the SSE `error` frame. There is no
+second engine to answer with, so a clear failure is the honest outcome: retry once
+the primary is reachable. A turn is never relayed with only some of its pictures.
+The additive `engine` field on the terminal frame reports which engine answered
+(`"claude-code"`); it is informational only.
 
 ### GET /api/v1/conversations/:id/stream (SSE)
 
@@ -415,8 +415,8 @@ to show the degradation.
 | `message-end` | `{ "turnId", "fullText", "engine"? }` | Turn finished; `fullText` = complete reply |
 | `error` | `{ "message", "engine"? }` | Turn failed |
 
-- `tool`, `tool-result` and `thinking` arrive on **every** engine (the
-  in-process loop and a Personal AI CLI lane alike), so an activity line can
+- `tool`, `tool-result` and `thinking` arrive on **every** engine (a Personal AI
+  CLI lane and a coding session alike), so an activity line can
   name what the agent is doing instead of blinking "Thinking…" for minutes.
   Subagent activity is deliberately NOT relayed: a delegated agent's own tool
   calls would overwrite the `Task` row the human needs to see.
@@ -1443,25 +1443,29 @@ Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
 - `POST /api/v1/chat/clear?agentId=&conversationId=` → `{ "ok": true }` —
   clears the conversation history.
 - `GET /api/v1/chat/engine?agentId=&conversationId=` →
-  `{ "engine": "lane"|"in-process", "sessionId": string|null, "cwd"?, "host"?, "model"? }`
-  — which engine answers this conversation, and on the lane engine the id of the
-  `claude` session behind it.
-  - `engine: "lane"` (config `agent.provider = 'claude-code'`): the turn runs in a
-    real CLI session, so `sessionId` is a normal session id and the existing
+  `{ "engine": "lane", "sessionId": string|null, "cwd"?, "host"?, "switchable"? }`
+  — the id of the `claude` session (the "lane") answering this conversation.
+  - `engine` is always `"lane"`: a chat turn runs in a real CLI session, so
+    `sessionId` is a normal session id and the existing
     `/sessions/:id/model-options`, `/model`, `/effort`, and `/controls` endpoints
     all work on it (they resolve by session RECORD, so a lane session is not
     excluded the way it is from `GET /sessions`). This is how a client puts a
-    model pill on the main-agent chat.
+    model pill on the main-agent chat. The field stays on the wire so a client can
+    badge it; older servers may also answer `"in-process"`, which now means the
+    same thing as no session (see the next bullet).
   - `sessionId: null` means the lane has no session YET (a conversation with no
     turn, or one whose lane was archived by `chat/clear`). **This endpoint never
     mints a lane** — minting is a side effect of sending, and opening a picker
     must not spawn a CLI. Clients render the model read-only (or hide the pill)
-    until the first turn.
-  - `engine: "in-process"`: no per-conversation session exists; the model is
-    `config.agent.main_model` (echoed as `model` when set) and is a config-level
-    setting, not a per-conversation switch.
+    until the first turn, or mint explicitly with
+    `POST /api/v1/chat/engine/session`.
   - `host` is `""` for the primary box, matching `ProjectedSession.host`
     semantics. No `conversationId` = the active conversation.
+- `PUT /api/v1/chat/model?agentId=&conversationId=` →
+  `409 { "error": { "code": "lane_engine", "sessionId" }, "sessionId" }` — the lane
+  session owns model and effort, so switch them through
+  `PUT /api/v1/sessions/:id/model|effort` on the `sessionId` this returns. A
+  malformed body still answers `400 bad_request` first.
 
 ### Library (additive, Wave 3 2026-08) — agents / commands / skills write / repositories
 

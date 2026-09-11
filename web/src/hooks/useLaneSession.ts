@@ -1,16 +1,16 @@
 /**
  * useLaneSession — resolve the coding-agent session backing a main-AI
- * conversation (the "lane"), for the thin-layer chat surface. Any registered
- * engine can back a lane; the server reports which one on every resolve.
+ * conversation (the "lane"). Any registered engine can back a lane; the server
+ * reports which one on every resolve.
  *
- * When `config.agent.provider === 'claude-code'` the chat panel doesn't run the
- * in-process loop at all: it mounts the SAME session timeline every coding
- * session uses (SessionChatHistory) directly on the conversation's lane session,
- * and sends ride the ordinary session queue. This hook owns the id resolution:
- * POST /api/agents/:agentId/conversations/:cid/lane-session returns (or mints)
- * the lane session. Resolution is eager — the CLI takes seconds to spawn, so
- * resolving on mount means it is warm by the time the user's first message
- * lands (the same perceived-instant-start reasoning as the notes chat shell).
+ * A chat turn IS a session turn: the surface mounts the SAME session timeline
+ * every coding session uses (SessionChatHistory) directly on the conversation's
+ * lane session, and sends ride the ordinary session queue. This hook owns the id
+ * resolution: POST /api/agents/:agentId/conversations/:cid/lane-session returns
+ * (or mints) the lane session. Resolution is eager — the CLI takes seconds to
+ * spawn, so resolving on mount means it is warm by the time the user's first
+ * message lands (the same perceived-instant-start reasoning as the notes chat
+ * shell).
  *
  * `ensure()` returns the resolved id (or the in-flight resolve) so a send fired
  * before the eager resolve lands still reaches the right session instead of
@@ -31,13 +31,6 @@ export interface UseLaneSessionReturn {
   engine: SessionEngine;
   error: string | null;
   ensure: () => Promise<string>;
-  /**
-   * Switch the provider backing this conversation. Only legal while the
-   * conversation is EMPTY — the server archives the lane session and mints a
-   * fresh one on the requested engine (409 once messages exist).
-   * Resolves to the new sessionId; rejects with the server's reason otherwise.
-   */
-  swapEngine: (engine: SessionEngine) => Promise<string>;
 }
 
 interface Resolved { sessionId: string; cwd?: string; engine: SessionEngine }
@@ -76,9 +69,6 @@ export function useLaneSession(
   // started for — a stale promise from a previous conversation must never be
   // handed to ensure().
   const inFlightRef = useRef<{ key: string; promise: Promise<Resolved> } | null>(null);
-  // Bumped by swapEngine: a resolve that STARTED before a swap must not land its
-  // (pre-swap, now-archived) session over the swapped binding.
-  const swapEpochRef = useRef(0);
   const key = `${agentId}:${conversationId ?? ''}:${resetNonce}`;
   const keyRef = useRef(key);
   keyRef.current = key;
@@ -90,19 +80,15 @@ export function useLaneSession(
   const resolve = useCallback((): Promise<Resolved> => {
     const { agentId: aid, conversationId: cid } = paramsRef.current;
     if (!enabledRef.current || !cid) {
-      return Promise.reject(new Error('lane engine not active'));
+      return Promise.reject(new Error('no conversation to resolve a lane for'));
     }
     const k = keyRef.current;
     if (inFlightRef.current?.key === k) return inFlightRef.current.promise;
-    const epoch = swapEpochRef.current;
     const promise = apiPost<{ sessionId: string; cwd?: string; created?: boolean; engine?: string }>(
       `/api/agents/${aid}/conversations/${cid}/lane-session`,
       {},
     ).then((r) => {
       const engine = coerceEngine(r.engine);
-      // A swap happened while this resolve was in flight: its session was just
-      // archived server-side — the swap's binding wins, drop this one.
-      if (swapEpochRef.current !== epoch) return { sessionId: r.sessionId, cwd: r.cwd, engine };
       resolvedCache.set(k, { sessionId: r.sessionId, cwd: r.cwd, engine });
       if (keyRef.current === k) setState({ sessionId: r.sessionId, cwd: r.cwd, engine, error: null });
       log.info('frontend', 'useLaneSession: resolved', {
@@ -134,26 +120,5 @@ export function useLaneSession(
 
   const ensure = useCallback((): Promise<string> => resolve().then((r) => r.sessionId), [resolve]);
 
-  const swapEngine = useCallback(async (engine: SessionEngine): Promise<string> => {
-    const { agentId: aid, conversationId: cid } = paramsRef.current;
-    if (!enabledRef.current || !cid) throw new Error('lane engine not active');
-    const k = keyRef.current;
-    const r = await apiPost<{ sessionId: string; cwd?: string; engine?: string }>(
-      `/api/agents/${aid}/conversations/${cid}/lane-engine`,
-      { engine },
-    );
-    const resolvedEngine = coerceEngine(r.engine);
-    // Invalidate any in-flight resolve — its (pre-swap) session was just
-    // archived server-side and must not overwrite the swapped binding.
-    swapEpochRef.current++;
-    if (inFlightRef.current?.key === k) inFlightRef.current = null;
-    resolvedCache.set(k, { sessionId: r.sessionId, cwd: r.cwd, engine: resolvedEngine });
-    if (keyRef.current === k) setState({ sessionId: r.sessionId, cwd: r.cwd, engine: resolvedEngine, error: null });
-    log.info('frontend', 'useLaneSession: engine swapped', {
-      agentId: aid, conversationId: cid, sessionId: r.sessionId, engine: resolvedEngine,
-    });
-    return r.sessionId;
-  }, []);
-
-  return { sessionId: state.sessionId, cwd: state.cwd, engine: state.engine ?? DEFAULT_ENGINE, error: state.error, ensure, swapEngine };
+  return { sessionId: state.sessionId, cwd: state.cwd, engine: state.engine ?? DEFAULT_ENGINE, error: state.error, ensure };
 }

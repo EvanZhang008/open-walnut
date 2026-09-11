@@ -42,7 +42,7 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
             {describeRoutineTiming(routine.schedule, routine.state)}
           </span>
         </div>
-        <span className="routine-executor-badge" title={routine.executor?.type ?? 'walnut-agent'}>
+        <span className="routine-executor-badge" title={routine.executor?.type ?? 'claude-code'}>
           {describeExecutorBadge(routine.executor, executorLabels)}
         </span>
         <div className="cron-job-actions">

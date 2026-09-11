@@ -30,11 +30,9 @@ import { VALID_PHASES } from '../../core/phase.js'
 import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
-import { enqueueAgentTurn, recordLastTurnTokens, getQueueStatus } from '../agent-turn-queue.js'
-import { triggerBackgroundCompaction } from '../background-compaction.js'
+import { enqueueAgentTurn, getQueueStatus } from '../agent-turn-queue.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
-import { usageTracker } from '../../core/usage/index.js'
 import { getLastSyncAtAsync } from '../../integrations/git-sync.js'
 import { setDeviceInfo } from '../../core/device-auth.js'
 import { computeContentHash } from '../../utils/file-ops.js'
@@ -53,7 +51,7 @@ import {
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
-import { mirrorRelayedChatFrame, relayChatTurnToPrimary, FALLBACK_ENGINE_LABEL, IN_PROCESS_ENGINE_LABEL } from './chat-turn-relay.js'
+import { mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
 import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { log } from '../../logging/index.js'
@@ -1260,8 +1258,8 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     //
     // A CLOUD REPLICA saves NOTHING here: the turn is about to be relayed, and
     // the primary is the single owner of both the bytes and the history for a
-    // relayed turn (a file on this box also means nothing over there). The
-    // fallback branch in runApiV1TurnRouted saves them if the relay fails.
+    // relayed turn (a file on this box also means nothing over there). A relay it
+    // cannot use ends the turn with an error, so there is nothing to save later.
     let imageData: TurnImageData | undefined
     if (images.length > 0) {
       imageData = { savedImages: [], imageContentBlocks: null, images }
@@ -1286,9 +1284,8 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
 
     // Fire the turn through the SAME per-agent queue the WS chat uses — one
     // serialization path. The 202 returns immediately; progress streams on SSE.
-    // On a CLOUD REPLICA the turn is relayed to the primary first, so the
-    // phone gets the Mac's configured engine (claude-code) rather than this
-    // box's in-process fallback loop — see routes/chat-turn-relay.ts.
+    // On a CLOUD REPLICA the turn is relayed to the primary, which is the only
+    // box that can run it — see routes/chat-turn-relay.ts.
     void runApiV1TurnRouted(agentId, conversationId, text, turnId, imageData)
       .catch((err) => {
         log.web.error('api-v1 turn failed', {
@@ -1306,32 +1303,27 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
   }
 })
 
+/** What a replica tells the phone when it cannot reach the box that answers. */
+const PRIMARY_UNREACHABLE_MESSAGE =
+  "Walnut's primary is unreachable; the replica cannot answer on its own. Try again when the primary is back."
+
 /**
- * Engine router for one accepted REST turn.
+ * Turn router for one accepted REST turn.
  *
- * On the PRIMARY this is just runApiV1Turn. On a CLOUD REPLICA it first tries to
- * hand the turn to the primary, because the replica cannot run the lane engine
- * at all (no session runner, no `claude` CLI) and would otherwise answer with a
- * different engine than the same question gets when the phone talks to the Mac
- * directly.
+ * On the PRIMARY this is just runApiV1Turn. On a CLOUD REPLICA the turn is handed
+ * to the primary, because a turn runs in a `claude` CLI session and the replica
+ * has neither a session runner nor the CLI. There is no second engine to degrade
+ * to, so a relay the replica cannot use is a turn it cannot answer: the phone
+ * gets the SSE `error` frame it already unlocks its composer on, and nothing is
+ * written here (the replica is never a writer for a relayed turn).
  *
  * IMAGE turns relay too, but their bytes take a different lane: the ORIGINAL
  * base64 payloads (not this box's saved paths, which mean nothing over there)
  * are staged on the primary via the daemon's narrow `image.save`, and only the
  * returned host paths ride the control RPC — base64 in a 45s RPC is the
- * oversized-frame failure mode that closes the shared bridge socket. If any
- * image fails to stage, the WHOLE turn falls back here, where the locally-saved
- * copies are already on disk.
- *
- * The one remaining fallback class: anything the relay reports `unavailable`
- * for (bridge down, primary's server down, old primary, relay error, image
- * staging refused). The user gets a real answer from the local loop instead of
- * an error, with the terminal frame marked `engine:'walnut-agent-fallback'` so
- * the degradation is observable.
- *
- * `turn_active` is NOT a fallback case: the primary already has a turn on this
- * conversation, and running a second one here would produce two answers and two
- * history writers. It is reported to the client as an SSE error.
+ * oversized-frame failure mode that closes the shared bridge socket. An image
+ * that will not stage takes the whole turn down the same unreachable path: a
+ * "what is this?" answered without the picture would be confidently wrong.
  */
 async function runApiV1TurnRouted(
   agentId: string,
@@ -1368,25 +1360,17 @@ async function runApiV1TurnRouted(
     return
   }
 
-  log.web.warn('api-v1 turn falling back to this replica\'s in-process loop', {
+  log.web.warn('api-v1 turn refused — the replica cannot reach the primary', {
     conversationId, turnId, agentId, reason: outcome.reason,
   })
-  // The local loop needs the images ON THIS BOX, and a replica deliberately
-  // skipped that save while the relay was still a possibility. Do it now: this
-  // is the one branch where the replica is the writer.
-  let localImageData = imageData
-  if (imageData?.images?.length) {
-    const processed = await processAndSaveImages(imageData.images)
-    if (processed) localImageData = { ...processed, images: imageData.images }
-  }
-  await runApiV1Turn(agentId, conversationId, text, turnId, localImageData, { engine: FALLBACK_ENGINE_LABEL })
+  emitSse(conversationId, 'error', { message: PRIMARY_UNREACHABLE_MESSAGE })
 }
 
 /**
  * Entry point for a chat turn RELAYED here from a cloud replica (the primary
  * side of routes/chat-turn-relay.ts). Deliberately the ordinary turn path: this
- * box resolves its own `agent.provider`, owns persistence, and owns the SSE
- * contract, so there is no second turn implementation to keep in sync.
+ * box owns the lane session, persistence, and the SSE contract, so there is no
+ * second turn implementation to keep in sync.
  */
 export async function runRelayedApiV1Turn(
   agentId: string,
@@ -1407,15 +1391,13 @@ export async function runRelayedApiV1Turn(
 /**
  * Persist + publish a failed turn: the disk entry, the SSE `error` the mobile
  * client unlocks its composer on, and the two WS broadcasts the web console
- * needs (live error card + agent:error). One helper so the in-process catch and
- * the lane branch below cannot drift into two different failure shapes.
+ * needs (live error card + agent:error). One helper so the prelude catch and the
+ * lane turn below cannot drift into two different failure shapes.
  */
 async function persistAndEmitTurnError(
   agentId: string,
   conversationId: string,
   errMsg: string,
-  /** Additive engine marker for the terminal frame (see runApiV1Turn). */
-  engineMark: Record<string, string> = {},
   /** The user's own text, when the caller knows the turn may have died BEFORE
    *  the eager persist. See `rescueUserMessage`. */
   rescue?: { text: string; turnId: string },
@@ -1425,7 +1407,7 @@ async function persistAndEmitTurnError(
     [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
     { source: 'agent-error', agentId, conversationId },
   ).catch(() => { /* best-effort */ })
-  emitSse(conversationId, 'error', { message: errMsg, ...engineMark })
+  emitSse(conversationId, 'error', { message: errMsg })
   // Mirror the WS path: push the error entry live, not disk-only (see chat.ts).
   broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
     entry: {
@@ -1485,28 +1467,26 @@ async function rescueUserMessage(
 }
 
 /**
- * Run one REST turn on the conversation's Personal AI lane
- * (`config.agent.provider === 'claude-code'`) and keep the frozen SSE contract.
+ * Run one REST turn on the conversation's Personal AI lane and keep the frozen
+ * SSE contract.
  *
- * Why this exists at all, when chat.ts's lane branch is fire-and-forget: the web
+ * Why this exists at all, when chat.ts's lane turn is fire-and-forget: the web
  * client subscribes to the LANE SESSION's own stream, so the RPC there can return
  * the moment the message is delivered. The mobile client has exactly one channel —
  * this conversation's SSE — and unlocks its composer on `message-end`. So a lane
  * turn fired from mobile has to be AWAITED and translated back onto that channel:
  *
- *   - `session:text-delta` for the lane session → SSE `text-delta` (the same shape
- *     the in-process path emits). This is what feeds the client's inactivity
- *     watchdog and paints the live bubble during a multi-minute turn; the SSE
- *     channel's own 25s comment ping is transport-level only and carries no event.
+ *   - `session:text-delta` for the lane session → SSE `text-delta`. This is what
+ *     feeds the client's inactivity watchdog and paints the live bubble during a
+ *     multi-minute turn; the SSE channel's own 25s comment ping is transport-level
+ *     only and carries no event.
  *   - `session:tool-use` → SSE `tool`, `session:tool-result` → SSE `tool-result`,
- *     `session:thinking-delta` → SSE `thinking`. Same three frames the in-process
- *     branch has always emitted. Relaying only text is what made a lane turn look
- *     like a blinking "Thinking…" with no tool ever named: the client's activity
- *     line is driven by these frames and it had none, so a five-minute turn of
- *     real work was indistinguishable from a hang.
+ *     `session:thinking-delta` → SSE `thinking`. Relaying only text is what made a
+ *     lane turn look like a blinking "Thinking…" with no tool ever named: the
+ *     client's activity line is driven by these frames and it had none, so a
+ *     five-minute turn of real work was indistinguishable from a hang.
  *   - turn answer → SSE `message-end` + a normal assistant entry on disk.
- *   - timeout / `session:error` → SSE `error` + the same failure the in-process
- *     catch persists.
+ *   - timeout / `session:error` → SSE `error` + the failure persisted on disk.
  */
 async function runApiV1LaneTurn(
   agentId: string,
@@ -1661,15 +1641,15 @@ async function runApiV1LaneTurn(
       return
     }
 
-    // Persist the answer as an ORDINARY assistant message — the same call the
-    // in-process path makes. Deliberate duplication with the lane session's own
-    // transcript: mobile has no session-stream surface, so GET /messages is the
-    // only place the phone can read the answer back after a reload.
+    // Persist the answer as an ORDINARY assistant message. Deliberate duplication
+    // with the lane session's own transcript: mobile has no session-stream
+    // surface, so GET /messages is the only place the phone can read the answer
+    // back after a reload.
     await chatHistory.addAIMessages(
       [{ role: 'assistant', content: [{ type: 'text', text: resultText }] }] as MessageParam[],
-      // Stamp WHICH engine answered. The catch-up detector reads this to tell a
-      // turn this lane never saw (answered in-process while the box was asleep)
-      // from one of its own, and it is the only provenance that survives on disk.
+      // Stamp WHICH lane answered. The catch-up detector reads this to tell a turn
+      // this lane never saw from one of its own, and it is the only provenance
+      // that survives on disk.
       {
         agentId,
         conversationId,
@@ -1682,8 +1662,8 @@ async function runApiV1LaneTurn(
     // breaks when the two texts differ (2026-08-23: an SSE ring replay after
     // reconnect re-materialized the previous reply as a permanent duplicate).
     emitSse(conversationId, 'message-end', { turnId, fullText: stripEntityRefs(resultText) })
-    // source:'session' marks a lane turn, exactly as chat.ts's branch does: the
-    // context inspector must not refetch in-process stats the lane never fed.
+    // source:'session' marks a lane turn: the context inspector must not refetch
+    // per-turn stats the lane never fed.
     broadcastEvent(EventNames.AGENT_RESPONSE, { text: resultText, agentId, conversationId, source: 'session' })
     log.web.info('api-v1 lane turn completed', {
       conversationId, turnId, agentId, sessionId, resultLength: resultText.length,
@@ -1708,8 +1688,8 @@ async function runApiV1LaneTurn(
 
 /**
  * Run one REST-initiated turn. Mirrors the canonical WS chat flow
- * (src/web/routes/chat.ts) minus web-only extras: enqueue → load history →
- * eager-persist user msg → runAgentLoop → persist AI messages → compaction.
+ * (src/web/routes/chat.ts) minus web-only extras: enqueue → eager-persist user
+ * msg → deliver into the conversation's lane session → persist the answer.
  * Emits SSE events AND the same WS broadcast events, so the web UI mirrors
  * turns fired from mobile.
  */
@@ -1722,78 +1702,22 @@ async function runApiV1Turn(
     savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
     imageContentBlocks: unknown[] | null
   },
-  /** Additive marker stamped on the terminal SSE frame. Set only on a cloud
-   *  replica's fallback turn, so a degraded answer is observable without any
-   *  client change (unknown fields are ignored by the frozen v1 contract). */
-  opts?: { engine?: string },
 ): Promise<void> {
-  const engineMark: Record<string, string> = opts?.engine ? { engine: opts.engine } : {}
   await enqueueAgentTurn(agentId, 'api-v1', async () => {
-    // ── Engine selection (config.agent.provider) ──
-    // 'claude-code' delivers the turn into the conversation's lane session instead
-    // of running the in-process loop. EVERY console agent rides the lane engine
-    // (per-agent persona via consoleAgentProfile — see personal-ai-lane.resolveLane),
-    // mirroring chat.ts. A failure to read config degrades to the in-process
-    // loop — never "no engine".
-    let useLaneEngine = false
-    /** Kept for the in-process model override below: the same read, not a second one. */
-    let engineConfig: import('../../core/types.js').Config | undefined
-    try {
-      const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-      engineConfig = await getConfig()
-      useLaneEngine = resolveAgentEngineProvider(engineConfig) === 'claude-code'
-    } catch (err) {
-      log.web.warn('api-v1 engine resolution failed; using the in-process loop', {
-        conversationId, turnId, agentId, error: err instanceof Error ? err.message : String(err),
-      })
-    }
-
-    // Agent-level abort registration so POST /v1/conversations/:id/stop can
-    // cancel this turn (REST clients have no per-socket AbortController).
-    const { registerAgentTurnAbort } = await import('../../core/agent-abort-registry.js')
-    const abortController = new AbortController()
-    const unregisterAbort = registerAgentTurnAbort(agentId, abortController)
-
-    // Non-General console agents get their own system prompt + filtered tool
-    // set — the same construction the WS chat performs (chat.ts).
-    let agentSystem: string | undefined
-    let agentTools: import('../../agent/tools.js').ToolDefinition[] | undefined
-    let history: MessageParam[]
     let userContent: string | unknown[]
     let savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
     // Everything from here to `message-start` is the PRELUDE, and it needs its own
     // catch. It used to have none, so a throw in any of it — a lazy import, the
-    // console-agent profile, the history read, the image rewrite — escaped the
-    // queue callback entirely: the eager persist never ran, the error handler
-    // never ran, and the user's message was simply GONE (the conversation file
-    // left at `entries: []`) while the phone showed its own bubble plus an error
-    // it could not retry. Observed 2026-08-27 23:03 on a relayed turn.
+    // image rewrite, the eager persist itself — escaped the queue callback
+    // entirely: the error handler never ran, and the user's message was simply
+    // GONE (the conversation file left at `entries: []`) while the phone showed
+    // its own bubble plus an error it could not retry. Observed 2026-08-27 23:03
+    // on a relayed turn.
     try {
-    if (agentId !== DEFAULT_AGENT_ID) {
-      const { getConsoleAgent } = await import('../../core/agent-registry.js')
-      const { buildSubagentToolSet } = await import('../../agent/subagent-context.js')
-      const { loadContextSources } = await import('../../agent/context-sources.js')
-      const agentDef = await getConsoleAgent(agentId)
-      if (!agentDef) throw new Error(`Console agent '${agentId}' not found`)
-      const now = new Date()
-      const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-      const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-      const contextXml = await loadContextSources(agentDef, {})
-      const sections = [
-        agentDef.system_prompt ?? `You are ${agentDef.name}.`,
-        `\nCurrent date/time: ${dateStr}, ${timeStr}`,
-      ]
-      if (contextXml) sections.push('\n' + contextXml)
-      agentSystem = sections.join('\n')
-      agentTools = await buildSubagentToolSet(agentDef)
-    }
-
-    history = await chatHistory.getApiMessages(agentId, conversationId)
-
     // Build the user content: images (if any) become base64 content blocks
-    // followed by a text block prefixed with the <attached-images> annotation
-    // — same shape chat.ts feeds runAgentLoop. Persist the path-based form so
-    // chat-history.json stays small (base64 → { type:'image', path } refs).
+    // followed by a text block prefixed with the <attached-images> annotation.
+    // Persist the path-based form so chat-history.json stays small (base64 →
+    // { type:'image', path } refs).
     savedImages = imageData?.savedImages ?? []
     const imageContentBlocks = imageData?.imageContentBlocks ?? null
     userContent = text
@@ -1822,167 +1746,29 @@ async function runApiV1Turn(
         conversationId, turnId, agentId, error: errMsg,
         ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
       })
-      unregisterAbort()
       // `rescue` writes the user's text, since the persist above is exactly what
       // may not have run. `message-start` was never emitted, so the client sees
       // one terminal `error` frame — enough to unlock its composer.
-      await persistAndEmitTurnError(agentId, conversationId, errMsg, engineMark, { text, turnId })
+      await persistAndEmitTurnError(agentId, conversationId, errMsg, { text, turnId })
       return
     }
 
     emitSse(conversationId, 'message-start', { turnId })
 
-    // ── Engine branch: Personal AI lane (config.agent.provider='claude-code') ──
-    // Everything above ran for BOTH engines (engine resolution, history load, image
-    // save, eager user-message persist, message-start) — only the engine differs.
-    // The POST handler's `activeTurns` entry is released in its `.finally()`, i.e.
-    // when the promise this callback belongs to settles: awaiting the lane turn here
-    // means the 409 guard covers the lane turn for its whole duration, same as the
-    // in-process path, with no second bookkeeping path to keep in sync.
-    if (useLaneEngine) {
-      // The lane's CLI process is not this controller's to cancel (stopping a lane
-      // turn is a session-level interrupt), so drop the registration rather than
-      // leave a no-op abort target that would make /stop report a false success.
-      unregisterAbort()
-      // The CLI takes plain text on stdin, not content blocks — images ride as
-      // readable file paths (the shape session chat uses), never base64.
-      const sessionMessage = savedImages.length > 0
-        ? buildSessionImageContext(savedImages) + text
-        : text
-      await runApiV1LaneTurn(agentId, conversationId, sessionMessage, turnId)
-      return
-    }
-
-    // Lazy import to avoid loading the agent at server startup (same as chat.ts);
-    // skipped entirely on the lane path above, which never runs the in-process loop.
-    const { runAgentLoop } = await import('../../agent/loop.js')
-
-    // Per-conversation model override (PUT /api/v1/chat/model). Absent → no
-    // modelConfig at all, so loop.ts builds its own from config exactly as before.
-    // When present, the object mirrors the loop's default field-for-field and only
-    // `model` differs: overriding the provider/region/maxTokens too would silently
-    // change how a turn is billed and framed, which the user did not ask for.
-    // (`effort` is intentionally NOT threaded — the in-process loop has no effort
-    // concept; see the PUT route's comment.)
-    let modelOverride: { model: string; provider?: string; region?: string; maxTokens?: number } | undefined
-    try {
-      const { getConversationModel } = await import('../../core/conversations.js')
-      const row = await getConversationModel(agentId, conversationId)
-      if (row.model) {
-        modelOverride = {
-          model: row.model,
-          provider: engineConfig?.agent?.main_provider,
-          region: engineConfig?.agent?.region,
-          maxTokens: engineConfig?.agent?.maxTokens,
-        }
-      }
-    } catch (err) {
-      log.web.warn('api-v1 conversation model override unreadable; using the config default', {
-        conversationId, turnId, agentId, error: err instanceof Error ? err.message : String(err),
-      })
-    }
-
-    try {
-      const result = await runAgentLoop(userContent, history, {
-        onTextDelta: (delta) => {
-          emitSse(conversationId, 'text-delta', { delta })
-          broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta, agentId, conversationId })
-        },
-        onThinking: (thinkingText) => {
-          // `delta` is additive and OPTIONAL — an old client that only looked at
-          // the event name keeps working. Unlike the lane path this callback is not
-          // a token stream: the loop hands over one WHOLE thinking block after the
-          // response, so it is clipped to the same ≤2000 the row's `thinkingText`
-          // uses rather than putting a 30KB block in a single frame that also rides
-          // the bridge mirror and the 512-event replay ring.
-          const delta = thinkingExcerpt(thinkingText)
-          emitSse(conversationId, 'thinking', { ...(delta ? { delta } : {}) })
-          broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingText, agentId, conversationId })
-        },
-        onToolCall: (toolName, input, toolUseId) => {
-          const detail = toolDetail(toolName, input as Record<string, unknown> | undefined)
-          // toolUseId is additive here too, so both branches emit the same shape;
-          // the client pairs `tool` with `tool-result` on it.
-          emitSse(conversationId, 'tool', {
-            name: toolName,
-            ...(toolUseId ? { toolUseId } : {}),
-            ...(detail ? { detail } : {}),
-          })
-          broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId, conversationId })
-        },
-        onToolResult: (_toolName, _result, toolUseId) => {
-          // toolUseId only — same reasoning as the lane path: this frame clears the
-          // activity line, and the output already reaches the phone as the row's
-          // `resultPreview`. Without it the in-process branch would leave the
-          // client naming a tool that finished minutes ago.
-          if (toolUseId) emitSse(conversationId, 'tool-result', { toolUseId })
-        },
-        onUsage: (usage) => {
-          bus.emit('agent:usage', { usage }, ['web-ui'], { source: 'agent' })
-          try {
-            usageTracker.record({
-              source: 'agent',
-              model: usage.model ?? 'unknown',
-              input_tokens: usage.input_tokens,
-              output_tokens: usage.output_tokens,
-              cache_creation_input_tokens: usage.cache_creation_input_tokens,
-              cache_read_input_tokens: usage.cache_read_input_tokens,
-              agentId,
-            })
-          } catch { /* non-critical */ }
-          // Feed the compaction/triage token-truth gate (see token-truth.ts).
-          try {
-            recordLastTurnTokens(conversationId, (usage.input_tokens ?? 0)
-              + (usage.cache_read_input_tokens ?? 0)
-              + (usage.cache_creation_input_tokens ?? 0))
-          } catch { /* non-critical */ }
-        },
-      }, {
-        signal: abortController.signal,
-        source: agentId === DEFAULT_AGENT_ID ? 'api-v1' : `api-v1:${agentId}`,
-        agentId,
-        conversationId,
-        ...(agentSystem && { system: agentSystem }),
-        ...(agentTools && { tools: agentTools }),
-        ...(modelOverride && { modelConfig: modelOverride }),
-      })
-
-      // newMessages = [userPrompt, ...ai]; the user prompt is already persisted.
-      const allNew = result.newMessages as MessageParam[]
-      const afterUser = allNew.length > 0 && (allNew[0] as { role: string }).role === 'user'
-        ? allNew.slice(1)
-        : allNew
-      if (afterUser.length > 0) {
-        // One argument covers both engines here: opts.engine is already the
-        // replica's fallback label on a relayed turn, and undefined otherwise.
-        await chatHistory.addAIMessages(afterUser, {
-          agentId,
-          conversationId,
-          engine: opts?.engine ?? IN_PROCESS_ENGINE_LABEL,
-        })
-      }
-
-      // Same stripping as the lane path above — the frame must match canonical.
-      emitSse(conversationId, 'message-end', { turnId, fullText: stripEntityRefs(result.response), ...engineMark })
-      broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, agentId, conversationId })
-      log.web.info('api-v1 turn completed', { conversationId, turnId, agentId })
-
-      // Same post-turn hygiene as WS chat — fire-and-forget.
-      triggerBackgroundCompaction('api-v1', { agentId, conversationId })
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      // With the STACK: an SDK message alone is not locatable. A real failure
-      // here read only "Could not load credentials from any providers" — the AWS
-      // SDK's own words, thrown from somewhere inside a lazily-imported module
-      // graph, with no way afterwards to tell WHICH call made it (2026-08-27).
-      log.web.error('api-v1 turn error', {
-        conversationId, turnId, agentId, error: errMsg,
-        ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
-      })
-      await persistAndEmitTurnError(agentId, conversationId, errMsg, engineMark)
-    } finally {
-      unregisterAbort()
-    }
+    // The turn runs in the conversation's lane session. EVERY console agent rides
+    // it (per-agent persona via consoleAgentProfile — see
+    // personal-ai-lane.resolveLane), mirroring chat.ts. The POST handler's
+    // `activeTurns` entry is released in its `.finally()`, i.e. when the promise
+    // this callback belongs to settles: awaiting the lane turn here means the 409
+    // guard covers it for its whole duration, with no second bookkeeping path to
+    // keep in sync.
+    //
+    // The CLI takes plain text on stdin, not content blocks — images ride as
+    // readable file paths (the shape session chat uses), never base64.
+    const sessionMessage = savedImages.length > 0
+      ? buildSessionImageContext(savedImages) + text
+      : text
+    await runApiV1LaneTurn(agentId, conversationId, sessionMessage, turnId)
   })
 }
 

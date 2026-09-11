@@ -9,8 +9,10 @@
  *     notification. task.summary etc. were already updated by the subagent's own tools.
  *
  * What's real: server, bus, chat-history, agent-turn-queue. What's mocked: constants
- * (temp dir). We emit subagent:result directly (no Claude CLI needed) — the subject is
- * the SERVER's gating logic, not the subagent run.
+ * (temp dir) and the 'session-runner' subscriber — in 'realtime' the notify turn runs on
+ * the conversation's lane session, and a fake runner answers it without spawning a
+ * `claude`. We emit subagent:result directly — the subject is the SERVER's gating logic,
+ * not the subagent run.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -22,12 +24,44 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-triage-notif
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { bus, EventNames } from '../../src/core/event-bus.js'
+import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
+import type { SessionStartEvent, SessionSendEvent } from '../../src/core/event-types.js'
+import { markProcessing, removeProcessed } from '../../src/core/session-message-queue.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { getTriageEntries, getApiMessages } from '../../src/core/chat-history.js'
 import { getMainConversationId } from '../../src/core/conversations.js'
 
 let server: HttpServer
+
+/** Drains left in flight; awaited before teardown so no message stays 'pending'. */
+const inFlightDrains = new Set<Promise<void>>()
+
+function drainQueue(sessionId: string): void {
+  const p = (async () => {
+    try {
+      const batch = await markProcessing(sessionId)
+      if (batch.length > 0) await removeProcessed(sessionId, batch.map((m) => m.id))
+    } catch { /* the store may be torn down between tests */ }
+  })()
+  inFlightDrains.add(p)
+  void p.finally(() => inFlightDrains.delete(p))
+}
+
+/** Fake session-runner (registered by NAME after startServer, displacing the real
+ *  one): answers every lane start/send with a synthetic session:result. */
+function installFakeRunner(): void {
+  bus.subscribe('session-runner', (event: BusEvent) => {
+    let sid: string | undefined
+    if (event.name === EventNames.SESSION_START) sid = (event.data as SessionStartEvent).preassignedSessionId
+    else if (event.name === EventNames.SESSION_SEND) sid = (event.data as SessionSendEvent).sessionId
+    if (!sid) return
+    drainQueue(sid)
+    setTimeout(() => {
+      bus.emit(EventNames.SESSION_RESULT, { sessionId: sid!, result: 'Triage summarized.', isError: false },
+        ['main-ai', 'session-runner'], { source: 'session-runner' })
+    }, 5)
+  })
+}
 
 const TASK_ID = 'notify-mode-task'
 
@@ -65,10 +99,13 @@ beforeAll(async () => {
     }),
   )
   server = await startServer({ port: 0, dev: true })
+  installFakeRunner()
 })
 
 afterAll(async () => {
+  await Promise.allSettled([...inFlightDrains])
   await stopServer()
+  bus.clear()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -109,8 +146,8 @@ describe('triage notify_mode gate', () => {
     const conversationId = await getMainConversationId('general')
 
     // realtime immediately broadcasts the triage content as a role:'user' chat entry
-    // via CHAT_HISTORY_UPDATED, BEFORE the (Bedrock-dependent) main-agent turn runs.
-    // That broadcast is deterministic and is the realtime-only signal we assert.
+    // via CHAT_HISTORY_UPDATED, BEFORE the lane turn runs. That broadcast is
+    // deterministic and is the realtime-only signal we assert.
     let userTriageEntry = false
     bus.subscribe('test-realtime-mode', (event) => {
       if (event.name === EventNames.CHAT_HISTORY_UPDATED) {

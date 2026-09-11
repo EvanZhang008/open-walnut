@@ -117,15 +117,6 @@ export function registerCommands(program: Command): void {
     });
 
   program
-    .command('chat [question]')
-    .description('Chat with Walnut (interactive or one-shot)')
-    .option('--debug', 'Show token usage and cache stats')
-    .action(async (question: string | undefined, options: Record<string, unknown>, cmd: Command) => {
-      const { runChat } = await import('./chat.js');
-      await runChat(question, { ...cmd.optsWithGlobals(), debug: !!options.debug });
-    });
-
-  program
     .command('auth')
     .description('Authenticate with Microsoft To-Do')
     .action(async (_options: Record<string, unknown>, cmd: Command) => {

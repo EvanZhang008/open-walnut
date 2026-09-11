@@ -42,8 +42,10 @@ export function triggerBackgroundCompaction(source: string, options?: { force?: 
       const oldMsgCount = (await chatHistory.getModelContext(agentId, conversationId)).length
       broadcastEvent(EventNames.CHAT_COMPACTING, { agentId, conversationId })
 
-      const { summarizer, memoryFlusher } = await createCompactionCallbacks({ trackUsage: true })
-      const result = await chatHistory.compact(summarizer, memoryFlusher, agentId, conversationId)
+      // No memory flusher: compaction summarizes, it does not run a tool-using
+      // turn to persist memory first (see compact()'s optional second argument).
+      const { summarizer } = await createCompactionCallbacks({ trackUsage: true })
+      const result = await chatHistory.compact(summarizer, undefined, agentId, conversationId)
 
       if (result) {
         const divider = buildCompactionDivider(oldMsgCount, result)

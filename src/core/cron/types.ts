@@ -186,13 +186,6 @@ export type CronServiceDeps = {
     error?: string;
     data?: unknown;
   }>;
-  runActionWithAgent?: (actionResult: {
-    status: 'ok' | 'error'; summary?: string; error?: string; data?: unknown;
-  }, agentId: string, modelOverride?: string) => Promise<{
-    status: 'ok' | 'error';
-    summary?: string;
-    error?: string;
-  }>;
   onEvent?: (evt: CronEvent) => void;
 };
 

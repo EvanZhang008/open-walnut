@@ -222,62 +222,6 @@ export function getOrCreateLaneSession(
 }
 
 /**
- * Switch the ENGINE backing a conversation's lane (claude ⇄ any ACP engine).
- *
- * An engine is a spawn-time fact, so this is a REPLACE, not a live switch:
- * archive the current lane session, mint a fresh one on the requested engine.
- * That discard is only safe while the conversation is EMPTY — the eager
- * resolve creates the session before the user says anything, and THAT is the
- * window where "switch provider" must work (user call, 2026-08-15). Once a
- * message exists the transcript lives in the old engine's session and a swap
- * would silently drop it → 409, start a new conversation instead.
- *
- * Guards (both map to 409 in the route):
- *   - conversation has messages (`ConversationMeta.messageCount` — bumped by
- *     touchLaneConversation on every lane send; the SESSION record's count
- *     can't be used, createSessionRecord defaults it to 1);
- *   - the lane was forked (`forkedFromSessionId`) — it inherits the parent
- *     transcript even with zero sends, and Codex can't fork anyway.
- */
-export async function swapLaneEngine(
-  agentId: string,
-  conversationId: string,
-  engine: SessionEngine,
-): Promise<LaneSession> {
-  const lane = personalAiLaneKey(agentId, conversationId);
-  // A resolve may be mid-flight (the eager mount fires one on every switch) —
-  // let it settle so we archive the record it created, not race it.
-  const pending = inFlight.get(lane);
-  if (pending) await pending.catch(() => {});
-
-  const existing = await getSessionByLane(lane);
-  const currentEngine = resolveEngine(existing?.engine);
-  if (existing && currentEngine === engine) {
-    return { sessionId: existing.claudeSessionId, created: false, engine };
-  }
-
-  if (existing) {
-    const { SessionControlError } = await import('./session-controls.js');
-    if (existing.forkedFromSessionId) {
-      throw new SessionControlError(
-        'This conversation was forked — its history lives in the current session, so the provider can no longer be changed', 409);
-    }
-    const { listConversations } = await import('../conversations.js');
-    const meta = (await listConversations(agentId)).find((c) => c.id === conversationId);
-    if ((meta?.messageCount ?? 0) > 0) {
-      throw new SessionControlError(
-        'This conversation already has messages — start a new conversation to use a different provider', 409);
-    }
-    await archiveLaneForConversation(agentId, conversationId, 'engine_switched');
-  }
-
-  log.session.info('Personal AI lane: engine swap', {
-    lane, from: existing ? currentEngine : null, to: engine,
-  });
-  return getOrCreateLaneSession(agentId, conversationId, { engine });
-}
-
-/**
  * Turn a WHOLE conversation into a task: create the task and link the
  * conversation's lane session to it (session_id slot + session_ids history +
  * the record's taskId back-pointer).
@@ -443,16 +387,19 @@ export async function buildLaneProfile(
   // Standing memory — Walnut-owned injection, engine-neutral (see
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
   const memoryContext = await buildLaneMemoryContext().catch(() => '');
-  // general = the Personal AI persona; any other console agent gets ITS persona
-  // plus the same two work modes — one engine, one consistent chat feel,
-  // per-agent identity.
+  // general = the Personal AI persona; any other agent gets ITS persona plus the
+  // same two work modes — one engine, one consistent chat feel, per-agent
+  // identity. Any REGISTRY agent, not only a console one: the console flag
+  // decides which agents the chat pickers OFFER (getConsoleAgents), not whose
+  // persona can be built — a dispatcher-launched run (subagent-runner) names a
+  // background agent by design and its persona builds exactly the same way.
   let profile;
   if (agentId === 'general') {
     profile = personalAiProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
   } else {
-    const { getConsoleAgent } = await import('../agent-registry.js');
-    const agentDef = await getConsoleAgent(agentId);
-    if (!agentDef) throw new Error(`Console agent '${agentId}' not found`);
+    const { getAgent } = await import('../agent-registry.js');
+    const agentDef = await getAgent(agentId);
+    if (!agentDef) throw new Error(`Agent '${agentId}' not found`);
     const { loadContextSources } = await import('../../agent/context-sources.js');
     const contextBlock = await loadContextSources(agentDef, {}).catch(() => '');
     profile = consoleAgentProfile(agentDef, skillsIndex, contextBlock);

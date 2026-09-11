@@ -91,7 +91,7 @@ export async function resolveTierModel(tier: string): Promise<{ model: string; p
     const id = m.id.toLowerCase();
     return id.includes(tier) && !id.includes('1m');
   });
-  return { model: entry?.id ?? config.agent?.model ?? tier, provider };
+  return { model: entry?.id ?? tier, provider };
 }
 
 export async function runMicroAgent(opts: MicroAgentOptions): Promise<MicroAgentResult> {

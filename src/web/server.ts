@@ -137,10 +137,8 @@ import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
 import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
 import { initLetterPush } from '../core/push/letter-push.js'
-import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, getLastTurnTokens } from './agent-turn-queue.js'
+import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
-import { effectiveTotalTokens, ESTIMATE_CORRECTION } from '../core/token-truth.js'
-import { triggerBackgroundCompaction } from './background-compaction.js'
 import {
   startHeartbeatRunner,
   isHeartbeatOk,
@@ -160,25 +158,6 @@ async function resolveTaskRef(taskId: string): Promise<string> {
     return `[${taskId}|${label}]`
   } catch {
     return `[${taskId}]`
-  }
-}
-
-/**
- * True when this agent's turns are answered by a lane-bound `claude` session
- * instead of the in-process agent loop (`config.agent.provider: 'claude-code'`).
- *
- * Read per turn, not once at boot: the flag is a live config value, and a config
- * edit must take effect on the NEXT background turn without a restart. Any
- * failure (unreadable config, unknown provider string) degrades to `false` — the
- * in-process loop — so a broken config can never leave a producer with no engine.
- */
-async function usePersonalAiLaneEngine(agentId: string): Promise<boolean> {
-  if (agentId !== 'general') return false
-  try {
-    const { getConfig, resolveAgentEngineProvider } = await import('../core/config-manager.js')
-    return resolveAgentEngineProvider(await getConfig()) === 'claude-code'
-  } catch {
-    return false
   }
 }
 
@@ -1198,71 +1177,30 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // broadcastCronNotification above).
         const { getMainConversationId } = await import('../core/conversations.js')
         const conversationId = await getMainConversationId('general')
-        // Hoisted above the engine branch so both engines send the byte-identical prompt.
         const cronPrompt = `[Scheduled Job "${jobName}"] ${prompt}`
         try {
-          // ── Engine branch: Personal AI lane (config.agent.provider='claude-code') ──
-          if (await usePersonalAiLaneEngine('general')) {
-            const laneTs = new Date().toISOString()
-            // The in-process path persists the prompt as part of result.newMessages;
-            // here the model context lives in the CLI's own transcript, so only the
-            // human-visible notification is persisted (same shape heartbeat uses).
-            await chatHistory.addNotification({
-              role: 'user', content: cronPrompt, source: 'cron', cronJobName: jobName,
-              notification: true, agentId: 'general', conversationId, timestamp: laneTs,
-            })
-            const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
-            const { sessionId: laneSessionId, resultText } =
-              await runLaneTurn('general', conversationId, cronPrompt, { source: 'cron' })
-            if (resultText === null) {
-              // Same contract as the in-process failure: the catch below broadcasts
-              // agent:error and re-throws so the cron system records a failed run.
-              throw new Error('cron lane turn timed out or errored')
-            }
-            await chatHistory.addNotification({
-              role: 'assistant', content: resultText, source: 'cron', cronJobName: jobName,
-              notification: true, sessionId: laneSessionId, agentId: 'general', conversationId,
-            })
-            broadcastEvent('agent:response', { text: resultText, source: 'cron', agentId: 'general', conversationId })
-            log.cron.info('cron lane turn done', { jobName, sessionId: laneSessionId, resultLength: resultText.length })
-            // No triggerBackgroundCompaction on the lane path — the CLI compacts its own context.
-            return
-          }
-
-          const { runAgentLoop } = await import('../agent/loop.js')
-          const { estimateMessagesTokens } = await import('../core/daily-log.js')
-          // Load history inside the queue (reads fresh state after any preceding turn)
-          const history = await chatHistory.getApiMessages('general', conversationId)
-          const historyTokens = estimateMessagesTokens(history)
-          log.cron.info('runMainAgentWithPrompt', {
-            jobName,
-            historyMessages: history.length,
-            historyTokens: `~${Math.round(historyTokens / 1000)}K`,
+          const laneTs = new Date().toISOString()
+          // The model context lives in the CLI's own transcript, so only the
+          // human-visible notification is persisted (same shape heartbeat uses).
+          await chatHistory.addNotification({
+            role: 'user', content: cronPrompt, source: 'cron', cronJobName: jobName,
+            notification: true, agentId: 'general', conversationId, timestamp: laneTs,
           })
-          const result = await runAgentLoop(cronPrompt, history, {
-            onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'cron', agentId: 'general', conversationId }),
-            onThinking: (text) => broadcastEvent('agent:thinking', { text, agentId: 'general', conversationId }),
-            onToolCall: (toolName, input, toolUseId) => broadcastEvent('agent:tool-call', { toolName, input, toolUseId, agentId: 'general', conversationId }),
-            onToolResult: (toolName, result, toolUseId) => broadcastEvent('agent:tool-result', { toolName, result, toolUseId, agentId: 'general', conversationId }),
-            onToolActivity: (activity) => broadcastEvent('agent:tool-activity', { ...activity, agentId: 'general', conversationId }),
-            // onText intentionally NOT provided — fires per text block per round.
-            // agent:response is fired ONCE below after the loop completes.
-            onUsage: (usage) => {
-              try { usageTracker.record({ source: 'cron', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, agentId: 'general' }) } catch {}
-            },
-          }, { source: 'cron', agentId: 'general', conversationId })
-          // Fire agent:response exactly once after loop completes
-          if (result.response) {
-            broadcastEvent('agent:response', { text: result.response, source: 'cron', agentId: 'general', conversationId })
+          const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
+          const { sessionId: laneSessionId, resultText } =
+            await runLaneTurn('general', conversationId, cronPrompt, { source: 'cron' })
+          if (resultText === null) {
+            // The catch below broadcasts agent:error and re-throws so the cron
+            // system records a failed run.
+            throw new Error('cron lane turn timed out or errored')
           }
-          // Persist agent response to chat history. newMessages (not slice(history.length))
-          // is trim-safe — see chat.ts. NB: pass the WHOLE array incl. the user prompt at [0];
-          // unlike chat.ts we did NOT eager-persist the prompt, so it must be persisted here.
-          const newApiMsgs = result.newMessages
-          await chatHistory.addAIMessages(newApiMsgs, { source: 'cron', agentId: 'general', conversationId })
-          log.cron.info('agent done', { jobName, newMessages: newApiMsgs.length })
-          // Trigger background compaction outside the turn queue
-          triggerBackgroundCompaction(`cron:${jobName}`, { agentId: 'general', conversationId })
+          await chatHistory.addNotification({
+            role: 'assistant', content: resultText, source: 'cron', cronJobName: jobName,
+            notification: true, sessionId: laneSessionId, agentId: 'general', conversationId,
+          })
+          broadcastEvent('agent:response', { text: resultText, source: 'cron', agentId: 'general', conversationId })
+          log.cron.info('cron lane turn done', { jobName, sessionId: laneSessionId, resultLength: resultText.length })
+          // No background compaction here — the CLI compacts its own context.
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
           log.cron.error('cron runMainAgentWithPrompt failed', { jobName, error: errMsg })
@@ -1273,13 +1211,31 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
     },
     runIsolatedAgentJob: async ({ job, message }) => {
-      const { runAgentLoop } = await import('../agent/loop.js')
-      const result = await runAgentLoop(message, [], {
-        onUsage: (usage) => {
-          try { usageTracker.record({ source: 'cron', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, agentId: 'general' }) } catch {}
-        },
-      }, { source: 'cron-isolated' })
-      return { status: 'ok', summary: (result.response ?? '').slice(0, 2000) }
+      // An isolated job runs as its own Personal AI session (the same launch path
+      // as Ask Walnut and the claude-code executor), so the work is watchable and
+      // resumable in the SessionPanel instead of living inside the server process.
+      //
+      // Fire-and-forget by design: the job is "ok" once the session started, so
+      // the summary can only name what was started, never the model's answer.
+      // Consequence for `delivery.mode: 'announce'`: the main session is told
+      // which session to look at rather than being handed its conclusion.
+      const { quickStartSession } = await import('../core/sessions/quick-start.js')
+      try {
+        const task = await quickStartSession({
+          message,
+          cwd: WALNUT_HOME,
+          walnutAgent: true,
+          taskTitle: `Routine: ${job.name}`,
+          // Background automation: an explicit null keeps every run off the
+          // pinned board (a daily job would otherwise add a card a day).
+          taskMeta: { pinTier: null },
+          project: 'Routines',
+          source: 'cron-isolated',
+        })
+        return { status: 'ok', summary: `Started session for task ${task.id} (${job.name})` }
+      } catch (err) {
+        return { status: 'error', error: err instanceof Error ? err.message : String(err) }
+      }
     },
     runAction: async (actionId, params) => {
       const { runAction } = await import('../actions/index.js')
@@ -1297,72 +1253,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           mediaType: ar.image.mediaType,
           timestampMs: Date.now(),
         } : undefined,
-      }
-    },
-    runActionWithAgent: async (actionResult, agentId, modelOverride) => {
-      const { getAgent } = await import('../core/agent-registry.js')
-      const { runAgentLoop } = await import('../agent/loop.js')
-      const { buildSubagentSystemPrompt, buildSubagentToolSet } = await import('../agent/subagent-context.js')
-      const { buildStatefulMemorySection, persistMemoryUpdate } = await import('../agent/stateful-memory.js')
-      const { getProjectMemory } = await import('../core/project-memory.js')
-
-      const agentDef = await getAgent(agentId)
-      if (!agentDef) return { status: 'error' as const, error: `agent "${agentId}" not found` }
-
-      // Build message from actionResult: multimodal if image present, text-only otherwise
-      const actionData = actionResult.data as Record<string, unknown> | undefined
-      let message: string | Array<{ type: string; [k: string]: unknown }>
-      if (actionData?.thumbnailBase64 && actionData?.mediaType) {
-        message = [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: actionData.mediaType, data: actionData.thumbnailBase64 },
-          },
-          {
-            type: 'text',
-            text: `New data at ${new Date().toLocaleTimeString()}. ${actionResult.summary ?? ''}`,
-          },
-        ] as Array<{ type: string; [k: string]: unknown }>
-      } else {
-        // Text-only: screen unchanged, permission error, or non-image action
-        message = actionResult.summary ?? '[action completed with no output]'
-      }
-
-      // Build system prompt
-      const taskDesc = typeof message === 'string' ? message : 'Analyze the provided data.'
-      let systemPrompt = buildSubagentSystemPrompt(agentDef, taskDesc)
-
-      // If stateful: inject memory
-      if (agentDef.stateful) {
-        const memResult = getProjectMemory(agentDef.stateful.memory_project)
-        systemPrompt += '\n\n' + buildStatefulMemorySection(memResult?.content ?? null, agentDef.stateful)
-      }
-
-      const tools = await buildSubagentToolSet(agentDef)
-
-      try {
-        const result = await runAgentLoop(message, [], {
-          onUsage: (usage) => {
-            try { usageTracker.record({ source: 'subagent', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, agentId, parent_source: 'cron' }) } catch {}
-          },
-        }, {
-          system: systemPrompt,
-          tools,
-          modelConfig: { model: modelOverride ?? agentDef.model },
-          maxToolRounds: agentDef.max_tool_rounds ?? 5,
-          source: `cron-action-${agentId}`,
-        })
-
-        // Persist the agent's <memory_update> block — the only write path to a
-        // stateful agent's memory_project (see stateful-memory.ts). Without this
-        // the protocol we just injected into the prompt would be a no-op.
-        if (agentDef.stateful) {
-          await persistMemoryUpdate(result.response, agentDef.stateful, agentDef.name, { agentId, source: 'cron' })
-        }
-
-        return { status: 'ok' as const, summary: result.response?.slice(0, 2000) }
-      } catch (err) {
-        return { status: 'error' as const, error: err instanceof Error ? err.message : String(err) }
       }
     },
     runExecutor: async (job, executor, message) => {
@@ -2796,7 +2686,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Start overview maintainer (task lifecycle → project skill upkeep) --
   {
-    const { startOverviewMaintainer } = await import('../agent/overview-maintainer.js')
+    const { startOverviewMaintainer } = await import('../core/overview-maintainer.js')
     startOverviewMaintainer()
   }
 
@@ -3876,10 +3766,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { DEFAULT_TRIAGE_AGENT_ID } = await import('../core/agent-registry.js')
       const { getConfig: getTriageConf } = await import('../core/config-manager.js')
       const triageConf2 = await getTriageConf()
-      const triageAgentId = triageConf2.agent?.session_triage_agent ?? DEFAULT_TRIAGE_AGENT_ID
       // 'message-send-triage' is a retired agent (no longer dispatched) but historical
       // persisted runs still carry that agentId — keep recognising it so old results render.
-      const triageAgentIds = new Set([triageAgentId, 'message-send-triage'])
+      const triageAgentIds = new Set([DEFAULT_TRIAGE_AGENT_ID, 'message-send-triage'])
       const isTriageResult = triageAgentIds.has(agentId)
 
       if (isTriageResult) {
@@ -3946,133 +3835,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               const taskRef = task ? `[${task.id}]` : `[${taskId}]`
 
               // AI needs the full triage analysis to summarize for the user.
-              // Built ABOVE the engine branch so both engines send the same prompt.
               const prompt = `[Triage Update] Task "${taskTitle}" ${taskRef}\n\n${cleanedResult}\n\n<task_note>\n${taskNote}\n</task_note>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage analysis says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
 
-              // ── Engine branch: Personal AI lane (config.agent.provider='claude-code') ──
-              // Skips the whole in-process block below (bail pre-check, system-prompt
-              // estimation, runAgentLoop): the CLI owns its own context, so estimating
-              // OUR history against OUR model window would gate a turn that isn't
-              // ours to gate.
-              if (await usePersonalAiLaneEngine('general')) {
-                const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
-                const { sessionId: laneSessionId, resultText } =
-                  await runLaneTurn('general', conversationId, prompt, { source: 'triage' })
-                if (resultText === null) {
-                  log.web.warn('triage lane turn produced no result (timeout or error)', { taskId, sessionId: laneSessionId })
-                  broadcastEvent('agent:error', { error: `Triage notify failed for task ${taskId}: lane turn timed out or errored`, agentId: 'general', conversationId })
-                  return
-                }
-                broadcastEvent('agent:response', { text: resultText, source: 'triage', agentId: 'general', conversationId })
-                await chatHistory.addNotification({
-                  role: 'assistant', content: resultText, source: 'triage',
-                  notification: true, taskId, sessionId: laneSessionId,
-                  agentId: 'general', conversationId,
-                })
-                log.web.info('triage lane turn done', { taskId, sessionId: laneSessionId, resultLength: resultText.length })
-                // No triggerBackgroundCompaction on the lane path — the CLI compacts itself.
+              // The CLI owns its own context, so nothing here estimates OUR history
+              // against OUR model window — that would gate a turn that isn't ours
+              // to gate.
+              const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
+              const { sessionId: laneSessionId, resultText } =
+                await runLaneTurn('general', conversationId, prompt, { source: 'triage' })
+              if (resultText === null) {
+                log.web.warn('triage lane turn produced no result (timeout or error)', { taskId, sessionId: laneSessionId })
+                broadcastEvent('agent:error', { error: `Triage notify failed for task ${taskId}: lane turn timed out or errored`, agentId: 'general', conversationId })
                 return
               }
-
-              const { runAgentLoop } = await import('../agent/loop.js')
-              const { estimateMessagesTokens, estimateFullPayload } = await import('../core/daily-log.js')
-              const { getContextWindowSize } = await import('../agent/model.js')
-              const { getConfig } = await import('../core/config-manager.js')
-              const { buildSystemPrompt } = await import('../agent/context.js')
-              // Fix 1 (root cause): triage only ever needs to READ state to phrase a
-              // 2-4 sentence status notification. It must NEVER hold task_create or any
-              // other write tool — that's what let a blind-trimmed turn re-create
-              // near-duplicate tasks in a self-propagating loop. Use the read-only set.
-              const { getReadOnlyTools, getReadOnlyToolSchemas } = await import('../agent/tools.js')
-              const history = await chatHistory.getApiMessages('general', conversationId)
-              const historyTokens = estimateMessagesTokens(history)
-
-              // Pre-check: estimate full payload and bail to notification-only if near the limit.
-              // This prevents burning API tokens on a 400 that the agent loop would have to recover from.
-              const agentConfig = await getConfig()
-              const mainModel = agentConfig.agent?.main_model
-              const contextLimit = getContextWindowSize(mainModel)
-              const TRIAGE_BAIL_PERCENT = 0.92 // bail if estimated > 92% of context window
-              let estimatedTotal = historyTokens
-              try {
-                const system = await buildSystemPrompt('general', conversationId)
-                // Estimate against the SAME (read-only) tool set we actually send below.
-                const tools = getReadOnlyToolSchemas()
-                const full = estimateFullPayload({ system, tools, messages: history })
-                estimatedTotal = full.total
-              } catch (preCheckErr) {
-                // If full estimation fails, be conservative — assume over limit to avoid 400
-                log.web.warn('triage pre-check: full estimation failed, using conservative fallback', {
-                  taskId, error: preCheckErr instanceof Error ? preCheckErr.message : String(preCheckErr),
-                })
-                estimatedTotal = contextLimit // force bail
-              }
-
-              // Decide in REAL-token space (estimator undercounts Claude 3+ by ~35%, so the
-              // raw estimate sailed under the threshold even at a real ~1.03M tokens — the bail
-              // never fired). effectiveTotalTokens = max(estimate × 1.35, last EXACT API tokens).
-              // Same shared helper as background-compaction's needsCompaction gate — one impl,
-              // one source-of-truth map. See token-truth.ts.
-              const correctedEstimate = Math.round(estimatedTotal * ESTIMATE_CORRECTION)
-              const lastExact = getLastTurnTokens(conversationId) ?? 0
-              const effectiveTotal = effectiveTotalTokens(estimatedTotal, conversationId)
-
-              if (effectiveTotal > contextLimit * TRIAGE_BAIL_PERCENT) {
-                log.web.warn('triage main agent skipped: history near context limit', {
-                  taskId,
-                  rawEstimate: `~${Math.round(estimatedTotal / 1000)}K`,
-                  correctedEstimate: `~${Math.round(correctedEstimate / 1000)}K`,
-                  lastExact: lastExact ? `~${Math.round(lastExact / 1000)}K` : 'unknown',
-                  effectiveTotal: `~${Math.round(effectiveTotal / 1000)}K`,
-                  contextLimit: `${Math.round(contextLimit / 1000)}K`,
-                  bailThreshold: `${Math.round(contextLimit * TRIAGE_BAIL_PERCENT / 1000)}K`,
-                })
-                // Fall back to notification-only (same as triageToChat: false path)
-                const bailContent = `**Triage** (${displayTaskRef}):\n\n${cleanedResult}`
-                await chatHistory.addNotification({
-                  role: 'assistant', content: bailContent,
-                  source: 'triage', notification: true, taskId,
-                  agentId: 'general', conversationId,
-                })
-                broadcastEvent('agent:response', { text: bailContent, source: 'triage', agentId: 'general', conversationId })
-                triggerBackgroundCompaction('triage-bail', { agentId: 'general', conversationId })
-                return
-              }
-
-              const readOnlyTools = getReadOnlyTools()
-              log.web.info('triage main agent turn starting', {
-                taskId,
-                historyMessages: history.length,
-                historyTokens: `~${Math.round(historyTokens / 1000)}K`,
-                effectiveTotal: `~${Math.round(effectiveTotal / 1000)}K`,
-                toolCount: readOnlyTools.length,
-                readOnlyTools: true,
+              broadcastEvent('agent:response', { text: resultText, source: 'triage', agentId: 'general', conversationId })
+              await chatHistory.addNotification({
+                role: 'assistant', content: resultText, source: 'triage',
+                notification: true, taskId, sessionId: laneSessionId,
+                agentId: 'general', conversationId,
               })
-
-              const agentResult = await runAgentLoop(prompt, history, {
-                onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'triage', agentId: 'general', conversationId }),
-                onThinking: (text) => broadcastEvent('agent:thinking', { text, agentId: 'general', conversationId }),
-                onToolCall: (toolName, input) => broadcastEvent('agent:tool-call', { toolName, input, agentId: 'general', conversationId }),
-                onToolResult: (toolName, result) => broadcastEvent('agent:tool-result', { toolName, result, agentId: 'general', conversationId }),
-                onToolActivity: (activity) => broadcastEvent('agent:tool-activity', { ...activity, agentId: 'general', conversationId }),
-                onUsage: (u) => {
-                  try { usageTracker.record({ source: 'triage', model: u.model ?? 'unknown', input_tokens: u.input_tokens, output_tokens: u.output_tokens, cache_creation_input_tokens: u.cache_creation_input_tokens, cache_read_input_tokens: u.cache_read_input_tokens, agentId: 'general' }) } catch {}
-                  // Fix 2: cache the EXACT input-token count (incl. cache) so the next
-                  // triage turn's bail pre-check can reason in real-token space.
-                  try { recordLastTurnTokens(conversationId, (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)) } catch {}
-                },
-              }, { source: 'triage', tools: readOnlyTools, agentId: 'general', conversationId })
-
-              if (agentResult.response) {
-                broadcastEvent('agent:response', { text: agentResult.response, source: 'triage', agentId: 'general', conversationId })
-              }
-              // newMessages (not slice(history.length)) is trim-safe — see chat.ts. NB: pass
-              // the WHOLE array incl. the user prompt at [0]; unlike chat.ts we did NOT
-              // eager-persist the prompt, so it must be persisted here.
-              const newApiMsgs = agentResult.newMessages
-              await chatHistory.addAIMessages(newApiMsgs, { source: 'triage', taskId, agentId: 'general', conversationId })
-              log.web.info('triage main agent done', { taskId, newMessages: newApiMsgs.length })
-              triggerBackgroundCompaction('triage', { agentId: 'general', conversationId })
+              log.web.info('triage lane turn done', { taskId, sessionId: laneSessionId, resultLength: resultText.length })
+              // No background compaction here — the CLI compacts itself.
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err)
               log.web.error('triage main agent failed', { taskId, error: errMsg })
@@ -4281,8 +4064,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Dream consolidation RETIRED (2026-07 memory/skill/history unification): it
   // wrote to the retired memory/topics/ + index.md wiki and kept regrowing the
   // old structure after migration. Its job (periodic knowledge consolidation)
-  // is covered by the in-conversation skill_manage triggers + the every-N-turn
-  // background self-review fork. src/core/dream.ts remains for manual runs.
+  // is covered by the in-conversation skill_manage triggers.
 
   // Conversation distill sweep REMOVED (unified memory redesign): the append-only
   // background distiller was the main source of MEMORY.md rot. Condensation now
@@ -4513,22 +4295,6 @@ async function startHeartbeatIfConfigured(): Promise<void> {
           // broadcastCronNotification above).
           const { getMainConversationId } = await import('../core/conversations.js')
           const conversationId = await getMainConversationId('general')
-          // Engine for this turn — a lane turn never enters the in-process loop, so
-          // it needs neither the API history nor the agent module.
-          const laneEngine = await usePersonalAiLaneEngine('general')
-
-          // Load chat history (fresh state after any preceding turn)
-          let history: Awaited<ReturnType<typeof chatHistory.getApiMessages>> = []
-          if (!laneEngine) {
-            const { estimateMessagesTokens } = await import('../core/daily-log.js')
-            history = await chatHistory.getApiMessages('general', conversationId)
-            const historyTokens = estimateMessagesTokens(history)
-            log.heartbeat.info('running heartbeat agent turn', {
-              historyMessages: history.length,
-              historyTokens: `~${Math.round(historyTokens / 1000)}K`,
-            })
-          }
-
           const heartbeatUserContent = '[Heartbeat] Periodic self-check…'
           const heartbeatTs = new Date().toISOString()
 
@@ -4548,8 +4314,8 @@ async function startHeartbeatIfConfigured(): Promise<void> {
             agentId: 'general', conversationId,
           })
 
-          // Turn-end persistence shared by BOTH engines: a silent "all clear" is
-          // stored as one compact line instead of the routine full response.
+          // A silent "all clear" is stored as one compact line instead of the
+          // routine full response.
           const persistSilentHeartbeat = () => chatHistory.addNotification({
             role: 'assistant',
             content: '**Heartbeat** — all clear, nothing needs attention.',
@@ -4558,86 +4324,28 @@ async function startHeartbeatIfConfigured(): Promise<void> {
             agentId: 'general', conversationId,
           })
 
-          // ── Engine branch: Personal AI lane (config.agent.provider='claude-code') ──
-          // Everything above ran for both engines (trigger broadcast + persist).
-          if (laneEngine) {
-            const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
-            const { sessionId: laneSessionId, resultText } =
-              await runLaneTurn('general', conversationId, prompt, { source: 'heartbeat' })
-            // heartbeat-runner records the error and emits heartbeat:error.
-            if (resultText === null) throw new Error('heartbeat lane turn timed out')
-            if (resultText) {
-              broadcastEvent('agent:response', { text: resultText, source: 'heartbeat', agentId: 'general', conversationId })
-            }
-            if (isHeartbeatOk(resultText)) {
-              await persistSilentHeartbeat()
-            } else {
-              // The model context lives in the CLI's transcript, so the substantive
-              // answer is persisted as one assistant notification (with a link back
-              // to the session that produced it) rather than as API messages.
-              await chatHistory.addNotification({
-                role: 'assistant', content: resultText, source: 'heartbeat',
-                notification: true, sessionId: laneSessionId,
-                agentId: 'general', conversationId,
-              })
-            }
-            // No triggerBackgroundCompaction on the lane path — the CLI compacts itself.
-            return resultText
+          const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
+          const { sessionId: laneSessionId, resultText } =
+            await runLaneTurn('general', conversationId, prompt, { source: 'heartbeat' })
+          // heartbeat-runner records the error and emits heartbeat:error.
+          if (resultText === null) throw new Error('heartbeat lane turn timed out')
+          if (resultText) {
+            broadcastEvent('agent:response', { text: resultText, source: 'heartbeat', agentId: 'general', conversationId })
           }
-
-          const { runAgentLoop } = await import('../agent/loop.js')
-          const result = await runAgentLoop(prompt, history, {
-            onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'heartbeat', agentId: 'general', conversationId }),
-            onThinking: (text) => broadcastEvent('agent:thinking', { text, agentId: 'general', conversationId }),
-            onToolCall: (toolName, input, toolUseId) => broadcastEvent('agent:tool-call', { toolName, input, toolUseId, agentId: 'general', conversationId }),
-            onToolResult: (toolName, result, toolUseId) => broadcastEvent('agent:tool-result', { toolName, result, toolUseId, agentId: 'general', conversationId }),
-            onToolActivity: (activity) => broadcastEvent('agent:tool-activity', { ...activity, agentId: 'general', conversationId }),
-            // onText intentionally NOT provided — fires per text block per round.
-            // agent:response is fired ONCE below after the loop completes (same
-            // pattern as the chat handler in routes/chat.ts).
-            onUsage: (usage) => {
-              try {
-                usageTracker.record({
-                  source: 'heartbeat',
-                  model: usage.model ?? 'unknown',
-                  input_tokens: usage.input_tokens,
-                  output_tokens: usage.output_tokens,
-                  cache_creation_input_tokens: usage.cache_creation_input_tokens,
-                  cache_read_input_tokens: usage.cache_read_input_tokens,
-                  agentId: 'general',
-                })
-              } catch { /* non-critical */ }
-            },
-          }, { source: 'heartbeat', agentId: 'general', conversationId })
-
-          // Fire agent:response exactly once after loop completes
-          const responseText = result.response ?? ''
-          if (responseText) {
-            broadcastEvent('agent:response', { text: responseText, source: 'heartbeat', agentId: 'general', conversationId })
-          }
-
-          // Persist agent response to chat history. newMessages (not slice(history.length))
-          // is trim-safe — see chat.ts. NB: pass the WHOLE array incl. the user prompt at [0];
-          // unlike chat.ts we did NOT eager-persist the prompt, so it must be persisted here.
-          const newApiMsgs = result.newMessages
-
-          // Check for HEARTBEAT_OK — if the AI says nothing needs attention,
-          // persist a compact notification instead of full AI messages.
-          const isSilent = isHeartbeatOk(responseText)
-
-          if (isSilent) {
-            // For silent heartbeats, persist a compact notification instead of full AI messages
-            // to avoid bloating chat history with routine "all clear" responses
+          if (isHeartbeatOk(resultText)) {
             await persistSilentHeartbeat()
           } else {
-            // Substantive response — persist full AI messages with heartbeat source
-            await chatHistory.addAIMessages(newApiMsgs, { source: 'heartbeat', agentId: 'general', conversationId })
+            // The model context lives in the CLI's transcript, so the substantive
+            // answer is persisted as one assistant notification (with a link back
+            // to the session that produced it) rather than as API messages.
+            await chatHistory.addNotification({
+              role: 'assistant', content: resultText, source: 'heartbeat',
+              notification: true, sessionId: laneSessionId,
+              agentId: 'general', conversationId,
+            })
           }
-
-          // Trigger background compaction outside the turn queue
-          triggerBackgroundCompaction('heartbeat', { agentId: 'general', conversationId })
-
-          return responseText
+          // No background compaction here — the CLI compacts its own context.
+          return resultText
         })
       },
 
@@ -5216,7 +4924,7 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('embedding-sync')
   bus.unsubscribe('setup-health')
   stopTimeTracking()
-  import('../agent/overview-maintainer.js')
+  import('../core/overview-maintainer.js')
     .then(({ stopOverviewMaintainer }) => stopOverviewMaintainer())
     .catch(() => {})
   // Release local terminal ptys (dtach sessions on targets survive).

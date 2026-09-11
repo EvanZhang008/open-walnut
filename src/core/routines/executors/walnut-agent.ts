@@ -1,6 +1,6 @@
 /**
- * walnut-agent executor — runs the instructions as an isolated in-process
- * agent turn (fresh context, no chat history).
+ * walnut-agent executor — runs the instructions in a fresh Personal AI session
+ * of its own (no chat history, its own task, watchable in the session panel).
  *
  * NOTE: like main-agent, jobs of this type are dispatched through the cron
  * engine's legacy 'isolated' path (timer.ts), which owns the delivery/announce
@@ -23,7 +23,7 @@ export function createWalnutAgentExecutor(deps: WalnutAgentExecutorDeps): Execut
   return {
     type: 'walnut-agent',
     label: 'Walnut Agent',
-    description: 'Run the instructions in an isolated built-in agent with a fresh context.',
+    description: 'Run the instructions in a fresh Personal AI session with its own task.',
     configSchema: [
       {
         name: 'instructions',

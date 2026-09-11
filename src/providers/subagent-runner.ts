@@ -1,154 +1,66 @@
 /**
- * SubagentRunner — event-bus subscriber that manages embedded subagent runs.
+ * SubagentRunner — turns a subagent request into a REAL Claude Code session
+ * running with that agent's persona.
  *
  * Listens on 'subagent-runner' for:
- *   - subagent:start → resolve agent definition, acquire semaphore, run embedded loop
- *   - subagent:send  → resume an existing run with new message
+ *   - subagent:start → quickStartSession({ walnutAgent: true, agentId, … })
+ *   - subagent:send  → performSessionSend to the session that run owns
  *
  * Emits:
  *   - subagent:started → ['main-ai']
- *   - subagent:result  → ['main-ai']
  *   - subagent:error   → ['main-ai']
  *
- * Phase 1 — Session UI Parity:
- *   - Creates a SessionRecord (provider='embedded') for each run
- *   - Writes JSONL history to ~/.open-walnut/sessions/streams/embedded-{runId}.jsonl
- *   - Emits session:text-delta, session:tool-use, session:tool-result events
- *   - Updates SessionRecord on completion/error
- *   → Embedded sessions appear in the session tree and stream in real-time
+ * A run IS a session: the run id is the session id the CLI adopts
+ * (preassignedSessionId), so a run shows up in the session tree, streams
+ * through the normal session pipeline, and its transcript is the session's own
+ * JSONL. That identity is also why a `subagent:send` still lands after a server
+ * restart even though this ledger is in-memory: the id resolves through the
+ * session records on disk.
+ *
+ * The ledger therefore holds metadata only (which session/task a run created,
+ * plus its status at launch). Turn-by-turn progress and completion live on the
+ * session record, which every session surface already reads; nothing here
+ * mirrors it.
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { bus, EventNames, eventData } from '../core/event-bus.js';
-import { TRIAGE_AGENTS as TRIAGE_AGENT_IDS } from '../core/session-tracker.js';
-import { getAgent } from '../core/agent-registry.js';
-import { getConfig } from '../core/config-manager.js';
-import { buildSubagentSystemPrompt, buildSubagentToolSet } from '../agent/subagent-context.js';
-import { buildStatefulMemorySection, persistMemoryUpdate } from '../agent/stateful-memory.js';
-import { buildFilteredSkillsPrompt } from '../core/skill-loader.js';
-import { loadContextSources, type ContextSourcesInput } from '../agent/context-sources.js';
-import { getProjectMemory } from '../core/project-memory.js';
-import { SESSION_STREAMS_DIR } from '../constants.js';
+import { quickStartSession } from '../core/sessions/quick-start.js';
+import { resolveAskAgent, askProjectFor, type AskAgentRef } from '../core/sessions/ask-agent.js';
+import { performSessionSend } from '../core/sessions/session-send-core.js';
+import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
-import { usageTracker } from '../core/usage/index.js';
-import type { AgentDefinition, AgentRun } from '../core/types.js';
-import type { MessageParam } from '../agent/model.js';
+import type { AgentRun } from '../core/types.js';
 
-// ── Embedded JSONL Writer ──
+/** A tracked run: the AgentRun the dispatch tools read, plus the session it owns. */
+type TrackedRun = AgentRun & {
+  /** The session the run launched. Equal to `runId` (see the file header). */
+  sessionId?: string;
+  /** The task quickStartSession created for the run. */
+  createdTaskId?: string;
+};
 
-/**
- * Append-only JSONL writer that produces the same format as CLI sessions.
- * This enables readSessionHistory() and SessionChatHistory to render
- * embedded sessions without any modification.
- */
-class EmbeddedJsonlWriter {
-  private msgCounter = 0;
-
-  constructor(private filePath: string) {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  }
-
-  writeInit(sessionId: string): void {
-    this.appendLine({
-      type: 'system',
-      subtype: 'init',
-      session_id: sessionId,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  writeUserMessage(text: string): void {
-    const id = `user-${++this.msgCounter}`;
-    this.appendLine({
-      type: 'user',
-      uuid: id,
-      timestamp: new Date().toISOString(),
-      message: { id, role: 'user', content: text },
-    });
-  }
-
-  writeAssistantText(text: string, model?: string): void {
-    const id = `asst-${++this.msgCounter}`;
-    this.appendLine({
-      type: 'assistant',
-      uuid: id,
-      timestamp: new Date().toISOString(),
-      message: {
-        id,
-        role: 'assistant',
-        model,
-        content: [{ type: 'text', text }],
-      },
-    });
-  }
-
-  writeToolUse(toolName: string, toolUseId: string, input: unknown, model?: string): void {
-    const id = `asst-tool-${++this.msgCounter}`;
-    this.appendLine({
-      type: 'assistant',
-      uuid: id,
-      timestamp: new Date().toISOString(),
-      message: {
-        id,
-        role: 'assistant',
-        model,
-        content: [{ type: 'tool_use', id: toolUseId, name: toolName, input }],
-      },
-    });
-  }
-
-  writeToolResult(toolUseId: string, result: string): void {
-    const id = `tool-result-${++this.msgCounter}`;
-    this.appendLine({
-      type: 'user',
-      uuid: id,
-      timestamp: new Date().toISOString(),
-      message: {
-        id,
-        role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: toolUseId, content: result }],
-      },
-    });
-  }
-
-  writeResult(usage: { input_tokens: number; output_tokens: number }): void {
-    this.appendLine({
-      type: 'result',
-      timestamp: new Date().toISOString(),
-      usage,
-    });
-  }
-
-  private appendLine(obj: unknown): void {
-    try {
-      fs.appendFileSync(this.filePath, JSON.stringify(obj) + '\n');
-    } catch (err) {
-      log.subagent.warn('failed to write JSONL', {
-        file: this.filePath,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-}
-
-// ── Semaphore ──
-
-interface Semaphore {
-  active: number;
-  max: number;
-  queue: Array<() => void>;
-}
-
-// ── SubagentRunner ──
+/** Ledger cap. A run is ~200 bytes of metadata, but this process lives for
+ *  weeks and a per-event hook can dispatch continuously, so the oldest entries
+ *  are dropped once the map grows past this. Dropping one only loses the
+ *  `subagent_list` row: the session and its task are on disk, and a send to the
+ *  run id still resolves through them. */
+const MAX_TRACKED_RUNS = 200;
 
 export class SubagentRunner {
-  readonly runs = new Map<string, AgentRun & { _history?: MessageParam[]; _historyPruned?: boolean; _abortController?: AbortController; _launchPhase?: string }>();
-  private semaphore: Semaphore;
+  readonly runs = new Map<string, TrackedRun>();
+
+  /** In-flight LAUNCHES, not concurrent agents: each start is a whole-store
+   *  read-modify-write (task create) plus a spawn, so a burst of hook-triggered
+   *  dispatches is admitted a few at a time instead of convoying the task lock.
+   *  The session itself is not counted — once spawned it is the session
+   *  machinery's to schedule, and this runner never learns when it finishes. */
+  private launching = 0;
+  private launchQueue: Array<() => void> = [];
+  private readonly maxConcurrent: number;
 
   constructor(maxConcurrent = 20) {
-    this.semaphore = { active: 0, max: maxConcurrent, queue: [] };
+    this.maxConcurrent = Math.max(1, maxConcurrent);
   }
 
   init(): void {
@@ -168,66 +80,39 @@ export class SubagentRunner {
 
   destroy(): void {
     this.runs.clear();
-    this.semaphore.queue = [];
+    this.launchQueue = [];
+    this.launching = 0;
     bus.unsubscribe('subagent-runner');
   }
 
   getAllRuns(): AgentRun[] {
-    return Array.from(this.runs.values()).map(({ _history, _historyPruned, _abortController, _launchPhase, ...run }) => run);
+    return Array.from(this.runs.values()).map(({ sessionId: _sessionId, createdTaskId: _createdTaskId, ...run }) => run);
   }
 
-  getRun(runId: string): (AgentRun & { _history?: MessageParam[]; _historyPruned?: boolean }) | undefined {
+  getRun(runId: string): TrackedRun | undefined {
     return this.runs.get(runId);
   }
 
-  /** Keep full `_history` only on the newest terminal runs. Completed runs are
-   *  never removed from `runs` (metadata is cheap and getAllRuns lists them),
-   *  but each history is a complete MessageParam[] with tool results — an
-   *  unbounded retained-heap accumulator over a long-lived process. Only the
-   *  most recent few can still be resumed via handleSend in practice; older
-   *  ones are marked so handleSend rejects instead of silently losing context.
-   *  10 is a product choice as much as a memory cap: it bounds retained heap
-   *  AND defines how far back a user can resume a finished run — lowering it
-   *  silently shrinks that resume window. */
-  // 10 = comfortably above the couple of runs a user realistically resumes
-  // (resume targets are almost always the most recent one or two), while
-  // capping retained MessageParam[] heap; not a measured constant — safe to
-  // tune, but keep it small: each history holds full tool results.
-  private static MAX_RETAINED_HISTORIES = 10;
-  private pruneRetainedHistories(): void {
-    const terminal: Array<{ _history?: MessageParam[]; _historyPruned?: boolean; completedAt?: string; status: string }> = [];
-    for (const run of this.runs.values()) {
-      if (run._history?.length && run.status !== 'running' && run.status !== 'queued') terminal.push(run);
-    }
-    if (terminal.length <= SubagentRunner.MAX_RETAINED_HISTORIES) return;
-    terminal.sort((a, b) => (a.completedAt ?? '').localeCompare(b.completedAt ?? ''));
-    for (const run of terminal.slice(0, terminal.length - SubagentRunner.MAX_RETAINED_HISTORIES)) {
-      run._history = undefined;
-      run._historyPruned = true;
-    }
-  }
-
-  /** Cancel all running subagent runs for a given task, optionally filtered by agent ID.
-   *  Used to cancel stale triage runs when user resumes a session. */
+  /** Stop the turns of runs still live for a task, optionally one agent's only.
+   *  Interrupt (not kill): the run's session stays in the tree with its
+   *  transcript, exactly like the composer's stop button, so a stale dispatch
+   *  cannot keep writing while the human works on the same task. */
   cancelRunsForTask(taskId: string, agentId?: string): number {
     let cancelled = 0;
-    for (const [, run] of this.runs) {
+    for (const run of this.runs.values()) {
       if (run.taskId !== taskId) continue;
       if (agentId && run.agentId !== agentId) continue;
       if (run.status !== 'running' && run.status !== 'queued') continue;
-      const ac = (run as any)._abortController as AbortController | undefined;
-      if (ac && !ac.signal.aborted) {
-        ac.abort();
-        cancelled++;
-        log.subagent.info('cancelled run for task', { runId: run.runId, agentId: run.agentId, taskId });
+      run.status = 'error';
+      run.error = 'cancelled';
+      run.completedAt = new Date().toISOString();
+      cancelled++;
+      if (run.sessionId) {
+        bus.emit(EventNames.SESSION_INTERRUPT, { sessionId: run.sessionId }, ['session-runner'], { source: 'subagent-runner' });
       }
+      log.subagent.info('cancelled run for task', { runId: run.runId, agentId: run.agentId, taskId });
     }
     return cancelled;
-  }
-
-  /** Get the launchPhase for a given run (used by tools.ts for CAS guard). */
-  getLaunchPhase(runId: string): string | undefined {
-    return (this.runs.get(runId) as any)?._launchPhase;
   }
 
   // ── Private ──
@@ -237,612 +122,192 @@ export class SubagentRunner {
     task: string;
     taskId?: string;
     model?: string;
-    region?: string;
-    deniedTools?: string[];
     context?: string;
-    context_override?: ContextSourcesInput;
   }): Promise<void> {
-    const agentId = data.agentId ?? 'general';
-    const agentDef = await getAgent(agentId);
-    if (!agentDef) {
-      bus.emit(EventNames.SUBAGENT_ERROR, {
-        error: `Agent "${agentId}" not found.`,
-        task: data.task,
-        taskId: data.taskId,
-      }, ['main-ai'], { source: 'subagent-runner' });
+    const requestedId = data.agentId?.trim() || 'general';
+    // Resolved here rather than left to quickStartSession so an unknown id is a
+    // subagent:error the dispatcher's caller can read, and so the run's title
+    // and project can use the agent's name.
+    let agent: AskAgentRef | undefined;
+    try {
+      agent = await resolveAskAgent(requestedId);
+    } catch (err) {
+      this.emitStartError(requestedId, data, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (!agent) {
+      this.emitStartError(requestedId, data, `Agent "${requestedId}" not found.`);
       return;
     }
 
-    const runId = randomBytes(8).toString('hex');
-    const config = await getConfig();
-    const subagentConfig = config.agent?.subagent;
+    // The run id IS the session id the CLI adopts (see the file header).
+    const runId = randomUUID();
+    const title = `${agent.name}: ${data.task.replace(/\s+/g, ' ').trim().slice(0, 80)}`;
+    // A hook run files next to the work that triggered it; a dispatch with no
+    // task goes to the agent's own "Ask …" project.
+    const project = (data.taskId ? await taskProject(data.taskId) : undefined) ?? askProjectFor(agent);
 
-    const model = data.model ?? agentDef.model ?? subagentConfig?.model ?? config.agent?.model;
-    const provider = agentDef.provider ?? subagentConfig?.provider ?? config.agent?.main_provider;
-    const region = data.region ?? agentDef.region ?? subagentConfig?.region ?? config.agent?.region;
-    const maxTokens = agentDef.max_tokens ?? subagentConfig?.max_tokens ?? config.agent?.maxTokens;
-    const maxToolRounds = agentDef.max_tool_rounds ?? subagentConfig?.max_tool_rounds ?? 10;
-
-    // Capture task phase at launch for CAS guard on task_update
-    let launchPhase: string | undefined;
-    if (data.taskId) {
-      try {
-        const { getTask } = await import('../core/task-manager.js');
-        const taskObj = await getTask(data.taskId);
-        launchPhase = taskObj.phase;
-      } catch { /* non-fatal */ }
-    }
-
-    const run: AgentRun & { _history?: MessageParam[]; _abortController?: AbortController; _launchPhase?: string } = {
+    const run: TrackedRun = {
       runId,
-      agentId,
+      agentId: agent.id,
       task: data.task,
       taskId: data.taskId,
-      runner: 'embedded',
+      runner: 'cli',
       status: 'queued',
       startedAt: new Date().toISOString(),
-      _history: [],
-      _abortController: new AbortController(),
-      _launchPhase: launchPhase,
-    };
-    this.runs.set(runId, run);
-
-    log.subagent.info('run queued', { runId, agentId, taskId: data.taskId, task: data.task.slice(0, 100) });
-
-    // ── Create SessionRecord for UI visibility ──
-    let taskProject = 'embedded';
-    if (data.taskId) {
-      try {
-        const { getTask } = await import('../core/task-manager.js');
-        const task = await getTask(data.taskId);
-        taskProject = task.project || 'embedded';
-      } catch {
-        // Task may not exist — use default
-      }
-    }
-
-    const title = `${agentDef.name}: ${data.task.slice(0, 80)}`;
-    try {
-      const { createSessionRecord } = await import('../core/session-tracker.js');
-      const sessionType: import('../core/types.js').SessionType = TRIAGE_AGENT_IDS.has(agentId) ? 'triage' : 'subagent';
-      await createSessionRecord(runId, data.taskId ?? '', taskProject, process.cwd(), {
-        provider: 'embedded',
-        title,
-        mode: 'default',
-        type: sessionType,
-      });
-    } catch (err) {
-      log.subagent.warn('failed to create session record for embedded run', {
-        runId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    // Link non-triage embedded sessions to task.session_ids so they appear in the UI.
-    // Uses addSessionToHistory (not linkSessionSlot) to avoid occupying the exec slot,
-    // which would block CLI sessions from starting.
-    // Triage sessions (turn-complete-triage, message-send-triage) are high-volume
-    // housekeeping and remain hidden — accessible via triage history instead.
-    if (data.taskId && !TRIAGE_AGENT_IDS.has(agentId)) {
-      try {
-        const { addSessionToHistory } = await import('../core/task-manager.js');
-        await addSessionToHistory(data.taskId, runId);
-      } catch {
-        // Task may not exist or link may fail — non-fatal
-      }
-    }
-
-    // Emit session:started for UI
-    bus.emit(EventNames.SESSION_STARTED, {
       sessionId: runId,
-      taskId: data.taskId,
-      project: taskProject,
-      title,
-      provider: 'embedded',
-    }, ['*'], { source: 'subagent-runner' });
+    };
+    this.trackRun(run);
+    log.subagent.info('run queued', { runId, agentId: agent.id, taskId: data.taskId, task: data.task.slice(0, 100) });
 
-    // Emit started event — routed to main-ai for agent loop awareness
-    bus.emit(EventNames.SUBAGENT_STARTED, {
-      runId,
-      agentId,
-      agentName: agentDef.name,
-      task: data.task,
-      taskId: data.taskId,
-    }, ['main-ai'], { source: 'subagent-runner' });
-
-    await this.acquireSemaphore();
-    run.status = 'running';
-    log.subagent.info('run starting', { runId, agentId, semaphoreActive: this.semaphore.active, semaphoreMax: this.semaphore.max });
-
-    this.runEmbedded(run, agentDef, data, { model, provider, region, maxTokens, maxToolRounds }).catch((err) => {
-      log.subagent.error('embedded run failed', { runId, error: err instanceof Error ? err.message : String(err) });
-    });
-  }
-
-  private async runEmbedded(
-    run: AgentRun & { _history?: MessageParam[]; _abortController?: AbortController; _launchPhase?: string },
-    agentDef: AgentDefinition,
-    data: { task: string; taskId?: string; deniedTools?: string[]; context?: string; context_override?: ContextSourcesInput },
-    opts: { model?: string; provider?: string; region?: string; maxTokens?: number; maxToolRounds: number; resume?: boolean },
-  ): Promise<void> {
-    const isResume = opts.resume === true;
-
-    // ── JSONL writer for session history ──
-    const jsonlPath = path.join(SESSION_STREAMS_DIR, `embedded-${run.runId}.jsonl`);
-    const jsonl = new EmbeddedJsonlWriter(jsonlPath);
-    // On resume, skip init (file already has init line) — just append user message
-    if (!isResume) {
-      jsonl.writeInit(run.runId);
-    }
-    jsonl.writeUserMessage(data.task);
-
+    await this.acquireLaunchSlot();
     try {
-      // Load context sources (task details, project memory, etc.) based on agent definition
-      const contextSourcesInput = data.context_override ?? { taskId: data.taskId };
-      const contextBlock = await loadContextSources(agentDef, contextSourcesInput);
-      const combinedContext = [contextBlock, data.context].filter(Boolean).join('\n\n');
-      log.subagent.info('context loaded', { runId: run.runId, taskId: data.taskId, contextLength: combinedContext.length });
-      let systemPrompt = buildSubagentSystemPrompt(agentDef, data.task, combinedContext || undefined);
-      const toolSet = await buildSubagentToolSet(agentDef, data.deniedTools);
-
-      // CAS guard: wrap task_update to inject ifPhase from launchPhase.
-      // This prevents stale triage from overwriting phase after user resumes.
-      if (run._launchPhase && TRIAGE_AGENT_IDS.has(run.agentId)) {
-        const updateTaskTool = toolSet.find(t => t.name === 'task_update');
-        if (updateTaskTool) {
-          const originalExecute = updateTaskTool.execute;
-          const launchPhase = run._launchPhase;
-          updateTaskTool.execute = async (params: Record<string, unknown>) => {
-            // Inject ifPhase so updateTask skips phase change if task has moved on
-            if (params.phase !== undefined) {
-              params._ifPhase = launchPhase;
-            }
-            return originalExecute(params);
-          };
-        }
-      }
-
-      // Inject per-run notify_main_agent tool (closure-based, concurrency-safe).
-      // Only agents with 'notify_main_agent' in allowed_tools get this tool.
-      let capturedNotification: string | undefined;
-      if (agentDef.allowed_tools?.includes('notify_main_agent')) {
-        toolSet.push({
-          name: 'notify_main_agent',
-          description: 'Send a notification to the main agent about an important milestone that requires user action. Only call this when the user needs to DO something (approve a plan, review, make a decision). If no notification is needed, simply do not call this tool.',
-          input_schema: {
-            type: 'object' as const,
-            properties: {
-              message: {
-                type: 'string',
-                description: '1-2 sentences: what happened and what action the user should take',
-              },
-            },
-            required: ['message'],
-          },
-          execute: async (params: Record<string, unknown>) => {
-            const msg = String(params.message ?? '').trim() || undefined;
-            if (capturedNotification) {
-              log.subagent.warn('notify_main_agent called again, overwriting previous', { runId: run.runId });
-            }
-            capturedNotification = msg;
-            log.subagent.info('notify_main_agent called', { runId: run.runId, messageLength: msg?.length ?? 0 });
-            return 'Notification queued for main agent.';
-          },
-        });
-      }
-
-      // Resolve {auto} token in stateful memory_project path
-      const resolvedStateful = agentDef.stateful ? { ...agentDef.stateful } : undefined;
-      if (resolvedStateful?.memory_project?.includes('{auto}') && data.taskId) {
-        try {
-          const { getTask } = await import('../core/task-manager.js');
-          const task = await getTask(data.taskId);
-          // Single segment: project is the only grouping layer ('' = inbox).
-          const autoPath = (task.project || 'inbox').toLowerCase();
-          resolvedStateful.memory_project = resolvedStateful.memory_project.replace('{auto}', autoPath);
-        } catch (err) {
-          log.subagent.warn('failed to resolve {auto} in memory_project', {
-            runId: run.runId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      // Inject selected skills into system prompt
-      if (agentDef.skills?.length) {
-        try {
-          const skillsPrompt = await buildFilteredSkillsPrompt(agentDef.skills);
-          if (skillsPrompt) {
-            systemPrompt += '\n\n' + skillsPrompt;
-          }
-        } catch (err) {
-          log.subagent.warn('failed to build skills prompt', {
-            runId: run.runId,
-            skills: agentDef.skills,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      if (resolvedStateful) {
-        const memResult = getProjectMemory(resolvedStateful.memory_project);
-        systemPrompt += '\n\n' + buildStatefulMemorySection(memResult?.content ?? null, resolvedStateful);
-      }
-
-      const { runAgentLoop } = await import('../agent/loop.js');
-      const totalUsage = { input_tokens: 0, output_tokens: 0 };
-      let lastToolUseId = '';
-
-      log.subagent.info('embedded loop starting', { runId: run.runId, agentId: run.agentId, model: opts.model, maxRounds: opts.maxToolRounds });
-      const result = await runAgentLoop(data.task, run._history ?? [], {
-        onText: (text) => {
-          jsonl.writeAssistantText(text, opts.model);
-          bus.emit(EventNames.SESSION_TEXT_DELTA, {
-            sessionId: run.runId,
-            delta: text,
-          }, ['*'], { source: 'subagent-runner' });
-          this.updateSessionLastActive(run.runId);
-        },
-        onToolCall: (toolName, input) => {
-          lastToolUseId = `toolu_emb_${randomBytes(6).toString('hex')}`;
-          jsonl.writeToolUse(toolName, lastToolUseId, input, opts.model);
-          bus.emit(EventNames.SESSION_TOOL_USE, {
-            sessionId: run.runId,
-            toolUseId: lastToolUseId,
-            toolName,
-            input,
-          }, ['*'], { source: 'subagent-runner' });
-          this.updateSessionActivity(run.runId, toolName);
-        },
-        onToolResult: (_toolName, resultText) => {
-          const toolUseId = lastToolUseId;
-          jsonl.writeToolResult(toolUseId, resultText);
-          bus.emit(EventNames.SESSION_TOOL_RESULT, {
-            sessionId: run.runId,
-            toolUseId,
-            result: resultText.slice(0, 2000),
-          }, ['*'], { source: 'subagent-runner' });
-        },
-        onUsage: (usage) => {
-          if (usage.input_tokens) totalUsage.input_tokens += usage.input_tokens;
-          if (usage.output_tokens) totalUsage.output_tokens += usage.output_tokens;
-          try { usageTracker.record({ source: 'subagent', model: usage.model ?? 'unknown', input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens, cache_read_input_tokens: usage.cache_read_input_tokens, runId: run.runId, taskId: data.taskId, agentId: run.agentId, parent_source: 'agent' }); } catch {}
-        },
-      }, {
-        system: systemPrompt,
-        tools: toolSet,
-        modelConfig: {
-          model: opts.model,
-          provider: opts.provider,
-          region: opts.region,
-          maxTokens: opts.maxTokens,
-        },
-        maxToolRounds: opts.maxToolRounds,
-        signal: run._abortController?.signal,
+      const task = await quickStartSession({
+        message: launchMessage(data),
+        cwd: WALNUT_HOME,
+        // The persona bundle (system prompt + standing memory + skills index +
+        // walnut MCP mount) rides this flag — without it the session would spawn
+        // as a bare coding agent with no idea whose run it is.
+        walnutAgent: true,
+        agentId: agent.id,
+        taskTitle: title,
+        project,
+        // Background automation, same call as a routine: an explicit null keeps
+        // every dispatch off the pinned board.
+        taskMeta: { pinTier: null },
+        preassignedSessionId: runId,
+        ...(data.model ? { model: data.model } : {}),
         source: 'subagent',
       });
-
-      // Handle abort: mark as error + skip result emission
-      if (result.aborted) {
-        run.status = 'error';
-        run.completedAt = new Date().toISOString();
-        run.error = 'cancelled';
-        run.usage = totalUsage;
-        log.subagent.info('embedded loop cancelled', { runId: run.runId, agentId: run.agentId });
-
-        // Update SessionRecord on cancel — auto-archive triage sessions
-        try {
-          const isTriage = TRIAGE_AGENT_IDS.has(run.agentId);
-          const {
-            emitSessionStatusChanged,
-            updateSessionRecord,
-          } = await import('../core/session-tracker.js');
-          const updated = await updateSessionRecord(run.runId, {
-            process_status: 'stopped',
-            activity: undefined,
-            last_status_change: new Date().toISOString(),
-            status_reason: 'user_stopped',
-            status_changed_by: 'subagent-runner',
-            ...(isTriage ? { archived: true, archive_reason: 'triage_cancelled' } : {}),
-          } as any);
-          emitSessionStatusChanged(
-            updated,
-            {},
-            ['*'],
-            { source: 'subagent-runner', urgency: 'urgent' },
-          );
-        } catch (err) {
-          log.subagent.warn('failed to commit cancellation status', {
-            runId: run.runId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-
-        return; // Don't emit subagent:result — the run was cancelled
-      }
-
-      run.status = 'completed';
-      run.completedAt = new Date().toISOString();
-      run.result = result.response;
-      run.usage = totalUsage;
-      run._history = result.messages;
-      log.subagent.info('embedded loop completed', { runId: run.runId, agentId: run.agentId, responseLength: result.response.length, usage: totalUsage });
-
-      jsonl.writeResult(totalUsage);
-
-      // Update SessionRecord on completion — triage sessions are archived immediately
-      // to prevent ghost session accumulation that blocks session_import.
-      try {
-        const isTriage = TRIAGE_AGENT_IDS.has(run.agentId);
-        const {
-          emitSessionStatusChanged,
-          updateSessionRecord,
-        } = await import('../core/session-tracker.js');
-        const updated = await updateSessionRecord(run.runId, {
-          process_status: 'stopped',
-          activity: undefined,
-          last_status_change: new Date().toISOString(),
-          status_reason: 'normal_completion',
-          status_changed_by: 'subagent-runner',
-          ...(isTriage ? { archived: true, archive_reason: 'triage_complete' } : {}),
-        } as any);
-        emitSessionStatusChanged(
-          updated,
-          { phase: 'AGENT_COMPLETE' },
-          ['*'],
-          { source: 'subagent-runner', urgency: 'urgent' },
-        );
-      } catch (err) {
-        log.subagent.warn('failed to update session record on completion', {
-          runId: run.runId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-
-      // Route only to main-ai (not ['*']) — prevents web-ui subscriber from
-      // broadcasting the full result to browsers, which would bypass compact
-      // triage summary logic in the main-ai handler.
-      bus.emit(EventNames.SESSION_RESULT, {
-        sessionId: run.runId,
-        taskId: data.taskId,
-        result: result.response.slice(0, 2000),
-        usage: totalUsage,
-      }, ['main-ai'], { source: 'subagent-runner' });
-
-      // Notify UI to clear optimistic messages (the turn consumed 1 queued message)
-      if (isResume) {
-        bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
-          sessionId: run.runId,
-          count: 1,
-        }, ['*'], { source: 'subagent-runner' });
-      }
-
-      // Persist the agent's <memory_update> block. Uses resolvedStateful so an
-      // {auto}-resolved memory_project writes where the prompt said it would.
-      if (resolvedStateful) {
-        await persistMemoryUpdate(result.response, resolvedStateful, agentDef.name, {
-          runId: run.runId,
-          agentId: run.agentId,
-        });
-      }
-
-      log.subagent.info('run completed', {
-        runId: run.runId,
-        agentId: run.agentId,
-        usage: totalUsage,
-        responseLength: result.response.length,
+      run.status = 'running';
+      run.createdTaskId = task.id;
+      log.subagent.info('run started', {
+        runId, agentId: agent.id, sessionId: runId, taskId: data.taskId, createdTaskId: task.id,
       });
-
-      log.subagent.info('subagent result emitted', { runId: run.runId, sessionId: run.runId, taskId: data.taskId, hasNotification: !!capturedNotification });
-      bus.emit(EventNames.SUBAGENT_RESULT, {
-        runId: run.runId,
-        agentId: run.agentId,
-        agentName: agentDef.name,
+      bus.emit(EventNames.SUBAGENT_STARTED, {
+        runId,
+        agentId: agent.id,
+        agentName: agent.name,
         task: data.task,
         taskId: data.taskId,
-        result: result.response,
-        notification: capturedNotification,
-        usage: totalUsage,
       }, ['main-ai'], { source: 'subagent-runner' });
     } catch (err) {
       run.status = 'error';
       run.completedAt = new Date().toISOString();
+      // QuickStartError's message is the caller-facing one (unknown agent,
+      // rejected project); anything else is a real fault and says so.
       run.error = err instanceof Error ? err.message : String(err);
-
       // skipNotify: server.ts's subagent:error handler publishes the richer
       // 'Subagent Error' notification (task ref + deep links) for this failure.
-      log.subagent.error('run error', { runId: run.runId, error: run.error, skipNotify: true });
-
-      // Update SessionRecord on error — auto-archive triage sessions
-      try {
-        const isTriage = TRIAGE_AGENT_IDS.has(run.agentId);
-        const {
-          emitSessionStatusChanged,
-          updateSessionRecord,
-        } = await import('../core/session-tracker.js');
-        const updated = await updateSessionRecord(run.runId, {
-          process_status: 'error',
-          errorMessage: run.error,
-          activity: undefined,
-          last_status_change: new Date().toISOString(),
-          status_reason: 'api_error',
-          status_changed_by: 'subagent-runner',
-          ...(isTriage ? { archived: true, archive_reason: 'triage_error' } : {}),
-        } as any);
-        emitSessionStatusChanged(
-          updated,
-          {},
-          ['*'],
-          { source: 'subagent-runner', urgency: 'urgent' },
-        );
-      } catch (statusErr) {
-        log.subagent.warn('failed to commit error status', {
-          runId: run.runId,
-          error: statusErr instanceof Error ? statusErr.message : String(statusErr),
-        });
-      }
-
-      // Clear optimistic messages on error too
-      if (isResume) {
-        bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
-          sessionId: run.runId,
-          count: 1,
-        }, ['*'], { source: 'subagent-runner' });
-      }
-
+      log.subagent.error('run error', { runId, agentId: agent.id, error: run.error, skipNotify: true });
       bus.emit(EventNames.SUBAGENT_ERROR, {
-        runId: run.runId,
-        agentId: run.agentId,
+        runId,
+        agentId: agent.id,
         task: data.task,
         taskId: data.taskId,
         error: run.error,
       }, ['main-ai'], { source: 'subagent-runner' });
     } finally {
-      // Prune on EVERY terminal path, not just success: a cancelled or errored
-      // resume still retains the run's prior _history, and error paths used to
-      // skip pruning entirely — letting failed whales accumulate unbounded.
-      this.pruneRetainedHistories();
-      this.releaseSemaphore();
+      this.releaseLaunchSlot();
     }
   }
 
   private async handleSend(data: { runId: string; message: string }): Promise<void> {
     const run = this.runs.get(data.runId);
-    if (!run) {
-      bus.emit(EventNames.SUBAGENT_ERROR, {
-        runId: data.runId,
-        error: `No run found for ID: ${data.runId}`,
-      }, ['main-ai'], { source: 'subagent-runner' });
-      return;
-    }
-
-    if (run._historyPruned) {
-      bus.emit(EventNames.SUBAGENT_ERROR, {
-        runId: data.runId,
-        error: 'This run can no longer be resumed because its conversation history was pruned.',
-      }, ['main-ai'], { source: 'subagent-runner' });
-      return;
-    }
-
-    const agentDef = await getAgent(run.agentId);
-    if (!agentDef) {
-      bus.emit(EventNames.SUBAGENT_ERROR, {
-        runId: data.runId,
-        error: `Agent "${run.agentId}" not found.`,
-      }, ['main-ai'], { source: 'subagent-runner' });
-      return;
-    }
-
-    const config = await getConfig();
-    const subagentConfig = config.agent?.subagent;
-
-    const model = agentDef.model ?? subagentConfig?.model ?? config.agent?.model;
-    const provider = agentDef.provider ?? subagentConfig?.provider ?? config.agent?.main_provider;
-    const region = agentDef.region ?? subagentConfig?.region ?? config.agent?.region;
-    const maxTokens = agentDef.max_tokens ?? subagentConfig?.max_tokens ?? config.agent?.maxTokens;
-    const maxToolRounds = agentDef.max_tool_rounds ?? subagentConfig?.max_tool_rounds ?? 10;
-
-    // Re-check after the awaits above: the run was still in a terminal status
-    // during getAgent/getConfig, so a concurrently completing run could have
-    // pruned THIS run's history in that window. Once status flips to 'running'
-    // below, pruneRetainedHistories skips it.
-    if (run._historyPruned) {
-      bus.emit(EventNames.SUBAGENT_ERROR, {
-        runId: data.runId,
-        error: 'This run can no longer be resumed because its conversation history was pruned.',
-      }, ['main-ai'], { source: 'subagent-runner' });
-      return;
-    }
-
-    run.status = 'running';
-    log.subagent.info('resuming run', { runId: data.runId, agentId: run.agentId, taskId: run.taskId, messageLength: data.message.length });
-
-    // Update session record back to running
+    // Fall back to the run id itself: it IS a session id, so a send after a
+    // server restart (empty ledger) still reaches the right session.
+    const target = run?.sessionId ?? data.runId;
     try {
-      const {
-        emitSessionStatusChanged,
-        updateSessionRecord,
-      } = await import('../core/session-tracker.js');
-      const updated = await updateSessionRecord(data.runId, {
-        process_status: 'running',
-        last_status_change: new Date().toISOString(),
+      const result = await performSessionSend({
+        to: target,
+        text: data.message,
+        // Nowhere to route a reply to — this dispatcher is not a session.
+        expectReply: false,
       });
-      emitSessionStatusChanged(
-        updated,
-        { phase: 'IN_PROGRESS' },
-        ['*'],
-        { source: 'subagent-runner', urgency: 'urgent' },
-      );
+      log.subagent.info('run message delivered', {
+        runId: data.runId, sessionId: result.targetSessionId, delivery: result.delivery,
+      });
     } catch (err) {
-      log.subagent.warn('failed to commit resume status', {
+      const message = err instanceof Error ? err.message : String(err);
+      log.subagent.warn('run message failed', { runId: data.runId, error: message });
+      bus.emit(EventNames.SUBAGENT_ERROR, {
         runId: data.runId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+        ...(run ? { agentId: run.agentId, taskId: run.taskId } : {}),
+        error: message,
+      }, ['main-ai'], { source: 'subagent-runner' });
     }
-
-    // Notify UI that the queued message has been picked up
-    bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
-      sessionId: data.runId,
-      count: 1,
-    }, ['*'], { source: 'subagent-runner' });
-
-    await this.acquireSemaphore();
-
-    this.runEmbedded(run, agentDef, {
-      task: data.message,
-      taskId: run.taskId,
-    }, { model, provider, region, maxTokens, maxToolRounds, resume: true }).catch((err) => {
-      log.subagent.error('resume run failed', { runId: data.runId, error: err instanceof Error ? err.message : String(err) });
-    });
   }
 
-  // ── Session record helpers (fire-and-forget, throttled) ──
-
-  private lastActiveFlush = new Map<string, number>();
-  private static readonly LAST_ACTIVE_THROTTLE_MS = 5_000;
-
-  private updateSessionLastActive(runId: string): void {
-    const now = Date.now();
-    const last = this.lastActiveFlush.get(runId) ?? 0;
-    if (now - last < SubagentRunner.LAST_ACTIVE_THROTTLE_MS) return;
-    this.lastActiveFlush.set(runId, now);
-
-    import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
-      updateSessionRecord(runId, { lastActiveAt: new Date().toISOString() }).catch(() => {});
-    }).catch(() => {});
+  private emitStartError(
+    agentId: string,
+    data: { task: string; taskId?: string },
+    error: string,
+  ): void {
+    log.subagent.warn('run rejected', { agentId, error, skipNotify: true });
+    bus.emit(EventNames.SUBAGENT_ERROR, {
+      agentId,
+      error,
+      task: data.task,
+      taskId: data.taskId,
+    }, ['main-ai'], { source: 'subagent-runner' });
   }
 
-  private updateSessionActivity(runId: string, toolName: string): void {
-    this.lastActiveFlush.set(runId, Date.now());
-
-    import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
-      updateSessionRecord(runId, {
-        activity: toolName,
-        lastActiveAt: new Date().toISOString(),
-      }).catch(() => {});
-    }).catch(() => {});
+  private trackRun(run: TrackedRun): void {
+    this.runs.set(run.runId, run);
+    if (this.runs.size <= MAX_TRACKED_RUNS) return;
+    // Insertion order is launch order, so the first keys are the oldest runs.
+    for (const key of this.runs.keys()) {
+      if (this.runs.size <= MAX_TRACKED_RUNS) break;
+      if (key === run.runId) continue;
+      this.runs.delete(key);
+    }
   }
 
-  // ── Semaphore ──
+  // ── Launch slots ──
 
-  private acquireSemaphore(): Promise<void> {
-    if (this.semaphore.active < this.semaphore.max) {
-      this.semaphore.active++;
+  private acquireLaunchSlot(): Promise<void> {
+    if (this.launching < this.maxConcurrent) {
+      this.launching++;
       return Promise.resolve();
     }
     return new Promise((resolve) => {
-      this.semaphore.queue.push(() => {
-        this.semaphore.active++;
+      this.launchQueue.push(() => {
+        this.launching++;
         resolve();
       });
     });
   }
 
-  private releaseSemaphore(): void {
-    this.semaphore.active--;
-    const next = this.semaphore.queue.shift();
+  private releaseLaunchSlot(): void {
+    this.launching--;
+    const next = this.launchQueue.shift();
     if (next) next();
   }
+}
+
+/** The trigger task's project, or undefined when there is no readable task. */
+async function taskProject(taskId: string): Promise<string | undefined> {
+  try {
+    const { getTask } = await import('../core/task-manager.js');
+    const task = await getTask(taskId);
+    return task.project || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The first message the session receives: the caller's extra context, then the
+ *  prompt. The agent's task-scoped context sources need a task id the persona
+ *  builder does not take, so the trigger task is NAMED here and the session
+ *  reads it through the CLI instead. */
+function launchMessage(data: { task: string; taskId?: string; context?: string }): string {
+  const parts: string[] = [];
+  if (data.taskId) {
+    parts.push(`Triggering task: ${data.taskId} (read it with \`walnut tools call task_get '{"id":"${data.taskId}"}'\`).`);
+  }
+  if (data.context?.trim()) parts.push(data.context.trim());
+  parts.push(data.task);
+  return parts.join('\n\n');
 }
 
 // ── Singleton ──

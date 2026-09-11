@@ -158,7 +158,7 @@ describe('Category 6: Server Lifecycle', () => {
       shouldUpdateWorkingMemory,
       trackToolCall,
       resetUpdaterState,
-    } = await import('../../src/agent/working-memory-updater.js');
+    } = await import('../../src/core/memory/working-memory-updater.js');
 
     // With fresh state, 5000 tokens is below initialization threshold
     expect(shouldUpdateWorkingMemory(5000)).toBe(false);

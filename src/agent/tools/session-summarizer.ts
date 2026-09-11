@@ -48,7 +48,7 @@ export async function summarizeSession(
 ): Promise<string> {
   // 1. Resolve model from config
   const config = await getConfig();
-  const agentId = config.agent?.session_summarizer_agent;
+  const agentId: string | undefined = undefined;
   let model: string | undefined;
 
   if (agentId) {
@@ -58,7 +58,7 @@ export async function summarizeSession(
   // main_model is the actual config key (agent.model is a legacy field that is
   // usually unset). Leaving this unresolved recorded usage as model 'unknown',
   // which computeCost prices at the most-expensive fallback tier — 3× overbilled.
-  model = model ?? config.agent?.main_model ?? config.agent?.model;
+  model = model ?? config.agent?.main_model;
 
   // 2. Read session history
   const messages = await readSessionHistory(sessionId, record?.cwd, record?.host, record?.outputFile);

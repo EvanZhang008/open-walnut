@@ -919,12 +919,11 @@ export function ProvidersSection({ config, onSave }: Props) {
     await loadProviders();
   };
 
-  // One radio, one meaning: what Ask Walnut runs on. The engine is written in step
-  // with the provider (Claude Code → its own `claude` session; anything else → the
-  // in-process loop that can call that provider) so the two never disagree.
+  // One radio, one meaning: which provider Walnut calls for the model work it does
+  // itself (titles, summaries, memory upkeep). A chat turn always runs in a `claude`
+  // session, so this radio does not pick an engine.
   const handleSetActive = async (name: string) => {
-    const provider = name === 'claude_cli' ? 'claude-code' : 'walnut-agent';
-    await onSave({ agent: { ...config.agent, main_provider: name, provider } });
+    await onSave({ agent: { ...config.agent, main_provider: name } });
   };
 
   // Save global agent-level settings (main_model, maxTokens)
@@ -955,9 +954,8 @@ export function ProvidersSection({ config, onSave }: Props) {
     await loadProviders();
   };
 
-  // Two ways to run Ask Walnut: Claude Code, or the built-in agent loop ("Walnut
-  // custom agent") on a provider picked underneath. `mode` is derived from the
-  // provider, never stored: claude_cli is Claude Code, anything else is custom.
+  // Presentation only: Claude Code is its own card, every other provider sits in
+  // the group under it. `mode` is derived from the provider, never stored.
   const mode: 'claude' | 'custom' | undefined =
     activeProvider === undefined ? undefined : activeProvider === 'claude_cli' ? 'claude' : 'custom';
   const claudeDef = ALL_PROVIDERS.find(p => p.name === 'claude_cli')!;
@@ -994,7 +992,7 @@ export function ProvidersSection({ config, onSave }: Props) {
     <SectionCard
       id="providers"
       title="Ask Walnut (Walnut Agent) Provider"
-      description="Coding sessions always use your own Claude Code."
+      description="Chat and coding sessions always use your own Claude Code. This picks the provider for the model calls Walnut makes itself: titles, summaries, and memory upkeep."
       showSave={false}
     >
       {loading ? (
@@ -1004,7 +1002,7 @@ export function ProvidersSection({ config, onSave }: Props) {
           {/* 1. Claude Code */}
           <ProviderCard key="claude_cli" {...cardProps(claudeDef, handleSetActive)} />
 
-          {/* 2. Walnut custom agent → a provider underneath */}
+          {/* 2. Any other provider, with the one it runs on underneath */}
           <div className={`provider-card${mode === 'custom' ? ' provider-card-active' : ''}`} data-testid="provider-mode-custom">
             <div className="provider-card-header" onClick={handleSelectCustomMode}>
               <div className="provider-card-left">
@@ -1012,13 +1010,13 @@ export function ProvidersSection({ config, onSave }: Props) {
                   className={`provider-radio${mode === 'custom' ? ' provider-radio-selected' : ''}`}
                   onClick={(e) => { e.stopPropagation(); handleSelectCustomMode(); }}
                 />
-                <span className="provider-card-label">Walnut custom agent</span>
+                <span className="provider-card-label">Another provider</span>
               </div>
               <div className="provider-card-right">
                 <span className="text-sm text-muted">
                   {mode === 'custom'
                     ? (customDefs.find(p => p.name === activeProvider)?.label ?? activeProvider)
-                    : 'Built-in agent loop on a provider below'}
+                    : 'Pick one below'}
                 </span>
               </div>
             </div>

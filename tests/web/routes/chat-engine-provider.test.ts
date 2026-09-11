@@ -1,22 +1,18 @@
 /**
- * Chat engine selection (`config.agent.provider`) — which engine answers a turn.
+ * How a chat turn is answered: there is exactly ONE engine, the conversation's
+ * lane session.
  *
- * The flag is a FORK in the chat RPC, so the two things worth asserting are that
- * each branch runs and that the other one does NOT:
- *   - default / 'walnut-agent' → the in-process loop runs, no lane is touched
- *   - 'claude-code'            → the turn goes to the conversation's lane session,
- *                                is AWAITED, and the lane's answer is persisted as
- *                                an ordinary assistant message in THIS chat (the
- *                                lane session is an implementation detail — the
- *                                chat panel is the only surface). The loop is
- *                                never called.
- * Plus the invariant that must hold on BOTH branches: the user's message is
- * persisted before the engine runs (it survives a refresh either way).
+ * A turn goes to the lane, is AWAITED, and the lane's answer is persisted as an
+ * ordinary assistant message in THIS chat (the lane session is an implementation
+ * detail — the chat panel is the only surface). No config value forks that: the
+ * turn rides the lane whichever AI provider Settings names. Plus the invariant
+ * around it: the user's message is persisted before the lane runs, so it survives
+ * a refresh.
  *
  * What's real: Express server, WS RPC, chat handler, session records, lane module.
- * What's mocked: constants.js (temp dir), the agent loop (spy), and the
- * 'session-runner' bus subscriber (a fake that records SESSION_START, answers with
- * a synthetic session:result, and NEVER spawns a `claude`).
+ * What's mocked: constants.js (temp dir) and the 'session-runner' bus subscriber
+ * (a fake that records SESSION_START, answers with a synthetic session:result, and
+ * NEVER spawns a `claude`).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -26,22 +22,6 @@ import yaml from 'js-yaml'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants())
-
-const runAgentLoop = vi.fn(async (userContent: string | unknown[], history: unknown[]) => ({
-  messages: [
-    ...(history as Array<{ role: string; content: unknown }>),
-    { role: 'user', content: typeof userContent === 'string' ? [{ type: 'text', text: userContent }] : userContent },
-    { role: 'assistant', content: [{ type: 'text', text: 'mock response' }] },
-  ],
-  newMessages: [
-    { role: 'user', content: typeof userContent === 'string' ? [{ type: 'text', text: userContent }] : userContent },
-    { role: 'assistant', content: [{ type: 'text', text: 'mock response' }] },
-  ],
-  response: 'mock response',
-  aborted: false,
-}))
-
-vi.mock('../../../src/agent/loop.js', () => ({ runAgentLoop }))
 
 // Turn-boundary memory bookkeeping: PARTIAL mock — the real implementations still
 // run (so nothing about memory behavior diverges here), the two entry points are
@@ -199,7 +179,6 @@ async function boot(agent: Record<string, unknown>): Promise<void> {
 }
 
 beforeEach(() => {
-  runAgentLoop.mockClear()
   getBoundedMemory.mockClear()
   beginMemoryPromptTurn.mockClear()
   started = []
@@ -218,87 +197,28 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-describe("explicit 'walnut-agent' → in-process loop", () => {
-  it('runs runAgentLoop and never creates a lane session', async () => {
-    await boot({ provider: 'walnut-agent' })
-    const ws = await connectWs()
-    try {
-      const res = await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
-      expect(res.ok).toBe(true)
-      // No lane id in the reply — unchanged contract for every existing client.
-      expect(res.payload).toBeUndefined()
-      expect(runAgentLoop).toHaveBeenCalledTimes(1)
-      expect(started).toHaveLength(0)
-      // The bookkeeping belongs to whichever engine ran the turn. On this branch
-      // that is loop.ts (mocked here) — the chat route must NOT also do it, or a
-      // real in-process turn would pin the snapshot twice per turn.
-      expect(beginMemoryPromptTurn).not.toHaveBeenCalled()
-
-      const { getSessionByLane } = await import('../../../src/core/session-tracker.js')
-      const { getActiveConversationId } = await import('../../../src/core/conversations.js')
-      const conv = await getActiveConversationId('general')
-      expect(await getSessionByLane(`chat:general:${conv}`)).toBeNull()
-    } finally {
-      ws.close()
-    }
-  })
-})
-
-// With no explicit engine the engine follows the AI provider (Settings → AI
-// Provider): Claude Code → the lane, anything else → the in-process loop that
-// can call it. The unknown-string case still lands on the LANE engine as of
-// 2026-08-28: the 2026-08-28 06:03 incident showed that "degrade to the loop" on
-// a CLI-only install degrades to an engine that answers "Could not load
-// credentials from any providers" instead of answering at all.
-describe('no explicit engine choice → the engine follows the AI provider', () => {
-  it('Claude Code as the provider rides the lane, not the in-process loop', async () => {
-    // Pinned explicitly so the case does not depend on whether this runner has a
-    // `claude` binary (that is what the default rule looks at when nothing is set).
-    await boot({ main_provider: 'claude_cli' })
-    const ws = await connectWs()
-    try {
-      const res = await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
-      expect(res.ok).toBe(true)
-      expect(runAgentLoop).not.toHaveBeenCalled()
-      expect(started).toHaveLength(1)
-    } finally {
-      ws.close()
-    }
-  })
-
-  it('another provider picked in Settings runs Ask Walnut in the in-process loop on it', async () => {
-    // What "AI Provider = Bedrock" must mean: Ask Walnut answers from Bedrock,
-    // not from a claude session that ignores the choice.
+describe('the config cannot fork the engine', () => {
+  it('a non-CLI AI provider in Settings still rides the lane', async () => {
+    // "AI Provider" picks which model answers INSIDE the lane session; it is not
+    // an engine choice. A config that once selected an in-process loop must now
+    // land on the lane like every other config, never on "no engine".
     await boot({ main_provider: 'bedrock' })
     const ws = await connectWs()
     try {
       const res = await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
       expect(res.ok).toBe(true)
-      expect(runAgentLoop).toHaveBeenCalledTimes(1)
-      expect(started).toHaveLength(0)
-    } finally {
-      ws.close()
-    }
-  })
-
-  it('an unknown provider string degrades to the lane engine too', async () => {
-    // A hand-edited config must never leave the Personal AI with "no engine" —
-    // and "an engine that cannot reach credentials" is the same outage wearing a
-    // different message. resolveAgentEngineProvider logs the bad value instead.
-    await boot({ provider: 'wat' })
-    const ws = await connectWs()
-    try {
-      await sendRpc(ws, 'chat', { message: 'hi' })
-      expect(runAgentLoop).not.toHaveBeenCalled()
       expect(started).toHaveLength(1)
+      const { getActiveConversationId } = await import('../../../src/core/conversations.js')
+      const conv = await getActiveConversationId('general')
+      expect(started[0].lane).toBe(`chat:general:${conv}`)
     } finally {
       ws.close()
     }
   })
 })
 
-describe("agent.provider = 'claude-code' → lane session", () => {
-  it('answers laneSessionId, spawns the lane, and does NOT run the loop', async () => {
+describe('the lane session answers the turn', () => {
+  it('answers laneSessionId and spawns the lane', async () => {
     await boot({ provider: 'claude-code' })
     const ws = await connectWs()
     try {
@@ -306,7 +226,6 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(res.ok).toBe(true)
       const { laneSessionId } = (res.payload ?? {}) as { laneSessionId?: string }
       expect(laneSessionId).toMatch(/^[0-9a-f-]{36}$/)
-      expect(runAgentLoop).not.toHaveBeenCalled()
 
       // One spawn, carrying the Personal AI profile + the conversation's lane.
       expect(started).toHaveLength(1)
@@ -336,7 +255,6 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       const secondId = (second.payload as { laneSessionId?: string }).laneSessionId
       expect(secondId).toBe(firstId)
       expect(started).toHaveLength(1)
-      expect(runAgentLoop).not.toHaveBeenCalled()
 
       // The follow-up was delivered through the session queue instead of a spawn
       // ('one' rode the spawn itself; the queue is drained by the fake runner, so
@@ -347,12 +265,11 @@ describe("agent.provider = 'claude-code' → lane session", () => {
     }
   })
 
-  it('does the turn-boundary memory bookkeeping the in-process loop would have done', async () => {
-    // The lane path skips agent/loop.ts entirely, and with it the two things every
-    // Personal AI turn owes memory: clearing the consolidation breaker, and
-    // re-pinning the frozen memory-prompt snapshot for this conversation. Without
-    // them a single failed consolidation wedges the breaker for the process's life
-    // and the prompt scope never advances.
+  it('does the turn-boundary memory bookkeeping', async () => {
+    // Two things every Personal AI turn owes memory: clearing the consolidation
+    // breaker, and re-pinning the frozen memory-prompt snapshot for this
+    // conversation. Without them a single failed consolidation wedges the breaker
+    // for the process's life and the prompt scope never advances.
     await boot({ provider: 'claude-code' })
     const ws = await connectWs()
     try {
@@ -383,14 +300,14 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       const { getActiveConversationId } = await import('../../../src/core/conversations.js')
       const conv = await getActiveConversationId('general')
 
-      // Pre-engine persistence must be identical on both branches.
+      // The user's message is persisted before the lane runs.
       const modelMsgs = await chatHistory.getApiMessages('general', conv)
       expect(JSON.stringify(modelMsgs)).toContain('remember this')
 
       // The reply itself lands in THIS chat — no session-ref breadcrumb, no
       // "go look at a session": the lane is an implementation detail.
       // An ORDINARY assistant entry (block content, not a notification) carries
-      // the answer — the same shape the in-process loop persists.
+      // the answer.
       const page = await chatHistory.getDisplayEntries(1, 50, 'general', conv)
       const answer = page.messages.find((e) => e.role === 'assistant'
         && e.notification !== true
@@ -457,81 +374,5 @@ describe("agent.provider = 'claude-code' → lane session", () => {
     const body2 = await res2.json() as { sessionId: string; created: boolean }
     expect(body2.sessionId).toBe(body1.sessionId)
     expect(body2.created).toBe(false)
-  })
-
-  it('lane-session endpoint answers 409 when the engine flag is off', async () => {
-    // Explicitly off: an unset config is the LANE engine now, so "off" has to be
-    // stated. Boot with the in-process loop chosen on purpose.
-    await boot({ provider: 'walnut-agent' })
-    const { getActiveConversationId } = await import('../../../src/core/conversations.js')
-    const conv = await getActiveConversationId('general')
-    const res = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
-    expect(res.status).toBe(409)
-    expect(started).toHaveLength(0)
-  })
-
-  it('lane-engine swap: EMPTY conversation re-mints the lane on codex, then back on claude', async () => {
-    await boot({ provider: 'claude-code' })
-    const { getActiveConversationId } = await import('../../../src/core/conversations.js')
-    const conv = await getActiveConversationId('general')
-
-    // Mint the default (claude) lane — the eager mount the UI performs.
-    const res1 = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
-    const body1 = await res1.json() as { sessionId: string; engine: string }
-    expect(body1.engine).toBe('claude')
-    drainQueue(body1.sessionId)
-
-    // Swap to codex while empty → NEW session id, engine codex, old lane archived.
-    const swap = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-engine`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ engine: 'codex' }),
-    })
-    expect(swap.status).toBe(200)
-    const swapBody = await swap.json() as { sessionId: string; engine: string }
-    expect(swapBody.engine).toBe('codex')
-    expect(swapBody.sessionId).not.toBe(body1.sessionId)
-    const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js')
-    const oldRecord = await getSessionByClaudeId(body1.sessionId)
-    expect(oldRecord?.archived).toBe(true)
-    expect(oldRecord?.archive_reason).toBe('engine_switched')
-    // The codex spawn rode SESSION_START with engine + lane (no preassigned id).
-    const codexStart = started.find((s) => s.engine === 'codex')
-    expect(codexStart?.lane).toBe(`chat:general:${conv}`)
-
-    // Idempotent: swapping to the CURRENT engine returns the same session.
-    const again = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-engine`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ engine: 'codex' }),
-    })
-    expect(((await again.json()) as { sessionId: string }).sessionId).toBe(swapBody.sessionId)
-
-    // And back to claude — still empty, still legal.
-    const back = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-engine`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ engine: 'claude' }),
-    })
-    expect(back.status).toBe(200)
-    const backBody = await back.json() as { sessionId: string; engine: string }
-    expect(backBody.engine).toBe('claude')
-    expect(backBody.sessionId).not.toBe(swapBody.sessionId)
-    drainQueue(backBody.sessionId)
-  })
-
-  it('lane-engine swap: a conversation WITH messages answers 409 and keeps its session', async () => {
-    await boot({ provider: 'claude-code' })
-    const { getActiveConversationId, touchLaneConversation } = await import('../../../src/core/conversations.js')
-    const conv = await getActiveConversationId('general')
-
-    const res1 = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
-    const body1 = await res1.json() as { sessionId: string }
-    drainQueue(body1.sessionId)
-    // A lane send bumps ConversationMeta.messageCount — the swap guard's signal.
-    await touchLaneConversation('general', conv, 'hello there')
-
-    const swap = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-engine`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ engine: 'codex' }),
-    })
-    expect(swap.status).toBe(409)
-    // The lane is untouched: same session, not archived.
-    const res2 = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
-    const body2 = await res2.json() as { sessionId: string }
-    expect(body2.sessionId).toBe(body1.sessionId)
   })
 })

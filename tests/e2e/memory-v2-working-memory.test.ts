@@ -37,7 +37,7 @@ import {
   setCompacting,
   executeWorkingMemoryUpdate,
   buildWorkingMemoryUpdatePrompt,
-} from '../../src/agent/working-memory-updater.js';
+} from '../../src/core/memory/working-memory-updater.js';
 
 let tmpDir: string;
 
@@ -247,9 +247,11 @@ describe('Update Trigger Thresholds', () => {
     trackToolCall();
     expect(shouldUpdateWorkingMemory(10000)).toBe(true);
 
-    // Simulate extraction
-    const mockForkedTurn = vi.fn(async () => {});
-    await executeWorkingMemoryUpdate(mockForkedTurn, 10000);
+    // Simulate extraction. The runner answers with a well-formed whole file —
+    // a malformed answer is refused, and a refusal deliberately does NOT advance
+    // the cadence, so the thresholds below would never move.
+    const mockRunner = vi.fn(async () => WORKING_MEMORY_TEMPLATE);
+    await executeWorkingMemoryUpdate(mockRunner, 10000);
 
     // Step 7: only 5K growth — need 5K more tokens
     expect(shouldUpdateWorkingMemory(15000)).toBe(false);
@@ -312,8 +314,8 @@ describe('Update Prompt Construction', () => {
     // References the working memory file path
     expect(prompt).toContain(WORKING_MEMORY_FILE);
 
-    // Contains instructions about using file_edit
-    expect(prompt).toContain('file_edit');
+    // Asks for the whole file back: the update is a one-shot with no tools.
+    expect(prompt).toContain('COMPLETE updated file');
   });
 
   it('2.10b: prompt without oversized sections has no WARNING', () => {

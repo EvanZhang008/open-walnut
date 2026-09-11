@@ -1,13 +1,13 @@
 /**
  * Which provider answers when config names none.
  *
- * Every background model call (titles, summaries, subagents, the in-process
- * loop) used to fall back to 'bedrock', so a machine with nothing but Claude Code
- * on it looked "unconfigured" and asked for AWS keys it never needed. This is the
- * ONE provider choice (Settings → AI Provider): what Ask Walnut runs on. The chat
- * engine follows it (config-manager's resolveAgentEngineProvider), and so do the
- * helpers: if `claude` is installed, the `claude_cli` provider drives them with
- * the CLI's own login, whatever that is.
+ * Every background model call (titles, summaries, memory upkeep) used to fall back
+ * to 'bedrock', so a machine with nothing but Claude Code on it looked
+ * "unconfigured" and asked for AWS keys it never needed. This is the ONE provider
+ * choice (Settings → AI Provider) and it governs those calls: if `claude` is
+ * installed, the `claude_cli` provider drives them with the CLI's own login,
+ * whatever that is. A chat turn does not consult it at all — that runs in a
+ * `claude` session either way.
  *
  * Precedence, first match wins:
  *   1. `agent.main_provider` set explicitly: the user's word.

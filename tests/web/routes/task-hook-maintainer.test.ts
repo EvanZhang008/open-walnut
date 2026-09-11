@@ -2,11 +2,11 @@
  * E2E: task lifecycle → overview maintainer wiring.
  *
  * What's real: Express server, REST task creation/completion, event bus,
- * overview-maintainer gating, the maintainer TOOL SET (wrapped skill_manage
- * writing real files under the temp WALNUT_HOME).
- * What's mocked: constants.js (temp dir) and runAgentLoop — the mock plays the
- * model's part by invoking the maintainer's own tools (log_append), so the
- * full REST → bus → hook → tool → file path is exercised without the network.
+ * overview-maintainer gating, and the maintainer's own writes (real files under
+ * the temp WALNUT_HOME).
+ * What's mocked: constants.js (temp dir) and the model call — the stub plays the
+ * model's part by answering with the JSON object the maintainer asks for, so the
+ * full REST → bus → hook → write path is exercised without the network.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
@@ -16,39 +16,37 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants())
 
-interface LoopCall {
-  userMessage: string
-  options?: {
-    system?: string
-    source?: string
-    tools?: Array<{ name: string; execute: (p: Record<string, unknown>) => Promise<unknown> }>
-  }
-}
-const loopCalls: LoopCall[] = []
+/**
+ * Every prompt the MAINTAINER sent, in order. Filtered by its system prompt:
+ * a live server has other one-shot model callers (project summaries, titling,
+ * auto-organize) and an unfiltered spy counts those as maintainer runs.
+ */
+const prompts: string[] = []
+const MAINTAINER_MARKER = 'overview maintainer'
 
-vi.mock('../../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async (
-    userMessage: string | unknown[],
-    _history: unknown[],
-    _callbacks?: unknown,
-    options?: LoopCall['options'],
-  ) => {
-    loopCalls.push({ userMessage: String(userMessage), options })
-    // Play the model: the maintainer's ALWAYS action is one log_append.
-    if (options?.source === 'task-hook') {
-      const skillManage = options.tools?.find((t) => t.name === 'skill_manage')
-      await skillManage?.execute({ action: 'log_append', content: `Hook entry for: ${String(userMessage).slice(0, 60)}` })
-    }
-    return {
-      messages: [], newMessages: [], response: 'Appended one entry.', aborted: false,
-    }
-  }),
+type SendOpts = { system?: string; tools?: unknown }
+/** The maintainer's own calls, in order. */
+function maintainerCalls(): SendOpts[] {
+  return sendMessage.mock.calls
+    .map((c) => c[0] as SendOpts)
+    .filter((o) => String(o.system ?? '').includes(MAINTAINER_MARKER))
+}
+
+const { sendMessage } = vi.hoisted(() => ({
+  sendMessage: vi.fn(),
+}))
+
+// Only the send is stubbed: everything else in the model module (context-window
+// helpers, DEFAULT_MODEL) is used by unrelated server code in this same process.
+vi.mock('../../../src/model/model.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/model/model.js')>()),
+  sendMessage,
 }))
 
 import type { Server as HttpServer } from 'node:http'
 import { WALNUT_HOME, GLOBAL_SKILLS_DIR } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
-import { resetMaintainerState } from '../../../src/agent/overview-maintainer.js'
+import { resetMaintainerState } from '../../../src/core/overview-maintainer.js'
 import { skillHistoryDir } from '../../../src/core/overview-log.js'
 import { clearSkillsCache } from '../../../src/core/skill-loader.js'
 
@@ -85,11 +83,25 @@ async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
-const hookCalls = () => loopCalls.filter((c) => c.options?.source === 'task-hook')
-
 describe('task lifecycle → overview maintainer (full server)', () => {
   beforeEach(async () => {
-    loopCalls.length = 0
+    prompts.length = 0
+    sendMessage.mockReset()
+    sendMessage.mockImplementation(async (opts: { system?: string; messages: Array<{ content: unknown }> }) => {
+      const userMessage = String(opts.messages[0]?.content ?? '')
+      const isMaintainer = String(opts.system ?? '').includes(MAINTAINER_MARKER)
+      if (isMaintainer) prompts.push(userMessage)
+      return {
+        content: [{
+          type: 'text',
+          // Anything that is not the maintainer gets an answer it will reject
+          // and drop; only the maintainer's own call gets a usable one.
+          text: isMaintainer ? JSON.stringify({ log: `Hook entry for: ${userMessage.slice(0, 60)}` }) : '',
+        }],
+        stopReason: 'end_turn',
+        usage: { input_tokens: 100, output_tokens: 20 },
+      }
+    })
     resetMaintainerState()
     clearSkillsCache()
     await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -113,15 +125,15 @@ describe('task lifecycle → overview maintainer (full server)', () => {
     })
     expect(res.status).toBe(201)
 
-    await waitFor(() => hookCalls().length === 1)
-    const call = hookCalls()[0]
-    expect(call.userMessage).toContain('[Task created]')
-    expect(call.userMessage).toContain('Wire the task hook')
-    expect(call.options?.system).toContain('overview maintainer')
-    // Restricted tool set: wrapped skill_manage + read-only skill_view, nothing else.
-    expect(call.options?.tools?.map((t) => t.name)).toEqual(['skill_manage', 'skill_view'])
+    await waitFor(() => prompts.length === 1)
+    expect(prompts[0]).toContain('[Task created]')
+    expect(prompts[0]).toContain('Wire the task hook')
+    // One JSON answer, no tools: the maintainer can only write through this module.
+    expect(prompts[0]).toContain('"log"')
+    expect(maintainerCalls()).toHaveLength(1)
+    expect(maintainerCalls()[0].tools).toBeUndefined()
 
-    // The mock model's log_append landed in the real file.
+    // The stub model's answer landed in the real file.
     const logFile = path.join(skillHistoryDir(SKILL_CAT, PROJECT), 'log.md')
     await waitFor(() => fs.existsSync(logFile))
     const raw = fs.readFileSync(logFile, 'utf-8')
@@ -136,27 +148,27 @@ describe('task lifecycle → overview maintainer (full server)', () => {
     })
     expect(res.status).toBe(201)
     await new Promise((r) => setTimeout(r, 400))
-    expect(hookCalls()).toHaveLength(0)
+    expect(prompts).toHaveLength(0)
   })
 
   it('does not fire for an Inbox task (no project)', async () => {
     const res = await post('/api/tasks', { title: 'Loose capture' })
     expect(res.status).toBe(201)
     await new Promise((r) => setTimeout(r, 400))
-    expect(hookCalls()).toHaveLength(0)
+    expect(prompts).toHaveLength(0)
   })
 
   it('completing a task fires the maintainer with [Task completed]', async () => {
     const createRes = await post('/api/tasks', { title: 'Finish me', project: PROJECT })
     expect(createRes.status).toBe(201)
     const { task } = await createRes.json() as { task: { id: string } }
-    await waitFor(() => hookCalls().length === 1)
+    await waitFor(() => prompts.length === 1)
 
     const completeRes = await post(`/api/tasks/${task.id}/complete`, {})
     expect(completeRes.status).toBe(200)
 
-    await waitFor(() => hookCalls().length === 2)
-    expect(hookCalls()[1].userMessage).toContain('[Task completed]')
-    expect(hookCalls()[1].userMessage).toContain('Finish me')
+    await waitFor(() => prompts.length === 2)
+    expect(prompts[1]).toContain('[Task completed]')
+    expect(prompts[1]).toContain('Finish me')
   })
 })

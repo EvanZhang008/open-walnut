@@ -1,26 +1,24 @@
 /**
- * Chat route — bridges WebSocket RPC to the agent loop.
+ * Chat route — bridges WebSocket RPC to the conversation's Personal AI lane.
  *
  * Server is the source of truth for conversation history.
  * Client sends only { message }, server loads history from ChatHistoryManager,
- * runs the agent loop, and persists the new turn to disk.
+ * delivers the turn into the lane session, and persists the new turn to disk.
  */
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { WebSocket } from 'ws'
 import type { MessageParam } from '../../agent/model.js'
 import type { DisplayMessageBlock } from '../../core/types.js'
 import type { CompactionResult } from '../../core/chat-history.js'
-import { MEMORY_FLUSH_MESSAGE } from '../../core/chat-history.js'
 import { registerMethod, broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { usageTracker } from '../../core/usage/index.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { getActiveConversationId } from '../../core/conversations.js'
 import { drainPendingCronNotifications } from '../server.js'
-import { getTask, appendConversationLog } from '../../core/task-manager.js'
+import { getTask } from '../../core/task-manager.js'
 import { getProjectMemory } from '../../core/project-memory.js'
 import { resolveProjectSkillDir } from '../../core/overview-log.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
@@ -29,13 +27,13 @@ import type { ImagePayload, ImageRef } from './images.js'
 import { truncateToTokenBudget } from '../../utils/token-truncate.js'
 import { log } from '../../logging/index.js'
 import { validateAgentId, validateConversationId, GLOBAL_SKILLS_DIR } from '../../constants.js'
-import { enqueueAgentTurn, recordLastTurnTokens, getLastTurnTokens } from '../agent-turn-queue.js'
-import { triggerBackgroundCompaction } from '../background-compaction.js'
+import { enqueueAgentTurn, getLastTurnTokens } from '../agent-turn-queue.js'
 import {
   shouldUpdateWorkingMemory,
   executeWorkingMemoryUpdate,
+  runWorkingMemoryUpdate,
   trackToolCall as trackWmToolCall,
-} from '../../agent/working-memory-updater.js'
+} from '../../core/memory/working-memory-updater.js'
 import {
   hasPendingQuestion,
   submitTextAnswer,
@@ -44,7 +42,7 @@ import {
 } from '../../core/agent-question.js'
 
 /**
- * Track usage for compaction-related LLM calls (both summarizer and memory flusher).
+ * Track usage for the compaction summarizer.
  */
 function trackCompactionUsage(usage: { model?: string; input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }): void {
   try {
@@ -59,46 +57,35 @@ function trackCompactionUsage(usage: { model?: string; input_tokens?: number; ou
   } catch { /* non-critical */ }
 }
 
-/**
- * The forked turn that rewrites working memory. Module-level because BOTH engines
- * trigger it — the in-process loop off its token breakdown, the Personal AI lane off
- * the lane turn — and they must fork identically (same tool filter, same system,
- * same source tag, so usage attribution and the tool allowlist can't drift).
- */
-async function runWmForkedTurn(prompt: string): Promise<void> {
-  const { runAgentLoop } = await import('../../agent/loop.js')
-  const { filesTools } = await import('../../agent/tools/files-tools.js')
-  // Restrict to file_edit only (not file_write) — the updater should EDIT sections
-  // within the existing template, never overwrite the entire file (would destroy structure).
-  const editTool = filesTools.find(t => t.name === 'file_edit')
-  const allowedTools = editTool ? [editTool] : filesTools
-  // Empty history is intentional: the update prompt contains the current working memory
-  // content inline. Full conversation context comes from the prompt cache prefix.
-  // Passing history would double token cost and defeat the lightweight extraction purpose.
-  await runAgentLoop(prompt, [], {
-    onTextDelta: () => {},
-  }, {
-    system: 'You are a working memory updater. Your only job is to update the working memory notes file using file_edit. Do not do anything else.',
-    tools: allowedTools,
-    source: 'working-memory-updater',
-    maxToolRounds: 5,
-  })
+/** Concatenate the text blocks of a one-shot model answer. */
+function answerText(content: Array<{ type: string; text?: string }> | undefined): string {
+  return (content ?? [])
+    .map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
+    .join('')
 }
 
 /**
- * Create summarizer and memoryFlusher callbacks for compaction.
+ * Create the summarizer callback for compaction.
  * Shared by the WebSocket chat handler and the REST /compact endpoint.
  */
 export async function createCompactionCallbacks(options?: { trackUsage?: boolean }): Promise<{
   summarizer: (instruction: string, history: MessageParam[]) => Promise<string>
-  memoryFlusher: (messages: MessageParam[]) => Promise<void>
 }> {
-  const { runAgentLoop } = await import('../../agent/loop.js')
-  const onUsage = options?.trackUsage ? trackCompactionUsage : undefined
+  const { sendMessage } = await import('../../agent/model.js')
+  // The usage row's model label: a one-shot answer does not carry one (only the
+  // agent loop stamped it), so read the configured main model once here rather
+  // than filing every compaction call under 'unknown'.
+  let usageModel: string | undefined
+  if (options?.trackUsage) {
+    try {
+      const { getConfig } = await import('../../core/config-manager.js')
+      usageModel = (await getConfig()).agent?.main_model
+    } catch { /* label only — never fail compaction over it */ }
+  }
 
-  // Summarizer: receives full message history as MessageParam[] so the Bedrock
-  // cache prefix (system + tools + messages) matches the main chat — maximizing
-  // cache-read hits instead of paying cache-write for serialized text.
+  // Summarizer: ONE call, no tools. It receives the conversation as real
+  // MessageParam[] history (not serialized text) so the provider sees the same
+  // message prefix the chat does.
   //
   // Reference max_tokens for compaction summaries:
   // - Claude Code CLI: 20,000 (hardcoded in binary, thinking disabled)
@@ -106,28 +93,18 @@ export async function createCompactionCallbacks(options?: { trackUsage?: boolean
   //   defaults to 16,384 from SDK but moltbot overrides the floor to 20,000 via
   //   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR in pi-settings.ts)
   const summarizer = async (instruction: string, history: MessageParam[]) => {
-    const result = await runAgentLoop(instruction, history, {
-      onTextDelta: () => {},
-      ...(onUsage && { onUsage }),
-    }, { source: 'compaction-summarizer', modelConfig: { maxTokens: 20_000 } })
-    return result.response
+    const result = await sendMessage({
+      system: 'You summarize conversations into a structured checkpoint. Follow the instruction exactly and answer with the summary only.',
+      messages: [...history, { role: 'user', content: instruction }],
+      config: { maxTokens: 20_000 },
+    })
+    if (options?.trackUsage && result.usage) {
+      trackCompactionUsage({ ...result.usage, model: result.usage.model ?? usageModel })
+    }
+    return answerText(result.content as Array<{ type: string; text?: string }>)
   }
 
-  // Memory flusher: uses the DEFAULT full tool set (no custom tools override).
-  // Previously this used a slim 2-tool set (memory + search only), which saved ~6K
-  // tokens of tool schemas BUT broke the Bedrock prompt cache prefix. The main chat's
-  // cached prefix is [system + 39 tools + messages]. When the flusher changed to 2 tools,
-  // the entire 140K of messages became uncached (cache-write instead of cache-read),
-  // making the first round ~5x slower. Keeping the full tool set preserves cache reuse.
-  // The MEMORY_FLUSH_MESSAGE already instructs the agent to only use `memory`.
-  const memoryFlusher = async (messages: MessageParam[]) => {
-    await runAgentLoop(MEMORY_FLUSH_MESSAGE, messages, {
-      onTextDelta: () => {},
-      ...(onUsage && { onUsage }),
-    }, { source: 'compaction-flush' })
-  }
-
-  return { summarizer, memoryFlusher }
+  return { summarizer }
 }
 
 interface TaskContext {
@@ -434,25 +411,6 @@ export async function enrichTaskContext(ctx: TaskContext, conversationId?: strin
 }
 
 /**
- * Fire-and-forget helper: append a conversation log entry to a task after a chat turn.
- * Preserves full user/AI messages — never truncate user input or AI responses.
- * appendConversationLog auto-prepends the timestamp.
- */
-async function autoAppendConversationLog(taskId: string, userMessage: string, aiResponse: string, toolNames?: string[]): Promise<void> {
-  let aiContent: string
-  if (aiResponse) {
-    aiContent = aiResponse
-  } else if (toolNames && toolNames.length > 0) {
-    aiContent = `[Used tools: ${toolNames.join(', ')}]`
-  } else {
-    aiContent = '[No response]'
-  }
-
-  const entry = `**User:** ${userMessage}\n**AI:** ${aiContent}`
-  await appendConversationLog(taskId, entry)
-}
-
-/**
  * Build a divider string from the compaction result.
  * Shows the structured summary produced by step 2 (summarization).
  * Memory persistence is handled by step 1 (memory flush) — no need to show it here.
@@ -532,31 +490,6 @@ export async function resolveEntityRefs(text: string): Promise<string> {
   })
 
   return result
-}
-
-/**
- * Resolve entity refs in API messages: only processes assistant text blocks.
- * Returns a new array with resolved text; original messages are not mutated.
- */
-async function resolveMessagesEntityRefs(msgs: MessageParam[]): Promise<MessageParam[]> {
-  const resolved: MessageParam[] = []
-  for (const msg of msgs) {
-    const { role, content } = msg as { role: string; content: unknown }
-    if (role === 'assistant' && Array.isArray(content)) {
-      const newContent = await Promise.all(
-        (content as Array<{ type: string; text?: string; [k: string]: unknown }>).map(async (block) => {
-          if (block.type === 'text' && block.text) {
-            return { ...block, text: await resolveEntityRefs(block.text) }
-          }
-          return block
-        }),
-      )
-      resolved.push({ role, content: newContent } as MessageParam)
-    } else {
-      resolved.push(msg)
-    }
-  }
-  return resolved
 }
 
 const TOOL_INPUT_MAX = 500;
@@ -655,36 +588,20 @@ function replaceImagesWithPaths(
   })
 }
 
-/** Per-client, per-agent abort controllers — keyed by `{wsId}:{agentId}`. */
-const activeAbortControllers = new Map<string, AbortController>()
-/** Auto-incrementing ID for WebSocket clients (used in abort controller keys). */
-let nextWsId = 1
-const wsIdMap = new WeakMap<WebSocket, number>()
-function getWsId(ws: WebSocket): number {
-  let id = wsIdMap.get(ws)
-  if (id === undefined) { id = nextWsId++; wsIdMap.set(ws, id) }
-  return id
-}
-function abortKey(ws: WebSocket, agentId: string): string {
-  return `${getWsId(ws)}:${agentId}`
-}
-
 /**
  * Register the "chat" and "chat:stop" RPC methods on the WebSocket handler.
  * Must be called after the WS handler is attached to the server.
  */
 export function registerChatRpc(): void {
-  // Register stop method — aborts the calling client's active agent turn
-  registerMethod('chat:stop', async (payload: unknown, client: WebSocket) => {
+  // Register stop method — interrupts the agent's turn
+  registerMethod('chat:stop', async (payload: unknown) => {
     const { agentId: stopAgentId, conversationId: stopConvId } = (payload ?? {}) as { agentId?: string; conversationId?: string }
     const effectiveAgentId = stopAgentId ? validateAgentId(stopAgentId) : 'general'
-    activeAbortControllers.get(abortKey(client, effectiveAgentId))?.abort()
-    cancelQuestion(effectiveAgentId) // Also cancel any pending user_ask tool
-    // Lane engine: the turn is running in a `claude` CLI, so the AbortController
-    // above stops nothing. Interrupt the lane's session through the canonical
-    // path. Unconditional (no engine-flag read): the lookup is one indexed
-    // sqlite read and resolves null on the in-process engine, which never has a
-    // lane record — cheaper than re-reading config on every stop.
+    cancelQuestion(effectiveAgentId) // Also cancel any pending structured question
+    // The turn runs in a `claude` CLI, which no AbortController can reach —
+    // interrupt the lane's session through the canonical bus path. Unconditional:
+    // the lookup is one indexed sqlite read and resolves null for a conversation
+    // that has no lane record yet.
     try {
       const conversationId = stopConvId
         ? validateConversationId(stopConvId)
@@ -692,8 +609,8 @@ export function registerChatRpc(): void {
       const { interruptLaneForConversation } = await import('../../core/sessions/personal-ai-lane.js')
       await interruptLaneForConversation(effectiveAgentId, conversationId)
     } catch (err) {
-      // A failed lane stop must never surface as an RPC error — the in-process
-      // abort above already happened, and the client's stop is done either way.
+      // A failed lane stop must never surface as an RPC error — the client's stop
+      // is done either way.
       log.web.warn('chat:stop lane interrupt failed', {
         agentId: effectiveAgentId, error: err instanceof Error ? err.message : String(err),
       })
@@ -721,7 +638,7 @@ export function registerChatRpc(): void {
     submitAnswers(answers, effectiveAgentId)
   })
 
-  registerMethod('chat', async (payload: unknown, client: WebSocket) => {
+  registerMethod('chat', async (payload: unknown) => {
     const { message, taskContext, images, imageRefs, source: payloadSource, mode, planModeFirst, planModeOff, agentId: payloadAgentId, conversationId: payloadConvId } = payload as ChatPayload
     const agentId = payloadAgentId ? validateAgentId(payloadAgentId) : 'general'
     // Resolve the conversation: explicit payload id wins, else the agent's active one.
@@ -730,9 +647,9 @@ export function registerChatRpc(): void {
     log.web.info('chat message received', { taskId: taskContext?.id, messageLength: message.length, imageCount: (imageRefs?.length ?? 0) || (images?.length ?? 0), source: payloadSource ?? 'chat', agentId, conversationId })
 
     // ── Intercept: if this agent is waiting for a question answer, route here ──
-    // The agent loop is blocked on user_ask tool. We must NOT enqueue a new
-    // turn (that would deadlock — current turn holds the single slot).
-    // Instead, resolve the pending question directly.
+    // Something is already waiting on an answer, not on a new turn: enqueueing one
+    // would hold the single turn slot while the waiter never resolves. Resolve the
+    // pending question directly instead.
     if (hasPendingQuestion(agentId)) {
       log.web.info('routing chat message to pending user_ask', { messageLength: message.length, agentId })
       // Persist the user's answer as a UI-only entry so it appears in chat history
@@ -778,59 +695,12 @@ export function registerChatRpc(): void {
       imageContentBlocks = processed.imageContentBlocks
     }
 
-    // ── Engine selection (config.agent.provider) ──
-    // 'claude-code' delivers the turn into the conversation's lane session instead
-    // of running the in-process loop. Resolved BEFORE the queue so the branch is a
-    // single decision per turn. EVERY console agent rides the lane engine: the
-    // Personal AI gets personalAiProfile, any other agent gets consoleAgentProfile (its
-    // own persona + the same session addendum) — see personal-ai-lane.resolveLane.
-    const { getConfig: getEngineConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-    const useLaneEngine = resolveAgentEngineProvider(await getEngineConfig()) === 'claude-code'
-    /** Set by the lane branch so the client can subscribe to the session stream. */
+    /** The lane session that ran the turn, so the client can subscribe to its stream. */
     let laneSessionId: string | undefined
 
     // Enqueue turn for this agent — per-agent queue, no cross-agent blocking
-    log.web.info('enqueueing agent turn', { taskId: taskContext?.id, source: 'chat', agentId, engine: useLaneEngine ? 'claude-code' : 'walnut-agent' })
+    log.web.info('enqueueing agent turn', { taskId: taskContext?.id, source: 'chat', agentId })
     await enqueueAgentTurn(agentId, 'chat', async () => {
-      // Create abort controller for this client + agent combo
-      const abortController = new AbortController()
-      const aKey = abortKey(client, agentId)
-      activeAbortControllers.set(aKey, abortController)
-      // Agent-level registry: lets the REST stop endpoint (mobile, no WS
-      // identity) abort this turn too. Unregistered on every exit path below.
-      const { registerAgentTurnAbort } = await import('../../core/agent-abort-registry.js')
-      const unregisterAbort = registerAgentTurnAbort(agentId, abortController)
-
-      // Resolve console agent definition + build system/tools for non-General agents
-      let agentSystem: string | undefined
-      let agentTools: import('../../agent/tools.js').ToolDefinition[] | undefined
-      if (agentId !== 'general') {
-        const { getConsoleAgent } = await import('../../core/agent-registry.js')
-        const { buildSubagentToolSet } = await import('../../agent/subagent-context.js')
-        const { loadContextSources } = await import('../../agent/context-sources.js')
-        const agentDef = await getConsoleAgent(agentId)
-        if (!agentDef) {
-          throw new Error(`Console agent '${agentId}' not found`)
-        }
-        // Build system prompt: agent's own prompt + context sources + date/time
-        const now = new Date()
-        const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-        const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-        const contextXml = await loadContextSources(agentDef, {})
-        const sections = [
-          agentDef.system_prompt ?? `You are ${agentDef.name}.`,
-          `\nCurrent date/time: ${dateStr}, ${timeStr}`,
-        ]
-        if (contextXml) sections.push('\n' + contextXml)
-        agentSystem = sections.join('\n')
-        // Build filtered tool set (respects allowed_tools / denied_tools)
-        agentTools = await buildSubagentToolSet(agentDef)
-      }
-
-      // Load existing history from disk (inside queue = reads fresh state)
-      const history = await chatHistory.getApiMessages(agentId, conversationId)
-      log.agent.info('agent loop starting', { taskId: taskContext?.id, source: 'chat', historyLength: history.length })
-
       // Drain any pending cron notifications (General only — cron is General's domain)
       const pendingCron = agentId === 'general' ? drainPendingCronNotifications() : []
       let cronPrefix = ''
@@ -871,11 +741,9 @@ export function registerChatRpc(): void {
       }
 
       const turnStartMs = Date.now()
-      const toolsUsedInTurn = new Set<string>()
 
-      // ── Eager persist: write user message to disk BEFORE the agent loop.
-      // Ensures the message survives page refresh during processing (~5ms write).
-      // `history` was captured BEFORE this write, so no duplication in the API call. ──
+      // ── Eager persist: write the user message to disk BEFORE the turn runs.
+      // Ensures the message survives page refresh during processing (~5ms write). ──
       //
       // The id also travels: it rides every agent:* event of this turn AND the
       // assistant entries it persists, which makes it the browser's only stable
@@ -901,430 +769,186 @@ export function registerChatRpc(): void {
         conversationId,
       })
 
-      // ── Engine branch: lane session (config.agent.provider='claude-code') ──
-      // Everything above this point ran for BOTH engines (history load, image
-      // persist, eager user-message persist) — only the engine differs. The turn
-      // is AWAITED like the in-process loop and its stream is relayed onto this
-      // chat's own agent:* events: the lane session is an implementation detail,
-      // the chat panel is the one and only surface for a main-AI turn.
-      if (useLaneEngine) {
-        activeAbortControllers.delete(aKey)
-        unregisterAbort()
+      // ── The turn runs in the conversation's lane session ──
+      // AWAITED, and its stream is relayed onto this chat's own agent:* events:
+      // the lane session is an implementation detail, the chat panel is the one
+      // and only surface for a main-AI turn.
+      try {
+        // ── Turn-boundary memory bookkeeping ──
+        // Every Personal AI turn owes memory two things: resetting the
+        // memory-consolidation breaker, and re-pinning the frozen memory-prompt
+        // snapshot for this conversation. Without them the breaker's
+        // consecutive-failure count never clears (one bad turn wedges
+        // consolidation for the process's life) and the prompt scope never
+        // advances.
         try {
-          // ── Turn-boundary memory bookkeeping (mirrors agent/loop.ts) ──
-          // The in-process loop opens every Personal AI turn by resetting the
-          // memory-consolidation breaker and re-pinning the frozen memory-prompt
-          // snapshot for this conversation. A lane turn never enters that loop, so
-          // without this the breaker's consecutive-failure count never clears
-          // (one bad turn wedges consolidation for the process's life) and the
-          // prompt scope never advances. Same two calls, same order, same reasons
-          // — see loop.ts for the full rationale.
-          try {
-            const { getBoundedMemory, beginMemoryPromptTurn } = await import('../../core/bounded-memory.js')
-            getBoundedMemory().resetConsolidationFailures()
-            getBoundedMemory(undefined, 'user').resetConsolidationFailures()
-            const { drift } = beginMemoryPromptTurn(agentId, conversationId)
-            for (const d of drift) {
-              if (d.origin !== 'external') continue
-              // Not an error: the new bytes ARE adopted from this turn on. But these
-              // paths (hand edit, file_write on a memory path, data-repo sync, the web
-              // editor) bypass every write-time check, so make it visible.
-              log.web.warn('memory changed outside the memory tool; adopted this turn', {
-                scope: d.scope, previousHash: d.previousHash, currentHash: d.currentHash,
-                agentId, conversationId,
-              })
-            }
-          } catch (err) {
-            log.web.warn('lane turn memory bookkeeping failed; continuing', {
-              agentId, conversationId, error: err instanceof Error ? err.message : String(err),
+          const { getBoundedMemory, beginMemoryPromptTurn } = await import('../../core/bounded-memory.js')
+          getBoundedMemory().resetConsolidationFailures()
+          getBoundedMemory(undefined, 'user').resetConsolidationFailures()
+          const { drift } = beginMemoryPromptTurn(agentId, conversationId)
+          for (const d of drift) {
+            if (d.origin !== 'external') continue
+            // Not an error: the new bytes ARE adopted from this turn on. But these
+            // paths (hand edit, file_write on a memory path, data-repo sync, the web
+            // editor) bypass every write-time check, so make it visible.
+            log.web.warn('memory changed outside the memory tool; adopted this turn', {
+              scope: d.scope, previousHash: d.previousHash, currentHash: d.currentHash,
+              agentId, conversationId,
             })
-          }
-
-          // The CLI takes plain text on stdin, not content blocks — images ride as
-          // readable file paths (the same shape session chat uses), never base64.
-          const sessionMessage = savedImages.length > 0
-            ? buildSessionImageContext(savedImages) + agentMessage + planSuffix
-            : agentMessage + planSuffix
-
-          // ── Live relay: the lane session's stream → this chat's own agent:*
-          // events. COMPAT SHIM: the current web client mounts the session
-          // timeline directly on the lane (SessionChatHistory + session:send) and
-          // never calls this RPC on the lane engine — this branch only serves a
-          // stale bundle or the seconds-wide race after a config flip. It relays
-          // the stream live and persists ONLY the final answer; the turn's full
-          // transcript (tools included) lives in the CLI's own JSONL, which is
-          // the one source of truth (no duplicate tool-block persistence here).
-          const relayName = `chat-lane-relay-${turnId}`
-          let relaySessionId: string | null = null
-
-          // Thinking arrives as deltas, but agent:thinking consumers render one
-          // block per event — buffer and flush per contiguous thinking run. A
-          // TIMED flush (1.5s) caps how long the buffer can sit: a turn that opens
-          // with a long thinking phase would otherwise paint NOTHING until its
-          // first tool call — reads as "sent a message, app is dead".
-          let thinkingBuf = ''
-          let thinkingTimer: ReturnType<typeof setTimeout> | undefined
-          const flushThinking = (): void => {
-            if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = undefined }
-            if (thinkingBuf.trim()) {
-              broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingBuf, agentId, conversationId, turnId })
-            }
-            thinkingBuf = ''
-          }
-          bus.subscribe(relayName, (event) => {
-            const d = event.data as {
-              sessionId?: string; parentToolUseId?: string; replayed?: boolean;
-              delta?: string; toolName?: string; toolUseId?: string;
-              input?: Record<string, unknown>; result?: string;
-            }
-            if (relaySessionId === null || d.sessionId !== relaySessionId) return
-            // Subagent output belongs to its own lane, and a replayed event is
-            // JSONL history being re-read — neither is this turn's live stream.
-            if (d.parentToolUseId || d.replayed) return
-            if (event.name === EventNames.SESSION_TEXT_DELTA) {
-              flushThinking()
-              // No sessionId in the payload: useChat drops agent:text-delta
-              // events that carry one (they'd be a session's, not the chat's).
-              if (d.delta) {
-                broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta: d.delta, agentId, conversationId, turnId })
-              }
-            } else if (event.name === EventNames.SESSION_THINKING_DELTA) {
-              if (d.delta) {
-                thinkingBuf += d.delta
-                thinkingTimer ??= setTimeout(flushThinking, 1500)
-              }
-            } else if (event.name === EventNames.SESSION_TOOL_USE) {
-              flushThinking()
-              // Real per-tool working-memory counting (the in-process loop's
-              // onToolCall does exactly this).
-              trackWmToolCall(agentId, conversationId)
-              broadcastEvent(EventNames.AGENT_TOOL_CALL, {
-                toolName: d.toolName, input: d.input, toolUseId: d.toolUseId, agentId, conversationId, turnId,
-              })
-            } else if (event.name === EventNames.SESSION_TOOL_RESULT) {
-              // toolName is not on the session event; the client matches by toolUseId.
-              broadcastEvent(EventNames.AGENT_TOOL_RESULT, {
-                toolName: '', result: d.result, toolUseId: d.toolUseId, agentId, conversationId, turnId,
-              })
-            }
-          }, { global: true, interest: [
-            EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_THINKING_DELTA,
-            EventNames.SESSION_TOOL_USE, EventNames.SESSION_TOOL_RESULT,
-          ] })
-
-          try {
-            // AWAITED, exactly like the in-process loop: the reply belongs in this
-            // chat. runLaneTurn owns create/send/result-correlation (lane-turn.ts);
-            // onSessionId fires before the send, so the relay can't miss a delta.
-            // 30 min ceiling — a chat turn that long has effectively hung.
-            const { runLaneTurn } = await import('../../core/sessions/lane-turn.js')
-            const { sessionId, resultText } = await runLaneTurn(agentId, conversationId, sessionMessage, {
-              source: 'chat',
-              timeoutMs: 1_800_000,
-              onSessionId: (sid) => { relaySessionId = sid },
-            })
-            laneSessionId = sessionId
-            flushThinking()
-
-            // ── Working-memory updater (lane path) ──
-            // The in-process trigger reads `result.tokenBreakdown`, which a lane
-            // turn never produces. Tool calls were counted per relayed
-            // session:tool-use above; the token size is the lane's last exact API
-            // input count (fed by the session:usage-update handler in server.ts),
-            // 0 until the lane's first assistant message reports usage — 0 simply
-            // fails the threshold. Fire-and-forget, same as the in-process trigger.
-            if (agentId === 'general') {
-              const laneTokens = getLastTurnTokens(conversationId) ?? 0
-              if (shouldUpdateWorkingMemory(laneTokens, agentId, conversationId)) {
-                executeWorkingMemoryUpdate(
-                  runWmForkedTurn,
-                  laneTokens,
-                  agentId,
-                  conversationId,
-                ).catch(() => { /* non-critical */ })
-              }
-            }
-
-            if (resultText === null) {
-              // Timeout / session:error / failed send — the user must see a real
-              // error in chat, not silence (the catch below persists it).
-              throw new Error('The main AI did not answer this turn (timed out or errored).')
-            }
-
-            // Persist ONLY the final answer (compat shim, see above): the turn's
-            // full transcript — tools included — is the CLI's own JSONL, which
-            // the session timeline renders directly. Refs are resolved BEFORE
-            // persisting, matching the in-process path.
-            const resolvedText = await resolveEntityRefs(resultText)
-            await chatHistory.addAIMessages(
-              [{ role: 'assistant', content: [{ type: 'text', text: resolvedText }] }] as MessageParam[],
-              { agentId, conversationId, turnId },
-            )
-            broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, agentId, conversationId, turnId })
-            log.web.info('chat lane turn completed', {
-              agentId, conversationId, sessionId, resultLength: resultText.length,
-              durationMs: Date.now() - turnStartMs,
-            })
-          } finally {
-            bus.unsubscribe(relayName)
           }
         } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err)
-          log.web.error('Personal AI lane turn failed', { agentId, conversationId, error: errMsg })
-          await chatHistory.addAIMessages(
-            [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
-            { source: 'agent-error', agentId, conversationId },
-          )
-          broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
-            entry: {
-              role: 'assistant', content: `[Error: ${errMsg}]`, source: 'agent-error',
-              notification: true, timestamp: new Date().toISOString(),
-            },
-            agentId,
-            conversationId,
+          log.web.warn('lane turn memory bookkeeping failed; continuing', {
+            agentId, conversationId, error: err instanceof Error ? err.message : String(err),
           })
-          broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
         }
-        return
-      }
 
-      // Lazy import to avoid loading the agent at server startup (and skipped
-      // entirely on the lane path above, which never runs the in-process loop).
-      const { runAgentLoop } = await import('../../agent/loop.js')
+        // The CLI takes plain text on stdin, not content blocks — images ride as
+        // readable file paths (the same shape session chat uses), never base64.
+        const sessionMessage = savedImages.length > 0
+          ? buildSessionImageContext(savedImages) + agentMessage + planSuffix
+          : agentMessage + planSuffix
 
-      try {
-        const result = await runAgentLoop(userContent, history, {
-          onTextDelta: (delta) => {
-            broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta, agentId, conversationId, turnId })
-          },
-          onToolActivity: (activity) => {
-            broadcastEvent(EventNames.AGENT_TOOL_ACTIVITY, { ...activity, agentId, conversationId, turnId })
-          },
-          onThinking: (text) => {
-            broadcastEvent(EventNames.AGENT_THINKING, { text, agentId, conversationId, turnId })
-          },
-          onToolCall: (toolName, input, toolUseId) => {
-            toolsUsedInTurn.add(toolName)
+        // ── Live relay: the lane session's stream → this chat's own agent:*
+        // events. COMPAT SHIM: the current web client mounts the session
+        // timeline directly on the lane (SessionChatHistory + session:send) and
+        // rarely calls this RPC at all — it mostly serves a stale bundle. It
+        // relays the stream live and persists ONLY the final answer; the turn's
+        // full transcript (tools included) lives in the CLI's own JSONL, which
+        // is the one source of truth (no duplicate tool-block persistence here).
+        const relayName = `chat-lane-relay-${turnId}`
+        let relaySessionId: string | null = null
+
+        // Thinking arrives as deltas, but agent:thinking consumers render one
+        // block per event — buffer and flush per contiguous thinking run. A
+        // TIMED flush (1.5s) caps how long the buffer can sit: a turn that opens
+        // with a long thinking phase would otherwise paint NOTHING until its
+        // first tool call — reads as "sent a message, app is dead".
+        let thinkingBuf = ''
+        let thinkingTimer: ReturnType<typeof setTimeout> | undefined
+        const flushThinking = (): void => {
+          if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = undefined }
+          if (thinkingBuf.trim()) {
+            broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingBuf, agentId, conversationId, turnId })
+          }
+          thinkingBuf = ''
+        }
+        bus.subscribe(relayName, (event) => {
+          const d = event.data as {
+            sessionId?: string; parentToolUseId?: string; replayed?: boolean;
+            delta?: string; toolName?: string; toolUseId?: string;
+            input?: Record<string, unknown>; result?: string;
+          }
+          if (relaySessionId === null || d.sessionId !== relaySessionId) return
+          // Subagent output belongs to its own lane, and a replayed event is
+          // JSONL history being re-read — neither is this turn's live stream.
+          if (d.parentToolUseId || d.replayed) return
+          if (event.name === EventNames.SESSION_TEXT_DELTA) {
+            flushThinking()
+            // No sessionId in the payload: useChat drops agent:text-delta
+            // events that carry one (they'd be a session's, not the chat's).
+            if (d.delta) {
+              broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta: d.delta, agentId, conversationId, turnId })
+            }
+          } else if (event.name === EventNames.SESSION_THINKING_DELTA) {
+            if (d.delta) {
+              thinkingBuf += d.delta
+              thinkingTimer ??= setTimeout(flushThinking, 1500)
+            }
+          } else if (event.name === EventNames.SESSION_TOOL_USE) {
+            flushThinking()
+            // Real per-tool counting for the working-memory trigger.
             trackWmToolCall(agentId, conversationId)
-            broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId, conversationId, turnId })
-          },
-          onToolResult: (toolName, result, toolUseId) => {
-            broadcastEvent(EventNames.AGENT_TOOL_RESULT, { toolName, result, toolUseId, agentId, conversationId, turnId })
-          },
-          onUsage: (usage) => {
-            bus.emit('agent:usage', { usage }, ['web-ui'], { source: 'agent' })
-            try {
-              usageTracker.record({
-                source: 'agent',
-                model: usage.model ?? 'unknown',
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cache_creation_input_tokens: usage.cache_creation_input_tokens,
-                cache_read_input_tokens: usage.cache_read_input_tokens,
-                agentId,
-              })
-            } catch (err) {
-              log.web.warn('failed to record usage', { error: err instanceof Error ? err.message : String(err) })
-            }
-            // Cache the EXACT input-token count (incl. cache) so the triage bail
-            // pre-check sees this conversation's real size after a chat turn grows it.
-            try { recordLastTurnTokens(conversationId, (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)) } catch {}
-          },
-        // Note: onText is intentionally not provided — agent:response is sent once
-        // at the end of the turn (not per text block) so isStreaming stays true
-        // for the full loop duration, keeping the Stop button visible.
-        }, {
-          signal: abortController.signal,
-          source: agentId === 'general' ? 'chat' : `chat:${agentId}`,
-          agentId,
-          conversationId,
-          ...(agentSystem && { system: agentSystem }),
-          ...(agentTools && { tools: agentTools }),
-        })
-
-        activeAbortControllers.delete(aKey)
-        unregisterAbort()
-
-        // Handle aborted turn: persist partial response but skip compaction.
-        // User message is already on disk (eagerly persisted above).
-        if (result.aborted) {
-          const allNewMsgs = result.newMessages as MessageParam[]
-          // Skip the eagerly-persisted user message (first in the new batch)
-          const afterUser = allNewMsgs.length > 0 && (allNewMsgs[0] as { role: string }).role === 'user'
-            ? allNewMsgs.slice(1)
-            : allNewMsgs
-
-          // Clean trailing: remove trailing user (tool_result) and strip orphan tool_use
-          const cleaned = [...afterUser]
-          while (cleaned.length > 0) {
-            const last = cleaned[cleaned.length - 1] as { role: string; content: unknown }
-            if (last.role === 'user') {
-              cleaned.pop()
-              continue
-            }
-            if (last.role === 'assistant' && Array.isArray(last.content)
-              && (last.content as Array<{ type: string }>).some(b => b.type === 'tool_use')) {
-              const kept = (last.content as Array<{ type: string }>).filter(b => b.type !== 'tool_use')
-              if (kept.length === 0) {
-                cleaned.pop()
-                continue
-              }
-              cleaned[cleaned.length - 1] = { ...last, content: kept } as MessageParam
-            }
-            break
-          }
-          if (cleaned.length > 0) {
-            const persistMsgs = replaceImagesWithPaths(cleaned, savedImages)
-            await chatHistory.addAIMessages(persistMsgs, { ...(chatSource && { source: chatSource }), agentId, conversationId, turnId })
-          }
-          // Even if cleaned is empty, user message is safe on disk ✅
-          // Auto-append to conversation_log for aborted turns (General only)
-          if (taskContext?.id && agentId === 'general') {
-            autoAppendConversationLog(taskContext.id, message, result.response || '[Aborted]', [...toolsUsedInTurn]).catch((err) => {
-              log.web.warn('autoAppendConversationLog failed (aborted)', { taskId: taskContext.id, error: err instanceof Error ? err.message : String(err) })
+            broadcastEvent(EventNames.AGENT_TOOL_CALL, {
+              toolName: d.toolName, input: d.input, toolUseId: d.toolUseId, agentId, conversationId, turnId,
+            })
+          } else if (event.name === EventNames.SESSION_TOOL_RESULT) {
+            // toolName is not on the session event; the client matches by toolUseId.
+            broadcastEvent(EventNames.AGENT_TOOL_RESULT, {
+              toolName: '', result: d.result, toolUseId: d.toolUseId, agentId, conversationId, turnId,
             })
           }
-          broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, aborted: true, agentId, conversationId, turnId })
-          return
-        }
+        }, { global: true, interest: [
+          EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_THINKING_DELTA,
+          EventNames.SESSION_TOOL_USE, EventNames.SESSION_TOOL_RESULT,
+        ] })
 
-        // Extract the new messages added during this turn.
-        // result.newMessages is [userPrompt, ...ai messages]; the user prompt was
-        // already eagerly persisted with turnId, so skip it. Using newMessages (not
-        // slice(history.length)) is trim-safe: an emergency trim shortens the front
-        // of result.messages, which would make slice(history.length) overshoot and
-        // silently drop the assistant reply (the duplicate-task / orphan bug).
-        const allNewMsgs = result.newMessages as MessageParam[]
-        const newApiMsgs = allNewMsgs.length > 0 && (allNewMsgs[0] as { role: string }).role === 'user'
-          ? allNewMsgs.slice(1)
-          : allNewMsgs
-
-        // Resolve entity refs before persisting
-        const resolvedMsgs = await resolveMessagesEntityRefs(newApiMsgs)
-        const resolvedText = await resolveEntityRefs(result.response)
-
-        // Replace base64 image blocks with path-based blocks before persisting
-        const persistMsgs = replaceImagesWithPaths(resolvedMsgs, savedImages)
-
-        // Persist AI response only (displayText/contextHashes already on eagerly-persisted user entry)
-        await chatHistory.addAIMessages(persistMsgs, {
-          ...(taskContext?.id && { taskId: taskContext.id }),
-          ...(chatSource && { source: chatSource }),
-          agentId,
-          conversationId,
-          turnId,
-        })
-        log.agent.info('agent response persisted', { taskId: taskContext?.id, messageCount: newApiMsgs.length })
-
-        // Build lightweight stats from agent loop's token breakdown (avoids expensive re-computation)
-        let stats: Record<string, unknown> | undefined
-        if (result.tokenBreakdown) {
-          const { getContextWindowSize } = await import('../../agent/model.js')
-          const { getConfig } = await import('../../core/config-manager.js')
-          const config = await getConfig()
-          const contextWindow = getContextWindowSize(config.agent?.main_model)
-          const compacted = !!(await chatHistory.getCompactionSummary(agentId, conversationId))
-          stats = {
-            // Display-only stat from the post-loop working array. After a mid-turn
-            // 400-trim this is the SHORTENED in-memory array, so it can under-report
-            // the on-disk message count — it is never persisted and not the canonical count.
-            apiMessageCount: result.messages.filter((m) => !(m as { compacted?: boolean }).compacted).length,
-            estimatedTokens: result.tokenBreakdown.messages,
-            systemTokens: result.tokenBreakdown.system,
-            toolsTokens: result.tokenBreakdown.tools,
-            estimatedTotalTokens: result.tokenBreakdown.total,
-            compacted,
-            contextWindow,
-          }
-        }
-
-        // Signal turn complete to the client (resets isStreaming).
-        // This resolves the RPC immediately — compaction runs separately below.
-        broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, ...(stats ? { stats } : {}), agentId, conversationId, turnId })
-        log.web.info('chat turn completed', { taskId: taskContext?.id, durationMs: Date.now() - turnStartMs, agentId, conversationId })
-
-        // Auto-append to conversation_log if a task was focused (General only)
-        if (taskContext?.id && agentId === 'general') {
-          autoAppendConversationLog(taskContext.id, message, result.response, [...toolsUsedInTurn]).catch((err) => {
-            log.web.warn('autoAppendConversationLog failed', { taskId: taskContext.id, error: err instanceof Error ? err.message : String(err) })
+        try {
+          // AWAITED: the reply belongs in this chat. runLaneTurn owns
+          // create/send/result-correlation (lane-turn.ts); onSessionId fires
+          // before the send, so the relay can't miss a delta.
+          // 30 min ceiling — a chat turn that long has effectively hung.
+          const { runLaneTurn } = await import('../../core/sessions/lane-turn.js')
+          const { sessionId, resultText } = await runLaneTurn(agentId, conversationId, sessionMessage, {
+            source: 'chat',
+            timeoutMs: 1_800_000,
+            onSessionId: (sid) => { relaySessionId = sid },
           })
-        }
+          laneSessionId = sessionId
+          flushThinking()
 
-        // Trigger working memory update if thresholds are met (fire-and-forget).
-        // Uses the token breakdown from the agent loop to check triggers.
-        if (result.tokenBreakdown && agentId === 'general') {
-          const currentTokens = result.tokenBreakdown.total
-          if (shouldUpdateWorkingMemory(currentTokens, agentId, conversationId)) {
-            executeWorkingMemoryUpdate(
-              runWmForkedTurn,
-              currentTokens,
-              agentId,
-              conversationId,
-            ).catch(() => { /* non-critical */ })
+          // ── Working-memory updater ──
+          // Tool calls were counted per relayed session:tool-use above; the token
+          // size is the lane's last exact API input count (fed by the
+          // session:usage-update handler in server.ts), 0 until the lane's first
+          // assistant message reports usage — 0 simply fails the threshold.
+          // Fire-and-forget: the answer must not wait on it.
+          if (agentId === 'general') {
+            const laneTokens = getLastTurnTokens(conversationId) ?? 0
+            if (shouldUpdateWorkingMemory(laneTokens, agentId, conversationId)) {
+              executeWorkingMemoryUpdate(
+                runWorkingMemoryUpdate,
+                laneTokens,
+                agentId,
+                conversationId,
+              ).catch(() => { /* non-critical */ })
+            }
           }
-        }
 
-        // Background self-review: count this clean Personal AI turn; every N turns
-        // fork the conversation (same cache prefix) for a skill/memory review pass.
-        // Fire-and-forget — persistence-isolated, never touches this conversation.
-        if (agentId === 'general') {
-          import('../../agent/background-review.js')
-            .then(({ noteTurnCompleteAndMaybeReview }) => noteTurnCompleteAndMaybeReview({
-              agentId,
-              conversationId,
-              toolsUsed: toolsUsedInTurn,
-              getHistory: () => chatHistory.getApiMessages(agentId, conversationId),
-            }))
-            .catch((err) => {
-              log.web.warn('background review trigger failed', { error: err instanceof Error ? err.message : String(err) })
-            })
-        }
+          if (resultText === null) {
+            // Timeout / session:error / failed send — the user must see a real
+            // error in chat, not silence (the catch below persists it).
+            throw new Error('The main AI did not answer this turn (timed out or errored).')
+          }
 
-        // Trigger background compaction outside the turn queue.
-        // This fires and forgets — the user can send more messages immediately.
-        triggerBackgroundCompaction('chat', { agentId, conversationId })
+          // Persist ONLY the final answer (compat shim, see above): the turn's
+          // full transcript — tools included — is the CLI's own JSONL, which
+          // the session timeline renders directly. Refs are resolved BEFORE
+          // persisting, so the stored text matches what the client rendered.
+          const resolvedText = await resolveEntityRefs(resultText)
+          await chatHistory.addAIMessages(
+            [{ role: 'assistant', content: [{ type: 'text', text: resolvedText }] }] as MessageParam[],
+            { agentId, conversationId, turnId },
+          )
+          broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, agentId, conversationId, turnId })
+          log.web.info('chat lane turn completed', {
+            agentId, conversationId, sessionId, resultLength: resultText.length,
+            durationMs: Date.now() - turnStartMs,
+          })
+        } finally {
+          bus.unsubscribe(relayName)
+        }
       } catch (err) {
-        activeAbortControllers.delete(aKey)
-        unregisterAbort()
         const errMsg = err instanceof Error ? err.message : String(err)
-        log.web.error('chat turn error', { taskId: taskContext?.id, source: 'chat', error: errMsg, agentId })
-
-        // User message already on disk (eagerly persisted). Only add synthetic error response.
+        log.web.error('Personal AI lane turn failed', { agentId, conversationId, error: errMsg })
         await chatHistory.addAIMessages(
-          [
-            { role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] },
-          ] as MessageParam[],
+          [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
           { source: 'agent-error', agentId, conversationId },
         )
-
-        // Push it live. addAIMessages only writes to DISK — without this the error
-        // was invisible until a page refresh, and then indistinguishable from a
-        // short normal reply. That is how an 18h all-turns-failing outage went
-        // unnoticed (2026-07-26: every turn returned `[Error: 403 …]`).
         broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
           entry: {
-            role: 'assistant',
-            content: `[Error: ${errMsg}]`,
-            source: 'agent-error',
-            notification: true,
-            timestamp: new Date().toISOString(),
+            role: 'assistant', content: `[Error: ${errMsg}]`, source: 'agent-error',
+            notification: true, timestamp: new Date().toISOString(),
           },
           agentId,
           conversationId,
         })
-
-        // Auto-append to conversation_log for error turns (General only)
-        if (taskContext?.id && agentId === 'general') {
-          autoAppendConversationLog(taskContext.id, message, `[Error: ${errMsg}]`, [...toolsUsedInTurn]).catch(() => { /* non-critical */ })
-        }
-
         broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
       }
     })
 
-    // The lane branch answers with the session that ran the turn, so the client can
-    // subscribe to its stream / open its panel. Undefined (→ no payload) for the
-    // in-process engine: unchanged reply for every existing caller.
+    // Answer with the session that ran the turn, so the client can subscribe to
+    // its stream / open its panel. Undefined (→ no payload) when the turn never
+    // reached a lane, which is the reply shape every pre-lane caller expects.
     if (laneSessionId) return { laneSessionId }
   })
 }

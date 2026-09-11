@@ -28,8 +28,6 @@ import {
 import { broadcastEvent } from '../ws/handler.js'
 import { EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
-import { isKnownEngine } from '../../core/agents/engine-registry.js'
-import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
 export function createConversationsRouter(): Router {
   const router = Router()
@@ -110,64 +108,18 @@ export function createConversationsRouter(): Router {
   })
 
   // POST /api/agents/:agentId/conversations/:cid/lane-session
-  // Resolve (or create) the lane session backing this conversation — the thin-layer
-  // chat surface mounts the session timeline directly on it and sends through the
+  // Resolve (or create) the lane session backing this conversation — the chat
+  // surface mounts the session timeline directly on it and sends through the
   // ordinary session queue. Created idle (empty first message): the first user
-  // message rides session:send, exactly like every other session. 409 when the
-  // engine flag is off — the in-process loop has no lane, and minting one anyway
-  // would leave an orphan CLI.
+  // message rides session:send, exactly like every other session.
   router.post('/:agentId/conversations/:cid/lane-session', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const agentId = validateAgentId(req.params.agentId as string)
       const cid = validateConversationId(req.params.cid as string)
-      const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-      // Every console agent runs on the lane engine (per-agent persona via
-      // consoleAgentProfile) — the only gate left is the engine flag itself.
-      if (resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
-        res.status(409).json({ error: 'Lane engine is not active' })
-        return
-      }
       const { getOrCreateLaneSession } = await import('../../core/sessions/personal-ai-lane.js')
       const lane = await getOrCreateLaneSession(agentId, cid)
       const { WALNUT_HOME } = await import('../../constants.js')
       res.json({ sessionId: lane.sessionId, cwd: WALNUT_HOME, created: lane.created, engine: lane.engine })
-    } catch (err) {
-      next(err)
-    }
-  })
-
-  // POST /api/agents/:agentId/conversations/:cid/lane-engine  {engine}
-  // Switch the provider backing this conversation's lane (claude ⇄ codex).
-  // Only legal while the conversation is EMPTY — the lane session is archived
-  // and re-minted on the requested engine (an engine is a spawn-time fact).
-  // 409 once messages exist / for forked lanes (swapLaneEngine guards).
-  router.post('/:agentId/conversations/:cid/lane-engine', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const agentId = validateAgentId(req.params.agentId as string)
-      const cid = validateConversationId(req.params.cid as string)
-      const engine = (req.body as { engine?: string } | undefined)?.engine
-      if (!isKnownEngine(engine)) {
-        res.status(400).json({ error: `engine must be one of: ${SESSION_ENGINE_IDS.join(', ')}` })
-        return
-      }
-      const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-      if (resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
-        res.status(409).json({ error: 'Lane engine is not active' })
-        return
-      }
-      const { swapLaneEngine } = await import('../../core/sessions/personal-ai-lane.js')
-      const { SessionControlError } = await import('../../core/sessions/session-controls.js')
-      try {
-        const lane = await swapLaneEngine(agentId, cid, engine)
-        const { WALNUT_HOME } = await import('../../constants.js')
-        res.json({ sessionId: lane.sessionId, cwd: WALNUT_HOME, created: lane.created, engine: lane.engine })
-      } catch (err) {
-        if (err instanceof SessionControlError) {
-          res.status(err.statusCode).json({ error: err.message })
-          return
-        }
-        throw err
-      }
     } catch (err) {
       next(err)
     }
@@ -216,17 +168,12 @@ export function createConversationsRouter(): Router {
   // POST /api/agents/:agentId/conversations/:cid/fork
   // Fork the conversation: new conversation + a forked lane session that carries
   // the full history via the CLI's native --resume --fork-session. No task is
-  // created (lane sessions are taskless). 409 when the engine flag is off or the
-  // conversation has no session yet.
+  // created (lane sessions are taskless). 409 when the conversation has no
+  // session yet.
   router.post('/:agentId/conversations/:cid/fork', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const agentId = validateAgentId(req.params.agentId as string)
       const cid = validateConversationId(req.params.cid as string)
-      const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-      if (resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
-        res.status(409).json({ error: 'Lane engine is not active' })
-        return
-      }
       const { forkLaneConversation } = await import('../../core/sessions/lane-fork.js')
       const { SessionControlError } = await import('../../core/sessions/session-controls.js')
       try {

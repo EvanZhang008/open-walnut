@@ -27,13 +27,6 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-lane-activity'))
 
-// The lane branch never reaches the in-process loop; mocked so a stray fallback
-// cannot spawn a real one.
-const runAgentLoop = vi.fn(async () => ({
-  messages: [], newMessages: [], response: 'in-process response', aborted: false,
-}))
-vi.mock('../../../src/agent/loop.js', () => ({ runAgentLoop }))
-
 import type { Server as HttpServer } from 'node:http'
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
@@ -68,8 +61,14 @@ let answerMode: 'result' | 'error' = 'result'
 /** Gap between the script and the answer, so paced steps can land mid-turn. */
 let resultDelayMs = 0
 let laneReply = 'the lane answered'
-/** Delay before the fake answers, so an ordered script lands after message-start. */
-const ANSWER_DELAY_MS = 10
+/**
+ * Delay before the fake CLI starts talking, so an ordered script lands after
+ * message-start AND after the relay subscribed to the bus. The relay subscribes
+ * inside the turn, a tick or two after the lane spawn this timer hangs off, so a
+ * near-zero delay races it: under machine load the tool frames were emitted into
+ * a bus nobody was listening on yet and the turn ended with only its result.
+ */
+const ANSWER_DELAY_MS = 60
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -269,7 +268,6 @@ async function runTurn(convId: string, sse: SseConn, text = 'do the thing'): Pro
 }
 
 beforeEach(() => {
-  runAgentLoop.mockClear()
   started = []
   script = []
   paced = []
@@ -315,7 +313,6 @@ describe('lane SSE: tool + tool-result frames', () => {
       expect(order.indexOf('message-start')).toBeLessThan(order.indexOf('tool'))
       expect(order.indexOf('tool')).toBeLessThan(order.indexOf('tool-result'))
       expect(order.indexOf('tool-result')).toBeLessThan(order.indexOf('message-end'))
-      expect(runAgentLoop).not.toHaveBeenCalled()
     } finally {
       sse.close()
     }

@@ -56,17 +56,24 @@ function projectSafeName(raw: string): string {
 }
 
 /**
- * Resolve an ask's agent from the registry, or undefined when there is no
- * console agent by that id (an unknown id, a deleted config agent, or a
- * background-only agent such as the screenshot tracker — its persona is not a
- * chat persona). `general` never hits the registry: it is the Personal AI,
- * which exists even when a config override drops its console flag.
+ * Resolve an ask's agent from the registry, or undefined when no agent has that
+ * id (an unknown id or a deleted config agent). `general` never hits the
+ * registry: it is the Personal AI, which exists even when a config override
+ * drops its console flag.
+ *
+ * ANY registry agent resolves, not only a console one. The console flag decides
+ * which agents the chat drawer OFFERS (getConsoleAgents); it cannot decide who
+ * may be asked, because the dispatcher (subagent-runner) launches its runs
+ * through this same resolution and a hook's `run_agent` action names a
+ * background agent by design (a stateful tracker, a config agent saved without
+ * the flag). A background agent's persona builds exactly like a console agent's,
+ * so the run is a normal session with that agent's identity.
  */
 export async function resolveAskAgent(agentId: string | undefined): Promise<AskAgentRef | undefined> {
   const id = agentId?.trim() || GENERAL_AGENT_ID;
   if (id === GENERAL_AGENT_ID) return { id, name: 'Walnut' };
-  const { getConsoleAgent } = await import('../agent-registry.js');
-  const def = await getConsoleAgent(id);
+  const { getAgent } = await import('../agent-registry.js');
+  const def = await getAgent(id);
   return def ? { id: def.id, name: def.name } : undefined;
 }
 

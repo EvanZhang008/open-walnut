@@ -13,7 +13,6 @@ import {
   AGENT_SEARCH_MAX_RESULTS,
   AGENT_SEARCH_PROMPT_V,
   SYSTEM_PROMPT,
-  SYSTEM_PROMPT_TOOL_LOOP,
 } from '../../src/core/task-search-agent-contract.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -169,7 +168,6 @@ describe('prompt contract v5: a results list, not one pick', () => {
   it.each([
     ['cli (walnut CLI fallback)', SYSTEM_PROMPT],
     ['cli (local API)', buildCliSystemPrompt('http://127.0.0.1:1')],
-    ['in-process tool loop', SYSTEM_PROMPT_TOOL_LOOP],
   ])('%s prompt asks for every plausible match and never "usually one"', (_name, prompt) => {
     expect(prompt).toContain('List EVERY distinct task that plausibly matches, best first, up to 5');
     expect(prompt).not.toContain('Usually ONE result');

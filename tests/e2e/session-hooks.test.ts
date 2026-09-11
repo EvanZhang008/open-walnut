@@ -706,15 +706,11 @@ describe('SubagentRunner picks up subagent:start', () => {
   it('subagent:start → SubagentRunner picks up → subagent:started/result/error', async () => {
     const targetTaskId = 'hook-task-002'
 
-    // Listen for subagent:started (emitted immediately when SubagentRunner picks up
-    // the event, before runAgentLoop) OR subagent:result/error (emitted after the
-    // agent loop completes or fails). We listen for ALL three — the first matching
-    // event for our task proves SubagentRunner picked up the event.
-    //
-    // Why subagent:started? It's emitted by SubagentRunner.handleStart() right after
-    // queueing the run, proving the runner received and processed the subagent:start
-    // event. This fires quickly, unlike subagent:result which depends on Bedrock API
-    // response time (can be 30-60s when creds are available).
+    // Listen for subagent:started (the run's session was launched) OR
+    // subagent:error (the launch was rejected). We listen for result too — the
+    // first matching event for our task proves SubagentRunner picked up the
+    // subagent:start, which is all this test is about; which of the two the
+    // launch produces depends on the environment, not on the pickup.
     const subagentPickupSubscriberName = `test-subagent-pickup-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const subagentPickupPromise = new Promise<{ type: 'started' | 'result' | 'error'; data: Record<string, unknown> }>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -750,18 +746,16 @@ describe('SubagentRunner picks up subagent:start', () => {
       agentId: 'general',
       task: `Summarize the current state of task ${targetTaskId}.`,
       taskId: targetTaskId,
-      context_override: { taskId: targetTaskId },
     }, ['subagent-runner'], { source: 'session-hooks-e2e' })
 
-    // Wait for SubagentRunner to confirm pickup via subagent:started (fast),
-    // or subagent:result/error (slower but also proves pickup).
+    // Wait for SubagentRunner to confirm pickup.
     const pickup = await subagentPickupPromise
 
     // Any of these event types proves SubagentRunner received the subagent:start
-    // and began processing:
-    //   - 'started': Runner queued the run and emitted subagent:started (fast path)
-    //   - 'result': Agent loop completed (Bedrock creds available)
-    //   - 'error': Agent loop failed (no creds or other error)
+    // and acted on it:
+    //   - 'started': the run's session was launched
+    //   - 'error': the launch was rejected (and said why)
+    //   - 'result': a completed run reported back
     expect(['started', 'result', 'error']).toContain(pickup.type)
 
     if (pickup.type === 'started') {

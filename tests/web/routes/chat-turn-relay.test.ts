@@ -1,11 +1,10 @@
 /**
- * chat-turn-relay — the REPLICA half in isolation: engine selection and the
- * degradation matrix.
+ * chat-turn-relay — the REPLICA half in isolation: the uplink decision table.
  *
- * The one rule under test: a phone chatting through the cloud replica must get
- * the PRIMARY's configured engine (claude-code) when the relay is usable, and a
- * real answer from the local loop (marked as a fallback) when it is not. It must
- * never end up with "no engine".
+ * The one rule under test: a phone chatting through the cloud replica reaches the
+ * PRIMARY when the relay is usable, and every way it can be unusable is reported
+ * as `unavailable` (never silently swallowed) so the caller can end the turn with
+ * an error the phone understands.
  *
  * The bridge is mocked at the v1-control-relay seam, which is where the four
  * failure classes are already normalized (needs_upgrade / bridge_offline /
@@ -47,7 +46,6 @@ import {
   relayChatTurnToPrimary,
   handleBridgeChatTurnFrame,
   resetChatTurnRelayState,
-  FALLBACK_ENGINE_LABEL,
   CHAT_TURN_FRAME_KIND,
 } from '../../../src/web/routes/chat-turn-relay.js'
 
@@ -225,7 +223,7 @@ describe('image turns: bytes take the image lane, the RPC carries paths', () => 
     expect(bridgeRequestMock).not.toHaveBeenCalled()
   })
 
-  it('a failed image turn leaves no in-flight slot behind (the local loop reruns it)', async () => {
+  it('a failed image turn leaves no in-flight slot behind', async () => {
     callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
     bridgeRequestMock.mockResolvedValue({ ok: false, error: 'image.save: too large (EFBIG)' })
     expect((await relayChatTurnToPrimary('general', CONV, 'pic', TURN, [pngPayload()])).kind)
@@ -239,8 +237,8 @@ describe('image turns: bytes take the image lane, the RPC carries paths', () => 
   })
 })
 
-describe('degradation matrix: every failure falls back, none hangs', () => {
-  it('bridge offline → unavailable (caller runs the local loop)', async () => {
+describe('degradation matrix: every failure reports unavailable, none hangs', () => {
+  it('bridge offline → unavailable', async () => {
     callPrimaryControlMock.mockResolvedValue({
       ok: false, failure: { kind: 'bridge_offline', message: 'No live bridge for host: __local__' },
     })
@@ -268,7 +266,7 @@ describe('degradation matrix: every failure falls back, none hangs', () => {
     expect(outcome.reason).toContain('dispatch exploded')
   })
 
-  it('primary answers but refuses → unavailable (fallback), except turn_active', async () => {
+  it('primary answers but refuses → unavailable, except turn_active', async () => {
     callPrimaryControlMock.mockResolvedValue({
       ok: true, result: { accepted: false, reason: 'bad_request', message: 'text is required' },
     })
@@ -278,8 +276,9 @@ describe('degradation matrix: every failure falls back, none hangs', () => {
       ok: true, result: { accepted: false, reason: 'turn_active', message: 'A turn is already active' },
     })
     const busy = await relayChatTurnToPrimary('general', CONV, 'hi', 'turn-unit-3')
-    // turn_active must NOT fall back: running a second turn locally would
-    // produce two answers and two history writers for one user message.
+    // turn_active is its own outcome, not an outage: the primary is already
+    // answering this conversation, so the caller must report a busy turn rather
+    // than telling the phone the primary is unreachable.
     expect(busy.kind).toBe('turn_active')
   })
 
@@ -294,13 +293,6 @@ describe('degradation matrix: every failure falls back, none hangs', () => {
     expect(retry.kind).toBe('accepted')
   })
 
-  it('the fallback engine label is a distinct, stable marker', () => {
-    // iOS ignores unknown fields, so this exists purely for observability —
-    // but it must not silently collide with a real provider id.
-    expect(FALLBACK_ENGINE_LABEL).toBe('walnut-agent-fallback')
-    expect(FALLBACK_ENGINE_LABEL).not.toBe('walnut-agent')
-    expect(FALLBACK_ENGINE_LABEL).not.toBe('claude-code')
-  })
 })
 
 describe('downlink frames: fan-out, engine stamping, and the injection gate', () => {

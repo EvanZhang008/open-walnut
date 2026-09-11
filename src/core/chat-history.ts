@@ -14,7 +14,7 @@ import { getContextThreshold } from '../agent/model.js';
 import type { ChatHistoryStore, ChatEntry, DisplayMessage } from './types.js';
 import { CHAT_HISTORY_FILE, chatHistoryFile, conversationFile } from '../constants.js';
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
-import { estimateMessagesTokens, estimateFullPayload, estimateTokens, compactDailyLog, formatDateKey } from './daily-log.js';
+import { estimateMessagesTokens, estimateTokens, compactDailyLog, formatDateKey } from './daily-log.js';
 import { getWorkingMemory, isWorkingMemoryEmpty, truncateWorkingMemoryForCompact, snapshotWorkingMemory } from './working-memory.js';
 import { effectiveTotalTokens, getLastTurnTokens, clearLastTurnTokens } from './token-truth.js';
 import { log } from '../logging/index.js';
@@ -1868,31 +1868,13 @@ export async function needsCompaction(agentId?: string, conversationId?: string)
     threshold = getContextThreshold(undefined, COMPACTION_PERCENT);
   }
 
-  let fullTotal: number;
-  let breakdown: { system: number; tools: number; messages: number; total: number };
-  try {
-    // Dynamic imports for agent modules to avoid circular dependencies
-    // (context.js and tools.js import from chat-history.ts)
-    const { buildSystemPrompt } = await import('../agent/context.js');
-    const { getToolSchemas } = await import('../agent/tools.js');
-    const system = await buildSystemPrompt(agentId, conversationId);
-    const tools = getToolSchemas();
-    breakdown = estimateFullPayload({ system, tools, messages: modelMsgs });
-    fullTotal = breakdown.total;
-  } catch (err) {
-    // Fallback: add a conservative overhead estimate so this doesn't silently
-    // revert to the old under-counting bug. The system prompt + tool schemas
-    // typically consume ~120K tokens; using that as a floor prevents the exact
-    // scenario this fix was designed to prevent.
-    const FALLBACK_OVERHEAD = 120_000;
-    log.agent.warn('needsCompaction: full payload estimation failed, using conservative overhead', {
-      error: String(err),
-      fallbackOverhead: FALLBACK_OVERHEAD,
-    });
-    const msgTokens = estimateMessagesTokens(modelMsgs);
-    fullTotal = msgTokens + FALLBACK_OVERHEAD;
-    breakdown = { system: FALLBACK_OVERHEAD, tools: 0, messages: msgTokens, total: fullTotal };
-  }
+  // Messages are the only part Walnut owns. The turn runs in a `claude` lane
+  // session, whose system prompt and tool schemas are the CLI's, so there is
+  // nothing here to estimate them from — and guessing a fixed overhead is what
+  // this gate must not do (it decides when to prune a real conversation).
+  // effectiveTotalTokens closes the gap with the number that is exact: the input
+  // count the lane's last turn reported.
+  const fullTotal = estimateMessagesTokens(modelMsgs);
 
   // Gate in REAL-token space, not estimate space. The offline estimator undercounts
   // Claude 3+ payloads by ~35%, so a real ~1.03M-token history estimated ~758K and
@@ -1904,9 +1886,7 @@ export async function needsCompaction(agentId?: string, conversationId?: string)
   const needed = effectiveTotal > threshold;
   log.agent.info('needsCompaction check', {
     messageCount: modelMsgs.length,
-    systemTokens: `~${Math.round(breakdown.system / 1000)}K`,
-    toolsTokens: `~${Math.round(breakdown.tools / 1000)}K`,
-    messageTokens: `~${Math.round(breakdown.messages / 1000)}K`,
+    messageTokens: `~${Math.round(fullTotal / 1000)}K`,
     // `fullTotal` retained as an alias of the raw estimate for backward-compatible log
     // scraping; `effectiveTotal` is the real-token-space value the gate actually uses.
     fullTotal: `~${Math.round(fullTotal / 1000)}K`,
@@ -2082,39 +2062,6 @@ export interface CompactionResult {
 }
 
 /**
- * Memory flush prompt — sent as a real agent turn so the agent can use
- * the `memory` tool to persist knowledge before compaction discards old messages.
- */
-export const MEMORY_FLUSH_MESSAGE = `Pre-compaction memory flush.
-
-Older turns are about to be compacted away. Persist what matters for RECALL
-before it's gone — route each item to the right store (three words):
-
-## Daily log (file_write memory/daily, append, max 800 chars)
-
-- **User requests**: their words, not paraphrased. Task names + IDs, not commits
-- **Decisions & why**: important choices and reasoning
-- **Struggles**: what blocked, how resolved, root causes, user corrections
-- **Events**: personal matters, noteworthy non-task events, new patterns
-- **Open threads**: unresolved questions, pending items
-
-DO NOT: commit SHAs, file line counts, bundle sizes, deploy status tables.
-Think: "What would I need to recall 2 weeks from now?"
-
-## Memory (memory_manage)
-New durable facts ONLY — declarative ("User prefers X"), never task progress.
-target:user = who the user is; target:memory = behavior rules.
-Replace stale entries, don't duplicate.
-
-## Skills (skill_manage patch / log_append)
-- A technique, fix, or pitfall from this window that a future conversation
-  needs → patch the matching skill NOW (it will be forgotten after compaction).
-- Notable project progress ("shipped X", "decided Y because...") →
-  log_append to that category's overview history.
-
-If nothing new → "Nothing to persist."`;
-
-/**
  * Minimum number of AI entries required before running memory flush.
  * With fewer than this, there's unlikely enough content to persist.
  */
@@ -2182,15 +2129,15 @@ function slimContent(content: unknown, stripImageData = false): unknown {
 }
 
 /**
- * Two-step compaction:
+ * Compaction: summarize, then prune.
  *
- * Step 1 (Memory Flush): Runs a real agent turn with the full tool set.
- *   The agent sees the current conversation and uses the `memory` tool
- *   to persist knowledge to daily logs, project memory, and global memory.
+ * Summarize: one LLM call that produces a structured checkpoint summary, stored
+ *   as compactionSummary and injected into the system prompt on subsequent
+ *   turns. Skipped entirely when working memory already holds a usable summary.
  *
- * Step 2 (Summarize): LLM call with fresh conversation (empty history).
- *   Produces a structured checkpoint summary stored as compactionSummary
- *   and injected into the system prompt on subsequent turns.
+ * `memoryFlusher` is an optional hook that runs alongside the summarizer to
+ *   persist knowledge before old messages are discarded. No production caller
+ *   supplies one.
  *
  * All entries before the turn boundary are DELETED from `entries[]` — both
  * old AI conversation and older UI notifications (triage/cron/subagent).
@@ -2202,7 +2149,7 @@ function slimContent(content: unknown, stripImageData = false): unknown {
  * tool_results from bloating future turns.
  *
  * @param summarizer — function that takes the compaction prompt and returns AI summary
- * @param memoryFlusher — optional function that runs the memory flush agent turn
+ * @param memoryFlusher — optional pre-prune memory persistence hook
  */
 export async function compact(
   summarizer: (instruction: string, history: MessageParam[]) => Promise<string>,
@@ -2258,7 +2205,7 @@ export async function compact(
   }
 
   // Prevent working memory updater from running during compaction
-  const { setCompacting } = await import('../agent/working-memory-updater.js');
+  const { setCompacting } = await import('./memory/working-memory-updater.js');
   setCompacting(true, agentId, conversationId);
 
   try {
@@ -2287,8 +2234,8 @@ export async function compact(
         : Promise.resolve(),
     ]);
 
-    // Step A (memory flush) already writes to daily log via the agent's memory tool.
-    // Step B (summarizer) only produces a summary for chat-history.json — no daily log write needed.
+    // The summarizer only produces a summary for chat-history.json — no daily
+    // log write needed here.
 
     // Final phase: re-read, mark compacted, write — all under write lock
     // to prevent concurrent writes from being lost.

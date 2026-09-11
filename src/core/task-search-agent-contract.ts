@@ -91,28 +91,9 @@ ${PROMPT_FOOTER}`;
 /** apiBase-less fallback shape (what injected-engine tests pin). */
 export const SYSTEM_PROMPT = buildCliSystemPrompt();
 
-/**
- * System prompt for the in-process engine (WALNUT_AGENT_SEARCH_ENGINE=
- * inprocess): the model has ONE native tool, `search`. Latency is dominated
- * by model round-trips, so the method
- * section pushes hard on batching query variants as PARALLEL tool calls in a
- * single round — profiled 2026-08-27: every extra round costs ~2-3s of model
- * time while a search call itself is ~150ms.
- */
-export const SYSTEM_PROMPT_TOOL_LOOP = `${PROMPT_HEADER}
-
-## Method — every model round costs the user seconds. Fewest rounds wins.
-0. The user message already contains SEED RESULTS: the raw query was searched for you. If they already show the plausible matches, answer IMMEDIATELY with ALL of them — no tool calls at all.
-1. Otherwise: issue SEVERAL search calls AT ONCE (parallel tool calls in one reply): variants with DIFFERENT vocabulary — the literal strings a transcript would contain (package names, file extensions, commands, API names) — plus an English <-> Chinese translation when the query could be phrased in the other language.
-2. Only if still nothing convincing: ONE more batched round with new vocabulary. Never repeat a query (the seed query counts as used).
-Then answer. Do not deliberate between rounds — a wide batch of searches beats thinking. Keep the answer terse: short evidence quotes, one-line summary.
-If a system message says your tool rounds are exhausted, print the JSON answer IMMEDIATELY from what you already saw (best guesses with lower confidence, or {"results":[]}). Never reply with prose about wanting more searches — a reply without the JSON object is a total failure.
-
-${PROMPT_FOOTER}`;
-
-/** Appended to the user prompt by the in-process engine: the raw query's own
- *  search results, pre-fetched server-side so the common case needs ONE model
- *  round instead of two (search round + answer round). */
+/** Appended to the user prompt: the raw query's own search results, pre-fetched
+ *  server-side so the common case needs ONE model round instead of two (search
+ *  round + answer round). */
 export function buildSeedResultsBlock(rowsJson: string): string {
   return `\n\nSEED RESULTS — the raw query was already searched for you (search tool, same format):\n${rowsJson}\nIf these already show the plausible matches, answer now with ALL of them, without any tool calls.`;
 }

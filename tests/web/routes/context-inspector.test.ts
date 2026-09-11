@@ -1,6 +1,11 @@
 /**
  * Integration tests for the context inspector API route.
  * Uses supertest against an Express app with the route mounted.
+ *
+ * There is one shape to test: a chat turn runs in a coding-agent session, so the
+ * route answers with that session's LAUNCH CONFIG. With no session yet it reports
+ * the persona the next spawn will carry (buildLaneProfile, the same builder a mint
+ * uses), and for a named session it reports that record or says it has no profile.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -15,8 +20,6 @@ import yaml from 'js-yaml';
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js';
 import { contextInspectorRouter } from '../../../src/web/routes/context-inspector.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { DEFAULT_MODEL } from '../../../src/agent/model.js';
-import { DEFAULT_MAX_TOKENS } from '../../../src/agent/providers/defaults.js';
 
 function createApp() {
   const app = express();
@@ -29,11 +32,12 @@ function createApp() {
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
-  // These sections describe the in-process assembly (tools, model config, token
-  // sums). The default engine is the claude-code lane, whose inspector answer is a
-  // different shape, so pin the engine this file is about.
   await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
-  await fs.writeFile(CONFIG_FILE, yaml.dump({ agent: { provider: 'walnut-agent' } }), 'utf-8');
+  await fs.writeFile(CONFIG_FILE, yaml.dump({
+    version: 1,
+    user: { name: 'Ada' },
+    provider: { type: 'claude-code' },
+  }), 'utf-8');
 });
 
 afterEach(async () => {
@@ -41,130 +45,13 @@ afterEach(async () => {
 });
 
 describe('GET /api/context', () => {
-  it('returns 200 with all expected sections', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/context');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('sections');
-    expect(res.body).toHaveProperty('totalTokens');
-
-    const { sections } = res.body;
-    expect(sections).toHaveProperty('modelConfig');
-    expect(sections).toHaveProperty('roleAndRules');
-    expect(sections).toHaveProperty('skills');
-    expect(sections).toHaveProperty('compactionSummary');
-    expect(sections).toHaveProperty('userProfile');
-    expect(sections).toHaveProperty('globalMemory');
-    expect(sections).toHaveProperty('dailyLogs');
-    expect(sections).toHaveProperty('tools');
-    expect(sections).toHaveProperty('apiMessages');
-  });
-
-  it('each section has content and tokens fields', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/context');
-
-    const { sections } = res.body;
-    for (const [name, section] of Object.entries(sections)) {
-      const s = section as { content: unknown; tokens: number };
-      expect(s, `section "${name}" missing content`).toHaveProperty('content');
-      expect(typeof s.tokens, `section "${name}" tokens is not a number`).toBe('number');
-      expect(s.tokens).toBeGreaterThanOrEqual(0);
-    }
-  });
-
-  it('totalTokens is close to the sum of all section tokens', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/context');
-
-    const { sections, totalTokens } = res.body;
-    const sum = Object.values(sections).reduce(
-      (acc, s) => acc + (s as { tokens: number }).tokens,
-      0,
-    );
-    // totalTokens uses estimateFullPayload() on the assembled prompt which includes
-    // additional headers/delimiters not counted in individual section estimates.
-    // Allow up to 5% divergence.
-    expect(totalTokens).toBeGreaterThanOrEqual(sum * 0.95);
-    expect(totalTokens).toBeLessThanOrEqual(sum * 1.05);
-  });
-
-  it('roleAndRules section contains Walnut identity', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/context');
-
-    const role = res.body.sections.roleAndRules.content as string;
-    expect(role).toContain('Walnut');
-    expect(role).toContain('project manager');
-  });
-
-  it('tools section lists all agent tools with count', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/context');
-
-    const tools = res.body.sections.tools;
-    expect(tools.count).toBeGreaterThan(0);
-    expect(Array.isArray(tools.content)).toBe(true);
-    expect(tools.content.length).toBe(tools.count);
-
-    // Each tool has name, description, input_schema
-    for (const tool of tools.content) {
-      expect(tool).toHaveProperty('name');
-      expect(tool).toHaveProperty('description');
-      expect(tool).toHaveProperty('input_schema');
-    }
-  });
-
-  it('modelConfig section has expected fields', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/context');
-
-    const config = res.body.sections.modelConfig.content;
-    expect(config).toHaveProperty('model');
-    expect(config).toHaveProperty('max_tokens');
-    expect(config.model).toBe(DEFAULT_MODEL);
-    expect(config.max_tokens).toBe(DEFAULT_MAX_TOKENS);
-    // Model config is call parameters, not prompt content — must cost 0 tokens
-    expect(res.body.sections.modelConfig.tokens).toBe(0);
-  });
-
-  it('userProfile section reflects USER.md bounded store', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/context');
-
-    expect(res.body.sections).toHaveProperty('userProfile');
-    expect(res.body.sections).not.toHaveProperty('projectSummaries');
-  });
-
-  it('apiMessages section starts empty (no chat history)', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/context');
-
-    const messages = res.body.sections.apiMessages;
-    expect(messages.count).toBe(0);
-    expect(messages.content).toEqual([]);
-  });
-
-  it("lane engine (agent.provider='claude-code') shows the session launch config, not the in-process assembly", async () => {
-    const yaml = await import('js-yaml');
-    const path = await import('node:path');
-    const { CONFIG_FILE } = await import('../../../src/constants.js');
-    await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
-    await fs.writeFile(CONFIG_FILE, yaml.dump({
-      version: 1,
-      user: { name: 'Ada' },
-      provider: { type: 'claude-code' },
-      agent: { provider: 'claude-code' },
-    }), 'utf-8');
-
-    const app = createApp();
-    const res = await request(app).get('/api/context');
+  it('reports the launch config of the session that answers, not a prompt Walnut assembles', async () => {
+    const res = await request(createApp()).get('/api/context');
 
     expect(res.status).toBe(200);
     expect(res.body.engine).toBe('claude-code');
-    // The prompt shown is the lane's --system-prompt (Personal AI persona), and the
-    // engine note explains ownership of tools/compaction.
+    // The prompt shown is the lane's persona block, and the engine note explains
+    // who owns tools and compaction.
     const role = res.body.sections.roleAndRules.content as string;
     expect(role).toContain('Claude Code session');
     expect(role).toContain('## Walnut operating contract');
@@ -180,16 +67,65 @@ describe('GET /api/context', () => {
     ]) {
       expect(role).not.toContain(removed);
     }
-    // In-process tool schemas / message history must NOT be presented as fed.
-    expect(res.body.sections.tools.count).toBe(0);
-    expect(res.body.sections.apiMessages.count).toBe(0);
-    // Skills ARE fed on this engine — the walnut skills index rides inside the
-    // system prompt, and the section splits it out for display.
+    // Skills ARE fed — the walnut skills index rides inside the system prompt, and
+    // the section splits it out for display.
     expect(res.body.sections.skills.content).toContain('Walnut skills');
     // Standing memory rides INSIDE the system prompt too (engine-neutral
     // injection) — the Global Memory section splits that block out.
     expect(res.body.sections.globalMemory.content).toContain('Standing memory (injected by Walnut)');
     expect(role).toContain('Standing memory (injected by Walnut)');
+  });
+
+  it('emits only sections with a real source — no zeroed tools or transcript', async () => {
+    const res = await request(createApp()).get('/api/context');
+
+    const { sections } = res.body;
+    expect(Object.keys(sections).sort()).toEqual(['globalMemory', 'modelConfig', 'roleAndRules', 'skills']);
+    // A zeroed tools/apiMessages section would read as "the model got none of
+    // that"; the session CLI owns both, so they are absent instead.
+    expect(sections).not.toHaveProperty('tools');
+    expect(sections).not.toHaveProperty('apiMessages');
+    expect(sections).not.toHaveProperty('compactionSummary');
+    expect(sections).not.toHaveProperty('dailyLogs');
+  });
+
+  it('each section has content and tokens fields', async () => {
+    const res = await request(createApp()).get('/api/context');
+
+    for (const [name, section] of Object.entries(res.body.sections)) {
+      const s = section as { content: unknown; tokens: number };
+      expect(s, `section "${name}" missing content`).toHaveProperty('content');
+      expect(typeof s.tokens, `section "${name}" tokens is not a number`).toBe('number');
+      expect(s.tokens).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('totalTokens is the system prompt, which already contains memory and skills', async () => {
+    const res = await request(createApp()).get('/api/context');
+
+    const { sections, totalTokens } = res.body;
+    expect(totalTokens).toBe(sections.roleAndRules.tokens);
+    // Substrings of the same prompt, so each is smaller than the whole.
+    expect(sections.skills.tokens).toBeLessThan(totalTokens);
+    expect(sections.globalMemory.tokens).toBeLessThan(totalTokens);
+  });
+
+  it('modelConfig describes the session, and costs no tokens', async () => {
+    const res = await request(createApp()).get('/api/context');
+
+    const config = res.body.sections.modelConfig.content;
+    expect(config).toHaveProperty('model');
+    expect(config).toHaveProperty('region');
+    // Not a prompt: call parameters must not be counted.
+    expect(res.body.sections.modelConfig.tokens).toBe(0);
+    // max_tokens had no source once the prompt stopped being assembled here.
+    expect(config).not.toHaveProperty('max_tokens');
+  });
+
+  it('404s an agent id the registry does not know', async () => {
+    const res = await request(createApp()).get('/api/context').query({ agentId: 'no-such-agent' });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain('no-such-agent');
   });
 });
 
@@ -242,9 +178,6 @@ describe('GET /api/context?sessionId=', () => {
     const role = res.body.sections.roleAndRules.content as string;
     expect(role).toContain('Claude Code session');
     expect(role).toContain(SYSTEM_PROMPT);
-    // The in-process assembly is NOT what this engine feeds.
-    expect(res.body.sections.tools.count).toBe(0);
-    expect(res.body.sections.apiMessages.count).toBe(0);
   });
 
   it('says so instead of synthesizing a prompt when the record has no profile', async () => {

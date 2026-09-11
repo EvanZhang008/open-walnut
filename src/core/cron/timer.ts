@@ -261,16 +261,12 @@ async function executeJobCore(
       return { status: 'error', error: actionResult.error };
     }
 
-    // targetAgent set → pipe directly to subagent (takes precedence over invokeAgent)
+    // targetAgent used to pipe the action result into a config-defined action
+    // agent that ran inside the server. Recorded as a failed run rather than
+    // silently ignored: the field is still in stored jobs, and a job that looks
+    // like it ran while doing nothing is worse than one that says why it didn't.
     if (job.initProcessor.targetAgent) {
-      if (!state.deps.runActionWithAgent) {
-        return { status: 'error', error: `targetAgent '${job.initProcessor.targetAgent}' requires runActionWithAgent dependency` };
-      }
-      return await state.deps.runActionWithAgent(
-        actionResult,
-        job.initProcessor.targetAgent,
-        job.initProcessor.targetAgentModel,
-      );
+      return { status: 'error', error: 'action agents were removed; use the claude-code executor' };
     }
 
     // invokeAgent=false → return action result directly, done

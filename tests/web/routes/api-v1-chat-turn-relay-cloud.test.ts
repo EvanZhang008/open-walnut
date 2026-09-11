@@ -1,7 +1,7 @@
 /**
  * POST /api/v1/conversations/:id/messages on a CLOUD REPLICA — the chat turn is
- * relayed to the primary so it runs on the PRIMARY's engine (claude-code),
- * instead of the replica's in-process walnut-agent loop.
+ * relayed to the primary, because a turn runs in a `claude` CLI session and only
+ * the primary has one.
  *
  * Real startServer with CLOUD_MODE forced, and a real /bridge socket driven
  * through the actual attachBridge/handleFrame path — so the hello handshake,
@@ -16,11 +16,12 @@
  *    the answering engine stamped on the terminal frame;
  *  - the replica writes NO chat history for a relayed turn (the primary is the
  *    single writer — two writers would double every message under git-sync);
- *  - bridge down degrades to the local loop and marks the terminal frame;
+ *  - bridge down ends the turn with the SSE `error` the phone already unlocks on,
+ *    and still writes nothing here (there is no second engine to degrade to);
  *  - an IMAGE turn relays too: the bytes ride the `image.save` daemon lane and
  *    the control RPC carries only host PATHS (base64 in a control frame is the
  *    1009 oversized-frame kill), the replica stages nothing on its own disk, and
- *    a staging refusal degrades the whole turn to the marked local loop.
+ *    an image that will not stage takes the whole turn down the same error path.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -31,27 +32,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-chat-relay-cloud', { CLOUD_MODE: true }))
 
-// The ONLY mock: the model call itself (project rule — mock the engine, never
-// the plumbing). Everything the feature owns (HTTP, bridge protocol, relay,
-// SSE, persistence) is real. Without this the fallback case makes a live Bedrock
-// call whose latency under machine load, not the code, decides pass/fail.
-vi.mock('../../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async (
-    userContent: string | unknown[],
-    _history: unknown,
-    callbacks: { onTextDelta?: (d: string) => void },
-  ) => {
-    callbacks.onTextDelta?.('local ')
-    callbacks.onTextDelta?.('fallback answer')
-    return {
-      response: 'local fallback answer',
-      newMessages: [
-        { role: 'user', content: typeof userContent === 'string' ? [{ type: 'text', text: userContent }] : userContent },
-        { role: 'assistant', content: [{ type: 'text', text: 'local fallback answer' }] },
-      ],
-    }
-  }),
-}))
+// Nothing is mocked beyond the constants: a replica has no engine to reach, so
+// every path in this file either relays or reports that it could not.
 
 import { WALNUT_HOME, IMAGES_DIR, MOBILE_STAGED_IMAGES_DIR } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
@@ -63,6 +45,11 @@ import { resetChatTurnRelayState } from '../../../src/web/routes/chat-turn-relay
 let server: HttpServer
 let port: number
 let deviceToken: string
+
+/** Must stay in step with PRIMARY_UNREACHABLE_MESSAGE in routes/api-v1.ts — the
+ *  phone shows this string verbatim, so it is part of the contract. */
+const PRIMARY_UNREACHABLE =
+  "Walnut's primary is unreachable; the replica cannot answer on its own. Try again when the primary is back."
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -476,7 +463,7 @@ describe('an image turn also runs on the primary\'s engine', () => {
     }
   }, 40_000)
 
-  it('a staging refusal degrades the WHOLE turn to the local loop, marked as a fallback', async () => {
+  it('a staging refusal ends the WHOLE turn with the unreachable error', async () => {
     const primary = connectFakePrimary()
     primary.onControl = () => ({ ok: true, result: { accepted: true, engine: 'claude-code' } })
     // An old daemon that predates image.save. The turn must not be relayed
@@ -490,16 +477,16 @@ describe('an image turn also runs on the primary\'s engine', () => {
         { data: TINY_PNG_BASE64, mediaType: 'image/png' },
       ])).status).toBe(202)
 
-      const end = await sse.waitFor((e) => e.event === 'message-end', 30_000)
-      expect(end.data.fullText).toBe('local fallback answer')
-      expect(end.data.engine).toBe('walnut-agent-fallback')
+      const err = await sse.waitFor((e) => e.event === 'error', 30_000)
+      expect(String(err.data.message)).toBe(PRIMARY_UNREACHABLE)
+      expect(sse.events.some((e) => e.event === 'message-end')).toBe(false)
 
-      // No relay attempt at all, and the picture IS on this box now — the local
-      // loop is the writer on the fallback path, images included.
+      // The turn never went on the wire, and the replica kept nothing: no picture
+      // in its image store, no history row. An unanswerable turn must not leave a
+      // half-turn behind for git-sync to hand the primary later.
       expect(primary.received.some((f) => f.action === 'server.chat.turn')).toBe(false)
-      expect((await listReplicaImageStore()).length).toBe(1)
-      const entries = await readReplicaHistory(conv.id) as Array<{ role?: string }>
-      expect(entries.filter((e) => e.role === 'user')).toHaveLength(1)
+      expect(await listReplicaImageStore()).toEqual([])
+      expect(await readReplicaHistory(conv.id)).toEqual([])
     } finally {
       sse.close()
       primary.close()
@@ -507,26 +494,24 @@ describe('an image turn also runs on the primary\'s engine', () => {
   }, 60_000)
 })
 
-describe('degradation: no bridge → the replica answers locally, and says so', () => {
-  it('falls back to the in-process loop and marks the terminal frame', async () => {
+describe('degradation: no bridge → the replica says it cannot answer', () => {
+  it('ends the turn with the unreachable SSE error and writes nothing', async () => {
     // No bridge connected at all: callPrimaryControl fails with BridgeOfflineError.
+    // A replica has no engine of its own, so the honest answer is to say so — and
+    // to say it on the ONE channel the phone unlocks its composer on. A turn that
+    // ends with neither message-end nor error leaves the composer spinning.
     const conv = await createConversation('general')
     const sse = await connectSse(apiUrl(`/api/v1/conversations/${conv.id}/stream`))
     try {
       expect((await postMessage(conv.id, 'hello with no bridge')).status).toBe(202)
 
-      // The user still gets a real answer — the degradation is never an error.
-      const end = await sse.waitFor((e) => e.event === 'message-end', 30_000)
-      expect(end.data.fullText).toBe('local fallback answer')
-      // …and it is marked, so a degraded box is observable without a client change.
-      expect(end.data.engine).toBe('walnut-agent-fallback')
+      const err = await sse.waitFor((e) => e.event === 'error', 30_000)
+      expect(String(err.data.message)).toBe(PRIMARY_UNREACHABLE)
+      expect(sse.events.some((e) => e.event === 'message-end')).toBe(false)
 
-      // The local loop IS the writer on the fallback path — both the user's
-      // message and the answer must be on THIS box's disk, or a phone reload
-      // would lose the turn (the relayed path is the opposite: zero writes here).
-      const entries = await readReplicaHistory(conv.id) as Array<{ role?: string }>
-      expect(entries.filter((e) => e.role === 'user').length).toBe(1)
-      expect(entries.filter((e) => e.role === 'assistant').length).toBe(1)
+      // Nothing on this box's disk: the primary is the single writer for every
+      // turn, answered or not, so a reconnect cannot resurrect a ghost half-turn.
+      expect(await readReplicaHistory(conv.id)).toEqual([])
     } finally {
       sse.close()
     }
@@ -537,11 +522,10 @@ describe('degradation: no bridge → the replica answers locally, and says so', 
  * The model pill's engine question is relayed too.
  *
  * A relayed turn runs on the primary, so "which engine answers this
- * conversation, and on which lane session" are facts about the PRIMARY. The
- * replica used to answer from its own config: it reported `in-process` with its
- * own `main_model` (usually absent), which is true only of the rare bridge-down
- * fallback and false of every relayed turn — so the phone's model pill showed
- * either the wrong model or, with no model to name, nothing at all.
+ * conversation, and on which lane session" are facts about the PRIMARY. A replica
+ * answering from its own config named a model no turn would ever use, so the
+ * phone's model pill showed either the wrong model or, with no model to name,
+ * nothing at all.
  */
 describe('the chat engine question is answered by the box that answers the turn', () => {
   async function getEngine(conversationId: string): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -570,7 +554,7 @@ describe('the chat engine question is answered by the box that answers the turn'
     const conv = await createConversation('general')
     const got = await getEngine(conv.id)
     expect(got.status).toBe(200)
-    // The PRIMARY's answer, verbatim — not this replica's in-process config.
+    // The PRIMARY's answer, verbatim — not this replica's own config.
     expect(got.body.engine).toBe('lane')
     expect(got.body.sessionId).toBe('primary-lane-1')
 
@@ -598,11 +582,10 @@ describe('the chat engine question is answered by the box that answers the turn'
   }, 30_000)
 
   it('bridge down → 503 primary_unreachable, never this box\'s own config', async () => {
-    // No bridge at all. Answering from this box used to be treated as honest
-    // degradation ("the fallback loop would answer the next message"), but the
-    // relayed turn is what actually happens and the mislabelled pill outlives the
-    // outage — it told the phone the model was fixed by "the server's config" and
-    // locked the control with that reason. A retryable 503 is the true answer.
+    // No bridge at all. Answering from this box's config was once treated as
+    // honest degradation, but the mislabelled pill outlives the outage — it told
+    // the phone the model was fixed by "the server's config" and locked the
+    // control with that reason. A retryable 503 is the true answer.
     const conv = await createConversation('general')
     const got = await getEngine(conv.id)
     expect(got.status).toBe(503)

@@ -1,16 +1,10 @@
 /**
- * Cloud chat-turn relay — "the phone's chat runs on the PRIMARY's engine".
+ * Cloud chat-turn relay — "the phone's chat runs on the PRIMARY".
  *
- * THE BUG THIS FIXES: a chat turn sent from the phone through the cloud replica
- * ran the replica's OWN in-process `walnut-agent` loop, because the replica's
- * config carries no `agent.provider` and `resolveAgentEngineProvider` defaults
- * to 'walnut-agent'. The Mac is configured `provider: claude-code`, so the same
- * question answered by two different engines depending on which box the phone
- * happened to reach — different tools, different memory, different skills.
- *
- * Writing `provider: claude-code` into the replica's config is NOT the fix: the
- * lane engine needs a local session runner and a `claude` CLI, and the replica
- * has neither. The turn has to RUN on the box that owns the lane session.
+ * A chat turn is answered by a `claude` CLI session (the conversation's lane),
+ * which needs a local session runner and the CLI itself. A cloud replica has
+ * neither, so a turn the phone sends there cannot run there: it has to RUN on the
+ * box that owns the lane session.
  *
  * ── Transport: two lanes that already exist, zero daemon changes ─────────────
  *
@@ -65,18 +59,17 @@
  * (~60 bytes each). The primary adopts those staged files into its own image
  * store and runs its ordinary image orchestration from there.
  *
- * ── Degradation: never "no engine" ───────────────────────────────────────────
+ * ── When the relay cannot be used ────────────────────────────────────────────
  *
  * Bridge down, primary's server down, old primary, relay error, or ANY image
- * that could not be staged (too large for `image.save`, a daemon predating it,
- * a save error) all fall back to the replica's in-process loop and mark the
- * terminal frame `engine: 'walnut-agent-fallback'`. That field is additive; a
- * client that ignores it behaves exactly as before.
+ * that could not be staged (too large for `image.save`, a daemon predating it, a
+ * save error) all report `unavailable`. The replica has no second engine to
+ * answer with — a turn runs in a `claude` session and this box has none — so the
+ * caller ends the turn with an SSE `error` instead (see runApiV1TurnRouted).
  *
  * Image failures are all-or-nothing on purpose: a turn that answered a picture
  * question from a partially-staged attachment set would be confidently wrong,
- * which is worse than the honest degraded answer the local loop gives (it still
- * has every image, on its own disk).
+ * which is worse than telling the user the primary is out of reach.
  */
 
 import { CLOUD_MODE } from '../../constants.js'
@@ -117,22 +110,14 @@ const KEEPALIVE_EVENT = '__keepalive'
 /** Keepalive cadence on the primary — well inside RELAY_FRAME_SILENCE_MS. */
 const KEEPALIVE_INTERVAL_MS = 60_000
 
-/** Engine label stamped on a terminal frame when the relay could not be used. */
-export const FALLBACK_ENGINE_LABEL = 'walnut-agent-fallback'
-
 /**
- * Engine label for an ORDINARY in-process turn — the same word
- * `resolveAgentEngineProvider` uses, so config and provenance read alike.
+ * The engine label on the accept reply and on the terminal SSE frame.
  *
- * Both labels are now written to DISK as well (chat-history's `engine` stamp),
- * not just onto the terminal SSE frame. That stamp is what lets a lane engine
- * discover turns another engine answered while it was unreachable: the incident
- * this pair exists for is a replica answering turn 1 with FALLBACK_ENGINE_LABEL
- * while the Mac slept, after which the Mac's lane denied the turn had happened.
- * With the answer unstamped, that had to be reconstructed from commit authorship
- * and tool-name vocabulary.
+ * One value, because a chat turn has one engine: the conversation's `claude` lane
+ * session. Kept on the wire rather than dropped because it is part of the frozen
+ * v1 frame shape (docs/reference/api-v1.md) and a client is allowed to read it.
  */
-export const IN_PROCESS_ENGINE_LABEL = 'walnut-agent'
+const PRIMARY_ENGINE_LABEL = 'claude-code'
 
 /**
  * No-frame watchdog on the replica. The primary always ends a turn with a
@@ -194,7 +179,7 @@ async function stageImagesOnPrimary(
   // Count cap first — cheap, and the REST route already clamps to the same
   // number, so a longer list means a caller that bypassed it.
   if (rawImages.length > maxImagesPerMessage()) {
-    log.web.info('chat-turn relay: too many images to stage — falling back', {
+    log.web.info('chat-turn relay: too many images to stage — the turn cannot be relayed', {
       conversationId, turnId, count: rawImages.length,
     })
     return null
@@ -210,7 +195,7 @@ async function stageImagesOnPrimary(
     const { compressImagesInMemory } = await import('./images.js')
     images = await compressImagesInMemory(rawImages)
   } catch (err) {
-    log.web.info('chat-turn relay: image compression failed — falling back', {
+    log.web.info('chat-turn relay: image compression failed — the turn cannot be relayed', {
       conversationId, turnId, error: err instanceof Error ? err.message : String(err),
     })
     return null
@@ -220,7 +205,7 @@ async function stageImagesOnPrimary(
   if (oversized) {
     // compressForApi gives up rather than throwing on formats sharp can't read
     // (or a GIF that stays huge), so a post-compression check is still needed.
-    log.web.info('chat-turn relay: an image exceeds the image.save limits — falling back', {
+    log.web.info('chat-turn relay: an image exceeds the image.save limits — the turn cannot be relayed', {
       conversationId, turnId, base64Length: oversized.data.length,
     })
     return null
@@ -241,7 +226,7 @@ async function stageImagesOnPrimary(
       // Bridge offline / request timeout. Nothing to clean up: the daemon stages
       // into its own /tmp dir, and an orphaned staged file is only a few
       // kilobytes on a path that gets reaped with the rest of the daemon tree.
-      log.web.info('chat-turn relay: image staging transport failed — falling back', {
+      log.web.info('chat-turn relay: image staging transport failed — the turn cannot be relayed', {
         conversationId, turnId, error: err instanceof Error ? err.message : String(err),
       })
       return null
@@ -250,7 +235,7 @@ async function stageImagesOnPrimary(
       paths.push(saved.path)
       continue
     }
-    log.web.info('chat-turn relay: the primary refused an image — falling back', {
+    log.web.info('chat-turn relay: the primary refused an image — the turn cannot be relayed', {
       conversationId, turnId, reason: String(saved.error ?? 'unknown'),
     })
     return null
@@ -263,7 +248,7 @@ async function stageImagesOnPrimary(
 
 /**
  * Ask the primary to run one chat turn. Never throws: every failure comes back
- * as `unavailable` so the caller can fall back to the in-process loop.
+ * as `unavailable` so the caller can end the turn with an error instead.
  *
  * Resolves as soon as the primary ACCEPTS. `settled` resolves later, when the
  * turn's terminal frame arrives (or the watchdog fires) — await it to hold a
@@ -333,7 +318,7 @@ export async function relayChatTurnToPrimary(
 
   if (!outcome.ok) {
     clearInFlight(conversationId, turnId)
-    log.web.info('chat-turn relay unavailable — falling back to the in-process loop', {
+    log.web.info('chat-turn relay unavailable', {
       conversationId, turnId, agentId, failureKind: outcome.failure.kind, reason: outcome.failure.message,
     })
     return { kind: 'unavailable', reason: `${outcome.failure.kind}: ${outcome.failure.message}` }
@@ -530,16 +515,15 @@ export interface PrimaryChatTurnOutcome {
  * 'server.chat.turn'). Starts the turn and returns immediately — the daemon's
  * 45s relay budget cannot cover a real turn, and the answer rides the downlink.
  *
- * Deliberately runs the ORDINARY `runApiV1Turn`: it resolves this box's own
- * `agent.provider` (so a claude-code Mac answers on the lane engine, which is
- * the entire point), owns persistence, and owns the SSE contract. There is no
- * second turn implementation to keep in sync.
+ * Deliberately runs the ORDINARY `runApiV1Turn`: it delivers into this box's own
+ * lane session for the conversation, owns persistence, and owns the SSE contract.
+ * There is no second turn implementation to keep in sync.
  *
  * `imagePaths` (optional) name files the replica staged on THIS box through the
  * daemon's `image.save`. They are adopted (validated → re-compressed → saved
  * into this box's own image store) BEFORE the accept, so a bad or vanished
- * attachment is a REFUSAL the replica can still fall back from, never a turn
- * that silently answers a picture question without the picture.
+ * attachment is a REFUSAL the replica reports as an error, never a turn that
+ * silently answers a picture question without the picture.
  */
 export async function handlePrimaryChatTurnRelay(
   params: Record<string, unknown>,
@@ -562,7 +546,7 @@ export async function handlePrimaryChatTurnRelay(
     // Idempotent replay: the turn is already running (or finished) here. Report
     // accepted so the replica keeps waiting for frames instead of double-sending.
     log.web.info('chat-turn relay replay deduped', { conversationId, turnId, agentId })
-    return { accepted: true, turnId, duplicate: true, engine: await resolvePrimaryEngineLabel() }
+    return { accepted: true, turnId, duplicate: true, engine: PRIMARY_ENGINE_LABEL }
   }
   if (primaryTurns.has(conversationId)) {
     return {
@@ -600,7 +584,7 @@ export async function handlePrimaryChatTurnRelay(
   const { ensureConversationRow } = await import('../../core/conversations.js')
   await ensureConversationRow(agentId, conversationId, text)
 
-  const engine = await resolvePrimaryEngineLabel()
+  const engine = PRIMARY_ENGINE_LABEL
   rememberTurnId(turnId)
   primaryTurns.set(conversationId, turnId)
   // Arm the mirror BEFORE the turn starts so its very first frame
@@ -646,11 +630,9 @@ export async function handlePrimaryChatTurnRelay(
  * session" for a REPLICA (`session.control` action 'server.chat.engine').
  *
  * The companion to handlePrimaryChatTurnRelay. A relayed turn runs HERE, so the
- * engine and the switchable model are facts about THIS box — a replica answering
- * from its own config reported `in-process` with its own `main_model`, which was
- * true of a fallback turn that almost never happens and false of every relayed
- * turn that does. The phone's model pill was therefore either wrong or (with no
- * `main_model` on the replica) absent entirely.
+ * lane session behind it is a fact about THIS box — a replica answering from its
+ * own state described a session that does not exist, and the phone's model pill
+ * was therefore either wrong or absent entirely.
  *
  * `ensure: true` mints the lane. Deliberately a PARAMETER rather than always-on:
  * the read side is used by a poll, and a poll must never spawn a CLI.
@@ -660,15 +642,6 @@ export async function handlePrimaryChatEngineRelay(
 ): Promise<Record<string, unknown>> {
   const agentId = typeof params.agentId === 'string' && params.agentId ? params.agentId : 'general'
   const ensure = params.ensure === true
-  const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-  const config = await getConfig()
-  if (resolveAgentEngineProvider(config) !== 'claude-code') {
-    return {
-      engine: 'in-process',
-      sessionId: null,
-      ...(config.agent?.main_model ? { model: config.agent.main_model } : {}),
-    }
-  }
 
   // Resolve the conversation on THIS box: a replica may pass an explicit id, or
   // none at all (its "active conversation" is its own bookkeeping, not ours).
@@ -694,15 +667,5 @@ export async function handlePrimaryChatEngineRelay(
     ...(record?.cwd ? { cwd: record.cwd } : {}),
     // '' on the record means this box, matching ProjectedSession.host.
     ...(record ? { host: record.host ?? '' } : {}),
-  }
-}
-
-/** This box's configured chat engine, for the accept reply's telemetry. */
-async function resolvePrimaryEngineLabel(): Promise<string> {
-  try {
-    const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-    return resolveAgentEngineProvider(await getConfig())
-  } catch {
-    return 'unknown'
   }
 }

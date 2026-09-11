@@ -31,10 +31,6 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-chat-model-cloud', { CLOUD_MODE: true }))
 
-vi.mock('../../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async () => ({ messages: [], newMessages: [], response: '', aborted: false })),
-}))
-
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { attachBridge, closeAllBridges } from '../../../src/web/ws/bridge-registry.js'

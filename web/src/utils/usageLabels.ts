@@ -15,8 +15,8 @@ const USAGE_LABELS: Record<string, string> = {
   agent: 'Main agent',
   'agent-cli': 'Main agent (CLI)',
   session: 'Claude Code session',
-  // A main-AI turn answered by its lane-bound CLI session (agent.provider='claude-code').
-  // Same work as 'agent', different engine — hence its own source, one label apart.
+  // A main-AI turn, answered by the conversation's lane-bound CLI session. Kept
+  // apart from 'agent' because historical rows under both ids still exist.
   chat: 'Main AI (Claude Code engine)',
   compaction: 'Compaction',
   heartbeat: 'Heartbeat',

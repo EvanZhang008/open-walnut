@@ -871,7 +871,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // File path click → open the shared FileViewer overlay. Self-contained so every
-  // page that renders ChatMessage (MainPage chat + session columns, ChatPage) gets
+  // page that renders ChatMessage (MainPage chat + session columns) gets
   // clickable file paths without threading a callback through the props chain.
   // EVERY file type (vault notes included) opens here — see FileContentView's
   // "Open in Notes" button for the opt-in jump to /notes.

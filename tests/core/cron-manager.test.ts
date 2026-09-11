@@ -1303,6 +1303,33 @@ describe('executeJob — execution flow', () => {
     expect(broadcastFn).not.toHaveBeenCalled();
   });
 
+  it('a job whose initProcessor names a targetAgent fails with a clear error', async () => {
+    // Action agents ran inside the server and are gone. Stored jobs still carry
+    // the field, so the run must SAY so instead of quietly doing nothing.
+    const runActionFn = vi.fn().mockResolvedValue({ status: 'ok', summary: 'screenshot taken' });
+    const runIsolatedFn = vi.fn().mockResolvedValue({ status: 'ok', summary: 'done' });
+    const service = await isolatedSvc({ runAction: runActionFn, runIsolatedAgentJob: runIsolatedFn });
+    const job = await service.add({
+      name: 'Action Agent Job',
+      enabled: true,
+      schedule: { kind: 'every', everyMs: 60_000 },
+      sessionTarget: 'isolated',
+      wakeMode: 'now',
+      payload: { kind: 'agentTurn', message: 'analyze the screenshot' },
+      initProcessor: { actionId: 'screenshot', targetAgent: 'screen-watcher' },
+    });
+
+    await service.run(job.id, 'force');
+    const jobs = await service.list({ includeDisabled: true });
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated?.state.lastStatus).toBe('error');
+    expect(updated?.state.lastError).toContain('action agents were removed');
+    expect(updated?.state.lastError).toContain('claude-code executor');
+    // The action still ran (it is the pre-step), but nothing consumed its result.
+    expect(runActionFn).toHaveBeenCalledTimes(1);
+    expect(runIsolatedFn).not.toHaveBeenCalled();
+  });
+
   it('job execution error increments consecutiveErrors and sets error status', async () => {
     const runIsolatedFn = vi.fn().mockRejectedValue(new Error('boom'));
     const service = await isolatedSvc({ runIsolatedAgentJob: runIsolatedFn });

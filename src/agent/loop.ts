@@ -248,7 +248,7 @@ export async function runAgentLoop(
   // Convert the `false` sentinel to an explicit disabled config object.
   const cacheConfig = options?.cacheConfig === false
     ? { enabled: false } as CacheConfig
-    : (options?.cacheConfig ?? config.agent?.cache);
+    : options?.cacheConfig;
 
   // Inject current date/time. Placement differs by path, and the difference is
   // load-bearing for the prompt cache:
@@ -299,7 +299,7 @@ export async function runAgentLoop(
   };
 
   const modelConfig: ModelConfig = options?.modelConfig ?? {
-    model: config.agent?.main_model ?? config.agent?.model,
+    model: config.agent?.main_model,
     provider: config.agent?.main_provider,
     region: config.agent?.region,
     maxTokens: config.agent?.maxTokens,

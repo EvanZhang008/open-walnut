@@ -10,8 +10,9 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { validateAgentId, validateConversationId } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
-import { estimateMessagesTokens, estimateFullPayload } from '../../core/daily-log.js'
+import { estimateMessagesTokens } from '../../core/daily-log.js'
 import { getContextWindowSize } from '../../agent/model.js'
+import { getLastTurnTokens } from '../agent-turn-queue.js'
 import { log } from '../../logging/index.js'
 import { isCompactionInProgress, triggerBackgroundCompaction } from '../background-compaction.js'
 
@@ -34,13 +35,19 @@ async function resolveChatRef(req: Request): Promise<{ agentId: string | undefin
   return { agentId, conversationId }
 }
 
-// Per-agent cache for stats endpoint — avoids rebuilding system prompt + tool schemas.
-// Invalidated automatically when file mtime changes (any chat history write).
+// Per-agent cache for the stats endpoint, invalidated automatically when the
+// chat-history file mtime changes (any write).
+//
+// `systemTokens`/`toolsTokens` are OPTIONAL and normally absent: a turn runs in a
+// `claude` lane session, whose system prompt and tool schemas belong to the CLI,
+// so Walnut cannot break the payload down. The one number it does know exactly is
+// the whole input the lane last reported (see estimatedTotalTokens below), and
+// both clients read the total, treating the two parts as optional extras.
 export interface ChatStatsPayload {
   apiMessageCount: number
   estimatedTokens: number
-  systemTokens: number
-  toolsTokens: number
+  systemTokens?: number
+  toolsTokens?: number
   estimatedTotalTokens: number
   compacted: boolean
   contextWindow: number
@@ -71,38 +78,13 @@ export async function computeChatStats(
   const messageTokens = estimateMessagesTokens(modelContext)
   const summary = await chatHistory.getCompactionSummary(agentId, conversationId)
 
-  // Compute full payload estimate (system + tools + messages)
-  let systemTokens = 0
-  let toolsTokens = 0
-  if (!agentId || agentId === 'general') {
-    // General agent: use full system prompt + tools
-    try {
-      const { buildSystemPrompt } = await import('../../agent/context.js')
-      const { getToolSchemas } = await import('../../agent/tools.js')
-      const systemPrompt = await buildSystemPrompt(agentId, conversationId)
-      const tools = getToolSchemas()
-      const breakdown = estimateFullPayload({ system: systemPrompt, tools, messages: modelContext })
-      systemTokens = breakdown.system
-      toolsTokens = breakdown.tools
-    } catch (err) {
-      log.web.warn('chat stats: full payload estimation failed', { error: String(err) })
-    }
-  } else {
-    // Non-General: estimate from agent def system prompt + filtered tools
-    try {
-      const { getConsoleAgent } = await import('../../core/agent-registry.js')
-      const { buildSubagentToolSet } = await import('../../agent/subagent-context.js')
-      const { estimateTokens } = await import('../../core/daily-log.js')
-      const agentDef = await getConsoleAgent(agentId)
-      if (agentDef) {
-        systemTokens = estimateTokens(agentDef.system_prompt ?? '')
-        const agentTools = await buildSubagentToolSet(agentDef)
-        toolsTokens = estimateTokens(JSON.stringify(agentTools))
-      }
-    } catch (err) {
-      log.web.warn('chat stats: agent payload estimation failed', { agentId, error: String(err) })
-    }
-  }
+  // The lane's own last-reported input count: the EXACT total the CLI sent,
+  // system prompt and tool schemas included, fed by the session:usage-update
+  // handler. It is the only honest "how full is this context" number here, since
+  // the lane's system prompt and tools are the CLI's, not Walnut's. 0 until the
+  // lane's first assistant message reports usage — then the message estimate is
+  // the best available answer.
+  const laneTokens = getLastTurnTokens(conversationId) ?? 0
 
   // Read model from config for context window detection
   let contextWindow: number
@@ -117,9 +99,7 @@ export async function computeChatStats(
   const result: ChatStatsPayload = {
     apiMessageCount: modelContext.length,
     estimatedTokens: messageTokens,
-    systemTokens,
-    toolsTokens,
-    estimatedTotalTokens: systemTokens + toolsTokens + messageTokens,
+    estimatedTotalTokens: laneTokens > 0 ? laneTokens : messageTokens,
     compacted: !!summary,
     contextWindow,
   }

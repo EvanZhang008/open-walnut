@@ -2,8 +2,8 @@
  * Tests for task context injection into chat messages.
  *
  * Verifies that when the frontend sends a chat message with a taskContext object,
- * the server prepends a [Task Context] prefix to the user message before sending
- * it to the agent, and that the prefixed message is persisted in the API history.
+ * the server prepends a [Task Context] prefix to the user message before the turn
+ * runs, and that the prefixed message is persisted in the API history.
  *
  * Bug: The agent was responding "I can't see your screen" because the task context
  * prefix was not being prepended to messages or not persisted in API history.
@@ -406,26 +406,60 @@ describe('enrichTaskContext', () => {
 //  Integration: chat RPC with taskContext → prefix in API messages
 // ═══════════════════════════════════════════════════════════════════
 
-// Mock agent loop to avoid Bedrock calls — just echo back the user message
-vi.mock('../../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async (userMessage: string, history: Array<{ role: string; content: unknown }>) => {
-    const messages = [
-      ...history,
-      { role: 'user', content: userMessage },
-      { role: 'assistant', content: [{ type: 'text', text: 'mock response' }] },
-    ];
-    return { messages, response: 'mock response' };
-  }),
-}));
-
 import type { Server as HttpServer } from 'node:http';
 import { WebSocket } from 'ws';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { startServer, stopServer } from '../../../src/web/server.js';
 import * as chatHistory from '../../../src/core/chat-history.js';
+import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js';
+import type { SessionStartEvent } from '../../../src/core/event-types.js';
+import { markProcessing, removeProcessed } from '../../../src/core/session-message-queue.js';
 
 let server: HttpServer;
 let port: number;
+
+/**
+ * Consume a session's queued messages the way a real delivery would. Tracked so
+ * teardown can await it: a message left 'pending' when the server goes down is
+ * what the local daemon's reconnect redelivery would cold-`--resume` into a REAL
+ * `claude` spawn.
+ */
+const inFlightDrains = new Set<Promise<void>>();
+
+function drainQueue(sessionId: string): void {
+  const p = (async () => {
+    try {
+      const batch = await markProcessing(sessionId);
+      if (batch.length > 0) await removeProcessed(sessionId, batch.map((m) => m.id));
+    } catch { /* the store may be torn down between tests */ }
+  })();
+  inFlightDrains.add(p);
+  void p.finally(() => inFlightDrains.delete(p));
+}
+
+/**
+ * Fake session-runner standing in for the `claude` CLI: the chat RPC AWAITS the
+ * lane turn, so a runner that never answers hangs the RPC to its timeout.
+ * Replacing the subscriber by NAME displaces the real runner startServer added,
+ * so nothing here can reach a real spawn.
+ */
+function installFakeRunner(): void {
+  bus.subscribe('session-runner', (event: BusEvent) => {
+    let sid: string | undefined;
+    if (event.name === EventNames.SESSION_START) {
+      sid = (event.data as SessionStartEvent).preassignedSessionId;
+    } else if (event.name === EventNames.SESSION_SEND) {
+      sid = (event.data as { sessionId: string }).sessionId;
+    }
+    if (!sid) return;
+    drainQueue(sid);
+    const sessionId = sid;
+    setTimeout(() => {
+      bus.emit(EventNames.SESSION_RESULT, { sessionId, result: 'lane answer', isError: false },
+        ['main-ai', 'session-runner'], { source: 'session-runner' });
+    }, 5);
+  });
+}
 
 function connectWs(): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -474,16 +508,20 @@ describe('Chat RPC task context integration', () => {
     server = await startServer({ port: 0, dev: true });
     const addr = server.address();
     port = typeof addr === 'object' && addr ? addr.port : 0;
+    installFakeRunner();
     const { getActiveConversationId } = await import('../../../src/core/conversations.js');
     convId = await getActiveConversationId('general');
   });
 
   afterEach(async () => {
+    // Let every fake delivery finish draining BEFORE the server goes down.
+    await Promise.allSettled([...inFlightDrains]);
     await stopServer();
     // Yield one IO turn instead of sleeping 100ms x 27 tests (2.7s of a 3.6s file).
     // stopServer() already awaits its own shutdown; the retrying rm below is what
     // actually tolerates a WAL checkpoint still finishing.
     await new Promise((r) => setImmediate(r));
+    bus.clear();
     await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => {});
   });
 

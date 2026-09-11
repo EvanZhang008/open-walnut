@@ -6,9 +6,9 @@
  * either agent:text-delta/agent:response (success) or agent:error (failure),
  * and the response is persisted in chat history.
  *
- * In test environments without Bedrock credentials, the agent loop will error.
- * The critical assertion is that the error is NOT silently swallowed — it must
- * be broadcast via WebSocket so the UI can display it.
+ * The turn is answered by the conversation's lane session, so the 'session-runner'
+ * bus subscriber is replaced by a fake that answers with a synthetic session:result
+ * — the assertion is the SERVER's delivery of a visible event, never a real `claude`.
  *
  * All test cron jobs are cleaned up in afterAll.
  */
@@ -23,6 +23,9 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-cron-age
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import * as chatHistory from '../../src/core/chat-history.js';
+import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js';
+import type { SessionStartEvent, SessionSendEvent } from '../../src/core/event-types.js';
+import { markProcessing, removeProcessed } from '../../src/core/session-message-queue.js';
 
 // ── Helpers ──
 
@@ -81,6 +84,40 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Drains left in flight; awaited before teardown so no message stays 'pending'
+ *  (a pending message is what a reconnect would cold-`--resume` into a spawn). */
+const inFlightDrains = new Set<Promise<void>>();
+
+function drainQueue(sessionId: string): void {
+  const p = (async () => {
+    try {
+      const batch = await markProcessing(sessionId);
+      if (batch.length > 0) await removeProcessed(sessionId, batch.map((m) => m.id));
+    } catch { /* the store may be torn down between tests */ }
+  })();
+  inFlightDrains.add(p);
+  void p.finally(() => inFlightDrains.delete(p));
+}
+
+/**
+ * Fake session-runner: answers every lane start/send with a synthetic
+ * session:result. Registered by NAME after startServer, which displaces the real
+ * subscriber, so nothing in this file can spawn a CLI.
+ */
+function installFakeRunner(): void {
+  bus.subscribe('session-runner', (event: BusEvent) => {
+    let sid: string | undefined;
+    if (event.name === EventNames.SESSION_START) sid = (event.data as SessionStartEvent).preassignedSessionId;
+    else if (event.name === EventNames.SESSION_SEND) sid = (event.data as SessionSendEvent).sessionId;
+    if (!sid) return;
+    drainQueue(sid);
+    setTimeout(() => {
+      bus.emit(EventNames.SESSION_RESULT, { sessionId: sid!, result: 'Hello from the lane.', isError: false },
+        ['main-ai', 'session-runner'], { source: 'session-runner' });
+    }, 5);
+  });
+}
+
 // ── Setup / Teardown ──
 
 // Cron writes background turns to the MAIN conversation (server.ts), so the
@@ -91,6 +128,7 @@ beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   server = await startServer({ port: 0, dev: true });
+  installFakeRunner();
   const addr = server.address();
   port = typeof addr === 'object' && addr ? addr.port : 0;
   const { getMainConversationId } = await import('../../src/core/conversations.js');
@@ -106,7 +144,9 @@ afterAll(async () => {
       // ignore cleanup errors
     }
   }
+  await Promise.allSettled([...inFlightDrains]);
   await stopServer();
+  bus.clear();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -156,10 +196,10 @@ describe('Cron agent response delivery (wakeMode=now)', () => {
     const notifMsg = messages.find((m) => m.name === 'cron:notification');
     expect(notifMsg).toBeDefined();
 
-    // Step 6: Verify agent produced SOME visible output (response OR error)
-    // In test env without Bedrock, we expect agent:error.
-    // In real env with Bedrock, we expect agent:text-delta + agent:response.
-    // Either way, the UI must NOT be left in silence.
+    // Step 6: Verify agent produced SOME visible output (response OR error).
+    // With the fake runner answering, that is agent:response; a lane that stalls
+    // or errors broadcasts agent:error. Either way, the UI must NOT be left in
+    // silence — that is the whole subject of this test.
     const agentResponse = messages.find((m) => m.name === 'agent:response');
     const agentError = messages.find((m) => m.name === 'agent:error');
     const agentDelta = messages.find((m) => m.name === 'agent:text-delta');

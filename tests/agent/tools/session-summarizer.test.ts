@@ -126,19 +126,6 @@ describe('summarizeSession', () => {
     expect(callArgs.tools).toBeUndefined();
   });
 
-  it('uses model from agent config', async () => {
-    await saveConfig(SUMMARIZER_CONFIG);
-    await writeJsonl('sess-1', [
-      msg('u1', 'user', 'Hello'),
-      msg('a1', 'assistant', 'Hi'),
-    ]);
-
-    await summarizeSession('sess-1', record);
-
-    const callArgs = mockSendMessageStream.mock.calls[0][0];
-    expect(callArgs.config.model).toBe('global.anthropic.claude-opus-4-6-v1');
-  });
-
   it('falls back to agent.main_model when no summarizer agent is configured', async () => {
     // NB: NOT a cheap/haiku model, and that is deliberate — summarizing a whole session
     // (200K-char budget) is a quality job. The genuinely cheap background paths opt in

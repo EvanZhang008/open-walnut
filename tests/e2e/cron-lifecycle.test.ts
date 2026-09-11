@@ -16,6 +16,9 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
+import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js';
+import type { SessionStartEvent, SessionSendEvent } from '../../src/core/event-types.js';
+import { markProcessing, removeProcessed } from '../../src/core/session-message-queue.js';
 
 // ── Helpers ──
 
@@ -88,16 +91,54 @@ const validJob = {
 
 // ── Setup / Teardown ──
 
+/** Drains left in flight; awaited before teardown so no message stays 'pending'
+ *  (a pending message is what a reconnect would cold-`--resume` into a spawn). */
+const inFlightDrains = new Set<Promise<void>>();
+
+function drainQueue(sessionId: string): void {
+  const p = (async () => {
+    try {
+      const batch = await markProcessing(sessionId);
+      if (batch.length > 0) await removeProcessed(sessionId, batch.map((m) => m.id));
+    } catch { /* the store may be torn down between tests */ }
+  })();
+  inFlightDrains.add(p);
+  void p.finally(() => inFlightDrains.delete(p));
+}
+
+/**
+ * Fake session-runner: a main-session cron turn runs on the conversation's lane
+ * and an isolated job starts a session of its own, so both would otherwise reach
+ * a real `claude` spawn. Registered by NAME after startServer, which displaces
+ * the real subscriber.
+ */
+function installFakeRunner(): void {
+  bus.subscribe('session-runner', (event: BusEvent) => {
+    let sid: string | undefined;
+    if (event.name === EventNames.SESSION_START) sid = (event.data as SessionStartEvent).preassignedSessionId;
+    else if (event.name === EventNames.SESSION_SEND) sid = (event.data as SessionSendEvent).sessionId;
+    if (!sid) return;
+    drainQueue(sid);
+    setTimeout(() => {
+      bus.emit(EventNames.SESSION_RESULT, { sessionId: sid!, result: 'done', isError: false },
+        ['main-ai', 'session-runner'], { source: 'session-runner' });
+    }, 5);
+  });
+}
+
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   server = await startServer({ port: 0, dev: true });
+  installFakeRunner();
   const addr = server.address();
   port = typeof addr === 'object' && addr ? addr.port : 0;
 });
 
 afterAll(async () => {
+  await Promise.allSettled([...inFlightDrains]);
   await stopServer();
+  bus.clear();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -799,13 +840,12 @@ describe('REST create with inferred defaults', () => {
 // EXECUTION LIFECYCLE: Full job execution with DI deps, WS events,
 // and state mutations.
 //
-// NOTE: All main session tests use wakeMode='next-cycle' to avoid
-// triggering the real Bedrock agent loop (which takes 20+ seconds per
-// invocation). With next-cycle the full cron execution path is still
-// exercised (emit started → broadcastCronNotification → applyJobResult
-// → emit finished) — only the optional runMainAgentWithPrompt call is
-// skipped. The isolated agent test uses the real runIsolatedAgentJob
-// dep, which may succeed or error in test; both outcomes are valid.
+// NOTE: All main session tests use wakeMode='next-cycle' so the full cron
+// execution path is exercised (emit started → broadcastCronNotification →
+// applyJobResult → emit finished) without a lane turn — only the optional
+// runMainAgentWithPrompt call is skipped. The isolated agent test uses the real
+// runIsolatedAgentJob dep, which starts a session through the fake runner
+// installed above; it may succeed or error in test, and both are valid.
 // ══════════════════════════════════════════════════════════════════════
 
 // Helper: collect WS messages matching a name filter within a timeout.
@@ -940,8 +980,9 @@ describe('Execution lifecycle — main session job', () => {
 
 describe('Execution lifecycle — isolated agent job', () => {
   it('run isolated job → WS events + state updated (may error in test)', async () => {
-    // Create an isolated job. The runIsolatedAgentJob dep calls the real agent
-    // loop which may succeed or error in test — both outcomes are valid.
+    // Create an isolated job. The runIsolatedAgentJob dep starts a real session
+    // (answered by the fake runner) and may succeed or error in test — both
+    // outcomes are valid.
     const createRes = await fetch(apiUrl('/api/cron'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

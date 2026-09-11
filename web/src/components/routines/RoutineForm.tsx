@@ -126,12 +126,12 @@ function tzAbbrev(tz: string): string {
 
 export function RoutineForm({ draft, routine, executors, options, onSave, onCancel }: RoutineFormProps) {
   const source: CreateRoutineInput | undefined = routine
-    ? { name: routine.name, description: routine.description, schedule: routine.schedule, executor: routine.executor ?? { type: 'walnut-agent', config: {} } }
+    ? { name: routine.name, description: routine.description, schedule: routine.schedule, executor: routine.executor ?? { type: 'claude-code', config: {} } }
     : draft;
 
   const [name, setName] = useState(source?.name ?? '');
   const [trigger, setTrigger] = useState<TriggerState>(() => scheduleToTrigger(source?.schedule));
-  const [executorType, setExecutorType] = useState(source?.executor?.type ?? 'walnut-agent');
+  const [executorType, setExecutorType] = useState(source?.executor?.type ?? 'claude-code');
   const [config, setConfig] = useState<Record<string, unknown>>(source?.executor?.config ?? {});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,7 +141,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     if (!draft) return;
     setName(draft.name ?? '');
     setTrigger(scheduleToTrigger(draft.schedule));
-    setExecutorType(draft.executor?.type ?? 'walnut-agent');
+    setExecutorType(draft.executor?.type ?? 'claude-code');
     setConfig(draft.executor?.config ?? {});
     setError(null);
   }, [draft]);

@@ -1,13 +1,12 @@
 /**
- * Gotcha ratchet on the claude -p DEFAULT engine: the exact arguments the
- * one-shot child runs with. If any of these drift (model, timeout, system
- * prompt, prompt shape, tool budget), the lane silently degrades — pin them.
- * The child runs by default (user decision 2026-08-28: ride Claude Code);
- * WALNUT_AGENT_SEARCH_ENGINE=inprocess is the opt-out. The engine rides the
- * WARM pool (micro-claude-warm.ts) — the slim/thinking-off spawn shape is
- * pinned in tests/providers/micro-claude-warm.test.ts.
+ * Gotcha ratchet on the claude -p engine: the exact arguments the one-shot child
+ * runs with. If any of these drift (model, timeout, system prompt, prompt shape,
+ * tool budget), the lane silently degrades — pin them. The child is the only
+ * engine (user decision 2026-08-28: ride Claude Code) and rides the WARM pool
+ * (micro-claude-warm.ts) — the slim/thinking-off spawn shape is pinned in
+ * tests/providers/micro-claude-warm.test.ts.
  */
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 const { aiDisabledRef, warmMock, prewarmMock, cliResolveMock, searchMock } = vi.hoisted(() => ({
@@ -41,13 +40,6 @@ import {
   _resetAgentSearchStateForTesting,
 } from '../../src/core/task-search-agent.js';
 
-// Pin the DEFAULT path: no engine env at all must still pick the CLI child.
-const prevEngine = process.env.WALNUT_AGENT_SEARCH_ENGINE;
-delete process.env.WALNUT_AGENT_SEARCH_ENGINE;
-afterAll(() => {
-  if (prevEngine === undefined) delete process.env.WALNUT_AGENT_SEARCH_ENGINE;
-  else process.env.WALNUT_AGENT_SEARCH_ENGINE = prevEngine;
-});
 
 beforeEach(async () => {
   aiDisabledRef.value = false;
