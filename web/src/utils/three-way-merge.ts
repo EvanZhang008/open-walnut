@@ -1,5 +1,5 @@
 /**
- * Line-based three-way merge (diff3) for the Files panel's Live Edit mode.
+ * Three-way merge (diff3) for the Files panel's Live Edit mode.
  *
  * Pure: no DOM, no network, no React — the whole point is that the rule which
  * decides "these two edits can both survive" is unit-testable, because the cost
@@ -17,10 +17,9 @@
  * and both apply; two insertions at the same point are empty ranges, so they do
  * not overlap either and both apply (ours first). "Identical" means same base
  * range AND same replacement lines — that edit is applied once instead of twice.
- * Anything else that overlaps is a conflict, and a conflict is never guessed at:
- * the caller falls back to the explicit-Save path so a human decides.
+ * 同行修改仅在词级范围互不重叠时合并，行数变化和真正重叠继续交给用户。
  */
-import { diffLines } from 'diff';
+import { diffLines, diffWordsWithSpace } from 'diff';
 
 /** One side's edit, in BASE line coordinates. `[baseStart, baseEnd)` is
  *  half-open; an empty range is a pure insertion at that point. */
@@ -105,6 +104,84 @@ export function diffToHunks(base: string[], other: string[]): MergeHunk[] {
   return hunks;
 }
 
+interface InlineEdit {
+  start: number;
+  end: number;
+  text: string;
+}
+
+function inlineEdits(base: string, text: string, timeout: number): InlineEdit[] | null {
+  const parts = diffWordsWithSpace(base, text, { timeout });
+  if (!parts) return null;
+  const edits: InlineEdit[] = [];
+  let pos = 0;
+  let edit: InlineEdit | null = null;
+  for (const part of parts) {
+    if (!part.added && !part.removed) {
+      if (edit) edits.push(edit);
+      edit = null;
+      pos += part.value.length;
+      continue;
+    }
+    edit ??= { start: pos, end: pos, text: '' };
+    if (part.removed) {
+      pos += part.value.length;
+      edit.end = pos;
+    } else {
+      edit.text += part.value;
+    }
+  }
+  if (edit) edits.push(edit);
+  return edits;
+}
+
+function mergeInline(base: string, ours: string, theirs: string, deadline: number): string | null {
+  if (ours === theirs || theirs === base) return ours;
+  if (ours === base) return theirs;
+  if (Date.now() >= deadline) return null;
+  const a = inlineEdits(base, ours, Math.max(1, deadline - Date.now()));
+  const b = inlineEdits(base, theirs, Math.max(1, deadline - Date.now()));
+  if (!a || !b) return null;
+  const edits = [...a];
+  for (const other of b) {
+    let duplicate = false;
+    for (const own of a) {
+      if (Date.now() >= deadline) return null;
+      if (own.start === other.start && own.end === other.end && own.text === other.text) {
+        duplicate = true;
+        continue;
+      }
+      // 插入点落在另一侧替换的边界也不猜测，避免拼出双方都没写过的词。
+      const overlaps = own.start === own.end
+        ? own.start >= other.start && own.start <= other.end
+        : other.start === other.end
+          ? other.start >= own.start && other.start <= own.end
+          : own.start < other.end && other.start < own.end;
+      if (overlaps) return null;
+    }
+    if (!duplicate) edits.push(other);
+  }
+  edits.sort((x, y) => x.start - y.start);
+  let pos = 0;
+  let result = '';
+  for (const edit of edits) {
+    result += base.slice(pos, edit.start) + edit.text;
+    pos = edit.end;
+  }
+  return result + base.slice(pos);
+}
+
+function applyRegion(base: string[], start: number, end: number, hunks: MergeHunk[]): string[] {
+  const result: string[] = [];
+  let pos = start;
+  for (const hunk of hunks) {
+    result.push(...base.slice(pos, hunk.baseStart), ...hunk.lines);
+    pos = hunk.baseEnd;
+  }
+  result.push(...base.slice(pos, end));
+  return result;
+}
+
 /**
  * Merge `ours` and `theirs` over their common `base`.
  *
@@ -143,6 +220,7 @@ export function threeWayMerge(base: string, ours: string, theirs: string): Merge
   const theirHunks = diffToHunks(baseLines, theirLines);
 
   const out: string[] = [];
+  const inlineDeadline = Date.now() + 40;
   let pos = 0;
   let i = 0;
   let j = 0;
@@ -189,11 +267,38 @@ export function threeWayMerge(base: string, ours: string, theirs: string): Merge
       continue;
     }
 
-    conflicts++;
-    if (a && a.baseEnd > pos) pos = a.baseEnd;
-    if (c && c.baseEnd > pos) pos = c.baseEnd;
-    i++;
-    j++;
+    if (a && c) {
+      const start = Math.min(a.baseStart, c.baseStart);
+      let end = Math.max(a.baseEnd, c.baseEnd);
+      const ourStart = i++;
+      const theirStart = j++;
+      let expanded: boolean;
+      do {
+        expanded = false;
+        while (ourHunks[i] && ourHunks[i].baseStart < end) {
+          end = Math.max(end, ourHunks[i++].baseEnd);
+          expanded = true;
+        }
+        while (theirHunks[j] && theirHunks[j].baseStart < end) {
+          end = Math.max(end, theirHunks[j++].baseEnd);
+          expanded = true;
+        }
+      } while (expanded);
+      const ourRegion = applyRegion(baseLines, start, end, ourHunks.slice(ourStart, i));
+      const theirRegion = applyRegion(baseLines, start, end, theirHunks.slice(theirStart, j));
+      const lines: string[] = [];
+      let clean = start >= pos && ourRegion.length === end - start && theirRegion.length === end - start;
+      for (let k = 0; clean && k < end - start; k++) {
+        const line = mergeInline(baseLines[start + k], ourRegion[k], theirRegion[k], inlineDeadline);
+        if (line === null) clean = false;
+        else lines.push(line);
+      }
+      if (clean) apply({ baseStart: start, baseEnd: end, lines });
+      else {
+        conflicts++;
+        pos = end;
+      }
+    }
   }
   copyBaseTo(baseLines.length);
 

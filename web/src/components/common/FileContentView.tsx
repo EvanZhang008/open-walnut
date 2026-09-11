@@ -179,6 +179,8 @@ export function FileContentView({
   onSelectCode, onSaved, onSymbolLookup,
 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
+  const dataRef = useRef(data);
+  dataRef.current = data;
   const [loading, setLoading] = useState(true);
   /**
    * Identity of THIS mount. Several views of one file can be on screen at once
@@ -936,7 +938,7 @@ export function FileContentView({
       editorRef.current?.setBase(text);
       return;
     }
-    editorRef.current?.markClean();
+    editorRef.current?.markClean(text);
     draftRef.current = null;
     // The bytes are on disk now, so the side record is obsolete. Cancelling the
     // pending capture matters as much as the delete: a timer that fired after
@@ -958,7 +960,7 @@ export function FileContentView({
   /** Another writer's bytes are now in the editor and nothing is unsaved. */
   const applyAdopted = useCallback((content: string, contentHash: string, size: number) => {
     applyDiskContent(content, contentHash, size);
-    editorRef.current?.markClean();
+    editorRef.current?.markClean(content);
     draftRef.current = null;
     dropDraft(filePath, host);
     setDraftDirty(false);
@@ -1111,12 +1113,18 @@ export function FileContentView({
   // and Discard becomes a permanently dead button. That is why the app-wide dialog
   // layer exists; every sibling destructive action already uses it.
   const handleDiscard = useCallback(async () => {
+    const editor = editorRef.current;
     const ok = await confirm({
       title: 'Discard your unsaved changes to this file?',
       confirmLabel: 'Discard',
       danger: true,
     });
-    if (!ok) return;
+    const disk = dataRef.current;
+    if (!ok || editorRef.current !== editor || disk?.content == null) return;
+    liveRef.current?.cancelPending();
+    noteBufferInstalled('discard', disk.contentHash);
+    baseContentRef.current = disk.content;
+    lockHashRef.current = disk.contentHash;
     draftRef.current = null;
     // Discard is the ONLY path that deliberately throws typed text away, so it
     // is also the only one that deletes the persisted copy.
@@ -1128,7 +1136,7 @@ export function FileContentView({
     setDraftRestored(false);
     conflictHashRef.current = undefined;
     setSeedNonce((n) => n + 1);
-  }, [confirm, dropDraft, filePath, host]);
+  }, [confirm, dropDraft, filePath, host, noteBufferInstalled]);
 
   // Stale-draft banner, "Restore my changes": seed the editor from the draft and
   // remount — and RE-ARM the lock at the draft's own baseHash (planStaleDraftRestore).

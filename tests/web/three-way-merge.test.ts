@@ -144,6 +144,89 @@ describe('threeWayMerge — conflicts', () => {
   });
 });
 
+describe('threeWayMerge inline edits', () => {
+  it.each([
+    ['latency 12 ms and retry limit 3', 'latency 10 ms and retry limit 3', 'latency 12 ms and retry limit 5', 'latency 10 ms and retry limit 5'],
+    ['| Alpha | 12 ms | pending |', '| Alpha | 10 ms | pending |', '| Alpha | 12 ms | approved |', '| Alpha | 10 ms | approved |'],
+    ['Alpha beta gamma', 'Alpha gamma', 'Alpha beta delta', 'Alpha delta'],
+    ['café 中文 latency 12 retry 3', 'café 中文 latency 10 retry 3', 'café 中文 latency 12 retry 5', 'café 中文 latency 10 retry 5'],
+    ['| A | 12 | pending |', '| A  | 10 | pending |', '| A | 12 | approved |', '| A  | 10 | approved |'],
+    ['same word and tail', 'changed word and tail', 'same word and ending', 'changed word and ending'],
+    ['alpha beta gamma delta epsilon', 'alpha NEW beta gamma delta epsilon', 'alpha beta gamma delta END epsilon', 'alpha NEW beta gamma delta END epsilon'],
+    ['alpha beta gamma delta epsilon', 'alpha gamma delta epsilon', 'alpha beta gamma epsilon', 'alpha gamma epsilon'],
+    ['alpha beta gamma delta epsilon', 'alpha BETA gamma delta epsilon', 'alpha beta gamma delta', 'alpha BETA gamma delta'],
+    ['alpha beta gamma delta epsilon', 'alpha beta gamma delta epsilon plus', 'first alpha beta gamma delta epsilon', 'first alpha beta gamma delta epsilon plus'],
+  ])('combines disjoint words in %s', (base, ours, theirs, expected) => {
+    expect(merged(base, ours, theirs)).toBe(expected);
+    expect(merged(base, theirs, ours)).toBe(expected);
+  });
+
+  it.each([
+    ['choice original', 'choice human', 'choice agent'],
+    ['retry 123', 'retry 124', 'retry 223'],
+    ['hello world', 'hello human world', 'hello agent world'],
+    ['alpha beta gamma', 'alpha gamma', 'alpha edited gamma'],
+    ['top', 'ours-top', 'THEIRS'],
+    ['item value', 'item value-added', 'item changed'],
+  ])('preserves a real inline conflict in %s', (base, ours, theirs) => {
+    expect(threeWayMerge(base, ours, theirs).ok).toBe(false);
+    expect(threeWayMerge(base, theirs, ours).ok).toBe(false);
+  });
+
+  it('does not duplicate a shared edit while combining another word', () => {
+    expect(merged('left 1 middle 2 right 3', 'left 4 middle 2 right 5', 'left 4 middle 6 right 3'))
+      .toBe('left 4 middle 6 right 5');
+  });
+
+  it('combines separated edits within a long table row', () => {
+    const base = `| ${'design detail '.repeat(380)} latency 12 ms | retry limit 3 |`;
+    expect(base.length).toBeGreaterThan(4900);
+    expect(merged(base, base.replace('12 ms', '10 ms'), base.replace('limit 3', 'limit 5')))
+      .toBe(base.replace('12 ms', '10 ms').replace('limit 3', 'limit 5'));
+  });
+
+  it('combines one overlapping block with several edits on the other side', () => {
+    const base = 'row 1 alpha\nrow 2 beta\nrow 3 gamma\n';
+    const ours = 'row 1 ALPHA\nrow 2 BETA\nrow 3 GAMMA\n';
+    const theirs = 'ROW 1 alpha\nrow 2 beta\nROW 3 gamma\n';
+    expect(merged(base, ours, theirs)).toBe('ROW 1 ALPHA\nrow 2 BETA\nROW 3 GAMMA\n');
+  });
+
+  it('preserves both writers across generated same-line and multi-line edits', () => {
+    const words = ['alpha', 'beta', 'gamma', 'delta'];
+    for (let lines = 1; lines <= 8; lines++) {
+      const base = Array.from({ length: lines }, (_, i) => `row${i} alpha${i} beta${i} gamma${i} delta${i}`).join('\n') + '\n';
+      for (let x = 0; x < lines * 4; x++) {
+        for (let y = 0; y < lines * 4; y++) {
+          const a = words[x % 4] + Math.floor(x / 4);
+          const b = words[y % 4] + Math.floor(y / 4);
+          const ours = base.replace(a, `HUMAN${x}`);
+          const theirs = base.replace(b, `AGENT${y}`);
+          const result = threeWayMerge(base, ours, theirs);
+          if (x === y) expect(result.ok).toBe(false);
+          else expect(result).toEqual({ ok: true, merged: base.replace(a, `HUMAN${x}`).replace(b, `AGENT${y}`) });
+        }
+      }
+    }
+  });
+
+  it('does not guess line alignment after an overlapping structural rewrite', () => {
+    expect(threeWayMerge('latency 12 retry 3\n', 'before\nlatency 10 retry 3\nafter\n', 'latency 12 retry 5\n').ok).toBe(false);
+  });
+
+  it('preserves CRLF and the final newline during inline merge', () => {
+    expect(merged('first\r\nlatency 12 retry 3\r\n', 'first\r\nlatency 10 retry 3\r\n', 'first\r\nlatency 12 retry 5\r\n'))
+      .toBe('first\r\nlatency 10 retry 5\r\n');
+  });
+
+  it('combines table edits when serialization also changes alignment spacing', () => {
+    const base = '| Option | Latency | Decision |\n|:--|--:|:--:|\n| Alpha | 12 ms | pending |\n';
+    const ours = base.replace('|:--|--:|:--:|', '| :-- | --: | :-: |').replace('12 ms', '10 ms');
+    const theirs = base.replace('pending', 'approved');
+    expect(merged(base, ours, theirs)).toBe(ours.replace('pending', 'approved'));
+  });
+});
+
 describe('threeWayMerge — line endings', () => {
   it('keeps a missing trailing newline', () => {
     const base = 'a\nb';

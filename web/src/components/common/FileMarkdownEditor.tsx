@@ -84,6 +84,7 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
       return cut === 0 ? '/' : undefined;
     }, [path]);
     const editorRef = useRef<Editor | null>(null);
+    const appliedRef = useRef<{ text: string; body: string } | null>(null);
     const dirtyRef = useRef(false);
     // Re-render channel for setValue when no editor has been captured yet — see
     // the handle below. Only the setter is needed; the count itself is never read.
@@ -103,6 +104,8 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
         const body = ed && !ed.isDestroyed
           ? (ed.storage.markdown.getMarkdown() as string)
           : seedRef.current.body;
+        // 程序装入后尚未编辑的正文保留原始字节，避免格式化被当成保存期间的新输入。
+        if (appliedRef.current?.body === body) return appliedRef.current.text;
         return joinFrontmatter(seedRef.current.frontmatter, body);
       },
       getBase: () => baseRef.current,
@@ -128,17 +131,19 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
         // adopt's is.
         baseRef.current = base ?? text;
         seedRef.current = splitFrontmatter(text);
+        appliedRef.current = null;
         const ed = editorRef.current;
         if (ed && !ed.isDestroyed) {
           ed.commands.setContent(
             normalizeForEditor(entityRefsToMarkdownLinks(seedRef.current.body)),
             { emitUpdate: false },
           );
+          appliedRef.current = { text, body: ed.storage.markdown.getMarkdown() as string };
           return;
         }
         bumpSeed((n) => n + 1);
       },
-      markClean: () => {
+      markClean: (diskText: string) => {
         const ed = editorRef.current;
         if (ed && !ed.isDestroyed) {
           seedRef.current = {
@@ -146,8 +151,8 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
             body: ed.storage.markdown.getMarkdown() as string,
           };
         }
-        // Our bytes are the bytes on disk now.
-        baseRef.current = joinFrontmatter(seedRef.current.frontmatter, seedRef.current.body);
+        // 序列化会规范化 Markdown 格式，不能用它替换磁盘的原始字节基线。
+        baseRef.current = diskText;
         if (dirtyRef.current) {
           dirtyRef.current = false;
           onDirtyChangeRef.current(false);
@@ -171,6 +176,7 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
         dirtyRef.current = true;
         onDirtyChangeRef.current(true);
       }
+      appliedRef.current = null;
       onDocChangeRef.current?.();
     }, []);
 

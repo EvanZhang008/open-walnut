@@ -49,13 +49,8 @@ export interface FileSourceEditorHandle {
    */
   getBase: () => string;
   focus: () => void;
-  /**
-   * Re-baseline "clean" at the CURRENT text — called by the parent after a
-   * successful save INSTEAD of remounting. A remount would reseed the doc and
-   * yank the caret/scroll to the top on every ⌘S; markClean keeps the instance
-   * (and its undo history) alive while making dirty-tracking correct again.
-   */
-  markClean: () => void;
+  /** 保留光标与撤销历史；磁盘基线必须使用读写结果的原始字节，而不是编辑器序列化结果。 */
+  markClean: (diskText: string) => void;
   /**
    * Move the BASE to bytes that are now on disk, without touching the document or
    * dirty tracking.
@@ -199,10 +194,9 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
       getValue: () => viewRef.current?.state.doc.toString() ?? seedRef.current,
       getBase: () => baseRef.current,
       focus: () => viewRef.current?.focus(),
-      markClean: () => {
+      markClean: (diskText: string) => {
         seedRef.current = viewRef.current?.state.doc.toString() ?? seedRef.current;
-        // Our bytes are the bytes on disk now.
-        baseRef.current = seedRef.current;
+        baseRef.current = diskText;
         if (dirtyRef.current) {
           dirtyRef.current = false;
           onDirtyChangeRef.current(false);
