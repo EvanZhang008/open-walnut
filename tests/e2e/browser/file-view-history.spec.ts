@@ -25,11 +25,8 @@ const SCREENSHOT_DIR = 'test-results/file-view-history'
 /**
  * Open the fixture session's panel from the homepage (real clicks, no page.goto).
  *
- * The kebab's session row is the FIRST item in the menu and its label is state-
- * dependent — "Session idle", "AI is working…", "Session error", or "Unread — open
- * to mark read" (TaskKebabMenu.tsx). Matching one literal made this helper flip to
- * a 30s timeout the moment the fixture session had unread output, so anchor on the
- * row's position instead of its wording.
+ * The task menu has no open-session row any more; the row itself is the
+ * one-click way in (the same click a user makes).
  */
 async function openSessionPanel(page: Page): Promise<Locator> {
   await page.locator('.todo-search-input').fill(SESSION_ID)
@@ -37,8 +34,8 @@ async function openSessionPanel(page: Page): Promise<Locator> {
   // Generous timeouts throughout: search is debounced and this machine runs several
   // agent sessions, so the default 5s expect budget is a coin flip under load.
   await expect(task).toBeVisible({ timeout: 20_000 })
-  await task.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
+  // Click the row's title: the task menu has no open-session row.
+  await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible({ timeout: 20_000 })
   return panel

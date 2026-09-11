@@ -38,10 +38,8 @@ async function openHomepageSession(page: Page) {
   // open, so retry instead of assuming the first one lands.
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt > 0) await page.waitForTimeout(800)
-    await row.getByRole('button', { name: 'More actions' }).click()
-    const menu = page.locator('.task-kebab-menu:visible')
-    await expect(menu).toBeVisible()
-    await menu.locator('.task-kebab-item').first().click()
+    // Click the row's title: the task menu has no open-session row.
+    await row.locator('.todo-item-title').click()
     try {
       await panel.waitFor({ state: 'visible', timeout: 2500 })
       return { panel, row }

@@ -343,7 +343,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
                 <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
                 <span>Task detail</span>
               </button>
-              <div className="task-kebab-divider" />
             </>
           )}
 

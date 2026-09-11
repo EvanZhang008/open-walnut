@@ -39,9 +39,8 @@ test.describe.configure({ timeout: 90_000 })
 /**
  * The fixture dataset is shared across concurrently running specs, and
  * task-multi-select-batch.spec.ts completes/reopens tasks in it. A COMPLETE task
- * renders a SHORTER kebab (no attention row, no pin/tier block) and drops the
- * "Session idle" entry, so this spec must assert its own precondition instead of
- * inheriting whatever the last spec left behind.
+ * renders a SHORTER kebab (no pin/tier block), so this spec must assert its own
+ * precondition instead of inheriting whatever the last spec left behind.
  *
  * ⚠️ This writes to shared fixture data, so the hazard runs both ways. It is safe
  * only because IN_PROGRESS is `pw-task-vscode`'s seeded state and no other spec
@@ -59,12 +58,8 @@ async function openHomepageSession(page: Page) {
   await page.locator('.todo-search-input').fill(SESSION_ID)
   const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(task).toBeVisible()
-  await task.getByRole('button', { name: 'More actions' }).click()
-  // The kebab's session row is targeted POSITIONALLY (first item), not by label: its
-  // text is derived from live state ("Session idle" / "AI is working…" / "Session
-  // error" / "Unread — open to mark read"), so a label matcher flakes as soon as the
-  // fixture session's state drifts.
-  await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
+  // Click the row's title: the task menu has no open-session row.
+  await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
   return panel

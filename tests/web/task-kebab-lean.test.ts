@@ -36,7 +36,11 @@ describe('task kebab menus stay lean and shared', () => {
     expect(KEBAB).toMatch(/if \(isCurrent\) onUnpinTask\?\.\(\)/);
   });
 
-  it('no unread row in either kebab', () => {
+  it('no session-status row and no unread row in either kebab', () => {
+    // Clicking the task row opens the session; a menu row that
+    // merely restated the session's state ("Session idle") was noise.
+    expect(KEBAB).not.toContain('Session idle');
+    expect(KEBAB).not.toContain('useSessionStatus');
     expect(KEBAB).not.toContain('open to mark read');
     expect(QUICK).not.toContain('Mark unread');
     expect(QUICK).not.toContain('handleToggleUnread');

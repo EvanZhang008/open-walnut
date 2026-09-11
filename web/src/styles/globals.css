@@ -14673,6 +14673,12 @@ a.task-kebab-info:hover {
   background: var(--border);
   margin: 4px 8px;
 }
+/* Sections are composed from blocks that each bring their own divider; when a
+   block renders nothing, two dividers meet. Draw one. */
+.task-kebab-divider + .task-kebab-divider,
+.task-kebab-menu > .task-kebab-divider:first-child {
+  display: none;
+}
 
 /* Section header inside the kebab dropdown (e.g. the "Session" half appended
    below the task actions via TaskQuickActions extraSection). */

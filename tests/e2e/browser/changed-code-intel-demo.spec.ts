@@ -63,9 +63,8 @@ test('demo: Changed-tab search, highlight, references, right-click menu', async 
   await page.locator('.todo-search-input').pressSequentially(SESSION_ID, { delay: 40 })
   const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(task).toBeVisible()
-  await task.getByRole('button', { name: 'More actions' }).click()
-  await page.waitForTimeout(500)
-  await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
+  // Click the row's title: the task menu has no open-session row.
+  await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
   await page.waitForTimeout(600)

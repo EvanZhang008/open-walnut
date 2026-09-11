@@ -27,9 +27,8 @@ async function openHomepageSession(page: Page) {
   await page.locator('.todo-search-input').fill(SESSION_ID)
   const row = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(row).toBeVisible()
-  await row.getByRole('button', { name: 'More actions' }).click()
-  // First kebab item = the session row (its label is live state, so positional).
-  await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
+  // Click the row's title: the task menu has no open-session row.
+  await row.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
   return { panel, row }

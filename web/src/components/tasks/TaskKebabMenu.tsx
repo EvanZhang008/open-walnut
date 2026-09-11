@@ -16,7 +16,6 @@ import { useShowPriority } from '@/hooks/useShowPriority';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
-import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { PluginFieldsSection } from './PluginFieldPicker';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
@@ -42,9 +41,11 @@ interface TaskKebabMenuProps {
   onPinTask?: (id: string) => void;
   onUnpinTask?: (id: string) => void;
   onSetTier?: (id: string, tier: FocusTier) => void;
+  /** Accepted for call-site compatibility; the menu no longer has an
+   *  open-session row (clicking the task row opens its session). */
   onOpenSession?: (sessionId: string) => void;
   /** Launch a session FOR this task (reusing it). Only rendered when the task
-   *  owns no session yet — when it does, the open-session row above covers it. */
+   *  owns no session yet; a task with a session is opened by clicking its row. */
   onStartSession?: (task: Task) => void;
   onSetDate?: (id: string, date: string | null) => void;
   onSetStartDate?: (id: string, date: string | null) => void;
@@ -409,10 +410,9 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
   );
 }
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onOpenSession, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete }: TaskKebabMenuProps) {
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const sessionId = resolveTaskSessionId(task);
-  const storedSessionStatus = useSessionStatus(sessionId);
   const [open, setOpen] = useState(false);
   /** Set only by the right-click path, which anchors the menu at the cursor. */
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
@@ -541,32 +541,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
           // the task"). Kill pointerdown here so no menu interaction can arm dnd.
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {/* Session status. Unread is deliberately NOT a menu row: opening the
-              task marks it read, and the red dot on the row already says it. */}
-          {(() => {
-            const ss = storedSessionStatus ?? task.session_status;
-            if (!sessionId && !ss) return null;
-            const isRunning = ss?.process_status === 'running';
-            const isError = ss?.process_status === 'error';
-            const color = isError ? 'var(--error)' : isRunning ? 'var(--success)' : 'var(--fg-muted)';
-            const label = isRunning ? 'AI is working...' : isError ? 'Session error' : 'Session idle';
-            return (
-              <button
-                className="task-kebab-item"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (sessionId && onOpenSession) { onOpenSession(sessionId); closeMenu(); }
-                }}
-              >
-                <span className="task-kebab-icon" style={{ color }}>●</span>
-                <span>{label}</span>
-              </button>
-            );
-          })()}
-
           {/* Start Session — the kebab twin of the row's ▶. Same gate: a task that
-              already owns a session gets the open-session row above instead, so a
-              second launch on the same task is never one click away. */}
+              already owns a session is opened by clicking its row, so a second
+              launch on the same task is never one click away. */}
           {onStartSession && !isDone && !sessionId && (
             <button
               className="task-kebab-item"

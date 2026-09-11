@@ -2,7 +2,8 @@
  * The task kebab (⋮) menu is LEAN by default. Each rule here removed a row the
  * user called noise on 2026-09-10:
  *
- *  1. No "Unread" row. Opening the task marks it read; the red dot on the row
+ *  1. No "Unread" row and no "Session idle" status row. Opening the task marks
+ *     it read; clicking the row's session pill opens the session; the row's dot
  *     already says it is unread.
  *  2. No "Unpin" row. The highlighted tier pill IS the pin: clicking it again
  *     unpins. Same rule in the session panel's kebab, which now renders the same
@@ -100,6 +101,10 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
   const menu = await openRowKebab(page, task)
 
   await expect(menu.getByText('Unread', { exact: false })).toHaveCount(0)
+  await expect(menu.getByText('Session idle', { exact: true })).toHaveCount(0)
+  // The top row is an action (Start Session for a task without one, else Details),
+  // never a status readout.
+  await expect(menu.locator('.task-kebab-item').first()).toHaveText(/Start Session|Details/)
   await expect(menu.getByText('Unpin', { exact: true })).toHaveCount(0)
   await expect(menu.locator('.task-kebab-priority')).toHaveCount(0)
 

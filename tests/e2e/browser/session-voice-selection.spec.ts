@@ -136,9 +136,8 @@ async function openSession(page: Page, sid = SESSION_ID, taskId = TASK_ID): Prom
     await page.locator('.todo-search-input').fill(sid)
     const task = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
     await expect(task).toBeVisible()
-    await task.getByRole('button', { name: 'More actions' }).click()
-    // Positional, not by label: the kebab's session row text is derived from live state.
-    await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
+    // Click the row's title: the task menu has no open-session row.
+    await task.locator('.todo-item-title').click()
   }
   await expect(panel).toBeVisible()
   await expect(panel.locator('.session-history')).toContainText(PARAGRAPH, { timeout: 20000 })

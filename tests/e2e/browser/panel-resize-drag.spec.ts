@@ -33,12 +33,8 @@ async function openSessionPanel(page: Page): Promise<Locator> {
   await page.locator('.todo-search-input').fill(SESSION_ID)
   const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(task).toBeVisible()
-  await task.getByRole('button', { name: 'More actions' }).click()
-  // The kebab's session entry is the session-status row, whose LABEL depends on
-  // live state ("Session idle" / "AI is working…" / "Session error" / "Unread —
-  // open to mark read"). Target it POSITIONALLY: enumerating labels missed the
-  // unread one, which turned this drag regression test into a menu-wording failure.
-  await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
+  // Click the row's title: the task menu has no open-session row.
+  await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
   return panel

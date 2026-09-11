@@ -28,10 +28,8 @@ const SCREENSHOT_DIR = 'test-results/file-preview-kinds'
 /**
  * Open the fixture session's panel from the homepage and switch to the Files tab.
  *
- * The kebab's session row is targeted POSITIONALLY (first item), not by label:
- * its text is derived from live status/phase ("Session idle" / "Needs your
- * attention" / "AI is working…"), so a label matcher makes the helper flake as
- * soon as the fixture session's phase moves.
+ * The task menu has no open-session row any more; the row itself is the
+ * one-click way in (the same click a user makes).
  */
 async function openFilesPanel(page: Page) {
   await page.locator('.todo-search-input').fill(SESSION_ID)
@@ -42,10 +40,8 @@ async function openFilesPanel(page: Page) {
   // other agents' vitest/Playwright — that's what made this flake at the tail of
   // a full-file run while passing in isolation.
   await expect(task).toBeVisible({ timeout: 30_000 })
-  await task.getByRole('button', { name: 'More actions' }).click()
-  const menu = page.locator('.task-kebab-menu:visible')
-  await expect(menu).toBeVisible()
-  await menu.locator('.task-kebab-item').first().click()
+  // Click the row's title: the task menu has no open-session row.
+  await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
   await panel.getByRole('button', { name: 'Files' }).click()

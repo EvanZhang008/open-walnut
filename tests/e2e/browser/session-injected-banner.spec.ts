@@ -40,9 +40,8 @@ async function openSession(page: Page): Promise<Locator> {
     await page.locator('.todo-search-input').fill(TASK_ID)
     const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
     await expect(task).toBeVisible({ timeout: 15_000 })
-    await task.getByRole('button', { name: 'More actions' }).click()
-    // Positional: the kebab's session row label is derived from live state.
-    await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
+    // Click the row's title: the task menu has no open-session row.
+    await task.locator('.todo-item-title').click()
   }
   await expect(panel).toBeVisible({ timeout: 15_000 })
   await expect(panel.locator('.session-msg', { hasText: 'BANNER_TYPED_ONE' }).first())

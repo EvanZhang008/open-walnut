@@ -52,9 +52,8 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await page.locator('.todo-search-input').fill(SESSION_ID)
   const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(task).toBeVisible()
-  await task.getByRole('button', { name: 'More actions' }).click()
-  // Positional, not by label: the session row's text is derived from live state.
-  await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
+  // Click the row's title: the task menu has no open-session row.
+  await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
   await panel.getByRole('button', { name: 'Files' }).click()
@@ -105,14 +104,18 @@ async function makeScratchFile(page: Page, name: string, body: string): Promise<
   return abs
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   // Pin the tree EXPANDED before first render: the collapse pref syncs through
   // ui-prefs to the SHARED fixture server, so a parallel spec could otherwise
   // boot this page with no tree at all.
   await page.addInitScript(() => {
-    try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
+    try {
+      localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
+      localStorage.setItem('open-walnut-live-edit', '0')
+    } catch { /* off */ }
   })
-  await page.goto('/')
+  await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
   await page.waitForLoadState('networkidle')
 })
 
