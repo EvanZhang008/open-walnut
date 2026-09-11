@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import { MicButton } from '../common/MicButton';
+import { useShowPriority } from '@/hooks/useShowPriority';
 
 export interface TaskFormData {
   title: string;
@@ -19,6 +20,7 @@ interface TaskFormProps {
 }
 
 export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProps) {
+  const showPriority = useShowPriority();
   const [title, setTitle] = useState(initial?.title ?? '');
   const [priority, setPriority] = useState<TaskPriority>(initial?.priority ?? 'none');
   const [project, setProject] = useState(initial?.project ?? '');
@@ -60,15 +62,17 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
         </div>
 
         <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="task-priority">Priority</label>
-            <select id="task-priority" value={priority} onChange={(e) => setPriority(e.target.value as TaskPriority)}>
-              <option value="none">None (untriaged)</option>
-              <option value="backlog">Backlog</option>
-              <option value="important">Important</option>
-              <option value="immediate">Immediate</option>
-            </select>
-          </div>
+          {showPriority && (
+            <div className="form-group">
+              <label htmlFor="task-priority">Priority</label>
+              <select id="task-priority" value={priority} onChange={(e) => setPriority(e.target.value as TaskPriority)}>
+                <option value="none">None (untriaged)</option>
+                <option value="backlog">Backlog</option>
+                <option value="important">Important</option>
+                <option value="immediate">Immediate</option>
+              </select>
+            </div>
+          )}
 
           <div className="form-group">
             <label htmlFor="task-due">Due Date</label>

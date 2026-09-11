@@ -137,7 +137,9 @@ test('the session kebab fits the viewport and scrolls when the window is short',
   // 1. It IS the tall two-section menu (guards against the test passing because
   //    a short single-section menu rendered instead).
   await expect(menu.getByText('Task detail', { exact: true })).toHaveCount(1)
-  await expect(menu.locator('.task-kebab-priority')).toHaveCount(1)
+  // Priority is hidden by default (Settings → Tasks → Show task priority), so the
+  // marker for the task half of the menu is its two collapsed date rows.
+  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(2)
 
   // 2. overflow-y must be `auto` — this is the CSS half of the fix, and the half
   //    that makes overflow REACHABLE rather than merely clipped. Asserted
@@ -241,7 +243,14 @@ test('the kebab containing an inline calendar still fits the viewport', async ({
   await row.getByRole('button', { name: 'More actions' }).click()
   const kebab = page.locator('.task-kebab-menu:visible')
   await expect(kebab).toBeVisible()
-  // Two inline calendars since start_date landed (2c4d557f): Start + Due.
+  // Start + Due are collapsed rows now (the two always-open calendars were most
+  // of the menu's height); open BOTH so the menu is as tall as it can get, then
+  // prove it still fits. The menu re-measures when a calendar appears.
+  await expect(kebab.locator('.dp-content')).toHaveCount(0)
+  const toggles = kebab.locator('.task-kebab-date-toggle')
+  await expect(toggles).toHaveCount(2)
+  await toggles.nth(0).click()
+  await toggles.nth(1).click()
   await expect(kebab.locator('.dp-content')).toHaveCount(2)
   const m = await assertFitsViewport(page, kebab, 'kebab with inline date picker')
   expect(m.overflowY).toBe('auto')

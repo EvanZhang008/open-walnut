@@ -10,6 +10,7 @@ import { Lightbox } from '@/components/common/Lightbox';
 import { FileViewer } from '@/components/common/FileViewer';
 import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { useSelectionFrozen } from '@/utils/selection-guard';
 import { useStableHtml } from '@/hooks/useStableHtml';
@@ -170,6 +171,7 @@ interface TaskContextSectionProps {
 
 function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
   const navigate = useNavigate();
+  const showPriority = useShowPriority();
   const [open, setOpen] = useState(false);
   const subtasksDone = ctx.subtasks?.filter(s => s.done).length ?? 0;
   const subtasksTotal = ctx.subtasks?.length ?? 0;
@@ -201,7 +203,7 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
               {PHASE_SYMBOLS[ctx.phase] ?? '?'} {ctx.phase.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase())}
             </span>
           )}
-          {ctx.priority && ctx.priority !== 'none' && (
+          {showPriority && ctx.priority && ctx.priority !== 'none' && (
             <span className="badge" style={{ color: ctx.priority === 'high' ? 'var(--error)' : ctx.priority === 'medium' ? 'var(--warning)' : 'var(--fg-muted)' }}>
               {ctx.priority === 'high' ? '!!' : ctx.priority === 'medium' ? '!' : '\u2013'} {ctx.priority}
             </span>

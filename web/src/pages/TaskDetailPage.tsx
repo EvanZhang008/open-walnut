@@ -9,6 +9,7 @@ import { DatePicker } from '@/components/common/DatePicker';
 import { fetchSessionsForTask, updateSession } from '@/api/sessions';
 import type { SessionRecord } from '@open-walnut/core';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { TagEditor } from '@/components/tasks/TagEditor';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -79,6 +80,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const integrations = useIntegrations();
   const confirm = useConfirm();
   const alert = useAlert();
+  const showPriority = useShowPriority();
   // The private detail fetch. It is the DONOR for what only a detail read
   // carries (note, description, ext, children, parent, resolved dependencies);
   // the shared store owns every field it carries — see `task` below.
@@ -573,7 +575,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                   {child.title}
                 </span>
                 <span style={{ fontSize: '0.7rem', opacity: 0.4 }}>{child.phase}</span>
-                {child.priority !== 'none' && (
+                {showPriority && child.priority !== 'none' && (
                   <PriorityBadge priority={child.priority as 'immediate' | 'important' | 'backlog' | 'none'} />
                 )}
               </div>
@@ -795,10 +797,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           <span className="tdv2-k">Project</span>
           <span className="tdv2-v">{task.project || 'Inbox'}</span>
         </div>
-        <div className="tdv2-kv">
-          <span className="tdv2-k">Priority</span>
-          <span className="tdv2-v"><PriorityBadge priority={task.priority} /></span>
-        </div>
+        {showPriority && (
+          <div className="tdv2-kv">
+            <span className="tdv2-k">Priority</span>
+            <span className="tdv2-v"><PriorityBadge priority={task.priority} /></span>
+          </div>
+        )}
         <div className="tdv2-kv">
           <span className="tdv2-k">Start</span>
           <span className="tdv2-v"><DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" ghostWhenEmpty /></span>

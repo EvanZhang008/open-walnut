@@ -23,6 +23,7 @@ import {
 } from '@/utils/engines';
 import { formatModelName } from '@/hooks/useSessionUsage';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import { sortByModelStrength } from '@/utils/model-strength-order';
 import { catalogRowLabel } from '../ModelPicker';
 
@@ -173,6 +174,7 @@ function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
 }
 
 export function MetaFooter({ meta, onChange, compact, host, hideModel = false }: Props) {
+  const showPriority = useShowPriority();
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
@@ -193,8 +195,10 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
   // fresh open shows an inactive badge, not "More · 1". Only counts controls that
   // LIVE in the menu: the pin tier moved to the primary row, where its own active
   // state is already visible.
+  // A field the menu does not draw must not be counted: with priority hidden the
+  // badge would read "More · 1" for a value the user cannot see or change here.
   const nonDefaultCount = Number(meta.unread !== DEFAULT_META.unread)
-    + Number(meta.priority !== DEFAULT_META.priority)
+    + Number(showPriority && meta.priority !== DEFAULT_META.priority)
     + Number(!!meta.startDate) + Number(!!meta.endDate) + Number(!!meta.dueDate);
 
   useEffect(() => {
@@ -291,22 +295,24 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
                   <span>Mark unread</span>
                 </button>
               </div>
-              <div className="sps-meta-row">
-                <span className="sps-meta-label">Priority</span>
-                <div className="sps-meta-priority-options">
-                  {PRIORITY_OPTIONS.map(p => (
-                    <button
-                      key={p.value}
-                      type="button"
-                      className={`badge badge-${p.value}${meta.priority === p.value ? ' badge-active' : ''} badge-clickable`}
-                      onClick={() => onChange(m => ({ ...m, priority: p.value }))}
-                      title={p.label}
-                    >
-                      {p.icon}
-                    </button>
-                  ))}
+              {showPriority && (
+                <div className="sps-meta-row">
+                  <span className="sps-meta-label">Priority</span>
+                  <div className="sps-meta-priority-options">
+                    {PRIORITY_OPTIONS.map(p => (
+                      <button
+                        key={p.value}
+                        type="button"
+                        className={`badge badge-${p.value}${meta.priority === p.value ? ' badge-active' : ''} badge-clickable`}
+                        onClick={() => onChange(m => ({ ...m, priority: p.value }))}
+                        title={p.label}
+                      >
+                        {p.icon}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>,
             document.body,
           )}

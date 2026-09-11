@@ -321,6 +321,10 @@
 }
 .tp-cols-5 { grid-template-columns: minmax(280px, 1fr) 120px 90px 170px 140px; }
 .tp-cols-4 { grid-template-columns: minmax(280px, 1fr) 120px 90px 170px; }
+/* Priority hidden (ui.show_priority off): same columns minus the 120px priority
+   track, so Due/Session/Project keep their own widths instead of shifting left. */
+.tp-cols-5.tp-nopri { grid-template-columns: minmax(280px, 1fr) 90px 170px 140px; }
+.tp-cols-4.tp-nopri { grid-template-columns: minmax(280px, 1fr) 90px 170px; }
 
 .tp-thead {
   height: 32px;

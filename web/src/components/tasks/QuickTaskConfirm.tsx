@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { DatePicker, formatDateTimeDisplay } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import {
   PRIORITY_CYCLE,
   PRIORITY_OPTIONS,
@@ -61,6 +62,7 @@ export function QuickTaskConfirm({
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [startPickerOpen, setStartPickerOpen] = useState(false);
   const [endPickerOpen, setEndPickerOpen] = useState(false);
+  const showPriority = useShowPriority();
 
   const priorityOption = PRIORITY_OPTIONS.find((option) => option.value === draft.priority);
   const priorityLabel = priorityOption ? `${priorityOption.icon} ${priorityOption.label}` : 'No priority';
@@ -128,14 +130,16 @@ export function QuickTaskConfirm({
           >
             {draft.due ? `Due ${formatDateTimeDisplay(draft.due)}` : '+ Due'} <AiBadge visible={draft.aiFields.has('due')} />
           </button>
-          <button
-            type="button"
-            className={`qtc-chip${draft.aiFields.has('priority') ? ' qtc-chip-ai' : ''}`}
-            disabled={submitting}
-            onClick={() => onChange({ priority: nextValue(PRIORITY_CYCLE, draft.priority) as ConfirmDraft['priority'] })}
-          >
-            {priorityLabel} <AiBadge visible={draft.aiFields.has('priority')} />
-          </button>
+          {showPriority && (
+            <button
+              type="button"
+              className={`qtc-chip${draft.aiFields.has('priority') ? ' qtc-chip-ai' : ''}`}
+              disabled={submitting}
+              onClick={() => onChange({ priority: nextValue(PRIORITY_CYCLE, draft.priority) as ConfirmDraft['priority'] })}
+            >
+              {priorityLabel} <AiBadge visible={draft.aiFields.has('priority')} />
+            </button>
+          )}
         </div>
         {datePickerOpen && (
           <div className="qtc-date-picker">

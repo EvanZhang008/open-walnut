@@ -44,6 +44,7 @@ import {
 import { TaskStartButton } from './TaskStartButton';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import { createProject } from '@/api/projects';
 import { ProjectSourcePicker } from './ProjectSourcePicker';
 import { log } from '@/utils/log';
@@ -1162,12 +1163,15 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
 // ── Static task item for DragOverlay ──
 
 function TaskItemOverlay({ task }: { task: Task }) {
+  const showPriority = useShowPriority();
   return (
     <div className="todo-panel-item drag-overlay-item">
       <div className="todo-item-content">
         <span className={`todo-item-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{task.title}</span>
       </div>
-      <span className={`badge badge-${task.priority}`}>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span>
+      {showPriority && (
+        <span className={`badge badge-${task.priority}`}>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span>
+      )}
     </div>
   );
 }
@@ -1676,6 +1680,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   const navigate = useNavigate();
   const integrations = useIntegrations();
   const statusEpoch = useSessionStatusEpoch();
+  const showPriority = useShowPriority();
   // Support slim/minimal mode: has_* flags are set when content was stripped
   // server-side. The minimal home-list payload drops summary/description/ext
   // too, so derive presence from the flag OR the inlined value.
@@ -1839,7 +1844,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
           <span className={`badge-phase badge-phase-${task.phase?.toLowerCase()}`}>
             {PHASE_ICON[task.phase] ?? '○'} {PHASE_LABEL[task.phase] ?? task.phase}
           </span>
-          {task.priority && task.priority !== 'none' && (
+          {showPriority && task.priority && task.priority !== 'none' && (
             <span className={`todo-detail-priority-pill priority-${task.priority}`}>
               {PRIORITY_ICON[task.priority]} {PRIORITY_LABEL[task.priority]}
             </span>

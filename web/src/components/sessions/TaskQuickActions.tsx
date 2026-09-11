@@ -2,8 +2,8 @@
  * TaskQuickActions — phase badge (inline) + kebab "⋮" menu for task actions.
  *
  * Used in session panels to show task status and actions.
- * Phase badge stays visible; priority, star, attention, pin, source
- * are consolidated into the kebab dropdown.
+ * Phase badge stays visible; pin, dates, project, source (and priority, when
+ * Settings shows it) are consolidated into the kebab dropdown.
  */
 
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
@@ -16,13 +16,10 @@ import * as ICONS from '@/components/common/Icons';
 import { taskCircleClass } from '@/utils/session-status';
 import type { FocusTier } from '@/api/focus';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
-import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '@/components/common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
-import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
-import { TIER_OPTIONS, tierColor, PRIORITY_OPTIONS } from './task-meta-constants';
-import { MoveToProjectSection } from '@/components/tasks/TaskKebabMenu';
+import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -80,13 +77,6 @@ interface TaskQuickActionsProps {
 
 export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, onOpenTaskDetail, contextMenuScope }: TaskQuickActionsProps) {
   const integrations = useIntegrations();
-  // Built-ins + the user's custom tiers. Safe hook: this kebab also renders on
-  // surfaces that may sit outside the FocusBarProvider.
-  const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
-  const tierOptions = [
-    ...TIER_OPTIONS,
-    ...customTiers.map((ct) => ({ value: ct.id, label: ct.label })),
-  ];
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
   // Writes go through the shared task store when it carries this row: the
   // optimistic change then reaches the board, the detail pane and the parent
@@ -247,21 +237,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     closeKebab();
   }, [task, closeKebab, storeFor]);
 
-  /** Manual read/unread flip — the "mark as unread" escape hatch (you glanced at
-   *  a task but want it to keep nagging). */
-  const handleToggleUnread = useCallback(() => {
-    if (!task) return;
-    const id = task.id;
-    const nextUnread = !task.unread;
-    setTask(prev => prev ? { ...prev, unread: nextUnread } : prev);
-    const shared = storeFor(id);
-    if (shared) shared.update(id, { unread: nextUnread });
-    else updateTask(id, { unread: nextUnread }).catch(() => {
-      fetchTask(id).then(setTask).catch(() => {});
-    });
-    closeKebab();
-  }, [task, closeKebab, storeFor]);
-
   const handleSetDate = useCallback((date: string | null) => {
     if (!task) return;
     const id = task.id;
@@ -372,102 +347,21 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             </>
           )}
 
-          {/* Read / unread */}
-          {!isDone && (
-            <button
-              className={`task-kebab-item${task.unread ? ' task-kebab-item-active' : ''}`}
-              onClick={(e) => { e.stopPropagation(); handleToggleUnread(); }}
-            >
-              <span className="task-kebab-icon" style={{ color: task.unread ? 'var(--error)' : undefined }}>●</span>
-              <span>{task.unread ? 'Mark read' : 'Mark unread'}</span>
-            </button>
-          )}
-
-          {/* Pin / Tier — same as TodoPanel kebab */}
-          {!isDone && (onPinTask || isPinned) && (
-            <>
-              <div className="task-kebab-divider" />
-              {isPinned && onUnpinTask && (
-                <button
-                  className="task-kebab-item"
-                  onClick={(e) => { e.stopPropagation(); onUnpinTask(task.id); closeKebab(); }}
-                >
-                  <span className="task-kebab-icon">{ICONS.ICON_PIN_FILLED}</span>
-                  <span>Unpin</span>
-                </button>
-              )}
-              <div className="task-kebab-tier">
-                <span className="task-kebab-tier-label">{isPinned ? 'Move to' : 'Pin to'}</span>
-                <div className="task-kebab-tier-options">
-                  {tierOptions.map((t) => (
-                    <button
-                      key={t.value}
-                      className={`task-kebab-tier-btn${pinnedTier === t.value ? ' active' : ''}`}
-                      style={{ color: tierColor(t.value) }}
-                      title={t.label}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (isPinned) {
-                          if (pinnedTier !== t.value) onSetTier?.(task.id, t.value);
-                        } else {
-                          onPinTask?.(task.id);
-                          setTimeout(() => onSetTier?.(task.id, t.value), 100);
-                        }
-                        closeKebab();
-                      }}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-
-          <div className="task-kebab-divider" />
-
-          {/* Priority */}
-          <div className="task-kebab-priority">
-            <span className="task-kebab-priority-label">Priority</span>
-            <div className="task-kebab-priority-options">
-              {PRIORITY_OPTIONS.map((p) => (
-                <button
-                  key={p.value}
-                  className={`badge badge-${p.value}${task.priority === p.value ? ' badge-active' : ''} badge-clickable`}
-                  title={p.label}
-                  onClick={(e) => { e.stopPropagation(); if (p.value !== task.priority) handleSetPriority(p.value); else closeKebab(); }}
-                >
-                  {p.icon}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Start date — when to begin (drives the Now view's deferral) */}
-          <div className="task-kebab-divider" />
-          <div className="task-kebab-date">
-            <span className="task-kebab-date-label">
-              Start{task.start_date ? `: ${formatStartDateDisplay(task.start_date)}` : ''}
-            </span>
-            <DatePicker
-              date={task.start_date}
-              onChange={handleSetStartDate}
-              inline
-            />
-          </div>
-
-          {/* Due date — the deadline */}
-          <div className="task-kebab-divider" />
-          <div className="task-kebab-date">
-            <span className="task-kebab-date-label">
-              Due{task.due_date ? `: ${formatDateDisplay(task.due_date)}` : ''}
-            </span>
-            <DatePicker
-              date={task.due_date}
-              onChange={handleSetDate}
-              inline
-            />
-          </div>
+          {/* Pin / Tier · Priority · Start / Due: the SAME rows as the board's
+              task kebab (one definition, TaskKebabMenu.TaskActionMenuItems). */}
+          <TaskActionMenuItems
+            task={task}
+            isPinned={Boolean(isPinned)}
+            pinnedTier={pinnedTier}
+            isDone={isDone}
+            onSetPriority={(p) => handleSetPriority(p as TaskPriority)}
+            onPinTask={onPinTask ? () => onPinTask(task.id) : undefined}
+            onUnpinTask={onUnpinTask ? () => onUnpinTask(task.id) : undefined}
+            onSetTier={onSetTier ? (t) => onSetTier(task.id, t) : undefined}
+            onSetDate={handleSetDate}
+            onSetStartDate={handleSetStartDate}
+            afterAction={closeKebab}
+          />
 
           {/* Move to project — same section as the TodoPanel kebab */}
           <MoveToProjectSection current={task.project || ''} onMove={handleMoveToProject} afterAction={closeKebab} />

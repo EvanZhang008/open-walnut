@@ -39,6 +39,8 @@ export const CHEVRON_GLYPH = '▶';
  *  project/folder distinction: project = solid, folder = hollow. */
 export const ICON_FOLDER_SOLID = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4a1 1 0 011-1h3.6l1.6 1.8h5.8a1 1 0 011 1V12a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/></svg>;
 export const ICON_INFO = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5v4"/><circle cx="8" cy="5.2" r=".8" fill="currentColor" stroke="none"/></svg>;
+/** Calendar outline: the Start / Due rows in the task kebab menu. */
+export const ICON_CALENDAR = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg>;
 export const ICON_STAR_EMPTY = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M8 1.5l2 4.1 4.5.6-3.2 3.2.8 4.5L8 11.7l-4.1 2.2.8-4.5L1.5 6.2l4.5-.6z"/></svg>;
 export const ICON_STAR_FILLED = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" strokeWidth="0.5" strokeLinejoin="round"><path d="M8 1.5l2 4.1 4.5.6-3.2 3.2.8 4.5L8 11.7l-4.1 2.2.8-4.5L1.5 6.2l4.5-.6z"/></svg>;
 export const ICON_PIN = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="5.5" r="3.5"/><path d="M8 9v5"/></svg>;

@@ -213,4 +213,11 @@ still live on the client.
   documents. One menu definition for both paths; never fork a separate context menu.
 - **Action rows are defined once.** The per-task kebab, the batch "More" dropdown, and the
   session-panel kebab share `TaskActionMenuItems` / `MoveToProjectSection`. Add an action in
-  one place and every surface gets it; parallel copies drift.
+  one place and every surface gets it; parallel copies drift (the session kebab once grew its
+  own "Unpin" and "Mark unread" rows this way).
+- **The kebab is lean by default** (2026-09-10 user feedback: "too noisy"). No unread row
+  (opening the task marks it read), no Unpin row (the lit tier pill IS the pin; clicking it
+  again unpins), Start/Due are collapsed `KebabDateRow`s whose calendar opens on click, and
+  priority renders only when `ui.show_priority` is on (`useShowPriority`, Settings → Tasks;
+  off by default and hidden on every surface, not just menus). Ratchets:
+  `tests/web/task-kebab-lean.test.ts`, `tests/e2e/browser/kebab-menu-lean.spec.ts`.

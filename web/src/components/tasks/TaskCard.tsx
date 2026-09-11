@@ -6,6 +6,7 @@ import { TagChip } from './TagChip';
 import { TaskSessionPill } from './SessionPill';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import { ICON_TRASH } from '../common/Icons';
 
 export type TaskListProjection = Task & {
@@ -98,6 +99,7 @@ export function SyncIndicator({ task }: { task: TaskListProjection }) {
 export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, isSelected, onSelectToggle, onRenameGroup, onUngroup }: TaskCardProps) {
   const navigate = useNavigate();
   const confirm = useConfirm();
+  const showPriority = useShowPriority();
 
   const className = [
     'task-card',
@@ -189,7 +191,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
           <SyncIndicator task={task} />
         </span>
         <div className="task-card-meta">
-          <PriorityBadge priority={task.priority} />
+          {showPriority && <PriorityBadge priority={task.priority} />}
           <TaskSessionPill task={task} />
           <span className="task-card-project text-xs text-muted">{task.project}</span>
           {task.tags && task.tags.length > 0 && (

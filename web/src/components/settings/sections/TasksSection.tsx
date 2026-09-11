@@ -3,7 +3,9 @@ import type { Config, TaskPriority } from '@open-walnut/core';
 import { useAutoSave } from '@/hooks/useAutoSave';
 import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
+import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useIntegrations } from '@/hooks/useIntegrations';
+import { useShowPriority, setShowPriority } from '@/hooks/useShowPriority';
 
 interface Props {
   config: Config;
@@ -20,6 +22,10 @@ type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
  */
 export function TasksSection({ config, onSave }: Props) {
   const integrations = useIntegrations();
+  // `ui.show_priority` is read and written through its own module store, NOT through
+  // this section's local state + useAutoSave: hundreds of rows read the same flag, and
+  // a second `ui` write from here would race the store's own merged write.
+  const showPriority = useShowPriority();
   const [defaultPriority, setDefaultPriority] = useState<TaskPriority>(config.defaults?.priority ?? 'none');
   const [defaultPlatform, setDefaultPlatform] = useState(config.defaults?.platform ?? 'local');
   const [defaultProject, setDefaultProject] = useState(config.defaults?.project ?? '');
@@ -71,20 +77,35 @@ export function TasksSection({ config, onSave }: Props) {
 
   return (
     <SectionCard id="tasks" title="Tasks" description="Where new tasks land, and how a finished session reports back onto its task. Changes save automatically." onSave={handleSave} showSave={false}>
+      <div className="form-group">
+        <ToggleSwitch
+          id="settings-show-priority"
+          checked={showPriority}
+          onChange={setShowPriority}
+          label="Show task priority"
+        />
+        <p className="text-sm text-muted" style={{ marginTop: 2 }}>
+          Hidden by default because most people never use it; priority stays stored and sortable either way.
+        </p>
+      </div>
+
       <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="settings-priority">Default Priority</label>
-          <select
-            id="settings-priority"
-            value={defaultPriority}
-            onChange={(e) => setDefaultPriority(e.target.value as TaskPriority)}
-          >
-            <option value="none">None (untriaged)</option>
-            <option value="backlog">Backlog</option>
-            <option value="important">Important</option>
-            <option value="immediate">Immediate</option>
-          </select>
-        </div>
+        {/* Only meaningful while priority is drawn — otherwise it sets a field nothing shows. */}
+        {showPriority && (
+          <div className="form-group">
+            <label htmlFor="settings-priority">Default Priority</label>
+            <select
+              id="settings-priority"
+              value={defaultPriority}
+              onChange={(e) => setDefaultPriority(e.target.value as TaskPriority)}
+            >
+              <option value="none">None (untriaged)</option>
+              <option value="backlog">Backlog</option>
+              <option value="important">Important</option>
+              <option value="immediate">Immediate</option>
+            </select>
+          </div>
+        )}
 
         <div className="form-group">
           <label htmlFor="settings-project">Default Project <span className="text-muted">(optional)</span></label>

@@ -41,6 +41,7 @@ import type { WorkingDirEntry } from '@/api/sessions';
 import { MetaFooter } from './path-selector/MetaFooter';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from './SessionPathSelector';
 import { applyLaunchMemory, quickDirsFor, type DraftAiField, type DraftColumn } from './draft-column';
+import { useShowPriority } from '@/hooks/useShowPriority';
 
 /** `host::cwd` — one directory's identity (same as draft-column's dirKey). */
 function chipKey(d: { cwd: string; host: string | null }): string {
@@ -85,6 +86,7 @@ export function DraftLaunchBar({
   draft, pickerOpen, onOpenPicker, onClosePicker,
   onPathChange, onProjectChange, onMetaChange, isKnownProject, onAfterQuickPick,
 }: Props) {
+  const showPriority = useShowPriority();
   const projectBtnRef = useRef<HTMLButtonElement>(null);
   // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
   // column can't clip it and siblings can't paint over it) but opens FROM this
@@ -150,8 +152,9 @@ export function DraftLaunchBar({
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
   // The meta row carries ONE badge for its AI-fillable fields (tier / priority /
-  // the More menu's dates) — see the row's comment below.
-  const metaHasAi = isAi('pinTier') || isAi('priority')
+  // the More menu's dates) — see the row's comment below. A field the row does not
+  // DRAW is left out: with priority hidden the badge would point at nothing.
+  const metaHasAi = isAi('pinTier') || (showPriority && isAi('priority'))
     || isAi('dueDate') || isAi('startDate') || isAi('endDate');
 
   return (
@@ -213,7 +216,7 @@ export function DraftLaunchBar({
             type="button"
             className="draft-walnut-more"
             onClick={() => setWalnutMetaOpen(true)}
-            title="Tier, priority, dates — defaults: Ask Walnut project, Focus tier"
+            title={`Tier, ${showPriority ? 'priority, ' : ''}dates — defaults: Ask Walnut project, Focus tier`}
           >
             ⋯ More
           </button>

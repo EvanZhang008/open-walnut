@@ -54,8 +54,25 @@ test.describe.configure({ mode: 'serial' })
  */
 let openPinId = ''
 
+/** Flip `ui.show_priority` on the fixture server (merging the rest of `ui`). */
+async function setShowPriority(on: boolean): Promise<void> {
+  // GET /api/config wraps the file under `config`; merge the rest of `ui` so
+  // sibling keys (session_panels) survive the write.
+  const body = (await (await fetch(`${API}/api/config`)).json()) as { config?: { ui?: Record<string, unknown> } }
+  const res = await fetch(`${API}/api/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ui: { ...(body.config?.ui ?? {}), show_priority: on } }),
+  })
+  if (!res.ok) throw new Error(`config write failed: ${res.status} ${await res.text()}`)
+}
+
 test.beforeAll(async () => {
   await fs.mkdir(SHOTS, { recursive: true })
+  // Priority is hidden by default (Settings → Tasks → Show task priority), which
+  // also drops the Priority rail section this spec filters through. Turn it on
+  // for the run and restore the default in afterAll.
+  await setShowPriority(true)
   const created = await fetch(`${API}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -68,6 +85,7 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
+  await setShowPriority(false).catch(() => {})
   if (!openPinId) return
   await fetch(`${API}/api/focus/tasks/${openPinId}`, { method: 'DELETE' }).catch(() => {})
   await fetch(`${API}/api/tasks/${openPinId}`, { method: 'DELETE' }).catch(() => {})

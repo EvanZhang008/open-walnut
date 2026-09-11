@@ -12,6 +12,7 @@ import type { Task } from '@open-walnut/core';
 import { PIN_TIER_POLICY } from '@open-walnut/core';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
+import { useShowPriority } from '@/hooks/useShowPriority';
 
 const DONE_PHASES = new Set(['COMPLETE', 'CANCELLED']);
 
@@ -29,9 +30,10 @@ export const TaskListChip = memo(function TaskListChip({
   task: Task;
   overlay?: boolean;
 }) {
+  const showPriority = useShowPriority();
   return (
     <div className={`cal-rail-chip${overlay ? ' cal-rail-chip-overlay' : ''}`}>
-      <PriorityBadge priority={task.priority} />
+      {showPriority && <PriorityBadge priority={task.priority} />}
       <span className="cal-rail-chip-title">{task.title}</span>
     </div>
   );

@@ -9,10 +9,10 @@ import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
 import { MentionPalette, type MentionPaletteHandle } from './MentionPalette';
 import { ComposerRefStrip } from './ComposerRefStrip';
+import { composeWithRefs, cutSpan, splitComposerRefs, type ComposerRefSplit } from './composer-refs';
 import { relativeTo } from './mention-path';
 import { routeMention } from './session-mention';
 import { detectMention } from './mention-trigger';
-import { extractEntityRefs } from '@/utils/entity-ref-tags';
 import { ensureSessionMentionIndex } from '@/stores/session-mention-index';
 import { ensureProjectsIndex } from '@/stores/mention-search';
 import type { Task } from '@open-walnut/core';
@@ -42,6 +42,17 @@ function formatMentionPath(relPath: string): string {
  */
 function getMaxHeight(el: HTMLTextAreaElement): number {
   return parseFloat(getComputedStyle(el).maxHeight) || 200;
+}
+
+/**
+ * Read the persisted draft and split it into chips + prose. The draft is stored
+ * in its composed form (one key, tags first), so a draft written by another
+ * surface (composer-insert.ts parks a quoted reference there when no panel is
+ * mounted) comes back as a chip instead of raw markup in the box.
+ */
+function readDraftSplit(key: string | undefined): ComposerRefSplit {
+  if (!key) return { refs: [], body: '' };
+  try { return splitComposerRefs(localStorage.getItem(key) ?? ''); } catch { return { refs: [], body: '' }; }
 }
 
 interface ChatInputProps {
@@ -128,14 +139,40 @@ interface ChatInputProps {
 }
 
 export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
-  const [value, setValue] = useState(() => {
-    if (!draftKey) return '';
-    try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
-  });
-  // Mirror of `value` for effects keyed on something else (the prefill effect is
-  // keyed on its nonce, so reading `value` there would read a stale render's text).
+  // ONE read of the persisted draft, split once for both pieces of state below.
+  const [initialDraft] = useState(() => readDraftSplit(draftKey));
+  const [value, setValue] = useState(initialDraft.body);
+  /**
+   * The entity references attached to this message, as tag strings in order.
+   * INVARIANT: `value` (what the textarea shows) never contains a ref tag. The
+   * tags live here and only rejoin the text when the message is composed
+   * (`composeWithRefs`). Every write to `value` goes through `applyText`.
+   */
+  const [refs, setRefs] = useState<string[]>(initialDraft.refs);
+  // Mirrors for effects keyed on something else (the prefill effect is keyed on
+  // its nonce, so reading state there would read a stale render's values).
   const valueRef = useRef(value);
   valueRef.current = value;
+  const refsRef = useRef(refs);
+  refsRef.current = refs;
+
+  /**
+   * The ONE normalizer every text-mutating path goes through: any ref tag in the
+   * candidate text is lifted into a chip and the box keeps the prose. Pass
+   * `keepRefs: false` for paths that replace the whole composer (switching
+   * sessions, a replacing prefill, a restore after a failed send): there the
+   * standing chips belong to the text being thrown away.
+   */
+  const applyText = useCallback((candidate: string, opts?: { keepRefs?: boolean }): ComposerRefSplit => {
+    const split = splitComposerRefs(candidate, opts?.keepRefs === false ? [] : refsRef.current);
+    const prev = refsRef.current;
+    const same = split.refs.length === prev.length && split.refs.every((t, i) => t === prev[i]);
+    if (!same) { refsRef.current = split.refs; setRefs(split.refs); }
+    valueRef.current = split.body;
+    setValue(split.body);
+    return split;
+  }, []);
+
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -182,7 +219,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (!draftKey) return;
     try {
       const saved = localStorage.getItem(draftKey) ?? '';
-      setValue(saved);
+      // The new session's draft owns its own chips, so drop the previous one's.
+      applyText(saved, { keepRefs: false });
       // Resize textarea to fit restored content
       requestAnimationFrame(() => {
         const el = textareaRef.current;
@@ -216,9 +254,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       const typed = prefillMode === 'keep-draft' ? valueRef.current.trimStart() : '';
       next = typed ? `${prefillText}${typed}` : prefillText;
     }
-    setValue(next);
+    // A prefill often IS a reference ("Quote in session" appends a `<task-ref/>`),
+    // so it lands as a chip and only the prose reaches the box. 'replace' throws
+    // the typed text away, and its chips with it.
+    const split = applyText(next, { keepRefs: prefillMode !== 'replace' });
+    const composed = composeWithRefs(split.refs, split.body);
     // Persist immediately (don't rely on the later-declared debounced saveDraft).
-    try { if (draftKeyRef.current) localStorage.setItem(draftKeyRef.current, next); } catch { /* unavailable */ }
+    try { if (draftKeyRef.current) localStorage.setItem(draftKeyRef.current, composed); } catch { /* unavailable */ }
     // Focus + caret-to-end, RETRIED until the box is actually focusable. A
     // hidden textarea (`display:none` — e.g. the session's chat column is
     // collapsed) silently swallows focus(), so the caret stayed on <body> and
@@ -232,7 +274,12 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (!el) return;
       if (el.offsetParent === null && frames++ < 20) { raf = requestAnimationFrame(tryFocus); return; }
       el.focus();
-      const caret = prefillMode === 'append' ? next.length : prefillText.length;
+      // End of the prose for an append (a chip landing must not move the caret
+      // off the sentence in progress); end of the injected block otherwise,
+      // clamped because lifting its tags out made the body shorter.
+      const caret = prefillMode === 'append'
+        ? split.body.length
+        : Math.min(prefillText.length, split.body.length);
       el.setSelectionRange(caret, caret);
       el.style.height = 'auto';
       el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
@@ -343,8 +390,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const onValueChangeRef = useRef(onValueChange);
   onValueChangeRef.current = onValueChange;
   useEffect(() => {
-    onValueChangeRef.current?.(value);
-  }, [value]);
+    onValueChangeRef.current?.(composeWithRefs(refs, value));
+  }, [value, refs]);
 
   // Re-fit when the textarea's WIDTH changes (panel resize / composer overlay
   // reflow re-wraps lines). Width-guarded so our own height writes don't loop.
@@ -506,6 +553,12 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }, 300);
   }, []);
 
+  /** Persist the draft in its composed form (chips + prose): ONE key, and it
+   *  splits back into the same chips on the next mount. */
+  const saveComposed = useCallback((body: string, refsNow: readonly string[] = refsRef.current) => {
+    saveDraft(composeWithRefs(refsNow, body));
+  }, [saveDraft]);
+
   const clearDraft = useCallback(() => {
     clearTimeout(draftTimerRef.current);
     const key = draftKeyRef.current;
@@ -518,6 +571,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // send is confirmed successful (otherwise a failed send loses the user's text).
   const resetInput = (keepDraft = false) => {
     setValue('');
+    valueRef.current = '';
+    setRefs([]);
+    refsRef.current = [];
     setImages([]);
     closePalette();
     closeMention();
@@ -537,7 +593,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // sure the draft is persisted so a page refresh still recovers it. This is the
   // hard guarantee: the user's input must never silently disappear.
   const restoreInput = (text: string, imgs: ImageAttachment[]) => {
-    setValue(text);
+    // `text` is the composed message that failed to send, so its tags go back to
+    // being chips. The box was reset on dispatch, hence keepRefs: false.
+    const split = applyText(text, { keepRefs: false });
     setImages(imgs);
     saveDraft(text);
     requestAnimationFrame(() => {
@@ -546,7 +604,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
         el.focus();
-        el.setSelectionRange(text.length, text.length);
+        el.setSelectionRange(split.body.length, split.body.length);
       }
     });
   };
@@ -574,7 +632,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const handleSend = () => {
-    const text = value.trim();
+    // The message = the chips, then the prose. A reference with no words is a
+    // complete message ("look at this task"), so refs alone are sendable.
+    const body = value.trim();
+    const text = composeWithRefs(refs, value);
     if ((!text && images.length === 0) || disabled || queueFull) return;
 
     // Sending is the user saying they are done talking. Stop the mic and drop the
@@ -584,8 +645,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     dictationSpanRef.current = null;
     lastDictationRef.current = null;
 
-    // Control commands: intercepted by UI, not sent as text to Claude
-    if (isSessionMode && text === '/model' && onControlCommand) {
+    // Control commands: intercepted by UI, not sent as text to Claude. Judged on
+    // the PROSE and only with no chips attached. A message carrying references
+    // is a message, and swallowing it as a command would drop them.
+    if (isSessionMode && refs.length === 0 && body === '/model' && onControlCommand) {
       onControlCommand('model');
       resetInput();
       return;
@@ -593,10 +656,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
     // In session mode, slash commands are sent as regular text (to Claude Code)
     // Only intercept in main chat mode (showCommands + no sessionCommands)
-    if (showCommands && !isSessionMode && text.startsWith('/')) {
-      const spaceIndex = text.indexOf(' ');
-      const name = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-      const args = spaceIndex === -1 ? undefined : text.slice(spaceIndex + 1).trim() || undefined;
+    if (showCommands && !isSessionMode && refs.length === 0 && body.startsWith('/')) {
+      const spaceIndex = body.indexOf(' ');
+      const name = spaceIndex === -1 ? body.slice(1) : body.slice(1, spaceIndex);
+      const args = spaceIndex === -1 ? undefined : body.slice(spaceIndex + 1).trim() || undefined;
 
       if (name) {
         const cmd = getCommand(name);
@@ -641,7 +704,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       : inserted;
     const newCaret = spanValid ? at + inserted.length : inserted.length;
     setValue(newValue);
-    saveDraft(newValue);
+    valueRef.current = newValue;
+    saveComposed(newValue);
     closePalette();
     // Resize textarea and move cursor to just after the inserted command
     requestAnimationFrame(() => {
@@ -653,7 +717,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         el.setSelectionRange(newCaret, newCaret);
       }
     });
-  }, [onCommand, onControlCommand, closePalette, value, saveDraft]);
+  }, [onCommand, onControlCommand, closePalette, value, saveComposed]);
 
   // Replace the active "@query" span with the selected path, then close the popup.
   // The popup hands back an absolute path (avoids ambiguity about what a relative
@@ -666,7 +730,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const ref = formatMentionPath(absPath) + ' ';
     const newValue = value.slice(0, at) + ref + value.slice(end);
     setValue(newValue);
-    saveDraft(newValue);
+    valueRef.current = newValue;
+    saveComposed(newValue);
     closeMention();
     const newCaret = at + ref.length;
     requestAnimationFrame(() => {
@@ -678,7 +743,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         ta.setSelectionRange(newCaret, newCaret);
       }
     });
-  }, [value, saveDraft, closeMention]);
+  }, [value, saveComposed, closeMention]);
 
   // Rewrite the "@query" span so the palette browses `absDir` (descend into a
   // dir / go to the parent / jump to a recent folder). The query text IS the
@@ -694,7 +759,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const inserted = display ? `@${display}/` : '@';
     const newValue = value.slice(0, at) + inserted + value.slice(end);
     setValue(newValue);
-    saveDraft(newValue);
+    valueRef.current = newValue;
+    saveComposed(newValue);
     const newCaret = at + inserted.length;
     mentionEndRef.current = newCaret;
     const query = inserted.slice(1); // drop the leading "@"
@@ -712,47 +778,48 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       const ta = textareaRef.current;
       if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
     });
-  }, [value, saveDraft, mentionCwd, enableEntityMention]);
+  }, [value, saveComposed, mentionCwd, enableEntityMention]);
 
-  // Entity pick: splice the reference pill tag (`<task-ref …/>` etc.) plus a
-  // space over the "@query" span. The tag travels verbatim in the message —
-  // the bubble renders it as a pill and the server appends a reference card.
+  // Entity pick: the "@query" span leaves the text and the reference becomes a
+  // chip above it (the tag rejoins the text only when the message is composed,
+  // where the bubble renders it as a pill and the server appends a reference
+  // card). The caret stays where the words were, ready for the sentence.
   const handlePickRef = useCallback((tag: string) => {
     const at = mentionAtIndexRef.current;
     const end = mentionEndRef.current;
     if (!tag || at < 0 || end < at) { closeMention(); return; }
-    const inserted = `${tag} `;
-    const newValue = value.slice(0, at) + inserted + value.slice(end);
-    setValue(newValue);
-    saveDraft(newValue);
+    const cut = cutSpan(value, at, end);
+    // The tag rides the candidate text so the ONE normalizer lifts it into a
+    // chip (and drops it if this entity is already attached).
+    const split = applyText(cut.text + tag);
+    saveComposed(split.body, split.refs);
     closeMention();
-    const newCaret = at + inserted.length;
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (ta) {
         ta.style.height = 'auto';
         ta.style.height = Math.min(ta.scrollHeight, getMaxHeight(ta)) + 'px';
         ta.focus();
-        ta.setSelectionRange(newCaret, newCaret);
+        ta.setSelectionRange(cut.caret, cut.caret);
       }
     });
-  }, [value, saveDraft, closeMention]);
+  }, [value, applyText, saveComposed, closeMention]);
 
-  // × on a reference pill in the strip above the textarea: cut its span out.
-  const handleRemoveRef = useCallback((start: number, end: number) => {
-    const newValue = value.slice(0, start) + value.slice(end);
-    setValue(newValue);
-    saveDraft(newValue);
+  // × on a reference chip: detach that one reference. The prose is untouched.
+  const handleRemoveRef = useCallback((index: number) => {
+    const next = refsRef.current.filter((_, i) => i !== index);
+    refsRef.current = next;
+    setRefs(next);
+    saveComposed(valueRef.current, next);
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (ta) {
-        ta.style.height = 'auto';
-        ta.style.height = Math.min(ta.scrollHeight, getMaxHeight(ta)) + 'px';
         ta.focus();
-        ta.setSelectionRange(start, start);
+        const caret = ta.value.length;
+        ta.setSelectionRange(caret, caret);
       }
     });
-  }, [value, saveDraft]);
+  }, [saveComposed]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Shift+Tab: caller-defined mode cycle (sessions: permission mode)
@@ -858,9 +925,23 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const handleChange = (newValue: string) => {
-    setValue(newValue);
+    // A pasted ref tag (someone copies a pill's markup, or a draft written by
+    // another surface arrives through here) becomes a chip: the box holds prose.
+    const split = applyText(newValue);
     handleInput();
-    saveDraft(newValue);
+    saveComposed(split.body, split.refs);
+    if (split.body !== newValue) {
+      // The text just moved under every span the detectors below rely on, so
+      // stop here: caret to the end of the prose, popups closed.
+      if (mentionOpenRef.current) closeMention();
+      closePalette();
+      paletteRef.current = { open: false, results: [], selectedIndex: 0 };
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (ta) { ta.focus(); ta.setSelectionRange(split.body.length, split.body.length); }
+      });
+      return;
+    }
 
     // "@" mention detection: caret follows an "@" (at start or after whitespace)
     // with no whitespace in between. routeMention picks the surface: "@?" → the
@@ -872,14 +953,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       // single spaces (multi-word lookups for the hybrid search); a closed
       // palette keeps the strict no-whitespace trigger.
       const openAt = enableEntityMention && mentionOpenRef.current ? mentionAtIndexRef.current : -1;
-      let m = detectMention(newValue, caret, openAt);
-      // An "@" INSIDE an inserted pill tag (a task titled "fix @mentions" puts
-      // one in its label) is markup, not a trigger: picking there would splice
-      // a second tag into the first and corrupt both.
-      if (m && enableEntityMention) {
-        const at = m.atIndex;
-        if (extractEntityRefs(newValue).some((r) => at >= r.start && at < r.end)) m = null;
-      }
+      // No tag can be in the text here (they are chips), so an "@" is always a
+      // real trigger. The old "is this @ inside a pill's label" guard is gone.
+      const m = detectMention(newValue, caret, openAt);
       if (m) {
         // Don't reopen a popup the user just dismissed with Esc for this same "@".
         if (m.atIndex === mentionDismissedAtRef.current) {
@@ -1097,7 +1173,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   const handleInterruptSend = () => {
     setSendMenuOpen(false);
-    const text = value.trim();
+    const text = composeWithRefs(refs, value);
     if ((!text && images.length === 0) || disabled || !onInterruptSend) return;
     dispatchSend(onInterruptSend, text, images);
   };
@@ -1107,7 +1183,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     onStop?.();
   };
 
-  const hasInput = !!(value.trim() || images.length > 0);
+  const hasInput = !!(value.trim() || refs.length > 0 || images.length > 0);
   const canSend = !disabled && !queueFull && hasInput;
 
   // Claude-style primary action swap: while a turn is streaming and the composer is
@@ -1214,8 +1290,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               <span className="pill-title">{focusedTask.title}</span>
             </div>
           )}
-          {/* Readable view of the reference pills sitting in the text as tags */}
-          {enableEntityMention && <ComposerRefStrip value={value} onRemove={handleRemoveRef} />}
+          {/* The references attached to this message. Rendered whenever there
+              are any, even where the "@" entity palette is off: a reference
+              quoted in from elsewhere must never be invisible yet sent. */}
+          {refs.length > 0 && <ComposerRefStrip tags={refs} onRemove={handleRemoveRef} />}
           {/* Image preview area */}
           {images.length > 0 && (
             <div className="chat-image-previews">

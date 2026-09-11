@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import { createPortal } from 'react-dom';
 import { DatePicker, isOverdue } from '../common/DatePicker';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
@@ -327,7 +328,11 @@ export function TasksPageTable({
   }, [navigate, onOpenTask]);
   const isAll = activeProject === null;
   const showGroups = isAll && grouped;
-  const cols = isAll ? 'tp-cols-5' : 'tp-cols-4';
+  const showPriority = useShowPriority();
+  // The grid template is per-row, so dropping the priority CELL has to drop its
+  // TRACK too or every later cell lands one column to the left. `tp-nopri` is the
+  // same column set minus the 120px priority track.
+  const cols = `${isAll ? 'tp-cols-5' : 'tp-cols-4'}${showPriority ? '' : ' tp-nopri'}`;
 
   // ── ghost add-row state (keyed by group so only one ghost is editing) ──
   const [addingIn, setAddingIn] = useState<string | null>(null);
@@ -466,7 +471,7 @@ export function TasksPageTable({
             />
           </span>
         </span>
-        <span><PriorityCell task={t} onUpdate={onUpdate} /></span>
+        {showPriority && <span><PriorityCell task={t} onUpdate={onUpdate} /></span>}
         <span className={`tp-cell-due${isOverdue(t.due_date) && t.status !== 'done' ? ' overdue' : ''}`}>
           {/* DatePicker popover handles flip/clamp; trigger inherits cell style */}
           <span className="tp-due-picker" onClick={(e) => e.stopPropagation()}>
@@ -623,7 +628,7 @@ export function TasksPageTable({
     <div className="tp-table-scroll" data-testid="tasks-table" ref={scrollRef}>
       <div className={`tp-thead ${cols}`}>
         <Th label="Title" k="title" sort={sort} onSortChange={onSortChange} />
-        <Th label="Priority" k="priority" sort={sort} onSortChange={onSortChange} />
+        {showPriority && <Th label="Priority" k="priority" sort={sort} onSortChange={onSortChange} />}
         <Th label="Due" k="due" sort={sort} onSortChange={onSortChange} />
         <Th label="Session" k="session" sort={sort} onSortChange={onSortChange} />
         {isAll && <Th label="Project" k="project" sort={sort} onSortChange={onSortChange} />}

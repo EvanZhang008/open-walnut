@@ -32,6 +32,7 @@ import { createPortal } from 'react-dom';
 import { ICON_SLIDERS } from '../common/Icons';
 import { INBOX_TAB } from './task-tabs';
 import { log } from '@/utils/log';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import {
   COMPLETION_OPTIONS,
   PHASE_FILTER_OPTIONS,
@@ -155,6 +156,7 @@ export function ViewDropdown({
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const showPriority = useShowPriority();
 
   // Which legacy blocks this surface still owns. Each is all-or-nothing (value +
   // setter), so a half-wired caller can't render a dead control.
@@ -191,7 +193,7 @@ export function ViewDropdown({
     if (hasQuery && query) {
       list.push({ id: 'q-status', name: 'Status', badge: query.completion.length });
       list.push({ id: 'q-phase', name: 'Phase', badge: query.phases.length });
-      list.push({ id: 'q-priority', name: 'Priority', badge: query.priorities.length });
+      if (showPriority) list.push({ id: 'q-priority', name: 'Priority', badge: query.priorities.length });
       // Home already has the Projects chip section — a second "Project" row
       // right under it read as a duplicate (user report 2026-08-23). The
       // multi-project query stays reachable there via the panel search;
@@ -211,7 +213,7 @@ export function ViewDropdown({
     // project) and the memo would go stale. `query` changes on every filter
     // click anyway, so this memo mostly documents the inputs.
   }, [hasProjectChips, hasLegacySelects, hasLegacySortGroup, hasQuery, query,
-      activeProject, phaseFilter, dateFilter,
+      activeProject, phaseFilter, dateFilter, showPriority,
       projectOptions, sourceOptions, sprintOptions]);
 
   const activeSection = sections.find((s) => s.id === section) ?? sections[0];
@@ -301,8 +303,14 @@ export function ViewDropdown({
   // Cross-dimension search (query model only — the legacy quick filters are
   // already one click away and duplicate the same concepts).
   const searchGroups = useMemo(
-    () => (hasQuery && query ? searchFilterOptions(query, { projectOptions, sourceOptions, sprintOptions }, search) : []),
-    [hasQuery, query, projectOptions, sourceOptions, sprintOptions, search],
+    () => {
+      if (!hasQuery || !query) return [];
+      const groups = searchFilterOptions(query, { projectOptions, sourceOptions, sprintOptions }, search);
+      // A hidden dimension has no rail section to land on, so its search hits
+      // would open an empty detail pane.
+      return showPriority ? groups : groups.filter((g) => g.options[0]?.section !== 'q-priority');
+    },
+    [hasQuery, query, projectOptions, sourceOptions, sprintOptions, search, showPriority],
   );
   const searchFlat = useMemo(() => searchGroups.flatMap((g) => g.options), [searchGroups]);
   const searching = search.trim().length > 0;

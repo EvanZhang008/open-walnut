@@ -12,6 +12,7 @@ import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
@@ -88,11 +89,51 @@ const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] =
 ];
 
 /**
- * Shared set-priority / pin-to-tier / set-date blocks — the SAME panel rows the
- * per-task kebab shows, reused by the multi-select "Group ▸" batch dropdown so
- * there is one definition of these actions (no drift). In batch mode `task` is
- * null: there is no single current value to highlight, so every option renders
- * un-selected and the callback fans out across the caller's selection.
+ * One date field as a collapsed menu row: "Start: Fri" / "Due" with a chevron,
+ * and the inline calendar only once the row is clicked. Two always-open
+ * calendars used to take ~60% of the menu's height, so every other action sat
+ * below the fold on a laptop screen; a date is set far less often than a task
+ * is opened, pinned or moved. The menu re-measures itself when the calendar
+ * appears (useMenuPlacement observes children), so expanding never clips.
+ */
+export function KebabDateRow({ label, date, display, onChange }: {
+  label: string;
+  date: string | undefined | null;
+  /** Human form of `date` for the collapsed row; empty when no date is set. */
+  display: string;
+  onChange: (date: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`task-kebab-date${open ? ' open' : ''}`}>
+      <button
+        type="button"
+        className="task-kebab-item task-kebab-date-toggle"
+        aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+      >
+        <span className="task-kebab-icon">{ICONS.ICON_CALENDAR}</span>
+        <span className="task-kebab-date-label">
+          {label}{display ? <>: <b>{display}</b></> : ''}
+        </span>
+        <span className={`task-kebab-date-caret${open ? ' open' : ''}`}>{ICONS.CHEVRON_GLYPH}</span>
+      </button>
+      {open && <DatePicker date={date} onChange={onChange} inline />}
+    </div>
+  );
+}
+
+/**
+ * Shared pin-to-tier / set-priority / set-date blocks — the SAME panel rows the
+ * per-task kebab shows, reused by the session panel's kebab (TaskQuickActions)
+ * and the multi-select "Group ▸" batch dropdown so there is one definition of
+ * these actions (no drift). In batch mode `task` is null: there is no single
+ * current value to highlight, so every option renders un-selected and the
+ * callback fans out across the caller's selection.
+ *
+ * Pinning has no separate "Unpin" row: the highlighted tier pill IS the pin, and
+ * clicking it again unpins. Priority renders only when Settings says so
+ * (`ui.show_priority`, off by default). Dates are collapsed rows (KebabDateRow).
  */
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
@@ -117,6 +158,7 @@ export function TaskActionMenuItems({
   // Custom tiers append after the built-ins. Safe hook: kebabs also render on
   // isolated surfaces (tests, popouts) that may sit outside the FocusBarProvider.
   const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
+  const showPriority = useShowPriority();
   const tierOptions = [
     ...TIER_OPTIONS,
     ...customTiers.map((ct) => ({ value: ct.id, label: ct.label, icon: ICONS.ICON_TIER_CUSTOM })),
@@ -127,31 +169,27 @@ export function TaskActionMenuItems({
       {(batchMode ? !!onSetTier : !isDone && (onPinTask || isPinned)) && (
         <>
           <div className="task-kebab-divider" />
-          {!batchMode && isPinned && onUnpinTask && (
-            <button
-              className="task-kebab-item"
-              onClick={(e) => { e.stopPropagation(); onUnpinTask(); afterAction(); }}
-            >
-              <span className="task-kebab-icon">{ICONS.ICON_PIN_FILLED}</span>
-              <span>Unpin</span>
-            </button>
-          )}
           <div className="task-kebab-tier">
-            <span className="task-kebab-tier-label">{!batchMode && isPinned ? 'Move to' : 'Pin to'}</span>
+            <span className="task-kebab-tier-label">{!batchMode && isPinned ? 'Pinned' : 'Pin to'}</span>
             <div className="task-kebab-tier-options">
-              {tierOptions.map((t) => (
+              {tierOptions.map((t) => {
+                const isCurrent = !batchMode && isPinned && pinnedTier === t.value;
+                return (
                 <button
                   key={t.value}
-                  className={`task-kebab-tier-btn${!batchMode && pinnedTier === t.value ? ' active' : ''}`}
+                  className={`task-kebab-tier-btn${isCurrent ? ' active' : ''}`}
                   style={{ color: TIER_COLORS[t.value] ?? 'var(--tier-custom)' }}
-                  title={t.label}
+                  title={isCurrent ? `Unpin from ${t.label}` : t.label}
+                  aria-pressed={isCurrent || undefined}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (batchMode) {
                       // Caller fans out pin+tier across the whole selection.
                       onSetTier?.(t.value);
                     } else if (isPinned) {
-                      if (pinnedTier !== t.value) onSetTier?.(t.value);
+                      // The lit pill is the pin itself: click it again to unpin.
+                      if (isCurrent) onUnpinTask?.();
+                      else onSetTier?.(t.value);
                     } else {
                       // Pin first, then set the tier. The 100ms gap is a race guard: the
                       // pin must register (server write + local focus-store update) before
@@ -168,14 +206,15 @@ export function TaskActionMenuItems({
                   <span className="task-kebab-tier-btn-icon">{t.icon}</span>
                   {t.label}
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         </>
       )}
 
-      {/* Priority */}
-      {onSetPriority && (
+      {/* Priority (hidden unless Settings → Tasks → Show task priority) */}
+      {onSetPriority && showPriority && (
         <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-priority">
@@ -200,38 +239,24 @@ export function TaskActionMenuItems({
         </>
       )}
 
-      {/* Start date — when to begin working (drives the Now view's deferral) */}
+      {/* Start (when to begin; drives the Now view's deferral) and Due (the
+          deadline): collapsed rows, calendar on click. */}
+      {(onSetStartDate || onSetDate) && <div className="task-kebab-divider" />}
       {onSetStartDate && (
-        <>
-          <div className="task-kebab-divider" />
-          <div className="task-kebab-date">
-            <span className="task-kebab-date-label">
-              Start{task?.start_date ? `: ${formatStartDateDisplay(task.start_date)}` : ''}
-            </span>
-            <DatePicker
-              date={task?.start_date}
-              onChange={(date) => { onSetStartDate(date); afterAction(); }}
-              inline
-            />
-          </div>
-        </>
+        <KebabDateRow
+          label="Start"
+          date={task?.start_date}
+          display={task?.start_date ? formatStartDateDisplay(task.start_date) : ''}
+          onChange={(date) => { onSetStartDate(date); afterAction(); }}
+        />
       )}
-
-      {/* Due date — the deadline */}
       {onSetDate && (
-        <>
-          <div className="task-kebab-divider" />
-          <div className="task-kebab-date">
-            <span className="task-kebab-date-label">
-              Due{task?.due_date ? `: ${formatDateDisplay(task.due_date)}` : ''}
-            </span>
-            <DatePicker
-              date={task?.due_date}
-              onChange={(date) => { onSetDate(date); afterAction(); }}
-              inline
-            />
-          </div>
-        </>
+        <KebabDateRow
+          label="Due"
+          date={task?.due_date}
+          display={task?.due_date ? formatDateDisplay(task.due_date) : ''}
+          onChange={(date) => { onSetDate(date); afterAction(); }}
+        />
       )}
     </>
   );
@@ -516,15 +541,15 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
           // the task"). Kill pointerdown here so no menu interaction can arm dnd.
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {/* Session status */}
+          {/* Session status. Unread is deliberately NOT a menu row: opening the
+              task marks it read, and the red dot on the row already says it. */}
           {(() => {
             const ss = storedSessionStatus ?? task.session_status;
             if (!sessionId && !ss) return null;
             const isRunning = ss?.process_status === 'running';
             const isError = ss?.process_status === 'error';
-            const unread = Boolean(task.unread);
-            const color = isError || unread ? 'var(--error)' : isRunning ? 'var(--success)' : 'var(--fg-muted)';
-            const label = isRunning ? 'AI is working...' : isError ? 'Session error' : unread ? 'Unread — open to mark read' : 'Session idle';
+            const color = isError ? 'var(--error)' : isRunning ? 'var(--success)' : 'var(--fg-muted)';
+            const label = isRunning ? 'AI is working...' : isError ? 'Session error' : 'Session idle';
             return (
               <button
                 className="task-kebab-item"

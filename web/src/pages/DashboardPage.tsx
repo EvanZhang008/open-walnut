@@ -3,6 +3,7 @@ import { useTasksContext } from '@/contexts/TasksContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useFavorites } from '@/hooks/useFavorites';
+import { useShowPriority } from '@/hooks/useShowPriority';
 import { createProject } from '@/api/projects';
 import { TasksPageRail, type RailProjectItem } from '@/components/tasks/TasksPageRail';
 import { TasksPageTable } from '@/components/tasks/TasksPageTable';
@@ -64,6 +65,7 @@ export function DashboardPage() {
   const { projectOrder, reorderProjects } = useOrdering();
   const { projectNames, sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry();
   const { toggleFavoriteProject } = useFavorites();
+  const showPriority = useShowPriority();
 
   // null = All Tasks, '' = Inbox, otherwise a project name. The rail NAVIGATES,
   // so it is deliberately not a query condition: the query panel's own `projects`
@@ -390,20 +392,24 @@ export function DashboardPage() {
           >
             ✓ Done
           </button>
-          <button
-            type="button"
-            className={`tp-chip${query.priorities.includes('immediate') ? ' on' : ''}`}
-            onClick={() => togglePriorityChip('immediate')}
-          >
-            <span className="tp-p-dot p0" />P0
-          </button>
-          <button
-            type="button"
-            className={`tp-chip${query.priorities.includes('important') ? ' on' : ''}`}
-            onClick={() => togglePriorityChip('important')}
-          >
-            <span className="tp-p-dot p1" />P1
-          </button>
+          {showPriority && (
+            <>
+              <button
+                type="button"
+                className={`tp-chip${query.priorities.includes('immediate') ? ' on' : ''}`}
+                onClick={() => togglePriorityChip('immediate')}
+              >
+                <span className="tp-p-dot p0" />P0
+              </button>
+              <button
+                type="button"
+                className={`tp-chip${query.priorities.includes('important') ? ' on' : ''}`}
+                onClick={() => togglePriorityChip('important')}
+              >
+                <span className="tp-p-dot p1" />P1
+              </button>
+            </>
+          )}
           <ViewDropdown
             onClearAll={() => handleQueryChange({ ...DEFAULT_TASK_QUERY_FILTER_STATE, sort: query.sort })}
             query={query}
