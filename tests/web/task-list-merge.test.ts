@@ -104,3 +104,60 @@ describe('mergeFetchedTasks', () => {
     expect(listRowEqual(withM, doneM)).toBe(false);
   });
 });
+
+describe('mergeFetchedTasks with tasks inserted after the snapshot was taken', () => {
+  // Live repro (2026-09-11): the first list fetch of ~6.4k tasks took 5.9s; an
+  // Ask Walnut launched meanwhile arrived over WS, then the stale snapshot
+  // landed and deleted it. The slot re-resolved onto an OLDER ask and, since
+  // that pick is persisted, stayed there.
+  it('keeps a retained task the fetched list does not know about, at the head', () => {
+    const old = task({ id: 'old' });
+    const fresh = task({ id: 'fresh' });
+    const prev = [fresh, old];
+    const next = mergeFetchedTasks(prev, [{ ...old }], new Set(['fresh']));
+    expect(next.map((t) => t.id)).toEqual(['fresh', 'old']);
+    expect(next[0]).toBe(fresh);
+    expect(next[1]).toBe(old);
+  });
+
+  it('a retained task the fetched list DOES carry is adopted from the fetch when the fetch is newer', () => {
+    const old = task({ id: 'old' });
+    const fresh = task({ id: 'fresh', updated_at: '2026-09-11T00:00:00Z' });
+    const freshFromServer = { ...fresh, title: 'server title', updated_at: '2026-09-11T00:00:01Z' };
+    const next = mergeFetchedTasks([fresh, old], [freshFromServer, { ...old }], new Set(['fresh']));
+    expect(next.map((t) => t.id)).toEqual(['fresh', 'old']);
+    expect(next[0]).toBe(freshFromServer);
+  });
+
+  it('a retained task keeps its WS state when the snapshot carries an OLDER row', () => {
+    // The snapshot was taken between the create and the session link: it has the
+    // task but no session_id. Adopting it blanked the slot's panel until the next
+    // event ("no session yet" card for ~7s in the live repro).
+    const old = task({ id: 'old' });
+    const linked = task({ id: 'fresh', session_id: 'sid-1', updated_at: '2026-09-11T00:00:02Z' });
+    const snapshotRow = { ...linked, session_id: undefined, updated_at: '2026-09-11T00:00:01Z' };
+    const next = mergeFetchedTasks([linked, old], [snapshotRow, { ...old }], new Set(['fresh']));
+    expect(next[0]).toBe(linked);
+    expect(next[0].session_id).toBe('sid-1');
+  });
+
+  it('a task that is NOT retained never uses the updated_at tie-break (the fetch is authoritative)', () => {
+    const newerLocally = task({ id: 'a', title: 'optimistic', updated_at: '2026-09-11T00:00:05Z' });
+    const snapshotRow = { ...newerLocally, title: 'server', updated_at: '2026-09-11T00:00:01Z' };
+    const next = mergeFetchedTasks([newerLocally], [snapshotRow]);
+    expect(next[0]).toBe(snapshotRow);
+  });
+
+  it('a task NOT retained is still dropped when the fetch lacks it (a deletion must win)', () => {
+    const old = task({ id: 'old' });
+    const gone = task({ id: 'gone' });
+    const next = mergeFetchedTasks([gone, old], [{ ...old }], new Set(['somebody-else']));
+    expect(next.map((t) => t.id)).toEqual(['old']);
+  });
+
+  it('an empty retain set behaves exactly like no retain set', () => {
+    const a = task({ id: 'a' });
+    const prev = [a];
+    expect(mergeFetchedTasks(prev, [{ ...a }], new Set())).toBe(prev);
+  });
+});

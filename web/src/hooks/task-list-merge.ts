@@ -77,16 +77,33 @@ export function listRowEqual(a: Task, b: Task): boolean {
  * Memoized rows then bail on reference equality instead of re-rendering all
  * ~6k rows because a full refetch minted 6k fresh objects. If nothing at all
  * changed, the previous ARRAY is returned so consumers skip entirely.
+ *
+ * `retain` names tasks the store learned about over WS AFTER the fetch was
+ * issued. The fetched list is a snapshot from before they existed, so adopting
+ * it wholesale would delete them until the next refetch (a ~6k-task list takes
+ * seconds to arrive, and a task created in that window vanished from every
+ * surface; the Ask Walnut slot then re-resolved its selection onto an OLDER ask
+ * and stayed there). Such a task keeps its place at the head, in the order the
+ * events inserted it. When the snapshot DOES carry it, the snapshot may still
+ * predate the events that followed the insert (the session link lands a beat
+ * after the create), so the row with the later server `updated_at` wins; both
+ * stamps come from the server, so they compare.
  */
-export function mergeFetchedTasks(prev: Task[], fetched: Task[]): Task[] {
+export function mergeFetchedTasks(prev: Task[], fetched: Task[], retain?: ReadonlySet<string>): Task[] {
   if (prev.length === 0) return fetched;
   const prevById = new Map(prev.map((t) => [t.id, t]));
   let reused = 0;
   const next = fetched.map((t) => {
     const old = prevById.get(t.id);
     if (old && listRowEqual(old, t)) { reused++; return old; }
+    if (old && retain?.has(t.id) && Date.parse(old.updated_at ?? '') > Date.parse(t.updated_at ?? '')) return old;
     return t;
   });
+  if (retain?.size) {
+    const fetchedIds = new Set(fetched.map((t) => t.id));
+    const kept = prev.filter((t) => retain.has(t.id) && !fetchedIds.has(t.id));
+    if (kept.length) return [...kept, ...next];
+  }
   if (reused === fetched.length && prev.length === fetched.length) {
     let sameOrder = true;
     for (let i = 0; i < prev.length; i++) {
