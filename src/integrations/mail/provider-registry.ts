@@ -120,6 +120,17 @@ export class MailProviderRegistry {
     return this.entries.get(id)?.spec
   }
 
+  /**
+   * Every registered provider id, in registration order.
+   *
+   * For a sweep over the providers themselves (adoption), which wants the SPECS rather than the
+   * console rows `list()` builds. Registration order is deliberate: it is stable, and a sweep that
+   * sorted would make the first provider alphabetically the one that spends the budget.
+   */
+  ids(): string[] {
+    return [...this.entries.keys()]
+  }
+
   list(): MailProviderSummary[] {
     return [...this.entries.values()]
       .map(({ spec }) => ({

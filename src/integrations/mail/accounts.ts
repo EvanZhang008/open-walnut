@@ -12,12 +12,12 @@
  * that cannot currently be reached. The mirror is that row: an id, a display name, an address,
  * a state, and the last health reading. No credentials, ever.
  */
-import { callProvider, MailServiceError, providerIdOf } from './contract.js'
+import { callProvider, MailServiceError, providerIdOf, reasonOf } from './contract.js'
 import type { MailEvents } from './events.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import type { MailRetention } from './retention.js'
 import type { MailStore } from './store.js'
-import type { MailAccount, ProviderHealth } from './types.js'
+import type { MailAccount, MailProviderSpec, ProviderHealth } from './types.js'
 
 /**
  * The backstop on `submit`, a little above the probe budget a provider sets for itself.
@@ -29,6 +29,15 @@ import type { MailAccount, ProviderHealth } from './types.js'
  */
 const SETUP_DEADLINE_MS = 18_000
 
+/**
+ * The backstop on an adoption sweep's `listAccounts`.
+ *
+ * Shorter than the setup deadline because nobody is waiting on a form: adoption runs in the
+ * background, and a provider that cannot name its own accounts in ten seconds is one this sweep
+ * should give up on and leave to the next registration or to an explicit `adoptAccounts` call.
+ */
+const ADOPT_DEADLINE_MS = 10_000
+
 export class MailAccounts {
   constructor(private readonly deps: {
     store: MailStore
@@ -39,6 +48,12 @@ export class MailAccounts {
     kick: (accountId: string) => void
     /** Drop the poll loop's memory of this account: its backoff, its park, its watch. */
     forget: (accountId: string) => Promise<void>
+    /** `true` on a replica, where the mirror is not ours to write. */
+    replica: () => boolean
+    log: {
+      info(message: string, meta?: Record<string, unknown>): void
+      warn(message: string, meta?: Record<string, unknown>): void
+    }
   }) {}
 
   /**
@@ -74,6 +89,88 @@ export class MailAccounts {
     this.deps.events.accountChanged(account.accountId, 'added')
     this.deps.kick(account.accountId)
     return account
+  }
+
+  /**
+   * Mirror the accounts a provider already knows about, for one provider or for all of them.
+   *
+   * `listAccounts` has always been in the contract and nothing ever called it, so a provider whose
+   * accounts need no setup at all (an ambient sign-in: no password to type, the helper already
+   * knows the mailbox) could not show one message until a human filled in a form about their own
+   * address. Adoption is that missing half: what the provider already knows becomes a mirror row,
+   * an announcement and a first poll, with no POST.
+   *
+   * Two rules make it safe to run automatically:
+   *
+   * - A row the mirror ALREADY HAS is left completely alone. The mirror is the source of truth for
+   *   state, health and display name once a row exists: its state may carry an auth park the poll
+   *   loop set, and re-mirroring would revive a disabled account and re-announce it every sweep.
+   * - It NEVER THROWS. One provider that cannot answer must not stop the others or turn a plugin
+   *   registration into an error, so a failure is a warning and a skip. The ids it did adopt come
+   *   back, which is what an explicit caller wants.
+   */
+  async adopt(providerId?: string): Promise<string[]> {
+    // The mirror lives on the primary: a replica that adopted would write a second copy of an
+    // account it does not own, and then poll it.
+    if (this.deps.replica()) return []
+    const specs = (providerId ? [providerId] : this.deps.providers.ids())
+      .map((id) => this.deps.providers.get(id))
+      .filter((spec): spec is MailProviderSpec => !!spec)
+    if (specs.length === 0) return []
+
+    let mirrored: Set<string>
+    try {
+      // ONE read for the whole sweep, before any provider is asked: a row lookup per listed
+      // account would be a worker round trip per account a provider names.
+      mirrored = new Set((await this.deps.store.listAccounts()).map((row) => row.account_id))
+    } catch (error: unknown) {
+      this.deps.log.warn('mail could not read its mirror to adopt provider accounts', {
+        error: reasonOf(error).slice(0, 200),
+      })
+      return []
+    }
+
+    const adopted: string[] = []
+    for (const spec of specs) {
+      let listed: MailAccount[]
+      try {
+        listed = await callProvider('its account list', () => spec.listAccounts(), ADOPT_DEADLINE_MS)
+      } catch (error: unknown) {
+        this.deps.log.warn('mail could not adopt a provider\'s accounts', {
+          providerId: spec.id, error: reasonOf(error).slice(0, 200),
+        })
+        continue
+      }
+      const mine: string[] = []
+      for (const account of listed ?? []) {
+        const accountId = account?.accountId
+        if (!accountId || mirrored.has(accountId)) continue
+        if (providerIdOf(accountId) !== spec.id) {
+          // An account id is `<providerId>:<providerAccountId>`, so a row whose prefix names
+          // somebody else can never be routed back to the provider that produced it.
+          this.deps.log.warn('mail skipped an account whose id belongs to another provider', {
+            providerId: spec.id, accountId,
+          })
+          continue
+        }
+        mirrored.add(accountId)
+        // Re-read the ROW, not the snapshot taken before the provider was asked: a setup POST (or
+        // a second sweep) for the same account can land while this one is awaiting `listAccounts`,
+        // and re-mirroring it would overwrite what that writer just stored, announce the account a
+        // second time and poll it twice.
+        if (await this.deps.store.getAccount(accountId)) continue
+        await this.mirror({ ...account, providerId: spec.id })
+        this.deps.events.accountChanged(accountId, 'added')
+        this.deps.kick(accountId)
+        mine.push(accountId)
+      }
+      if (mine.length === 0) continue
+      this.deps.log.info('mail adopted provider accounts', {
+        providerId: spec.id, count: mine.length, accountIds: mine,
+      })
+      adopted.push(...mine)
+    }
+    return adopted
   }
 
   /** The account row, its mailboxes, its cached messages, its body files, and the provider's copy. */

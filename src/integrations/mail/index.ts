@@ -168,6 +168,8 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     events,
     kick: (accountId) => { void sync.refresh(accountId).catch(() => undefined) },
     forget: (accountId) => sync.forget(accountId),
+    replica: () => walnut.replica,
+    log: walnut.log,
   })
   // The digest rides the tick rather than a timer of its own: "is today's due" is a clock question,
   // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
@@ -212,6 +214,11 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     sync,
     accounts: () => service.listAccounts(),
     caller: () => walnut.services.caller(),
+    adopt: (providerId) => accounts.adopt(providerId),
+    // A HOST TIMER, for the same reason the reconciler and the first surface read are: the sweep
+    // opens the database, and one that outlived a teardown would re-create the plugin's data
+    // directory after the loader deleted it. A timer is cancelled by dispose.
+    defer: (run) => { walnut.timers.timeout(run, 0) },
   }))
   registerMailRoutes(walnut, {
     store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest,

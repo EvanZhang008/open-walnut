@@ -122,7 +122,7 @@ MailCapabilities {
 MailProviderSpec {
   id, label, capabilities
   setup: AccountSetupSpec                  // declared fields; the console renders them generically
-  listAccounts(): MailAccount[]
+  listAccounts(): MailAccount[]          // the base ADOPTS these; see the adoption rule below
   health(accountId): ProviderHealth
   listMailboxes(accountId): Mailbox[]
   poll(accountId, { mailbox, cursor?, limit }):
@@ -162,6 +162,7 @@ Contract rules that matter:
 - **Mail threads are cache-derived**: there is deliberately no thread method on the mail contract; the base groups messages by the References/In-Reply-To headers it already stores, so `mail_thread` and the console thread view work identically for every provider. Chat threads are provider-native, hence `getThread`.
 - **A body may return both representations, and the base derives its own stored format.** `getBody` answers `'both'` when a multipart message carried a text part and an HTML part, which is the common case, and the base decides from what actually landed on disk rather than trusting the label. `attachments` on a body is optional and additive: the poll already reported the metadata from the structure, so a provider that repeats it after parsing is refining, not introducing.
 - **Deleting an account tells the provider, and cannot be blocked by it.** `removeAccount` is optional and best effort: the base calls it first, then purges its own rows, mailboxes, body files and mirror whatever happened. The user asked for the account to go away, and a cache row nobody can reach is worse than a provider that still holds a config block.
+- **The base adopts the accounts a provider already knows about.** `listAccounts()` is called right after a provider registers, deferred so a slow answer cannot eat into the plugin's activation budget, and every account it names that the mirror does not have yet is mirrored, announced and polled. That is the whole path for an ambient sign-in (no password to type, the helper already knows the mailbox): the mailbox is simply there, with no form. The automatic sweep is for a provider that declares NO setup fields, because a provider with fields is asking for something only the person knows and those accounts still arrive by setup POST; a provider that has a form as well, or that discovers its accounts after its own probe, calls `adoptAccounts(providerId?)` on the service (contract 1.6.0) to be mirrored on demand. Adoption never overwrites a row the mirror already has: once a row exists the mirror owns its state, health and display name, so re-listing an account cannot revive one the poll loop parked or re-announce it every sweep. A provider whose `listAccounts` throws or never answers is logged and skipped, and the others in the same sweep are adopted anyway.
 
 ## Data model
 

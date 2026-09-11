@@ -90,8 +90,16 @@ export type {
  * 1.5.0 lets `MailBody` carry `from`, `to`, `cc` and `replyTo`, for a transport whose LISTING
  * cannot name an address and only a body fetch can. The base treats them as gap fill only: an
  * address the envelope already had is never overwritten. Additive and optional.
+ *
+ * 1.6.0 is ADOPTION: the base finally calls `listAccounts()`. A provider that renders no setup
+ * fields is swept right after it registers, so an ambient mailbox (no password to type, the helper
+ * already knows the account) is simply there instead of waiting for a human to fill in a form about
+ * their own address. `adoptAccounts(providerId?)` is the same sweep on demand, and it is what a
+ * provider that discovers its accounts LATE (after its own async probe, or one that does have a
+ * setup form as well) calls to be mirrored without a setup POST. Adoption never touches an account
+ * the mirror already has, and a setup POST is still how a credentialed account is added.
  */
-export const MAIL_BASE_API_VERSION = '1.5.0'
+export const MAIL_BASE_API_VERSION = '1.6.0'
 
 /**
  * The method bag published as `mail:base`.
@@ -124,6 +132,15 @@ export type MailBaseApi = {
   refresh(accountId?: string): Promise<TickReport>
   /** Told when an account is added, changed or removed. Owned by the caller. */
   onAccountsChanged(handler: (event: MailAccountChangedEvent) => void): Disposable
+  /**
+   * Mirror the accounts `listAccounts()` reports and return the ids that were new (1.6.0).
+   *
+   * For a provider that discovers its accounts after its own probe, or that has a setup form and
+   * ambient accounts as well: a provider with no setup fields is swept automatically when it
+   * registers and does not need this. An account the mirror already has is never touched, so
+   * calling it repeatedly is safe, and it never rejects: what it could not reach is logged.
+   */
+  adoptAccounts(providerId?: string): Promise<string[]>
 }
 
 export function createMailBaseApi(deps: {
@@ -133,17 +150,48 @@ export function createMailBaseApi(deps: {
   accounts: () => Promise<MailAccountDto[]>
   /** The host's current-caller reader, injected so the registry stays host-free. */
   caller: () => string | undefined
+  /** Mirror what a provider already knows about. Never rejects; it logs what it could not reach. */
+  adopt: (providerId?: string) => Promise<string[]>
+  /**
+   * Run this after the current turn, on a timer the host owns.
+   *
+   * Injected rather than `setImmediate` so the loader cancels a pending sweep when it tears the
+   * plugin down. A floating promise that opens the mail database after a teardown re-creates the
+   * plugin's data directory behind the loader, which is the same reason activation arms its first
+   * cache read on a host timer.
+   */
+  defer: (run: () => void) => void
 }): MailBaseApi {
   // A plain object of closures, never a class instance: the host refuses a published service
   // with a prototype, because a consumer holding a per-key handle could not re-resolve it.
   return {
     // `caller()` is read HERE, synchronously inside the method body, which is the only place
     // it means anything: after the first await the caller may be anybody.
-    registerProvider: (spec) => deps.providers.register(spec, deps.caller() ?? 'unknown'),
+    registerProvider: (spec) => {
+      const handle = deps.providers.register(spec, deps.caller() ?? 'unknown')
+      // A provider that renders NO setup form has nothing to wait for a human about, so its
+      // accounts are adopted the moment it attaches. One that declares fields is asking for
+      // something only the person knows, and those accounts still arrive by setup POST; such a
+      // provider opts in with one `adoptAccounts` call of its own.
+      //
+      // DEFERRED and never awaited: `registerProvider` is called inside a provider plugin's
+      // activate, which has 20 seconds in total, and a slow `listAccounts` must not spend any of
+      // it. The registration is looked up again inside the sweep, so an activate that throws
+      // after this line adopts nothing at all.
+      if ((spec?.setup?.fields?.length ?? 0) === 0) {
+        deps.defer(() => {
+          // `adopt` reports its own failures. The catch is only here so a future change to that
+          // cannot turn a background sweep into an unhandled rejection.
+          void deps.adopt(spec.id).catch(() => undefined)
+        })
+      }
+      return handle
+    },
     listProviders: () => deps.providers.list(),
     version: () => MAIL_BASE_API_VERSION,
     listAccounts: () => deps.accounts(),
     refresh: (accountId) => deps.sync.refresh(accountId),
     onAccountsChanged: (handler) => deps.events.onAccountsChanged(handler),
+    adoptAccounts: (providerId) => deps.adopt(providerId),
   }
 }
