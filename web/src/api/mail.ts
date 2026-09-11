@@ -286,17 +286,26 @@ export function listMailboxes(accountId: string): Promise<{ mailboxes: MailboxDt
   return apiGet(`${BASE}/mailboxes`, { account: accountId }, QUIET);
 }
 
+/**
+ * One page of a mailbox.
+ *
+ * `unread` is the SERVER's filter, over the whole mailbox rather than over the page: a mailbox with
+ * more unread mail than a page holds cannot be filtered in the browser without calling a fraction of
+ * the unread mail all of it. It pages with `before` exactly like the unfiltered list.
+ */
 export function listMailMessages(query: {
   accountId?: string;
   mailboxId?: string;
   limit?: number;
   before?: number;
+  unread?: boolean;
 }): Promise<MailMessagePage> {
   const params: Record<string, string> = {};
   if (query.accountId) params.account = query.accountId;
   if (query.mailboxId) params.mailbox = query.mailboxId;
   if (query.limit) params.limit = String(query.limit);
   if (query.before !== undefined) params.before = String(query.before);
+  if (query.unread) params.unread = '1';
   return apiGet(`${BASE}/messages`, params, QUIET);
 }
 

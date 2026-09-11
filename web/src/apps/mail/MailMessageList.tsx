@@ -9,15 +9,16 @@
  */
 import { useEffect, useState } from 'react';
 import type { MailMessageDto } from '@/api/mail';
-import { formatMailTime, isUnread, senderLabel } from './mail-format';
+import { formatCount, formatMailTime, isUnread, senderLabel } from './mail-format';
 import {
   clearMailSearch,
   loadOlderMailMessages,
   openMailMessage,
   runMailSearch,
+  setMailUnreadOnly,
 } from './mail-actions';
 import { DRAFTS_MAILBOX, serverDraftsMailbox, type MailSnapshot } from './mail-store';
-import { readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
+import { readUnreadOnly } from './mail-unread-filter';
 import { MailDraftsList } from './compose/MailDraftsList';
 import { AttachmentIcon, BackIcon, SearchIcon } from './mail-icons';
 
@@ -52,10 +53,14 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
     : null;
 
   const clear = () => { setDraft(''); clearMailSearch(); };
-  const section = search.active ? null : sectionOf(snapshot, draftsView, rows, !!serverDrafts);
   const filtering = unreadOnly && !search.active && !draftsView;
+  // The server already answered with the unread set, so this only holds back the row that was read
+  // in this session and has not been left yet (see `keepWhileFiltering`), and gives the toggle an
+  // instant answer while the new page is in flight.
   const visible = filtering ? rows.filter((one) => keepWhileFiltering(one, snapshot)) : rows;
-  const showAll = () => { setUnreadOnly(false); writeUnreadOnly(accountId, mailboxId, false); };
+  // Built from the rows ON SCREEN, so the header counts what is under it in both modes.
+  const section = search.active ? null : sectionOf(snapshot, draftsView, visible, !!serverDrafts);
+  const toggleFilter = (next: boolean) => { setUnreadOnly(next); void setMailUnreadOnly(next); };
 
   return (
     <section className="mail-list-pane" data-testid="mail-message-list">
@@ -115,30 +120,35 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
       {section && (
         <p className="mail-list-section" data-testid="mail-list-section">
           <span className="mail-list-section-name">{section.name}</span>
-          {/* `8 of 43` while the filter is on, because this count exists to be checkable by
-              looking: a bare 43 over eight visible rows is the one number a reader would call a
-              bug. */}
-          <span className="mail-list-section-count">
-            {filtering ? `${visible.length} of ${section.count}` : section.count}
+          {/* How big the FOLDER is, from the same mailbox row the badge on the left is drawn from. It
+              used to be the rows on screen, so a 103-message inbox read "INBOX 50" under a folder row
+              badged 53 and a person had three numbers and no way to line them up. When it is the
+              loaded count (first paint, or a provider declaring fewer messages than we hold) the title
+              says so instead of letting a page count pass for the folder's size. */}
+          <span
+            className="mail-list-section-count"
+            data-loaded={section.countLoaded}
+            title={section.countLoaded ? 'of the messages loaded so far' : 'messages in this folder'}
+          >
+            {formatCount(section.count)}
           </span>
           {/* The unread count is a CONTROL, not a label: it was the only place the number appeared
-              and there was no way to act on it. Kept on screen while the filter is on even at zero
-              unread, or turning the last one read would take the way out with it. */}
+              and there was no way to act on it. It is the MAILBOX's number, so it counts unread mail
+              deeper than the loaded page, which is the whole reason the filter reaches the server.
+              Kept on screen while the filter is on even at zero unread, or turning the last one read
+              would take the way out with it. */}
           {!draftsView && (section.unread > 0 || unreadOnly) && (
             <button
               type="button"
               className={`mail-unread-chip${unreadOnly ? ' on' : ''}`}
               data-testid="mail-unread-filter"
               data-on={unreadOnly}
+              data-loaded={section.unreadLoaded}
               aria-pressed={unreadOnly}
-              title={unreadOnly ? 'Show every message again' : 'Show only unread messages'}
-              onClick={() => {
-                const next = !unreadOnly;
-                setUnreadOnly(next);
-                writeUnreadOnly(accountId, mailboxId, next);
-              }}
+              title={chipTitle(unreadOnly, section.unreadLoaded)}
+              onClick={() => toggleFilter(!unreadOnly)}
             >
-              {section.unread} unread{unreadOnly ? ' · showing' : ''}
+              {formatCount(section.unread)} unread{unreadOnly ? ' · showing' : ''}
             </button>
           )}
         </p>
@@ -158,23 +168,27 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           <p className="mail-pane-empty" data-testid="mail-no-mailbox">
             Pick a mailbox on the left to read it.
           </p>
-        ) : rows.length === 0 ? (
-          <p className="mail-pane-empty" data-testid="mail-list-empty">
-            {busy ? 'Loading…'
-              : search.active ? 'Nothing matched. Cached search only sees mail Walnut has already fetched.'
-                : 'No mail in this folder yet.'}
-          </p>
-        ) : visible.length === 0 ? (
+        ) : busy && rows.length === 0 ? (
+          <p className="mail-pane-empty" data-testid="mail-list-empty">Loading…</p>
+        ) : filtering && visible.length === 0 ? (
           <p className="mail-pane-empty mail-unread-empty" data-testid="mail-unread-empty">
             <span>No unread messages</span>
             <button
               type="button"
               className="mail-text-btn"
               data-testid="mail-unread-show-all"
-              onClick={showAll}
+              onClick={() => toggleFilter(false)}
             >
               Show all
             </button>
+          </p>
+        ) : visible.length === 0 ? (
+          /* An EMPTY answer, which with the filter on is the branch above: the server returns the
+             unread set now, so "nothing unread" and "nothing at all" are the same zero rows and only
+             the filter tells them apart. */
+          <p className="mail-pane-empty" data-testid="mail-list-empty">
+            {search.active ? 'Nothing matched. Cached search only sees mail Walnut has already fetched.'
+              : 'No mail in this folder yet.'}
           </p>
         ) : visible.map((message) => (
           <MailRow
@@ -199,6 +213,18 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
       )}
     </section>
   );
+}
+
+/**
+ * The chip's hover text: what the click does, and where its number came from when that is in doubt.
+ *
+ * Only the first paint can put a page-derived number here, and it lasts a moment, but a filter's own
+ * label quietly meaning something else for that moment is exactly the kind of thing this header was
+ * fixed for.
+ */
+function chipTitle(unreadOnly: boolean, unreadLoaded: boolean): string {
+  const action = unreadOnly ? 'Show every message again' : 'Show only unread messages';
+  return unreadLoaded ? `${action}. Counted from the messages loaded so far.` : action;
 }
 
 /**
@@ -265,15 +291,33 @@ function GroupHeader({ group, name, count }: { group: string; name: string; coun
   );
 }
 
-interface Section { name: string; count: number; unread: number }
+interface Section {
+  name: string;
+  count: number;
+  unread: number;
+  /** Whether `count` is the mailbox's size or only what has been loaded. Said on screen, in a title. */
+  countLoaded: boolean;
+  /** The same question for `unread`, which can only be page-derived before any mailbox list lands. */
+  unreadLoaded: boolean;
+}
 
 /**
- * The folder header: which mailbox this column is, how many rows are loaded, and how many of them
- * are unread.
+ * The folder header: which mailbox this column is, how big it is, and how much unread mail it holds.
  *
- * The count is the ROWS ON SCREEN rather than the provider's total, because that is the number a
- * human can check by looking, and "Load older" is what says there are more. Null when nothing is
- * selected: there is no folder to name yet.
+ * BOTH numbers are the MAILBOX ROW's, which is the same row the folder badge on the left is drawn
+ * from, so the three figures a person sees for one folder cannot disagree. They used to be page
+ * arithmetic, and the result was the report this header exists to answer: a folder row reading
+ * "Inbox 99+" beside a header reading "INBOX 50" and "5 unread", none of which described the same
+ * thing.
+ *
+ * The fallback to the loaded rows is for the FIRST PAINT, before any mailbox list has landed, and it
+ * says so in a title rather than passing a page count off as the folder's size. The count falls back
+ * one step further: a provider that declares fewer messages than this console is already holding has
+ * told us something that cannot be true, and the honest number is then the one that can be counted on
+ * screen. The unread figure has no such check on purpose, because it is what the badge shows and the
+ * two have to stay the same number.
+ *
+ * Null when nothing is selected: there is no folder to name yet.
  */
 function sectionOf(
   snapshot: MailSnapshot,
@@ -287,15 +331,26 @@ function sectionOf(
     // Both halves, so the header still counts the rows below it: with a server section the local
     // count alone would repeat "Written here" one line further up and describe a third of the list.
     const drafts = snapshot.drafts[selected.accountId] ?? [];
-    return { name: 'Drafts', count: drafts.length + (hasServerDrafts ? rows.length : 0), unread: 0 };
+    const count = drafts.length + (hasServerDrafts ? rows.length : 0);
+    // Drafts is not a provider mailbox: the rows below ARE all of it, so nothing is being held back.
+    return { name: 'Drafts', count, unread: 0, countLoaded: false, unreadLoaded: false };
   }
   const mailbox = (snapshot.mailboxes[selected.accountId] ?? [])
     .find((one) => one.mailboxId === selected.mailboxId);
+  const total = mailbox ? countOf(mailbox.total) : 0;
+  const describesThePage = !!mailbox && total >= rows.length;
   return {
     name: mailbox?.name || selected.mailboxId,
-    count: rows.length,
-    unread: rows.filter((one) => isUnread(one.flags)).length,
+    count: describesThePage ? total : rows.length,
+    countLoaded: !describesThePage,
+    unread: mailbox ? countOf(mailbox.unread) : rows.filter((one) => isUnread(one.flags)).length,
+    unreadLoaded: !mailbox,
   };
+}
+
+/** A provider-declared count, made safe to compare: no fractions, no negatives, no NaN. */
+function countOf(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
 }
 
 function MailRow({ message, selected, showMailbox }: {

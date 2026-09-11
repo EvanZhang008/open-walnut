@@ -14,6 +14,7 @@ import { requestMailRefresh, selectMailbox } from './mail-actions';
 import { sendMailDigest } from './mail-task-actions';
 import { openMailComposer } from './compose/compose-actions';
 import { CANNOT_SEND_TITLE, canSendFrom, isOpenDraft } from './compose/send-status';
+import { formatCount } from './mail-format';
 import { ComposeIcon, DraftsIcon, MailboxRoleIcon, RefreshIcon } from './mail-icons';
 
 interface Props {
@@ -191,6 +192,7 @@ export function MailAccountsPane({
                           data-mailbox-id={mailbox.mailboxId}
                           data-account-id={account.accountId}
                           data-unread={mailbox.unread}
+                          data-total={mailbox.total}
                           aria-current={active ? 'true' : undefined}
                           onClick={() => {
                             selectMailbox(account.accountId, mailbox.mailboxId);
@@ -199,9 +201,14 @@ export function MailAccountsPane({
                         >
                           <MailboxRoleIcon role={mailbox.role} />
                           <span className="mail-mailbox-name">{mailbox.name}</span>
+                          {/* The EXACT number, from this mailbox row, which is the same row the list
+                              header's own two numbers come from. It used to cap at "99+", and a
+                              folder saying "Inbox 99+" next to a header saying "5 unread" is two
+                              numbers a human cannot reconcile by looking. The badge grows instead
+                              and the folder name gives up the width (see mail.css). */}
                           {mailbox.unread > 0 && (
                             <span className="mail-unread-badge" data-testid="mail-mailbox-unread">
-                              {mailbox.unread > 99 ? '99+' : mailbox.unread}
+                              {formatCount(mailbox.unread)}
                             </span>
                           )}
                         </button>
@@ -271,9 +278,12 @@ function DraftsRow({ accountId, drafts, active, onPicked }: {
     >
       <DraftsIcon />
       <span className="mail-mailbox-name">Drafts</span>
+      {/* Exact and grouped, like the mailbox badges above: the two sit in the same column of the
+          same list, and one of them capping while the other does not is a difference with no
+          meaning behind it. */}
       {waiting > 0 && (
         <span className="mail-unread-badge" data-testid="mail-drafts-count">
-          {waiting > 99 ? '99+' : waiting}
+          {formatCount(waiting)}
         </span>
       )}
     </button>

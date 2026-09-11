@@ -33,6 +33,7 @@ import { closeMailComposer, onMailDraftEvent } from './compose/compose-actions';
 import { loadMailDrafts } from './compose/compose-drafts';
 import { markReadIfAllowed } from './mail-read-flag';
 import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
+import { keepOpenRow, readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
 import {
   DRAFTS_MAILBOX,
   EMPTY_SEARCH,
@@ -152,6 +153,40 @@ function pageMailboxOf(selection: MailSelection): string | null {
   return serverDraftsMailbox(store.state.mailboxes[selection.accountId])?.mailboxId ?? null;
 }
 
+/**
+ * Whether the page reads for this selection ask the server for unread only.
+ *
+ * Read from the preference rather than from the pane's state, because the reads that matter most
+ * happen with no pane involved: a sync event, a reconnect, a "Load older" fired from a click the
+ * pane has already forgotten about. The Drafts row is never filtered (a draft is not unread mail),
+ * and neither is search, which is a different route entirely.
+ */
+function unreadOnlyFor(selection: MailSelection): boolean {
+  if (selection.mailboxId === DRAFTS_MAILBOX) return false;
+  return readUnreadOnly(selection.accountId, selection.mailboxId);
+}
+
+/**
+ * Turn "only unread" on or off for the mailbox on screen.
+ *
+ * A RELOAD, not a re-render, because the filter belongs to the server now: the old chip narrowed the
+ * fifty rows a page held, so an inbox with hundreds of unread mails showed whichever few of them
+ * happened to be on the first page and offered no way to reach the rest.
+ *
+ * The rows already on screen are deliberately left in place while the new page is in flight: the
+ * pane's own client-side rule renders an instant approximation of the answer (turning it on hides the
+ * read rows immediately) and the fuller answer replaces it. `nextBefore` is the one thing that must
+ * go, because a cursor issued for the other set would page the wrong list from a click landing in
+ * that window.
+ */
+export function setMailUnreadOnly(on: boolean): Promise<void> {
+  const selection = store.state.selected;
+  if (!selection || selection.mailboxId === DRAFTS_MAILBOX) return Promise.resolve();
+  writeUnreadOnly(selection.accountId, selection.mailboxId, on);
+  patch({ nextBefore: null, listError: null });
+  return loadMailMessages(true);
+}
+
 export function loadMailMessages(force = false): Promise<void> {
   const selection = store.state.selected;
   if (!selection) return Promise.resolve();
@@ -170,19 +205,32 @@ export function loadMailMessages(force = false): Promise<void> {
   return loadMessagePage(selection, selection.mailboxId, force);
 }
 
+/**
+ * The first page of a mailbox.
+ *
+ * ONE key per selection, deliberately NOT keyed on the unread flag: two loads of the same mailbox
+ * under different filters would both land in `messages` and the slower one would win. A toggle
+ * arriving mid-flight therefore rides `force`, which queues exactly one more pass, and the pass
+ * re-reads the preference.
+ */
 function loadMessagePage(selection: MailSelection, mailboxId: string, force: boolean): Promise<void> {
   return run(`messages:${selectionKey(selection)}`, async () => {
     patch({ listLoading: true, listError: null });
+    const unread = unreadOnlyFor(selection);
     try {
       const page = await listMailMessages({
         accountId: selection.accountId,
         mailboxId,
         limit: PAGE_SIZE,
+        ...(unread ? { unread: true } : {}),
       });
       // The human may have moved to another mailbox while this was in flight.
       if (!sameSelection(selection)) return;
+      const rows = page.messages ?? [];
       patch({
-        messages: page.messages ?? [],
+        // The message being read is not in a fresh unread answer any more, because opening it is
+        // what marked it read. It stays until another row is selected; see `keepOpenRow`.
+        messages: unread ? keepOpenRow(rows, store.state.messages, store.state.open) : rows,
         nextBefore: page.nextBefore ?? null,
         listLoading: false,
       });
@@ -211,8 +259,13 @@ export function loadOlderMailMessages(): Promise<void> {
         mailboxId,
         limit: PAGE_SIZE,
         before,
+        // The cursor came from a page read under this same filter, so the two have to agree or the
+        // next page would be taken from a different list than the one it continues.
+        ...(unreadOnlyFor(selection) ? { unread: true } : {}),
       });
       if (!sameSelection(selection)) return;
+      // Appending is also what keeps a row the server has stopped returning: a message read while the
+      // filter is on is already in this list, and it is not in any later page.
       const known = new Set(store.state.messages.map((one) => one.messageId));
       patch({
         messages: [...store.state.messages, ...(page.messages ?? []).filter((one) => !known.has(one.messageId))],

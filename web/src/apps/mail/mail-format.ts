@@ -55,6 +55,20 @@ export function recipientLabel(to: MailAddress[]): string {
   return to.map((one) => one.name?.trim() || one.address).filter(Boolean).join(', ');
 }
 
+/**
+ * A count as a person reads it: grouped by the browser's own locale, and never capped.
+ *
+ * The cap was the bug. A folder row reading "Inbox 99+" beside a list header reading "5 unread"
+ * cannot be reconciled by looking at it, and the human's conclusion (correctly) was that one of the
+ * two numbers is lying. Exact numbers can be compared, so the badge prints 1,284 and the header
+ * prints the same figure. Rounded and floored, because it is a provider-declared number: one
+ * non-integer would render as "3.0001", and a negative one is not a count of anything.
+ */
+export function formatCount(count: number): string {
+  if (!Number.isFinite(count)) return '0';
+  return Math.max(0, Math.round(count)).toLocaleString();
+}
+
 /** True when a message has not been read. IMAP states the POSITIVE, so absence is unread. */
 export function isUnread(flags: string[]): boolean {
   return !flags.includes('\\Seen');

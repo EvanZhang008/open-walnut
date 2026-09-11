@@ -161,6 +161,31 @@ function placeholders(count: number): string {
   return new Array(count).fill('?').join(', ')
 }
 
+/** The IMAP read flag, as it appears INSIDE the stored `flags_json` array. */
+const SEEN_FLAG = '\\Seen'
+
+/**
+ * What the `seen` column holds for a given flags array (see SCHEMA_V7).
+ *
+ * Here, in the only file that writes those columns, because `seen` is a DERIVED copy of `flags_json`
+ * and the three statements that write flags are exactly the three that must move it: an insert, an
+ * envelope update, and a read-flag change. A column that can be written without its array is a column
+ * that disagrees with it, and the unread filter reads the column.
+ *
+ * The match is on an ARRAY ELEMENT, never on the JSON text: a substring test would read a provider
+ * flag named `\SeenByAgent` as read. Anything unparseable counts as unread, which is the same answer
+ * `isUnread` gives in the console for flags it cannot read.
+ */
+function seenOf(flagsJson: string | null): 0 | 1 {
+  if (!flagsJson) return 0
+  try {
+    const flags: unknown = JSON.parse(flagsJson)
+    return Array.isArray(flags) && flags.includes(SEEN_FLAG) ? 1 : 0
+  } catch {
+    return 0
+  }
+}
+
 /** `service.ts` composes these calls; nothing above it ever writes SQL. */
 export class MailStore {
   /**
@@ -342,12 +367,13 @@ export class MailStore {
     const result = await this.db.run(
       'INSERT INTO messages (account_id, message_id, rfc_message_id, mailbox_id, thread_id,'
       + ' from_addr, subject, snippet, sent_at, received_at, flags_json, attachments_json,'
-      + ' payload, updated_at, envelope_hash)'
-      + ` VALUES (${placeholders(15)})`,
+      + ' payload, updated_at, envelope_hash, seen)'
+      + ` VALUES (${placeholders(16)})`,
       [
         write.accountId, write.messageId, write.rfcMessageId, write.mailboxId, write.threadId,
         write.fromAddr, write.subject, write.snippet, write.sentAt, write.receivedAt,
         write.flagsJson, write.attachmentsJson, write.payload, now, write.envelopeHash,
+        seenOf(write.flagsJson),
       ],
     )
     return Number(result.lastInsertRowid)
@@ -356,12 +382,12 @@ export class MailStore {
   async updateMessage(rowid: number, write: MessageWrite, now: number): Promise<void> {
     await this.db.run(
       'UPDATE messages SET rfc_message_id = ?, mailbox_id = ?, thread_id = ?, from_addr = ?,'
-      + ' subject = ?, snippet = ?, sent_at = ?, received_at = ?, flags_json = ?,'
+      + ' subject = ?, snippet = ?, sent_at = ?, received_at = ?, flags_json = ?, seen = ?,'
       + ' attachments_json = ?, payload = ?, updated_at = ?, envelope_hash = ? WHERE rowid = ?',
       [
         write.rfcMessageId, write.mailboxId, write.threadId, write.fromAddr, write.subject,
-        write.snippet, write.sentAt, write.receivedAt, write.flagsJson, write.attachmentsJson,
-        write.payload, now, write.envelopeHash, rowid,
+        write.snippet, write.sentAt, write.receivedAt, write.flagsJson, seenOf(write.flagsJson),
+        write.attachmentsJson, write.payload, now, write.envelopeHash, rowid,
       ],
     )
   }
@@ -375,17 +401,25 @@ export class MailStore {
    * older than that timestamp and skipped the rest of the group forever. The tie is broken by
    * `message_id`, which is unique per account and is what the ORDER BY sorts on too, so the
    * comparison and the order agree.
+   *
+   * `unread` narrows the whole MAILBOX, not the page: it is an equality test on the indexed `seen`
+   * column (see SCHEMA_V7), so paging with `before` walks the unread set exactly the way it walks
+   * the full one, and the answer covers mail the caller has never loaded.
    */
   listMessages(query: {
     accountId?: string
     mailboxId?: string
     limit: number
+    unread?: boolean
     before?: { sentAt: number; messageId: string }
   }): Promise<MessageRow[]> {
     const where: string[] = []
     const params: unknown[] = []
     if (query.accountId) { where.push('account_id = ?'); params.push(query.accountId) }
     if (query.mailboxId) { where.push('mailbox_id = ?'); params.push(query.mailboxId) }
+    // Ahead of the cursor so the three equality terms sit together and `messages_by_unread` can
+    // serve the seek: account, mailbox, seen, then the range on sent_at.
+    if (query.unread) where.push('seen = 0')
     if (query.before) {
       where.push('(sent_at < ? OR (sent_at = ? AND message_id < ?))')
       params.push(query.before.sentAt, query.before.sentAt, query.before.messageId)
@@ -468,10 +502,11 @@ export class MailStore {
     )
   }
 
+  /** The read-flag write. `seen` moves with the array, or the unread filter would disagree with it. */
   async setMessageFlags(rowid: number, flagsJson: string, now: number): Promise<void> {
     await this.db.run(
-      'UPDATE messages SET flags_json = ?, updated_at = ? WHERE rowid = ?',
-      [flagsJson, now, rowid],
+      'UPDATE messages SET flags_json = ?, seen = ?, updated_at = ? WHERE rowid = ?',
+      [flagsJson, seenOf(flagsJson), now, rowid],
     )
   }
 

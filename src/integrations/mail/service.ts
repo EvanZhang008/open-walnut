@@ -252,10 +252,19 @@ export class MailService {
     return message!
   }
 
+  /**
+   * One page of a mailbox, newest first.
+   *
+   * `unread` is the store's filter and not a pass over the answer: the console's "only unread" has to
+   * mean the mailbox, and a page filtered after the fact can only ever narrow the fifty rows it
+   * already holds. `nextBefore` therefore pages the UNREAD set, and is still only offered when the
+   * page filled, so the end of the unread list ends rather than serving one empty page.
+   */
   async listMessages(query: {
     accountId?: string
     mailboxId?: string
     limit: number
+    unread?: boolean
     before?: MessagePageCursor
   }): Promise<{ messages: MailMessageDto[]; nextBefore?: string }> {
     const rows = await this.deps.store.listMessages(query)

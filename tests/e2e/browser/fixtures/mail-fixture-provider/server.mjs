@@ -150,18 +150,45 @@ const dense = process.env.MAIL_FIXTURE_DENSE === '1';
 if (dense) MESSAGES.push(...denseMessages(), ...denseExtras());
 
 /**
+ * `MAIL_FIXTURE_DEEP=1` adds sixty OLDER inbox messages, forty-five of them unread.
+ *
+ * Its own flag, on top of dense, because it is the only shape that makes an unread filter falsifiable:
+ * the dense inbox is 43 rows with 8 unread, which fits inside one 50-row page, so a filter applied in
+ * the browser and a filter applied in SQL produce the same list and no test can tell them apart. With
+ * this on, the inbox is 103 rows and 53 unread: the first page holds 13 of those 53, the unread list
+ * itself needs two pages, and both numbers are things a run can check. The design spec counts the 43,
+ * which is why this is not folded into dense.
+ */
+const deep = process.env.MAIL_FIXTURE_DEEP === '1';
+if (dense && deep) MESSAGES.push(...deepTail());
+
+/**
  * The dense set also keeps the two folders a work account always has and this fixture had not: a
  * DRAFTS folder (the provider holding drafts written on another device, next to Walnut's own) and a
  * JUNK folder, which is empty and is here for its POSITION. The server lists folders inbox first
  * then by name, so Junk is what makes "the merged Drafts row sits where the provider's folder was"
  * a claim a run can fail. Dense only: the other specs count the rows of the plain set.
+ *
+ * No new folder for the deep tail: it rides the INBOX in `MESSAGES` like everything else, so
+ * `listMailboxes` counts it, and the mailbox row's own unread number (the provider's) is exactly what
+ * the console's list header now reads.
+ *
+ * `declared` is the one exception to counting: with the deep flag on, Junk reports five figures of mail
+ * and none of it cached, which is what a real spam folder looks like and the only way a run can see a
+ * badge that no longer says "99+". A number that wide has to fit the folder row without clipping or
+ * wrapping, in both engines, and no amount of cached fixture mail would produce it.
  */
 const MAILBOXES = [
   { mailboxId: 'INBOX', name: 'Inbox', role: 'inbox' },
   { mailboxId: 'Archive', name: 'Archive', role: 'archive' },
   ...(dense ? [
     { mailboxId: 'Drafts', name: 'Drafts', role: 'drafts' },
-    { mailboxId: 'Junk', name: 'Junk', role: 'spam' },
+    {
+      mailboxId: 'Junk',
+      name: 'Junk',
+      role: 'spam',
+      ...(deep ? { declared: { total: 45_231, unread: 12_345 } } : {}),
+    },
   ] : []),
 ];
 
@@ -283,12 +310,13 @@ const spec = {
     return { state: 'ok', checkedAt: Date.now() };
   },
   async listMailboxes() {
-    return MAILBOXES.map((mailbox) => {
+    return MAILBOXES.map(({ declared, ...mailbox }) => {
       const held = MESSAGES.filter((one) => one.mailboxId === mailbox.mailboxId);
       return {
         ...mailbox,
-        total: held.length,
-        unread: held.filter((one) => !seen.has(one.messageId)).length,
+        // Counted from what this server holds, unless the folder declares its own figures (Junk).
+        total: declared ? declared.total : held.length,
+        unread: declared ? declared.unread : held.filter((one) => !seen.has(one.messageId)).length,
       };
     });
   },
@@ -700,6 +728,53 @@ function denseExtras() {
       unreadAtFirstSight: false,
     },
   ];
+}
+
+/**
+ * Sixty older inbox messages, forty-five unread: the tail an unread filter has to be able to reach.
+ *
+ * Every one of them is older than the whole dense set (which stops at 34 days), so the list order is
+ * the dense 43 followed by these in index order, and the arithmetic a spec asserts is stable: unread
+ * where the index is not a multiple of four, which is 45 of 60 and leaves 5 unread among the seven that
+ * land on the first page. Inside the retention window (180 days) by construction, or the poll would
+ * cache them and the sweep would drop them again in the same tick.
+ *
+ * The ids sit in their own thousand so they cannot collide with the dense set's, and the subjects are
+ * numbered because the specs pick a row by its words: `Older harbour note 45` is unread and past the
+ * first page, which is the row that proves the filter reached mail the browser never had.
+ */
+function deepTail() {
+  const you = [{ name: 'You', address: 'you@example.com' }];
+  const senders = [
+    ['Tide Desk', 'tides'], ['Harbour Master', 'harbour.master'], ['Sandhill Crew', 'sandhill'],
+    ['Long Reef Office', 'long.reef'], ['Chandlery', 'chandlery'],
+  ];
+  const topics = [
+    'Tide table for the week', 'Slipway booking confirmed', 'Fuel dock hours',
+    'Mooring inspection notes', 'Weather board replaced', 'Night crew rota',
+    'Handrail paint order', 'Ticket machine receipt roll',
+  ];
+  const out = [];
+  for (let index = 0; index < 60; index += 1) {
+    const [name, local] = senders[index % senders.length];
+    const topic = topics[index % topics.length];
+    const sentAt = now - (40 + index) * 24 * HOUR - (index % 7) * HOUR;
+    out.push({
+      messageId: `INBOX:1:2${String(index).padStart(3, '0')}`,
+      rfcMessageId: `<older-${index}@example.com>`,
+      mailboxId: 'INBOX',
+      from: { name, address: `${local}@example.com` },
+      to: you,
+      subject: `Older harbour note ${index}`,
+      snippet: `${topic}. Filed from the office, nothing needed today.`,
+      sentAt,
+      sentAtHeader: new Date(sentAt).toUTCString(),
+      attachments: [],
+      body: { format: 'text', text: `${topic}.\n\nFiled from the office. Nothing needed today.` },
+      unreadAtFirstSight: index % 4 !== 0,
+    });
+  }
+  return out;
 }
 
 /**

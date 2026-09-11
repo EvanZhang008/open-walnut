@@ -51,6 +51,7 @@ import type { MailSync } from './sync.js'
  * DELETE /accounts/:accountId                          -> { ok: true, messages }
  * GET    /mailboxes?account=                           -> { mailboxes: MailboxDto[] }
  * GET    /messages?account=&mailbox=&limit=&before=    -> { messages: MailMessageDto[], nextBefore? }
+ *        &unread=1                                        (unread only, over the whole mailbox)
  * GET    /messages/:accountId/:messageId               -> { message, body, bodyError? }
  * POST   /messages/:accountId/:messageId/read { read } -> { ok: true, message } | 409 unsupported
  * POST   /messages/:accountId/:messageId/task {...}    -> 201 { taskId, created: true }
@@ -309,12 +310,17 @@ export function registerMailRoutes(
     // sort key. The query name is unchanged, and a bare number (a console tab that was open
     // across the deploy) still pages the way it used to rather than answering with a 400.
     const before = decodeMessageCursor(firstQuery(request.query.before))
+    // `unread=1` narrows the MAILBOX in SQL, not the page in the browser. Exactly `'1'` turns it on,
+    // so `unread=0`, `unread=false` and a missing parameter are all the same unfiltered request:
+    // anything truthier would make a typo silently hide most of somebody's mail.
+    const unread = firstQuery(request.query.unread) === '1'
     try {
       return {
         json: await service.listMessages({
           ...(firstQuery(request.query.account) ? { accountId: firstQuery(request.query.account)! } : {}),
           ...(firstQuery(request.query.mailbox) ? { mailboxId: firstQuery(request.query.mailbox)! } : {}),
           limit: intQuery(request.query.limit, DEFAULT_PAGE, MAX_PAGE),
+          ...(unread ? { unread: true } : {}),
           ...(before ? { before } : {}),
         }),
       }

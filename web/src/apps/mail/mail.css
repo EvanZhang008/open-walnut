@@ -297,7 +297,11 @@
   white-space: nowrap;
 }
 
+/* The badge holds an EXACT count now (1,284, not "99+"), so it has to be able to be wide. It keeps
+   its own width whatever it says (`flex: 0 0 auto`) and never breaks the number over two lines;
+   `.mail-mailbox-name` above is the flex item that gives up the room, and it already ellipsizes. */
 .mail-unread-badge {
+  flex: 0 0 auto;
   min-width: 18px;
   padding: 1px 5px;
   border-radius: 999px;
@@ -305,7 +309,9 @@
   color: #fff;
   font-size: 11px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   text-align: center;
+  white-space: nowrap;
 }
 
 .mail-add-account {
