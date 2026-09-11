@@ -74,7 +74,7 @@ export interface ConditionalFileContent {
 export async function fetchFileContentConditional(
   filePath: string,
   host?: string,
-  opts: { ifNoneMatch?: string; track?: 'baseline' | 'agent' } = {},
+  opts: { ifNoneMatch?: string; track?: 'baseline' | 'agent'; signal?: AbortSignal } = {},
 ): Promise<ConditionalFileContent> {
   const params = new URLSearchParams({ path: filePath });
   if (host) params.set('host', host);
@@ -82,6 +82,7 @@ export async function fetchFileContentConditional(
 
   const res = await fetch(`/api/file-content?${params}`, {
     cache: 'no-store',
+    signal: opts.signal,
     ...(opts.ifNoneMatch ? { headers: { 'If-None-Match': `"${opts.ifNoneMatch}"` } } : {}),
   });
   if (res.status === 304) return { notModified: true };

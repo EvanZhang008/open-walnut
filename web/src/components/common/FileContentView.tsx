@@ -1013,6 +1013,7 @@ export function FileContentView({
     origin: viewIdRef.current,
     sessionId,
     canEdit,
+    isVisible: () => !document.hidden && !!contentRef.current?.getClientRects().length,
     getText: () => editorRef.current?.getValue() ?? null,
     // The bytes the EDITOR says its text is based on. Deliberately not
     // `baseContentRef`: that one moves when a read lands, which is a render before

@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  decideAfterConflict, agentPathMatches, MAX_MERGE_ATTEMPTS, AGENT_WRITE_TOOLS,
+  decideAfterConflict, agentPathMatches, MAX_MERGE_ATTEMPTS, agentToolMayChangeFile,
   liveSuspensionKey, isLiveSuspended, suspendLiveEdit, resumeLiveEdit, clearLiveSuspensions,
   noteFileDeleted, isRecentlyDeleted, noteWritten, freshestBase,
   loadLiveEditPref, LIVE_EDIT_PREF_KEY, LIVE_WRITE_DEBOUNCE_MS,
@@ -106,19 +106,31 @@ describe('agentPathMatches', () => {
   });
 });
 
-describe('AGENT_WRITE_TOOLS', () => {
-  it('covers every tool that writes a file', () => {
-    for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']) {
-      expect(AGENT_WRITE_TOOLS.has(tool)).toBe(true);
+describe('agentToolMayChangeFile', () => {
+  const path = '/work/repo/design.md';
+
+  it('checks scripts, delegated work and unknown provider tools without parsing commands', () => {
+    for (const tool of ['Bash', 'Task', 'Agent', 'execute', 'mcp__files__edit', undefined]) {
+      expect(agentToolMayChangeFile(path, tool, { command: 'python update.py' })).toBe(true);
     }
   });
 
-  it('ignores tools that only read or run things', () => {
-    // A Read or a Bash call must not trigger a pull — the file has not changed,
-    // and each pull costs a no-cache round trip to the host.
-    for (const tool of ['Read', 'Bash', 'Grep', 'Glob', 'Task', 'TodoWrite']) {
-      expect(AGENT_WRITE_TOOLS.has(tool)).toBe(false);
+  it('skips known read-only tools', () => {
+    for (const tool of ['Read', 'Grep', 'Glob', 'WebFetch', 'TodoWrite', 'ToolSearch']) {
+      expect(agentToolMayChangeFile(path, tool)).toBe(false);
     }
+  });
+
+  it('filters explicit absolute file targets but checks unresolved paths', () => {
+    for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']) {
+      expect(agentToolMayChangeFile(path, tool, { file_path: path })).toBe(true);
+      expect(agentToolMayChangeFile(path, tool, { file_path: '/work/repo/other.md' })).toBe(false);
+      expect(agentToolMayChangeFile(path, tool, { file_path: 'design.md' })).toBe(true);
+      expect(agentToolMayChangeFile(path, tool, { file_path: '~/repo/design.md' })).toBe(true);
+      expect(agentToolMayChangeFile(path, tool, { file_path: '/work/repo/sub/../design.md' })).toBe(true);
+      expect(agentToolMayChangeFile(path, tool)).toBe(true);
+    }
+    expect(agentToolMayChangeFile(path, 'NotebookEdit', { notebook_path: '/other.ipynb' })).toBe(false);
   });
 });
 

@@ -18,7 +18,8 @@
  * file's bytes under another file's path.
  */
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { saveFileContent, fetchFileContent, FileSaveConflictError } from '@/api/files';
+import { saveFileContent, fetchFileContent, fetchFileContentConditional, FileSaveConflictError } from '@/api/files';
+import { READ_ONLY_TOOLS } from '@/utils/embedded-image-freshness';
 import { deleteFileDraft } from '@/utils/file-drafts';
 import { threeWayMerge, type MergeResult } from '@/utils/three-way-merge';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -37,8 +38,19 @@ const BUSY_RECHECK_MS = 150;
 export const MAX_MERGE_ATTEMPTS = 3;
 /** Toolbar receipt lifetime. */
 export const LIVE_RECEIPT_MS = 4000;
-/** Tool calls that mean "the agent wrote a file". */
-export const AGENT_WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const FILE_TARGET_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+export const FILE_CHECK_INTERVAL_MS = 30_000;
+const FILE_CHECK_SETTLE_MS = 300;
+
+export function agentToolMayChangeFile(path: string, tool?: string, input?: Record<string, unknown>): boolean {
+  if (tool && READ_ONLY_TOOLS.has(tool)) return false;
+  const target = input?.file_path ?? input?.notebook_path;
+  if (tool && FILE_TARGET_TOOLS.has(tool) && typeof target === 'string'
+    && target.startsWith('/') && !target.split('/').includes('..')) {
+    return agentPathMatches(path, target);
+  }
+  return true;
+}
 /** How long after a tool call the session still counts as mid-turn, for the
  *  RECEIPT WORDING only ("from the agent" vs "from disk"). */
 export const AGENT_ACTIVE_WINDOW_MS = 30_000;
@@ -155,7 +167,7 @@ function saveLiveEditPref(on: boolean): void {
  * Who the bytes we just pulled came from. Receipt WORDING only — the merge and
  * the lock bookkeeping are identical either way.
  */
-export type PullReason = 'agent' | 'other-view';
+export type PullReason = 'agent' | 'other-view' | 'disk';
 
 export type ConflictDecision =
   | { action: 'write-merged'; merged: string }
@@ -303,6 +315,7 @@ export interface UseLiveEditOptions {
   /** The viewer's own editability gate. Live mode never writes a truncated,
    *  binary or errored read — there are no complete bytes to write back. */
   canEdit: boolean;
+  isVisible: () => boolean;
   /** Current editor buffer. */
   getText: () => string | null;
   /** Put text in the live editor WITHOUT a remount, and without arming a write
@@ -430,6 +443,20 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   // Write tool calls aimed at THIS file, awaiting their result.
   const agentWriteIdsRef = useRef(new Set<string>());
   const pullInFlightRef = useRef(false);
+  const pullTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pullPendingRef = useRef<PullReason | null>(null);
+  const pullRef = useRef<(reason: PullReason) => Promise<void>>(async () => {});
+  const schedulePull = useCallback((reason: PullReason, ms = FILE_CHECK_SETTLE_MS) => {
+    if (!mountedRef.current) return;
+    pullPendingRef.current = reason;
+    if (pullTimerRef.current) return;
+    pullTimerRef.current = setTimeout(() => {
+      pullTimerRef.current = null;
+      const pending = pullPendingRef.current;
+      pullPendingRef.current = null;
+      if (pending) void pullRef.current(pending);
+    }, ms);
+  }, []);
 
   // Suspension is keyed per file, so switching files re-reads it. The watched
   // tool ids go too: a result that arrives after the switch would otherwise pull
@@ -437,7 +464,12 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   useEffect(() => {
     setSuspended(isLiveSuspended(host, path));
     agentWriteIdsRef.current.clear();
-  }, [host, path]);
+    return () => {
+      if (pullTimerRef.current) clearTimeout(pullTimerRef.current);
+      pullTimerRef.current = null;
+      pullPendingRef.current = null;
+    };
+  }, [host, path, sessionId]);
 
   useEffect(() => {
     if (!receipt) return;
@@ -784,8 +816,9 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       // proceeds rather than reading a stale `true` and giving up.
       settle();
       if (live) setWriting(false);
+      if (pullPendingRef.current) schedulePull(pullPendingRef.current);
     }
-  }, [isCurrent, resolveConflict, suspendHere]);
+  }, [isCurrent, resolveConflict, suspendHere, schedulePull]);
   writeOnceRef.current = writeOnce;
 
   const noteUserEdit = useCallback(() => {
@@ -829,28 +862,34 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     if (!next) cancelPending();
   }, [cancelPending]);
 
-  // ── The other writer, announced ─────────────────────────────────────────────
-  // A tool-use for this session naming this file, then its tool-result (the
-  // write has landed), is a far better signal than waiting for our own next
-  // write to 409 — it also covers a file the user is only READING. It arrives
-  // only while the browser is subscribed to that session's stream; the 409 path
-  // covers everything else.
   const pullFromDisk = useCallback(async (reason: PullReason = 'agent') => {
-    const adopted = reason === 'agent' ? 'Updated from agent' : 'Updated from another view';
-    const merged = reason === 'agent' ? 'Merged agent changes' : 'Merged changes from another view';
+    const adopted = reason === 'agent' ? 'Updated from agent'
+      : reason === 'disk' ? 'Updated from disk' : 'Updated from another view';
+    const merged = reason === 'agent' ? 'Merged agent changes'
+      : reason === 'disk' ? 'Merged disk changes' : 'Merged changes from another view';
     const o = optsRef.current;
-    if (!o.canEdit || pullInFlightRef.current) return;
-    // Our own write is mid-air. Its 409 handler is about to read disk itself
-    // (with the base it captured); a pull racing it would move the base under
-    // that merge and hand the same hunks to both. The write's own conflict path
-    // sees whatever the agent wrote, so nothing is missed by yielding here.
-    if (inFlightRef.current) return;
+    if (!mountedRef.current || !o.canEdit || !o.isVisible()) return;
+    if (pullInFlightRef.current || inFlightRef.current) {
+      pullPendingRef.current = reason;
+      return;
+    }
     const rec = { path: pathRef.current, host: hostRef.current };
+    const readGen = o.bufferGenRef.current;
     pullInFlightRef.current = true;
     try {
-      const disk = await fetchFileContent(rec.path, rec.host, { noCache: true, track: 'agent' });
+      const res = await fetchFileContentConditional(rec.path, rec.host, {
+        ifNoneMatch: o.lockHashRef.current,
+        track: reason === 'agent' ? 'agent' : undefined,
+        signal: AbortSignal.timeout(15_000),
+      });
       if (!isCurrent(rec)) return;
-      if (disk.content == null || disk.contentHash == null) return;
+      // 等待网络期间可能已保存或手动刷新，旧响应不能覆盖新基线。
+      if (optsRef.current.bufferGenRef.current !== readGen || inFlightRef.current) {
+        pullPendingRef.current = reason;
+        return;
+      }
+      const disk = res.payload;
+      if (res.notModified || !disk || disk.content == null || disk.contentHash == null) return;
       // Our own write, echoed back through the agent's read/write of the file.
       if (disk.contentHash === optsRef.current.lockHashRef.current) return;
       const cur = optsRef.current;
@@ -884,7 +923,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
           });
         }
         cur.onConflict(
-          `${reason === 'agent' ? 'The agent in this session' : 'Another view of this file'} changed this `
+          `${reason === 'agent' ? 'The agent in this session' : reason === 'disk' ? 'Another writer' : 'Another view of this file'} changed this `
           + 'file, and those changes overlap yours. Your unsaved version is still in the editor — Save will '
           + 'warn you before it replaces the other one, or Discard and reopen the file to get it.',
         );
@@ -910,8 +949,28 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       });
     } finally {
       pullInFlightRef.current = false;
+      if (pullPendingRef.current) schedulePull(pullPendingRef.current);
     }
-  }, [flush, isCurrent, showReceipt, suspendHere]);
+  }, [flush, isCurrent, showReceipt, suspendHere, schedulePull]);
+  pullRef.current = pullFromDisk;
+
+  useEffect(() => {
+    if (!canEdit) return;
+    const check = () => schedulePull('disk');
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    const timer = setInterval(check, FILE_CHECK_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [canEdit, schedulePull]);
+
+  useEvent('_ws:reconnected', () => schedulePull('disk'));
+  useEvent('session:result', (data) => {
+    if (sessionId && (data as { sessionId?: string }).sessionId === sessionId) schedulePull('disk');
+  });
 
   useEvent('session:tool-use', (data) => {
     const d = data as {
@@ -922,9 +981,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // long before this read, so a pull would only re-fetch what we already hold.
     if (d.replayed) return;
     agentSeenAtRef.current = Date.now();
-    if (!d.toolUseId || !d.toolName || !AGENT_WRITE_TOOLS.has(d.toolName)) return;
-    const target = d.input?.file_path ?? d.input?.notebook_path;
-    if (typeof target !== 'string' || !agentPathMatches(pathRef.current, target)) return;
+    if (!d.toolUseId || !agentToolMayChangeFile(pathRef.current, d.toolName, d.input)) return;
     agentWriteIdsRef.current.add(d.toolUseId);
   });
 
@@ -934,7 +991,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // The result is the "it landed" signal — reading on tool-use would race the
     // write itself and pull the PRE-write bytes.
     if (!agentWriteIdsRef.current.delete(d.toolUseId)) return;
-    void pullFromDisk();
+    schedulePull('agent');
   });
 
   // File switch / unmount: land the buffer under the OUTGOING identity. The
