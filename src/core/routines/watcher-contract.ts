@@ -13,17 +13,23 @@
 
 /**
  * A watcher gets NO data tools by default, and its `tools` field names them one
- * by one out of two pools: Walnut's read-only allowlist, and the installed
- * plugins' tools.
+ * by one out of ONE pool: Walnut's read-only ops plus the installed plugins'
+ * tools, named the same way, with no precedence between them.
  *
  * That default is a measured decision, not caution. Every tool schema sits in
  * the prefix of EVERY model round, and a watcher on a 10-minute schedule pays it
- * ~144 times a day. Handing it the whole read-only set for free cost 2,835
- * tokens a round, of which `task_query` (1,128) and `memory_notes_search` (997)
- * were nice-to-haves nobody asked for; the entire mail trio it actually needs is
- * 159. So the cost decision belongs to whoever names a tool, while the SAFETY
- * decision stays where it was: `READ_ONLY_TOOL_NAMES` is fail-closed, and a
- * watcher can only ever name something already in it.
+ * ~144 times a day. Measured on the real pool (24 tools once the mail and chat
+ * plugins are installed): handing the whole thing over for free is 3,868 tokens
+ * a round, and ONE tool, `task_list`, is 1,232 of it (`task_get_bulk` another
+ * 480) — schemas nobody asked for. A quiet run that names nothing is a 1,186
+ * token prefix, and the mail pair a triage watcher actually needs adds 231. So
+ * naming its tools is what keeps a watcher ~4x cheaper per round than a
+ * default-everything one.
+ *
+ * The cost decision therefore belongs to whoever names a tool, while the SAFETY
+ * decision stays where it was: the read-only set is fail-closed (an op is in it
+ * only if tagged `readonly`), so a watcher can only ever name something already
+ * in it.
  */
 
 export interface WatcherBudget {

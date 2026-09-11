@@ -205,7 +205,8 @@ export async function draftRoutineFromText(text: unknown): Promise<{ draft: unkn
   // produce a routine failing its first run with "unknown data tool".
   let dataTools: string[] = [];
   try {
-    const { getReadOnlyTools, getPluginTools } = await import('../../agent/tools.js');
+    const { getReadOnlyTools } = await import('../tools/read-only.js');
+    const { getPluginTools } = await import('../plugins/plugin-tools.js');
     dataTools = [...getReadOnlyTools(), ...getPluginTools()].map((t) => t.name);
   } catch { /* degrade to no suggestions rather than failing the draft */ }
   const result = await draftRoutine(text, {

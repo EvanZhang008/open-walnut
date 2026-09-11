@@ -20,7 +20,7 @@
  * can see, rather than a key marked done for an outcome that never happened.
  */
 
-import type { ToolDefinition } from '../../agent/tools.js';
+import type { ToolDefinition } from '../../model/tools.js';
 import {
   hasActed, markSeen, updateTriggerState, NOTES_MAX_CHARS,
   type TriggerState,

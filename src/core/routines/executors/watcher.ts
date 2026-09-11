@@ -25,6 +25,7 @@
 
 import { WALNUT_HOME } from '../../../constants.js';
 import { log } from '../../../logging/index.js';
+import type { ToolDefinition } from '../../../model/tools.js';
 import type { ExecutorDefinition } from '../types.js';
 import type { CronJob } from '../../cron/types.js';
 import {
@@ -59,7 +60,7 @@ export interface WatcherExecutorConfig {
 export type WatcherEngine = (opts: {
   system: string;
   userMessage: string;
-  tools: import('../../../agent/tools.js').ToolDefinition[];
+  tools: ToolDefinition[];
   model?: string;
   timeoutMs: number;
   jobId: string;
@@ -69,9 +70,9 @@ export interface WatcherExecutorDeps {
   engine?: WatcherEngine;
   toolDeps?: WatcherToolDeps;
   /** Plugin tools available right now. Defaults to the live registry. */
-  pluginTools?: () => import('../../../agent/tools.js').ToolDefinition[];
+  pluginTools?: () => ToolDefinition[];
   /** Read-only Walnut tools. Defaults to the built-in allowlist. */
-  readOnlyTools?: () => import('../../../agent/tools.js').ToolDefinition[];
+  readOnlyTools?: () => ToolDefinition[];
   nowMs?: () => number;
   /** Gate that keeps unprompted model calls off test servers. */
   backgroundDisabled?: () => boolean;
@@ -89,7 +90,7 @@ function parseToolNames(raw: unknown): string[] {
 }
 
 async function defaultEngine(opts: Parameters<WatcherEngine>[0]) {
-  const { runMicroAgent } = await import('../../../agent/micro-agent.js');
+  const { runMicroAgent } = await import('../../../model/micro-agent.js');
   const result = await runMicroAgent({
     system: opts.system,
     userMessage: opts.userMessage,
@@ -261,12 +262,13 @@ export function createWatcherExecutor(deps: WatcherExecutorDeps = {}): ExecutorD
       // the same way, and an unnamed tool is simply absent. See the note in
       // watcher-contract.ts for the measurement behind that.
       const wantedNames = parseToolNames(config.tools);
-      let dataTools: import('../../../agent/tools.js').ToolDefinition[] = [];
+      let dataTools: ToolDefinition[] = [];
       if (wantedNames.length > 0) {
-        const agentTools = await import('../../../agent/tools.js');
+        const readOnly = await import('../../tools/read-only.js');
+        const plugins = await import('../../plugins/plugin-tools.js');
         const available = [
-          ...(deps.readOnlyTools ?? agentTools.getReadOnlyTools)(),
-          ...(deps.pluginTools ?? agentTools.getPluginTools)(),
+          ...(deps.readOnlyTools ?? readOnly.getReadOnlyTools)(),
+          ...(deps.pluginTools ?? plugins.getPluginTools)(),
         ];
         const byName = new Map(available.map((t) => [t.name, t]));
         const missing = wantedNames.filter((n) => !byName.has(n));

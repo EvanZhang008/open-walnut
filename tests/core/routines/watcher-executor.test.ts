@@ -56,7 +56,7 @@ function make(opts: {
   const executor = createWatcherExecutor({
     nowMs: () => T0,
     backgroundDisabled: () => opts.backgroundDisabled ?? false,
-    readOnlyTools: () => (opts.readOnly ?? ['task_query', 'file_read']).map(fakeTool),
+    readOnlyTools: () => (opts.readOnly ?? ['task_list', 'note_read']).map(fakeTool),
     pluginTools: () => (opts.plugins ?? ['mail_list', 'mail_read', 'mail_draft']).map(fakeTool),
     toolDeps,
     engine: async (e) => {
@@ -133,16 +133,17 @@ describe('tool belt handed to the engine', () => {
 
   it('names read-only walnut tools out of the SAME pool as plugin tools', async () => {
     const { executor, seen } = make();
-    await executor.run(job(), cfg({ tools: 'task_query, mail_list' }) as never, 'x');
+    await executor.run(job(), cfg({ tools: 'task_list, mail_list' }) as never, 'x');
     expect(seen.tools).toEqual([
-      'task_query', 'mail_list',
+      'task_list', 'mail_list',
       'trigger_seen', 'trigger_note', 'trigger_task', 'trigger_notify', 'trigger_session',
     ]);
   });
 
   it('gives NOTHING for free — an unnamed read tool is simply absent', async () => {
-    // Measured: handing over the whole read-only set cost 2,835 tokens on EVERY
-    // round, ~144 rounds a day, for tools nobody asked for.
+    // Measured on the real 24-tool pool: handing the whole thing over for free
+    // is 3,868 tokens on EVERY round (task_list alone 1,232), ~144 rounds a day,
+    // for tools nobody asked for.
     const { executor, seen } = make();
     await executor.run(job(), cfg() as never, 'Check unread mail.');
     expect(seen.tools).toEqual([
@@ -170,7 +171,7 @@ describe('tool belt handed to the engine', () => {
     expect(res.error).toContain('unknown data tool(s): slack_list');
     expect(res.error).toContain('mail_list');
     // Walnut's own read tools are in the same pool, so they are listed too.
-    expect(res.error).toContain('task_query');
+    expect(res.error).toContain('task_list');
   });
 
   it('names the empty case rather than printing a bare list', async () => {
