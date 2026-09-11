@@ -286,6 +286,21 @@ export interface MailProviderSpec {
   label: string
   capabilities: MailCapabilities
   /**
+   * The SHAPE of the bodies this provider returns, as a string only this provider gives meaning to.
+   *
+   * Change it when a fix alters what `getBody` returns for a message the base has ALREADY fetched:
+   * a helper that mis-decoded every charset, a parser that dropped the plain-text half. The base
+   * caches a body on disk and serves it forever, which is right for bytes that cannot change, so
+   * without this the messages fetched before such a fix stay broken in the cache and no read path
+   * ever asks for them again.
+   *
+   * A revision the base has not seen makes it drop every body it cached from this provider's
+   * accounts, ONCE. Envelopes are untouched, and each body is fetched again the next time that
+   * message is opened. Undefined means never, which is the right answer for a provider whose
+   * decoding has not changed.
+   */
+  bodyRevision?: string
+  /**
    * The capabilities of ONE account, when they differ from the provider's own.
    *
    * Optional, and the base prefers it whenever it exists. IMAP is why it does: reading needs

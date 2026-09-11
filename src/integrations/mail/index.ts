@@ -7,6 +7,7 @@ import type { MailAgentDeps } from './agent-surface.js'
 import { createMailBaseApi } from './api.js'
 import { MailApprovals } from './approvals.js'
 import { MailBodyStore } from './bodies.js'
+import { reconcileBodyRevision } from './body-revision.js'
 import type { MailAccountDto } from './contract.js'
 import { openMailDatabase } from './db.js'
 import { MailDigest } from './digest.js'
@@ -215,6 +216,19 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     accounts: () => service.listAccounts(),
     caller: () => walnut.services.caller(),
     adopt: (providerId) => accounts.adopt(providerId),
+    // A provider saying the bodies it handed over before its own fix are wrong. Nothing on a
+    // replica: the cache and its body files live on the primary, which is the only box that ever
+    // fetched them. It reports its own failure because the caller is a timer with nobody to tell.
+    bodyRevision: async (providerId, revision) => {
+      if (walnut.replica) return
+      try {
+        await reconcileBodyRevision({ store, bodies, log: walnut.log }, providerId, revision)
+      } catch (error: unknown) {
+        walnut.log.warn('mail could not retire the bodies a provider replaced', {
+          providerId, revision: revision ?? '', error: String(error).slice(0, 200),
+        })
+      }
+    },
     // A HOST TIMER, for the same reason the reconciler and the first surface read are: the sweep
     // opens the database, and one that outlived a teardown would re-create the plugin's data
     // directory after the loader deleted it. A timer is cancelled by dispose.

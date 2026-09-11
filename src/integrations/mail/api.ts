@@ -98,8 +98,14 @@ export type {
  * provider that discovers its accounts LATE (after its own async probe, or one that does have a
  * setup form as well) calls to be mirrored without a setup POST. Adoption never touches an account
  * the mirror already has, and a setup POST is still how a credentialed account is added.
+ *
+ * 1.7.0 is `MailProviderSpec.bodyRevision`, the one thing a provider could not say: that what
+ * `getBody` returns for a message the base has ALREADY fetched has changed. A revision the base has
+ * not seen retires every body it cached from that provider's accounts, once, envelopes untouched,
+ * and each one is fetched again the next time it is opened. Additive and optional: a provider that
+ * declares none sweeps nothing, ever.
  */
-export const MAIL_BASE_API_VERSION = '1.6.0'
+export const MAIL_BASE_API_VERSION = '1.7.0'
 
 /**
  * The method bag published as `mail:base`.
@@ -153,6 +159,14 @@ export function createMailBaseApi(deps: {
   /** Mirror what a provider already knows about. Never rejects; it logs what it could not reach. */
   adopt: (providerId?: string) => Promise<string[]>
   /**
+   * Reconcile `spec.bodyRevision`: drop the bodies this provider handed over before its own fix.
+   *
+   * Takes the revision rather than reading it back from the registry, so the value that was
+   * declared at registration is the one that is acted on even if the registration went away in
+   * between. Skipped entirely on a replica, where there is no cache to retire.
+   */
+  bodyRevision: (providerId: string, revision: string | undefined) => Promise<void>
+  /**
    * Run this after the current turn, on a timer the host owns.
    *
    * Injected rather than `setImmediate` so the loader cancels a pending sweep when it tears the
@@ -183,6 +197,18 @@ export function createMailBaseApi(deps: {
           // `adopt` reports its own failures. The catch is only here so a future change to that
           // cannot turn a background sweep into an unhandled rejection.
           void deps.adopt(spec.id).catch(() => undefined)
+        })
+      }
+      // A provider whose own fix changed what an already-fetched body looks like. Deferred like the
+      // sweep above and for the same reason: it opens the cache, and a plugin has 20 seconds in
+      // total to activate. Armed ONLY when a revision is declared, so the common case (a provider
+      // whose decoding never changed) still opens no database on registration at all.
+      if (spec?.bodyRevision !== undefined) {
+        const revision = spec.bodyRevision
+        deps.defer(() => {
+          // The wiring logs its own failures; this catch only keeps a background sweep from
+          // becoming an unhandled rejection.
+          void deps.bodyRevision(spec.id, revision).catch(() => undefined)
         })
       }
       return handle

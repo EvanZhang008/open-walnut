@@ -533,6 +533,23 @@ export class MailStore {
     )
   }
 
+  /**
+   * Cached bodies for ONE account, a page at a time: what the body-revision sweep walks.
+   *
+   * Paged rather than "every bodied row for this account", because an account can hold 50,000 of
+   * them and the sweep clears each page as it goes: the next call therefore answers with the NEXT
+   * page without a cursor, and an account whose bodies are all gone answers empty. Ordered by
+   * rowid so a repeated first row means a clear did not stick, which is the only way that loop
+   * can fail to end.
+   */
+  bodiedForAccount(accountId: string, limit: number): Promise<BodiedRow[]> {
+    return this.db.all<BodiedRow>(
+      'SELECT rowid, account_id, message_id, rfc_message_id, body_ref, body_bytes FROM messages'
+      + ' WHERE account_id = ? AND body_ref IS NOT NULL ORDER BY rowid LIMIT ?',
+      [accountId, limit],
+    )
+  }
+
   /** Give the bytes back while keeping the envelope: a body is re-fetchable, a row is not. */
   async clearMessageBody(rowid: number): Promise<void> {
     await this.db.run(
