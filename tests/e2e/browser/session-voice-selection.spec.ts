@@ -28,22 +28,20 @@
  *    device and a mocked transcribe endpoint: real recorder, real insert path, canned
  *    words.
  *
- * ⚠️ THE DRAFT LANE ANSWERS SLOWLY ON PURPOSE (`stubDictation`). While recording, the
- * hook posts a live preview every `DRAFT_INTERVAL_MS` (2000ms) and each preview is a
- * real write into the composer — focus moves, the selection collapses. A test that
- * records for ~1.2s only stays under that tick while the machine is idle, so the draft
- * route is answered after `DRAFT_LAG_MS`, longer than any of these recordings: a
- * preview started under load cannot land inside the window being asserted, and one that
- * arrives after the stop is dropped by the hook (it checks the recorder is still the
- * live one). So "the passage is still selected while recording" is about the press, not
- * about the clock.
+ * ⚠️ THE LIVE DRAFTS ARE THE POINT, NOT NOISE TO MOCK AWAY. While recording, the hook
+ * posts a preview of the words so far every `DRAFT_INTERVAL_MS` (2000ms) and writes it
+ * into the composer. The first version of this spec answered that route after a 4s lag
+ * so that no preview could land inside a 1.2s recording — and so it was green while
+ * the user's real recordings, all longer than two seconds, lost the selection at the
+ * first draft: every draft write focused the textarea. "It still deselects while I'm
+ * talking" came back the same day. The draft lane now answers at once and the main
+ * test speaks for long enough to take several drafts, asserting the selection, the
+ * pill and the composer's focus at every one of them. That is the assertion that was
+ * missing.
  *
- * It must be a LAG and not a hang, because `/api/stt/draft` is BOTH lanes: the live
- * preview AND the stop's fast tail pass (`useSpeechToText.ts`, the `pcm` branch posts
- * `sliceWavBase64` to `draftTranscribe`). Routing it and never answering leaves the
- * composer empty forever — measured: all four dictation tests failed that way. The
- * draft's own write path is the same `writeDictation` as the final transcript, so it is
- * covered by the assertions below either way.
+ * `/api/stt/draft` is also the stop's fast tail pass (`useSpeechToText.ts`, the `pcm`
+ * branch posts `sliceWavBase64` to `draftTranscribe`), so a test may never route it
+ * without answering: that leaves the composer empty forever (measured).
  */
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
@@ -60,8 +58,12 @@ const PARAGRAPH = 'The migration runs in three phases'
 const PHRASE = 'rewrites the index in place'
 /** A SECOND passage in the same paragraph, for the tests that dictate twice. */
 const PHRASE2 = 'only verifies checksums'
-/** What the mocked engine "hears". */
+/** What the mocked engine "hears" — the final text, and the live preview of it. */
 const DICTATED = 'why does phase two matter'
+const DRAFTED = 'why does phase'
+/** Either engine string: the stop's tail pass rides the draft route, so the final
+ *  composer text can legitimately be the DRAFTED words. */
+const ANY_WORDS = /why does phase/
 /** Sentence 1 of the streamed reply the live-reply test sends, and the phrase dragged
  *  out of it. Neither string is in the seeded transcript, so a drag can only land on
  *  the LIVE block. */
@@ -106,24 +108,26 @@ async function stubSttStatus(page: Page): Promise<void> {
   }))
 }
 
-/** Longer than any recording here, so no live preview can land mid-assertion (see the
- *  file header for why this is a lag and not a hang). */
-const DRAFT_LAG_MS = 4000
-
-/** Canned words for both engine lanes: `/transcribe` answers at once, `/draft` after a
- *  lag. Returns the requests seen on each, so a test can prove the recorder really
- *  posted audio rather than the words appearing some other way. */
+/** Canned words for both engine lanes, answered at once. The draft lane says DRAFTED
+ *  so a test can tell a live preview from the final text; the stop's tail pass rides
+ *  the same route, so the final composer text may be either string — what the tests
+ *  pin is WHEN each lands and what else it touched, not the words. Returns the requests
+ *  seen on each lane, so a test can prove the recorder really posted audio. */
 async function stubDictation(page: Page): Promise<{ transcribe: string[]; draft: string[] }> {
   const seen = { transcribe: [] as string[], draft: [] as string[] }
-  const body = JSON.stringify({ text: DICTATED, durationMs: 120 })
   await page.route('**/api/stt/transcribe', async (route) => {
     seen.transcribe.push(route.request().url())
-    await route.fulfill({ status: 200, contentType: 'application/json', body })
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ text: DICTATED, durationMs: 120 }),
+    })
   })
   await page.route('**/api/stt/draft', async (route) => {
     seen.draft.push(route.request().url())
-    await new Promise((r) => setTimeout(r, DRAFT_LAG_MS))
-    await route.fulfill({ status: 200, contentType: 'application/json', body })
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ text: DRAFTED, durationMs: 90 }),
+    })
   })
   return seen
 }
@@ -165,11 +169,20 @@ async function centreRow(page: Page, panel: Locator, needle = PARAGRAPH): Promis
       const h = (el.closest('.session-history') as HTMLElement).getBoundingClientRect()
       return (r.y + r.height / 2) - (h.y + h.height / 2)
     })
-    if (Math.abs(delta) < 40) return
+    if (Math.abs(delta) < 40) break
     await wheel(page, panel, Math.max(-500, Math.min(500, Math.round(delta))))
     const top = await history.evaluate((el) => el.scrollTop)
-    if (top === lastTop) return
+    if (top === lastTop) break
     lastTop = top
+  }
+  // A wheel scroll is animated; the rects a drag is measured from must be read
+  // after the timeline has come to rest, or the words move under the mouse.
+  let settled = await history.evaluate((el) => el.scrollTop)
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(100)
+    const now = await history.evaluate((el) => el.scrollTop)
+    if (now === settled) return
+    settled = now
   }
 }
 
@@ -271,20 +284,46 @@ test.describe('Voice input keeps the selected passage', () => {
       const pill = await selectPassage(page, panel)
 
       const mic = panel.locator('.mic-btn-wrapper .mic-btn').first()
+      const textarea = panel.locator('.chat-input-textarea').first()
       await mic.click()
       await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
-      // Speaking. The passage stays selected the whole time — this is the state the
-      // report described, and the pill is still there to act on.
-      await page.waitForTimeout(1200)
-      expect(await selectedText(page)).toBe(PHRASE)
-      await expect(pill).toBeVisible()
+
+      // Speaking — for long enough that several live drafts land (one every 2s).
+      // THIS is the window the report was about: "while I'm talking, it deselects".
+      // Each draft is a real write into the composer, and every one of them must
+      // leave the selection, the pill and the page's focus exactly where they were.
+      // Sampled every 250ms rather than asserted once at the end, so a single frame
+      // of collapse anywhere in the recording fails the test.
+      const deadline = Date.now() + 20_000
+      let firstDraftAt = 0
+      while (Date.now() < deadline) {
+        const state = await page.evaluate(() => ({
+          selected: window.getSelection()?.toString() ?? '',
+          active: document.activeElement?.className ?? '',
+        }))
+        expect(state.selected, 'the passage stayed selected while speaking').toBe(PHRASE)
+        expect(state.active, 'no draft took focus').not.toContain('chat-input-textarea')
+        await expect(pill).toBeVisible()
+        if (!firstDraftAt && (await textarea.inputValue()).includes(DRAFTED)) firstDraftAt = Date.now()
+        // Keep sampling through the NEXT draft tick as well: the first draft is the
+        // fresh-dictation branch, the second is the swap-the-span branch.
+        if (firstDraftAt && Date.now() - firstDraftAt > 2_600) break
+        await page.waitForTimeout(250)
+      }
+      expect(firstDraftAt, 'a live preview landed in the box while recording').toBeGreaterThan(0)
+      expect(seen.draft.length, 'live previews really posted while recording').toBeGreaterThan(0)
+      // The preview is in the box the whole time, without the box owning focus.
+      expect(await textarea.inputValue()).toContain(DRAFTED)
+      expect(await page.evaluate(() => document.activeElement?.className ?? '')).not.toContain('chat-input-textarea')
       await shot(page, '03-recording-with-the-passage-still-selected')
 
-      // Stop. The transcript comes back and is written into the composer, which
-      // takes focus — the moment the selection cannot survive.
+      // Stop. The final text is written into the composer, which takes focus — the
+      // one moment the selection cannot survive, and the moment the caret is placed.
       await mic.click()
-      const textarea = panel.locator('.chat-input-textarea').first()
-      await expect(textarea).toHaveValue(new RegExp(DICTATED), { timeout: 30_000 })
+      await expect(mic).not.toHaveClass(/mic-recording/, { timeout: 15_000 })
+      await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
+      await expect.poll(() => page.evaluate(() => document.activeElement?.className ?? ''), { timeout: 10_000 })
+        .toContain('chat-input-textarea')
       expect(
         seen.transcribe.length + seen.draft.length,
         'the recorder really posted audio (which lane depends on whether PCM capture ran)',
@@ -301,7 +340,7 @@ test.describe('Voice input keeps the selected passage', () => {
       // session, with the dictated text untouched.
       await chip.locator('.thread-anchor-chip-clear').click()
       await expect(chip).toHaveCount(0)
-      await expect(textarea).toHaveValue(new RegExp(DICTATED))
+      await expect(textarea).toHaveValue(ANY_WORDS)
     })
 
     test('dictation does not overwrite an anchor the user aimed themselves', async ({ page }) => {
@@ -325,7 +364,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await selectPassage(page, panel, PHRASE2)
       const textarea = panel.locator('.chat-input-textarea').first()
       await dictate(page, panel)
-      await expect(textarea).toHaveValue(new RegExp(DICTATED), { timeout: 30_000 })
+      await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
       await expect(chip).toBeVisible()
       expect((await chip.textContent()) ?? '').toContain('rewrites the index')
       await shot(page, '05-existing-anchor-untouched')
@@ -360,9 +399,18 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect(pill).toHaveCount(0) // the pill dismisses itself for the same reason
       expect(await selectedText(page), 'still selected, just out of sight').toBe(PHRASE)
 
+      // The press itself must not bring the pill back: its mouseup re-evaluates the
+      // selection, and a pill hung on an off-screen passage was clamped into view
+      // right over the mic, so the stop click hit the pill instead (seen in a run
+      // that timed out after 120s of recording).
       const textarea = panel.locator('.chat-input-textarea').first()
-      await dictate(page, panel)
-      await expect(textarea).toHaveValue(new RegExp(DICTATED), { timeout: 30_000 })
+      const mic = panel.locator('.mic-btn-wrapper .mic-btn').first()
+      await mic.click()
+      await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
+      await page.waitForTimeout(1200)
+      await expect(pill, 'a press on the mic does not revive a pill for a passage out of sight').toHaveCount(0)
+      await mic.click()
+      await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
       // Words landed, no chip: dictating after scrolling away is a plain message.
       await expect(panel.locator('[data-testid="thread-anchor-chip"]')).toHaveCount(0)
       await shot(page, '08-scrolled-away-passage-not-adopted')
@@ -439,7 +487,7 @@ test.describe('Voice input keeps the selected passage', () => {
       expect(await selectedText(page)).toBe(REPLY_PHRASE)
       await expect(page.locator('[data-testid="quote-pin-pill"]')).toBeVisible()
       await dictate(page, panel)
-      await expect(textarea).toHaveValue(new RegExp(DICTATED), { timeout: 30_000 })
+      await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
       const after = (await chip.count()) ? ((await chip.textContent()) ?? '') : ''
       expect(after, 'the node view keeps aiming where the user pointed it').toBe(before)
       expect(after).not.toContain(REPLY_PHRASE)
@@ -473,11 +521,14 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect(textarea).toHaveValue('')
       await expect(chip).toBeVisible()
       expect((await chip.textContent()) ?? '', 'sticky, still naming passage one').toContain('rewrites the index')
+      // Let the reply land first: rows arriving under a drag move the words out from
+      // under the mouse (a run selected from the row above down to mid-paragraph).
+      await expect(panel.locator('.session-history')).toContainText(REPLY_PHRASE, { timeout: 30_000 })
 
       // A second passage, dictated. The chip must follow the new selection.
       await selectPassage(page, panel, PHRASE2, STICKY_SESSION_ID)
       await dictate(page, panel)
-      await expect(textarea).toHaveValue(new RegExp(DICTATED), { timeout: 30_000 })
+      await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
       await expect(chip).toBeVisible()
       await expect(chip).toContainText('only verifies checksums')
       await shot(page, '07-sticky-anchor-followed-the-new-passage')
@@ -519,7 +570,7 @@ test.describe('Voice input keeps the selected passage', () => {
       expect(await selectedText(page)).toBe(STREAM_PHRASE)
       await expect(pill).toBeVisible()
       await mic.click()
-      await expect(textarea).toHaveValue(new RegExp(DICTATED), { timeout: 30_000 })
+      await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
 
       // A live block DOES carry its message id, so the passage can be anchored.
       const chip = panel.locator('[data-testid="thread-anchor-chip"]')

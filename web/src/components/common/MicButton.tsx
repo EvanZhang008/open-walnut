@@ -72,13 +72,16 @@ function MicWaveform({ level }: { level: number }) {
 
 export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md' }: MicButtonProps) {
   /**
-   * Did this recording put any text anywhere? Tracked because the mic now KEEPS the
+   * Did this recording deliver a FINAL text? Tracked because the mic now KEEPS the
    * user's selection (see the mousedown note below), and something has to release it
-   * when the recording produces nothing. Writing the text is normally what releases
-   * it: the write focuses the composer and the browser collapses the selection.
+   * when the recording ends without one. The final write is what normally releases
+   * it: it focuses the composer and the browser collapses the selection. Live drafts
+   * do not count — a draft changes the composer's text and deliberately never takes
+   * focus, so the selection outlives every draft by design, and a recording whose
+   * drafts landed but whose final text never did still has to give it back.
    *
    * These three refs are that bookkeeping, per press:
-   *  · `delivered` — a transcript, draft or refinement reached the consumer;
+   *  · `delivered` — a final transcript (or its refinement) reached the consumer;
    *  · `armed` — a press started a recording (so a dropdown insert, which delivers
    *    text without a press, never triggers the release);
    *  · `sawLive` — the recorder (or its transcribe step) actually ran, so the release
@@ -90,7 +93,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   const sawLive = useRef(false);
   const sttOptions: Parameters<typeof useSpeechToText>[0] = {
     onTranscribe: (text) => { delivered.current = true; onTranscribe(text); },
-    ...(onDraft ? { onDraft: (text: string) => { delivered.current = true; onDraft(text); } } : {}),
+    ...(onDraft ? { onDraft } : {}),
     ...(onRefine
       ? { onRefine: (final: string, provisional: string) => { delivered.current = true; onRefine(final, provisional); } }
       : {}),

@@ -750,9 +750,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
    * anchor, the same state the pill's Ask produces, visible as the chip and cleared
    * with its `×`.
    *
-   * Deliberately NOT at the mic press: a recording the user cancels would leave a
-   * chip they never asked for. By the time the first words land the selection is
-   * still alive (the press no longer clears it), so this is both safe and honest.
+   * Deliberately NOT at the mic press, and not at a live draft either: the press
+   * and the drafts leave the selection alone now (a recording the user abandons
+   * must not leave a chip they never asked for), so this runs once, when the FINAL
+   * text is about to take focus — the one write that really does collapse the
+   * selection, and therefore the last moment it can be read. Capturing then also
+   * means a passage re-selected mid-recording is the one that gets carried.
    *
    * This INFERS what the user meant, so the cost of being wrong is worth stating: a
    * `selection` anchor makes the send quote the passage above the message

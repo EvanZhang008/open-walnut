@@ -156,6 +156,15 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     // body (~19ms on a long answer, which is why the scroll path below refuses to call
     // it), and a selection with no focus rect has nowhere to hang a pill anyway.
     if (!selectionBody(container, selection)) { setState(null); return; }
+    // Out of sight, no pill — the same rule the scroll path applies below, and it
+    // has to hold here too because a selection the reader scrolled clear of is
+    // STILL a selection: the next mouseup anywhere (a press on the mic, say)
+    // re-runs this, and a pill hung on an off-screen focus point gets clamped
+    // into the viewport by useMenuPlacement, right over whatever control sits at
+    // the timeline's bottom edge. Measured: the composer's mic, so the click that
+    // was meant to stop the recording hit the pill instead, for as long as the
+    // user kept trying.
+    if (!selectionVisibleIn(container, selection)) { setState(null); return; }
     const range = selection.getRangeAt(selection.rangeCount - 1);
     const anchor = focusPoint(selection, range);
     if (!anchor) { setState(null); return; }

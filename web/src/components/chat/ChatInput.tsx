@@ -87,13 +87,14 @@ interface ChatInputProps {
   /** Session-mode: control commands like /model are intercepted and trigger UI actions */
   onControlCommand?: (command: string) => void;
   /**
-   * Dictated words are about to be written in here, which takes focus — and the
-   * browser answers a focus move by collapsing whatever the user had selected
-   * elsewhere on the page. Called just BEFORE that, on every dictation write, so a
-   * host that cares can act on the selection while it still exists (the session
-   * panel turns the selected passage into the composer's thread anchor, so speaking
-   * a question about a passage no longer loses the passage). Must be idempotent:
-   * a live draft calls it every couple of seconds.
+   * The FINAL dictated text is about to be written in here, which takes focus — and
+   * the browser answers a focus move by collapsing whatever the user had selected
+   * elsewhere on the page. Called just BEFORE that, so a host that cares can act on
+   * the selection while it still exists (the session panel turns the selected passage
+   * into the composer's thread anchor, so speaking a question about a passage no
+   * longer loses the passage). NOT called for live drafts: those change the text only
+   * and never touch focus, so the selection outlives them. Idempotent all the same
+   * (a stop can deliver a provisional result and then a refinement).
    */
   onDictationInsert?: () => void;
   /** localStorage key for persisting draft text. When set, input value is saved on change (debounced) and restored on mount. */
@@ -1038,38 +1039,52 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
    *
    * Anything the user types elsewhere while dictating is untouched, because we
    * only ever replace [start, start+length) and re-derive the tail each time.
+   *
+   * ⚠️ A DRAFT CHANGES THE TEXT AND NOTHING ELSE. Focus and the caret move only
+   * when the FINAL text lands. `focus()` on this textarea collapses the document
+   * selection in both engines (measured 2026-09-10, Chromium and WebKit) — so when
+   * every draft focused, a passage the user had selected in a reply survived the
+   * mic press and then vanished a few seconds into speaking, at the first draft,
+   * and "it still deselects while I'm talking" came back the same day the press had
+   * been fixed. Writing the VALUE of an unfocused box leaves the selection alone
+   * (measured, both engines), which is all a draft needs: it is a preview of words
+   * in flight, and the caret is placed once, when there is something final to
+   * place it after.
    */
   const writeDictation = (text: string, isDraft: boolean) => {
-    // Last moment the page's selection still exists: the focus move below collapses
-    // it (in WebKit the mic press alone would have, which is why that press keeps
-    // its focus off the button). The host gets to keep the passage the user is
-    // dictating about before it goes; idempotent, so every draft can call it.
-    onDictationInsert?.();
     const el = textareaRef.current;
     const span = dictationSpanRef.current;
-    // Fresh dictation: anchor at the caret, adding separators only once so the
-    // span we later replace never includes surrounding text.
+    let start: number;
+    let next: string;
     if (!span) {
+      // Fresh dictation: anchor at the caret, adding separators only once so the
+      // span we later replace never includes surrounding text. On an unfocused
+      // box `selectionStart` is the caret it last had, which is the right spot.
       const pos = el?.selectionStart ?? value.length;
       const before = value.slice(0, pos);
       const after = value.slice(pos);
       const pre = before.length > 0 && !/[\s]$/.test(before) ? ' ' : '';
       const post = after.length > 0 && !/^[\s]/.test(after) ? ' ' : '';
-      const start = pos + pre.length;
-      handleChange(before + pre + text + post + after);
-      dictationSpanRef.current = isDraft ? { start, length: text.length } : null;
-      if (!isDraft) lastDictationRef.current = { start, text };
-      const caret = start + text.length;
-      requestAnimationFrame(() => { el?.setSelectionRange(caret, caret); el?.focus(); });
+      start = pos + pre.length;
+      next = before + pre + text + post + after;
+    } else {
+      // Subsequent draft (or the final result): swap the remembered span.
+      start = span.start;
+      next = value.slice(0, span.start) + text + value.slice(span.start + span.length);
+    }
+    if (isDraft) {
+      handleChange(next);
+      dictationSpanRef.current = { start, length: text.length };
       return;
     }
-    // Subsequent draft (or the final result): swap the remembered span.
-    const head = value.slice(0, span.start);
-    const tail = value.slice(span.start + span.length);
-    handleChange(head + text + tail);
-    dictationSpanRef.current = isDraft ? { start: span.start, length: text.length } : null;
-    if (!isDraft) lastDictationRef.current = { start: span.start, text };
-    const caret = span.start + text.length;
+    // Last moment the page's selection still exists: the focus move below collapses
+    // it. The host gets to keep the passage the user was dictating about before it
+    // goes (idempotent — a stop can deliver twice, provisional then refined).
+    onDictationInsert?.();
+    handleChange(next);
+    dictationSpanRef.current = null;
+    lastDictationRef.current = { start, text };
+    const caret = start + text.length;
     requestAnimationFrame(() => { el?.setSelectionRange(caret, caret); el?.focus(); });
   };
 
