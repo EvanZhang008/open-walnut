@@ -139,6 +139,13 @@ export interface ProjectedSession {
   task_id?: string
   task_title?: string
   project?: string
+  /** Local-only FOLDER the owning task sits in (Task.group_id). Additive: the
+   *  "where does the caller stand" half of GET /api/v1/sessions scopes on it,
+   *  so a session can ask for the sessions NEAR it instead of the whole list. */
+  group_id?: string
+  /** The folder's own label. A nested folder contributes its OWN label, not the
+   *  ancestor chain, so the row names the folder the task actually sits in. */
+  group_label?: string
   /** '' = the primary box itself; otherwise the remote host alias. */
   host: string
   process_status: string
@@ -172,15 +179,30 @@ export interface SessionProjection {
   truncated?: true
 }
 
+/** Folder id → label. Passed in rather than looked up per row: the registry is
+ *  one small table and this projection is built inline on polled routes. */
+export type FolderLabels = ReadonlyMap<string, string>
+
 /** Exported: the mobile events feed (events-v1) maps single rows with it. */
-export function projectSession(s: SessionRecord, task: Task | undefined): ProjectedSession {
+export function projectSession(
+  s: SessionRecord,
+  task: Task | undefined,
+  folderLabels?: FolderLabels,
+): ProjectedSession {
   const description = (s.description || '').trim()
+  // Folder membership lives on the TASK (local-only, never synced), so a session
+  // with no task simply has no folder. The label is optional on purpose: a caller
+  // that has no label map still gets the id, which is what scoping keys on.
+  const groupId = task?.group_id
+  const groupLabel = groupId ? folderLabels?.get(groupId) : undefined
   return {
     id: s.claudeSessionId,
     ...(s.title ? { title: s.title } : {}),
     ...(s.taskId ? { task_id: s.taskId } : {}),
     ...(task?.title ? { task_title: task.title } : {}),
     ...(s.project || task?.project ? { project: s.project || task?.project } : {}),
+    ...(groupId ? { group_id: groupId } : {}),
+    ...(groupLabel ? { group_label: groupLabel } : {}),
     host: s.host ?? '',
     process_status: s.process_status,
     ...(s.model ? { model: s.model } : {}),
@@ -222,9 +244,14 @@ export async function buildSessionProjection(): Promise<SessionProjection> {
   // Lazy imports keep cloud boxes (which never export) from touching the
   // session registry / task store at module load.
   const { listSessions, isListableSession } = await import('./session-tracker.js')
-  const { listTasks } = await import('./task-manager.js')
+  const { listTasks, listFolderLabels } = await import('./task-manager.js')
 
-  const [allSessions, allTasks] = await Promise.all([listSessions(), listTasks()])
+  // listFolderLabels is a one-table SELECT, deliberately not listGroups(): this
+  // runs inline on routes the phone polls and a second whole-store read to learn
+  // a handful of folder names would be the most expensive field on the row.
+  const [allSessions, allTasks, folderLabels] = await Promise.all([
+    listSessions(), listTasks(), listFolderLabels(),
+  ])
   const taskById = new Map(allTasks.map((t) => [t.id, t]))
   const cutoff = Date.now() - STOPPED_RETENTION_DAYS * 24 * 60 * 60 * 1000
 
@@ -251,7 +278,7 @@ export async function buildSessionProjection(): Promise<SessionProjection> {
   // projectSession stamps `pinned` from the owning task, so the rows carry
   // everything the priority order below needs — no second task lookup, and the
   // priority can never disagree with the stamped flag.
-  const rows = eligible.map((s) => projectSession(s, s.taskId ? taskById.get(s.taskId) : undefined))
+  const rows = eligible.map((s) => projectSession(s, s.taskId ? taskById.get(s.taskId) : undefined, folderLabels))
   const exportedAt = () => new Date().toISOString()
 
   // FAST PATH — prove no budget can bite, then skip the ordered fill entirely.

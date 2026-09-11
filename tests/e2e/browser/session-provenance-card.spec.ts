@@ -285,6 +285,52 @@ test('an injected skill dump that quotes an envelope stays a collapsed context r
   await expect(panel.getByText('ENVELOPE_SKILL_DUMP')).toHaveCount(0)
 })
 
+/** The outbound card renders SOLO in the timeline: a send is conversation, so
+ *  it must never fold into a collapsed "Ran a command" run (that is asserted). */
+async function revealOutboundCard(panel: Locator): Promise<Locator> {
+  const outbound = panel.locator('.provenance-card[data-envelope-kind="outbound"]')
+  await expect(outbound).toHaveCount(1)
+  await expect(outbound).toBeVisible()
+  await expect(panel.locator('.tool-run-toggle', { hasText: 'Ran a command' })).toHaveCount(0)
+  return outbound
+}
+
+test('this session messaging another one cards too, mirroring the inbound card', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/')
+  const panel = await openSession(page)
+  const title = await peerTitle(page)
+
+  const outbound = await revealOutboundCard(panel)
+  await expect(outbound).toHaveAttribute('data-outbound-via', 'cli')
+  await expect(outbound.locator('.provenance-label')).toHaveText('Message to another session')
+  // The FULL live title, same as the inbound card: the server's answer only
+  // printed an 80-char clip, so anything longer proves the target was resolved.
+  await expect(outbound.locator('.provenance-title')).toHaveText(title)
+  await expect(outbound.locator('.provenance-body')).toContainText('ENVELOPE_OUTBOUND_BODY')
+
+  // Same chips, same click contract as the receiving side.
+  const chip = outbound.locator('a.provenance-chip-session')
+  await expect(chip).toHaveText(`@${PEER_SHORT}`)
+  await expect(chip).toHaveAttribute('data-session-id', PEER_ID)
+  await expect(outbound.locator('a.provenance-chip-task')).toHaveAttribute('data-task-id', 'pw-task-001')
+
+  // The whole point: the send is provenance, so its generic Bash block is gone.
+  await expect(panel.locator('.chat-tool-block').filter({ hasText: 'session_send' })).toHaveCount(0)
+  // The command and the server's answer stay recoverable, folded.
+  const raw = outbound.locator('.provenance-raw').first()
+  await expect(raw).toBeHidden()
+  expect(await outbound.innerText()).not.toContain('walnut tools call')
+  await outbound.locator('.provenance-details > summary').click()
+  await expect(raw).toContainText('walnut tools call session_send')
+  await expect(outbound.locator('.provenance-raw').last()).toContainText('"delivery":"queued"')
+
+  await shotCard(page, panel, outbound, `${SCREENSHOT_DIR}/card-outbound.png`)
+
+  // Existing counts are untouched: a send is a new kind, not a fifth peer note.
+  await expect(card(panel, 'peer-note')).toHaveCount(4)
+})
+
 test('a real API send shows the peer words, never the envelope prose', async ({ page }) => {
   test.setTimeout(60_000)
   await page.goto('/')

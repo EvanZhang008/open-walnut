@@ -36,7 +36,10 @@ export function createWalnutMcpServer(options: McpOptions = {}): McpServer {
       instructions:
         'Walnut is the user\'s personal task + session hub. task_create only records work; ' +
         'session_start starts a session for a task; session_send messages a live session ' +
-        '(its outcome comes back to you by default; expect_reply=false opts out). Reuse tasks only by explicit id. Hand work back ' +
+        '(its outcome comes back to you by default; expect_reply=false opts out). ' +
+        'To reach another session use session_send (task id or session id), never the built-in ' +
+        'ListAgents/SendMessage; find the session with session_list (scope=folder, then project, then all). ' +
+        'Reuse tasks only by explicit id. Hand work back ' +
         'with task_update phase=AGENT_COMPLETE when work is done and awaiting review; ' +
         'COMPLETE means the whole task is finished. ' +
         'Never delete tasks unless the user explicitly asked.',

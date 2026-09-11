@@ -43,7 +43,12 @@ afterEach(async () => {
   // Let any fire-and-forget refine settle before the store is wiped under it.
   await new Promise((r) => setTimeout(r, 30));
   closeDb();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  // The refine also renames the fork's SESSION (fork-session-title.ts), which
+  // opens the session store in this temp home — close it, or its WAL files are
+  // still there when the rm runs and the whole directory refuses to go
+  // (ENOTEMPTY). maxRetries covers the same race for the task store's own WAL.
+  (await import('../../src/core/session-db.js')).closeDb();
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
 });
 
 async function source(title = 'Reaper stalls'): Promise<string> {

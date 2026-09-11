@@ -11,9 +11,19 @@
  * The rule under test, and every way it must refuse:
  *   reconnect → settle → compare bundles → reload only while HIDDEN, only with
  *   no unsaved text, only within the rate limit, and never on an unknown.
+ *
+ * The second half of the file is the case that refusal creates (2026-09-09): the
+ * Mac app's window is never hidden, so "wait for a hidden moment" meant a whole
+ * evening on a bundle six deploys old, silently. Staying silent is the bug — the
+ * reload rules do not change, we just publish the drift and let the HUMAN click.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { initStaleBuildUpgrade, type StaleBuildUpgradeDeps } from '../../web/src/utils/stale-assets';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  getStaleBuild,
+  initStaleBuildUpgrade,
+  subscribeStaleBuild,
+  type StaleBuildUpgradeDeps,
+} from '../../web/src/utils/stale-assets';
 
 class FakeStorage {
   private store = new Map<string, string>();
@@ -43,11 +53,28 @@ class FakeTimers {
       t.fn();
     }
   }
+  /** How many callbacks are waiting on exactly `ms` — "was the clock restarted?". */
+  countAt(ms: number): number {
+    return [...this.pending.values()].filter((t) => t.ms === ms).length;
+  }
   get size() { return this.pending.size; }
 }
 
 const SETTLE_MS = 5_000;
 const HIDDEN_GRACE_MS = 20_000;
+/** STALE_VISIBLE_PROMPT_MS: drift must persist this long before the human is told. */
+const PROMPT_MS = 3 * 60_000;
+/** PERIODIC_CHECK_MS: the re-check for a deploy that never bounced the WS. */
+const PERIODIC_MS = 10 * 60_000;
+/** MIN_FETCH_INTERVAL_MS: at most one /api/config from this module per minute. */
+const MIN_FETCH_MS = 60_000;
+
+/** The served() promise plus the async check body. */
+async function flush(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 interface Harness {
   teardown: () => void;
@@ -57,6 +84,8 @@ interface Harness {
   visibilityChanged: () => void;
   state: { running: string | null; served: string | null; hidden: boolean; unsaved: boolean };
   session: FakeStorage;
+  /** Manual clock, so the fetch rate limit is a fact and not a race. */
+  clock: { t: number };
   /** reconnect → settle → the served-bundle promise resolves. */
   reconnectAndSettle: () => Promise<void>;
 }
@@ -65,6 +94,7 @@ function harness(over?: Partial<StaleBuildUpgradeDeps>): Harness {
   const timers = new FakeTimers();
   const reload = vi.fn();
   const session = new FakeStorage();
+  const clock = { t: 1_700_000_000_000 };
   const state = { running: 'OLD' as string | null, served: 'NEW' as string | null, hidden: false, unsaved: false };
   let onReconnect: (() => void) | null = null;
   let onVisibility: (() => void) | null = null;
@@ -80,27 +110,27 @@ function harness(over?: Partial<StaleBuildUpgradeDeps>): Harness {
     hasUnsaved: () => state.unsaved,
     reload,
     session: session as unknown as Storage,
-    now: () => Date.now(),
+    now: () => clock.t,
     ...over,
   });
 
   const reconnect = () => onReconnect?.();
   const visibilityChanged = () => onVisibility?.();
   return {
-    teardown, timers, reload, reconnect, visibilityChanged, state, session,
+    teardown, timers, reload, reconnect, visibilityChanged, state, session, clock,
     reconnectAndSettle: async () => {
       reconnect();
       timers.fire(SETTLE_MS);
-      // The served() promise plus the async check body.
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flush();
     },
   };
 }
 
 let h: Harness;
 beforeEach(() => { h = harness(); });
+// The published drift is a MODULE store, so a test that leaves it set would leak
+// into the next one. Teardown retracts it; calling it twice is a no-op.
+afterEach(() => { h.teardown(); });
 
 describe('stale-build upgrade', () => {
   it('does NOT reload while the tab is visible — the reported flash', async () => {
@@ -223,6 +253,152 @@ describe('stale-build upgrade', () => {
     h.teardown();
     h.timers.fire(HIDDEN_GRACE_MS);
     expect(h.reload).not.toHaveBeenCalled();
+    expect(h.timers.size).toBe(0);
+  });
+});
+
+describe('telling the human when the tab cannot be healed quietly', () => {
+  it('publishes the drift after three minutes on a visible tab', async () => {
+    const seen = vi.fn();
+    const unsubscribe = subscribeStaleBuild(seen);
+    h.state.hidden = false;
+    await h.reconnectAndSettle();
+    expect(getStaleBuild(), 'silence first: a tab about to be hidden heals on its own').toBeNull();
+    h.timers.fire(PROMPT_MS);
+    expect(getStaleBuild()).toEqual({ running: 'OLD', served: 'NEW' });
+    expect(seen).toHaveBeenCalledTimes(1);
+    // The whole point: telling the human is NOT reloading under them.
+    expect(h.reload).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it('retracts the prompt once the server serves what this tab runs', async () => {
+    h.state.hidden = false;
+    await h.reconnectAndSettle();
+    h.timers.fire(PROMPT_MS);
+    expect(getStaleBuild()).not.toBeNull();
+    // A rollback, or a deploy of the very build this tab already runs.
+    h.state.served = 'OLD';
+    h.clock.t += MIN_FETCH_MS;
+    await h.reconnectAndSettle();
+    expect(getStaleBuild()).toBeNull();
+  });
+
+  it('a deploy storm keeps the original clock and never flashes the pill', async () => {
+    h.state.hidden = false;
+    await h.reconnectAndSettle();
+    expect(h.timers.countAt(PROMPT_MS)).toBe(1);
+    // Second deploy of the hour, before the three minutes are up. Re-arming here
+    // would push the prompt out for as long as deploys keep landing.
+    h.state.served = 'NEWER';
+    h.clock.t += MIN_FETCH_MS;
+    await h.reconnectAndSettle();
+    expect(h.timers.countAt(PROMPT_MS), 'still the first clock').toBe(1);
+    h.timers.fire(PROMPT_MS);
+    expect(getStaleBuild()).toEqual({ running: 'OLD', served: 'NEWER' });
+    // Third deploy AFTER the pill is up: the label follows the server, but the
+    // pill must not blink out and back in.
+    h.state.served = 'NEWEST';
+    h.clock.t += MIN_FETCH_MS;
+    await h.reconnectAndSettle();
+    expect(getStaleBuild()).toEqual({ running: 'OLD', served: 'NEWEST' });
+    expect(h.timers.countAt(PROMPT_MS), 'no second prompt armed on top of a live one').toBe(0);
+  });
+
+  it('leaves the hidden tab healing silently — nothing to tell', async () => {
+    h.state.hidden = true;
+    await h.reconnectAndSettle();
+    h.timers.fire(HIDDEN_GRACE_MS);
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(getStaleBuild(), 'a reload nobody had to be asked about needs no pill').toBeNull();
+  });
+
+  it('escalates a hidden tab that could not be reloaded over a draft', async () => {
+    h.state.hidden = true;
+    h.state.unsaved = true;
+    await h.reconnectAndSettle();
+    h.timers.fire(HIDDEN_GRACE_MS);
+    expect(h.reload, 'the draft still wins over the reload').not.toHaveBeenCalled();
+    // Refusing forever in silence is how the incident happened: the user has to
+    // learn that saving their text is what unblocks the upgrade.
+    h.timers.fire(PROMPT_MS);
+    expect(getStaleBuild()).toEqual({ running: 'OLD', served: 'NEW' });
+  });
+
+  it('re-checks on a timer, so a deploy that never bounces the WS is noticed', async () => {
+    const served = vi.fn(() => Promise.resolve('NEW' as string | null));
+    const t = harness({ served });
+    try {
+      // No reconnect at all: the socket stayed up straight through the deploy.
+      t.clock.t += PERIODIC_MS;
+      t.timers.fire(PERIODIC_MS);
+      await flush();
+      expect(served).toHaveBeenCalledTimes(1);
+      t.timers.fire(PROMPT_MS);
+      expect(getStaleBuild()).toEqual({ running: 'OLD', served: 'NEW' });
+      // …and the cycle re-arms rather than firing once and stopping.
+      t.state.hidden = true;
+      t.clock.t += PERIODIC_MS;
+      t.timers.fire(PERIODIC_MS);
+      await flush();
+      expect(served, 'a hidden tab is nobody\'s problem this second').toHaveBeenCalledTimes(1);
+      t.state.hidden = false;
+      t.clock.t += PERIODIC_MS;
+      t.timers.fire(PERIODIC_MS);
+      await flush();
+      expect(served).toHaveBeenCalledTimes(2);
+    } finally {
+      t.teardown();
+    }
+  });
+
+  it('asks the server at most once a minute, and defers the ask it skipped', async () => {
+    const served = vi.fn(() => Promise.resolve('NEW' as string | null));
+    const t = harness({ served });
+    try {
+      await t.reconnectAndSettle();
+      expect(served).toHaveBeenCalledTimes(1);
+      // A flapping socket reconnects again seconds later.
+      t.clock.t += 5_000;
+      await t.reconnectAndSettle();
+      expect(served).toHaveBeenCalledTimes(1);
+      // Deferred, not dropped: a deploy is exactly when the WS bounces, and
+      // losing that check means ten more minutes on the old bundle.
+      t.clock.t += MIN_FETCH_MS;
+      t.timers.fire(MIN_FETCH_MS);
+      await flush();
+      expect(served).toHaveBeenCalledTimes(2);
+    } finally {
+      t.teardown();
+    }
+  });
+
+  it('an offline second changes nothing — neither the pill nor the arming', async () => {
+    let bundle: string | null = 'NEW';
+    const t = harness({ served: () => Promise.resolve(bundle) });
+    try {
+      t.state.hidden = false;
+      await t.reconnectAndSettle();
+      t.timers.fire(PROMPT_MS);
+      expect(getStaleBuild()).toEqual({ running: 'OLD', served: 'NEW' });
+      // The server is briefly unreachable. Claiming the tab is current here
+      // would retract a pill that is still true.
+      bundle = null;
+      t.clock.t += MIN_FETCH_MS;
+      await t.reconnectAndSettle();
+      expect(getStaleBuild()).toEqual({ running: 'OLD', served: 'NEW' });
+    } finally {
+      t.teardown();
+    }
+  });
+
+  it('teardown retracts the prompt', async () => {
+    h.state.hidden = false;
+    await h.reconnectAndSettle();
+    h.timers.fire(PROMPT_MS);
+    expect(getStaleBuild()).not.toBeNull();
+    h.teardown();
+    expect(getStaleBuild()).toBeNull();
     expect(h.timers.size).toBe(0);
   });
 });

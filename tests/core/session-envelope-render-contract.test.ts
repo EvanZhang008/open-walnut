@@ -30,6 +30,8 @@ vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: (...args: unknown[]) => getSessionByClaudeId(...args),
   getSessionsForTask: (...args: unknown[]) => getSessionsForTask(...args),
   isEnvironmentSession: (s: { type?: string }) => s.type === 'triage' || s.type === 'hook' || s.type === 'cron',
+  isListableSession: (s: { type?: string; lane?: string }) =>
+    !(s.type === 'triage' || s.type === 'hook' || s.type === 'cron') && !(typeof s.lane === 'string' && s.lane.length > 0),
 }));
 
 vi.mock('../../src/core/task-manager.js', () => ({

@@ -21,8 +21,16 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-request-notify'));
 
 const getSessionByClaudeId = vi.fn();
+const getSessionsForTask = vi.fn();
+const listSessions = vi.fn();
 vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: (...args: unknown[]) => getSessionByClaudeId(...args),
+  // The notice is addressed through reply-routing.ts (same ladder the real reply
+  // uses), which reads the task's other sessions and the asker's fork lineage.
+  getSessionsForTask: (...args: unknown[]) => getSessionsForTask(...args),
+  listSessions: (...args: unknown[]) => listSessions(...args),
+  isListableSession: (s: { lane?: string; type?: string }) =>
+    !s.lane && s.type !== 'triage' && s.type !== 'hook' && s.type !== 'cron',
 }));
 
 const sendMessageToSession = vi.fn();
@@ -130,6 +138,8 @@ beforeEach(() => {
   fs.rmSync(REQUESTS_FILE, { force: true });
   sessions = [rec(ASKER, { title: 'Asker', taskId: 'task-asker' }), rec(TARGET, { title: 'Target' })];
   getSessionByClaudeId.mockReset();
+  getSessionsForTask.mockReset();
+  listSessions.mockReset();
   sendMessageToSession.mockReset();
   enqueueMessage.mockReset();
   listTasksByIds.mockReset();
@@ -137,6 +147,9 @@ beforeEach(() => {
 
   getSessionByClaudeId.mockImplementation(async (sid: string) =>
     sessions.find((s) => s.claudeSessionId === sid) ?? null);
+  getSessionsForTask.mockImplementation(async (taskId: string) =>
+    sessions.filter((s) => s.taskId === taskId));
+  listSessions.mockImplementation(async () => sessions);
   sendMessageToSession.mockResolvedValue({ id: 'qm-notify' });
   enqueueMessage.mockResolvedValue({ id: 'qm-parked' });
   listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration' }]);
@@ -215,6 +228,36 @@ describe('notifyRequesterFallback — a failure after the settle', () => {
 
     expect(sendMessageToSession).not.toHaveBeenCalled();
     expect((await getSessionRequest(rq.id))?.status).toBe('notified');
+  });
+
+  it('follows the asker into a live fork of it, not the stopped session that asked', async () => {
+    const rq = await arm();
+    sessions = [
+      rec(ASKER, { title: 'Asker', taskId: 'task-asker', process_status: 'stopped' }),
+      rec('sess-asker-fork', {
+        title: 'Fork of Asker', taskId: 'task-fork', forkedFromSessionId: ASKER,
+      }),
+      rec(TARGET, { title: 'Target' }),
+    ];
+
+    expect(await notifyRequesterFallback(rq, 'timeout')).toBe(true);
+
+    const [sid] = sendMessageToSession.mock.calls[0] as [string];
+    expect(sid).toBe('sess-asker-fork');
+    // Still the same notice, so the fork can tie it to the ask it inherited.
+    expect(deliveredText()).toContain(`request="${rq.id}"`);
+  });
+
+  it('still notifies the asker itself when it is live, fork or no fork', async () => {
+    const rq = await arm();
+    sessions.push(rec('sess-asker-fork', {
+      title: 'Fork of Asker', taskId: 'task-fork', forkedFromSessionId: ASKER,
+    }));
+
+    expect(await notifyRequesterFallback(rq, 'completed')).toBe(true);
+
+    const [sid] = sendMessageToSession.mock.calls[0] as [string];
+    expect(sid).toBe(ASKER);
   });
 
   it('still notifies when the task-title lookup fails', async () => {

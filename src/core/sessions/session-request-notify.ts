@@ -31,14 +31,19 @@ export async function notifyRequesterFallback(
   if (!settled) return false; // replied / already notified — someone else spoke
 
   try {
-    const { getSessionByClaudeId } = await import('../session-tracker.js');
-    const origin = await getSessionByClaudeId(request.fromSessionId);
-    if (!origin || origin.archived) {
+    // Same address resolution the real reply uses (reply-routing.ts): a notice
+    // filed in a session the human stopped reading is as lost as a reply. An
+    // asker that is still live resolves to itself — unchanged.
+    const { resolveReplyDestination, logReplyReroute } = await import('./reply-routing.js');
+    const destination = await resolveReplyDestination(request.fromSessionId);
+    if (!destination) {
       log.session.info('request fallback: asker session gone — notification skipped', {
         requestId: request.id, fromSessionId: request.fromSessionId, outcome,
       });
       return false;
     }
+    logReplyReroute(request.id, request.fromSessionId, destination);
+    const origin = destination.session;
 
     // Target naming is embellishment — a failed lookup must not lose the notice.
     let targetTitle: string | undefined;
@@ -60,7 +65,8 @@ export async function notifyRequesterFallback(
       busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId,
     });
     log.session.info('request fallback notification delivered', {
-      requestId: request.id, fromSessionId: request.fromSessionId, outcome, delivery,
+      requestId: request.id, fromSessionId: request.fromSessionId,
+      toSessionId: origin.claudeSessionId, outcome, delivery,
     });
     return true;
   } catch (err) {

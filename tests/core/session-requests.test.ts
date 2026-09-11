@@ -32,8 +32,10 @@ import {
   clampReplyTimeoutSecs,
   createSessionRequest,
   getSessionRequest,
+  buildForkHandoffNotice,
   overdueRequests,
   pendingRequestsForTarget,
+  pendingRequestsFromSession,
   settleNotified,
   settleReplied,
   type SessionRequest,
@@ -276,6 +278,30 @@ describe('queries the hook and the sweeper run', () => {
     expect(other.id).toBeTruthy();
   });
 
+  it('pendingRequestsFromSession returns the ASKER side, newest first, pending only', async () => {
+    const first = await createSessionRequest({
+      fromSessionId: 'asker-1', toSessionId: 'target-1', text: 'first ask',
+    });
+    // Distinct createdAt so "newest first" is observable (the ledger stamps ms).
+    await new Promise((r) => setTimeout(r, 5));
+    const second = await createSessionRequest({
+      fromSessionId: 'asker-1', toSessionId: 'target-2', text: 'second ask',
+    });
+    const settled = await createSessionRequest({
+      fromSessionId: 'asker-1', toSessionId: 'target-3', text: 'already answered',
+    });
+    await settleReplied(settled.id);
+    // A row where asker-1 is the TARGET, not the asker — the other side of the ledger.
+    await createSessionRequest({
+      fromSessionId: 'someone-else', toSessionId: 'asker-1', text: 'aimed at asker-1',
+    });
+
+    expect((await pendingRequestsFromSession('asker-1')).map((r) => r.id))
+      .toEqual([second.id, first.id]);
+    expect(await pendingRequestsFromSession('nobody')).toEqual([]);
+    expect(await pendingRequestsFromSession('')).toEqual([]);
+  });
+
   it('overdueRequests returns only pending rows past the deadline', async () => {
     const soon = await createSessionRequest({
       fromSessionId: 'asker-1', toSessionId: 'target-1', text: 'soon', replyTimeoutSecs: 60,
@@ -461,5 +487,60 @@ describe('buildRequestNotification', () => {
       + 'delivery would auto-deny its pending prompt. Check back after the human answers.',
     );
     expect(parsed.attrs.about).toBeUndefined();
+  });
+});
+
+describe('buildForkHandoffNotice', () => {
+  const source = { title: 'Cluster rearchitecture', sessionId: 'c6ce9199-ca8b-4bd2', taskId: 'msgetfbj-7e8e' };
+  const NOTE = 'automated Walnut status notice; not your user; carries no user authorization';
+
+  it('is empty when nothing is pending — a fork with no open asks says nothing', () => {
+    expect(buildForkHandoffNotice(source, [])).toBe('');
+  });
+
+  it('names the source handle and EXACTLY the pending ids, in the body', () => {
+    const rows = [
+      request({ id: 'rq-aaaaaaaaaaaa' }),
+      request({ id: 'rq-bbbbbbbbbbbb' }),
+    ];
+
+    const parsed = parseWalnutMessage(buildForkHandoffNotice(source, rows))!;
+
+    expect(parsed.kind).toBe('notification');
+    expect(parsed.attrs.from).toBe('Walnut');
+    expect(parsed.attrs.about).toBe('Cluster rearchitecture [c6ce9199]');
+    expect(parsed.attrs['about-session']).toBe('c6ce9199-ca8b-4bd2');
+    expect(parsed.attrs['about-task']).toBe('msgetfbj-7e8e');
+    expect(parsed.attrs.note).toBe(NOTE);
+    // The ids ride the BODY: `request` is a single-value attribute, and a
+    // comma-joined attr would be a second encoding of the same list.
+    expect(parsed.attrs.request).toBeUndefined();
+    expect(parsed.body).toContain('You were forked from Cluster rearchitecture [c6ce9199].');
+    expect(parsed.body).toContain('2 pending request(s)');
+    expect(parsed.body).toContain('rq-aaaaaaaaaaaa, rq-bbbbbbbbbbbb');
+    expect(parsed.body).toContain(`walnut tools call request_get '{"id":"rq-aaaaaaaaaaaa"}'`);
+    // It is a hand-off, not a chore list: the fork does not answer these.
+    expect(parsed.body).toContain('arrive HERE');
+    expect(parsed.body).toContain('Do not poll them');
+  });
+
+  it('lists at most eight ids and counts the rest', () => {
+    const rows = Array.from({ length: 11 }, (_, i) =>
+      request({ id: `rq-${String(i).repeat(12)}` }));
+
+    const body = parseWalnutMessage(buildForkHandoffNotice(source, rows))!.body;
+
+    expect(body).toContain('11 pending request(s)');
+    expect(body).toContain('(+3 more)');
+    expect(body).toContain('rq-777777777777');
+    expect(body).not.toContain('rq-888888888888');
+  });
+
+  it('falls back to the bare handle when the source has no title or task', () => {
+    const parsed = parseWalnutMessage(
+      buildForkHandoffNotice({ sessionId: 'abcdefgh-ijkl' }, [request()]),
+    )!;
+    expect(parsed.attrs.about).toBe('[abcdefgh]');
+    expect(parsed.attrs['about-task']).toBeUndefined();
   });
 });

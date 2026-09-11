@@ -38,6 +38,16 @@
  *    server's reloads only while HIDDEN (and with no unsaved text). A visible
  *    tab waits for the next time it is hidden. The Mac app's shell covers the
  *    visible-but-idle case on its own (WebContentWatchdog, `stale_bundle`).
+ *
+ * Waiting for a hidden moment is not enough on its own. The Mac app's window
+ * stays VISIBLE for hours, so "wait until nobody is looking" can mean "never":
+ * on 2026-09-09 a window ran a bundle from six deploys earlier all evening
+ * (`server serves a newer build than this tab runs … hidden:false`, repeated for
+ * hours) and rendered new wire formats wrong. The reload rules stay as they are
+ * (never under the user, never over unsaved text) — so when the drift persists,
+ * we stop waiting silently and TELL the human: `subscribeStaleBuild` publishes
+ * the drift, `StaleBuildPill` shows a "Walnut updated · Reload", and
+ * `reloadForUpgrade()` is the reload they asked for.
  */
 import { log } from '@/utils/log';
 import { beaconFlush } from '@/utils/browser-logger';
@@ -59,6 +69,25 @@ const RECONNECT_SETTLE_MS = 5_000;
  * and back is not "nobody is looking".
  */
 const HIDDEN_GRACE_MS = 20_000;
+/**
+ * How long drift must PERSIST before we tell the human about it. Long enough
+ * that a tab which is about to be hidden (or which the shell is about to
+ * recycle) heals silently first, short enough that an evening on a stale bundle
+ * cannot happen. A deploy storm of several builds in a row does NOT restart this
+ * clock — otherwise the pill would never appear during a busy deploy hour, and
+ * would flash on and off once it had.
+ */
+const STALE_VISIBLE_PROMPT_MS = 3 * 60_000;
+/**
+ * Re-check cadence. The reconnect hook only fires when the WS bounces, so a
+ * deploy that leaves the socket up (or a tab that reconnected before the new
+ * assets were live) would never be noticed. Only asks while the tab is visible:
+ * a hidden tab is nobody's problem this second, and the reconnect path covers a
+ * deploy that lands while it is away.
+ */
+const PERIODIC_CHECK_MS = 10 * 60_000;
+/** Never ask the server which bundle it serves more often than this. */
+const MIN_FETCH_INTERVAL_MS = 60_000;
 
 /** What the DOM told us about work a reload would destroy. */
 export interface UnsavedSnapshot {
@@ -244,6 +273,56 @@ export function runningBundleId(doc: Document = document): string | null {
   return null;
 }
 
+// ── The "this tab is stale" store (what the pill renders) ──
+
+/** A drift the human should be told about. */
+export interface StaleBuildState {
+  /** Entry bundle this tab is running. */
+  running: string;
+  /** Entry bundle the server serves now. */
+  served: string;
+}
+
+let staleBuild: StaleBuildState | null = null;
+const staleBuildListeners = new Set<() => void>();
+
+/**
+ * Current drift, or null while this tab matches the server. Returns the SAME
+ * object between notifications so it is safe as a `useSyncExternalStore`
+ * snapshot / a `useState` value.
+ */
+export function getStaleBuild(): StaleBuildState | null {
+  return staleBuild;
+}
+
+/** Subscribe to drift being published or retracted; returns the unsubscribe. */
+export function subscribeStaleBuild(cb: () => void): () => void {
+  staleBuildListeners.add(cb);
+  return () => { staleBuildListeners.delete(cb); };
+}
+
+function setStaleBuild(next: StaleBuildState | null): void {
+  if (next?.running === staleBuild?.running && next?.served === staleBuild?.served) return;
+  staleBuild = next;
+  for (const cb of [...staleBuildListeners]) {
+    try { cb(); } catch { /* one listener must not break the others */ }
+  }
+}
+
+/**
+ * The reload the human just asked for. Deliberately NOT rate-limited through
+ * `recordStaleReload`: that budget exists to stop an automatic reload from
+ * spinning the tab, and a click is not a loop. It still flushes logs first, so
+ * the line explaining the reload survives the page it describes.
+ */
+export function reloadForUpgrade(): void {
+  log.warn('assets', 'reloading onto the current build at the human\'s request', {
+    running: staleBuild?.running ?? null,
+    served: staleBuild?.served ?? null,
+  });
+  reloadWithLogs();
+}
+
 export interface StaleBuildUpgradeDeps {
   /** Bundle this tab runs; null = unknown (never reload on a guess). */
   running: () => string | null;
@@ -262,10 +341,16 @@ export interface StaleBuildUpgradeDeps {
   reload: () => void;
   session: Storage;
   now: () => number;
+  /** How long drift must persist before the human is told. */
+  promptDelayMs: number;
+  /** Publish (or retract, with null) the drift. Defaults to the module store. */
+  onPrompt: (state: StaleBuildState | null) => void;
 }
 
 function resolveUpgradeDeps(deps?: Partial<StaleBuildUpgradeDeps>): StaleBuildUpgradeDeps {
   return {
+    promptDelayMs: deps?.promptDelayMs ?? STALE_VISIBLE_PROMPT_MS,
+    onPrompt: deps?.onPrompt ?? setStaleBuild,
     running: deps?.running ?? (() => runningBundleId()),
     served: deps?.served ?? fetchServedBundle,
     hidden: deps?.hidden ?? (() => document.visibilityState === 'hidden'),
@@ -306,23 +391,65 @@ function subscribeReconnect(cb: () => void): () => void {
  * Wire the upgrade. Pure sequencing over injected deps so the rule is
  * unit-testable without a DOM or a server:
  *
- *   reconnect → settle → bundles differ?
- *     no  → done
+ *   reconnect → settle ─┐
+ *   every 10 min ───────┴→ bundles differ?
+ *     no  → disarm everything, retract the prompt
  *     yes → hidden now? reload (unsaved-gated, rate-limited)
  *           visible?   wait for the tab to be hidden HIDDEN_GRACE_MS, then the same
+ *           either way: if the drift is still there 3 min later, tell the human
  *
- * Any unknown (either bundle null) means "do nothing": a reload on a guess is
- * exactly the bug this file exists to prevent.
+ * Any unknown (either bundle null) means "change nothing": a reload on a guess
+ * is exactly the bug this file exists to prevent, and a transient fetch failure
+ * must not cancel an upgrade that was already armed.
+ *
+ * The prompt is armed whatever the visibility, because the hidden path is the
+ * one that takes the timer with it (it reloads, and the page goes away long
+ * before 3 min). What survives to fire the prompt is a tab that could NOT be
+ * healed silently: visible for hours, or hidden with unsaved text, or past its
+ * reload budget. Every one of those is a case where the human has to be told.
  */
 export function initStaleBuildUpgrade(deps?: Partial<StaleBuildUpgradeDeps>): () => void {
   const d = resolveUpgradeDeps(deps);
   let settleTimer: unknown = null;
   let graceTimer: unknown = null;
+  let promptTimer: unknown = null;
+  let periodicTimer: unknown = null;
+  let refetchTimer: unknown = null;
   let offVisibility: (() => void) | null = null;
   let checking = false;
+  /** Latest known drift, from the moment it appears until it is gone. */
+  let drift: StaleBuildState | null = null;
+  /** Whether the human has been told (so a newer `served` refreshes in place). */
+  let published = false;
+  let lastFetchAt = 0;
 
   const clearGrace = () => { if (graceTimer != null) { d.clearTimeout(graceTimer); graceTimer = null; } };
   const disarm = () => { clearGrace(); offVisibility?.(); offVisibility = null; };
+
+  const publish = (state: StaleBuildState | null) => {
+    published = state != null;
+    d.onPrompt(state);
+  };
+
+  /** The drift is gone (or we are shutting down): forget it and retract the pill. */
+  const clearPrompt = () => {
+    if (promptTimer != null) { d.clearTimeout(promptTimer); promptTimer = null; }
+    drift = null;
+    if (published) publish(null);
+  };
+
+  const armPrompt = (state: StaleBuildState) => {
+    const first = drift == null;
+    drift = state;
+    // Already told: keep showing the CURRENT server bundle, but never re-arm.
+    if (published) { publish(state); return; }
+    // A later build during a deploy storm keeps the original clock running.
+    if (!first) return;
+    promptTimer = d.setTimeout(() => {
+      promptTimer = null;
+      if (drift) publish(drift);
+    }, d.promptDelayMs);
+  };
 
   const tryReload = (served: string, running: string) => {
     if (!d.hidden()) return false;
@@ -355,16 +482,31 @@ export function initStaleBuildUpgrade(deps?: Partial<StaleBuildUpgradeDeps>): ()
 
   const check = async () => {
     if (checking) return;
+    const startedAt = d.now();
+    if (startedAt - lastFetchAt < MIN_FETCH_INTERVAL_MS) {
+      // One /api/config per minute from this module, whoever asks. Deferred
+      // rather than dropped: the ask that gets squeezed out is usually the one
+      // that matters most (a deploy just bounced the WS).
+      if (refetchTimer == null) {
+        refetchTimer = d.setTimeout(() => { refetchTimer = null; void check(); }, MIN_FETCH_INTERVAL_MS);
+      }
+      return;
+    }
     checking = true;
     try {
       const running = d.running();
       if (!running) return;
+      lastFetchAt = startedAt;
       const served = await d.served();
-      if (!served || served === running) { disarm(); return; }
+      // Unknown: keep whatever we already knew. An offline second must not
+      // cancel a pending upgrade, nor claim the tab is current.
+      if (!served) return;
+      if (served === running) { disarm(); clearPrompt(); return; }
       log.info('assets', 'server serves a newer build than this tab runs', { running, served, hidden: d.hidden() });
       // A tab that is hidden right now gets the same grace as one that hides
       // later: a reconnect can land mid ⌘-tab, seconds before the user is back.
       armForHidden(served, running);
+      armPrompt({ running, served });
     } catch (err) {
       log.warn('assets', 'could not compare bundles after reconnect', { error: String((err as Error)?.message ?? err) });
     } finally {
@@ -372,14 +514,27 @@ export function initStaleBuildUpgrade(deps?: Partial<StaleBuildUpgradeDeps>): ()
     }
   };
 
+  const schedulePeriodic = () => {
+    periodicTimer = d.setTimeout(() => {
+      periodicTimer = null;
+      if (!d.hidden()) void check();
+      schedulePeriodic();
+    }, PERIODIC_CHECK_MS);
+  };
+
   const offReconnect = d.onReconnect(() => {
     if (settleTimer != null) d.clearTimeout(settleTimer);
     settleTimer = d.setTimeout(() => { settleTimer = null; void check(); }, RECONNECT_SETTLE_MS);
   });
+  schedulePeriodic();
 
   return () => {
     offReconnect();
-    if (settleTimer != null) { d.clearTimeout(settleTimer); settleTimer = null; }
+    for (const id of [settleTimer, periodicTimer, refetchTimer]) if (id != null) d.clearTimeout(id);
+    settleTimer = null;
+    periodicTimer = null;
+    refetchTimer = null;
     disarm();
+    clearPrompt();
   };
 }

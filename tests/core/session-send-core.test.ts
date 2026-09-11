@@ -33,6 +33,9 @@ vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: (...args: unknown[]) => getSessionByClaudeId(...args),
   getSessionsForTask: (...args: unknown[]) => getSessionsForTask(...args),
   isEnvironmentSession: (s: { type?: string }) => s.type === 'triage' || s.type === 'hook' || s.type === 'cron',
+  // Reply routing (reply-routing.ts) filters candidate destinations with this.
+  isListableSession: (s: { lane?: string; type?: string }) =>
+    !s.lane && s.type !== 'triage' && s.type !== 'hook' && s.type !== 'cron',
 }));
 
 const getTask = vi.fn();
@@ -661,6 +664,91 @@ describe('performSessionSend — in_reply_to', () => {
       'origin_session_gone', 410,
     );
     expect(err.message).toContain('sess-ask');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A reply is addressed to the ASKER, and the asker is a train of thought, not one
+ * process. 2026-09-11: the human forked the asking session, kept working in the
+ * fork, and the answer was filed six minutes later in the idle original nobody was
+ * reading. The ladder lives in reply-routing.ts (unit-pinned in
+ * tests/core/reply-routing.test.ts); these cases pin that performReply USES it and
+ * reports where the answer really went.
+ */
+describe('performSessionSend — in_reply_to routes to the requester’s CURRENT session', () => {
+  const ASKER = 'sess-asker-1';
+  const TARGET = 'sess-target-1';
+
+  async function armRequest() {
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    return createSessionRequest({ fromSessionId: ASKER, toSessionId: TARGET, text: 'count the rows' });
+  }
+
+  beforeEach(() => {
+    sessions = [
+      rec(ASKER, { title: 'Asker', taskId: 'task-asker' }),
+      rec(TARGET, { title: 'Target', host: 'devbox', taskId: 'task-target' }),
+    ];
+  });
+
+  it('lands in the newer session when the requester TASK moved on', async () => {
+    const rq = await armRequest();
+    sessions = [
+      rec(ASKER, { title: 'Asker', taskId: 'task-asker', process_status: 'stopped', lastActiveAt: '2026-09-11T02:29:00.000Z' }),
+      rec('sess-asker-2', { title: 'Asker restarted', taskId: 'task-asker', lastActiveAt: '2026-09-11T02:35:00.000Z' }),
+      rec(TARGET, { title: 'Target', taskId: 'task-target' }),
+    ];
+
+    const result = await performSessionSend({ text: 'done', inReplyTo: rq.id, callerSid: TARGET });
+
+    expect(dispatched().sid).toBe('sess-asker-2');
+    expect(result.targetSessionId).toBe('sess-asker-2');
+    expect(result.target.handle).toBe('Asker restarted [sess-ask]');
+  });
+
+  it('lands in a LIVE fork of the asker even though the fork has its own task', async () => {
+    const rq = await armRequest();
+    sessions = [
+      rec(ASKER, { title: 'Asker', taskId: 'task-asker', process_status: 'stopped' }),
+      rec('sess-fork-1', {
+        title: 'Fork of Asker', taskId: 'task-fork', forkedFromSessionId: ASKER,
+        lastActiveAt: '2026-09-11T02:36:00.000Z',
+      }),
+      rec(TARGET, { title: 'Target', taskId: 'task-target' }),
+    ];
+
+    const result = await performSessionSend({ text: 'done', inReplyTo: rq.id, callerSid: TARGET });
+
+    expect(dispatched().sid).toBe('sess-fork-1');
+    expect(result.targetSessionId).toBe('sess-fork-1');
+    // The envelope still names the request, so the fork can tie it to the ask.
+    expect(parseWalnutMessage(dispatched().opts.enqueueMessage as string)!.attrs.request).toBe(rq.id);
+  });
+
+  it('leaves the common case alone: a live asker still gets its own answer', async () => {
+    const rq = await armRequest();
+    // A fork exists, but the asker is alive — nothing may be re-routed.
+    sessions.push(rec('sess-fork-1', { title: 'Fork of Asker', taskId: 'task-fork', forkedFromSessionId: ASKER }));
+
+    const result = await performSessionSend({ text: 'done', inReplyTo: rq.id, callerSid: TARGET });
+
+    expect(dispatched().sid).toBe(ASKER);
+    expect(result.targetSessionId).toBe(ASKER);
+  });
+
+  it('never routes the answer back into the replying session', async () => {
+    const rq = await armRequest();
+    // Pathological lineage: the replier is itself a fork of the (dead) asker.
+    sessions = [
+      rec(ASKER, { title: 'Asker', taskId: 'task-asker', archived: true }),
+      rec(TARGET, { title: 'Target', taskId: 'task-target', forkedFromSessionId: ASKER }),
+    ];
+
+    await expectSendError(
+      performSessionSend({ text: 'done', inReplyTo: rq.id, callerSid: TARGET }),
+      'origin_session_gone', 410,
+    );
     expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 });

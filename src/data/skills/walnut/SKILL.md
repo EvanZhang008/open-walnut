@@ -11,7 +11,8 @@ description: >-
   letter (human inbox) when work finishes or a decision is needed. Triggers:
   "add a task", "put that on my list", "what's on my plate", "did I write
   anything about X", "which task/session did X", "start a session on this",
-  "tell that other session ...". Read
+  "tell that other session ...", and any cross-session messaging, instead of the
+  built-in ListAgents / SendMessage. Read
   this BEFORE guessing subcommands, running --help, inspecting files, or
   reaching for git: those guess, this gives the exact call. Works through the
   `walnut` CLI over Bash (the same `walnut` command works inside managed sessions on any host), or the
@@ -104,7 +105,7 @@ disagree.
 | Is the server up / which version? | `walnut tools call walnut_status '{}'` |
 | What did session `<id>` do? | `walnut tools call session_transcript '{"id":"<id>"}'` |
 | Get a task actually running | `walnut tools call session_start '{"task":"<id>","message":"..."}'`. A `409 session_exists` means it is already running: `session_send` to it. |
-| Tell another session something | `walnut tools call session_send '{"to":"<session-id \| task-id \| title>","text":"..."}'`. List targets with `session_list`. |
+| Tell another session something | `walnut tools call session_send '{"to":"<session-id \| task-id \| title>","text":"..."}'` — never the built-in `SendMessage`/`ListAgents`. Find the target with `session_list '{"scope":"folder"}'`, then widen to `project`, then `all`. |
 | Did the session I asked answer yet? | Nothing: the reply arrives in your session on its own. Only when you cannot continue, `walnut wait <rq-id>`. |
 | Review the pinned board | `walnut tools call task_list '{"working_set":true}'` returns the WHOLE board (no default limit). Its `board` field carries the server's own per-tier counts: compare your bucketing against them before reporting numbers, and never report a result whose `truncated` is true as the full picture. |
 | State of many tasks at once | `walnut tools call task_get_bulk '{"ids":["...","..."],"fields":["title","phase","progress"]}'`: one call, up to 50 ids, only the fields you name. `progress` is the note's status bullets ([DONE]/[WIP]/[WAIT]/[TODO]/[BLOCKED]) without the multi-KB Work Log. Do NOT loop `task_get`. |
@@ -147,7 +148,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `task_delete` | Delete a Walnut task (write, local-only) | id (string): Task id or a unique id prefix; force? (boolean): Stop the task's active sessions and delete anyway |
 | `search` | Search Walnut (read) | q (string): Search query; types? (string): Comma-separated subset of: task,memory,session (default: all three); limit? (integer): Max results (default 20) |
 | `project_list` | List Walnut projects (read) | (none) |
-| `session_list` | List Walnut coding sessions (read) | status? (running\|idle\|stopped\|error): Filter by process status |
+| `session_list` | List Walnut coding sessions (read) | status? (running\|idle\|stopped\|error): Filter by process status; scope? (folder\|project\|all): How far to look: folder = sessions whose task sits in the same folder as yours, project = same project, all (default). Start with folder when looking for the session you should talk to. |
 | `walnut_status` | Walnut server status (read) | (none) |
 | `session_transcript` | Read a session transcript (read) | id (string): Session id; fresh? (boolean): Force a live transcript read (primary box only) |
 | `memory_read` | Read Walnut memory (MEMORY.md / USER.md) (read) | doc (global\|user): Which memory document |
@@ -269,6 +270,20 @@ work to start, not as a side effect of writing a note to self.
 - `to` accepts a session id, a unique id prefix of 4 characters or more, a task id (routed to that task's session), or a unique title substring. A task with no session yet answers `409 task_has_no_session`, which is the signal to call `session_start`.
 - Before reusing anything: search first and get the exact task id. Never merge by a similar title.
 - You need context the repo does not have: use `search`.
+
+## Reaching another session
+
+**When Walnut is available, do NOT use Claude Code's built-in `ListAgents` or `SendMessage` to reach another session. Use `session_send` with a task id or a session id.** Why: the built-in path is invisible to the human and to the task record, it carries no request id, and it does not survive a fork or a compaction; Walnut's does.
+
+Find the session to talk to by widening a ring, nearest first:
+
+```bash
+walnut tools call session_list '{"scope":"folder"}'    # sessions whose task sits in your folder
+walnut tools call session_list '{"scope":"project"}'   # same project
+walnut tools call session_list '{}'                    # everything (scope defaults to all)
+```
+
+The answer's `you` row tells you where Walnut thinks you stand (your own handle, project, folder), so you also know which handle is yourself: your own session is never a valid target. Rows come back nearest first, and each row's `handle` pastes straight into `session_send`'s `to`.
 
 ## How results come back
 

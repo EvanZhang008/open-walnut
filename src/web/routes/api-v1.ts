@@ -2486,10 +2486,58 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
   }
 })
 
+/** How far GET /sessions looks, nearest ring first. */
+type SessionScope = 'folder' | 'project' | 'all'
+
+/** One string field off a projected row, whichever half of the cloud union it
+ *  came from (own rows are untyped records). '' = absent. */
+function rowField(row: unknown, key: string): string {
+  const v = (row as Record<string, unknown> | null | undefined)?.[key]
+  return typeof v === 'string' ? v : ''
+}
+
+/**
+ * Where the CALLING session stands, as one projected row (`you`).
+ *
+ * The caller is normally in its own list, so the cheap answer is a lookup. It is
+ * not always: a lane-bound conversation session, an environment session
+ * (triage/cron/hook) and a row a projection budget dropped are all real callers
+ * that the list itself excludes, and telling one of them "you are nowhere" would
+ * make the folder/project rings unusable from exactly the sessions that want
+ * them. The registry still knows, so fall back to it — on the primary only, since
+ * a cloud replica has no session registry to consult.
+ */
+async function resolveCallerSessionRow(
+  sid: string,
+  rows: ReadonlyArray<{ id: string }>,
+): Promise<Record<string, unknown> | null> {
+  const listed = rows.find((r) => r.id === sid)
+  if (listed) return listed as unknown as Record<string, unknown>
+  if (CLOUD_MODE) return null
+  const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
+  const caller = await resolveCaller(sid).catch(() => null)
+  if (caller?.kind !== 'session') return null
+  const { projectSession } = await import('../../core/session-projection.js')
+  const { getTask, listFolderLabels } = await import('../../core/task-manager.js')
+  const task = caller.record.taskId
+    ? await getTask(caller.record.taskId).catch(() => undefined)
+    : undefined
+  const labels = await listFolderLabels().catch(() => new Map<string, string>())
+  return projectSession(caller.record, task, labels) as unknown as Record<string, unknown>
+}
+
 // GET /api/v1/sessions — slim session list for mobile (read-only, additive).
 // Same projection pattern as /tasks: primary refreshes inline, cloud serves
 // the git-synced sessions/projection.json. Opening/steering a session from
 // the companion is Phase 2 (reverse-WS bridge to the primary).
+//
+// `scope` + `you` (additive 2026-09-10) answer "which sessions are NEAR me".
+// An agent that cannot find the session it should talk to reaches for its
+// harness's own cross-session messaging instead, so the list has to be able to
+// narrow itself: `scope=folder` is the sessions whose task sits in the caller's
+// folder, `scope=project` the same project, `all` (the default, so every
+// existing client is untouched) the whole list. The caller is identified by the
+// `x-walnut-caller-sid` header the ops executor stamps from WALNUT_SESSION_ID.
 apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { readSessionProjection, exportSessionProjection } = await import('../../core/session-projection.js')
@@ -2525,10 +2573,49 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
       return
     }
     const { unionOwnedSessions } = await import('../../core/cloud-exec.js')
-    let sessions = unionOwnedSessions(projection?.sessions ?? [], ownRows)
+    const all = unionOwnedSessions(projection?.sessions ?? [], ownRows)
+
+    const asked = typeof req.query.scope === 'string' && req.query.scope ? req.query.scope : 'all'
+    if (asked !== 'all' && asked !== 'project' && asked !== 'folder') {
+      sendError(res, 400, 'bad_request', `Unknown scope "${asked}": use folder, project, or all`)
+      return
+    }
+    // Resolved against the UNFILTERED list: `you` is orientation, not a result
+    // row, so a `status` the caller itself does not match must not erase it.
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim()
+    const you = callerSid ? await resolveCallerSessionRow(callerSid, all) : null
+
+    let sessions = all
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) sessions = sessions.filter((s) => (s as { process_status?: string }).process_status === status)
-    res.json({ sessions, syncedAt: projection?.exportedAt ?? new Date().toISOString() })
+    if (asked !== 'all' && !you) {
+      // A caller Walnut cannot place gets an error, never a silently unfiltered
+      // list: "here is everything" read as "here is your folder" is the confident
+      // wrong answer this feature exists to remove.
+      sendError(res, 400, 'bad_request',
+        `scope=${asked} needs a session caller: this request carries no session id Walnut recognises `
+        + '(x-walnut-caller-sid), so there is no folder or project to measure from. Call it with scope=all.')
+      return
+    }
+    // A caller whose task sits in no folder has nothing narrower than its
+    // project, so the folder ring degrades to the project one instead of
+    // answering "no sessions" to a question that had an answer. `scope` in the
+    // response is therefore the ring actually APPLIED, not the one asked for.
+    const youGroup = rowField(you, 'group_id')
+    const scope: SessionScope = asked === 'folder' && !youGroup ? 'project' : asked
+    if (you && scope !== 'all') {
+      const youProject = rowField(you, 'project').toLowerCase()
+      sessions = sessions.filter((s) => scope === 'folder'
+        ? rowField(s, 'group_id') === youGroup
+        : rowField(s, 'project').toLowerCase() === youProject)
+    }
+    res.json({
+      sessions,
+      ...(you ? { you } : {}),
+      scope,
+      syncedAt: projection?.exportedAt ?? new Date().toISOString(),
+    })
   } catch (err) {
     next(err)
   }

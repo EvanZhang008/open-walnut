@@ -534,6 +534,11 @@ export async function createForkSiblingTask(
         const { task: updated } = await updateTask(forkId, { title: refinedTitle }, { source: titleSource });
         bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: titleSource });
         log.session.info('fork title refined', { taskId: forkId, title: refinedTitle });
+        // The SESSION wearing the same placeholder follows the task, because the
+        // session title is what becomes the `Title [8hex]` handle session_list
+        // prints and session_send accepts (see fork-session-title.ts).
+        const { adoptForkTaskTitle } = await import('./fork-session-title.js');
+        await adoptForkTaskTitle(forkId, [placeholderTitle]);
       } catch (err) {
         log.session.warn('fork title refine failed', {
           taskId: forkId, error: err instanceof Error ? err.message : String(err),
@@ -652,13 +657,38 @@ export async function forkSessionToTask(
   const FORK_FOCUS_PREFIX =
     'This is a forked session. Focus on the NEW request below — treat it as your primary task. ' +
     'Do not resume or continue the parent session\'s previous work unless the user explicitly asks you to.\n\n';
-  const forkMessage = `${FORK_FOCUS_PREFIX}${imageContext ?? ''}New request:\n${userRequest}`;
+  // Hand-off: answers the SOURCE session is still owed can now arrive HERE
+  // (reply-routing.ts rung ③ routes them to the live fork), and a fork that was
+  // never told has no idea what an incoming `rq-…` refers to. Built only when
+  // something is actually pending — a fork with no open asks says nothing.
+  const { buildForkHandoffNotice, pendingRequestsFromSession } = await import('../session-requests.js');
+  let handoffNotice = '';
+  try {
+    const pending = await pendingRequestsFromSession(sourceSessionId);
+    handoffNotice = buildForkHandoffNotice({
+      title: sourceRecord.title,
+      sessionId: sourceSessionId,
+      ...(sourceRecord.taskId ? { taskId: sourceRecord.taskId } : {}),
+    }, pending);
+    if (handoffNotice) handoffNotice = `${handoffNotice}\n\n`;
+  } catch (err) {
+    // A ledger read must never block a fork.
+    log.session.warn('fork: pending-request hand-off notice skipped', {
+      sourceSessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  const forkMessage = `${handoffNotice}${FORK_FOCUS_PREFIX}${imageContext ?? ''}New request:\n${userRequest}`;
 
   // Mint the fork's session id up front (--session-id composes with --resume
   // --fork-session). Returning it lets the client open the real forked panel
   // immediately instead of polling.
   const forkSessionId = randomUUID();
-  const forkTitle = title ?? `Fork of ${sourceRecord.title ?? sourceSessionId.slice(0, 16)}`;
+  // The SESSION title is the fork TASK's title — never the fork's prompt. That
+  // title is the `Title [8hex]` handle session_list prints and session_send
+  // accepts, and the task's is the curated one (`Fork of <source>` now, refined
+  // to `<label> - fork of <source>` moments later; see fork-session-title.ts).
+  const forkTitle = title
+    ?? (task.title?.trim() || `Fork of ${sourceRecord.title ?? sourceSessionId.slice(0, 16)}`);
 
   // Seed the record before the spawn — the client opens the panel on this
   // response, and its first session read must not 404.
@@ -676,6 +706,15 @@ export async function forkSessionToTask(
       sessionId: forkSessionId, taskId: task.id,
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  // Close the ordering gap with the background title refine: it may have already
+  // rewritten the task title while this record was being seeded, in which case its
+  // own sync found no session to rename. Re-reading the task makes the two orders
+  // converge on the same answer. Skipped when the caller named the title itself.
+  if (!title) {
+    const { adoptForkTaskTitle } = await import('./fork-session-title.js');
+    await adoptForkTaskTitle(task.id, [forkTitle]);
   }
 
   // Emit SESSION_START with forkedFromSessionId — handleStart() uses Claude

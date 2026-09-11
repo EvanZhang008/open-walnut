@@ -58,7 +58,21 @@ export async function promoteSideThread(
   // nothing to be a sibling of, so it becomes a top-level Inbox task.
   const parentRecord = await getSessionByClaudeId(parentSid);
   const siblingOfTaskId = parentRecord?.taskId?.trim() || undefined;
-  const threadLabel = opts?.title?.trim() || entry.title?.trim() || undefined;
+  // A thread's label is a NAME only when someone (a human, or the auto-titler)
+  // actually named it. The client mints the chip's label by truncating the
+  // question itself, and passing THAT through as the task title is how a task —
+  // and the session record promote points at it — ended up wearing 100+ chars of
+  // raw prompt in the shape `<first 48 chars of the question>… - fork of <source>`
+  // (2026-09-11, session 85acbbad: unreadable in session_list, and another session
+  // picked the wrong recipient off that list). isDerivedLabel is the same "nobody
+  // has named this yet" test the auto-titler uses. Undefined here hands the naming
+  // to createForkSiblingTask: `Fork of <source>` now, `<2-4 word label> - fork of
+  // <source>` moments later, and the session record follows both.
+  const rawLabel = opts?.title?.trim() || entry.title?.trim() || undefined;
+  const { isDerivedLabel } = await import('./side-thread-title.js');
+  const threadLabel = rawLabel && !isDerivedLabel(rawLabel, entry.question)
+    ? rawLabel
+    : undefined;
 
   const { addTask, linkSession, linkSessionSlot } = await import('../task-manager.js');
   let groupId: string | undefined;
@@ -121,6 +135,14 @@ export async function promoteSideThread(
   // The session was invisible until this write, so nothing else would tell the
   // UI it now exists.
   emitSessionStatusChanged(updated, {}, ['*']);
+
+  // The background title refine (createForkSiblingTask) races this re-point: if it
+  // landed FIRST, `task.title` above is already stale and its own session sync
+  // found a row still wearing the `Side: …` label. Re-reading the TASK converges
+  // both orders on the same answer, and it may only replace the title written
+  // just above. AFTER the emit, so the UI never receives the stale one last.
+  const { adoptForkTaskTitle } = await import('./fork-session-title.js');
+  await adoptForkTaskTitle(task.id, [task.title]);
 
   // Same two-step link the runner performs when a fork's session starts: the slot
   // drives the task's session badge, `linkSession` fills session_ids.

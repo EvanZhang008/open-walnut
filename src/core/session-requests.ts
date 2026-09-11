@@ -221,6 +221,24 @@ export async function pendingRequestsForTarget(
   );
 }
 
+/**
+ * Pending requests this session REGISTERED — the ASKER side of the ledger
+ * (`pendingRequestsForTarget` is the receiver side).
+ *
+ * The fork hand-off reads this: a session being forked may still be owed
+ * answers, and the fork is where the human continues, so the fork has to be told
+ * which ids can still arrive in it (reply-routing.ts is what makes them arrive).
+ * Newest-first, so a truncated list keeps the freshest asks.
+ */
+export async function pendingRequestsFromSession(sessionId: string): Promise<SessionRequest[]> {
+  const sid = (sessionId ?? '').trim();
+  if (!sid) return [];
+  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
+  return (store.requests ?? [])
+    .filter((r) => r.status === 'pending' && r.fromSessionId === sid)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 /** Pending requests past their deadline (the sweeper's query). */
 export async function overdueRequests(now = Date.now()): Promise<SessionRequest[]> {
   const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
@@ -321,6 +339,55 @@ export function buildRequestNotification(
     body: next.length > 0
       ? `${OUTCOME_LINES[outcome]}\n\nNext:\n${next.join('\n')}`
       : OUTCOME_LINES[outcome],
+  });
+}
+
+/** How many ids the fork hand-off names before it stops listing. */
+const FORK_NOTICE_MAX_IDS = 8;
+
+/**
+ * What a FORK reads on its first turn when the session it was forked from is
+ * still owed answers.
+ *
+ * Why it exists: a fork inherits the parent's whole conversation, so it inherits
+ * the parent's open questions too — and the human who forked is reading the FORK.
+ * Without this notice the fork has no idea an `rq-…` can land in it (2026-09-11:
+ * a reply arrived six minutes after a fork and the fork never knew what it was
+ * answering). The ids go in the BODY, one list, because `request` is a
+ * single-value attribute and a comma-joined attr would be a second, unparseable
+ * encoding of the same thing.
+ *
+ * Zero-noise contract: callers must not build this when nothing is pending —
+ * an empty list returns '' so a caller that forgets still says nothing.
+ */
+export function buildForkHandoffNotice(
+  source: { title?: string; sessionId: string; taskId?: string },
+  pending: SessionRequest[],
+): string {
+  if (pending.length === 0) return '';
+  const handle = sessionHandle(source.title, source.sessionId);
+  const shown = pending.slice(0, FORK_NOTICE_MAX_IDS);
+  const ids = shown.map((r) => r.id).join(', ');
+  const more = pending.length > shown.length ? ` (+${pending.length - shown.length} more)` : '';
+  const first = shown[0].id;
+  return buildWalnutMessage({
+    kind: 'notification',
+    attrs: {
+      from: 'Walnut',
+      about: handle,
+      'about-session': source.sessionId,
+      'about-task': source.taskId,
+      note: NOTE_NOTIFICATION,
+    },
+    body: [
+      `You were forked from ${handle}. It has ${pending.length} pending request(s) `
+      + `it asked other sessions and has not been answered on — those answers can still `
+      + `arrive HERE: ${ids}${more}.`,
+      '',
+      `Read one with: walnut tools call request_get '{"id":"${first}"}'`,
+      'Do not poll them: an answer (or a Walnut notice that none came) is delivered to '
+      + 'this session on its own.',
+    ].join('\n'),
   });
 }
 

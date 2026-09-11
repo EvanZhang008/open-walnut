@@ -450,12 +450,22 @@ async function performReply(
   // Resolve the asker BEFORE settling: a gone asker means there is nowhere to
   // deliver, and settling first would burn the request (status → replied) with
   // the answer lost forever. Left pending, the sweeper closes it honestly.
-  const { getSessionByClaudeId } = await import('../session-tracker.js');
-  const origin = await getSessionByClaudeId(request.fromSessionId);
-  if (!origin || origin.archived) {
+  //
+  // The address is RESOLVED, not read off the row: a human who forked the asking
+  // session and carried on in the fork is not reading the session that registered
+  // the request any more (see reply-routing.ts for the incident). The common case
+  // — an asker that is still live — resolves to itself, unchanged.
+  const { resolveReplyDestination, logReplyReroute } = await import('./reply-routing.js');
+  const destination = await resolveReplyDestination(request.fromSessionId, {
+    // Never route the answer back into the session that is answering.
+    exclude: [caller.record.claudeSessionId],
+  });
+  if (!destination) {
     throw new SendError('origin_session_gone',
       `the asking session (${shortId(request.fromSessionId)}) is gone — nothing to deliver to`, 410);
   }
+  logReplyReroute(id, request.fromSessionId, destination);
+  const origin = destination.session;
 
   if (request.status !== 'pending') {
     // Late but honest: the asker was already notified (turn end / timeout), yet
@@ -482,19 +492,23 @@ async function performReply(
     taskId: origin.taskId, messageId: input.messageId,
   });
 
+  const originSid = origin.claudeSessionId;
   log.session.info('session reply delivered to asker', {
     requestId: id, fromSessionId: caller.record.claudeSessionId,
-    toSessionId: request.fromSessionId, delivery, messageId,
+    requesterSessionId: request.fromSessionId,
+    toSessionId: originSid, delivery, messageId,
   });
   return {
     delivery,
-    targetSessionId: request.fromSessionId,
+    // The RESOLVED address, not the row's fromSessionId: a caller that reads this
+    // back must see where its answer actually went.
+    targetSessionId: originSid,
     targetTitle: origin.title ?? null,
     ...(origin.taskId ? { targetTaskId: origin.taskId } : {}),
     // The "target" of a reply is the asker it routed back to.
     target: {
-      handle: sessionHandle(origin.title, request.fromSessionId),
-      sessionId: request.fromSessionId,
+      handle: sessionHandle(origin.title, originSid),
+      sessionId: originSid,
       ...(origin.taskId ? { taskId: origin.taskId } : {}),
     },
     repliedTo: id,

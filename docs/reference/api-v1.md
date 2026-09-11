@@ -641,14 +641,31 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 
 ### Sessions (read-only)
 
-- `GET /api/v1/sessions?status=running|idle|stopped|error` →
-  `{ "sessions": [ProjectedSession], "syncedAt": "<ISO>" }`
+- `GET /api/v1/sessions?status=running|idle|stopped|error&scope=folder|project|all` →
+  `{ "sessions": [ProjectedSession], "you"?: ProjectedSession, "scope": "folder|project|all", "syncedAt": "<ISO>" }`
 - `ProjectedSession`: `{ id, title?, task_id?, task_title?,
-  project?, host, process_status, model?, mode?, started_at, last_active_at,
+  project?, group_id?, group_label?, host, process_status, model?, mode?, started_at, last_active_at,
   message_count, cwd?, pinned?, focus_tier?, description? }` — `host` is `""`
   for sessions on the primary box, otherwise the host alias; `pinned` /
   `focus_tier` mirror the owning task's pin state at export time;
-  `description` is truncated to ~300 chars.
+  `description` is truncated to ~300 chars; `group_id` / `group_label`
+  (additive 2026-09) are the local-only FOLDER the owning task sits in, and a
+  nested folder contributes its own label rather than the ancestor chain.
+- `scope` + `you` (additive 2026-09) answer "which sessions are near me", for an
+  agent that has to find the session it should message. The caller is identified
+  by the `x-walnut-caller-sid` header (the same provenance header
+  `POST /api/v1/messages` reads, set by the ops executor from
+  `WALNUT_SESSION_ID`): when it resolves to a session, `you` is that session's
+  own row, so a caller learns its own handle, project and folder in the same
+  trip. `scope=folder` keeps the rows whose task sits in the caller's folder,
+  `scope=project` the rows in its project, and `all` (the default, so every
+  existing client is untouched) keeps everything. A caller with no folder gets
+  the project ring instead of an empty list, and the response's `scope` is the
+  ring actually applied, not the one asked for. A narrowing scope with no
+  recognised session caller answers `400 bad_request` rather than a silently
+  unfiltered list; an unknown scope word answers `400` too. The `status` filter
+  composes with any scope, and `you` is resolved before it, so a status the
+  caller itself does not match never erases the caller's own row.
 - `focus_tier` values: `"focus"`, `"backlog"` (built-in since 2026-08),
   `"wait"`, a custom tier id (`ct_` + 8 alphanumerics — user-defined tiers,
   added 2026-08), or absent (= Satellite, the default bucket). Clients that
@@ -1598,7 +1615,7 @@ One long-lived SSE stream that pushes slim updates so the app can keep its task 
 
 1. `event: snapshot` — sent once per connection, immediately on attach. `data: { "sessions": [ProjectedSession…], "tasks": [ProjectedTask…] }` — the exact same row shapes as `GET /api/v1/sessions` and `GET /api/v1/tasks`. Carries **no SSE id** (it is per-connection state, never part of replay). Treat it as a full replace of both lists.
 2. Live events (each with an SSE `id`; **no server-side replay** — the snapshot on (re)connect is the sole catch-up mechanism):
-   - `event: session-upsert` — `data:` one `ProjectedSession` row (`id`, `title`?, `task_id`?, `task_title`?, `project`?, `host`, `process_status`, `model`?, `mode`?, `started_at`, `last_active_at`, `message_count`, `cwd`?, `pinned`?, `focus_tier`?, `description`?; absent fields are omitted, not null). Merge by `id` (insert when new).
+   - `event: session-upsert` — `data:` one `ProjectedSession` row (`id`, `title`?, `task_id`?, `task_title`?, `project`?, `group_id`?, `group_label`?, `host`, `process_status`, `model`?, `mode`?, `started_at`, `last_active_at`, `message_count`, `cwd`?, `pinned`?, `focus_tier`?, `description`?; absent fields are omitted, not null). Merge by `id` (insert when new).
    - `event: task-upsert` — `data:` one `ProjectedTask` row (same shape as `GET /tasks` rows). Merge by `id`.
    - `event: task-delete` — `data: { "id" }`. Remove the row.
 3. `: ping` comment every ~25s (heartbeat; ignore).

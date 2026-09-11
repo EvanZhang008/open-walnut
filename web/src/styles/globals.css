@@ -32957,3 +32957,139 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* The top level owns no branch colour (same rule as the breadcrumb's first crumb),
    so being on it reads as plain emphasis. */
 .thread-map-row--root.is-current { background: var(--bg-hover); color: var(--fg); }
+
+/* ── Stale-build pill: "Walnut updated · Reload" ──────────────────────────────
+   Shown only when a tab has been running an old bundle long enough that the
+   silent hidden-tab upgrade clearly is not going to happen (the Mac app window
+   is visible for hours). Bottom centre, above the composer, and deliberately
+   small: it must be ignorable, because the tab still works. */
+.stale-build-pill {
+  position: fixed;
+  bottom: 92px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Under dialogs (9500) and menus (9999) — an update is never urgent enough to
+     sit on top of what the user is doing. */
+  z-index: 9300;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 5px 8px 5px 12px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08);
+  animation: stale-build-pill-in 0.2s ease-out;
+}
+
+@keyframes stale-build-pill-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.stale-build-pill-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The unsaved-text question is the one thing here worth reading. */
+.stale-build-pill.is-confirming {
+  border-color: var(--warning);
+}
+
+.stale-build-pill.is-confirming .stale-build-pill-text {
+  color: var(--fg);
+}
+
+.stale-build-pill-sep {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.stale-build-pill-action {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.stale-build-pill-action:hover {
+  text-decoration: underline;
+}
+
+.stale-build-pill-later {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  background: none;
+  border: none;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.stale-build-pill-later:hover {
+  color: var(--fg);
+}
+
+/* A light shadow disappears on a dark background; the border carries the edge. */
+[data-theme="dark"] .stale-build-pill {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .stale-build-pill {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* On a narrow window the composer is taller and the pill has less room. */
+@media (max-width: 768px) {
+  .stale-build-pill { bottom: 76px; font-size: 11px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stale-build-pill { animation: none; }
+}
+
+/* ── Outbound session send (SessionOutboundCard) ──────────────────────────────
+   The mirror of the inbound provenance card: same shell, same chips, same
+   disclosure. Only the direction differs, so only the direction is restyled —
+   a dashed left edge reads as "leaving" next to the solid inbound one, which is
+   what tells a send and a receipt apart when both sit in one timeline. */
+.provenance-card[data-envelope-kind="outbound"] {
+  border-left-style: dashed;
+}
+
+.provenance-card[data-envelope-kind="outbound"][data-outbound-error="true"] {
+  border-left-color: var(--error, var(--warning));
+}
+
+.provenance-card[data-envelope-kind="outbound"][data-outbound-error="true"] .provenance-status {
+  color: var(--error, var(--warning));
+}
+
+/* "The text is not in this transcript" — a fact about the record, not content. */
+.provenance-outbound-payload {
+  margin-top: 8px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--fg-muted);
+}
+
+/* Same label idiom as the disclosure's other rows (.provenance-address-label). */
+.provenance-outbound-raw-label {
+  margin-top: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}

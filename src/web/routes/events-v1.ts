@@ -70,11 +70,16 @@ async function projectSessionRow(sessionId: string): Promise<Record<string, unkn
   // lane-bound ones (they back a UI conversation surface, not a listed session).
   if (!record || record.archived || !isListableSession(record)) return null
   let task: Task | undefined
+  let labels: ReadonlyMap<string, string> | undefined
   if (record.taskId) {
-    const { getTask } = await import('../../core/task-manager.js')
+    const { getTask, listFolderLabels } = await import('../../core/task-manager.js')
     task = await getTask(record.taskId).catch(() => undefined)
+    // Folder label only when the task is in a folder, so an event for a
+    // folder-less task pays no extra query. Same row shape GET /sessions ships:
+    // an update must not arrive missing a field the list row carried.
+    if (task?.group_id) labels = await listFolderLabels().catch(() => undefined)
   }
-  return projectSession(record, task) as unknown as Record<string, unknown>
+  return projectSession(record, task, labels) as unknown as Record<string, unknown>
 }
 
 /** Push one slim event to all local SSE subscribers.

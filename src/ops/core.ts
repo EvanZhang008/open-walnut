@@ -49,38 +49,94 @@ defineOp({
   tags: { readonly: true, remote: 'allow' },
 })
 
+/**
+ * Add the printed `Title [8hex]` handle to one session row, when it has an id.
+ *
+ * The name half is the SESSION title (`ProjectedSession.title` — the session
+ * record's own title, NOT the owning task's `task_title`), because that is the
+ * field `session_send`'s title-substring rung matches against. A row with no
+ * session title falls back to the task's: it still reads as a name, and it still
+ * routes, since resolution keys on the `[8hex]` id.
+ */
+function withHandle(row: Record<string, unknown>): Record<string, unknown> {
+  const own = typeof row.title === 'string' ? row.title.trim() : ''
+  const name = own || (typeof row.task_title === 'string' ? row.task_title : '')
+  const handle = sessionHandle(name, typeof row.id === 'string' ? row.id : '')
+  return handle ? { ...row, handle } : row
+}
+
+/** A row's string field, '' when absent. */
+function rowStr(row: Record<string, unknown> | null, key: string): string {
+  const v = row?.[key]
+  return typeof v === 'string' ? v : ''
+}
+
+/** How near a row is to the caller: 0 same folder, 1 same project, 2 elsewhere. */
+function nearnessRank(row: Record<string, unknown>, you: Record<string, unknown>): number {
+  const youGroup = rowStr(you, 'group_id')
+  if (youGroup && rowStr(row, 'group_id') === youGroup) return 0
+  if (rowStr(row, 'project').toLowerCase() === rowStr(you, 'project').toLowerCase()) return 1
+  return 2
+}
+
 defineOp({
   name: 'session_list',
   title: 'List Walnut coding sessions',
   description:
-    'The user\'s tracked AI coding sessions (id, handle, title, owning task, host, process_status, ' +
-    'model, message_count). Read-only — use it to see what else is running before starting work.',
+    'The user\'s tracked AI coding sessions (id, handle, title, owning task, folder, host, ' +
+    'process_status, model, message_count). Read-only — use it to see what else is running before ' +
+    'starting work, and to find the session you should talk to with session_send. Pass a `scope` to ' +
+    'narrow it to the sessions near you; the result\'s `you` row says where Walnut thinks you stand.',
   input: {
     status: z.enum(['running', 'idle', 'stopped', 'error']).optional().describe('Filter by process status'),
+    scope: z.enum(['folder', 'project', 'all']).optional().describe(
+      'How far to look: folder = sessions whose task sits in the same folder as yours, project = same '
+      + 'project, all (default). Start with folder when looking for the session you should talk to.'),
   },
   bind: { method: 'GET', path: '/sessions' },
   mapResult: ({ body }) => {
     const b = (body ?? {}) as Record<string, unknown>
     const rows = Array.isArray(b.sessions) ? b.sessions : []
     const running = rows.filter((s) => (s as { process_status?: unknown }).process_status === 'running').length
+    // `handle` is derived HERE, not in the projection: the /sessions row shape
+    // is a frozen contract the phone also reads, and this is the only surface
+    // whose reader pastes a row straight back into session_send's `to`.
+    let sessions = rows.map((s) => withHandle(s as Record<string, unknown>))
+    // The server tells the caller where it stands; that also orders the answer.
+    const you = b.you && typeof b.you === 'object' ? withHandle(b.you as Record<string, unknown>) : null
+    if (you) {
+      // Nearest first even on scope=all: the session worth talking to is almost
+      // always in the same folder, and a reader that stops at the first rows
+      // should be reading those. Array.sort is stable, so recency order survives
+      // inside each ring.
+      sessions = sessions
+        .map((row, i) => ({ row, i, rank: nearnessRank(row, you) }))
+        .sort((x, y) => x.rank - y.rank || x.i - y.i)
+        .map((e) => e.row)
+    }
+    const scope = rowStr(b, 'scope') || 'all'
+    const place = you
+      ? `You are ${rowStr(you, 'handle') || 'this session'}, in `
+        + `${rowStr(you, 'project') ? `project ${rowStr(you, 'project')}` : 'the Inbox'}`
+        + `${rowStr(you, 'group_label') ? `, folder ${rowStr(you, 'group_label')}` : ''}. `
+      : ''
+    const ring = scope === 'folder' ? 'This is your folder only. '
+      : scope === 'project' ? 'This is your project only. '
+        : ''
+    const widen = scope === 'folder' ? 'Nothing here? Widen the ring: scope="project", then scope="all". '
+      : scope === 'project' ? 'Nothing here? Widen the ring: scope="all". '
+        : you ? 'Narrow to the sessions beside you with scope="folder". ' : ''
     return {
       ...b,
-      // `handle` is derived HERE, not in the projection: the /sessions row shape
-      // is a frozen contract the phone also reads, and this is the only surface
-      // whose reader pastes a row straight back into session_send's `to`.
-      sessions: rows.map((s) => {
-        const row = s as Record<string, unknown>
-        const handle = sessionHandle(
-          typeof row.title === 'string' ? row.title : '',
-          typeof row.id === 'string' ? row.id : '',
-        )
-        return handle ? { ...row, handle } : row
-      }),
+      sessions,
+      ...(you ? { you } : {}),
       // Reads change nothing, but this is where the task/session distinction is
       // easiest to teach: these rows are the things actually doing work.
-      outcome: `${rows.length} session(s) listed, ${running} of them working right now. `
-        + 'A session is a live process doing work; its task row is just the record it hangs on.',
+      outcome: `${place}${ring}${rows.length} session(s) listed, ${running} of them working right now. `
+        + 'A session is a live process doing work; its task row is just the record it hangs on.'
+        + (you ? ' Nearest rows first: same folder, then same project.' : ''),
       next: 'Talk to one with session_send (never yourself): a row\'s `handle` pastes straight into `to`. '
+        + `${widen}`
         + 'Or start one for a task with session_start.',
     }
   },

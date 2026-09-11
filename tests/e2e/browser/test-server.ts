@@ -1510,6 +1510,31 @@ await fs.writeFile(
       { text: nativeMessage, injected: true },
       { text: skillDumpQuotingEnvelope, injected: true },
     ]
+    // The OUTBOUND half of the same conversation: this session sending TO the
+    // peer, as the CLI records it — a Bash tool_use whose payload is a
+    // single-quoted JSON literal, answered by the server's stdout. The sender's
+    // card is parsed straight out of these two rows (session-outbound.ts), so the
+    // shape here is the real transport shape and not a hand-made summary.
+    const outboundHandle = `${ENVELOPE_PEER_TITLE.slice(0, 80)}… [pw-envel]`
+    const outboundCommand = 'walnut tools call session_send '
+      + `'{"to":"pw-envelope-peer-session","text":"Both blockers cleared on my side. ENVELOPE_OUTBOUND_BODY","expect_reply":true}'`
+    const outboundResult = JSON.stringify({
+      delivery: 'queued',
+      targetSessionId: 'pw-envelope-peer-session',
+      targetTitle: `${ENVELOPE_PEER_TITLE.slice(0, 80)}…`,
+      targetTaskId: 'pw-task-001',
+      target: {
+        handle: outboundHandle,
+        sessionId: 'pw-envelope-peer-session',
+        taskId: 'pw-task-001',
+      },
+      requestId: 'rq-0utb0und0001',
+      messageId: 'qm-0utb0und',
+      queueDepth: 1,
+    })
+    // Parent chain: the send follows the LAST assistant row the loop below emits.
+    const lastLoopAssistant = `0199bb03-0000-4aaa-8bbb-${String(userTurns.length - 1).padStart(12, '0')}`
+    const outboundToolUseId = 'toolu_pw_outbound_1'
     await fs.writeFile(
       path.join(jsonlDir, 'pw-provenance-session.jsonl'),
       [
@@ -1542,6 +1567,36 @@ await fs.writeFile(
             message: { role: 'assistant', content: [{ type: 'text', text: `Acknowledged note ${i + 1}.` }] },
           }),
         ]),
+        JSON.stringify({
+          type: 'assistant',
+          uuid: '0199bb04-0000-4aaa-8bbb-000000000000',
+          parentUuid: lastLoopAssistant,
+          sessionId: 'pw-provenance-session',
+          timestamp: new Date(sessionFixtureNow - 90_000).toISOString(),
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Telling the Mac session both blockers are clear.' },
+              {
+                type: 'tool_use',
+                id: outboundToolUseId,
+                name: 'Bash',
+                input: { command: outboundCommand, description: 'Message the Mac session' },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'user',
+          uuid: '0199bb05-0000-4aaa-8bbb-000000000000',
+          parentUuid: '0199bb04-0000-4aaa-8bbb-000000000000',
+          sessionId: 'pw-provenance-session',
+          timestamp: new Date(sessionFixtureNow - 89_000).toISOString(),
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: outboundToolUseId, content: outboundResult }],
+          },
+        }),
         '',
       ].join('\n'),
     )

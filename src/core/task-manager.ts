@@ -5098,6 +5098,23 @@ export interface FolderListing {
 /** List all folders: the UNION of registry records (so EMPTY folders show — an
  *  explicitly created folder must be visible before its first task arrives) and
  *  membership-derived groups (defensive: a record the registry somehow lost). */
+/**
+ * Folder id → label, straight from the registry table.
+ *
+ * The cheap half of listGroups(), for callers that only need to NAME a folder a
+ * task already points at (the session projection stamps `group_label` on every
+ * row). listGroups() pays a whole-store read + a per-task membership scan to
+ * answer "who is in each folder", which the session list is built inline on
+ * polled routes and must not pay for a handful of short strings.
+ */
+export async function listFolderLabels(): Promise<Map<string, string>> {
+  await ensureInit();
+  const db = getDb();
+  if (!db) return new Map();
+  const rows = db.prepare('SELECT id, label FROM task_groups').all() as { id: string; label: string }[];
+  return new Map(rows.map((r) => [r.id, r.label]));
+}
+
 export async function listGroups(): Promise<FolderListing[]> {
   const store = await readStore();
   const byGroup = new Map<string, string[]>();

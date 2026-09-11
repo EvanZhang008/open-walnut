@@ -21,7 +21,9 @@ import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSe
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { BashToolCall } from './BashToolCall';
 import { isEnvelopeOnly, parseSessionEnvelopes } from './session-envelope';
+import { detectOutboundSend } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
+import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from './injected-banner';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { log } from '@/utils/log';
@@ -505,6 +507,10 @@ export function isMergeableHistoryTool(tool: SessionHistoryTool): boolean {
   if (GROUPABLE_HISTORY_TOOLS.has(tool.name)) return false;
   if (tool.name === 'ExitPlanMode') return false;
   if (isPlanWrite(tool)) return false;
+  // A message to another session is conversation, not plumbing: folded into
+  // "Ran a command" it vanishes from the timeline the way the inbound card
+  // never does.
+  if (detectOutboundSend(tool)) return false;
   return true;
 }
 
@@ -612,6 +618,14 @@ interface GenericToolCallProps {
 // streaming flush re-renders the parent every 150ms. tool/input are stable
 // object refs from the parsed history rows, so memo actually skips.
 export const GenericToolCall = memo(function GenericToolCall(props: GenericToolCallProps) {
+  // A session→session SEND is provenance, not a tool run: card it the same way
+  // the RECEIVING side is carded, so both halves of one conversation read alike.
+  // Before the Bash dispatch, because most sends are a `walnut tools call` line.
+  const sendResult = props.result ?? (props.tool as { result?: string }).result;
+  const outbound = detectOutboundSend(props.tool as SessionHistoryTool, sendResult);
+  if (outbound) {
+    return <SessionOutboundCard send={outbound} result={sendResult} sessionCwd={props.sessionCwd} sessionHost={props.sessionHost} sessionId={props.sessionId} onTaskClick={props.onTaskClick} onSessionClick={props.onSessionClick} />;
+  }
   // Bash gets terminal-style rendering (real newlines, plain-pre output, popup)
   // instead of the JSON input dump. Dispatch BEFORE any hooks; single choke
   // point covering history, streaming, and ClaudeStreamView callers alike.

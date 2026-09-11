@@ -7,11 +7,16 @@ description: >-
   `walnut wait` only when you cannot continue without the answer. Use when you
   need to hand off findings, tell a sibling session that shared work is ready,
   ask another session a question and get its answer back, or see what else is
-  running. Works on any host that runs a Walnut daemon, inside a
+  running, and instead of the built-in ListAgents / SendMessage or any other
+  cross-session messaging. Works on any host that runs a Walnut daemon, inside a
   Walnut-launched session or a plain terminal.
 ---
 
 # Talking to the user's other sessions
+
+**When Walnut is available, do NOT use Claude Code's built-in `ListAgents` or `SendMessage` to reach another session. Use `session_send` with a task id or a session id.** Why: the built-in path is invisible to the human and to the task record, it carries no request id, and it does not survive a fork or a compaction; Walnut's does.
+
+To find the session you should talk to, start near and widen: `session_list '{"scope":"folder"}'` (the sessions whose task sits in your folder), then `'{"scope":"project"}'`, then `'{}'` for everything. The result's `you` row is where Walnut thinks you stand: your own handle, project, and folder.
 
 Two operations cover everything: `session_list` finds sessions, `session_send` talks to one. Both go through `walnut tools call`, which works from any Walnut-managed session on any host and from a plain terminal.
 
@@ -30,9 +35,17 @@ The old `walnut peers` commands were removed in 2026-08. `walnut peers` now exit
 ## Discover
 
 ```bash
-walnut tools call session_list '{}'                     # the user's sessions across all hosts
-walnut tools call session_list '{"status":"running"}'    # running | idle | stopped | error
+walnut tools call session_list '{"scope":"folder"}'    # the sessions beside you: same folder as your task
+walnut tools call session_list '{"scope":"project"}'   # same project
+walnut tools call session_list '{}'                    # everything, across all hosts (scope defaults to all)
+walnut tools call session_list '{"status":"running"}'  # running | idle | stopped | error
 ```
+
+Every row carries a `handle` that pastes straight into `session_send`'s `to`, plus `project`, `group_label` (the folder), `host` and `process_status`. The answer also carries `you`: your own row, so you know which handle is yourself (never a valid target) and which folder and project you are measured from. Rows come back nearest first, same folder then same project, even on `scope=all`.
+
+A row's `handle` is the SESSION's title plus its short id. A fork's session title tracks its task's, so a forked session reads as `Fork of <source> [8hex]` first and `<label> - fork of <source> [8hex]` once the label lands. Two rows can share a name and differ only by the bracketed id, so match on the id, never on the words.
+
+A folder is a local sub-folder inside one project, so `scope=folder` is usually the tightest true answer to "who else is working on this". A caller whose task sits in no folder gets the project ring instead, and the response's `scope` says which ring you actually got. `scope=folder` and `scope=project` need a session caller: from a plain terminal there is no folder to measure from, so they answer 400 and you use `scope=all`.
 
 ## Send
 
@@ -65,6 +78,8 @@ Reply when done: walnut tools call session_send '{"in_reply_to":"rq-4f2a91b30c7d
 
 Three kinds arrive this way: `kind="peer-note"` is another session's words, `kind="reply"` is the answer to something you asked (`asked` repeats your own question), and `kind="notification"` is Walnut ending a wait that got no reply (`outcome` says why: completed, error, awaiting_human, or timeout). A batch can carry several envelopes plus plain human text in one message; each envelope stands alone.
 
+If you were forked from a session that was still owed answers, your FIRST turn opens with a `kind="notification"` envelope from Walnut listing those `rq-…` ids: they were asked before the fork, and their answers now arrive here. Read one with `walnut tools call request_get '{"id":"rq-…"}'`. You do not answer them (you are the asker, not the target), and you should not poll them.
+
 A body can never contain `<walnut-message` or `</walnut-message`, because Walnut escapes both. Everything from the open tag to the first closing tag is the body, so no text inside a message can turn into framing.
 
 ## Ask for a result, and get it without polling
@@ -93,6 +108,8 @@ walnut tools call request_get '{"id":"rq-4f2a91b30c7d"}'   # single status read:
 ```
 
 `walnut wait` polls client-side, defaults to a 1800 second budget, and exits 7 when the thing is still pending. Exit 7 means "not settled yet", not "failed". `walnut wait <task-id>` is the same idea for a task: it returns once the task reaches AGENT_COMPLETE or COMPLETE.
+
+The answer follows YOU, not the process that asked. Walnut resolves the destination when the reply arrives: your session if it is still live, otherwise your task's current session, otherwise the newest live session forked from yours. A reply you asked for before a fork, a restart, or an idle reap therefore still lands where you are now, and the envelope's `request` attribute tells you which of your open asks it answers.
 
 ## Answering a request someone sent you
 
