@@ -13,6 +13,8 @@
  * instead of the full text.
  */
 import { expect, test, type Page } from '@playwright/test'
+import { openAskWalnutDrawer } from './draft-helpers'
+import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -26,16 +28,132 @@ async function openHomepageSession(page: Page) {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Locate task', exact: true })).toBeVisible()
   return panel
 }
+
+async function openHome(page: Page) {
+  await isolateUiPrefs(page)
+  await presetPanelView(page)
+  await page.setContent(`<a href="${test.info().project.use.baseURL}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
+  await expect(page.locator('.main-page')).toBeVisible()
+}
+
+const CLOCK = new Date('2026-01-15T18:00:00Z')
+const SIX_HOURS_EARLIER = '2026-01-15T12:00:00Z'
+
+async function setSessionTime(page: Page, timestamp?: string, sessionId = SESSION_ID) {
+  await page.clock.setFixedTime(CLOCK)
+  await page.route(`**/api/sessions/${sessionId}`, async (route) => {
+    const response = await route.fetch()
+    if (!response.ok()) {
+      await route.fulfill({ response })
+      return
+    }
+    const body = await response.json()
+    body.session.lastActiveAt = timestamp
+    await route.fulfill({ response, json: body })
+  })
+}
+
+for (const width of [1280, 820]) {
+  test(`activity time only appears in the expanded panel at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 800 })
+    await setSessionTime(page, SIX_HOURS_EARLIER)
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await openHome(page)
+    const panel = await openHomepageSession(page)
+    const time = panel.locator('.session-panel-time')
+    const draft = panel.getByPlaceholder('Send a message to this session...')
+    await draft.fill('Keep this draft while checking the activity time')
+    await expect(time).toHaveCount(0)
+    await panel.locator('.session-panel-header').screenshot({
+      animations: 'disabled', scale: 'css',
+      path: `/tmp/session-time-compact/${testInfo.project.name}-${width}-collapsed.png`,
+    })
+
+    for (const close of ['Collapse session', 'Exit full screen', 'Escape']) {
+      await panel.getByRole('button', { name: 'Expand session to full screen', exact: true }).click()
+      await expect(time).toHaveText('6h')
+      await expect(time).toHaveAttribute('datetime', SIX_HOURS_EARLIER)
+      const exactTime = await page.evaluate((timestamp) => new Date(timestamp).toLocaleString(), SIX_HOURS_EARLIER)
+      await expect(time).toHaveAttribute('title', `Last active: ${exactTime}`)
+      const box = (await time.boundingBox())!
+      expect(box.x).toBeGreaterThanOrEqual(0)
+      expect(box.x + box.width).toBeLessThanOrEqual(width)
+      if (close === 'Collapse session') {
+        await panel.locator('.session-panel-header').screenshot({
+          animations: 'disabled', scale: 'css',
+          path: `/tmp/session-time-compact/${testInfo.project.name}-${width}-expanded.png`,
+        })
+      }
+      if (close === 'Escape') await page.keyboard.press('Escape')
+      else await panel.getByRole('button', { name: close, exact: true }).click()
+      await expect(time).toHaveCount(0)
+      await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
+      await expect(draft).toHaveValue('Keep this draft while checking the activity time')
+    }
+    expect(errors).toEqual([])
+  })
+}
+
+for (const sample of [
+  { name: 'missing', timestamp: undefined, label: '' },
+  { name: 'invalid', timestamp: 'not-a-date', label: '' },
+  { name: 'recent', timestamp: '2026-01-15T17:59:45Z', label: 'just now' },
+  { name: 'minutes', timestamp: '2026-01-15T17:45:00Z', label: '15m' },
+  { name: 'days', timestamp: '2026-01-13T18:00:00Z', label: '2d' },
+  { name: 'future', timestamp: '2026-01-15T19:00:00Z', label: 'just now' },
+]) {
+  test(`expanded activity time handles ${sample.name} timestamps`, async ({ page }) => {
+    await setSessionTime(page, sample.timestamp)
+    await openHome(page)
+    const panel = await openHomepageSession(page)
+    await expect(panel.locator('.session-panel-time')).toHaveCount(0)
+    await panel.getByRole('button', { name: 'Expand session to full screen', exact: true }).click()
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    const time = panel.locator('.session-panel-time')
+    if (sample.label) {
+      await expect(time).toHaveText(sample.label)
+      await expect(time).toHaveAttribute('datetime', sample.timestamp!)
+    } else await expect(time).toHaveCount(0)
+  })
+}
+
+test('the embedded Ask Walnut panel keeps compact activity time across task updates', async ({ page, request }) => {
+  const started = await request.post('/api/sessions/quick-start', {
+    data: { walnutAgent: true, message: 'Check the expanded activity time' },
+  })
+  expect(started.ok(), await started.text()).toBe(true)
+  const { taskId, sessionId } = await started.json() as { taskId: string; sessionId: string }
+  expect(taskId).toBeTruthy()
+  expect(sessionId).toBeTruthy()
+  await setSessionTime(page, SIX_HOURS_EARLIER, sessionId)
+  await openHome(page)
+  const drawer = await openAskWalnutDrawer(page)
+  await drawer.locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${taskId}"]`).click()
+  const panel = page.getByTestId('ask-walnut-session').locator(`.session-panel[data-session-id="${sessionId}"]`)
+  await expect(panel.getByRole('button', { name: 'Locate task', exact: true })).toBeVisible()
+  await expect(panel.locator('.session-panel-time')).toHaveCount(0)
+  await panel.getByRole('button', { name: 'Expand session to full screen', exact: true }).click()
+  await expect(panel.locator('.session-panel-time')).toHaveText('6h')
+  const renamed = await request.patch(`/api/tasks/${taskId}`, { data: { title: 'Updated activity check' } })
+  expect(renamed.ok()).toBe(true)
+  await expect(panel.locator('.session-panel-title')).toHaveText('Updated activity check')
+  await expect(panel.locator('.session-panel-time')).toHaveText('6h')
+  await panel.getByRole('button', { name: 'Collapse session', exact: true }).click()
+  await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
+  await expect(panel.locator('.session-panel-time')).toHaveCount(0)
+})
 
 test('the session title owns the second header row and reveals its full text on hover', async ({ page, request }) => {
   // Long title so truncation pressure is real — the fixture title is short.
   const renamed = await request.patch(`/api/tasks/${TASK_ID}`, { data: { title: LONG_TITLE } })
   expect(renamed.ok()).toBe(true)
 
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+  await openHome(page)
   const panel = await openHomepageSession(page)
 
   const toolsRow = panel.locator('.session-meta-row-2')

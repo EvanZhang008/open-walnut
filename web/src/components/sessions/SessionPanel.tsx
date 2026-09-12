@@ -1469,6 +1469,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // Header content — prefer the linked task title; fall back to session metadata.
   const sessionFallbackTitle = session?.title || session?.description || session?.slug || null;
   const headerTitle = (session?.taskId ? taskTitle : null) || sessionFallbackTitle;
+  const activityAge = isFullscreen && session?.lastActiveAt ? timeAgo(session.lastActiveAt).replace(/ ago$/, '') : '';
+  const activityTimeTitle = activityAge ? `Last active: ${new Date(session!.lastActiveAt!).toLocaleString()}` : '';
 
   const planContentValue = plan?.content ?? null;
 
@@ -1785,11 +1787,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             >
               Terminal
             </button>
-            {/* Model pill + turn count moved out of the header (2026-07-25):
-                the pill now lives in the composer controls row (ComposerModelPill,
-                rendered in both ChatInput controlsSlot mode bars); the turn
-                count was removed entirely. Time-ago stays. */}
-            {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
+            {activityAge && (
+              <time className="session-panel-time" dateTime={session?.lastActiveAt} title={activityTimeTitle}>
+                {activityAge}
+              </time>
+            )}
             </div>{/* .session-meta-row-2-chips */}
             <div className="session-panel-window-controls">
               {!loading && session?.taskId && (
