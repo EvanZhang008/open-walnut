@@ -146,4 +146,57 @@ describe('sync adopts a rewritten upstream (post-compaction force-push)', () => 
     // Working tree matches the adopted chain.
     expect(await fsp.readFile(path.join(tmpDir, 'data.txt'), 'utf-8')).toBe('v2\n');
   });
+
+  it('shared-ancestry rewrite (filter-repo style): adopts the force-moved upstream instead of merging the old chain back', async () => {
+    // Both sides share `base` AND `v2`: the primary publishes v2 normally and
+    // local pulls it, so the later rewrite keeps a common ancestor.
+    await fsp.writeFile(path.join(other, 'data.txt'), 'v2\n', 'utf-8');
+    sh('git add -A && git commit -m v2', other);
+    sh('git push origin main', other);
+    await sync();
+    const base = sh('git rev-parse HEAD^', tmpDir);
+    expect(sh('git show HEAD:data.txt', tmpDir)).toBe('v2');
+
+    // The primary rewrites v2 in place (a new commit on the SAME parent, with
+    // the scrubbed content) and force-pushes — what a path scrub leaves behind.
+    sh(`git reset -q --hard ${base}`, other);
+    await fsp.writeFile(path.join(other, 'data.txt'), 'v2 scrubbed\n', 'utf-8');
+    sh('git add -A && git commit -m "v2 (rewritten)"', other);
+    const rewritten = sh('git rev-parse HEAD', other);
+    sh('git push --force origin main', other);
+
+    // Local meanwhile edits the same line: the replay conflicts, so the sync
+    // lands in lwwMerge, where a merge base now EXISTS (base).
+    await fsp.writeFile(path.join(tmpDir, 'data.txt'), 'local-edit\n', 'utf-8');
+    sh('git add -A && git commit -m "local edit"', tmpDir);
+    const oldHead = sh('git rev-parse HEAD', tmpDir);
+
+    const result = await sync();
+
+    // Adopted, not merged: HEAD is the rewritten chain itself, no merge commit
+    // joined the old v2 back in, and the hub was not refattened.
+    expect(result.pulled).toBe(1);
+    expect(sh('git rev-parse HEAD', tmpDir)).toBe(rewritten);
+    expect(sh('git rev-list --count --merges HEAD', tmpDir)).toBe('0');
+    expect(sh('git rev-parse main', bare)).toBe(rewritten);
+    expect(sh('git rev-parse pre-rewrite-backup', tmpDir)).toBe(oldHead);
+    expect(await fsp.readFile(path.join(tmpDir, 'data.txt'), 'utf-8')).toBe('v2 scrubbed\n');
+  });
+
+  it('ordinary divergence with a shared ancestor still merges (a fast-forwarded upstream is not a rewrite)', async () => {
+    // The primary adds a NEW file on top of base (origin/main moves forward,
+    // the old remote-tracking head stays an ancestor); local adds its own.
+    await fsp.writeFile(path.join(other, 'theirs.txt'), 'theirs\n', 'utf-8');
+    sh('git add -A && git commit -m theirs', other);
+    sh('git push origin main', other);
+    await fsp.writeFile(path.join(tmpDir, 'data.txt'), 'local-edit\n', 'utf-8');
+    sh('git add -A && git commit -m "local edit"', tmpDir);
+
+    await sync();
+
+    // Both edits survive; nothing was parked on a backup ref.
+    expect(await fsp.readFile(path.join(tmpDir, 'theirs.txt'), 'utf-8')).toBe('theirs\n');
+    expect(await fsp.readFile(path.join(tmpDir, 'data.txt'), 'utf-8')).toBe('local-edit\n');
+    expect(() => sh('git rev-parse --verify -q pre-rewrite-backup', tmpDir)).toThrow();
+  });
 });

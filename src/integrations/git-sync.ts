@@ -1995,13 +1995,17 @@ async function pullFromRemote(branch: string): Promise<{ pulled: number; conflic
   let pulled = 0;
   let conflicts = 0;
 
+  // Remember where the remote-tracking ref stood BEFORE this pull's fetch moves
+  // it: lwwMerge compares the two to tell a rewritten upstream from ordinary
+  // divergence (see the force-moved check there).
+  const remoteBefore = await gitSafeAsync(`rev-parse --verify -q origin/${branch}`);
   const pullResult = await gitSafeAsync(`pull --rebase origin ${branch}`, { timeout: PULL_TIMEOUT });
   if (pullResult === null) {
     // Rebase failed — could be a content conflict or a network error.
     // Abort any half-applied rebase (no-op if none), then take the merge path.
     // lwwMerge's fetch outcome updates the network failure streak.
     await gitSafeAsync('rebase --abort');
-    const merge = await lwwMerge(branch);
+    const merge = await lwwMerge(branch, remoteBefore);
     conflicts = merge.conflicts;
     if (merge.merged) pulled = 1;
   } else {
@@ -2064,7 +2068,7 @@ async function contentClockMs(ref: string, file: string): Promise<number | null>
  * If the merge fails for a NON-conflict reason (unrelated histories, etc.)
  * we abort and fall back to the legacy `pull -X theirs`, logging loudly.
  */
-async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: number }> {
+async function lwwMerge(branch: string, remoteBefore: string | null = null): Promise<{ merged: boolean; conflicts: number }> {
   const remoteRef = `origin/${branch}`;
 
   // Clear stale locks BEFORE fetching: a crashed git can leave a ref lock that
@@ -2136,28 +2140,47 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
   }
 
   // Upstream history rewrite (weekly compaction on the primary force-pushes a
-  // rewritten main). No common ancestor means merging would join the OLD fat
-  // chain with the compacted one — resurrecting the entire pre-compaction
-  // history into the hub and undoing the compaction. Adopt the new chain
-  // instead: park the old head on a self-replacing backup ref (any local-only
-  // commits stay recoverable from it until the next rewrite), then hard-reset.
-  // Safe against dirty-file loss: syncInner() commits everything before pull.
-  if (await gitSafeAsync(`merge-base HEAD ${remoteRef}`) === null) {
+  // rewritten main). Merging would join the OLD fat chain with the rewritten
+  // one — resurrecting the entire pre-rewrite history into the hub and undoing
+  // the rewrite. Adopt the new chain instead: park the old head on a
+  // self-replacing backup ref (any local-only commits stay recoverable from it
+  // until the next rewrite), then hard-reset. Safe against dirty-file loss:
+  // syncInner() commits everything before pull.
+  //
+  // Two signals, because one is not enough. "No common ancestor" catches a
+  // compaction that rebuilds from a new root. A path-scrubbing rewrite
+  // (filter-repo) keeps every commit before the first scrubbed one, so the
+  // chains DO share ancestry, the merge is attempted, fails, and the tick
+  // loops on it forever (a replica burned 7.5h that way, 2026-09-11). The
+  // remote-tracking ref tells the truth directly: if where origin/main stood
+  // before this fetch is not an ancestor of where it stands now, upstream was
+  // force-moved, whatever the two chains happen to share.
+  const noMergeBase = await gitSafeAsync(`merge-base HEAD ${remoteRef}`) === null;
+  const forceMoved = !noMergeBase && remoteBefore !== null && remoteBefore !== remoteHead
+    && await gitSafeAsync(`merge-base --is-ancestor ${remoteBefore} ${remoteHead}`) === null;
+  if (noMergeBase || forceMoved) {
+    const localOnly = remoteBefore ? Number(await gitSafeAsync(`rev-list --count ${remoteBefore}..HEAD`) || '0') : null;
     await gitSafeAsync('branch -f pre-rewrite-backup HEAD');
     if (await gitSafeAsync(`reset --hard ${remoteRef}`) === null) {
       log.git.error('git-sync: upstream history rewritten but reset --hard failed — will retry next cycle', { localHead, remoteHead });
       return { merged: false, conflicts: 0 };
     }
-    log.git.warn('git-sync: upstream history rewritten (compaction) — adopted the new chain; previous head saved on pre-rewrite-backup', {
+    log.git.warn('git-sync: upstream history rewritten — adopted the new chain; previous head saved on pre-rewrite-backup', {
       previousHead: localHead, newHead: remoteHead,
+      reason: noMergeBase ? 'no-merge-base' : 'upstream-force-moved',
+      localOnlyCommitsParked: localOnly,
     });
     return { merged: true, conflicts: 0 };
   }
 
   // True merge WITHOUT -X: non-overlapping edits auto-merge; overlapping
   // edits leave unmerged paths we resolve per-file below.
-  if (await gitSafeAsync(`merge --no-edit ${remoteRef}`) !== null) {
+  let mergeError: string | null = null;
+  try {
+    await gitAsync(`merge --no-edit ${remoteRef}`);
     return { merged: true, conflicts: 0 }; // clean auto-merge or fast-forward
+  } catch (err) {
+    mergeError = err instanceof Error ? err.message : String(err);
   }
 
   const unmerged = await gitSafeAsync('diff --name-only --diff-filter=U');
@@ -2169,7 +2192,7 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
     await gitSafeAsync('merge --abort');
     log.git.error(
       'git-sync merge failed with a NON-conflict error — falling back to `pull -X theirs` (REMOTE WINS unconditionally). Investigate!',
-      { branch, localHead, remoteHead },
+      { branch, localHead, remoteHead, error: mergeError.slice(0, 400) },
     );
     const fallback = await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: PULL_TIMEOUT });
     return { merged: fallback !== null, conflicts: fallback !== null ? 1 : 0 };
