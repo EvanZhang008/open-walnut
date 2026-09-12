@@ -104,8 +104,14 @@ export type {
  * not seen retires every body it cached from that provider's accounts, once, envelopes untouched,
  * and each one is fetched again the next time it is opened. Additive and optional: a provider that
  * declares none sweeps nothing, ever.
+ *
+ * 1.8.0 is `MailProviderSpec.identityRevision`, the heavier sibling: what a `messageId` MEANS has
+ * changed, so every row cached under the old handles is a ghost no poll will ever match again. A
+ * revision the base has not seen drops every cached message of that provider's accounts and forgets
+ * every mailbox cursor, once, and the next poll lists each mailbox again from the top. Same shape as
+ * 1.7.0 otherwise: additive, optional, per provider, recorded only after the sweep finishes.
  */
-export const MAIL_BASE_API_VERSION = '1.7.0'
+export const MAIL_BASE_API_VERSION = '1.8.0'
 
 /**
  * The method bag published as `mail:base`.
@@ -167,6 +173,11 @@ export function createMailBaseApi(deps: {
    */
   bodyRevision: (providerId: string, revision: string | undefined) => Promise<void>
   /**
+   * Reconcile `spec.identityRevision`: drop every row this provider handed over under its old
+   * handles and forget the cursors, so the next poll re-lists. Same calling shape as `bodyRevision`.
+   */
+  identityRevision: (providerId: string, revision: string | undefined) => Promise<void>
+  /**
    * Run this after the current turn, on a timer the host owns.
    *
    * Injected rather than `setImmediate` so the loader cancels a pending sweep when it tears the
@@ -209,6 +220,15 @@ export function createMailBaseApi(deps: {
           // The wiring logs its own failures; this catch only keeps a background sweep from
           // becoming an unhandled rejection.
           void deps.bodyRevision(spec.id, revision).catch(() => undefined)
+        })
+      }
+      // A provider whose handles changed meaning. Deferred for the same reason; and it runs whether
+      // or not a body revision also moved, because the two answer different questions (what a body
+      // says vs. which row a handle names) and a provider may bump either alone.
+      if (spec?.identityRevision !== undefined) {
+        const revision = spec.identityRevision
+        deps.defer(() => {
+          void deps.identityRevision(spec.id, revision).catch(() => undefined)
         })
       }
       return handle

@@ -96,6 +96,8 @@ async function openBase(existingRoot?: string): Promise<Harness> {
       inflight.push(work.then((result) => { sweeps.push(result); }));
       return work.then(() => undefined);
     },
+    // Graded on its own in mail-identity-revision.test.ts; none of the providers here declare one.
+    identityRevision: async () => undefined,
     defer: (run) => { scheduled.push(run); },
   });
 

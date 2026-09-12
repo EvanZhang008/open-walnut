@@ -585,6 +585,14 @@ export class MailStore {
     )
   }
 
+  /** One page of an account's rows, bodied or not, oldest rowid first: what a full wipe walks. */
+  rowsForAccount(accountId: string, limit: number): Promise<Array<{ rowid: number; body_ref: string | null }>> {
+    return this.db.all<{ rowid: number; body_ref: string | null }>(
+      'SELECT rowid, body_ref FROM messages WHERE account_id = ? ORDER BY rowid LIMIT ?',
+      [accountId, limit],
+    )
+  }
+
   /** Give the bytes back while keeping the envelope: a body is re-fetchable, a row is not. */
   async clearMessageBody(rowid: number): Promise<void> {
     await this.db.run(

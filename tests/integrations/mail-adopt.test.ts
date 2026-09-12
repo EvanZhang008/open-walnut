@@ -269,9 +269,10 @@ describe('the trigger on the service', () => {
         adoptCalls.push(providerId);
         return one.accounts.adopt(providerId);
       },
-      // Graded on its own in mail-body-revision.test.ts. Here it only has to exist, so that a
-      // provider declaring no `bodyRevision` provably schedules nothing extra.
+      // Graded on their own in mail-body-revision.test.ts and mail-identity-revision.test.ts. Here
+      // they only have to exist, so that a provider declaring neither provably schedules nothing extra.
       bodyRevision: async () => undefined,
+      identityRevision: async () => undefined,
       defer: (run) => { scheduled.push(run); },
     });
     return { api, scheduled, adoptCalls };
@@ -542,7 +543,7 @@ describe('through a real server, an ambient mailbox is simply there', () => {
     // The provider that never answers was asked, and its plugin activated anyway.
     expect(marks().listed).toContain('stuck');
     expect(getPluginLifecycleRecords(registry).find((entry) => entry.id === FIXTURE_ID)?.state).toBe('active');
-    expect(marks().base?.version()).toBe('1.7.0');
+    expect(marks().base?.version()).toBe('1.8.0');
   }, 120_000);
 
   it('leaves the mirrored row alone when the provider lists it again with other values', async () => {

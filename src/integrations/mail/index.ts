@@ -8,6 +8,7 @@ import { createMailBaseApi } from './api.js'
 import { MailApprovals } from './approvals.js'
 import { MailBodyStore } from './bodies.js'
 import { reconcileBodyRevision } from './body-revision.js'
+import { reconcileIdentityRevision } from './identity-revision.js'
 import type { MailAccountDto } from './contract.js'
 import { openMailDatabase } from './db.js'
 import { MailDigest } from './digest.js'
@@ -225,6 +226,18 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
         await reconcileBodyRevision({ store, bodies, log: walnut.log }, providerId, revision)
       } catch (error: unknown) {
         walnut.log.warn('mail could not retire the bodies a provider replaced', {
+          providerId, revision: revision ?? '', error: String(error).slice(0, 200),
+        })
+      }
+    },
+    // A provider saying its handles changed meaning: the whole cache for its accounts goes, and
+    // the next poll lists again. Replica rule and failure handling as for bodyRevision.
+    identityRevision: async (providerId, revision) => {
+      if (walnut.replica) return
+      try {
+        await reconcileIdentityRevision({ store, bodies, log: walnut.log }, providerId, revision)
+      } catch (error: unknown) {
+        walnut.log.warn('mail could not drop the cache a provider re-keyed', {
           providerId, revision: revision ?? '', error: String(error).slice(0, 200),
         })
       }

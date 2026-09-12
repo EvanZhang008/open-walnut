@@ -186,7 +186,7 @@ describe('a provider plugin attaches through the service, with no kernel change'
     expect(marks().activated).toBe(1);
     // The CONTRACT version, not the manifest's. It has to move when methods arrive, or a
     // provider written against a later base has no way to gate on one being there.
-    expect(marks().version).toBe('1.7.0');
+    expect(marks().version).toBe('1.8.0');
 
     const providers = await getJson<{ providers: Array<{ id: string; label: string; capabilities: { bodies: string }; setupFields: unknown[] }> }>('/providers');
     expect(providers.status).toBe(200);

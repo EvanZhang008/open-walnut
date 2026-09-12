@@ -301,6 +301,21 @@ export interface MailProviderSpec {
    */
   bodyRevision?: string
   /**
+   * What a `messageId` from this provider MEANS, as a string only this provider gives meaning to.
+   *
+   * Change it when a fix alters which real thing a handle points at: a provider that keyed rows by
+   * a thread id and now keys them by thread-in-folder, one that switched from a display name to a
+   * server id. The base keys its cache by `messageId`, so after such a change every row written
+   * before it is a ghost: never matched by a poll again, so never updated, never removed, and shown
+   * next to the row that replaced it.
+   *
+   * A revision the base has not seen makes it drop every cached message of this provider's accounts
+   * (rows, bodies, index) and forget every mailbox cursor, ONCE, so the next poll lists each mailbox
+   * from the top under the new handles. Heavier than `bodyRevision` by design: an envelope whose id
+   * changed cannot be kept. Undefined means never.
+   */
+  identityRevision?: string
+  /**
    * The capabilities of ONE account, when they differ from the provider's own.
    *
    * Optional, and the base prefers it whenever it exists. IMAP is why it does: reading needs
