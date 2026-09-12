@@ -1091,16 +1091,6 @@ select {
   flex-wrap: wrap;
 }
 
-.setup-link-btn {
-  background: none;
-  border: none;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: inherit;
-  padding: 0;
-  text-decoration: underline;
-}
-
 /* ── Onboarding: lead-in framing the setup as "best experience" ── */
 .setup-lead {
   font-size: 12.5px;
@@ -1183,15 +1173,6 @@ select {
   flex: 1;
   height: 1px;
   background: var(--border);
-}
-
-.setup-banner-autodetect {
-  background: color-mix(in srgb, #34c759 7%, var(--bg-secondary));
-  border-color: color-mix(in srgb, #34c759 35%, var(--border));
-}
-
-.setup-banner-autodetect .setup-banner-title {
-  color: #2a9d4a;
 }
 
 /* Install button */

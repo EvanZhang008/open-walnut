@@ -2485,11 +2485,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSessionReplaced={handleSessionReplaced}
           onOpenForkDraft={handleOpenForkDraft}
           banner={(
-            /* SetupBanner decides internally what to show: full onboarding when no
-               provider, a small "auto-detected" note when a non-config source was
-               used, or nothing when fully configured. So mount it unconditionally
-               rather than gating on setupComplete (which is true once auto-detected
-               and would hide the auto-detect note). */
             <SetupBanner
               health={health}
               loading={healthLoading}
