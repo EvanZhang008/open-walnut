@@ -53,24 +53,30 @@ let operationTail: Promise<void> = Promise.resolve()
 let activationTimeoutMs = 10_000
 
 /**
- * Backoff for the FIRST refresh only, and why it exists.
+ * Backoff for a failed refresh, and why every failure retries.
  *
- * Every other refresh can fail safely: the snapshot keeps the last authoritative answer. The first
- * one has nothing to keep, so publishing `ready: true` with an empty plugin list tells the whole
- * app "no plugins are installed" on the strength of one failed fetch, and every `requiresPlugin`
- * app stays hidden for the life of the page because nothing retries. A boot on a loaded machine
+ * The FIRST refresh has nothing to fall back on: publishing `ready: true` with an empty plugin
+ * list tells the whole app "no plugins are installed" on the strength of one failed fetch, and
+ * every `requiresPlugin` app stays hidden for the life of the page. A boot on a loaded machine
  * really does hit this (a 15 s timeout is reachable).
+ *
+ * A LATER refresh keeps the last authoritative answer, so its failure looks harmless, but it was
+ * triggered by something (a plugin reload, a reconnect) and the window now silently runs the
+ * previous bundle until the next unrelated trigger. The 20 s connection-pool queue is the failure
+ * that actually happens here, and it clears on its own, so a bounded retry is what turns "reload
+ * the page to see the new plugin" back into the hot swap it is meant to be.
  *
  * Bounded on purpose: `ready` gates the app shell, so staying unready forever is an indefinite
  * spinner, which is a worse failure than a wrong empty list. Five tries, then publish whatever we
- * have plus the error and let the UI say so.
+ * have plus the error and let the UI say so. Only the first refresh shows `loading` while it
+ * retries; a later one keeps rendering what it has.
  */
-const FIRST_REFRESH_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000]
+const REFRESH_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000]
 let firstRefreshSettled = false
 let retriesUsed = 0
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 
-function cancelFirstRefreshRetry(): void {
+function cancelRefreshRetry(): void {
   if (retryTimer === null) return
   clearTimeout(retryTimer)
   retryTimer = null
@@ -81,10 +87,10 @@ function cancelFirstRefreshRetry(): void {
  * `refreshWebPlugins` appends to `operationTail`, and a refresh that awaited its own retry would
  * be waiting on a promise queued behind itself.
  */
-function scheduleFirstRefreshRetry(): void {
-  const delay = FIRST_REFRESH_BACKOFF_MS[retriesUsed] ?? FIRST_REFRESH_BACKOFF_MS[FIRST_REFRESH_BACKOFF_MS.length - 1]!
+function scheduleRefreshRetry(): void {
+  const delay = REFRESH_BACKOFF_MS[retriesUsed] ?? REFRESH_BACKOFF_MS[REFRESH_BACKOFF_MS.length - 1]!
   retriesUsed += 1
-  cancelFirstRefreshRetry()
+  cancelRefreshRetry()
   retryTimer = setTimeout(() => {
     retryTimer = null
     void refreshWebPlugins()
@@ -251,21 +257,19 @@ async function refreshNow(): Promise<void> {
       // Any successful refresh, from any trigger, ends the retry loop.
       firstRefreshSettled = true
       retriesUsed = 0
-      cancelFirstRefreshRetry()
+      cancelRefreshRetry()
     }
-    const retrying = runtimeFailed
-      && !firstRefreshSettled
-      && retriesUsed < FIRST_REFRESH_BACKOFF_MS.length
+    const retrying = runtimeFailed && retriesUsed < REFRESH_BACKOFF_MS.length
     // `ready` never goes back to false once it has been true: consumers evict on an empty list.
     publish({
       ready: firstRefreshSettled || !retrying,
-      loading: retrying,
+      loading: retrying && !firstRefreshSettled,
       plugins,
       tombstones,
       modules,
       errors,
     })
-    if (retrying) scheduleFirstRefreshRetry()
+    if (retrying) scheduleRefreshRetry()
   }
 }
 
@@ -327,7 +331,7 @@ export async function disposeWebPluginsForTesting(): Promise<void> {
   initialized = false
   moduleImporter = browserImporter
   activationTimeoutMs = 10_000
-  cancelFirstRefreshRetry()
+  cancelRefreshRetry()
   firstRefreshSettled = false
   retriesUsed = 0
   resetWebPluginRuntime()

@@ -395,6 +395,36 @@ describe('the first refresh retries before it gives up', () => {
     expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(6)
   })
 
+  it('retries a later failure too, so a missed plugin reload still reaches the open window', async () => {
+    // The server reloaded a plugin and told this window; the window's refresh hit the saturated
+    // connection pool. Without a retry it keeps running the previous bundle until some unrelated
+    // trigger, which is the "I have to reload the page to see the new plugin" report.
+    vi.useFakeTimers()
+    let imports = 0
+    setWebPluginImporterForTesting(async () => {
+      imports++
+      return { activate() { /* nothing to register */ } }
+    })
+    vi.mocked(apiGet).mockResolvedValue(response('hash-one'))
+    await refreshWebPlugins()
+    expect(imports).toBe(1)
+
+    vi.mocked(apiGet)
+      .mockRejectedValueOnce(new Error('Request queued 20000ms without a free connection'))
+      .mockResolvedValue(response('hash-two'))
+    await refreshWebPlugins()
+
+    // Still ready and not loading: the last good answer keeps rendering while the retry waits.
+    expect(getWebPluginRuntimeSnapshot()).toMatchObject({ ready: true, loading: false })
+    expect(getWebPluginRuntimeSnapshot().modules[0]?.hash).toBe('hash-one')
+
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(imports).toBe(2)
+    expect(getWebPluginRuntimeSnapshot().modules[0]?.hash).toBe('hash-two')
+    expect(getWebPluginRuntimeSnapshot().errors).toEqual([])
+  })
+
   it('stops retrying when another trigger got a good answer first', async () => {
     vi.useFakeTimers()
     vi.mocked(apiGet).mockRejectedValueOnce(new Error('FAILED after 15000ms'))
