@@ -37,7 +37,7 @@ export type AgentCommandRoute =
  * and pinned by tests/providers/agent-command-map.test.ts (which compares it
  * against acpEngineIds() from the registry).
  */
-export const ACP_ENGINES: ReadonlySet<string> = new Set(['codex', 'gemini', 'opencode', 'goose', 'custom'])
+export const ACP_ENGINES: ReadonlySet<string> = new Set(['codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'])
 
 /** Any ACP engine → the ACP worker family. */
 const ACP_ROUTES: Record<AgentOp, string> = {

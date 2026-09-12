@@ -22,6 +22,28 @@ const frame = (
 })
 
 describe('ACP journal projector', () => {
+  it.each(['prompt-accepted', 'steer-accepted'])('strips display-only wrappers from %s without rewriting the journal', (type) => {
+    const text = 'Keep this message.\n\n[Rich output mode: ON] Internal presentation instruction.\n\n---walnut-refs---\nInternal reference card.\n---/walnut-refs---'
+    const record = meta(1, { type, commandId: 'turn-1', walnutMessageId: 'message-1', text } as never)
+    expect(projectAcpJournalHistory('runtime-1', [record])[0].text).toBe('Keep this message.')
+    expect(record).toMatchObject({ event: { text } })
+  })
+
+  it('resolves minimal permission details from the current tool without changing raw frames', () => {
+    const projector = new AcpJournalProjector('permissions')
+    const request: JournalRecord = { kind: 'acp', ts: 3, frame: {
+      method: 'session/request_permission', providerRequestId: 'permission-1',
+      params: { toolCall: { toolCallId: 'call-1' }, options: [] },
+    } }
+    projector.project(meta(1, { type: 'turn-started', commandId: 'turn-1' } as never))
+    projector.project(frame(2, { sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'bash', rawInput: { command: 'printf hello' } }))
+    expect(projector.project(request)).toEqual([{ type: 'permission-request', ts: 3, requestId: 'permission-1', toolName: 'bash', input: { command: 'printf hello' }, options: [] }])
+    projector.project(meta(4, { type: 'turn-ended', commandId: 'turn-1', stopReason: 'end_turn' } as never))
+    projector.project(meta(5, { type: 'turn-started', commandId: 'turn-2' } as never))
+    expect(projector.project(request)[0]).toMatchObject({ toolName: 'tool', input: undefined })
+    expect((request.frame as { params: { toolCall: unknown } }).params.toolCall).toEqual({ toolCallId: 'call-1' })
+  })
+
   it('routes display and permissions only through main-ai, with terminal events also reaching session-runner', () => {
     for (const name of [
       'session:text-delta',
@@ -171,6 +193,38 @@ describe('ACP journal projector', () => {
       'acp:runtime-recycle:acp-prompt:qm-recycle:tool:0:call_2',
       'acp:runtime-recycle:acp-prompt:qm-recycle:tool:1:call_2',
     ])
+  })
+
+  it('keeps terminal deltas isolated across interleaved and recycled tool ids', () => {
+    const records: JournalRecord[] = [
+      frame(1, { sessionUpdate: 'tool_call', toolCallId: 'a', title: 'A' }),
+      frame(2, { sessionUpdate: 'tool_call', toolCallId: 'b', title: 'B' }),
+      frame(3, { sessionUpdate: 'tool_call_update', toolCallId: 'a', status: 'in_progress', _meta: { terminal_output: { data: 'first\n' } } }),
+      frame(4, { sessionUpdate: 'tool_call_update', toolCallId: 'b', status: 'in_progress', _meta: { terminal_output: { data: 'other' } } }),
+      frame(5, { sessionUpdate: 'tool_call_update', toolCallId: 'a', status: 'completed', _meta: { terminal_output: { data: 'last' }, terminal_exit: { exit_code: 0 } } }),
+      frame(6, { sessionUpdate: 'tool_call_update', toolCallId: 'b', status: 'failed', _meta: { terminal_exit: { exit_code: 2 } } }),
+      frame(7, { sessionUpdate: 'tool_call', toolCallId: 'a', title: 'C' }),
+      frame(8, { sessionUpdate: 'tool_call_update', toolCallId: 'a', status: 'completed', _meta: { terminal_exit: { exit_code: 0 } } }),
+    ]
+    const history = projectAcpJournalHistory('terminal-test', records)
+    expect(history.flatMap((message) => message.tools ?? []).map((tool) => [tool.name, tool.result, !!tool.isError])).toEqual([
+      ['A', 'first\nlast\nExit code: 0', false], ['B', 'other\nExit code: 2', true], ['C', 'Exit code: 0', false],
+    ])
+    const live = new AcpJournalProjector('terminal-test')
+    expect(records.flatMap((record) => live.project(record)).filter((event) => event.type === 'tool-result').map((event) => event.result))
+      .toEqual(['first\nlast\nExit code: 0', 'other\nExit code: 2', 'Exit code: 0'])
+  })
+
+  it('reads standard ACP nested content and file diffs without replacing them with status', () => {
+    const records = [
+      frame(1, { sessionUpdate: 'tool_call', toolCallId: 'read', title: 'Read' }),
+      frame(2, { sessionUpdate: 'tool_call_update', toolCallId: 'read', status: 'failed', content: [{ type: 'content', content: { type: 'text', text: 'File not found: sample.txt' } }] }),
+      frame(3, { sessionUpdate: 'tool_call', toolCallId: 'edit', title: 'Edit' }),
+      frame(4, { sessionUpdate: 'tool_call_update', toolCallId: 'edit', status: 'completed', content: [{ type: 'diff', path: 'sample.txt', oldText: 'before', newText: 'after' }] }),
+    ]
+    const tools = projectAcpJournalHistory('nested', records).flatMap((message) => message.tools ?? [])
+    expect(tools[0]).toMatchObject({ result: 'File not found: sample.txt', isError: true })
+    expect(JSON.parse(tools[1].result!)).toEqual({ path: 'sample.txt', oldText: 'before', newText: 'after' })
   })
 
   it('folds later chunks into the exact same assistant frame', () => {

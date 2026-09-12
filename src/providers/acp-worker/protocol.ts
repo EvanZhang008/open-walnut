@@ -191,6 +191,8 @@ export interface AcpModelInfo {
   modelId: string
   name: string
   description?: string
+  groupId?: string
+  groupName?: string
 }
 
 export interface AcpModelCatalog {
@@ -202,6 +204,8 @@ export interface AcpConfigOptionChoice {
   value: string
   name: string
   description?: string
+  groupId?: string
+  groupName?: string
 }
 
 export interface AcpConfigOption {
@@ -286,8 +290,9 @@ export function snapshotAcpCapabilities(response: unknown): AcpCapabilitySnapsho
   }
 }
 
-/** Normalize the codex-acp models extension, accepting its legacy top-level shape too. */
 export function snapshotAcpModels(response: unknown): AcpModelCatalog {
+  const options = snapshotAcpConfigOptions(response)
+  const modelOption = options.find((option) => option.category === 'model' || option.id === 'model')
   const root = asRecord(response)
   const metaModels = asRecord(asRecord(root._meta).models)
   const models = Object.keys(metaModels).length > 0 ? metaModels : asRecord(root.models)
@@ -302,12 +307,21 @@ export function snapshotAcpModels(response: unknown): AcpModelCatalog {
         }]
       })
     : []
-  return {
-    ...(typeof models.currentModelId === 'string'
-      ? { currentModelId: models.currentModelId }
-      : {}),
-    availableModels,
+  // The extension can carry effort-qualified variants that the model select omits.
+  if (availableModels.length > 0) {
+    let currentModelId = typeof models.currentModelId === 'string' ? models.currentModelId : undefined
+    if (modelOption) {
+      const effort = options.find((option) => option.category === 'thought_level')?.currentValue
+      const qualified = `${modelOption.currentValue}[${effort}]`
+      const candidate = availableModels.some((model) => model.modelId === qualified) ? qualified : modelOption.currentValue
+      if (availableModels.some((model) => model.modelId === candidate)) currentModelId = candidate
+    }
+    return { ...(currentModelId !== undefined ? { currentModelId } : {}), availableModels }
   }
+  return modelOption ? {
+    currentModelId: modelOption.currentValue,
+    availableModels: modelOption.options.map(({ value, ...choice }) => ({ modelId: value, ...choice })),
+  } : { availableModels: [] }
 }
 
 /** Normalize ACP select config options while dropping malformed/provider-specific entries. */
@@ -322,13 +336,30 @@ export function snapshotAcpConfigOptions(response: unknown): AcpConfigOption[] {
       || typeof option.currentValue !== 'string'
       || !Array.isArray(option.options)
     ) return []
-    const choices = option.options.flatMap((choice) => {
-      const value = asRecord(choice)
-      if (typeof value.value !== 'string') return []
+    const choices = option.options.flatMap<AcpConfigOptionChoice>((entry) => {
+      const node = asRecord(entry)
+      if (typeof node.group === 'string' && Array.isArray(node.options)) {
+        const groupId = node.group
+        const groupName = typeof node.name === 'string' ? node.name : groupId
+        return node.options.flatMap((choice) => {
+          const value = asRecord(choice)
+          if (typeof value.value !== 'string') return []
+          return [{
+            value: value.value,
+            name: typeof value.name === 'string' ? value.name : value.value,
+            ...(typeof value.description === 'string' ? { description: value.description } : {}),
+            groupId,
+            groupName,
+          }]
+        })
+      }
+      if (typeof node.value !== 'string') return []
       return [{
-        value: value.value,
-        name: typeof value.name === 'string' ? value.name : value.value,
-        ...(typeof value.description === 'string' ? { description: value.description } : {}),
+        value: node.value,
+        name: typeof node.name === 'string' ? node.name : node.value,
+        ...(typeof node.description === 'string' ? { description: node.description } : {}),
+        ...(typeof node.groupId === 'string' ? { groupId: node.groupId } : {}),
+        ...(typeof node.groupName === 'string' ? { groupName: node.groupName } : {}),
       }]
     })
     return [{

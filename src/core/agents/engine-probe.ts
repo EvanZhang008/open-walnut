@@ -242,6 +242,7 @@ async function readVersion(binary: string, args: readonly string[]): Promise<str
 /** Adapter entry each 'bundled'-source engine needs under this install, by probed binary. */
 const BUNDLED_ADAPTER_ENTRIES: Record<string, string> = {
   codex: path.join('node_modules', '@agentclientprotocol', 'codex-acp', 'dist', 'index.js'),
+  pi: path.join('dist', 'daemon-binaries', 'pi-acp.js'),
 };
 
 /**
@@ -356,14 +357,14 @@ async function runProbe(caps: EngineCapabilities, options: EngineProbeOptions): 
   if (adapter.source === 'bundled') {
     const present = (options.bundledAdapterPresent ?? bundledAdapterExists)(binaryName);
     if (!present) {
-      return { availability: unavailable(`the bundled ${binaryName}-acp adapter is missing from this walnut install (run npm install)`) };
+      const remedy = caps.id === 'pi' ? 'reinstall Walnut, or run npm run build:daemon in a source checkout' : 'run npm install';
+      return { availability: unavailable(`the bundled ${binaryName}-acp adapter is missing from this walnut install (${remedy})`) };
     }
   }
 
-  const resolvedBinary = binary;
   return {
     availability: { installed: true, version: null, reason: null },
-    fillVersion: () => runVersion(resolvedBinary, adapter.versionArgs),
+    fillVersion: () => runVersion(binary, adapter.versionArgs),
   };
 }
 

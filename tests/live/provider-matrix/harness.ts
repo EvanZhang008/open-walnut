@@ -35,8 +35,12 @@ export async function startLiveServer(): Promise<LiveServer> {
   // Same reason scripts/walnut-sandbox.sh uses env -i.
   const env: Record<string, string | undefined> = {
     ...process.env,
-    WALNUT_HOME: dataDir,
+    OPEN_WALNUT_HOME: dataDir,
     WALNUT_DAEMON_DIR: path.join(dataDir, 'daemon'),
+    WALNUT_STREAMS_DIR: path.join(dataDir, 'streams'),
+    WALNUT_LEGACY_STREAMS_DIR: path.join(dataDir, 'legacy-streams'),
+    WALNUT_DISABLE_BACKGROUND_AI: '1',
+    WALNUT_EXTERNAL_SESSION_IMPORT: '0',
     WALNUT_DISABLE_CRON: '1',
   }
   for (const k of Object.keys(env)) {

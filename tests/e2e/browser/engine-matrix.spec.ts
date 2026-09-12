@@ -1,5 +1,6 @@
 /**
- * Playwright specs for the ACP engine family beyond Codex: Gemini, OpenCode, Goose.
+ * Playwright specs for the ACP engine family beyond Codex: Gemini, OpenCode, Goose,
+ * pi, DeepSeek Harness.
  *
  * Same shape as codex-engine.spec.ts, one flow per engine: real UI clicks grow a
  * draft column, open its folder picker, click THAT engine's button in the
@@ -7,7 +8,7 @@
  * real POST body must carry `engine: '<id>'` and the mock ACP agent's reply must
  * stream into the session panel.
  *
- * Why one file for three engines instead of three codex-shaped files: every ACP
+ * Why one file for every engine instead of one codex-shaped file each: every ACP
  * engine rides the SAME transport (acp-worker + the fixture's mock adapter), so
  * the per-engine question is only "does the toggle offer it, does the launch carry
  * it, does the panel render it as an ACP session". The deep per-scenario suites
@@ -43,6 +44,8 @@ const ENGINE_CASES: readonly EngineCase[] = [
   { id: 'gemini', displayName: 'Gemini' },
   { id: 'opencode', displayName: 'OpenCode' },
   { id: 'goose', displayName: 'Goose' },
+  { id: 'pi', displayName: 'Pi' },
+  { id: 'dsh', displayName: 'DeepSeek Harness' },
 ]
 
 /**
@@ -58,8 +61,10 @@ const ENGINE_CASES: readonly EngineCase[] = [
  * commit later, when GET /api/engines lands.
  */
 async function openDraftWithEngine(page: Page, cwd: string, displayName: string): Promise<Locator> {
-  await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await page.setContent('<a href="/">Open Walnut</a>')
+  await page.getByRole('link', { name: 'Open Walnut' }).evaluate((link, url) => { (link as HTMLAnchorElement).href = url }, `http://localhost:${TEST_PORT}/`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
   const panel = await openDraft(page)
   await draftCwdPill(panel).click()
 
@@ -72,7 +77,10 @@ async function openDraftWithEngine(page: Page, cwd: string, displayName: string)
   const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
   if (await localTab.isVisible()) await localTab.click()
 
-  const button = picker.locator('.sps-engine-toggle .sps-engine-btn', { hasText: displayName })
+  // Exact label: a substring match would let a short name ("pi") ride inside
+  // another engine's label the day one is added.
+  const exact = new RegExp(`^\\s*${displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`)
+  const button = picker.locator('.sps-engine-toggle .sps-engine-btn', { hasText: exact })
   await expect(button).toBeVisible({ timeout: 15_000 })
   // Enabled = the catalog reports it installed AND the picked host is local; a
   // disabled button here would mean the fixture's probe override never applied.
@@ -216,6 +224,184 @@ test('OpenCode draft lists probed models and the pick rides the launch payload',
   await audit.assertClean()
 })
 
+test('status updates during native input preserve the draft and the real send payload', async ({ page }) => {
+  test.setTimeout(90_000)
+  const sends: Array<{ sessionId: string; message: string }> = []
+  await page.addInitScript(() => {
+    const Original = window.WebSocket
+    window.WebSocket = class extends Original {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols)
+        if (new URL(String(url), location.href).pathname === '/ws') {
+          (window as unknown as { inputTestSocket: WebSocket }).inputTestSocket = this
+        }
+      }
+    }
+  })
+  page.on('websocket', socket => socket.on('framesent', frame => {
+    if (typeof frame.payload !== 'string') return
+    const data = JSON.parse(frame.payload)
+    if (data.type === 'req' && data.method === 'session:send') sends.push(data.payload)
+  }))
+  const audit = await installBrowserAudit(page, walnutHome)
+  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'DeepSeek Harness')
+  const launch = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/sessions/quick-start')
+  await draft.locator('.chat-input-textarea').fill('Start an input regression session')
+  await draft.locator('.chat-input-textarea').press('Enter')
+  expect((await launch).status()).toBe(200)
+  const panel = page.locator(REAL_PANEL)
+  await expect(panel).toContainText('hello from mock-acp', { timeout: 30_000 })
+  const sessionId = (await panel.getAttribute('data-session-id'))!
+  const response = await page.request.get(`/api/sessions/${sessionId}`)
+  expect(response.status()).toBe(200)
+  const { session } = await response.json()
+  const configured = await page.request.patch(`/api/sessions/${sessionId}`, { data: { output_mode: 'markdown' } })
+  expect(configured.status()).toBe(200)
+  await page.reload()
+  await expect(panel.locator('button[title^="Output mode:"]')).toHaveText('MD')
+  await page.evaluate(({ sessionId, revision, taskId }) => {
+    const socket = (window as unknown as { inputTestSocket: WebSocket }).inputTestSocket
+    let current = revision
+    document.addEventListener('input', event => {
+      if (!(event.target instanceof HTMLTextAreaElement)
+        || event.target.closest('.session-panel')?.getAttribute('data-session-id') !== sessionId) return
+      current++
+      socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        type: 'event', name: 'session:status-changed', seq: current,
+        data: { status: { sessionId, taskId, process_status: 'idle', activity: null,
+          mode: 'default', planCompleted: false, archived: false, errorMessage: null,
+          provider: 'cli', engine: 'dsh', statusRevision: current, statusUpdatedAt: new Date().toISOString() } },
+      }) }))
+    }, true)
+  }, { sessionId, revision: session.statusRevision ?? 0, taskId: session.taskId })
+  const input = panel.locator('.chat-input-textarea')
+  for (let i = 0; i < 4; i++) {
+    const text = `Keep native input ${i}`
+    if (i % 2) { await input.click(); await input.pressSequentially(text) }
+    else await input.fill(text)
+    await input.press('ArrowRight')
+    await expect(input).toHaveValue(text)
+    await expect.poll(() => page.evaluate(key => localStorage.getItem(key), `draft:session:${sessionId}`)).toBe(text)
+    await input.press('Enter')
+    await expect.poll(() => sends.filter(send => send.sessionId === sessionId && send.message === text).length).toBe(1)
+    await expect(panel.locator('.session-msg-assistant').filter({ hasText: `hello from mock-acp (you said: ${text}` })).toHaveCount(1, { timeout: 20_000 })
+    await expect(input).toHaveValue('')
+  }
+  await page.reload()
+  await expect(panel).toContainText('Keep native input 3', { timeout: 20_000 })
+  await expect(input).toHaveValue('')
+  await audit.assertClean()
+})
+
+test('provider reasoning controls refresh after model switches and preserve the empty default', async ({ page }) => {
+  test.setTimeout(60_000)
+  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'DeepSeek Harness')
+  let reasoning = false
+  let effort = ''
+  let rejectNext = false
+  const writes: Array<{ id: string; value: string }> = []
+  const controls = () => reasoning ? [{
+    id: 'reasoning_effort', name: 'Reasoning effort', category: 'thought_level', type: 'select', currentValue: effort,
+    options: [{ value: '', name: 'Provider default' }, { value: 'high', name: 'High' }],
+  }] : []
+  await page.route('**/api/sessions/*/controls', async (route) => {
+    if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON() as { id: string; value: string }
+      writes.push(body)
+      if (rejectNext) {
+        rejectNext = false
+        await route.fulfill({ status: 409, json: { error: 'Provider declined the setting' } })
+        return
+      }
+      effort = body.value
+    }
+    await route.fulfill({ json: { engine: 'dsh', controls: controls() } })
+  })
+  await page.route('**/api/sessions/*/model', async (route) => {
+    const body = route.request().postDataJSON() as { model: string }
+    const response = await route.fetch()
+    expect(response.ok()).toBe(true)
+    reasoning = body.model === 'mock-gpt-fast'
+    await route.fulfill({ response })
+  })
+  await draft.locator('.chat-input-textarea').fill('reasoning control UI test')
+  await draft.locator('.chat-input-textarea').press('Enter')
+  const panel = page.locator(REAL_PANEL)
+  const pill = panel.locator('.composer-model-pill').first()
+  await expect(pill).toContainText('GPT Best', { timeout: 20_000 })
+  await expect(panel.locator('button[title="Reasoning effort"]')).toHaveCount(0)
+  await pill.click()
+  await page.locator('.model-picker').getByRole('option', { name: /Mock GPT Fast/ }).click()
+  await page.keyboard.press('Escape')
+  const reasoningPill = panel.locator('button[title="Reasoning effort"]').first()
+  await expect(reasoningPill).toHaveText('Provider default')
+  await page.setViewportSize({ width: 800, height: 600 })
+  await reasoningPill.click()
+  const menu = page.getByRole('listbox', { name: 'Reasoning effort', exact: true })
+  await expect(menu).toBeVisible()
+  const rect = await menu.boundingBox()
+  expect(rect).not.toBeNull()
+  expect(rect!.x).toBeGreaterThanOrEqual(0)
+  expect(rect!.y).toBeGreaterThanOrEqual(0)
+  expect(rect!.x + rect!.width).toBeLessThanOrEqual(801)
+  expect(rect!.y + rect!.height).toBeLessThanOrEqual(601)
+  await menu.getByRole('option', { name: 'High', exact: true }).click()
+  await expect(reasoningPill).toHaveText('High')
+  await reasoningPill.click()
+  await menu.getByRole('option', { name: 'Provider default', exact: true }).click()
+  await expect(reasoningPill).toHaveText('Provider default')
+  expect(writes).toEqual([{ id: 'reasoning_effort', value: 'high' }, { id: 'reasoning_effort', value: '' }])
+  rejectNext = true
+  await reasoningPill.click()
+  await menu.getByRole('option', { name: 'High', exact: true }).click()
+  await expect(menu).toBeHidden()
+  await expect(reasoningPill).toHaveText('Provider default')
+  await expect(page.getByText('Session setting could not be applied', { exact: true }).first()).toBeVisible()
+  await reasoningPill.click()
+  await menu.getByRole('option', { name: 'High', exact: true }).click()
+  await expect(menu).toBeHidden()
+  await expect(reasoningPill).toHaveText('High')
+  await reasoningPill.click()
+  await page.keyboard.press('Escape')
+  await expect(menu).toBeHidden()
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await pill.click()
+  await page.locator('.model-picker').getByRole('option', { name: /Mock GPT Best/ }).click()
+  await page.keyboard.press('Escape')
+  await expect(panel.locator('button[title="Reasoning effort"]')).toHaveCount(0)
+})
+
+test('a newly typed path never confirms a stale listing parent or remembered engine', async ({ page }) => {
+  const oldPath = `${fixtureRoot}/projects/walnut`
+  const nextPath = `${fixtureRoot}/projects/another-workspace`
+  const draft = await openDraftWithEngine(page, oldPath, 'Pi')
+  await draftCwdPill(draft).click()
+  const picker = page.locator('.session-path-selector')
+  const input = picker.locator('.sps-search-input')
+  await input.fill(`${oldPath}/`)
+  await expect(picker.locator('.sps-status-valid')).toBeVisible()
+  let release: () => void = () => {}
+  const hold = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/api/sessions/list-dirs**', async (route) => {
+    const prefix = new URL(route.request().url()).searchParams.get('prefix')
+    if (prefix?.includes('another-workspace')) await hold
+    await route.continue()
+  })
+  try {
+    await input.fill(nextPath)
+    await expect(input).toHaveValue(nextPath)
+    await input.press('Shift+Enter')
+    await expect(picker).toBeHidden()
+    await draftCwdPill(draft).click()
+    await expect(input).toHaveValue(nextPath)
+    await expect(picker.getByRole('button', { name: 'Pi', exact: true })).toHaveClass(/active/)
+  } finally {
+    release()
+    await page.unrouteAll({ behavior: 'wait' })
+  }
+})
+
 test('an engine the server cannot run renders disabled with its reason', async ({ page }) => {
   const audit = await installBrowserAudit(page, walnutHome)
   // The fixture forces every engine "installed" (WALNUT_ENGINE_PROBE_ALL=1), which
@@ -274,8 +460,10 @@ test('an engine the server cannot run renders disabled with its reason', async (
     })
   })
 
-  await page.goto('/')
-  await expect(page.locator('.main-page')).toBeVisible()
+  await page.setContent('<a href="/">Open Walnut</a>')
+  await page.getByRole('link', { name: 'Open Walnut' }).evaluate((link, url) => { (link as HTMLAnchorElement).href = url }, `http://localhost:${TEST_PORT}/`)
+  await page.getByRole('link', { name: 'Open Walnut' }).click()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
   const panel = await openDraft(page)
   await draftCwdPill(panel).click()
   const picker = page.locator('.session-path-selector')

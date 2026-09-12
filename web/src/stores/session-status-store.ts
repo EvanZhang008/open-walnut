@@ -1,4 +1,4 @@
-import { VALID_SESSION_MODE_IDS } from '@open-walnut/core';
+import { SESSION_ENGINE_IDS, VALID_SESSION_MODE_IDS } from '@open-walnut/core';
 import type { SessionEffort, SessionOutputMode, Task } from '@open-walnut/core';
 import type {
   ProcessStatus,
@@ -161,8 +161,10 @@ function isSessionProvider(value: unknown): value is SessionProvider {
   return value === 'cli' || value === 'sdk' || value === 'embedded';
 }
 
+const KNOWN_ENGINE_IDS: ReadonlySet<string> = new Set(SESSION_ENGINE_IDS);
+
 function isSessionEngine(value: unknown): value is SessionEngine {
-  return value === 'claude' || value === 'codex';
+  return typeof value === 'string' && KNOWN_ENGINE_IDS.has(value);
 }
 
 function nullableString(value: unknown): string | null {

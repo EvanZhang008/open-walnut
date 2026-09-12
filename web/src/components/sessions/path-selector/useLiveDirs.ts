@@ -28,25 +28,28 @@ export interface LiveDirsResult {
 }
 
 const DEBOUNCE_MS = 150;
+const EMPTY_HOSTS = new Map<string, HostLiveState>();
 
 export function useLiveDirs(
   activePath: string,
   hostFilter: string,
   configuredHosts: ConfiguredHost[],
 ): LiveDirsResult {
-  const [byHost, setByHost] = useState<Map<string, HostLiveState>>(new Map());
+  const [snapshot, setSnapshot] = useState<{ key: string; byHost: Map<string, HostLiveState> }>({ key: '', byHost: EMPTY_HOSTS });
   const epochRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Stable key for configuredHosts (avoid refiring on referentially-new but equal arrays)
   const hostsKey = configuredHosts.map(h => h.alias).join(',');
+  const requestKey = JSON.stringify([activePath, hostFilter, hostsKey]);
+  const byHost = snapshot.key === requestKey ? snapshot.byHost : EMPTY_HOSTS;
 
   useEffect(() => {
     // Invalidate any in-flight batch immediately — even before deciding to fetch.
     const epoch = ++epochRef.current;
 
     if (!activePath || activePath.length < 2) {
-      setByHost(prev => (prev.size === 0 ? prev : new Map()));
+      setSnapshot({ key: requestKey, byHost: EMPTY_HOSTS });
       return;
     }
 
@@ -59,12 +62,12 @@ export function useLiveDirs(
         : [hostFilter === '__local__' ? null : hostFilter];
 
       // Seed all targets as loading in one update
-      setByHost(() => {
+      setSnapshot(() => {
         const next = new Map<string, HostLiveState>();
         for (const t of targets) {
           next.set(t ?? '__local__', { status: 'loading', parent: '', exists: true, dirs: [] });
         }
-        return next;
+        return { key: requestKey, byHost: next };
       });
 
       for (const target of targets) {
@@ -72,21 +75,21 @@ export function useLiveDirs(
         listDirsCached(activePath, target)
           .then(listing => {
             if (epoch !== epochRef.current) return; // stale response — drop
-            setByHost(prev => {
-              const next = new Map(prev);
+            setSnapshot(prev => {
+              const next = new Map(prev.key === requestKey ? prev.byHost : EMPTY_HOSTS);
               next.set(key, { status: 'done', parent: listing.parent, exists: listing.exists, dirs: listing.dirs });
-              return next;
+              return { key: requestKey, byHost: next };
             });
           })
           .catch(err => {
             if (epoch !== epochRef.current) return;
-            setByHost(prev => {
-              const next = new Map(prev);
+            setSnapshot(prev => {
+              const next = new Map(prev.key === requestKey ? prev.byHost : EMPTY_HOSTS);
               next.set(key, {
                 status: 'error', parent: '', exists: true, dirs: [],
                 error: err instanceof Error ? err.message : String(err),
               });
-              return next;
+              return { key: requestKey, byHost: next };
             });
           });
       }
@@ -96,7 +99,7 @@ export function useLiveDirs(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, hostFilter, hostsKey]);
 
-  let anyLoading = false;
+  let anyLoading = activePath.length >= 2 && snapshot.key !== requestKey;
   for (const state of byHost.values()) {
     if (state.status === 'loading') { anyLoading = true; break; }
   }

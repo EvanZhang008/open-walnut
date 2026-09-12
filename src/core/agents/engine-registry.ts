@@ -170,6 +170,24 @@ const GOOSE: EngineCapabilities = {
   skillSync: true,
 };
 
+const PI: EngineCapabilities = {
+  ...CODEX,
+  id: 'pi',
+  displayName: 'Pi',
+  acpAdapter: { source: 'bundled', binary: 'pi', args: null, versionArgs: ['--version'] },
+  externalImport: false,
+  skillSync: true,
+};
+
+const DSH: EngineCapabilities = {
+  ...CODEX,
+  id: 'dsh',
+  displayName: 'DeepSeek Harness',
+  acpAdapter: { source: 'cli', binary: 'dsh', args: ['--profile', 'acp'], versionArgs: ['--version'] },
+  externalImport: false,
+  skillSync: false,
+};
+
 /** User-supplied ACP adapter: argv comes from config, so there is no binary to probe. */
 const CUSTOM: EngineCapabilities = {
   ...CODEX,
@@ -191,6 +209,8 @@ const DESCRIPTORS: Record<SessionEngine, EngineCapabilities> = {
   gemini: GEMINI,
   opencode: OPENCODE,
   goose: GOOSE,
+  pi: PI,
+  dsh: DSH,
   custom: CUSTOM,
 };
 

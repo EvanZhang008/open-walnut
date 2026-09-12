@@ -40,6 +40,26 @@ describe('parseAcpModelId', () => {
       .toEqual({ familyId: 'someprovider/high', effort: null });
   });
 
+  it('preserves JSON-array model ids instead of treating them as effort suffixes', () => {
+    const modelId = '["provider","model/high"]';
+    expect(parseAcpModelId(modelId)).toEqual({ familyId: modelId, effort: null });
+    expect(parseAcpModelId(`${modelId}[high]`)).toEqual({ familyId: modelId, effort: 'high' });
+    expect(acpProviderGroupId(modelId)).toBe('provider');
+    expect(shortAcpModelName('["provider","deepseek-v4-pro"]')).toBe('Deepseek V4 Pro');
+    const [group] = groupAcpModels([{ modelId, name: 'Model w/ tools' }]);
+    expect(group.families[0].label).toBe('Model w/ tools');
+    expect(group.families[0].byEffort.get(null)?.modelId).toBe(modelId);
+  });
+
+  it('keeps same-named models in their advertised provider groups', () => {
+    const groups = groupAcpModels(['route-one', 'route-two'].map((groupId) => ({
+      modelId: JSON.stringify([groupId, 'model']), name: 'Model w/ tools', groupId, groupName: `Provider ${groupId}`,
+    })));
+    expect(groups.map((group) => [group.id, group.label, group.families[0].label])).toEqual([
+      ['route-one', 'Provider route-one', 'Model w/ tools'], ['route-two', 'Provider route-two', 'Model w/ tools'],
+    ]);
+  });
+
   it('leaves plain ids untouched (mock catalogs)', () => {
     expect(parseAcpModelId('mock-gpt-best')).toEqual({ familyId: 'mock-gpt-best', effort: null });
   });

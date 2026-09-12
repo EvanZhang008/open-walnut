@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SessionControl } from '@/api/sessions';
+import { createPortal } from 'react-dom';
+import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 
 interface SessionControlPillsProps {
   controls: SessionControl[];
@@ -87,7 +89,55 @@ const CHATGPT_MODE_WORDING: Record<string, { name: string; description: string }
  * bottom (ChatGPT keeps it in the "+" menu; we have no such menu here), and
  * only surfaces as its own amber pill while ON, where clicking turns it off.
  */
-export function SessionControlPills({
+export function SessionControlPills(props: SessionControlPillsProps) {
+  return <>
+    <ApprovalControlPills {...props} />
+    {props.controls.filter((control) => control.category === 'thought_level').map((control) => (
+      <ThoughtControlPill key={`${control.id}:${control.options.map((option) => option.value).join('|')}`} control={control} setControl={props.setControl} />
+    ))}
+  </>;
+}
+
+function ThoughtControlPill({ control, setControl }: Pick<SessionControlPillsProps, 'setControl'> & { control: SessionControl }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const placement = useMenuPlacement(open, trigger, menu, { preferSide: 'up', onAnchorLost: () => setOpen(false) });
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!trigger.current?.contains(event.target as Node) && !menu.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
+  }, [open]);
+  const current = control.options.find((option) => option.value === control.currentValue);
+  if (!control.options.length) return null;
+  return <>
+    <button ref={trigger} type="button" className="mode-toggle-pill" title={control.name} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <span className="mode-toggle-pill-label">{current?.name ?? control.currentValue}</span>
+    </button>
+    {open && createPortal(<div ref={menu} className="session-control-menu" role="listbox" aria-label={control.name}
+      onPointerDown={(event) => event.stopPropagation()}
+      style={{ position: 'fixed', bottom: 'auto', left: 'auto', width: 'min(280px, calc(100vw - 24px))', zIndex: 10020, ...placement, visibility: placement ? 'visible' : 'hidden' }}>
+      <div className="session-control-menu-title">{control.name}</div>
+      {control.options.map((option) => <button key={option.value} type="button" role="option" className="session-control-option" aria-selected={option.value === control.currentValue} disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          void setControl(control.id, option.value).catch(() => {}).finally(() => { setBusy(false); setOpen(false); });
+        }}>
+        <span aria-hidden />
+        <span className="session-control-option-name">{option.name}</span>
+        <span className="session-control-option-check" aria-hidden>{option.value === control.currentValue ? '✓' : ''}</span>
+      </button>)}
+    </div>, document.body)}
+  </>;
+}
+
+function ApprovalControlPills({
   controls,
   setControl,
   engineName,

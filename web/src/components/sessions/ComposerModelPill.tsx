@@ -22,6 +22,7 @@ import type { SessionEffort } from '@open-walnut/core';
 import { setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
 import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
+import { refreshSessionControls } from '@/hooks/useSessionControls';
 import { useNotifications } from '@/contexts/notifications';
 import { log } from '@/utils/log';
 import type { EngineUiCaps } from '@/utils/engine-capabilities';
@@ -170,7 +171,11 @@ export function ComposerModelPill({
     // pill prefers it, so keeping it would label the new model with the old name
     // until the server record comes back.
     onOptimistic({ acpModel: modelId, acpModelName: undefined });
-    setCodexSessionModel(sessionId, modelId).catch((error) => {
+    setCodexSessionModel(sessionId, modelId).then(() => {
+      void refreshSessionControls(sessionId).catch((error) => {
+        log.warn('session-controls', 'failed to refresh controls after model change', { sessionId, error: String(error) });
+      });
+    }).catch((error) => {
       onOptimistic({ acpModel: previous, acpModelName: previousName });
       log.error('session-panel', 'acp model switch failed', {
         sessionId,

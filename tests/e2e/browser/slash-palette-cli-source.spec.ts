@@ -14,13 +14,10 @@
  * compact, mock-skill-alpha, mock-skill-beta (plus the composer's own `/model`
  * control), and NOT the shipped Walnut skills the directory scan finds for the
  * same cwd — the CLI never listed those, so the session could not run them.
- *
- * House rules: `page.goto('/')` is the initial load only; every later step is a
- * real click or keystroke.
  */
 
 import { test, expect } from '@playwright/test'
-import { discoverFixtureRoot, draftComposer, loadHome, openDraftOnCwd } from './draft-helpers'
+import { discoverFixtureRoot, draftComposer, draftCwdPill, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = process.env.SLASH_SHOT_DIR ?? '/tmp/slash-palette-cli'
 
@@ -31,11 +28,20 @@ test.beforeAll(async () => { fixtureRoot = await discoverFixtureRoot() })
 test.setTimeout(150_000)
 
 test('a live session palette lists the CLI-advertised commands, hides terminal-only + internal ones, and drops scan-only skills', async ({ page }) => {
-  await page.setViewportSize({ width: 1600, height: 1000 })
-  await loadHome(page)
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.setContent('<a href="/">Open Walnut</a>')
+  await page.getByRole('link').evaluate((el, url) => { (el as HTMLAnchorElement).href = url },
+    `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/`)
+  await page.getByRole('link').click()
+  await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
 
   const cwd = `${fixtureRoot}/projects/walnut`
   const panel = await openDraftOnCwd(page, cwd)
+  await draftCwdPill(panel).click()
+  const folder = page.locator('.session-path-selector')
+  await folder.getByRole('button', { name: 'Claude', exact: true }).click()
+  await folder.locator('.sps-search-input').press('Shift+Enter')
+  await expect(folder).toBeHidden()
   await draftComposer(page).fill(`slash palette probe ${Date.now()}`)
 
   const launch = page.waitForRequest((req) =>

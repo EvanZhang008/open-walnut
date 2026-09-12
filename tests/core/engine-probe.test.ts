@@ -40,6 +40,7 @@ function makeHome(): { home: string; bin: string } {
 }
 
 function installFakeBinary(bin: string, name: string): string {
+  fs.mkdirSync(bin, { recursive: true })
   const file = path.join(bin, name)
   fs.writeFileSync(file, '#!/bin/sh\necho fake\n', { mode: 0o755 })
   return file
@@ -176,6 +177,31 @@ describe('probeEngine — cli-sourced engines', () => {
     installFakeBinary(bin, 'gemini')
     const result = await probeEngine('gemini', baseOptions({ runVersion: async () => null }))
     expect(result).toEqual({ installed: true, version: null, reason: null })
+  })
+})
+
+describe('Pi availability', () => {
+  it('uses the system Pi version without requiring a global ACP adapter', async () => {
+    installFakeBinary(bin, 'pi')
+    expect(await probeEngine('pi', baseOptions())).toEqual({ installed: true, version: '1.2.3', reason: null })
+    expect(versionCalls).toEqual(['pi --version'])
+  })
+
+  it('requires the bundled adapter and names a missing system provider', async () => {
+    expect((await probeEngine('pi', baseOptions())).reason).toContain('WALNUT_PI_PATH')
+    _resetEngineProbeCache()
+    installFakeBinary(bin, 'pi')
+    expect((await probeEngine('pi', baseOptions({ bundledAdapterPresent: () => false }))).reason).toContain('pi-acp')
+  })
+
+  it('rejects an invalid override instead of using another Pi installation', async () => {
+    installFakeBinary(bin, 'pi')
+    const result = await probeEngine('pi', baseOptions({
+      env: { HOME: home, PATH: bin, WALNUT_PI_PATH: path.join(home, 'missing') },
+    }))
+    expect(result.installed).toBe(false)
+    expect(result.reason).toContain('WALNUT_PI_PATH')
+    expect(versionCalls).toEqual([])
   })
 })
 

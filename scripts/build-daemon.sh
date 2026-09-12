@@ -47,6 +47,8 @@ if [ -z "$BUN" ]; then
   exit 0
 fi
 
+"$BUN" scripts/build-pi-acp.mjs
+
 SOURCES=(
   src/providers/daemon-standalone.ts
   src/providers/daemon-core.ts

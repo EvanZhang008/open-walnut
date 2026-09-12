@@ -88,7 +88,7 @@ describe('engine registry', () => {
       .filter((caps) => caps.runtimeKind === 'acp')
       .map((caps) => caps.id);
     expect(acpEngineIds()).toEqual(fromRegistry);
-    expect(acpEngineIds()).toEqual(['codex', 'gemini', 'opencode', 'goose', 'custom']);
+    expect(acpEngineIds()).toEqual(['codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom']);
     expect(acpEngineIds()).not.toContain('claude');
   });
 
@@ -104,6 +104,12 @@ describe('engine registry', () => {
     });
     expect(engineCaps('goose').acpAdapter).toEqual({
       source: 'cli', binary: 'goose', args: ['acp'], versionArgs: ['--version'],
+    });
+    expect(engineCaps('pi').acpAdapter).toEqual({
+      source: 'bundled', binary: 'pi', args: null, versionArgs: ['--version'],
+    });
+    expect(engineCaps('dsh').acpAdapter).toEqual({
+      source: 'cli', binary: 'dsh', args: ['--profile', 'acp'], versionArgs: ['--version'],
     });
     expect(engineCaps('custom').acpAdapter).toEqual({
       source: 'config', binary: null, args: null, versionArgs: [],

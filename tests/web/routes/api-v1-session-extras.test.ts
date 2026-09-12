@@ -20,6 +20,8 @@ import { sessionExtrasV1Router } from '../../../src/web/routes/session-extras-v1
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
+import { sessionRunner } from '../../../src/providers/claude-code-session.js'
+import type { AcpSession } from '../../../src/providers/acp-session.js'
 
 function createApp() {
   const app = express()
@@ -35,6 +37,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -74,6 +77,18 @@ describe('POST /api/v1/sessions/:id/controls', () => {
     expect(res.status).toBe(200)
     const modeControl = res.body.controls.find((c: { id: string }) => c.id === 'mode')
     expect(modeControl.currentValue).toBe('plan')
+  })
+
+  it('accepts an advertised empty provider-default value and rejects unadvertised values', async () => {
+    await createSessionRecord('se-empty-default', '', '', '/tmp', { engine: 'dsh', initialProcessStatus: 'idle' })
+    const controls = [{ id: 'reasoning_effort', name: 'Reasoning', type: 'select', currentValue: 'high', options: [{ value: '', name: 'Provider default' }, { value: 'high', name: 'High' }] }]
+    const setConfigOption = vi.fn(async (_id: string, value: string) => { controls[0].currentValue = value; return true })
+    vi.spyOn(sessionRunner, 'findOrAttachAcpSession').mockResolvedValue({ sessionControls: controls, setConfigOption } as unknown as AcpSession)
+    const res = await request(createApp()).post('/api/v1/sessions/se-empty-default/controls').send({ id: 'reasoning_effort', value: '' })
+    expect(res.status).toBe(200)
+    expect(setConfigOption).toHaveBeenCalledWith('reasoning_effort', '')
+    expect(res.body.controls[0].currentValue).toBe('')
+    expect((await request(createApp()).post('/api/v1/sessions/se-empty-default/controls').send({ id: 'reasoning_effort', value: 'unknown' })).status).toBe(400)
   })
 
   it('400 for an unknown control id', async () => {

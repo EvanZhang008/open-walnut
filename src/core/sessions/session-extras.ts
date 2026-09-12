@@ -73,8 +73,8 @@ export async function applySessionControl(
   id: unknown,
   value: unknown,
 ): Promise<SessionControlsPayload> {
-  if (typeof id !== 'string' || typeof value !== 'string' || !id || !value) {
-    throw new SessionControlError('id and value must be non-empty strings', 400);
+  if (typeof id !== 'string' || typeof value !== 'string' || !id) {
+    throw new SessionControlError('id must be non-empty and value must be a string', 400);
   }
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);

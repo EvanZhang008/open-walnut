@@ -158,6 +158,11 @@ describe('splitAcpModelId', () => {
     // effort must still split, or the whole id is treated as the base id.
     expect(splitAcpModelId('vendor[x]/m[x-high]')).toEqual({ base: 'vendor[x]/m', effort: 'x-high' });
     expect(splitAcpModelId('m[]')).toEqual({ base: 'm[]' });
+    const opaque = '["provider","model/high"]';
+    expect(splitAcpModelId(opaque)).toEqual({ base: opaque });
+    expect(splitAcpModelId('[high]')).toEqual({ base: '', effort: 'high' });
+    expect(splitAcpModelId('["provider","model[tools]/high"]')).toEqual({ base: '["provider","model[tools]/high"]' });
+    expect(splitAcpModelId(`${opaque}[high]`)).toEqual({ base: opaque, effort: 'high' });
   });
 });
 
@@ -253,17 +258,36 @@ describe('AcpSession advertised model name', () => {
   });
 });
 
+it('adopts dependent controls from config responses, including an empty default value', async () => {
+  const sid = 'dsh-controls';
+  await createSessionRecord(sid, '', '', '/tmp', { engine: 'dsh', initialProcessStatus: 'idle' });
+  const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: 'dsh', providerSessionId: sid, artifacts: ARTIFACTS });
+  vi.spyOn(session, 'establish').mockResolvedValue(sid);
+  const model = { id: 'model', name: 'Model', type: 'select', currentValue: 'plain', options: [{ value: 'plain', name: 'Plain' }, { value: 'reasoning', name: 'Reasoning' }] };
+  const thought = { id: 'reasoning_effort', name: 'Reasoning', type: 'select', currentValue: '', options: [{ value: '', name: 'Provider default' }, { value: 'high', name: 'High' }] };
+  attachFakeDaemon(session, (_command, params) => ({ ok: true, result: {
+    configOptions: params?.value === 'plain' ? [model] : [model, thought],
+    models: { currentModelId: 'reasoning', availableModels: [] },
+  } }));
+  expect(await session.setConfigOption('model', 'reasoning')).toBe(true);
+  expect(session.sessionControls.map((control) => control.id)).toEqual(['model', 'reasoning_effort']);
+  expect(await session.setConfigOption('reasoning_effort', '')).toBe(true);
+  expect((await getSessionByClaudeId(sid))?.acpConfig?.reasoning_effort).toBe('');
+  expect(await session.setConfigOption('model', 'plain')).toBe(true);
+  expect(session.sessionControls.map((control) => control.id)).toEqual(['model']);
+});
+
 describe('AcpSession resume pre-empt', () => {
-  async function establishWithSeededCapabilities(loadSession: boolean): Promise<{
+  async function establishWithSeededCapabilities(loadSession: boolean, resumeSession = false): Promise<{
     startParams: { providerSessionId?: string };
   }> {
-    const sid = `gemini-old-${loadSession}`;
-    const runtimeId = `acp-gemini-resume-${loadSession}`;
+    const sid = `gemini-old-${loadSession}-${resumeSession}`;
+    const runtimeId = `acp-gemini-resume-${loadSession}-${resumeSession}`;
     await createSessionRecord(sid, '', 'Quick Start', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'gemini',
       acpRuntimeId: runtimeId,
-      acpCapabilities: capabilities(loadSession),
+      acpCapabilities: { ...capabilities(loadSession), resumeSession },
     });
     const session = new AcpSession({
       taskId: '',
@@ -302,7 +326,12 @@ describe('AcpSession resume pre-empt', () => {
 
   it('still resumes when the adapter advertises loadSession', async () => {
     const { startParams } = await establishWithSeededCapabilities(true);
-    expect(startParams.providerSessionId).toBe('gemini-old-true');
+    expect(startParams.providerSessionId).toBe('gemini-old-true-false');
+  });
+
+  it('retains the provider thread when only session/resume is advertised', async () => {
+    const { startParams } = await establishWithSeededCapabilities(false, true);
+    expect(startParams.providerSessionId).toBe('gemini-old-false-true');
   });
 });
 

@@ -42,6 +42,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/local-daemon-session-e2e.test.ts', // 29s
   'tests/providers/claude-stream-partial.e2e.test.ts', // 11s
   'tests/providers/acp-worker.test.ts', // 9s
+  'tests/providers/pi-acp-bundle.test.ts', // 6.5s
   'tests/providers/session-io.test.ts', // 2.5s (was 9s — dead RemoteIO suites + afterEach sleep)
   'tests/providers/acp-daemon.test.ts', // 7s
   'tests/providers/session-background-workflow.test.ts', // 0.3s (was 5s — afterEach sleep was 90% of it)

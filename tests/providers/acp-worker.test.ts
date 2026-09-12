@@ -8,11 +8,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { AcpWorker } from '../../src/providers/acp-worker/worker.js'
+import { AcpWorker, classifyPromptRejection } from '../../src/providers/acp-worker/worker.js'
 import { readJournal } from '../../src/providers/acp-worker/journal.js'
 import {
   WALNUT_MCP_SERVER,
   resolveWalnutMcpServers,
+  snapshotAcpModels,
+  snapshotAcpConfigOptions,
 } from '../../src/providers/acp-worker/protocol.js'
 import type { WorkerStateSnapshot, JournalRecord } from '../../src/providers/acp-worker/protocol.js'
 
@@ -63,6 +65,44 @@ beforeEach(() => {
 afterEach(async () => {
   if (worker) { await op(worker, 'shutdown').catch(() => {}) }
   fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+describe('ACP model snapshots', () => {
+  it('preserves grouped opaque values when the models extension is empty', () => {
+    const id = '["provider","model/high"]'
+    const response = {
+      models: { availableModels: [] },
+      configOptions: [{
+        id: 'model', category: 'model', type: 'select', currentValue: id,
+        options: [{ group: 'provider', name: 'Provider', options: [
+          { value: id, name: 'Model', description: 'Large context' },
+          { value: 'fallback', description: null },
+          null,
+        ] }],
+      }],
+    }
+    expect(snapshotAcpModels(response)).toEqual({ currentModelId: id, availableModels: [
+      { modelId: id, name: 'Model', description: 'Large context', groupId: 'provider', groupName: 'Provider' },
+      { modelId: 'fallback', name: 'fallback', groupId: 'provider', groupName: 'Provider' },
+    ] })
+    expect(snapshotAcpConfigOptions({ configOptions: [null, {}, { type: 'boolean' }] })).toEqual([])
+    expect(snapshotAcpModels({ configOptions: [] })).toEqual({ availableModels: [] })
+    expect(snapshotAcpModels({ _meta: { models: { currentModelId: 'legacy', availableModels: [{ modelId: 'legacy' }] } } }))
+      .toEqual({ currentModelId: 'legacy', availableModels: [{ modelId: 'legacy', name: 'legacy' }] })
+  })
+})
+
+it('keeps effort variants while deriving the current selection from config options', () => {
+  const models = { currentModelId: 'model[low]', availableModels: [
+    { modelId: 'model[low]', name: 'Model (low)' },
+    { modelId: 'model[high]', name: 'Model (high)' },
+  ] }
+  const configOptions = [
+    { id: 'model', category: 'model', type: 'select', currentValue: 'model', options: [{ value: 'model', name: 'Model' }] },
+    { id: 'reasoning_effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'high', name: 'High' }] },
+  ]
+  expect(snapshotAcpModels({ models, configOptions })).toEqual({ ...models, currentModelId: 'model[high]' })
+  expect(snapshotAcpModels({ models, configOptions: configOptions.slice(0, 1) })).toEqual(models)
 })
 
 describe('AcpWorker lifecycle', () => {
@@ -228,6 +268,34 @@ describe('AcpWorker lifecycle', () => {
     expect(fs.readFileSync(promptLog, 'utf-8').trim().split('\n')).toHaveLength(1)
   })
 
+  it('a prompt the provider rejects for a missing key journals auth_required, never the provider text', async () => {
+    const secret = 'no API key for provider route "anthropic"; export SUPER_SECRET_TOKEN=abc123'
+    worker = await initWorker({ MOCK_ACP_REJECT_PROMPT: secret })
+    await op(worker, 'newSession', { cwd: tmpDir })
+    const p = await op(worker, 'prompt', { commandId: 'acp-prompt:qm-rejected', walnutMessageId: 'qm-rejected', text: 'hello' })
+    expect(p.ok).toBe(true) // accepted for dispatch; the rejection lands in the journal
+    const recs = await waitForJournal((r) => metas(r).some((e) => e.type === 'turn-interrupted'))
+    const err = metas(recs).find((e) => e.type === 'error') as { errorKind: string; message: string } | undefined
+    expect(err?.errorKind).toBe('auth_required')
+    expect(err?.message).toBe('ACP provider authentication is required')
+    expect(fs.readFileSync(journalPath(), 'utf-8')).not.toContain('SUPER_SECRET_TOKEN')
+    expect(fs.readFileSync(journalPath(), 'utf-8')).not.toContain('abc123')
+  })
+
+  it('classifyPromptRejection: auth-shaped text → auth_required, anything else → protocol', () => {
+    expect(classifyPromptRejection(new Error('turn failed: llm-deepseek: no API key for provider route "deepseek-official"'))).toBe('auth_required')
+    expect(classifyPromptRejection(new Error('401 Unauthorized'))).toBe('auth_required')
+    expect(classifyPromptRejection(new Error('Not logged in. Run gemini to authenticate.'))).toBe('auth_required')
+    expect(classifyPromptRejection(new Error('Invalid params: unsupported content block'))).toBe('protocol')
+    expect(classifyPromptRejection('Method not found')).toBe('protocol')
+    expect(classifyPromptRejection(undefined)).toBe('protocol')
+    expect(classifyPromptRejection({ code: -32000, message: 'Sign in' })).toBe('auth_required')
+    expect(classifyPromptRejection(new Error('API key service timed out'))).toBe('protocol')
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+    expect(classifyPromptRejection(cyclic)).toBe('protocol')
+  })
+
   it('prompt while turn active → turn_active error', async () => {
     worker = await initWorker()
     await op(worker, 'newSession', { cwd: tmpDir })
@@ -271,6 +339,24 @@ describe('AcpWorker lifecycle', () => {
         configId: 'model',
         value: 'mock-gpt-fast',
       }])
+  })
+
+  it('returns the complete dependent controls and accepts the empty provider default', async () => {
+    worker = await initWorker({ MOCK_ACP_DEPENDENT_OPTIONS: '1', MOCK_ACP_CONFIG_ONLY: '1' })
+    await op(worker, 'newSession', { cwd: tmpDir })
+    for (const [configId, value, ids] of [
+      ['reasoning_effort', 'high', ['model', 'reasoning_effort']],
+      ['reasoning_effort', '', ['model', 'reasoning_effort']],
+      ['model', 'mock-gpt-fast', ['model']],
+      ['model', 'mock-gpt-best', ['model', 'reasoning_effort']],
+    ] as const) {
+      const response = await op(worker, 'setConfigOption', { commandId: `cfg-${configId}-${value}`, configId, value })
+      expect(response.ok).toBe(true)
+      const result = response.result as { configOptions: { id: string; currentValue: string }[] }
+      expect(result.configOptions.map((option) => option.id)).toEqual(ids)
+      expect(result.configOptions.find((option) => option.id === configId)?.currentValue).toBe(value)
+      expect((await op(worker, 'getState')).result).toMatchObject({ configOptions: result.configOptions })
+    }
   })
 
   it('setConfigOption updates the normalized session control currentValue', async () => {
@@ -587,6 +673,21 @@ describe('MCP server mounts', () => {
 })
 
 describe('permission round-trip', () => {
+  it('keeps tool details in reconnect snapshots when permission requests carry only an id', async () => {
+    worker = await initWorker()
+    await op(worker, 'newSession', { cwd: tmpDir })
+    await op(worker, 'prompt', { commandId: 'cmd-minimal', walnutMessageId: 'qm-minimal', text: 'minimal-permission-test' })
+    const records = await waitForJournal((r) => metas(r).some((e) => e.type === 'permission-requested'))
+    const state = (await op(worker, 'getState')).result as WorkerStateSnapshot
+    expect(state.pendingPermissions[0].toolCall).toMatchObject({
+      toolCallId: 'tc-1', title: 'Write file', rawInput: { path: 'mock.txt', content: 'approved' },
+    })
+    const request = records.find((r) => r.kind === 'acp' && (r.frame as { method?: string }).method === 'session/request_permission')
+    expect((request as { frame: { params: { toolCall: unknown } } }).frame.params.toolCall).toEqual({ toolCallId: 'tc-1' })
+    await op(worker, 'permissionResponse', { commandId: 'cmd-minimal-reject', providerRequestId: state.pendingPermissions[0].providerRequestId, optionId: 'reject-once' })
+    await waitForJournal(turnEnded)
+  })
+
   it('requestPermission → pending in state → respond → agent sees option id', async () => {
     worker = await initWorker()
     await op(worker, 'newSession', { cwd: tmpDir })
@@ -727,6 +828,61 @@ describe('load / resume', () => {
     const recs = readJournal(journalPath()).records.map(({ record }) => record)
     expect(recs.filter((record) =>
       record.kind === 'acp' && record.source === 'provider-replay').length).toBeGreaterThan(0)
+  })
+
+  it('an adapter with NO session/load but session/resume (dsh) is resumed, not reloaded', async () => {
+    const sessionLog = path.join(tmpDir, 'sessions.log')
+    worker = await initWorker({ MOCK_ACP_RESUME_ONLY: '1', MOCK_ACP_SESSION_LOG: sessionLog })
+    const state = (await op(worker, 'getState')).result as WorkerStateSnapshot
+    expect(state.capabilities.loadSession).toBe(false)
+    expect(state.capabilities.resumeSession).toBe(true)
+
+    const resp = await op(worker, 'loadSession', { providerSessionId: 'mock-session-77', cwd: tmpDir })
+    expect(resp.ok).toBe(true)
+    const recs = await waitForJournal((r) => metas(r).some((e) => e.type === 'session-loaded'))
+    const loaded = metas(recs).find((e) => e.type === 'session-loaded')
+    expect(loaded && 'providerSessionId' in loaded && loaded.providerSessionId).toBe('mock-session-77')
+    // Resume restores without a replay burst — nothing tagged provider-replay.
+    expect(recs.some((r) => r.kind === 'acp' && r.source === 'provider-replay')).toBe(false)
+    const requests = fs.readFileSync(sessionLog, 'utf-8').trim().split('\n').map((l) => JSON.parse(l) as { method: string })
+    expect(requests.map((r) => r.method)).toEqual(['session/resume'])
+
+    // The thread is live: a prompt on it works and the model catalog is populated.
+    const after = (await op(worker, 'getState')).result as WorkerStateSnapshot
+    expect(after.providerSessionId).toBe('mock-session-77')
+    expect(after.configOptions.find((o) => o.id === 'model')?.options.length).toBeGreaterThan(0)
+    const p = await op(worker, 'prompt', { commandId: 'acp-prompt:qm-after-resume', walnutMessageId: 'qm-after-resume', text: 'hello' })
+    expect(p.ok).toBe(true)
+    await waitForJournal(turnEnded)
+  })
+
+  it('a load-capable adapter is still LOADED even when it also advertises resume', async () => {
+    const sessionLog = path.join(tmpDir, 'sessions.log')
+    worker = await initWorker({ MOCK_ACP_SESSION_LOG: sessionLog, MOCK_ACP_RESUME: '1' })
+    const state = (await op(worker, 'getState')).result as WorkerStateSnapshot
+    expect(state.capabilities).toMatchObject({ loadSession: true, resumeSession: true })
+    const resp = await op(worker, 'loadSession', { providerSessionId: 'mock-session-78', cwd: tmpDir })
+    expect(resp.ok).toBe(true)
+    await waitForJournal((r) => metas(r).some((e) => e.type === 'session-loaded'))
+    const requests = fs.readFileSync(sessionLog, 'utf-8').trim().split('\n').map((l) => JSON.parse(l) as { method: string })
+    expect(requests.map((r) => r.method)).toEqual(['session/load'])
+  })
+
+  it('a GROUPED model select (dsh) is flattened into selectable choices, not read as empty', async () => {
+    worker = await initWorker({ MOCK_ACP_GROUPED_MODELS: '1', MOCK_ACP_CONFIG_ONLY: '1' })
+    const created = await op(worker, 'newSession', { cwd: tmpDir })
+    expect(created.ok).toBe(true)
+    const state = (await op(worker, 'getState')).result as WorkerStateSnapshot
+    const model = state.configOptions.find((o) => o.id === 'model')
+    expect(model).toBeDefined()
+    expect(model!.options.map((o) => o.value)).toEqual(['mock-gpt-best', 'mock-gpt-fast'])
+    expect(state.models.currentModelId).toBe('mock-gpt-best')
+    expect(state.models.availableModels.map((m) => m.name)).toEqual(['Mock GPT Best', 'Mock GPT Fast'])
+    // The group label survives the flattening so a mixed-provider list still reads.
+    expect(model!.options.every((o) => o.groupId === 'mock-provider' && o.groupName === 'Mock Provider')).toBe(true)
+    // Switching still works against the flattened value.
+    const switched = await op(worker, 'setConfigOption', { commandId: 'acp-cfg:1', configId: 'model', value: model!.options.find((o) => o.value !== model!.currentValue)!.value })
+    expect(switched.ok).toBe(true)
   })
 
   it('loadSession failure surfaces load_failed (fallback decision is the caller\'s)', async () => {

@@ -2887,6 +2887,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   // gemini is the only engine with its own dir: it discovers ONLY
   // ~/.gemini/skills and <project>/.gemini/skills, never ~/.agents or ~/.claude.
   if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))
+  if (fs.existsSync(process.env.PI_CODING_AGENT_DIR || path.join(HOME_DIR, '.pi', 'agent'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'))
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
   // the user's skill store (it shadowed the category sub-skills there); the
   // dir itself and every other entry stay. Drop the dir only when we owned

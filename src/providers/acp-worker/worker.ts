@@ -87,6 +87,7 @@ export class AcpWorker {
   private skipReplayFrames = false
   /** providerRequestId → live JSON-RPC resolver. Dies with the process (by design). */
   private pendingPermissions = new Map<string, PendingPermission>()
+  private toolCalls = new Map<string, RequestPermissionRequest['toolCall']>()
   private permissionSeq = 0
   /** Per-process nonce folded into permission ids. A bare `perm-${seq}` counter
    * restarts at 1 in every replacement worker, so a stale UI card from a dead
@@ -131,8 +132,14 @@ export class AcpWorker {
           return this.err(req, { kind: 'protocol', message: `unknown op: ${(req as WorkerRequest).op}` })
       }
     } catch (e) {
-      const werr: WorkerError = isWorkerError(e) ? e : { kind: 'internal', message: e instanceof Error ? e.message : String(e) }
-      const safeError = sanitizeWorkerError(werr)
+      const adapterError = asObject(asObject(e).data)
+      const werr: WorkerError = isWorkerError(e) ? e : {
+        kind: classifyPromptRejection(e) === 'auth_required' ? 'auth_required'
+          : adapterError.walnutError === 'provider_incompatible' ? 'provider_incompatible'
+            : adapterError.walnutError === 'provider_missing' ? 'provider_missing' : 'internal',
+        message: e instanceof Error ? e.message : String(e),
+      }
+      const safeError = sanitizeWorkerError(werr, adapterError.provider)
       const control = req.op === 'prompt'
         && (req.params as Partial<PromptParams> | undefined)?.control === 'self-report'
       const recoverableLoadFailure = req.op === 'loadSession' && werr.kind === 'load_failed'
@@ -259,7 +266,8 @@ export class AcpWorker {
 
   private async opLoadSession(params: LoadSessionParams): Promise<unknown> {
     const conn = this.requireConn()
-    this.loadingSession = true
+    const useLoad = this.capabilities.loadSession || !this.capabilities.resumeSession
+    this.loadingSession = useLoad
     // The journal already holds this conversation, so the provider's replay
     // burst is pure duplication (see the sessionUpdate handler). Gate on
     // EVIDENCE of the conversation being on disk, not on this.journal.offset:
@@ -268,13 +276,16 @@ export class AcpWorker {
     // non-empty without holding any conversation — both cases must keep the
     // replay or the conversation becomes unrecoverable (the journal is
     // walnut's only copy).
-    this.skipReplayFrames = journalHoldsConversation(this.journal.filePath)
+    this.skipReplayFrames = useLoad && journalHoldsConversation(this.journal.filePath)
     try {
-      const resp = await conn.loadSession({
+      const request = {
         sessionId: params.providerSessionId,
         cwd: params.cwd || this.cwd,
         mcpServers: this.mcpServersFor(params),
-      })
+      }
+      const resp = useLoad
+        ? await conn.loadSession(request)
+        : await conn.resumeSession(request)
       this.providerSessionId = params.providerSessionId
       this.sessionResponse = resp
       this.models = snapshotAcpModels(resp)
@@ -283,6 +294,7 @@ export class AcpWorker {
       this.notifyJournal()
       return resp
     } catch (e) {
+      if (classifyPromptRejection(e) === 'auth_required' || ['provider_incompatible', 'provider_missing'].includes(String(asObject(asObject(e).data).walnutError))) throw e
       throw <WorkerError>{ kind: 'load_failed', message: e instanceof Error ? e.message : String(e) }
     } finally {
       this.loadingSession = false
@@ -321,6 +333,7 @@ export class AcpWorker {
       commandId: params.commandId,
     }, true)
     this.notifyJournal()
+    this.toolCalls.clear()
     this.turnActive = true
     this.turnCommandId = params.commandId
 
@@ -370,10 +383,12 @@ export class AcpWorker {
       this.turnActive = false
       this.turnCommandId = null
       this.lastEnded = 'turn'
+      // Only the error category is safe to persist; provider diagnostics may contain credentials.
+      const kind = classifyPromptRejection(e)
       this.journal.appendMeta({
         type: 'error',
-        errorKind: 'protocol',
-        message: safeWorkerErrorMessage('protocol'),
+        errorKind: kind,
+        message: safeWorkerErrorMessage(kind),
         commandId: params.commandId,
       })
       this.journal.appendMeta({
@@ -565,24 +580,21 @@ export class AcpWorker {
           value: params.value,
         }
     const resp = await conn.setSessionConfigOption(request)
+    this.configOptions = Array.isArray(resp.configOptions)
+      ? snapshotAcpConfigOptions(resp)
+      : this.configOptions.map((option) => option.id === params.configId && typeof params.value === 'string'
+        ? { ...option, currentValue: params.value }
+        : option)
+    this.sessionResponse = { ...asObject(this.sessionResponse), configOptions: this.configOptions }
+    this.models = snapshotAcpModels(this.sessionResponse)
     const accepted = {
       applied: true,
       configId: params.configId,
       value: params.value,
+      configOptions: this.configOptions,
+      models: this.models,
     }
     this.rememberAcceptedCommand('setConfigOption', params.commandId, accepted)
-    this.sessionResponse = {
-      ...asObject(this.sessionResponse),
-      configOptions: resp.configOptions,
-    }
-    const responseOptions = snapshotAcpConfigOptions(resp)
-    this.configOptions = (responseOptions.length > 0 ? responseOptions : this.configOptions)
-      .map((option) => option.id === params.configId && typeof params.value === 'string'
-        ? { ...option, currentValue: params.value }
-        : option)
-    if (params.configId === 'model' && typeof params.value === 'string') {
-      this.models = { ...this.models, currentModelId: params.value }
-    }
     this.journal.appendMeta({
       type: 'command-accepted',
       op: 'setConfigOption',
@@ -655,6 +667,17 @@ export class AcpWorker {
         // (offset 0, e.g. the file was lost) still records the replay so the
         // conversation isn't unrecoverable.
         if (this.loadingSession && this.skipReplayFrames) return
+        const update = params.update
+        if (update.sessionUpdate === 'tool_call') {
+          this.toolCalls.set(update.toolCallId, { toolCallId: update.toolCallId, title: update.title, kind: update.kind, rawInput: update.rawInput })
+        } else if (update.sessionUpdate === 'tool_call_update') {
+          this.toolCalls.set(update.toolCallId, {
+            ...this.toolCalls.get(update.toolCallId), toolCallId: update.toolCallId,
+            ...(update.title !== undefined ? { title: update.title } : {}),
+            ...(update.kind !== undefined ? { kind: update.kind } : {}),
+            ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
+          })
+        }
         // Raw to journal; zero interpretation here.
         this.journal.appendAcpFrame(
           { method: 'session/update', params },
@@ -678,7 +701,7 @@ export class AcpWorker {
           this.pendingPermissions.set(providerRequestId, {
             snapshot: {
               providerRequestId,
-              toolCall: params.toolCall,
+              toolCall: { ...this.toolCalls.get(params.toolCall.toolCallId), ...params.toolCall },
               options: params.options,
               receivedAt: Date.now(),
             },
@@ -916,8 +939,21 @@ function asObject(value: unknown): Record<string, unknown> {
     : {}
 }
 
-function sanitizeWorkerError(error: WorkerError): WorkerError {
-  return { kind: error.kind, message: safeWorkerErrorMessage(error.kind) }
+function sanitizeWorkerError(error: WorkerError, provider?: unknown): WorkerError {
+  const message = error.kind === 'provider_incompatible' && provider === 'pi'
+    ? 'Pi 0.80.4 or newer is required; update the Pi CLI.'
+    : safeWorkerErrorMessage(error.kind)
+  return { kind: error.kind, message }
+}
+
+const AUTH_REJECTION_RE = /\b(?:(?:no|missing|invalid|expired) (?:api[ -]?key|credentials?)|unauthori[sz]ed|unauthenticated|not (?:signed|logged) in|authentication (?:required|failed)|auth required|login required|401)\b/i
+
+export function classifyPromptRejection(error: unknown): Extract<WorkerError['kind'], 'auth_required' | 'protocol'> {
+  const record = asObject(error)
+  const text = error instanceof Error ? error.message : typeof error === 'string' ? error : record.message
+  return record.code === -32000 || (typeof text === 'string' && AUTH_REJECTION_RE.test(text))
+    ? 'auth_required'
+    : 'protocol'
 }
 
 function safeWorkerErrorMessage(kind: WorkerError['kind']): string {

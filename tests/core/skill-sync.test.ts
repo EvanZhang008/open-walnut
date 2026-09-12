@@ -16,7 +16,7 @@
  * canonical. The daemon-side function is extracted from the deployed node
  * twin and RUN against a temp HOME.
  */
-import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -111,6 +111,16 @@ describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () =>
     expect(fs.readFileSync(path.join(claudeLink(), 'SKILL.md'), 'utf-8')).toBe(SKILL)
     expect(fs.existsSync(path.join(tmp, '.agents'))).toBe(false)
     expect(fs.existsSync(path.join(tmp, '.codex'))).toBe(false)
+  })
+
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each([false, true])('links Pi skills with a redirected agent directory: %s', (redirected) => {
+    const agentDir = path.join(tmp, redirected ? 'pi-custom' : '.pi/agent')
+    vi.stubEnv('PI_CODING_AGENT_DIR', redirected ? agentDir : '')
+    fs.mkdirSync(agentDir, { recursive: true })
+    expect(run().ok).toBe(true)
+    expect(fs.realpathSync(agentsLink())).toBe(fs.realpathSync(canonicalDir()))
   })
 
   it('with ~/.codex present, also links ~/.agents/skills/walnut', () => {

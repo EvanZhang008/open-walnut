@@ -1522,7 +1522,7 @@ export type SessionProvider = 'cli' | 'sdk' | 'embedded';
  * All registered coding-agent engines. Order = presentation preference.
  * Capabilities per engine live in src/core/agents/engine-registry.ts.
  */
-export const SESSION_ENGINE_IDS = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'custom'] as const;
+export const SESSION_ENGINE_IDS = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
 /** Which coding-agent CLI binary backs a 'cli' session (claude-code vs codex vs future engines). */
 export type SessionEngine = (typeof SESSION_ENGINE_IDS)[number];
 export type SessionType = 'interactive' | 'triage' | 'hook' | 'cron' | 'subagent';

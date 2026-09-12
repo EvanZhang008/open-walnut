@@ -186,7 +186,7 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
     async assertClean(allowances = {}) {
       const standardAbort = (failure: { method: string; url: string; errorText?: string }) => {
         const pathname = new URL(failure.url).pathname
-        if (failure.errorText !== 'net::ERR_ABORTED') return false
+        if (failure.errorText !== 'net::ERR_ABORTED' && failure.errorText !== 'cancelled') return false
         return (failure.method === 'GET'
             && (pathname.endsWith('/workflow')
               || pathname.endsWith('/history')

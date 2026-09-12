@@ -26,6 +26,9 @@ export function parseAcpModelId(modelId: string): { familyId: string; effort: st
   // Bracket form first — same split as the server's splitAcpModelId
   // (acp-session.ts); a narrower class here silently mis-parses any effort
   // the server accepts.
+  if (modelId.startsWith('[')) {
+    try { if (Array.isArray(JSON.parse(modelId))) return { familyId: modelId, effort: null }; } catch { /* An effort suffix is not JSON. */ }
+  }
   const m = /^(.*?)\[([^\]]+)\]$/.exec(modelId);
   if (m) return { familyId: m[1], effort: m[2] };
   // Path-tail form: only a last segment naming a known effort level counts,
@@ -40,6 +43,14 @@ export function parseAcpModelId(modelId: string): { familyId: string; effort: st
  *  Provider-prefixed ids keep only the model half, and Anthropic ids get the
  *  same versioned short form the claude pane shows ("Sonnet 4.6"). */
 export function acpFamilyName(familyId: string): string {
+  if (familyId.startsWith('[')) {
+    try {
+      const value: unknown = JSON.parse(familyId);
+      if (Array.isArray(value) && value.length === 2 && value.every((part) => typeof part === 'string')) {
+        return acpFamilyName(value[1]);
+      }
+    } catch { /* Non-JSON ids keep their original display path. */ }
+  }
   const tail = familyId.includes('/') ? familyId.slice(familyId.lastIndexOf('/') + 1) : familyId;
   const versioned = formatModelName(tail);
   if (/^(Opus|Sonnet|Haiku|Fable) \d/.test(versioned)) return versioned;
@@ -59,6 +70,13 @@ export function acpFamilyName(familyId: string): string {
  *  ("amazon-bedrock/…" → amazon-bedrock). Ids without one (codex, mock) fall
  *  into a single anonymous group, which hides the group column entirely. */
 export function acpProviderGroupId(familyId: string): string {
+  if (familyId.startsWith('[')) {
+    try {
+      const tuple: unknown = JSON.parse(familyId);
+      if (Array.isArray(tuple) && tuple.length === 2 && tuple.every((part) => typeof part === 'string')) return tuple[0];
+    } catch { /* Non-JSON ids have no provider group. */ }
+    return '';
+  }
   const idx = familyId.indexOf('/');
   return idx > 0 ? familyId.slice(0, idx) : '';
 }
@@ -146,6 +164,8 @@ export interface AcpCatalogModel {
   modelId: string;
   name: string;
   description?: string;
+  groupId?: string;
+  groupName?: string;
 }
 
 export interface AcpModelFamily {
@@ -175,15 +195,15 @@ export function groupAcpModels(models: readonly AcpCatalogModel[]): AcpModelGrou
   const groups = new Map<string, { id: string; label: string; families: Map<string, AcpModelFamily> }>();
   for (const m of models) {
     const { familyId, effort } = parseAcpModelId(m.modelId);
-    const groupId = acpProviderGroupId(familyId);
+    const groupId = m.groupId ?? acpProviderGroupId(familyId);
     let group = groups.get(groupId);
     if (!group) {
       // Prefer the provider's own spelling from the advertised name
       // ("Amazon Bedrock/Claude …"); ids without one prettify the id.
       const nameSlash = m.name.indexOf('/');
-      const label = groupId
-        ? (nameSlash > 0 ? m.name.slice(0, nameSlash).trim() : prettyGroupLabel(groupId))
-        : '';
+      const label = m.groupName ?? (groupId
+        ? (!familyId.startsWith('[') && nameSlash > 0 ? m.name.slice(0, nameSlash).trim() : prettyGroupLabel(groupId))
+        : '');
       group = { id: groupId, label, families: new Map() };
       groups.set(groupId, group);
     }
@@ -197,7 +217,7 @@ export function groupAcpModels(models: readonly AcpCatalogModel[]): AcpModelGrou
       // .trim() is non-empty and the `|| ` fallback never fires — the row
       // rendered the raw qualified id.
       const nameSlash = m.name.indexOf('/');
-      const withoutGroup = groupId && nameSlash > 0 ? m.name.slice(nameSlash + 1) : m.name;
+      const withoutGroup = groupId && !familyId.startsWith('[') && nameSlash > 0 ? m.name.slice(nameSlash + 1) : m.name;
       const label = m.name === m.modelId
         ? acpFamilyName(familyId)
         : withoutGroup.replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, '').trim()

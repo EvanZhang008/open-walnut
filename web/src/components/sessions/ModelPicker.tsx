@@ -99,6 +99,27 @@ function GooseMark() {
   );
 }
 
+/** The Greek letter π — pi's wordmark. */
+function PiMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4.5 8h15" />
+      <path d="M8.5 8v10.5" />
+      <path d="M15.5 8v8.2c0 1.4.8 2.3 2.1 2.3.7 0 1.3-.3 1.9-.8" />
+    </svg>
+  );
+}
+
+/** Whale silhouette — DeepSeek's mark, drawn as a simple outline. */
+function DshMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#4D6BFE" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3.5 12.5c1.2-3.6 4.4-5.8 8.3-5.8 3 0 5.5 1.3 7 3.4l2.2-1.6-.6 3.2.6 3.2-2.2-1.6c-1.5 2.1-4 3.4-7 3.4-3.9 0-7.1-2.2-8.3-5.8z" />
+      <circle cx="9" cy="11.6" r="0.5" fill="#4D6BFE" stroke="none" />
+    </svg>
+  );
+}
+
 /** Sliders — the operator-configured `custom` adapter. */
 function CustomEngineMark() {
   return (
@@ -127,6 +148,8 @@ const PROVIDER_ICONS: Partial<Record<string, React.FC>> = {
   gemini: GeminiMark,
   opencode: OpenCodeMark,
   goose: GooseMark,
+  pi: PiMark,
+  dsh: DshMark,
   custom: CustomEngineMark,
 };
 

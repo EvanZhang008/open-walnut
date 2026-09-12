@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { SESSION_ENGINE_IDS } from '../../src/core/types';
 import {
   SessionStatusStore,
   type SessionStatusSnapshot,
@@ -158,6 +159,60 @@ describe('SessionStatusStore', () => {
       engine: null,
     }, 'ws')).toBe('rejected-invalid');
     expect(store.getStatus('provider-session-1')).toBeNull();
+  });
+
+  // The engine validator is derived from the ONE registry (SESSION_ENGINE_IDS),
+  // not a hand-listed pair: a snapshot whose engine fails this check is REJECTED
+  // WHOLE, so a hardcoded list here would blank the pill of every session on a
+  // newly added engine. Kept a SYNCHRONOUS import on purpose — this runs on the
+  // WS path before React renders, so it can never wait on /api/engines.
+  it('accepts every registered engine and rejects unregistered ones', () => {
+    for (const [i, engine] of SESSION_ENGINE_IDS.entries()) {
+      const store = new SessionStatusStore();
+      expect(store.applyVersioned(status(i + 1, { engine }), 'ws')).toBe('accepted');
+      expect(store.getStatus('provider-session-1')).toMatchObject({ engine });
+    }
+    const store = new SessionStatusStore();
+    expect(store.applyVersioned(status(1, { engine: 'zcode' as never }), 'ws')).toBe('rejected-invalid');
+  });
+
+  it.each(SESSION_ENGINE_IDS)('preserves %s through REST hydration and later status snapshots', (engine) => {
+    const store = new SessionStatusStore();
+    store.seedSessionRecord({
+      claudeSessionId: 'provider-session-1', process_status: 'idle', engine,
+      statusRevision: 1, statusUpdatedAt: '2026-07-19T12:00:01.000Z',
+    });
+    expect(store.getStatus('provider-session-1')?.engine).toBe(engine);
+    expect(store.applyVersioned(status(2, { engine }), 'ws')).toBe('accepted');
+    expect(store.getStatus('provider-session-1')?.engine).toBe(engine);
+    const legacy = new SessionStatusStore();
+    legacy.seedSessionRecord({ claudeSessionId: 'provider-session-1', process_status: 'idle', engine });
+    expect(legacy.getStatus('provider-session-1')?.engine).toBe(engine);
+  });
+
+  it('falls back to the default engine when a REST record omits or garbles it', () => {
+    const store = new SessionStatusStore();
+    store.seedSessionRecord({
+      claudeSessionId: 'provider-session-1',
+      process_status: 'idle',
+      engine: 'zcode',
+      statusRevision: 4,
+      statusUpdatedAt: '2026-07-19T12:00:04.000Z',
+    });
+    expect(store.getStatus('provider-session-1')).toMatchObject({ engine: 'claude' });
+
+    // Unversioned records take the same route through legacyPatchFromRecord: a
+    // registered engine lands verbatim, an unregistered one falls back instead
+    // of storing junk the pill would have to interpret.
+    const legacy = new SessionStatusStore();
+    legacy.seedSessionRecord({
+      claudeSessionId: 'provider-session-2', process_status: 'idle', engine: 'gemini',
+    });
+    expect(legacy.getStatus('provider-session-2')).toMatchObject({ engine: 'gemini' });
+    legacy.seedSessionRecord({
+      claudeSessionId: 'provider-session-3', process_status: 'idle', engine: 'zcode',
+    });
+    expect(legacy.getStatus('provider-session-3')).toMatchObject({ engine: 'claude' });
   });
 
   it('rejects incomplete versioned snapshots instead of treating omissions as clears', () => {

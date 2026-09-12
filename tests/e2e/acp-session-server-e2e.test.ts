@@ -223,7 +223,7 @@ beforeAll(async () => {
       EventNames.SESSION_RESULT, EventNames.SESSION_ERROR,
       EventNames.SESSION_PERMISSION_REQUEST, EventNames.SESSION_PERMISSION_RESOLVED,
       EventNames.SESSION_SYSTEM_EVENT, EventNames.SESSION_START,
-      EventNames.SESSION_STATUS_CHANGED,
+      EventNames.SESSION_STATUS_CHANGED, EventNames.SESSION_BATCH_COMPLETED,
     ],
   })
 
@@ -671,6 +671,96 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
     expect(replacementAt).toBeGreaterThan(interruptedAt)
   }, 30_000)
 
+  it('holds a concurrent send until an active ACP turn has restarted', async () => {
+    const session = sessionRunner.findAcpSession(sessionId)!
+    const priorTools = eventsFor(sessionId, EventNames.SESSION_TOOL_USE).length
+    await sendMessageToSession(sessionId, 'status-slow-tool-long', { source: 'ui', taskId })
+    await waitFor(() => eventsFor(sessionId, EventNames.SESSION_TOOL_USE).length > priorTools, 15_000, 'active tool')
+    let release!: () => void
+    let entered!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const establish = session.establish.bind(session)
+    const spy = vi.spyOn(session, 'establish').mockImplementation(async () => {
+      entered()
+      await hold
+      return establish()
+    })
+    const response = fetch(apiUrl(`/api/sessions/${sessionId}/restart`), { method: 'POST' })
+    try {
+      await started
+      await sendMessageToSession(sessionId, 'queued during ACP restart', { source: 'ui', taskId })
+      expect(textFor(sessionId)).not.toContain('you said: queued during ACP restart')
+    } finally {
+      release()
+      spy.mockRestore()
+    }
+    expect((await response).status).toBe(200)
+    await waitFor(() => textFor(sessionId).includes('you said: queued during ACP restart'), 20_000, 'queued restart reply')
+    const records = journalRecords(session.runtimeId)
+    const accepted = records.findIndex((row) => row.kind === 'meta' && (row.event as { text?: string }).text === 'queued during ACP restart')
+    const loaded = records.findLastIndex((row) => row.kind === 'meta' && row.event.type === 'session-loaded')
+    expect(loaded).toBeGreaterThanOrEqual(0)
+    expect(accepted).toBeGreaterThan(loaded)
+    expect(sessionRunner.findSessionByClaudeId(sessionId)).toBeUndefined()
+    expect(promptFacts(session.runtimeId).filter((fact) => fact.event.text === 'queued during ACP restart')).toHaveLength(1)
+  }, 40_000)
+
+  it('recovers a concurrent send when ACP restart fails after aborting the old turn', async () => {
+    const session = sessionRunner.findAcpSession(sessionId)!
+    const priorTools = eventsFor(sessionId, EventNames.SESSION_TOOL_USE).length
+    const priorBatches = eventsFor(sessionId, EventNames.SESSION_BATCH_COMPLETED).length
+    await sendMessageToSession(sessionId, 'status-slow-tool-long', { source: 'ui', taskId })
+    await waitFor(() => eventsFor(sessionId, EventNames.SESSION_TOOL_USE).length > priorTools, 15_000, 'active tool before failed restart')
+    let release!: () => void
+    let entered!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const spy = vi.spyOn(session, 'establish').mockImplementationOnce(async () => {
+      entered()
+      await hold
+      throw new Error('Injected ACP restart failure')
+    })
+    const response = fetch(apiUrl(`/api/sessions/${sessionId}/restart`), { method: 'POST' })
+    try {
+      try {
+        await started
+        await waitFor(() => eventsFor(sessionId, EventNames.SESSION_BATCH_COMPLETED).length > priorBatches, 5_000, 'interrupted batch settled')
+        await sendMessageToSession(sessionId, 'queued during failed ACP restart', { source: 'ui', taskId })
+        expect(textFor(sessionId)).not.toContain('you said: queued during failed ACP restart')
+      } finally {
+        release()
+      }
+      expect((await response).status).toBe(500)
+      await waitFor(() => textFor(sessionId).includes('you said: queued during failed ACP restart'), 20_000, 'normal recovery after failed restart')
+      await waitForAsync(async () => (await getSessionsForTask(taskId)).find((record) => record.claudeSessionId === sessionId)?.process_status === 'idle', 10_000, 'recovered session idle')
+      expect(promptFacts(session.runtimeId).filter((fact) => fact.event.text === 'queued during failed ACP restart')).toHaveLength(1)
+      expect(sessionRunner.findSessionByClaudeId(sessionId)).toBeUndefined()
+    } finally {
+      spy.mockRestore()
+    }
+  }, 40_000)
+
+  it('settles the old batch when restart fails before abort and lets the live turn finish', async () => {
+    const session = sessionRunner.findAcpSession(sessionId)!
+    const textBefore = textFor(sessionId).length
+    const priorBatches = eventsFor(sessionId, EventNames.SESSION_BATCH_COMPLETED).length
+    await sendMessageToSession(sessionId, 'steer-window', { source: 'ui', taskId })
+    await waitFor(() => textFor(sessionId).slice(textBefore).includes('steer window open'), 15_000, 'live turn before restart rejection')
+    const spy = vi.spyOn(session, 'restart').mockRejectedValueOnce(new Error('Injected restart connection failure'))
+    try {
+      const response = await fetch(apiUrl(`/api/sessions/${sessionId}/restart`), { method: 'POST' })
+      expect(response.status).toBe(500)
+      expect(eventsFor(sessionId, EventNames.SESSION_BATCH_COMPLETED).length).toBeGreaterThan(priorBatches)
+      await sendMessageToSession(sessionId, 'after rejected restart', { source: 'ui', taskId })
+      await waitFor(() => textFor(sessionId).includes('steered:after rejected restart'), 20_000, 'delivery into the surviving live turn')
+      await waitForAsync(async () => (await getSessionsForTask(taskId)).find((record) => record.claudeSessionId === sessionId)?.process_status === 'idle', 10_000, 'live turn and recovery idle')
+      expect(journalRecords(session.runtimeId).filter((row) => row.kind === 'meta' && (row.event as { type?: string; text?: string }).type === 'steer-accepted' && (row.event as { text?: string }).text === 'after rejected restart')).toHaveLength(1)
+    } finally {
+      spy.mockRestore()
+    }
+  }, 40_000)
+
   it('re-attaches from the record after the runner loses its in-memory session (server-restart equivalent)', async () => {
     // Simulate a web-server restart: the runner's in-memory ACP map is empty,
     // but the record (engine + acpRuntimeId + providerSessionId) survives.
@@ -798,8 +888,8 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
       .toMatch(/earlier history remains visible/i)
     expect(eventsFor(previousSessionId, EventNames.SESSION_ERROR)).toHaveLength(errorsBefore)
 
-    expect(await getQueue(previousSessionId)).toEqual([])
-    expect(await getQueue(newSessionId)).toEqual([])
+    await waitForAsync(async () => (await getQueue(previousSessionId)).length === 0
+      && (await getQueue(newSessionId)).length === 0, 10_000, 'fallback delivery queue settled')
     expect((await getSessionsForTask(taskId))
       .find((record) => record.claudeSessionId === previousSessionId)).toBeUndefined()
     const settled = (await getSessionsForTask(taskId))
@@ -824,6 +914,41 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
     expect(task.session_ids).toContain(newSessionId)
     expect(task.session_ids).not.toContain(previousSessionId)
     sessionId = newSessionId
+  }, 40_000)
+
+  it('restarts across a provider identity boundary when the old thread cannot load', async () => {
+    const previousSessionId = sessionId
+    const session = sessionRunner.findAcpSession(previousSessionId)!
+    const promptsBefore = promptFacts(session.runtimeId).length
+    fs.writeFileSync(path.join(daemonDir, 'fail-next-load'), 'reject restart load')
+    let release!: () => void
+    let entered!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const establish = session.establish.bind(session)
+    const spy = vi.spyOn(session, 'establish').mockImplementationOnce(async () => {
+      entered()
+      await hold
+      return establish()
+    })
+    const response = fetch(apiUrl(`/api/sessions/${previousSessionId}/restart`), { method: 'POST' })
+    try {
+      await started
+      await sendMessageToSession(previousSessionId, 'after restart identity change', { source: 'ui', taskId })
+      expect(promptFacts(session.runtimeId)).toHaveLength(promptsBefore)
+    } finally {
+      release()
+      spy.mockRestore()
+    }
+    expect((await response).status).toBe(200)
+    const replacement = (await getSessionsForTask(taskId)).find((record) => record.acpRuntimeId === session.runtimeId)!
+    expect(replacement.claudeSessionId).not.toBe(previousSessionId)
+    sessionId = replacement.claudeSessionId
+    expect((await getTask(taskId)).session_id).toBe(sessionId)
+    await waitFor(() => textFor(sessionId).includes('you said: after restart identity change'), 20_000, 'queued message follows restart identity change')
+    await waitForAsync(async () => (await getQueue(previousSessionId)).length === 0 && (await getQueue(sessionId)).length === 0, 10_000, 'identity queues drained')
+    expect(promptFacts(session.runtimeId).filter((fact) => fact.event.text === 'after restart identity change')).toHaveLength(1)
+    expect(sessionRunner.findSessionByClaudeId(sessionId)).toBeUndefined()
   }, 40_000)
 
   it('rejects Codex fork before task creation or native session start', async () => {
@@ -930,7 +1055,7 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
 // and that suite's findRuntimeId() asserts a single journal file in streamsDir.
 describe.runIf(HAVE_BIN)('ACP engine conformance through the real server', () => {
   it('covers every ACP engine in the registry', () => {
-    expect(acpEngineIds()).toEqual(['codex', 'gemini', 'opencode', 'goose', 'custom'])
+    expect(acpEngineIds()).toEqual(['codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'])
   })
 
   describe.each(acpEngineIds())('engine=%s', (engine) => {
@@ -955,6 +1080,24 @@ describe.runIf(HAVE_BIN)('ACP engine conformance through the real server', () =>
       expect(record.process_status).toBe('idle')
       expect(textFor(sessionId)).toContain(`you said: hello ${engine} conformance`)
     })
+
+    it('restarts the ACP worker without creating a native session or an extra turn', async () => {
+      const session = sessionRunner.findAcpSession(sessionId)!
+      const journalPath = path.join(streamsDir, `${session.runtimeId}.acp.jsonl`)
+      const readJournal = () => fs.readFileSync(journalPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+      const promptsBefore = readJournal().filter((row) => row.event?.type === 'prompt-accepted').length
+      const responses = await Promise.all([1, 2].map(() => fetch(apiUrl(`/api/sessions/${sessionId}/restart`), { method: 'POST' })))
+      for (const response of responses) expect(response.status).toBe(200)
+      expect(sessionRunner.findSessionByClaudeId(sessionId)).toBeUndefined()
+      expect(sessionRunner.findAcpSession(sessionId)?.active).toBe(true)
+      const records = readJournal()
+      expect(records.some((row) => row.event?.type === 'session-loaded')).toBe(true)
+      expect(records.filter((row) => row.event?.type === 'prompt-accepted')).toHaveLength(promptsBefore)
+      await sendMessageToSession(sessionId, `after restart ${engine}`, { source: 'ui', taskId })
+      await waitFor(() => textFor(sessionId).includes(`you said: after restart ${engine}`), 20_000, 'post-restart reply')
+      await waitForAsync(async () => (await getSessionsForTask(taskId)).find((row) => row.claudeSessionId === sessionId)?.process_status === 'idle', 10_000, 'post-restart idle')
+      expect(eventsFor(sessionId, EventNames.SESSION_ERROR)).toHaveLength(0)
+    }, 40_000)
 
     it('serves the provider-advertised model catalog', async () => {
       const response = await fetch(apiUrl(`/api/sessions/${sessionId}/model-catalog`))

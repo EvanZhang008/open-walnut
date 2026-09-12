@@ -473,6 +473,8 @@ export interface CodexModelInfo {
   modelId: string;
   name: string;
   description?: string;
+  groupId?: string;
+  groupName?: string;
 }
 
 /** The per-session ACP model catalog. Engine-generic on the server (it asks

@@ -2044,7 +2044,7 @@ function handleCommand(ws, msg) {
 // This template runs on a plain remote Node with no imports, so the routing
 // table is inlined here verbatim instead of being required.
 // Engines on the ACP worker family — mirrors engine-registry runtimeKind==='acp'.
-var AGENT_ACP_ENGINES = { codex: 1, gemini: 1, opencode: 1, goose: 1, custom: 1 };
+var AGENT_ACP_ENGINES = { codex: 1, gemini: 1, opencode: 1, goose: 1, pi: 1, dsh: 1, custom: 1 };
 var AGENT_ACP_ROUTES = {
   start: 'acpStart', send: 'acpSend', steer: 'acpSteer', cancel: 'acpCancel',
   respond: 'acpRespond', setOption: 'acpSetConfigOption', state: 'acpState',
@@ -3726,6 +3726,7 @@ function cmdSkillsSync(ws, id, cmd) {
   }
   // gemini discovers ONLY ~/.gemini/skills (never ~/.agents or ~/.claude).
   if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'));
+  if (fs.existsSync(process.env.PI_CODING_AGENT_DIR || path.join(HOME_DIR, '.pi', 'agent'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'));
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
   // the user's skill store; the dir and every other entry stay. Drop the dir
   // only when we owned the sole file in it.

@@ -77,9 +77,9 @@ import {
   rollbackSessionQueueMigration,
 } from '../core/session-message-queue.js'
 
-/** node_modules adapter entry per 'bundled' engine (only codex ships one today). */
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
+  pi: 'dist/daemon-binaries/pi-acp.js',
 }
 
 export interface ResolveAcpArtifactsOptions {
@@ -586,6 +586,9 @@ const ACP_COLD_RESUME_TIMEOUT_MS = 5 * 60_000
  * config write can never disagree about where the split is.
  */
 export function splitAcpModelId(modelId: string): { base: string; effort?: string } {
+  if (modelId.startsWith('[')) {
+    try { if (Array.isArray(JSON.parse(modelId))) return { base: modelId } } catch { /* An effort suffix is not JSON. */ }
+  }
   const match = /^(.*?)\[([^\]]+)\]$/.exec(modelId)
   return match ? { base: match[1], effort: match[2] } : { base: modelId }
 }
@@ -971,6 +974,7 @@ export class AcpSession {
    */
   private async resolveMcpServers(): Promise<AcpMcpServer[]> {
     if (this.cfg.walnutMcpServer) {
+      if (this.engineId === 'pi') throw new Error('Pi does not support MCP mounts; use the walnut CLI instead.')
       return [{
         ...this.cfg.walnutMcpServer,
         args: [...this.cfg.walnutMcpServer.args],
@@ -981,9 +985,14 @@ export class AcpSession {
       const { getConfig } = await import('../core/config-manager.js')
       const config = await getConfig()
       // Read structurally: the field is optional and additive in Config.
-      return resolveWalnutMcpServers(
+      const servers = resolveWalnutMcpServers(
         config.session as { acp_walnut_mcp?: boolean } | undefined,
       )
+      if (this.engineId === 'pi' && servers.length > 0) {
+        log.session.warn('Pi does not support MCP mounts; the walnut CLI remains available', { runtimeId: this.runtimeId })
+        return []
+      }
+      return servers
     } catch (error) {
       log.session.debug('acp: MCP mount config unreadable — mounting none', {
         runtimeId: this.runtimeId,
@@ -1037,12 +1046,14 @@ export class AcpSession {
    * otherwise outranks the profile the operator configured (real failure:
    * goose sent a bearer Authorization header → IncompleteSignatureException).
    */
-  private async buildAdapterEnv(systemCodex: string | undefined): Promise<Record<string, string> | undefined> {
+  private async buildAdapterEnv(providerExecutable: string | undefined): Promise<Record<string, string> | undefined> {
     const overlay = await this.resolveConfiguredEngineEnv()
     if (this.engineId !== 'codex') {
       const managed = buildAcpAdapterEnv(undefined, { sessionId: this.runtimeId })
-      if (!overlay) return managed
-      return { ...overlay, ...(managed ?? {}) }
+      const provider = this.engineId === 'pi' && providerExecutable
+        ? { PI_ACP_PI_COMMAND: providerExecutable }
+        : undefined
+      return { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) }
     }
     const parsedBaseConfig = parseCodexBaseConfig(process.env.CODEX_CONFIG)
     // Startup approval preset: the session's OWN persisted choice wins (it is
@@ -1076,7 +1087,7 @@ export class AcpSession {
         defaultInstructions = (await buildSessionContext(this.taskId, this.cfg.cwd)).systemPrompt || undefined
       } catch { /* context is additive — never block establish */ }
     }
-    const managed = buildAcpAdapterEnv(systemCodex, {
+    const managed = buildAcpAdapterEnv(providerExecutable, {
       disableProjectInstructions: this.cfg.disableProjectInstructions,
       developerInstructions: this.cfg.developerInstructions ?? defaultInstructions,
       baseConfig: parsedBaseConfig,
@@ -1125,8 +1136,8 @@ export class AcpSession {
     // Production always passes a validated system Codex path — omitting
     // CODEX_PATH would make codex-acp silently use its bundled dependency.
     // Tests that inject a mock adapter do not need a Codex executable.
-    const systemCodex = this.engineId === 'codex' && !this.cfg.artifacts
-      ? resolveSystemCodexPath()
+    const providerExecutable = !this.cfg.artifacts && engineCaps(this.engineId).acpAdapter?.source === 'bundled'
+      ? resolveEngineExecutable({ engine: this.engineId, cwd: this.cfg.cwd })
       : undefined
 
     // Concurrent with ensureConn: the mount list is a small config read and must
@@ -1136,7 +1147,7 @@ export class AcpSession {
       this.resolveMcpServers(),
       this.ensureConn(),
     ])
-    const adapterEnv = await this.buildAdapterEnv(systemCodex)
+    const adapterEnv = await this.buildAdapterEnv(providerExecutable)
     // Adapters that answer `loadSession: false` (gemini) can NEVER resume a
     // provider thread: acpStart would run session/load, get load_failed, and
     // fall back to a fresh session on EVERY worker respawn. Pre-empt that round
@@ -1145,6 +1156,7 @@ export class AcpSession {
     // ignores providerSessionId entirely, so this is a no-op when nothing died.
     const preemptFreshSession = Boolean(this._providerSessionId)
       && this._capabilities?.loadSession === false
+      && this._capabilities?.resumeSession !== true
     const boundaryFrom = preemptFreshSession ? this.trackingId() : undefined
     if (preemptFreshSession) {
       log.session.info('acp: adapter cannot load sessions — starting a fresh provider thread', {
@@ -1238,9 +1250,10 @@ export class AcpSession {
         value,
       }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
       if (resp.ok) {
-        this._configOptions = this._configOptions.map((c) =>
+        const result = (resp as { result?: { configOptions?: AcpConfigOption[]; models?: AcpModelCatalog } }).result
+        this._configOptions = result?.configOptions ?? this._configOptions.map((c) =>
           c.id === configId ? { ...c, currentValue: value } : c)
-        if (configId === 'model') this._models = { ...this._models, currentModelId: value }
+        this._models = result?.models ?? (configId === 'model' ? { ...this._models, currentModelId: value } : this._models)
         log.session.info('acp: replayed persisted config after worker spawn', {
           runtimeId: this.runtimeId, configId, value,
         })
@@ -1574,7 +1587,7 @@ export class AcpSession {
 
   /** Apply any provider-advertised session option through standard ACP config. */
   async setConfigOption(configId: string, value: string): Promise<boolean> {
-    if (!configId || !value) return false
+    if (!configId) return false
     await this.establish()
     const conn = await this.ensureConn()
     const resp = await conn.send('acpSetConfigOption', {
@@ -1584,13 +1597,14 @@ export class AcpSession {
       value,
     })
     if (!resp.ok) return false
-    this._configOptions = this._configOptions.map((control) =>
+    const result = resp.result as { configOptions?: AcpConfigOption[]; models?: AcpModelCatalog } | undefined
+    this._configOptions = result?.configOptions ?? this._configOptions.map((control) =>
       control.id === configId ? { ...control, currentValue: value } : control)
-    if (configId === 'model') this._models = { ...this._models, currentModelId: value }
+    this._models = result?.models ?? (configId === 'model' ? { ...this._models, currentModelId: value } : this._models)
     const record = await getSessionByClaudeId(this.trackingId())
     await updateSessionRecord(this.trackingId(), {
-      ...(configId === 'model'
-        ? { acpModel: value, ...this.acpModelNamePatch(value) }
+      ...(this._models.currentModelId
+        ? { acpModel: this._models.currentModelId, ...this.acpModelNamePatch(this._models.currentModelId) }
         : {}),
       acpConfig: { ...(record?.acpConfig ?? this.cfg.acpConfig ?? {}), [configId]: value },
     })
@@ -1805,6 +1819,14 @@ export class AcpSession {
       )
     }
     return promise
+  }
+
+  async restart(): Promise<string> {
+    if (this._establishing) await this._establishing
+    // acpCancel confirms process-group exit; acpStop only acknowledges shutdown intent.
+    await this.abortTurn()
+    await this._cursorCommit
+    return this.establish()
   }
 
   /** Graceful stop: shut the worker down (journal meta → adapter teardown). */

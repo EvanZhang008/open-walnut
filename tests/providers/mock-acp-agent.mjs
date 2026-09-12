@@ -21,6 +21,13 @@
  * Set MOCK_ACP_SESSION_LOG to record every session/new + session/load request
  * (method + mcpServers + cwd), so tests can assert what the CLIENT actually
  * sent — the only honest check for MCP mount wiring.
+ * Set MOCK_ACP_RESUME_ONLY=1 to model an adapter with NO session/load that
+ * advertises sessionCapabilities.resume instead (dsh): session/load answers
+ * "Method not found", session/resume restores the thread WITHOUT a replay burst.
+ * Set MOCK_ACP_GROUPED_MODELS=1 to publish the model select as
+ * SessionConfigSelectGroup[] (one group per provider, dsh's shape).
+ * Set MOCK_ACP_REJECT_PROMPT=<text> to reject every session/prompt with a
+ * JSON-RPC internal error whose message carries <text>.
  * Set MOCK_ACP_EXIT_ON_STDIN_CLOSE_MS to delay exit after stdin closes
  * (default 50ms — models codex-acp's ~2s app-server teardown, shortened).
  */
@@ -39,6 +46,7 @@ const steeredTexts = [];          // texts injected mid-turn via _session/steeri
 const sessionModels = new Map();
 const sessionModes = new Map();
 const sessionCollaborationModes = new Map();
+const sessionEfforts = new Map();
 const availableModels = [
   { modelId: 'mock-gpt-best', name: 'Mock GPT Best', description: 'Best mock model' },
   { modelId: 'mock-gpt-fast', name: 'Mock GPT Fast', description: 'Fast mock model' },
@@ -55,7 +63,7 @@ function reply(id, result) {
   send({ jsonrpc: '2.0', id, result });
 }
 function replyError(id, message) {
-  send({ jsonrpc: '2.0', id, error: { code: -32000, message } });
+  send({ jsonrpc: '2.0', id, error: { code: -32603, message } });
 }
 function notify(method, params) {
   send({ jsonrpc: '2.0', method, params });
@@ -77,11 +85,21 @@ function modelConfigOption(sessionId) {
     category: 'model',
     type: 'select',
     currentValue: models.currentModelId,
-    options: models.availableModels.map((model) => ({
-      value: model.modelId,
-      name: model.name,
-      description: model.description,
-    })),
+    options: process.env.MOCK_ACP_GROUPED_MODELS === '1'
+      ? [{
+          group: 'mock-provider',
+          name: 'Mock Provider',
+          options: models.availableModels.map((model) => ({
+            value: model.modelId,
+            name: model.name,
+            description: model.description,
+          })),
+        }]
+      : models.availableModels.map((model) => ({
+          value: model.modelId,
+          name: model.name,
+          description: model.description,
+        })),
   };
 }
 
@@ -128,6 +146,14 @@ function logSessionRequest(method, params) {
 }
 
 function sessionConfigOptions(sessionId) {
+  if (process.env.MOCK_ACP_DEPENDENT_OPTIONS === '1') return [
+    modelConfigOption(sessionId),
+    ...(modelState(sessionId).currentModelId === 'mock-gpt-best' ? [{
+      id: 'reasoning_effort', name: 'Reasoning effort', category: 'thought_level', type: 'select',
+      currentValue: sessionEfforts.get(sessionId) ?? '',
+      options: [{ value: '', name: 'Provider default' }, { value: 'high', name: 'High' }],
+    }] : []),
+  ];
   return [
     modeConfigOption(sessionId),
     collaborationModeConfigOption(sessionId),
@@ -301,9 +327,13 @@ async function handlePrompt(id, params) {
 
   if (text.includes('permission-test')) {
     chunk(sessionId, 'about to ask permission');
+    const minimal = text.includes('minimal-permission-test');
+    if (minimal) notify('session/update', { sessionId, update: {
+      sessionUpdate: 'tool_call', toolCallId: 'tc-1', title: 'Write file', kind: 'edit', status: 'pending', rawInput: { path: 'mock.txt', content: 'approved' },
+    } });
     const resp = await request('session/request_permission', {
       sessionId,
-      toolCall: { toolCallId: 'tc-1', title: 'Write file /tmp/mock.txt', kind: 'edit', status: 'pending' },
+      toolCall: minimal ? { toolCallId: 'tc-1' } : { toolCallId: 'tc-1', title: 'Write file /tmp/mock.txt', kind: 'edit', status: 'pending' },
       options: [
         { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
         { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
@@ -371,12 +401,13 @@ rl.on('line', async (line) => {
       reply(msg.id, {
         protocolVersion: msg.params?.protocolVersion ?? 1,
         agentCapabilities: {
-          loadSession: true,
+          loadSession: process.env.MOCK_ACP_RESUME_ONLY !== '1',
           promptCapabilities: { image: true },
           sessionCapabilities: {
             list: {},
             close: {},
             additionalDirectories: {},
+            ...(process.env.MOCK_ACP_RESUME_ONLY === '1' || process.env.MOCK_ACP_RESUME === '1' ? { resume: {} } : {}),
           },
         },
         agentInfo: { name: 'mock-acp-agent', version: '1.0.0' },
@@ -421,13 +452,30 @@ rl.on('line', async (line) => {
         reply(msg.id, {
           sessionId,
           configOptions: sessionConfigOptions(sessionId),
-          _meta: { models },
-          models,
+          ...(process.env.MOCK_ACP_CONFIG_ONLY === '1' ? {} : { _meta: { models }, models }),
         });
       }
       break;
+    case 'session/resume': {
+      logSessionRequest('session/resume', msg.params);
+      if (process.env.MOCK_ACP_RESUME_ONLY !== '1' && process.env.MOCK_ACP_RESUME !== '1') {
+        replyError(msg.id, '"Method not found": session/resume');
+        break;
+      }
+      const sid = msg.params?.sessionId;
+      if (!sessionModels.has(sid)) sessionModels.set(sid, 'mock-gpt-best');
+      if (!sessionModes.has(sid)) sessionModes.set(sid, 'agent');
+      if (!sessionCollaborationModes.has(sid)) sessionCollaborationModes.set(sid, 'default');
+      // No replay: resume restores the agent's log without re-sending history.
+      reply(msg.id, { configOptions: sessionConfigOptions(sid) });
+      break;
+    }
     case 'session/load': {
       logSessionRequest('session/load', msg.params);
+      if (process.env.MOCK_ACP_RESUME_ONLY === '1') {
+        replyError(msg.id, '"Method not found": session/load');
+        break;
+      }
       const failOnceFile = process.env.MOCK_ACP_FAIL_LOAD_FILE;
       const failOnce = Boolean(failOnceFile && fs.existsSync(failOnceFile));
       if (failOnce && failOnceFile) fs.unlinkSync(failOnceFile);
@@ -464,6 +512,8 @@ rl.on('line', async (line) => {
       const value = msg.params?.value;
       if (configId === 'model' && availableModels.some((model) => model.modelId === value)) {
         sessionModels.set(sid, value);
+      } else if (configId === 'reasoning_effort' && process.env.MOCK_ACP_DEPENDENT_OPTIONS === '1' && ['', 'high'].includes(value) && modelState(sid).currentModelId === 'mock-gpt-best') {
+        sessionEfforts.set(sid, value);
       } else if (configId === 'mode' && ['read-only', 'agent', 'agent-full-access'].includes(value)) {
         sessionModes.set(sid, value);
       } else if (configId === 'collaboration_mode' && ['default', 'plan'].includes(value)) {
@@ -476,6 +526,12 @@ rl.on('line', async (line) => {
       break;
     }
     case 'session/prompt':
+      // MOCK_ACP_REJECT_PROMPT=<text>: refuse the prompt as a JSON-RPC internal
+      // error carrying that text (dsh's "no API key for provider route" shape).
+      if (process.env.MOCK_ACP_REJECT_PROMPT) {
+        replyError(msg.id, `Internal error: turn failed: ${process.env.MOCK_ACP_REJECT_PROMPT}`);
+        break;
+      }
       void handlePrompt(msg.id, msg.params ?? {}).finally(() => { turnRunning = false; });
       break;
     case 'session/cancel':

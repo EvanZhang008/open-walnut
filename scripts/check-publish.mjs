@@ -26,7 +26,9 @@ const required = [
   // is where it has to be caught (scripts/ship-builtin-plugins.mjs writes these).
   'dist/integrations/walnut-time/manifest.json',
   'dist/integrations/walnut-time/dist/web.mjs',
-  'dist/daemon-binaries/acp-worker.js', // plain JS bundle (kept; daemon-* binaries excluded)
+  'dist/daemon-binaries/acp-worker.js',
+  'dist/daemon-binaries/pi-acp.js',
+  'dist/daemon-binaries/pi-acp.LICENSE', // plain JS bundle (kept; daemon-* binaries excluded)
   'patches',
   'scripts/postinstall.mjs',
 ];
@@ -52,7 +54,8 @@ const packJson = execFileSync('npm', ['pack', '--dry-run', '--json'], { cwd: roo
 const [pack] = JSON.parse(packJson);
 const files = pack.files.map((f) => f.path);
 
-const mustInclude = ['dist/cli.js', 'dist/web/static/index.html', 'scripts/postinstall.mjs'];
+const mustInclude = ['dist/cli.js', 'dist/web/static/index.html', 'scripts/postinstall.mjs',
+  'dist/daemon-binaries/pi-acp.js', 'dist/daemon-binaries/pi-acp.LICENSE'];
 const notPacked = mustInclude.filter((f) => !files.includes(f));
 if (notPacked.length) {
   console.error('check-publish: files allowlist excludes required artifacts:\n' + notPacked.map((m) => `  - ${m}`).join('\n'));

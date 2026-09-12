@@ -5,6 +5,7 @@ import {
   type SessionControl,
 } from '@/api/sessions';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { useNotifications } from '@/contexts/notifications';
 import { engineCaps } from '@/utils/engine-capabilities';
 import { log } from '@/utils/log';
 
@@ -34,6 +35,12 @@ function publishControls(sessionId: string, controls: readonly SessionControl[])
   for (const listener of listeners) listener();
 }
 
+export async function refreshSessionControls(sessionId: string): Promise<void> {
+  const version = nextRequestVersion(sessionId);
+  const response = await fetchSessionControls(sessionId);
+  if (requestVersions.get(sessionId) === version) publishControls(sessionId, response.controls);
+}
+
 function subscribeControls(listener: () => void): () => void {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
@@ -47,6 +54,7 @@ function subscribeControls(listener: () => void): () => void {
  */
 export function useSessionControls(sessionId: string | undefined, engine: string | undefined) {
   const engineCatalog = useEngineCatalog();
+  const { notify } = useNotifications();
   const hasControls = engineCaps(engine, engineCatalog).configModes;
 
   const getSnapshot = useCallback(
@@ -94,8 +102,17 @@ export function useSessionControls(sessionId: string | undefined, engine: string
         value,
         error: String(error),
       });
+      notify({
+        kind: 'operation-error',
+        severity: 'error',
+        title: 'Session setting could not be applied',
+        body: error instanceof Error ? error.message : String(error),
+        persistent: false,
+        dedupKey: `session-control:${sessionId}:${id}`,
+        sessionId,
+      });
     }
-  }, [hasControls, sessionId]);
+  }, [hasControls, sessionId, notify]);
 
   return { controls: controls as SessionControl[], setControl };
 }

@@ -143,6 +143,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   /**
    * The entity references attached to this message, as tag strings in order.
    * INVARIANT: `value` (what the textarea shows) never contains a ref tag. The
@@ -170,13 +171,14 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const same = split.refs.length === prev.length && split.refs.every((t, i) => t === prev[i]);
     if (!same) { refsRef.current = split.refs; setRefs(split.refs); }
     valueRef.current = split.body;
+    const el = textareaRef.current;
+    if (el && el.value !== split.body) el.value = split.body;
     setValue(split.body);
     return split;
   }, []);
 
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Span of composer text currently owned by an in-progress dictation, so each
   // live draft replaces the previous one instead of stacking. null = no active
   // dictation (the final result releases it).
@@ -373,9 +375,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     window.setTimeout(() => setRefreshing(false), 8000);
   }, [onRefreshSessionCommands]);
 
-  // Auto-resize (single source of truth): after EVERY value change — typing,
-  // draft restore on mount (useState initializer bypasses all handlers), prefill,
-  // voice insert — grow the textarea to fit, capped by the CSS max-height.
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -573,6 +572,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const resetInput = (keepDraft = false) => {
     setValue('');
     valueRef.current = '';
+    if (textareaRef.current) textareaRef.current.value = '';
     setRefs([]);
     refsRef.current = [];
     setImages([]);
@@ -704,21 +704,15 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       ? value.slice(0, at) + inserted + value.slice(end)
       : inserted;
     const newCaret = spanValid ? at + inserted.length : inserted.length;
-    setValue(newValue);
-    valueRef.current = newValue;
+    applyText(newValue);
     saveComposed(newValue);
     closePalette();
-    // Resize textarea and move cursor to just after the inserted command
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (el) {
-        el.style.height = 'auto';
-        el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
-        el.focus();
-        el.setSelectionRange(newCaret, newCaret);
-      }
-    });
-  }, [onCommand, onControlCommand, closePalette, value, saveComposed]);
+    const el = textareaRef.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(newCaret, newCaret);
+    }
+  }, [onCommand, onControlCommand, closePalette, value, saveComposed, applyText]);
 
   // Replace the active "@query" span with the selected path, then close the popup.
   // The popup hands back an absolute path (avoids ambiguity about what a relative
@@ -730,21 +724,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (at < 0 || end < at) { closeMention(); return; }
     const ref = formatMentionPath(absPath) + ' ';
     const newValue = value.slice(0, at) + ref + value.slice(end);
-    setValue(newValue);
-    valueRef.current = newValue;
+    applyText(newValue);
     saveComposed(newValue);
     closeMention();
     const newCaret = at + ref.length;
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (ta) {
-        ta.style.height = 'auto';
-        ta.style.height = Math.min(ta.scrollHeight, getMaxHeight(ta)) + 'px';
-        ta.focus();
-        ta.setSelectionRange(newCaret, newCaret);
-      }
-    });
-  }, [value, saveComposed, closeMention]);
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(newCaret, newCaret);
+    }
+  }, [value, saveComposed, closeMention, applyText]);
 
   // Rewrite the "@query" span so the palette browses `absDir` (descend into a
   // dir / go to the parent / jump to a recent folder). The query text IS the
@@ -759,8 +748,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const display = rel === '.' ? '' : rel.replace(/\/+$/, '');
     const inserted = display ? `@${display}/` : '@';
     const newValue = value.slice(0, at) + inserted + value.slice(end);
-    setValue(newValue);
-    valueRef.current = newValue;
+    applyText(newValue);
     saveComposed(newValue);
     const newCaret = at + inserted.length;
     mentionEndRef.current = newCaret;
@@ -775,11 +763,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       mentionKindRef.current = 'palette';
       setMentionOrder(enableEntityMention ? route.order : 'files-first');
     }
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
-    });
-  }, [value, saveComposed, mentionCwd, enableEntityMention]);
+    const ta = textareaRef.current;
+    if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
+  }, [value, saveComposed, mentionCwd, enableEntityMention, applyText]);
 
   // Entity pick: the "@query" span leaves the text and the reference becomes a
   // chip above it (the tag rejoins the text only when the message is composed,
@@ -795,15 +781,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const split = applyText(cut.text + tag);
     saveComposed(split.body, split.refs);
     closeMention();
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (ta) {
-        ta.style.height = 'auto';
-        ta.style.height = Math.min(ta.scrollHeight, getMaxHeight(ta)) + 'px';
-        ta.focus();
-        ta.setSelectionRange(cut.caret, cut.caret);
-      }
-    });
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(cut.caret, cut.caret);
+    }
   }, [value, applyText, saveComposed, closeMention]);
 
   // × on a reference chip: detach that one reference. The prose is untouched.
@@ -812,14 +794,12 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     refsRef.current = next;
     setRefs(next);
     saveComposed(valueRef.current, next);
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (ta) {
-        ta.focus();
-        const caret = ta.value.length;
-        ta.setSelectionRange(caret, caret);
-      }
-    });
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.focus();
+      const caret = ta.value.length;
+      ta.setSelectionRange(caret, caret);
+    }
   }, [saveComposed]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -937,10 +917,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (mentionOpenRef.current) closeMention();
       closePalette();
       paletteRef.current = { open: false, results: [], selectedIndex: 0 };
-      requestAnimationFrame(() => {
-        const ta = textareaRef.current;
-        if (ta) { ta.focus(); ta.setSelectionRange(split.body.length, split.body.length); }
-      });
+      const ta = textareaRef.current;
+      if (ta) { ta.focus(); ta.setSelectionRange(split.body.length, split.body.length); }
       return;
     }
 
@@ -1174,7 +1152,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // otherwise lead with the entity groups.
     const atIndex = caret + (needSpace ? 1 : 0);
     mentionOrderOverrideRef.current = opts?.fileMention ? { at: atIndex, order: 'files-first' } : null;
-    handleChange(el.value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
   const handleFileChange = () => {
@@ -1333,7 +1311,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           <textarea
             ref={textareaRef}
             className="chat-input-textarea"
-            value={value}
+            defaultValue={initialDraft.body}
             onChange={(e) => handleChange(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}

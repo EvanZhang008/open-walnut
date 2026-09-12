@@ -8708,6 +8708,14 @@ export class SessionRunner {
    * (processNext routes back here) — the pre-steering behavior.
    */
   private async drainAcpQueue(session: AcpSession, sessionId: string): Promise<void> {
+    try {
+      await this.awaitNativeReinitialization(sessionId)
+    } catch (err) {
+      log.session.warn('acp: explicit restart failed; attempting normal recovery', {
+        sessionId, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    sessionId = session.sessionId ?? sessionId
     if (session.activity === 'processing') {
       const steered = await this.steerAcpQueued(session, sessionId)
       if (!steered) {
@@ -10123,6 +10131,26 @@ export class SessionRunner {
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const record = await getSessionByClaudeId(sessionId)
     if (!record) throw new Error(`reinitialize: no session record for ${sessionId}`)
+    if (isAcpEngine(record.engine)) {
+      const session = await this.findOrAttachAcpSession(sessionId)
+      if (!session) throw new Error('ACP session is not available for restart')
+      const restartIds = new Set([sessionId, session.runtimeId])
+      for (const id of restartIds) this.acpAbortInProgress.add(id)
+      try {
+        await this.acpDeliverySettlements.get(sessionId)
+        this.settleInFlightTurn(sessionId)
+        const restoredId = await session.restart()
+        const { updateSessionRecord, emitSessionStatusChanged } = await import('../core/session-tracker.js')
+        const updated = await updateSessionRecord(restoredId, {
+          process_status: 'idle', errorMessage: undefined, activity: undefined,
+          status_reason: 'restart_reinitialize', status_changed_by: 'user',
+        })
+        emitSessionStatusChanged(updated, {}, ['*'], { source: 'session-runner' })
+      } finally {
+        for (const id of restartIds) this.acpAbortInProgress.delete(id)
+      }
+      return
+    }
 
     const { getConfig } = await import('../core/config-manager.js')
     const cfg = await getConfig()

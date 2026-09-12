@@ -1,4 +1,5 @@
 import type { JournalRecord } from './acp-worker/protocol.js'
+import { toDisplayedUserText } from '../core/sessions/reference-cards.js'
 import type {
   SessionHistoryMessage,
   SessionHistoryTool,
@@ -29,6 +30,7 @@ interface AcpUpdate {
   status?: string | null
   rawInput?: unknown
   rawOutput?: unknown
+  _meta?: { terminal_output?: { data?: unknown }; terminal_exit?: { exit_code?: unknown; signal?: unknown } }
   used?: number
   size?: number
 }
@@ -115,6 +117,8 @@ export type AcpProjectedEvent =
 interface ToolIdentity {
   msgId: string
   toolUseId: string
+  toolName?: string
+  input?: Record<string, unknown>
 }
 
 /**
@@ -127,6 +131,7 @@ export class AcpJournalProjector {
   private segmentOrdinal = 0
   private currentSegment: { ordinal: number; providerMessageId?: string } | null = null
   private tools = new Map<string, ToolIdentity>()
+  private terminalOutput = new Map<string, string>()
   private turnHasError = false
   private terminalCommands = new Set<string>()
   /** providerRequestId → optionId → ACP option `kind`, harvested from the
@@ -264,12 +269,13 @@ export class AcpJournalProjector {
       const params = frame.params
       if (!frame.providerRequestId || !params?.toolCall) return []
       this.permissionOptionKinds.set(frame.providerRequestId, optionKinds(params.options))
+      const tool = params.toolCall.toolCallId ? this.tools.get(params.toolCall.toolCallId) : undefined
       return [{
         type: 'permission-request',
         ts: record.ts,
         requestId: frame.providerRequestId,
-        toolName: params.toolCall.title ?? params.toolCall.kind ?? 'tool',
-        input: asInput(params.toolCall.rawInput),
+        toolName: params.toolCall.title ?? params.toolCall.kind ?? tool?.toolName ?? 'tool',
+        input: asInput(params.toolCall.rawInput) ?? tool?.input,
         options: params.options ?? [],
       }]
     }
@@ -303,8 +309,11 @@ export class AcpJournalProjector {
           // map stays keyed by raw toolCallId; call→completed→next-call is
           // serialized, so tool_call_update resolves the right instance value.
           toolUseId: this.id(commandId, 'tool', String(segment.ordinal), update.toolCallId),
+          toolName: update.title ?? update.kind ?? 'tool',
+          input: asInput(update.rawInput),
         }
         this.tools.set(update.toolCallId, identity)
+        this.terminalOutput.delete(update.toolCallId)
         this.currentSegment = null
         return [{
           type: 'tool-use',
@@ -316,8 +325,12 @@ export class AcpJournalProjector {
         }]
       }
       case 'tool_call_update': {
-        if (!update.toolCallId
-          || (update.status !== 'completed' && update.status !== 'failed')) return []
+        if (!update.toolCallId) return []
+        const delta = update._meta?.terminal_output?.data
+        if (typeof delta === 'string') {
+          this.terminalOutput.set(update.toolCallId, (this.terminalOutput.get(update.toolCallId) ?? '') + delta)
+        }
+        if (update.status !== 'completed' && update.status !== 'failed') return []
         const orphanOrdinal = this.segmentOrdinal
         const identity = this.tools.get(update.toolCallId) ?? {
           msgId: this.segmentId(commandId, this.allocateSegment().ordinal),
@@ -325,12 +338,14 @@ export class AcpJournalProjector {
         }
         this.tools.set(update.toolCallId, identity)
         this.currentSegment = null
+        const result = toolResultText(update, this.terminalOutput.get(update.toolCallId))
+        this.terminalOutput.delete(update.toolCallId)
         return [{
           type: 'tool-result',
           ts: record.ts,
           commandId,
           ...identity,
-          result: toolResultText(update),
+          result,
           isError: update.status === 'failed',
         }]
       }
@@ -348,12 +363,14 @@ export class AcpJournalProjector {
     this.segmentOrdinal = 0
     this.currentSegment = null
     this.tools.clear()
+    this.terminalOutput.clear()
     this.turnHasError = false
   }
 
   private finishTurn(): void {
     this.currentSegment = null
     this.tools.clear()
+    this.terminalOutput.clear()
     this.turnHasError = false
   }
 
@@ -430,7 +447,7 @@ export class AcpHistoryFold {
         case 'user': {
           const message: SessionHistoryMessage = {
             role: 'user',
-            text: event.text,
+            text: toDisplayedUserText(event.text),
             timestamp,
             msgId: event.msgId,
             walnutMessageId: event.walnutMessageId,
@@ -656,13 +673,29 @@ function optionKinds(options: unknown[] | undefined): Map<string, string> {
   return out
 }
 
-function toolResultText(update: AcpUpdate): string {
+function toolResultText(update: AcpUpdate, terminalOutput?: string): string {
   if (update.rawOutput !== undefined) {
     return typeof update.rawOutput === 'string'
       ? update.rawOutput
       : JSON.stringify(update.rawOutput)
   }
-  return contentText(update.content) || update.status || ''
+  const blocks = Array.isArray(update.content) ? update.content : [update.content]
+  const content = blocks.map((block) => {
+    const value = asInput(block)
+    if (value?.type === 'content') {
+      const nested = asInput(value.content)
+      return contentText(nested) || (nested ? JSON.stringify([nested]) : '')
+    }
+    if (value?.type === 'diff') return JSON.stringify({ path: value.path, oldText: value.oldText, newText: value.newText }, null, 2)
+    return contentText(value)
+  }).filter(Boolean).join('\n')
+  if (content) return content
+  const exit = update._meta?.terminal_exit
+  if (terminalOutput !== undefined || exit) {
+    return [terminalOutput, typeof exit?.exit_code === 'number' ? `Exit code: ${exit.exit_code}` : '',
+      typeof exit?.signal === 'string' ? `Signal: ${exit.signal}` : ''].filter(Boolean).join('\n')
+  }
+  return update.status || ''
 }
 
 function interruptionMessage(reason: string): string {

@@ -24,13 +24,13 @@ import type { SessionEngine } from '../core/types.js'
 import {
   resolveAcpArtifacts,
   resolveSystemCodexPath,
+  resolveEngineExecutable,
   buildAcpAdapterEnv,
   engineEnvOverlayFromConfig,
 } from './acp-session.js'
 import {
   mergeAcpSpawnEnv,
   snapshotAcpModels,
-  snapshotAcpConfigOptions,
   type AcpModelInfo,
 } from './acp-worker/protocol.js'
 import { log } from '../logging/index.js'
@@ -191,21 +191,7 @@ export function probeAdapterModels(
           return
         }
         const snapshot = snapshotAcpModels(msg.result)
-        if (snapshot.availableModels.length > 0) {
-          finish(null, { models: snapshot.availableModels, currentModelId: snapshot.currentModelId })
-          return
-        }
-        // Some adapters advertise models only as the `model` config option —
-        // its choices are the same catalog under another name.
-        const modelOption = snapshotAcpConfigOptions(msg.result).find((option) => option.id === 'model')
-        if (modelOption) {
-          finish(null, {
-            models: modelOption.options.map((choice) => ({ modelId: choice.value, name: choice.name, ...(choice.description ? { description: choice.description } : {}) })),
-            currentModelId: modelOption.currentValue,
-          })
-          return
-        }
-        finish(null, { models: [] })
+        finish(null, { models: snapshot.availableModels, currentModelId: snapshot.currentModelId })
       }
     })
     send({
@@ -264,7 +250,10 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
   const managed = engine === 'codex'
     ? buildAcpAdapterEnv(resolveSystemCodexPath(), { sessionId: `model-probe-${engine}` })
     : buildAcpAdapterEnv(undefined, { sessionId: `model-probe-${engine}` })
-  const env = mergeAcpSpawnEnv(process.env, { ...(overlay ?? {}), ...(managed ?? {}) })
+  const provider = engine === 'pi'
+    ? { PI_ACP_PI_COMMAND: resolveEngineExecutable({ engine: 'pi', cwd: probeCwd }) }
+    : undefined
+  const env = mergeAcpSpawnEnv(process.env, { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) })
   const { models, currentModelId } = await probeAdapterModels(adapterCmd, { env, cwd: probeCwd })
   return { engine, models, currentModelId, fetchedAt: Date.now(), source: 'probe' }
 }
