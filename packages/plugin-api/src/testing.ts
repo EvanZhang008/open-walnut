@@ -353,6 +353,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       sync: () => disposable(),
       sourceClaim: () => disposable(),
       display: () => disposable(),
+      connection: () => disposable(),
       migration: () => disposable(),
       extIndex: () => disposable(),
       tool: () => disposable(),

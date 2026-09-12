@@ -11,6 +11,9 @@ import { Router } from 'express';
 import { registry } from '../../core/integration-registry.js';
 import { getUnconfiguredPlugins } from '../../core/integration-loader.js';
 import { getConfig } from '../../core/config-manager.js';
+import { getSyncHealth } from '../../core/plugin-sync-health.js';
+import type { RegisteredPlugin } from '../../core/integration-types.js';
+import { log } from '../../logging/index.js';
 
 export const integrationsRouter = Router();
 
@@ -77,6 +80,8 @@ integrationsRouter.get('/settings', async (_req, res) => {
       // A conventional skills/ dir and a runtime registry.skill() registration are
       // different claims — a plugin can contribute skills with hasSkills false.
       registeredSkills: !!p.registeredSkills,
+      // Has an account link the Settings row can show (GET …/:id/connection).
+      connection: !!p.connection,
     }));
 
   const unconfigured = getUnconfiguredPlugins().map(p => ({
@@ -91,4 +96,75 @@ integrationsRouter.get('/settings', async (_req, res) => {
   }));
 
   res.json([...loaded, ...unconfigured]);
+});
+
+// ── Account link (PluginConnection) ──────────────────────────────────────────
+//
+// The plugin says whether its credential is alive (status() never touches the
+// network; it reads the cached token and the last renewal outcome) and Walnut
+// adds what its own sync loop saw. The Settings row shows both together, so a
+// human can tell "signed in, renews on its own" from "the provider is down"
+// from "sign in again" without reading logs.
+
+async function connectionReport(p: RegisteredPlugin) {
+  const status = await p.connection!.status();
+  return {
+    pluginId: p.id,
+    pluginName: p.name,
+    ...status,
+    canSignIn: typeof p.connection!.signIn === 'function',
+    sync: getSyncHealth(p.id) ?? null,
+  };
+}
+
+integrationsRouter.get('/connections', async (_req, res) => {
+  const withLink = registry.getAll().filter(p => p.id !== 'local' && p.connection);
+  const reports = await Promise.all(withLink.map(async (p) => {
+    try {
+      return await connectionReport(p);
+    } catch (err) {
+      // One plugin's broken status() must not blank the whole list.
+      log.web.warn('plugin connection status failed', { pluginId: p.id, error: err instanceof Error ? err.message : String(err) });
+      return { pluginId: p.id, pluginName: p.name, state: 'unreachable' as const, detail: 'Could not read the connection status.', canSignIn: typeof p.connection!.signIn === 'function', sync: getSyncHealth(p.id) ?? null };
+    }
+  }));
+  res.json({ connections: reports });
+});
+
+integrationsRouter.get('/:id/connection', async (req, res) => {
+  const p = registry.get(req.params.id);
+  if (!p || p.id === 'local' || !p.connection) {
+    res.status(404).json({ error: 'This plugin has no account link.' });
+    return;
+  }
+  try {
+    res.json(await connectionReport(p));
+  } catch (err) {
+    log.web.warn('plugin connection status failed', { pluginId: p.id, error: err instanceof Error ? err.message : String(err) });
+    res.status(502).json({ error: 'Could not read the connection status.' });
+  }
+});
+
+// Starts (or returns the still-valid) device-code sign-in. 202: the prompt to
+// show the human; the plugin finishes the flow in the background and its next
+// status() reports 'connected'. The route never waits for the human.
+integrationsRouter.post('/:id/connection/sign-in', async (req, res) => {
+  const p = registry.get(req.params.id);
+  if (!p || p.id === 'local' || !p.connection) {
+    res.status(404).json({ error: 'This plugin has no account link.' });
+    return;
+  }
+  if (typeof p.connection.signIn !== 'function') {
+    res.status(405).json({ error: `${p.name} does not support signing in from Settings.` });
+    return;
+  }
+  try {
+    const prompt = await p.connection.signIn();
+    log.web.info('plugin sign-in started', { pluginId: p.id, expiresAt: prompt.expiresAt });
+    res.status(202).json({ pluginId: p.id, ...prompt });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.web.warn('plugin sign-in could not start', { pluginId: p.id, error: message });
+    res.status(502).json({ error: message });
+  }
 });

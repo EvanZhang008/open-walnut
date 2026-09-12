@@ -95,6 +95,12 @@ export interface NotificationRecord {
    *  cannot read. Capped like `body`. */
   detail?: string;
 
+  /** operation-error only — the ONE thing the human can do about this card,
+   *  when the producer knows it (a plugin whose credential died → "Sign in" →
+   *  its Settings row). Without it the UI's only deep link is the session, and
+   *  a plugin failure has none. `to` is a console route; the iOS app maps it. */
+  action?: NotificationAction;
+
   // ── Permission detail (so the feed can render + answer a request itself) ──
   /** Permission: the provider's request id. First-class instead of parsed back out of dedupKey. */
   requestId?: string;
@@ -142,6 +148,13 @@ export interface NotificationFix {
   taskId: string;
   sessionId?: string;
   startedAt: number;
+}
+
+export interface NotificationAction {
+  /** Button text ("Sign in", "Open Settings"). */
+  label: string;
+  /** Console route, e.g. `/settings#plugin-store`. */
+  to: string;
 }
 
 interface NotificationsStore {
@@ -323,6 +336,10 @@ const REFRESHABLE_DETAIL_KEYS = [
   // shipped gains its category + Details block on the next occurrence, so an old
   // card in a live feed joins the grouping instead of sitting in a lone 'Other'.
   'category', 'detail',
+  // A card's action follows the latest occurrence too: a sign-in card that
+  // re-fires must keep its Sign in button, and a card that first fired without
+  // one gains it when the producer learns what the human can do.
+  'action',
 ] as const;
 
 /**

@@ -42,6 +42,7 @@ import {
   type MissingDependencyView,
 } from './PluginDependencyRows';
 import { PluginAppControls } from '../PluginAppControls';
+import { PluginConnectionPanel, CONNECTION_BADGE, type ConnectionReport } from '../PluginConnectionPanel';
 import { BuildPluginCard } from '../BuildPluginCard';
 // Deliberately NOT '@/plugins/hooks': that module reaches the plugin loader, which
 // reaches every view a plugin may mount (NotesPage, CalendarPage, SessionPanel …).
@@ -175,6 +176,9 @@ export function PluginStoreSection({ config, onSave }: Props) {
   const [restartNeeded, setRestartNeeded] = useState(false);
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState<string | null>(null);
+  // Account links, by plugin id: which rows have one, and their latest state
+  // (the row badge reads it; the panel under the row keeps it fresh).
+  const [connections, setConnections] = useState<Record<string, ConnectionReport>>({});
   // Turning off a plugin others run on is refused (409) until the user has seen the list.
   const [cascadeAsk, setCascadeAsk] = useState<{ target: { id: string; name: string }; dependents: string[] } | null>(null);
   // What an install (or a blocked row's "Install…") turned out to need, and where to ask.
@@ -185,10 +189,11 @@ export function PluginStoreSection({ config, onSave }: Props) {
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    // Two independent reads: a plugin-sources failure must not blank the plugin list.
-    const [registryRes, sourcesRes] = await Promise.allSettled([
+    // Independent reads: a plugin-sources (or connections) failure must not blank the plugin list.
+    const [registryRes, sourcesRes, connectionsRes] = await Promise.allSettled([
       fetch('/api/plugin-runtime/registry'),
       fetch('/api/plugin-sources'),
+      fetch('/api/integrations/connections'),
     ]);
     if (registryRes.status === 'fulfilled' && registryRes.value.ok) {
       try { setRegistry(await registryRes.value.json()); } catch { /* keep the last list */ }
@@ -196,6 +201,16 @@ export function PluginStoreSection({ config, onSave }: Props) {
     if (sourcesRes.status === 'fulfilled' && sourcesRes.value.ok) {
       try { setSources(await sourcesRes.value.json()); } catch { /* keep the last list */ }
     }
+    if (connectionsRes.status === 'fulfilled' && connectionsRes.value.ok) {
+      try {
+        const body = await connectionsRes.value.json() as { connections?: ConnectionReport[] };
+        setConnections(Object.fromEntries((body.connections ?? []).map((c) => [c.pluginId, c])));
+      } catch { /* keep the last map */ }
+    }
+  }, []);
+
+  const onConnectionReport = useCallback((report: ConnectionReport) => {
+    setConnections((prev) => ({ ...prev, [report.pluginId]: report }));
   }, []);
 
   useEffect(() => {
@@ -452,6 +467,11 @@ export function PluginStoreSection({ config, onSave }: Props) {
               // buries every row under it — the row already says NEEDS SETUP, names
               // the missing field, and offers Configure.
               const open = configuring === row.id;
+              const connection = connections[row.id];
+              // Only when the account needs the human: a healthy link says so on
+              // the panel below, not as a second "on" badge in the title.
+              const connectionBadge = connection && connection.state !== 'connected'
+                ? CONNECTION_BADGE[connection.state] : null;
               return (
                 <div key={row.id} className="plugin-store-entry">
                   <SettingsRow
@@ -517,6 +537,11 @@ export function PluginStoreSection({ config, onSave }: Props) {
                     <strong>
                       {row.name}
                       <span className={status.className}>{status.label}</span>
+                      {connectionBadge && (
+                        <span className={connectionBadge.className} data-testid={`plugin-row-connection-${row.id}`}>
+                          {connectionBadge.label}
+                        </span>
+                      )}
                       {row.version && <span className="plugin-store-version">v{row.version}</span>}
                     </strong>
                     {row.description && <span>{row.description}</span>}
@@ -581,6 +606,12 @@ export function PluginStoreSection({ config, onSave }: Props) {
                   {/* The plugin's app entries live HERE, on the plugin itself —
                       an app is not a separate thing to manage on another panel. */}
                   <PluginAppControls pluginId={row.id} />
+                  {/* The account link lives on the row too, always visible: whether
+                      the credential is alive is the first thing to check when sync
+                      looks off, and it must not hide behind Configure. */}
+                  {connection && isOn && (
+                    <PluginConnectionPanel pluginId={row.id} initial={connection} onReport={onConnectionReport} />
+                  )}
                   {open && row.configurable && (
                     <div className="plugin-store-config" data-testid={`plugin-config-${row.id}`}>
                       <PluginConfigCards config={config} onSave={onSave} onlyIds={[row.id]} bare />

@@ -31260,6 +31260,15 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 .nfc-card-action:disabled { opacity: 0.6; cursor: default; }
 
+/* The producer's own remedy (a plugin's "Sign in"): the one filled pill on the
+   card, because it is the thing to do, not one of several optional tools. */
+.nfc-card-action--primary {
+  border-color: var(--accent, #0a84ff);
+  background: var(--accent, #0a84ff);
+  color: var(--accent-fg, #fff);
+  font-weight: 600;
+}
+
 /* The primary of the pair — starting the repair is the card's main offer. */
 .nfc-fix-start { color: var(--accent); }
 

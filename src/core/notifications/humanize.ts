@@ -553,6 +553,19 @@ const RULES: Rule[] = [
     }),
   },
   {
+    // The sync loop's own human copy (plugin-sync-health.ts decideSyncFailureNotice):
+    // "<Plugin> needs you to sign in again" / "<Plugin> is not set up yet" /
+    // "<Plugin> sync keeps failing". Already prose; pass title AND the whole
+    // body through — the second sentence ("Sync is paused until you sign in;
+    // retrying will not fix this") is the part that tells the human what to do,
+    // and the unmatched path would cut it to the first sentence.
+    id: 'plugin-connection-notice',
+    category: (i) => pluginNameOf(i),
+    match: (i) => !!pluginNameOf(i)
+      && /(needs you to sign in again|is not set up yet|sync keeps failing)$/i.test(i.title.trim()),
+    render: (i) => ({ title: i.title.trim(), message: (i.body ?? '').trim() }),
+  },
+  {
     id: 'plugin-sync-repeating',
     category: (i) => pluginNameOf(i),
     match: (i) => !!pluginNameOf(i) && /sync failing repeatedly/i.test(i.title),

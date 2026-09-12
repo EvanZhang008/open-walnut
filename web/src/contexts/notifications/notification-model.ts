@@ -319,6 +319,21 @@ export function isRejectOption(o: NotificationAcpOption): boolean {
  * beats the record's own navigate action. `/sessions?id=…` is rewritten to the
  * home session columns by navigateToTarget — the shape is the link, not the route.
  */
+/**
+ * The button a wire record carries into the feed: the producer's own action
+ * when it sent one (a plugin's "Sign in" pointing at its Settings row), else the
+ * session deep link when the record belongs to a session, else none. Shared by
+ * the live (notification:new / :updated) and the initial-load mappings so the
+ * three cannot disagree about which wins.
+ */
+export function actionOf(
+  r: { action?: { label?: string; to?: string }; sessionId?: string },
+): Notification['action'] | undefined {
+  if (r.action?.label && r.action.to) return { label: r.action.label, kind: 'navigate', to: r.action.to };
+  if (r.sessionId) return { label: 'Go to Session', kind: 'navigate', to: `/sessions?id=${r.sessionId}` };
+  return undefined;
+}
+
 export function linkTargetOf(n: Notification): string | null {
   if (n.sessionId) return `/sessions?id=${n.sessionId}`;
   if (n.taskId) return `/tasks/${n.taskId}`;

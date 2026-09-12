@@ -183,6 +183,19 @@ export default function register(api: PluginApi): void {
     syncTooltip: (task) => task.sync_error ? `Sync error: ${task.sync_error}` : 'Synced to Microsoft To-Do',
   });
 
+  // The account link: Settings shows it, and the human signs in from there.
+  // Renewal never needs them; only a revoked refresh token does.
+  api.registerConnection({
+    async status() {
+      const { getAuthStatus } = await import('../microsoft-todo.js');
+      return getAuthStatus();
+    },
+    async signIn() {
+      const { beginSignIn } = await import('../microsoft-todo.js');
+      return beginSignIn();
+    },
+  });
+
   api.registerAgentContext(
     'Tasks with source "ms-todo" sync bidirectionally with Microsoft To-Do. ' +
     'Phase maps to 3 MS To-Do statuses: notStarted/inProgress/completed.'

@@ -997,6 +997,14 @@ const FeedItem = memo(function FeedItem({
   // only where a source tree exists (canFix) or a session already ran (n.fix) —
   // on a cloud replica or a git-less install the affordance simply isn't there.
   const showFixActions = n.kind === 'operation-error' && (!!n.fix || !!canFix);
+  // A navigate action the PRODUCER attached (server record `action`), on a card
+  // with no session of its own. A session-bound card already opens its session
+  // on click, and a second button saying the same would be noise; a recovered
+  // card no longer needs anything done.
+  const producerAction = n.kind === 'operation-error' && !n.sessionId && !recovered
+    && n.action?.kind === 'navigate' && n.action.to
+    ? { label: n.action.label, to: n.action.to }
+    : null;
 
   const startFix = async (restart: boolean) => {
     if (fixBusy || fixesInFlight.has(n.dedupKey)) return;
@@ -1081,6 +1089,24 @@ const FeedItem = memo(function FeedItem({
           {detailOpen && (
             <pre className="nfc-card-pre" onClick={(e) => e.stopPropagation()}>{presented.detail}</pre>
           )}
+        </div>
+      )}
+      {/* The producer's own remedy ("Sign in" on a plugin whose credential died),
+          as a labelled button: the row click already goes there, but a card that
+          asks for an action must SHOW the action, not hide it in the row's cursor. */}
+      {producerAction && (
+        <div
+          className="nfc-card-actions"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <button
+            className="nfc-card-action nfc-card-action--primary"
+            data-testid="nfc-producer-action"
+            onClick={(e) => { e.stopPropagation(); onNavigate(producerAction.to); }}
+          >
+            {producerAction.label} ↗
+          </button>
         </div>
       )}
       {/* Hand the error to a coding session in Walnut's own source. Every click in

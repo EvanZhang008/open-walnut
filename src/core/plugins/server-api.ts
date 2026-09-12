@@ -5,6 +5,7 @@ import type {
   IntegrationSync,
   MigrateFn,
   PluginApi,
+  PluginConnection,
   PluginToolSpec,
   ProjectClaimFn,
 } from '../integration-types.js'
@@ -66,6 +67,7 @@ interface ContributionCollector {
   sync: IntegrationSync | null
   claim: { fn: ProjectClaimFn; priority: number } | null
   display: DisplayMeta | null
+  connection: PluginConnection | null
   migrations: MigrateFn[]
   extIndex: ExtIndexSpec | null
   tools: PluginToolSpec[]
@@ -818,6 +820,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         legacyApi.registerDisplay(internal)
         return own(toDisposable(() => {
           if (contributions.display === internal) contributions.display = null
+        }))
+      },
+      connection(link: unknown) {
+        const internal = link as PluginConnection
+        legacyApi.registerConnection(internal)
+        return own(toDisposable(() => {
+          if (contributions.connection === internal) contributions.connection = null
         }))
       },
       migration(migrate: unknown) {

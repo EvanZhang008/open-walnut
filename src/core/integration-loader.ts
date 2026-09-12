@@ -74,6 +74,7 @@ import type {
   TaskFieldSpec,
   PluginToolSpec,
   RegisteredUiApp,
+  PluginConnection,
 } from './integration-types.js';
 
 const log = createSubsystemLogger('plugin-loader');
@@ -707,6 +708,7 @@ interface PluginApiBuilder {
     sync: IntegrationSync | null;
     claim: { fn: ProjectClaimFn; priority: number } | null;
     display: DisplayMeta | null;
+    connection: PluginConnection | null;
     agentContext: string | null;
     migrations: MigrateFn[];
     httpRoutes: HttpRoute[];
@@ -743,6 +745,7 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
     sync: null,
     claim: null,
     display: null,
+    connection: null,
     agentContext: null,
     migrations: [],
     httpRoutes: [],
@@ -769,6 +772,16 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
 
     registerDisplay(meta: DisplayMeta) {
       collected.display = meta;
+    },
+
+    registerConnection(connection: PluginConnection) {
+      if (collected.connection) {
+        throw new Error(`Plugin "${manifest.id}" called registerConnection() more than once.`);
+      }
+      if (!connection || typeof connection.status !== 'function') {
+        throw new Error(`Plugin "${manifest.id}" registerConnection: expected an object with a status() function.`);
+      }
+      collected.connection = connection;
     },
 
     registerAgentContext(snippet: string) {
@@ -1563,6 +1576,7 @@ async function loadPlugin(
     capabilities: effectiveCapabilities,
     get claim() { return builder.collected.claim ?? undefined; },
     get display() { return builder.collected.display ?? undefined; },
+    get connection() { return builder.collected.connection ?? undefined; },
     get agentContext() { return builder.collected.agentContext ?? undefined; },
     migrations: builder.collected.migrations,
     httpRoutes: builder.collected.httpRoutes,
@@ -1593,6 +1607,7 @@ async function loadPlugin(
     hasSync: initialHasSync,
     hasClaim: !!registered.claim,
     hasDisplay: !!registered.display,
+    hasConnection: !!registered.connection,
     migrations: registered.migrations.length,
     httpRoutes: registered.httpRoutes.length,
     extIndexPaths: registered.extIndex?.paths.length ?? 0,

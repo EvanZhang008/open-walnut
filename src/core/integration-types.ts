@@ -184,6 +184,95 @@ export interface DisplayMeta {
   languageHint?: string;
 }
 
+// ── PluginConnection: a plugin's link to the account it syncs with ──
+// A sync plugin holds credentials for somebody's account (an OAuth refresh
+// token, an API key). Renewal is the plugin's job and must never need a human;
+// what the human owns is the ONE step no software can do for them: signing in.
+// This contract exists so the console can show where that link stands and
+// offer the sign-in right there, and so core can tell "the provider did not
+// answer" (retry, stay quiet) from "the account must sign in again" (tell the
+// human once, with a button) without knowing any provider's error shapes.
+
+export type PluginConnectionState =
+  /** Credentials present and usable; renewal happens on its own. */
+  | 'connected'
+  /** A sign-in is in progress: `signIn` carries the prompt the human must finish. */
+  | 'signing-in'
+  /** The provider refused the stored credential; only a new sign-in fixes this. */
+  | 'sign-in-required'
+  /** The provider could not be reached; the credential itself is not known to be bad. */
+  | 'unreachable'
+  /** Required config (client id, host…) is missing, so there is nothing to sign in to. */
+  | 'not-configured';
+
+/** What the human has to do to finish a device-code (or similar) sign-in. */
+export interface PluginSignInPrompt {
+  /** Code to type on the provider's page. */
+  userCode: string;
+  /** Page to type it on. */
+  verificationUri: string;
+  /** Provider's own instruction sentence, when it gives one. */
+  message?: string;
+  /** ISO time after which the code is dead and a new sign-in must start. */
+  expiresAt: string;
+  /** ISO time the prompt was issued. */
+  startedAt: string;
+}
+
+export interface PluginConnectionStatus {
+  state: PluginConnectionState;
+  /** Who is signed in (an email, a username), when known. */
+  account?: string;
+  /** One human sentence about the current state (why sign-in is needed, what failed). */
+  detail?: string;
+  /** ISO expiry of the short-lived credential in hand. Informational: renewal is automatic. */
+  credentialExpiresAt?: string;
+  /** Present while `state` is 'signing-in'. */
+  signIn?: PluginSignInPrompt;
+  /** ISO time the last failed attempt to reach the provider happened, when one is remembered. */
+  lastFailureAt?: string;
+}
+
+export interface PluginConnection {
+  /** Must not hit the network: it answers from what the plugin already knows. */
+  status(): Promise<PluginConnectionStatus>;
+  /**
+   * Start an interactive sign-in. Resolves as soon as the prompt exists (not when the
+   * human finishes); completion is observed through `status()`. Calling it again while
+   * a prompt is still valid returns that same prompt instead of issuing a new one.
+   * Absent when the plugin's credential is config-only (an API key) and there is nothing
+   * interactive to start.
+   */
+  signIn?(): Promise<PluginSignInPrompt>;
+}
+
+// A plugin says WHY a call failed by putting `authKind` on the error it throws.
+// Duck-typed on purpose: an external plugin need not import anything to speak
+// it, and core never has to learn a provider's own error classes.
+export type PluginAuthFailureKind = 'sign-in-required' | 'unreachable' | 'not-configured';
+
+export interface PluginAuthFailure {
+  authKind: PluginAuthFailureKind;
+  /** The provider's own error code (`invalid_grant`, `ECONNRESET`…), for the log line. */
+  authCode?: string;
+}
+
+const AUTH_FAILURE_KINDS = new Set<string>(['sign-in-required', 'unreachable', 'not-configured']);
+
+/** The auth classification an error carries, or null when it says nothing about auth. */
+export function pluginAuthFailureOf(err: unknown): (PluginAuthFailure & { message: string }) | null {
+  if (!err || typeof err !== 'object') return null;
+  const kind = (err as { authKind?: unknown }).authKind;
+  if (typeof kind !== 'string' || !AUTH_FAILURE_KINDS.has(kind)) return null;
+  const code = (err as { authCode?: unknown }).authCode;
+  const message = err instanceof Error ? err.message : String((err as { message?: unknown }).message ?? kind);
+  return {
+    authKind: kind as PluginAuthFailureKind,
+    ...(typeof code === 'string' && code ? { authCode: code } : {}),
+    message,
+  };
+}
+
 // ── TaskFieldSpec: plugin-declared task fields (manifest `taskFields`) ──
 // A plugin can expose extra per-task fields (e.g. a tracker's sprint) that the
 // console renders generically — a picker in the task kebab menu + a pill on the
@@ -335,6 +424,9 @@ export interface PluginApi {
   registerSync(sync: IntegrationSync): void;
   registerSourceClaim(fn: ProjectClaimFn, opts?: { priority?: number }): void;
   registerDisplay(meta: DisplayMeta): void;
+  /** Tell the console where this plugin's account link stands and, when the
+   *  credential is interactive, how to sign in from there. At most once. */
+  registerConnection(connection: PluginConnection): void;
   /** @deprecated No consumer: a session reads skills, so this text reaches no
    *  model. Register a skill instead. The loader logs one warning per plugin. */
   registerAgentContext(snippet: string): void;
@@ -378,6 +470,8 @@ export interface RegisteredPlugin {
   capabilities?: string[];
   claim?: { fn: ProjectClaimFn; priority: number };
   display?: DisplayMeta;
+  /** Account-link status + sign-in, when the plugin registered one. */
+  connection?: PluginConnection;
   /** @deprecated Collected but read by nothing — see registerAgentContext. */
   agentContext?: string;
   migrations: MigrateFn[];

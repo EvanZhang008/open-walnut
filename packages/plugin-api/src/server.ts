@@ -437,6 +437,64 @@ export interface PluginIntegrationSync {
   confirmRemoteDeleted?(remoteId: string, remoteList?: string | null): Promise<boolean>
 }
 
+/**
+ * Where a plugin's link to its account stands. A sync plugin renews its own
+ * credentials without a human; the ONE step it cannot do alone is the sign-in,
+ * and this is how it hands that step to the console (Settings shows the state
+ * and a Sign in button) and to the notification feed (a card with that button
+ * when the account must sign in again).
+ */
+export type PluginConnectionState =
+  | 'connected'
+  | 'signing-in'
+  | 'sign-in-required'
+  | 'unreachable'
+  | 'not-configured'
+
+export interface PluginSignInPrompt {
+  userCode: string
+  verificationUri: string
+  message?: string
+  /** ISO time after which the code is dead and a new sign-in must start. */
+  expiresAt: string
+  startedAt: string
+}
+
+export interface PluginConnectionStatus {
+  state: PluginConnectionState
+  account?: string
+  detail?: string
+  /** ISO expiry of the short-lived credential in hand; renewal is automatic. */
+  credentialExpiresAt?: string
+  /** Present while `state` is 'signing-in'. */
+  signIn?: PluginSignInPrompt
+  lastFailureAt?: string
+}
+
+export interface PluginConnection {
+  /** Answer from what you already know; never hit the network here. */
+  status(): Promise<PluginConnectionStatus>
+  /**
+   * Start an interactive sign-in and resolve as soon as the prompt exists; the human
+   * finishing it is observed through `status()`. Return the SAME prompt while one is
+   * still valid. Omit when the credential is config-only (an API key).
+   */
+  signIn?(): Promise<PluginSignInPrompt>
+}
+
+/**
+ * Put `authKind` on an error you throw from a sync method and Walnut reacts to the
+ * class, not the text: 'sign-in-required' tells the human once, with a Sign in button;
+ * 'unreachable' is retried quietly; 'not-configured' points at Settings.
+ */
+export type PluginAuthFailureKind = 'sign-in-required' | 'unreachable' | 'not-configured'
+
+export interface PluginAuthFailure {
+  authKind: PluginAuthFailureKind
+  /** The provider's own error code, for the log line. */
+  authCode?: string
+}
+
 export interface PluginDisplayMeta {
   badge: string
   badgeColor: string
@@ -641,6 +699,8 @@ export interface RegistryService {
     options?: { priority?: number },
   ): Disposable
   display(meta: PluginDisplayMeta): Disposable
+  /** Show the account link in Settings and let the human sign in from there. At most one. */
+  connection(link: PluginConnection): Disposable
   migration(migrate: PluginMigration): Disposable
   extIndex(spec: PluginExtIndexSpec): Disposable
   tool(spec: PluginToolSpec): Disposable

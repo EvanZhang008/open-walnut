@@ -78,6 +78,7 @@ import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, getPluginLifecycleRecords, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
+import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, type ConnectionWatch } from '../core/plugin-sync-health.js'
 import { syncReconciler } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { createPluginSourcesRouter } from './routes/plugin-sources.js'
@@ -217,6 +218,8 @@ async function publishErrorNotification(input: {
    * which is right for a one-shot event (a session that already ended).
    */
   recoveryKey?: string
+  /** The one thing the human can do about it (a "Sign in" button); see NotificationRecord.action. */
+  action?: { label: string; to: string }
 }): Promise<boolean> {
   const timestamp = Date.now()
   const lastAt = errorNotificationRecentScopes.get(input.dedupScope)
@@ -283,6 +286,7 @@ async function publishErrorNotification(input: {
       ...(input.taskId ? { taskId: input.taskId } : {}),
       ...(input.recoveryKey ? { recoveryKey: input.recoveryKey } : {}),
       ...(causeKey ? { causeKey } : {}),
+      ...(input.action ? { action: input.action } : {}),
     })
     // Armed only after the write landed — a failed persist must not silence this
     // failure for a full TTL window with nothing durable to show for it.
@@ -4416,7 +4420,10 @@ function startPluginSyncPolling(): void {
   // inert stub: polling it would burn a timer forever to call no-ops.
   const plugins = registry.getAll().filter(p =>
     p.id !== 'local' && p.hasSync !== false && !pluginSyncStops.has(p.id))
-  const FIRST_TICK_DELAY_MS = 60_000 // boot grace — let startup quiet down first
+  // Boot grace — let startup quiet down first. A fixture server may shorten it
+  // (WALNUT_SYNC_FIRST_TICK_MS) so a browser spec can watch the first tick land.
+  const firstTickOverride = Number(process.env.WALNUT_SYNC_FIRST_TICK_MS)
+  const FIRST_TICK_DELAY_MS = Number.isInteger(firstTickOverride) && firstTickOverride > 0 ? firstTickOverride : 60_000
   // Yield to the event loop every N sync iterations — a compromise between two
   // failure modes: N=1 adds needless loop overhead on every Graph call, while
   // N≥20 recreates the original event-loop starvation that wedged the server at
@@ -4429,6 +4436,8 @@ function startPluginSyncPolling(): void {
     let consecutiveFailures = 0
     // First success in this process also publishes recovery (see the edge logic below).
     let recoveredOnce = false
+    // Whether this plugin's "sign in again" card is up (see decideConnectionNotice).
+    const connectionWatch: ConnectionWatch = { noticed: false }
     const intervalMs = (plugin.config.sync_interval_ms as number) ?? SYNC_INTERVAL_MS
     const pushRetrySchedule = pushRetrySchedules.get(plugin.id) ?? new SyncRetrySchedule()
     pushRetrySchedules.set(plugin.id, pushRetrySchedule)
@@ -4701,7 +4710,35 @@ function startPluginSyncPolling(): void {
         const recovered = consecutiveFailures > 0 || !recoveredOnce
         consecutiveFailures = 0
         recoveredOnce = true
-        if (recovered) void publishRecovery([`plugin:${plugin.id}`])
+        recordSyncSuccess(plugin.id)
+        if (recovered) {
+          void publishRecovery([`plugin:${plugin.id}`])
+          // A recovery retired every card under this key, the sign-in one included.
+          connectionWatch.noticed = false
+        }
+        // A good tick is not proof the account is fine: the refresh token can be
+        // dead while the access token in hand still has an hour left, and that
+        // is exactly when the human should hear about it (before sync stops).
+        // The plugin's status() reads its cache, no network.
+        if (plugin.connection) {
+          const status = await plugin.connection.status().catch((e: unknown) => {
+            log.web.debug(`${plugin.id} connection status failed`, { error: e instanceof Error ? e.message : String(e) })
+            return null
+          })
+          const decision = decideConnectionNotice(plugin.name, plugin.id, status, connectionWatch)
+          if (decision.notice) {
+            void publishErrorNotification({
+              title: decision.notice.title,
+              body: decision.notice.body,
+              dedupScope: `plugin:${plugin.id}:sign-in`,
+              recoveryKey: `plugin:${plugin.id}`,
+              ...(decision.notice.action ? { action: decision.notice.action } : {}),
+            })
+            log.web.warn(`${plugin.id} sync: sign-in`, { pluginId: plugin.id, detail: status?.detail })
+          } else if (decision.recovered) {
+            void publishRecovery([`plugin:${plugin.id}`])
+          }
+        }
         const syncElapsed = Date.now() - syncT0
         if (syncElapsed > 2000) {
           log.web.warn(`${plugin.id} sync: slow tick`, { elapsed: syncElapsed })
@@ -4709,13 +4746,31 @@ function startPluginSyncPolling(): void {
       } catch (err) {
         consecutiveFailures++
         const errorMsg = err instanceof Error ? err.message : String(err)
-        if (consecutiveFailures >= 5) {
-          // pluginId in meta is load-bearing, not decoration: the log-error
-          // bridge derives this record's recoveryKey from it (the 'web'
-          // subsystem is core, so without pluginId the card would have no
-          // lifecycle and stay red after the plugin recovered).
-          log.web.error(`${plugin.id} sync failing repeatedly`, {
+        // What this failure means for the human is the plugin's call, not a
+        // streak count: a dead refresh token gets a Sign in card on the FIRST
+        // tick (retrying cannot fix it), a provider outage stays quiet until it
+        // has repeated, and neither ever tells the user to re-auth for the
+        // other's reason (2026-09-11: eighteen "run the auth command" cards
+        // from one token-endpoint outage, with a valid refresh token throughout).
+        const health = recordSyncFailure(plugin.id, err)
+        const notice = decideSyncFailureNotice(plugin.name, plugin.id, err, health)
+        if (notice.level === 'sign-in') connectionWatch.noticed = true
+        if (notice.level !== 'none') {
+          // dedupScope per notice level: the sign-in card and the outage card
+          // are different root causes and must not overwrite each other's body;
+          // both share the plugin's recoveryKey so a completed sync retires both.
+          const published = await publishErrorNotification({
+            title: notice.title,
+            body: notice.body,
+            dedupScope: `plugin:${plugin.id}:${notice.level}`,
+            recoveryKey: `plugin:${plugin.id}`,
+            ...(notice.action ? { action: notice.action } : {}),
+          })
+          // One warn per card the human actually got; the absorbed repeats in
+          // between are debug, or a 30s failing tick would fill the log.
+          log.web[published ? 'warn' : 'debug'](`${plugin.id} sync: ${notice.level}`, {
             pluginId: plugin.id, consecutiveFailures, error: errorMsg,
+            ...(notice.code ? { code: notice.code } : {}),
           })
         } else {
           log.web.debug(`${plugin.id} sync failed`, { consecutiveFailures, error: errorMsg })

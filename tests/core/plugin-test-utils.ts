@@ -16,6 +16,7 @@ import type {
   ExtIndexSpec,
   SyncPollContext,
   PluginToolSpec,
+  PluginConnection,
 } from '../../src/core/integration-types.js';
 import type { Task, TaskPhase, TaskPriority } from '../../src/core/types.js';
 
@@ -102,6 +103,7 @@ export function createTestPluginApi(
     httpRoutes: HttpRoute[];
     extIndex: ExtIndexSpec | null;
     tools: PluginToolSpec[];
+    connection: PluginConnection | null;
   };
 } {
   const m = { id: 'test', name: 'Test Plugin', ...manifest };
@@ -114,6 +116,7 @@ export function createTestPluginApi(
     httpRoutes: [] as HttpRoute[],
     extIndex: null as ExtIndexSpec | null,
     tools: [] as PluginToolSpec[],
+    connection: null as PluginConnection | null,
   };
 
   const api: PluginApi = {
@@ -139,6 +142,10 @@ export function createTestPluginApi(
     },
     registerAgentContext(snippet: string) {
       collected.agentContext = snippet;
+    },
+    registerConnection(connection: PluginConnection) {
+      if (collected.connection) throw new Error(`Plugin "${m.id}" called registerConnection() more than once.`);
+      collected.connection = connection;
     },
     registerMigration(fn: MigrateFn) {
       collected.migrations.push(fn);

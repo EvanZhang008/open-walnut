@@ -247,6 +247,34 @@ describe('upsertNotification', () => {
     expect(feed[0].body).toBe('host unreachable');
   });
 
+  it('carries the producer\'s action, and a re-fire keeps or gains it', async () => {
+    const first = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Acme needs you to sign in again',
+      body: 'dead credential', timestamp: 1_000, dedupKey: 'error:plugin:acme:sign-in',
+      recoveryKey: 'plugin:acme', action: { label: 'Sign in', to: '/settings#plugin-store' },
+    });
+    expect(first.record.action).toEqual({ label: 'Sign in', to: '/settings#plugin-store' });
+
+    // A re-fire without an action (an older producer, or a fold from the log
+    // bridge) must not strip the button off the card.
+    const second = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Acme needs you to sign in again',
+      body: 'still dead', timestamp: 2_000, dedupKey: 'error:plugin:acme:sign-in', recoveryKey: 'plugin:acme',
+    });
+    expect(second.outcome).toBe('refreshed');
+    expect(second.record.action).toEqual({ label: 'Sign in', to: '/settings#plugin-store' });
+
+    // And a newer producer's action replaces the old one.
+    const third = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Acme needs you to sign in again',
+      body: 'still dead', timestamp: 3_000, dedupKey: 'error:plugin:acme:sign-in', recoveryKey: 'plugin:acme',
+      action: { label: 'Open Settings', to: '/settings' },
+    });
+    expect(third.record.action).toEqual({ label: 'Open Settings', to: '/settings' });
+    const { feed } = await listNotifications();
+    expect(feed[0].action).toEqual({ label: 'Open Settings', to: '/settings' });
+  });
+
   it('refreshes in place on a dedupKey hit: count grows, latest body wins, id/timestamp stable', async () => {
     const first = await upsertNotification({
       kind: 'operation-error', severity: 'error', title: 'Delivery Failed',

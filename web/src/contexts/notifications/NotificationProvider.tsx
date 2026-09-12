@@ -30,7 +30,7 @@ import {
   type Notification, type NotificationInput,
   TOAST_DURATION_MS, IS_PERSISTENT, MAX_FEED_BODY_CHARS, SHOULD_TOAST,
 } from './types';
-import { effectiveTs, attentionBadgeCount } from './notification-model';
+import { effectiveTs, attentionBadgeCount, actionOf } from './notification-model';
 
 interface NotificationContextValue {
   /** Current top-right toast stack. */
@@ -130,6 +130,9 @@ export interface FeedRecord {
   letterId?: string;
   /** operation-error only — the repair session "Ask AI to fix" started. */
   fix?: { taskId: string; sessionId?: string; startedAt: number };
+  /** operation-error only — the producer's own button ("Sign in" → the plugin's
+   *  Settings row). Wins over the default "Go to Session" link. */
+  action?: { label: string; to: string };
 }
 
 /** Copy the enrichment fields off a wire record, omitting absent ones so a
@@ -357,6 +360,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           body: r.body, timestamp: r.timestamp, persistent: true, read: r.read,
           dedupKey: r.dedupKey, sessionId: r.sessionId, taskId: r.taskId,
           resolved: r.resolved,
+          ...(actionOf(r) ? { action: actionOf(r) } : {}),
           ...enrichmentOf(r),
         }));
         // Merge with anything that arrived live before the fetch resolved. Live
@@ -490,9 +494,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ...enrichmentOf(r),
       // Permissions are the one kind worth waking a hidden tab for.
       ...(kind === 'permission' ? { browserNotify: true } : {}),
-      ...(r.sessionId
-        ? { action: { label: 'Go to Session', kind: 'navigate' as const, to: `/sessions?id=${r.sessionId}` } }
-        : {}),
+      ...(actionOf(r) ? { action: actionOf(r) } : {}),
     });
   });
 
@@ -532,9 +534,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ...(r.sessionId ? { sessionId: r.sessionId } : {}),
       ...(r.taskId ? { taskId: r.taskId } : {}),
       ...(r.resolved ? { resolved: r.resolved } : {}),
-      ...(r.sessionId
-        ? { action: { label: 'Go to Session', kind: 'navigate' as const, to: `/sessions?id=${r.sessionId}` } }
-        : {}),
+      ...(actionOf(r) ? { action: actionOf(r) } : {}),
       ...enrichmentOf(r),
       // The server's read state wins when it sent one. Two producers share this
       // frame and they disagree ON PURPOSE: a re-FIRE (upsertNotification) sets

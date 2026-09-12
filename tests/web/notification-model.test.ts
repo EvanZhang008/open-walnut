@@ -17,7 +17,7 @@ import { describe, it, expect } from 'vitest';
 import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
-  linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
+  linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory, actionOf,
   systemIssueCount, causeLabelOf, partitionErrorsByCause, attentionBadgeCount,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
@@ -849,5 +849,27 @@ describe('attentionBadgeCount', () => {
 
   it('is 0 for an empty feed', () => {
     expect(attentionBadgeCount([])).toBe(0);
+  });
+});
+
+describe('actionOf (wire record → card button)', () => {
+  it("the producer's action wins over the session default, and a record with neither has none", () => {
+    expect(actionOf({ action: { label: 'Sign in', to: '/settings#plugin-store' } }))
+      .toEqual({ label: 'Sign in', kind: 'navigate', to: '/settings#plugin-store' });
+    expect(actionOf({ action: { label: 'Sign in', to: '/settings#plugin-store' }, sessionId: 's1' }))
+      .toEqual({ label: 'Sign in', kind: 'navigate', to: '/settings#plugin-store' });
+    expect(actionOf({ sessionId: 's1' })).toEqual({ label: 'Go to Session', kind: 'navigate', to: '/sessions?id=s1' });
+    expect(actionOf({})).toBeUndefined();
+    // A half-written action (no target) is not a button.
+    expect(actionOf({ action: { label: 'Sign in' } })).toBeUndefined();
+  });
+
+  it('a session-less error card links where its action points', () => {
+    const card = n({
+      kind: 'operation-error', severity: 'error', dedupKey: 'error:plugin:ms-todo:sign-in',
+      title: 'Microsoft To-Do needs you to sign in again',
+      action: { label: 'Sign in', kind: 'navigate', to: '/settings#plugin-store' },
+    });
+    expect(linkTargetOf(card)).toBe('/settings#plugin-store');
   });
 });

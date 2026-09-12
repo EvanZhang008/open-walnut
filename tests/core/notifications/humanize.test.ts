@@ -380,6 +380,33 @@ describe('plugin sync families', () => {
     expect(out.message).toBe('7 sync attempts in a row have failed.');
   });
 
+  it('the sync loop\'s own connection notices pass through whole: title, and BOTH sentences of the body', () => {
+    // publishErrorNotification path: recoveryKey names the plugin, no meta.
+    const out = humanizeErrorNotification({
+      title: 'Microsoft To-Do needs you to sign in again',
+      body: 'Microsoft To-Do could not renew its credential (invalid_grant). Sync is paused until you sign in; retrying will not fix this.',
+      recoveryKey: 'plugin:ms-todo',
+    });
+    expect(out.category).toBe('Ms Todo');
+    expect(out.title).toBe('Microsoft To-Do needs you to sign in again');
+    // The unmatched path would cut this to the first sentence and lose the instruction.
+    expect(out.message).toBe('Microsoft To-Do could not renew its credential (invalid_grant). Sync is paused until you sign in; retrying will not fix this.');
+
+    const outage = humanizeErrorNotification({
+      title: 'Microsoft To-Do sync keeps failing',
+      body: "Microsoft To-Do's provider has not answered for 5 attempts in a row. Your sign-in is fine; sync keeps retrying on its own.",
+      recoveryKey: 'plugin:ms-todo',
+    });
+    expect(outage.title).toBe('Microsoft To-Do sync keeps failing');
+    expect(outage.message).toContain('Your sign-in is fine');
+
+    const setup = humanizeErrorNotification({
+      title: 'Acme is not set up yet', body: 'Acme has no api_key yet.', recoveryKey: 'plugin:acme',
+    });
+    expect(setup.category).toBe('Acme');
+    expect(setup.message).toBe('Acme has no api_key yet.');
+  });
+
   it('a full reconcile failure is its own title', () => {
     const out = humanizeErrorNotification({
       title: 'sync-reconciler: full reconcile failed',
@@ -515,6 +542,9 @@ describe('rule precedence list', () => {
     const ids = [...HUMANIZE_RULE_IDS];
     expect(ids[ids.length - 1]).toBe('plugin-generic');
     expect(ids.indexOf('plugin-api-error')).toBeLessThan(ids.indexOf('plugin-generic'));
+    // The loop's prose notices must be seen before the log-bridge 'sync failing
+    // repeatedly' rule, whose render would rebuild the body from meta it lacks.
+    expect(ids.indexOf('plugin-connection-notice')).toBeLessThan(ids.indexOf('plugin-sync-repeating'));
     expect(ids.indexOf('transport-start-failed')).toBeLessThan(ids.indexOf('plugin-generic'));
     // Delivery-failed must precede the generic session-error prefix rule.
     expect(ids.indexOf('session-delivery-failed')).toBeLessThan(ids.indexOf('session-error'));

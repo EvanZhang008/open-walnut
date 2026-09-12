@@ -4,6 +4,7 @@ import type {
   IntegrationSync,
   MigrateFn,
   PluginApi,
+  PluginConnection,
   PluginToolSpec,
   ProjectClaimFn,
   DisplayMeta,
@@ -28,6 +29,9 @@ export async function createLegacyRegistrationAdapter(
     },
     registerDisplay(meta: DisplayMeta) {
       walnut.registry.display(meta)
+    },
+    registerConnection(connection: PluginConnection) {
+      walnut.registry.connection(connection)
     },
     registerAgentContext(text: string) {
       walnut.registry.agentContext(text)

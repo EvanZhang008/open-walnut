@@ -29,6 +29,7 @@ import {
 import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask, recordRemoteLink } from '../core/task-remote-links.js';
 import { findProjectTombstoneByRemoteListId, learnProjectTombstoneRemoteIds } from '../core/project-tombstones.js';
 import type { Config } from '../core/types.js';
+import { pluginAuthFailureOf, type PluginAuthFailure, type PluginAuthFailureKind, type PluginConnectionStatus, type PluginSignInPrompt } from '../core/integration-types.js';
 
 // ── Plugin-system helpers ──
 
@@ -132,12 +133,68 @@ const MS_TO_STATUS: Record<string, TaskStatus> = {
 
 // -- MSAL client --
 
+/**
+ * Thrown by the auth layer with the CLASS of failure on it (see PluginAuthFailure):
+ * core reacts to `authKind`, never to the wording, so the text here is written
+ * for the human who reads the card.
+ */
+export class MsTodoAuthError extends Error implements PluginAuthFailure {
+  readonly authKind: PluginAuthFailureKind;
+  readonly authCode?: string;
+  constructor(kind: PluginAuthFailureKind, message: string, code?: string) {
+    super(message);
+    this.name = 'MsTodoAuthError';
+    this.authKind = kind;
+    if (code) this.authCode = code;
+  }
+}
+
+/**
+ * MSAL error codes that mean the refresh token itself is dead (revoked, expired
+ * after 90 idle days, password/security event, consent withdrawn). Only a new
+ * sign-in fixes these. Everything else the token endpoint can throw (network,
+ * 5xx, throttling, a 401 HTML page from a proxy) is a bad DAY, not a bad token.
+ */
+const SIGN_IN_REQUIRED_CODES = new Set([
+  'invalid_grant',
+  'interaction_required',
+  'consent_required',
+  'login_required',
+  'no_account_in_silent_request',
+  'no_tokens_found',
+  'no_account_found',
+  'token_refresh_required',
+]);
+
+function msalErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const code = (err as { errorCode?: unknown; code?: unknown }).errorCode
+    ?? (err as { code?: unknown }).code;
+  return typeof code === 'string' && code ? code : undefined;
+}
+
+/** Does this MSAL failure mean "sign in again" (true) or "try again later" (false)? */
+export function isSignInRequiredError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  // By class when the real MSAL is loaded, by name when it is not (a test mock
+  // that stubs the module, or an error that crossed a serialization boundary).
+  if (typeof msal.InteractionRequiredAuthError === 'function' && err instanceof msal.InteractionRequiredAuthError) return true;
+  if ((err as { name?: unknown }).name === 'InteractionRequiredAuthError') return true;
+  const code = msalErrorCode(err);
+  if (code && SIGN_IN_REQUIRED_CODES.has(code)) return true;
+  // MSAL wraps the token endpoint's own body; AADSTS70008 / 700082 / 50173 are the
+  // refresh-token-expired and revoked families, all "invalid_grant" underneath.
+  const text = err instanceof Error ? err.message : '';
+  return /invalid_grant|AADSTS7000[0-9]{2}|AADSTS50173|AADSTS50076/.test(text);
+}
+
 async function createMsalClient(): Promise<msal.PublicClientApplication> {
   const config = await getConfig();
   const clientId = getMsTodoConfig(config)?.client_id;
   if (!clientId) {
-    throw new Error(
-      'Microsoft To-Do client_id not configured. Add ms_todo.client_id to ~/.open-walnut/config.yaml',
+    throw new MsTodoAuthError(
+      'not-configured',
+      'Microsoft To-Do has no client_id yet. Add it under Settings → Plugins → Microsoft To-Do.',
     );
   }
 
@@ -168,6 +225,57 @@ async function saveTokenCache(app: msal.PublicClientApplication, accessToken: st
   await writeJsonFile(TOKENS_FILE, cache);
 }
 
+// -- Connection state (what Settings and the notification feed show) --
+//
+// Kept in-process and refreshed by every token acquisition, so status() answers
+// without a network call. The token FILE is the durable half (survives restart);
+// this is the "what happened last" half.
+
+interface AuthMemory {
+  /** The last silent-renewal failure, cleared by the next success. */
+  lastFailure: { kind: PluginAuthFailureKind; code?: string; message: string; at: string } | null;
+  /** The device-code sign-in the human has not finished yet. */
+  pendingSignIn: { prompt: PluginSignInPrompt; done: Promise<void> } | null;
+  /** How the last sign-in attempt ended, until a new one starts. */
+  lastSignInError: { message: string; at: string } | null;
+}
+
+const authMemory: AuthMemory = { lastFailure: null, pendingSignIn: null, lastSignInError: null };
+
+/** Test seam: forget everything the process learned about auth (not the token file). */
+export function _resetAuthMemoryForTesting(): void {
+  authMemory.lastFailure = null;
+  authMemory.pendingSignIn = null;
+  authMemory.lastSignInError = null;
+}
+
+function noteAuthFailure(kind: PluginAuthFailureKind, err: unknown): { kind: PluginAuthFailureKind; code?: string; message: string } {
+  const code = msalErrorCode(err);
+  const message = err instanceof Error ? err.message : String(err);
+  authMemory.lastFailure = { kind, ...(code ? { code } : {}), message, at: new Date().toISOString() };
+  return { kind, ...(code ? { code } : {}), message };
+}
+
+const SIGN_IN_HINT = 'Open Settings → Plugins → Microsoft To-Do and click Sign in (or run `walnut auth`).';
+
+function signInRequiredError(code?: string, reason?: string): MsTodoAuthError {
+  const why = reason ? ` (${reason.split('\n')[0].slice(0, 160)})` : '';
+  return new MsTodoAuthError(
+    'sign-in-required',
+    `Microsoft To-Do needs you to sign in again${why}. ${SIGN_IN_HINT}`,
+    code,
+  );
+}
+
+function unreachableError(code?: string, reason?: string): MsTodoAuthError {
+  const why = reason ? ` (${reason.split('\n')[0].slice(0, 160)})` : '';
+  return new MsTodoAuthError(
+    'unreachable',
+    `Microsoft's sign-in service did not renew the To-Do credential${why}. Sync retries on its own; nothing to do unless this keeps up.`,
+    code,
+  );
+}
+
 // -- Authentication --
 
 export interface DeviceCodeInfo {
@@ -176,32 +284,172 @@ export interface DeviceCodeInfo {
   message: string;
 }
 
-export async function authenticate(
-  onDeviceCode: (info: DeviceCodeInfo) => void,
-): Promise<{ account: string; lists: MSTodoList[] }> {
-  const app = await createMsalClient();
+/** Device-code prompts are valid for 15 minutes on the Microsoft side. */
+const DEVICE_CODE_TTL_MS = 15 * 60 * 1000;
 
-  const result = await app.acquireTokenByDeviceCode({
+/**
+ * Start a device-code sign-in and resolve with the prompt as soon as Microsoft
+ * issues it. The exchange keeps running in the background until the human
+ * finishes on the verification page (or the code expires); `getAuthStatus()`
+ * reports 'signing-in' meanwhile and 'connected' once the token is saved.
+ * A second call while a prompt is still valid returns that same prompt.
+ */
+export async function beginSignIn(): Promise<PluginSignInPrompt> {
+  const pending = authMemory.pendingSignIn;
+  if (pending && new Date(pending.prompt.expiresAt).getTime() > Date.now()) return pending.prompt;
+
+  const app = await createMsalClient();
+  authMemory.lastSignInError = null;
+
+  let resolvePrompt!: (p: PluginSignInPrompt) => void;
+  let rejectPrompt!: (e: unknown) => void;
+  const promptReady = new Promise<PluginSignInPrompt>((res, rej) => { resolvePrompt = res; rejectPrompt = rej; });
+  let prompt: PluginSignInPrompt | null = null;
+  // The exchange can settle before the prompt's awaiter resumes (a mock, or a
+  // human who is very fast); a settled flow must never be recorded as pending.
+  let settled = false;
+
+  const done = app.acquireTokenByDeviceCode({
     scopes: SCOPES,
+    timeout: Math.floor(DEVICE_CODE_TTL_MS / 1000),
     deviceCodeCallback: (response) => {
-      onDeviceCode({
+      const startedAt = new Date();
+      const ttl = typeof response.expiresIn === 'number' && response.expiresIn > 0
+        ? response.expiresIn * 1000
+        : DEVICE_CODE_TTL_MS;
+      prompt = {
         userCode: response.userCode,
         verificationUri: response.verificationUri,
         message: response.message,
-      });
+        startedAt: startedAt.toISOString(),
+        expiresAt: new Date(startedAt.getTime() + ttl).toISOString(),
+      };
+      resolvePrompt(prompt);
     },
+  }).then(async (result) => {
+    if (!result) throw new Error('Authentication failed: no token received');
+    await saveTokenCache(app, result.accessToken, result.expiresOn);
+    authMemory.lastFailure = null;
+    log.web.info('ms-todo: signed in', { account: result.account?.username ?? 'unknown' });
+  }).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    authMemory.lastSignInError = { message, at: new Date().toISOString() };
+    log.web.warn('ms-todo: sign-in did not complete', { error: message.split('\n')[0].slice(0, 200) });
+    // Reject only when the prompt never came; after that the human's failure to
+    // finish is state, not an exception for whoever asked for the prompt.
+    if (!prompt) rejectPrompt(err);
+  }).finally(() => {
+    settled = true;
+    if (authMemory.pendingSignIn?.prompt === prompt) authMemory.pendingSignIn = null;
   });
 
-  if (!result) {
-    throw new Error('Authentication failed: no token received');
+  const issued = await promptReady;
+  if (!settled) authMemory.pendingSignIn = { prompt: issued, done };
+  return issued;
+}
+
+/**
+ * Interactive sign-in for the CLI: prints the prompt through `onDeviceCode`, then
+ * waits for the human to finish and returns who signed in.
+ */
+export async function authenticate(
+  onDeviceCode: (info: DeviceCodeInfo) => void,
+): Promise<{ account: string; lists: MSTodoList[] }> {
+  const prompt = await beginSignIn();
+  onDeviceCode({
+    userCode: prompt.userCode,
+    verificationUri: prompt.verificationUri,
+    message: prompt.message ?? `To sign in, open ${prompt.verificationUri} and enter the code ${prompt.userCode}`,
+  });
+  const pending = authMemory.pendingSignIn;
+  if (pending) await pending.done;
+  if (authMemory.lastSignInError) {
+    throw new Error(`Authentication failed: ${authMemory.lastSignInError.message}`);
+  }
+  const app = await createMsalClient();
+  const accounts = await app.getTokenCache().getAllAccounts();
+  const token = await getAccessToken();
+  const lists = await fetchTaskLists(token);
+  return { account: accounts[0]?.username ?? 'unknown', lists };
+}
+
+/**
+ * Where the account link stands, from what this process already knows (token
+ * file + last renewal outcome + pending sign-in). Never touches the network.
+ */
+export async function getAuthStatus(): Promise<PluginConnectionStatus> {
+  const config = await getConfig();
+  if (!getMsTodoConfig(config)?.client_id) {
+    return { state: 'not-configured', detail: 'No client_id yet. Add it below and save.' };
   }
 
-  await saveTokenCache(app, result.accessToken, result.expiresOn);
+  const pending = authMemory.pendingSignIn;
+  if (pending && new Date(pending.prompt.expiresAt).getTime() > Date.now()) {
+    return {
+      state: 'signing-in',
+      signIn: pending.prompt,
+      detail: 'Finish the sign-in in your browser; this updates on its own when you are done.',
+    };
+  }
 
-  const lists = await fetchTaskLists(result.accessToken);
-  const account = result.account?.username ?? 'unknown';
+  const cached = await readJsonFile<TokenCache | null>(TOKENS_FILE, null);
+  let account: string | undefined;
+  let hasAccount = false;
+  if (cached?.msalCache) {
+    try {
+      const accounts = await (await createMsalClient()).getTokenCache().getAllAccounts();
+      hasAccount = accounts.length > 0;
+      account = accounts[0]?.username || undefined;
+    } catch {
+      // An unreadable cache is the same as no cache: sign in again.
+    }
+  }
+  const tokenExpiresAt = cached?.expiresAt;
+  const tokenValid = !!tokenExpiresAt && new Date(tokenExpiresAt).getTime() > Date.now();
+  const failure = authMemory.lastFailure;
+  const signInError = authMemory.lastSignInError;
 
-  return { account, lists };
+  if (!hasAccount && !tokenValid) {
+    return {
+      state: 'sign-in-required',
+      detail: signInError
+        ? `The last sign-in did not complete: ${signInError.message.split('\n')[0].slice(0, 160)}`
+        : 'Not signed in yet.',
+      ...(signInError ? { lastFailureAt: signInError.at } : {}),
+    };
+  }
+
+  if (failure?.kind === 'sign-in-required') {
+    return {
+      state: 'sign-in-required',
+      ...(account ? { account } : {}),
+      ...(tokenExpiresAt ? { credentialExpiresAt: tokenExpiresAt } : {}),
+      lastFailureAt: failure.at,
+      detail: tokenValid
+        ? `Microsoft refused to renew the credential${failure.code ? ` (${failure.code})` : ''}. Sync still works until ${new Date(tokenExpiresAt!).toLocaleTimeString()}; sign in before then.`
+        : `Microsoft refused to renew the credential${failure.code ? ` (${failure.code})` : ''}. Sync is paused until you sign in.`,
+    };
+  }
+
+  if (failure?.kind === 'unreachable' && !tokenValid) {
+    return {
+      state: 'unreachable',
+      ...(account ? { account } : {}),
+      ...(tokenExpiresAt ? { credentialExpiresAt: tokenExpiresAt } : {}),
+      lastFailureAt: failure.at,
+      detail: `Microsoft's sign-in service did not answer${failure.code ? ` (${failure.code})` : ''}; retrying on its own.`,
+    };
+  }
+
+  return {
+    state: 'connected',
+    ...(account ? { account } : {}),
+    ...(tokenExpiresAt ? { credentialExpiresAt: tokenExpiresAt } : {}),
+    ...(failure ? { lastFailureAt: failure.at } : {}),
+    detail: failure
+      ? 'Connected. The last renewal attempt failed but the credential in hand is still good; it renews on its own.'
+      : 'Connected. The credential renews on its own; you only sign in again if Microsoft revokes it.',
+  };
 }
 
 // -- Token acquisition --
@@ -209,8 +457,9 @@ export async function authenticate(
 export async function getAccessToken(): Promise<string> {
   const app = await createMsalClient();
 
-  // Try silent acquisition first
+  // Silent renewal first: the refresh token in the cache buys a fresh access token.
   const accounts = await app.getTokenCache().getAllAccounts();
+  let failure: { kind: PluginAuthFailureKind; code?: string; message: string } | null = null;
   if (accounts.length > 0) {
     try {
       const result = await app.acquireTokenSilent({
@@ -219,22 +468,29 @@ export async function getAccessToken(): Promise<string> {
       });
       if (result) {
         await saveTokenCache(app, result.accessToken, result.expiresOn);
+        authMemory.lastFailure = null;
         return result.accessToken;
       }
-    } catch {
-      // Silent acquisition failed, fall through
+      failure = noteAuthFailure('unreachable', new Error('acquireTokenSilent returned no result'));
+    } catch (err) {
+      failure = noteAuthFailure(isSignInRequiredError(err) ? 'sign-in-required' : 'unreachable', err);
+      log.web.debug('ms-todo: silent token renewal failed', {
+        kind: failure.kind, code: failure.code, error: failure.message.split('\n')[0].slice(0, 200),
+      });
     }
+  } else {
+    failure = noteAuthFailure('sign-in-required', new MsTodoAuthError('sign-in-required', 'no account in the token cache', 'no_account_found'));
   }
 
-  // Fall back to cached token if still valid
+  // Renewal failed: the access token already in hand is still good until it expires.
   const cached = await readJsonFile<TokenCache | null>(TOKENS_FILE, null);
   if (cached && new Date(cached.expiresAt) > new Date()) {
     return cached.accessToken;
   }
 
-  throw new Error(
-    'Not authenticated with Microsoft To-Do. Run "walnut auth" to sign in.',
-  );
+  throw failure.kind === 'sign-in-required'
+    ? signInRequiredError(failure.code, failure.code ? undefined : failure.message)
+    : unreachableError(failure.code, failure.message);
 }
 
 // -- HTTP helpers --
@@ -1591,6 +1847,8 @@ export async function fullPullAllTasks(): Promise<Array<{
 export interface MsTodoSyncStatus {
   configured: boolean;
   authenticated: boolean;
+  /** Why `authenticated` is false, when it is: a dead credential vs. Microsoft not answering. */
+  authFailure?: { kind: PluginAuthFailureKind; message: string };
   lastSync: string | null;
   deltaLinksCount: number;
 }
@@ -1604,11 +1862,16 @@ export async function getMsTodoSyncStatus(): Promise<MsTodoSyncStatus> {
   }
 
   let authenticated = false;
+  let authFailure: MsTodoSyncStatus['authFailure'];
   try {
     await getAccessToken();
     authenticated = true;
-  } catch {
-    // Not authenticated
+  } catch (err) {
+    const auth = pluginAuthFailureOf(err);
+    authFailure = {
+      kind: auth?.authKind ?? 'unreachable',
+      message: (err instanceof Error ? err.message : String(err)).split('\n')[0],
+    };
   }
 
   const deltaState = await readJsonFile<DeltaState>(DELTA_FILE, {
@@ -1620,6 +1883,7 @@ export async function getMsTodoSyncStatus(): Promise<MsTodoSyncStatus> {
   return {
     configured,
     authenticated,
+    ...(authFailure ? { authFailure } : {}),
     lastSync: deltaState.lastSync || null,
     deltaLinksCount: Object.keys(deltaState.deltaLinks).length,
   };

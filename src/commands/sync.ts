@@ -83,10 +83,16 @@ async function runTodoSync(globals: GlobalOptions): Promise<{ ran: boolean; resu
     }
 
     if (!status.authenticated) {
+      // A dead credential and a provider outage look the same from here (no
+      // token), but only one of them is fixed by signing in.
+      const unreachable = status.authFailure?.kind === 'unreachable';
       if (!globals.json) {
-        console.log(chalk.yellow('  To-Do: not authenticated.') + ' Run: walnut auth');
+        console.log(unreachable
+          ? chalk.yellow('  To-Do: Microsoft did not answer; your sign-in is fine, try again shortly.')
+            + (status.authFailure?.message ? chalk.dim(` (${status.authFailure.message})`) : '')
+          : chalk.yellow('  To-Do: not signed in.') + ' Sign in under Settings → Plugins → Microsoft To-Do, or run: walnut auth');
       }
-      return { ran: false, result: { todo: 'not_authenticated' } };
+      return { ran: false, result: { todo: unreachable ? 'unreachable' : 'not_authenticated' } };
     }
 
     if (!globals.json) {

@@ -88,3 +88,98 @@
   background: none;
   padding: 0;
 }
+
+/* A plugin's account link, on its own row: signed in as whom, renews until when,
+   and the device-code prompt while a sign-in is outstanding. */
+.plugin-connection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+
+.plugin-connection--sign-in-required {
+  border-color: var(--priority-immediate, #ff3b30);
+}
+
+.plugin-connection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.plugin-connection-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plugin-connection-line strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 28ch;
+  white-space: nowrap;
+}
+
+.plugin-connection-muted {
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.plugin-connection-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+/* The plugin's own sentence about what is wrong. Wraps: it is a diagnosis. */
+.plugin-connection-detail {
+  color: var(--fg-secondary, var(--fg));
+  white-space: normal;
+  line-height: 1.45;
+}
+
+.plugin-connection-sync {
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.plugin-connection-signin {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary, var(--bg));
+}
+
+.plugin-connection-code-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plugin-connection-code {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+  user-select: all;
+}
+
+.plugin-connection-error {
+  color: var(--priority-immediate, #ff3b30);
+  white-space: normal;
+}
