@@ -68,6 +68,7 @@ import { SessionReaper } from '../core/session-reaper.js'
 import { isClaudeCliInstalled } from '../core/claude-cli-detect.js'
 import { subagentRunner } from '../providers/subagent-runner.js'
 import { getTask, listTasks } from '../core/task-manager.js'
+import { SyncRetrySchedule } from '../core/sync-retry-schedule.js'
 import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
@@ -456,6 +457,11 @@ let httpServer: HttpServer | null = null
 // Self-rescheduling timers keyed by owning plugin. A reload stops the old owner
 // before replacing its code, so no tick can retain a stale plugin object.
 const pluginSyncStops = new Map<string, () => Promise<void>>()
+// Backoff for Step 1.5 of a plugin's tick, ONE PER PLUGIN: `pick` prunes entries that
+// are not among the candidates it was handed, so a schedule shared across plugins would
+// have each plugin's tick wipe the others' backoff. Per process on purpose: a restart is
+// the moment a retry is welcome.
+const pushRetrySchedules = new Map<string, SyncRetrySchedule>()
 // Set during startup; invoked by the plugin-sources router after add/update.
 let pluginSoftReload: () => Promise<void> = async () => {}
 let pluginMutationTail: Promise<unknown> = Promise.resolve()
@@ -4421,7 +4427,11 @@ function startPluginSyncPolling(): void {
   for (const plugin of plugins) {
     let syncing = false
     let consecutiveFailures = 0
+    // First success in this process also publishes recovery (see the edge logic below).
+    let recoveredOnce = false
     const intervalMs = (plugin.config.sync_interval_ms as number) ?? SYNC_INTERVAL_MS
+    const pushRetrySchedule = pushRetrySchedules.get(plugin.id) ?? new SyncRetrySchedule()
+    pushRetrySchedules.set(plugin.id, pushRetrySchedule)
 
     let timer: ReturnType<typeof setTimeout> | null = null
     let stopped = false
@@ -4537,10 +4547,13 @@ function startPluginSyncPolling(): void {
         }
 
         // Step 1.5: Retry tasks with sync_error that already have ext data
-        // These are tasks that were created successfully but had a subsequent push failure.
-        // SQL-filtered (listSyncErrorTasks) so we don't re-scan the whole task set.
+        // These are tasks that were created successfully but had a subsequent push failure
+        // (completed ones included: a close that never reached the tracker is the one edit
+        // the whole team can see). SQL-filtered (listSyncErrorTasks) so we don't re-scan the
+        // whole task set; the schedule spaces repeat failures out with backoff so a task
+        // the remote will never accept cannot occupy the batch every minute.
         const MAX_ERROR_RETRIES_PER_CYCLE = 5
-        const errorRetries = (await listSyncErrorTasks(plugin.id)).slice(0, MAX_ERROR_RETRIES_PER_CYCLE)
+        const errorRetries = pushRetrySchedule.pick(await listSyncErrorTasks(plugin.id), MAX_ERROR_RETRIES_PER_CYCLE)
         let errorRetryCounter = 0
         for (const task of errorRetries) {
           // Same reason as the unsynced loop — yield periodically so the event loop
@@ -4550,8 +4563,16 @@ function startPluginSyncPolling(): void {
           }
           errorRetryCounter++
           try {
-            await autoPushIfConfigured(task)
+            const result = await autoPushIfConfigured(task)
+            if (result.success) {
+              pushRetrySchedule.noteSuccess(task.id)
+              log.web.info(`${plugin.id} sync: error retry push succeeded`, { taskId: task.id, phase: task.phase })
+            } else {
+              pushRetrySchedule.noteFailure(task.id)
+              log.web.debug(`${plugin.id} sync: error retry push failed`, { taskId: task.id, error: result.error })
+            }
           } catch (err) {
+            pushRetrySchedule.noteFailure(task.id)
             log.web.debug(`${plugin.id} sync: error retry push failed`, {
               taskId: task.id,
               error: err instanceof Error ? err.message : String(err),
@@ -4668,14 +4689,18 @@ function startPluginSyncPolling(): void {
         }
         // A sync that completed is proof the plugin's whole condition (auth,
         // network, remote API) is healthy again — so this is where its wall of
-        // red retires. Gated on the failure→success EDGE: firing on every
-        // healthy tick would mean a locked read-modify-write scan of
-        // notifications.json every 30s, per plugin, forever, to change nothing.
+        // red retires. Gated on the failure→success EDGE, plus the FIRST success of
+        // this process: firing on every healthy tick would mean a locked
+        // read-modify-write scan of notifications.json every 30s, per plugin, forever,
+        // to change nothing; but a plugin that was down in the previous process (not
+        // loaded, quarantined) never had a failing tick here, so without the
+        // first-success rule the cards it left behind would stay red until dismissed.
         // Every record under this key retires at once, including the ones the
         // log bridge wrote from the plugin's own subsystem (its http client, the
         // sync reconciler) — they all carry `plugin:<id>`.
-        const recovered = consecutiveFailures > 0
+        const recovered = consecutiveFailures > 0 || !recoveredOnce
         consecutiveFailures = 0
+        recoveredOnce = true
         if (recovered) void publishRecovery([`plugin:${plugin.id}`])
         const syncElapsed = Date.now() - syncT0
         if (syncElapsed > 2000) {

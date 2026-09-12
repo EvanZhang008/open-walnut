@@ -61,7 +61,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getRunningPackageRoot, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
 import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js';
 import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
 
@@ -438,15 +438,15 @@ export default function register(api) {
     expect(await readActivationCount('preflight')).toBe(1);
   });
 
-  it('recovers a quarantined Plugin through clearQuarantine then reload', async () => {
-    // The exact sequence the server runs for the store's "Clear quarantine" button.
-    // Reload ALONE must not be enough: the quarantine is persisted, so re-discovery
-    // reads it back and the plugin stays parked. Clearing it first is what makes the
-    // follow-up reload land on `disabled` → activate.
-    const pluginDir = path.join(tmpDir, 'plugins', 'quarantined');
+  it('a plugin whose activate keeps throwing stays `failed` with its error, and recovers on its own once fixed', async () => {
+    // A CAUGHT activation failure cannot hurt the process, so it must not quarantine
+    // across reloads: the row shows the real error, and fixing the plugin is enough.
+    // (Two caught failures used to persist a quarantine that only a manual clear could
+    // lift; a deploy-shape change left an external tracker plugin dark for two weeks.)
+    const pluginDir = path.join(tmpDir, 'plugins', 'throws');
     await writeManifest(pluginDir, {
-      id: 'quarantined',
-      name: 'Quarantined',
+      id: 'throws',
+      name: 'Throws',
       apiVersion: 1,
       engines: { walnut: '>=0.0.0' },
       server: 'dist/server.mjs',
@@ -458,15 +458,54 @@ export default function register(api) {
     const registry = new IntegrationRegistry();
     await load(registry);
     expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'quarantined', state: 'failed' }),
+      expect.objectContaining({ id: 'throws', state: 'failed', error: 'broken' }),
     ]));
-    // Second failure trips the quarantine (quarantineAfter defaults to 2).
-    await reloadLoadedPlugin(registry, 'quarantined');
+    await reloadLoadedPlugin(registry, 'throws');
+    await reloadLoadedPlugin(registry, 'throws');
     expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'quarantined', state: 'quarantined' }),
+      expect.objectContaining({ id: 'throws', state: 'failed', error: 'broken' }),
     ]));
 
     await fsp.writeFile(serverFile, 'export function activate() {}\n');
+    expect((await reloadLoadedPlugin(registry, 'throws')).state).toBe('active');
+    expect(registry.has('throws')).toBe(true);
+  });
+
+  it('recovers a quarantined Plugin through clearQuarantine then reload', async () => {
+    // Quarantine comes from the boot sentinel: the process died mid-activation twice
+    // under THIS build. Reload ALONE must not be enough (the verdict is persisted and
+    // re-discovery reads it back); the store's "Clear quarantine" button clears it first,
+    // and the follow-up reload lands on `disabled` → activate.
+    const pluginDir = path.join(tmpDir, 'plugins', 'quarantined');
+    await writeManifest(pluginDir, {
+      id: 'quarantined',
+      name: 'Quarantined',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), 'export function activate() {}\n');
+    const stateFile = path.join(WALNUT_HOME, 'cache', 'plugin-boot-state.json');
+    await fsp.mkdir(path.dirname(stateFile), { recursive: true });
+    await fsp.writeFile(stateFile, JSON.stringify({
+      version: 2,
+      activating: {},
+      crashes: { quarantined: { count: 2, lastAt: '2026-09-11T00:00:00.000Z', buildId: getRunningPackageRoot() } },
+      lastFailure: { quarantined: { at: '2026-09-11T00:00:00.000Z', kind: 'interrupted', error: 'The server exited while this plugin was activating', buildId: getRunningPackageRoot() } },
+    }));
+
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'quarantined',
+        state: 'quarantined',
+        error: 'The server exited while this plugin was activating',
+      }),
+    ]));
+    expect(registry.has('quarantined')).toBe(false);
+
     await reloadLoadedPlugin(registry, 'quarantined');
     expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'quarantined', state: 'quarantined' }),
@@ -475,6 +514,66 @@ export default function register(api) {
     expect((await clearPluginQuarantine(registry, 'quarantined'))?.state).toBe('disabled');
     expect((await reloadLoadedPlugin(registry, 'quarantined')).state).toBe('active');
     expect(registry.has('quarantined')).toBe(true);
+  });
+
+  it('a crash verdict written by another build does not quarantine this one', async () => {
+    // The state file is shared by every process using this data dir. A dev server (or a
+    // test booted against the real home) crashing mid-activation is not evidence
+    // against the production build's copy of the plugin.
+    const pluginDir = path.join(tmpDir, 'plugins', 'other-build');
+    await writeManifest(pluginDir, {
+      id: 'other-build',
+      name: 'Other Build',
+      apiVersion: 1,
+      engines: { walnut: '>=0.0.0' },
+      server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(pluginDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, 'dist', 'server.mjs'), 'export function activate() {}\n');
+    const stateFile = path.join(WALNUT_HOME, 'cache', 'plugin-boot-state.json');
+    await fsp.mkdir(path.dirname(stateFile), { recursive: true });
+    await fsp.writeFile(stateFile, JSON.stringify({
+      version: 2,
+      // `ghost` is a plugin only the other build knows about (still activating there).
+      activating: { ghost: { startedAt: '2026-09-11T08:11:03.000Z', buildId: '/somewhere/else/walnut' } },
+      crashes: { 'other-build': { count: 5, lastAt: '2026-09-11T08:11:59.000Z', buildId: '/somewhere/else/walnut' } },
+      lastFailure: {},
+    }));
+
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    expect(getPluginLifecycleRecords(registry)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'other-build', state: 'active', failureCount: 0 }),
+    ]));
+    // The other build's in-flight entry is left for that build to recover, and its
+    // crash count is not rewritten by this build's successful activation.
+    const onDisk = JSON.parse(await fsp.readFile(stateFile, 'utf8'));
+    expect(onDisk.activating.ghost).toEqual({ startedAt: '2026-09-11T08:11:03.000Z', buildId: '/somewhere/else/walnut' });
+    expect(onDisk.crashes['other-build']).toEqual({ count: 5, lastAt: '2026-09-11T08:11:59.000Z', buildId: '/somewhere/else/walnut' });
+  });
+
+  it('a .ts plugin whose parent import cannot be resolved fails with the bundler\'s reason, not "no valid entry point"', async () => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'bad-import');
+    await writeManifest(pluginDir, { id: 'bad-import', name: 'Bad Import', version: '1.0.0' });
+    // The symbol is USED: esbuild follows TypeScript and drops an unused import
+    // before it ever tries to resolve it.
+    await writePluginTs(pluginDir, `
+import { nothing } from '../../core/this-module-does-not-exist.js';
+
+export default function register(api) {
+  nothing();
+  api.registerSync(${NOOP_SYNC_SOURCE});
+}
+`);
+
+    const registry = new IntegrationRegistry();
+    await load(registry);
+
+    expect(registry.has('bad-import')).toBe(false);
+    const record = getPluginLifecycleRecords(registry).find((r) => r.id === 'bad-import');
+    expect(record?.state).toBe('failed');
+    expect(record?.error).toContain('could not be bundled');
+    expect(record?.error).toContain('this-module-does-not-exist');
   });
 
   it('reflects mid-life disposal of a singleton contribution', async () => {

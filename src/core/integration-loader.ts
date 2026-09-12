@@ -30,6 +30,7 @@ import { ensureExtIndexes } from './task-db.js';
 import { setExtIndexes } from './ext-index-registry.js';
 import type { IntegrationRegistry } from './integration-registry.js';
 import { PluginBootSentinel, pluginSafeModeEnabled } from './plugins/boot-sentinel.js';
+import { resolvePluginSourceTree } from './plugins/plugin-source-tree.js';
 import { PluginContext } from './plugins/plugin-context.js';
 import {
   PluginManager,
@@ -76,7 +77,20 @@ import type {
 } from './integration-types.js';
 
 const log = createSubsystemLogger('plugin-loader');
-const bootSentinel = new PluginBootSentinel();
+// `resolveBuiltinDir` is a hoisted function declaration further down; the constants that
+// depend on it live here so the sentinel can be keyed by the running build.
+const BUILTIN_DIR = resolveBuiltinDir();
+const EXTERNAL_DIR = path.join(WALNUT_HOME, 'plugins');
+/** The directory the running code lives in: the source checkout in dev, a staged
+ *  copy on the temp volume in production, `node_modules/open-walnut` for an npm
+ *  install. Every deploy stages a fresh copy, so this doubles as the build identity. */
+const RUNNING_PACKAGE_ROOT = path.dirname(path.dirname(BUILTIN_DIR));
+const bootSentinel = new PluginBootSentinel({ buildId: RUNNING_PACKAGE_ROOT });
+
+/** The build identity the boot sentinel keys its records by (diagnostics and tests). */
+export function getRunningPackageRoot(): string {
+  return RUNNING_PACKAGE_ROOT;
+}
 let pluginCodeTimeoutMs = 20_000;
 
 // One line per process: an unknown host version refuses every apiVersion 1 plugin,
@@ -355,8 +369,8 @@ async function createPluginManager(registry: IntegrationRegistry): Promise<Plugi
         });
       }
     },
-    onActivationEnd: async (pluginId, outcome) => {
-      try { await bootSentinel.finish(pluginId, outcome); }
+    onActivationEnd: async (pluginId, outcome, detail) => {
+      try { await bootSentinel.finish(pluginId, outcome, detail); }
       catch (error) {
         log.warn('Could not clear plugin activation sentinel', {
           id: pluginId, error: error instanceof Error ? error.message : String(error),
@@ -377,6 +391,9 @@ async function discoverManagedPlugin(
     ...definition,
     quarantined: definition.quarantined ?? persisted.quarantined,
     failureCount: Math.max(definition.failureCount ?? 0, persisted.failureCount),
+    ...(definition.lastError === undefined && persisted.lastFailure?.error
+      ? { lastError: persisted.lastFailure.error }
+      : {}),
   });
 }
 
@@ -386,24 +403,25 @@ async function discoverManagedPlugin(
 // resolve correctly when the plugin is inside src/integrations/. At runtime,
 // plugins live in ~/.open-walnut/plugins/ so the paths break. We use esbuild to
 // bundle the plugin on-the-fly, rebasing parent imports to the real src/ tree.
+
+type BundleOutcome = { outfile: string; error?: undefined } | { outfile?: undefined; error: string };
+
 async function bundleExternalPlugin(
   pluginDir: string,
   entryFile: string,
-): Promise<string | null> {
+): Promise<BundleOutcome> {
   try {
     const { build } = await import('esbuild');
     const pluginName = path.basename(pluginDir);
+    const tree = resolvePluginSourceTree(RUNNING_PACKAGE_ROOT);
 
-    // BUILTIN_DIR is always {root}/dist/integrations or {root}/src/integrations
-    const projectRoot = path.dirname(path.dirname(BUILTIN_DIR));
-
-    // CRITICAL: write the bundled mjs INSIDE the walnut project so Node's
-    // ESM resolver can walk up from the bundle file to walnut's node_modules
-    // when resolving externals like 'better-sqlite3'. If we write to os.tmpdir(),
-    // Node looks for node_modules in /private/var/folders/... and fails.
-    // esbuild's `nodePaths` option only affects build-time resolution — Node
-    // ignores it at runtime, so the file's actual on-disk location matters.
-    const cacheDir = path.join(projectRoot, '.plugin-cache');
+    // CRITICAL: write the bundled mjs INSIDE the running package so Node's ESM
+    // resolver can walk up from the bundle file to a real node_modules when
+    // resolving externals like 'better-sqlite3' (the stage symlinks one in). If we
+    // write to os.tmpdir(), Node looks for node_modules in /private/var/folders/...
+    // and fails. esbuild's `nodePaths` option only affects build-time resolution —
+    // Node ignores it at runtime, so the file's actual on-disk location matters.
+    const cacheDir = path.join(tree.nodeModulesRoot, '.plugin-cache');
     try { fs.mkdirSync(cacheDir, { recursive: true }); } catch { /* exists */ }
     const outfile = path.join(cacheDir, `${pluginName}-${Date.now()}.mjs`);
 
@@ -421,7 +439,7 @@ async function bundleExternalPlugin(
       // any new transitively-reached native dep broke the bundle (better-sqlite3,
       // then node-pty). `packages: 'external'` kills that whole class.
       packages: 'external',
-      nodePaths: [path.join(projectRoot, 'node_modules')],
+      nodePaths: [path.join(tree.nodeModulesRoot, 'node_modules')],
       banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' },
       logLevel: 'warning',
       plugins: [{
@@ -430,9 +448,7 @@ async function bundleExternalPlugin(
           // Rebase parent-directory imports (../../core/, ../../utils/, etc.)
           // to the open-walnut src/ tree so they resolve correctly.
           // Use src/ (not dist/) because tsup bundles everything — dist/ lacks individual module files.
-          // BUILTIN_DIR = {project}/dist/integrations → srcBase = {project}/src/integrations
-          const srcBase = path.join(path.dirname(path.dirname(BUILTIN_DIR)), 'src', 'integrations');
-          const rebaseDir = fs.existsSync(srcBase) ? srcBase : BUILTIN_DIR;
+          const rebaseDir = tree.srcIntegrationsDir ?? BUILTIN_DIR;
           b.onResolve({ filter: /^\.\.\// }, (args) => {
             // Only rebase imports originating from the plugin directory itself.
             // Once resolved into the open-walnut src/ tree, let esbuild handle natively.
@@ -454,13 +470,20 @@ async function bundleExternalPlugin(
       }],
     });
 
-    return outfile;
+    return { outfile };
   } catch (err) {
-    log.warn('failed to bundle external plugin', {
-      dir: pluginDir,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
+    const raw = err instanceof Error ? err.message : String(err);
+    // esbuild's message is "Build failed with N errors:" followed by one line per error;
+    // the first error line is the one that explains the failure, and "Could not resolve
+    // '../../core/x.js'" additionally means no source checkout is reachable from here.
+    const firstError = raw.split('\n').map(l => l.trim()).find(l => l.includes('ERROR:')) ?? raw.split('\n')[0];
+    const tree = resolvePluginSourceTree(RUNNING_PACKAGE_ROOT);
+    const hint = !tree.srcIntegrationsDir && /Could not resolve "\.\./.test(raw)
+      ? ' (this plugin imports Walnut source modules, but no source checkout is reachable from the running package)'
+      : '';
+    const error = `${firstError}${hint}`;
+    log.warn('failed to bundle external plugin', { dir: pluginDir, error: raw, packageRoot: RUNNING_PACKAGE_ROOT, srcIntegrationsDir: tree.srcIntegrationsDir });
+    return { error };
   }
 }
 
@@ -486,9 +509,6 @@ function resolveBuiltinDir(): string {
   // Fallback: sibling of this file's parent (src/core/ → src/integrations/)
   return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'integrations');
 }
-
-const BUILTIN_DIR = resolveBuiltinDir();
-const EXTERNAL_DIR = path.join(WALNUT_HOME, 'plugins');
 
 // Plugins discovered on disk but skipped for missing required config.
 // Reset on each loadPlugins() run; served via /api/integrations for the Settings UI.
@@ -1358,6 +1378,9 @@ async function loadPlugin(
         : [])
     : ['index.ts', 'plugin.ts', 'index.js', 'plugin.js', 'index.mjs'];
   let bundledFile: string | null = null;
+  // The bundler's own words for the entry that failed, so the activation error names the
+  // real cause instead of the generic "no valid entry point" the loop below ends on.
+  let bundleError: string | null = null;
 
   for (const filename of candidates) {
     const entryPath = path.join(pluginDir, filename);
@@ -1366,7 +1389,9 @@ async function loadPlugin(
 
       // External .ts plugins need esbuild bundling (parent imports break otherwise)
       if (!isBuiltin && filename.endsWith('.ts')) {
-        bundledFile = await bundleExternalPlugin(pluginDir, entryPath);
+        const bundled = await bundleExternalPlugin(pluginDir, entryPath);
+        if (bundled.error) bundleError ??= `${filename}: ${bundled.error}`;
+        bundledFile = bundled.outfile ?? null;
         if (bundledFile) {
           const currentBundle = bundledFile;
           try {
@@ -1415,9 +1440,11 @@ async function loadPlugin(
   }
 
   if (candidates.length > 0 && (!registerFn || typeof registerFn !== 'function')) {
-    log.warn('No valid entry point found', { id: pluginId, dir: pluginDir, tried: candidates });
+    log.warn('No valid entry point found', { id: pluginId, dir: pluginDir, tried: candidates, bundleError });
     if (bundledFile) try { await fsp.unlink(bundledFile); } catch { /* non-critical cleanup */ }
-    throw new Error(`Plugin "${pluginId}" has no valid entry point`);
+    throw new Error(bundleError
+      ? `Plugin "${pluginId}" could not be bundled: ${bundleError}`
+      : `Plugin "${pluginId}" has no valid entry point`);
   }
 
   const builder = createPluginApiBuilder(manifest, pluginConfig);
@@ -1449,7 +1476,7 @@ async function loadPlugin(
       if (deactivateFn) context.onDispose(() => deactivateFn!());
     }
   } catch (err) {
-    log.error('Plugin registration threw an error', { id: pluginId, error: String(err) });
+    log.error('Plugin registration threw an error', { id: pluginId, pluginId, error: String(err) });
     throw err;
   }
 
@@ -1578,14 +1605,24 @@ async function loadPlugin(
   });
 
   if (lifecycle.state !== 'discovered') {
+    if (lifecycle.state === 'quarantined') {
+      // Error level on purpose: the log-error bridge turns this into a notification card
+      // keyed `plugin:<id>`, which retires itself on the plugin's next successful sync. A
+      // quarantined plugin used to log at info and stay dark for weeks.
+      log.error('Plugin activation skipped: quarantined', {
+        id: pluginId, pluginId, reason: lifecycle.reason, error: lifecycle.error,
+      });
+      return;
+    }
     log.info('Plugin activation skipped', { id: pluginId, state: lifecycle.state, reason: lifecycle.reason });
     return;
   }
   try {
     await manager.activate(pluginId);
   } catch (error) {
+    // pluginId is what gives the notification card its `plugin:<id>` lifecycle.
     log.error('Plugin activation failed', {
-      id: pluginId,
+      id: pluginId, pluginId,
       error: error instanceof Error ? error.message : String(error),
     });
   }

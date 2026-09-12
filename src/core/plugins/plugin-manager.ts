@@ -48,6 +48,8 @@ export interface PluginDefinition {
   unsupportedReason?: string
   quarantined?: boolean
   failureCount?: number
+  /** Why the last activation failed, when a persisted record knows (shown on a quarantined row). */
+  lastError?: string
   activate(context: PluginContext): void | Disposable | Promise<void | Disposable>
   deactivate?(): void | Promise<void>
 }
@@ -91,7 +93,11 @@ export interface PluginManagerOptions {
   deactivationTimeoutMs?: number
   onStateChange?(record: PluginLifecycleRecord): void
   onActivationStart?(pluginId: string): void | Promise<void>
-  onActivationEnd?(pluginId: string, outcome: 'active' | 'failed' | 'cancelled'): void | Promise<void>
+  onActivationEnd?(
+    pluginId: string,
+    outcome: 'active' | 'failed' | 'cancelled',
+    detail?: { error?: string },
+  ): void | Promise<void>
 }
 
 export class PluginManager implements Disposable {
@@ -131,6 +137,7 @@ export class PluginManager implements Disposable {
 
     let state: PluginLifecycleState = 'discovered'
     let reason: string | undefined
+    let error: string | undefined
     if (definition.unsupportedReason) {
       state = 'unsupported'
       reason = definition.unsupportedReason
@@ -146,6 +153,7 @@ export class PluginManager implements Disposable {
     } else if (definition.quarantined) {
       state = 'quarantined'
       reason = 'Quarantined after repeated activation failures'
+      error = definition.lastError
     } else if (definition.enabled === false || (this.safeMode && !definition.builtin)) {
       state = 'disabled'
       if (this.safeMode && !definition.builtin) reason = 'Disabled by Safe Mode'
@@ -158,6 +166,7 @@ export class PluginManager implements Disposable {
       failureCount: definition.failureCount ?? 0,
       deactivateInvoked: false,
       reason,
+      ...(error ? { error } : {}),
       ...(definition.missingDependencies?.length
         ? { missingDependencies: definition.missingDependencies.map((entry) => ({ ...entry })) }
         : {}),
@@ -383,7 +392,11 @@ export class PluginManager implements Disposable {
         this.setState(plugin, quarantined ? 'quarantined' : 'failed')
       }
       try {
-        await this.options.onActivationEnd?.(plugin.definition.id, cancelled ? 'cancelled' : 'failed')
+        await this.options.onActivationEnd?.(
+          plugin.definition.id,
+          cancelled ? 'cancelled' : 'failed',
+          plugin.error ? { error: plugin.error } : undefined,
+        )
       } catch (endError) {
         const endMessage = `activation end failed: ${endError instanceof Error ? endError.message : String(endError)}`
         plugin.error = plugin.error ? `${plugin.error}; ${endMessage}` : endMessage

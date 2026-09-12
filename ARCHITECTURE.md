@@ -323,7 +323,7 @@ Time tracking is the worked example of a first-party App: the `walnut-time` Plug
 
 `PluginManager` runs discovery, compatibility checks, activation, disposal, reload, quarantine, and Safe Mode. Every registration carries its Plugin owner and returns a token-guarded `Disposable`. A disable or reload removes routes, tools, timers, subscriptions, hooks, commands, skills, agents, providers, RPC methods, and UI contributions in reverse registration order. Historical task sources retain inert tombstones so old tasks remain readable.
 
-A boot sentinel records the Plugin that was activating if the process dies. Repeated activation failures quarantine that Plugin only. `WALNUT_PLUGIN_SAFE_MODE=1` or `--plugin-safe-mode` starts Walnut with external Plugins disabled so the user can recover.
+A boot sentinel records the Plugin that was activating if the process dies. Two such interruptions on the same build quarantine that Plugin only; a caught activation failure marks it `failed` with the reason and is retried on the next start, and records written by another build (a dev server sharing the data dir) are ignored. `WALNUT_PLUGIN_SAFE_MODE=1` or `--plugin-safe-mode` starts Walnut with external Plugins disabled so the user can recover.
 
 ### Loading and distribution
 

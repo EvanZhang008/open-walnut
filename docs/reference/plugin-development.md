@@ -716,7 +716,7 @@ Discovery and reload are different operations: `POST /api/plugin-runtime/discove
 | `needs-config` | A required config field is missing. | Fill the generated Settings form. |
 | `unsupported` | The API version or Walnut engine range is incompatible. | Update Walnut, or install a compatible plugin version. |
 | `failed` | Activation threw or timed out. | Read the `plugin/<id>` logs and fix the first error. |
-| `quarantined` | Activation failed or crashed repeatedly. | Fix the code, then clear the quarantine. |
+| `quarantined` | The server exited during this plugin's activation twice in a row on the same build (a caught failure only marks `failed` and is retried on the next start). | Fix the code, then clear the quarantine. |
 
 The Plugin Store source list has separate source states. `duplicate` means a higher-priority source owns the same id, and `pending-restart` means changed legacy code cannot be replaced live. Neither is a `walnut-plugin status` lifecycle state.
 

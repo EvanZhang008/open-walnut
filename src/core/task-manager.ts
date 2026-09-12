@@ -2036,7 +2036,13 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
   if (!plugin) {
     // Plugin not loaded — set sync_error so the user sees something went wrong
     const message = `Plugin "${task.source}" not loaded — task not synced`;
-    log.task.warn('sync skipped: plugin not loaded', { taskId: task.id, source: task.source });
+    // Error level: a user's edit was just dropped on the floor. The log-error bridge
+    // turns this into a notification keyed `plugin:<source>` (retired when the plugin
+    // syncs again); at warn it stayed in the log file for two weeks while a tracker
+    // plugin sat quarantined and every close/edit silently never left the machine.
+    // `task` rather than `taskId` on purpose: taskId is a dedup key, and the actionable
+    // fact is the plugin, so a bulk edit of fifty tasks must land as ONE card, not fifty.
+    log.task.error('sync skipped: plugin not loaded', { task: task.id, source: task.source, pluginId: task.source });
     await withWriteLock(async () => {
       const store = await readStore();
       const found = store.tasks.find(t => t.id === task.id);
@@ -6969,8 +6975,8 @@ export async function listUnsyncedTasks(pluginId: string): Promise<Task[]> {
 }
 
 /**
- * Tasks owned by `pluginId` that have a non-null `sync_error`, are still open,
- * and have been pushed at least once. Used by the errorRetries loop inside
+ * Tasks owned by `pluginId` that have a non-null `sync_error` and have been pushed at
+ * least once, completed ones included. Used by the errorRetries loop inside
  * startPluginSyncPolling.
  */
 export async function listSyncErrorTasks(pluginId: string): Promise<Task[]> {
@@ -6979,9 +6985,18 @@ export async function listSyncErrorTasks(pluginId: string): Promise<Task[]> {
 
   const db = getDb()!;
   const pathLiteral = extPath.replace(/'/g, "''");
-  const sql = `SELECT * FROM tasks WHERE source = ? AND status != 'done'
+  // Done tasks are deliberately INCLUDED. A task closed while its plugin was down (or
+  // while the remote was throttling) carries the most visible unsynced edit there is:
+  // the whole team still sees it open in the tracker. The old `status != 'done'` filter
+  // excluded exactly those, so a lost close was never retried until the user touched
+  // the task again. The caller spaces retries out (SyncRetrySchedule), so a permanent
+  // failure on an old completed task costs a call every few hours, not every minute.
+  // Newest edit first: with a backlog, the close the user made yesterday matters more
+  // than a stale error from a month ago (the caller's batch keeps this order).
+  const sql = `SELECT * FROM tasks WHERE source = ?
     AND sync_error IS NOT NULL
-    AND json_extract(ext, '${pathLiteral}') IS NOT NULL`;
+    AND json_extract(ext, '${pathLiteral}') IS NOT NULL
+    ORDER BY updated_at DESC`;
   const rows = db.prepare(sql).all(pluginId) as Record<string, any>[];
   return rows.map(rowToTask);
 }
