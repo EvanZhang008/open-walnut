@@ -1339,6 +1339,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
               reloadToken={reloadToken}
               onSelectCode={onSelectCode}
               onSymbolLookup={handleSymbolLookup}
+              // A link inside an HTML preview to another file opens it exactly
+              // like a tree click: history stop, tree reveal, its own viewer.
+              onOpenPath={selectFile}
               // A save changes the file's size on disk, so the tree's size column
               // is now stale — re-list just that file's directory (not the whole
               // tree: a full Refresh would also reload the file we just wrote).

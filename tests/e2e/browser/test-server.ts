@@ -1117,6 +1117,40 @@ await fs.writeFile(
     '',
   ].join('\n'),
 )
+// HTML-preview link fixture (file-html-preview-links.spec.ts): a generated report
+// that links to the files it produced the way real reports do — by ABSOLUTE
+// filesystem path (`href="/tmp/…/clip.webm"`), which the browser resolved
+// against the site root and Express answered with `Cannot GET`; plus a relative
+// sibling page, an in-page anchor, an external site and a target=_blank link.
+{
+  const reportDir = path.join(vscodeFixtureRoot, 'report')
+  await fs.mkdir(reportDir, { recursive: true })
+  // Stub WebM (EBML magic + filler): the spec asserts the panel's <video> viewer
+  // took over, not decoding.
+  await fs.writeFile(path.join(reportDir, 'clip.webm'), Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(64)]))
+  await fs.writeFile(
+    path.join(reportDir, 'details.html'),
+    '<!doctype html><html><body><h1>Details page</h1><p>DETAILS_BODY</p></body></html>\n',
+  )
+  await fs.writeFile(
+    path.join(reportDir, 'summary.html'),
+    [
+      '<!doctype html>',
+      '<html><head><title>Verification report</title></head>',
+      '<body style="margin:16px;font-family:sans-serif">',
+      '<h1>Verification report</h1>',
+      `<p><a id="abs-video" href="${path.join(reportDir, 'clip.webm')}">Recording (absolute path)</a></p>`,
+      '<p><a id="rel-page" href="details.html">Details (relative)</a></p>',
+      '<p><a id="anchor" href="#tail">Jump to tail (anchor)</a></p>',
+      '<p><a id="external" href="https://example.com/docs">Example docs (external)</a></p>',
+      '<p><a id="blank" href="details.html" target="_blank">Details in a new tab</a></p>',
+      ...Array.from({ length: 80 }, (_, i) => `<p>filler line ${i + 1}</p>`),
+      '<h2 id="tail">Tail</h2><p>TAIL_MARKER</p>',
+      '</body></html>',
+      '',
+    ].join('\n'),
+  )
+}
 // PDF fixture (file-preview-kinds.spec.ts): a minimal but STRUCTURALLY VALID
 // one-page PDF, so the browser's built-in viewer actually renders it instead of
 // showing its "failed to load" chrome. Byte offsets in the xref are hand-checked.

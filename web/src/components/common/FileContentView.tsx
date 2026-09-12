@@ -61,6 +61,7 @@ import {
 } from '@/utils/dom-text-search';
 import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
+import { classifyPreviewLink, classifyPreviewNavigation } from '@/utils/html-preview-links';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import '@/styles/live-edit.css';
@@ -105,6 +106,14 @@ interface FileContentViewProps {
    * component only detects the gesture and reports the symbol.
    */
   onSymbolLookup?: (symbol: string, filePath: string, line?: number) => void;
+  /**
+   * A link inside the HTML preview pointed at ANOTHER file on this host. When
+   * provided, the container opens that file the way a tree click would (its own
+   * viewer, tree reveal, ‹ › history) instead of the frame navigating to it
+   * with no way back. Absent → the frame navigates, and a "Back to <file>" strip
+   * offers the way back.
+   */
+  onOpenPath?: (path: string) => void;
 }
 
 /** Build line-numbered HTML from raw file content. Lines get Prism syntax
@@ -176,7 +185,7 @@ function findScroller(start: HTMLElement | null): HTMLElement | null {
 
 export function FileContentView({
   path: filePath, line, lineTerm, host, sessionId, hidePopout, reloadToken = 0,
-  onSelectCode, onSaved, onSymbolLookup,
+  onSelectCode, onSaved, onSymbolLookup, onOpenPath,
 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
   const dataRef = useRef(data);
@@ -1351,10 +1360,13 @@ export function FileContentView({
 
     const attach = () => {
       // Cross-origin navigation inside the preview throws — no memory then.
-      try { win = frame.contentWindow; } catch { win = null; return; }
-      if (!win) return;
-      win.removeEventListener('scroll', onFrameScroll); // load+readyState can both fire
-      win.addEventListener('scroll', onFrameScroll, { passive: true });
+      // (contentWindow itself is readable; touching the window is what throws.)
+      try {
+        win = frame.contentWindow;
+        if (!win) return;
+        win.removeEventListener('scroll', onFrameScroll); // load+readyState can both fire
+        win.addEventListener('scroll', onFrameScroll, { passive: true });
+      } catch { win = null; return; }
       const saved = line ? null : loadFileScroll(host, filePath);
       if (saved && saved.top > 0) {
         chaseTop = saved.top;
@@ -1376,6 +1388,90 @@ export function FileContentView({
       if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top });
     };
   }, [htmlPreviewLive, filePath, host, line]);
+
+  // ── HTML preview: links go to the panel, not the frame ─────────────────────
+  // A report links to the files it produced (`/tmp/report/video.webm`, a sibling
+  // `details.html`). Left to the frame, such a click navigates INSIDE the
+  // iframe: the tree, the ‹ › history and the viewer never hear of it, so there
+  // is no way back except clicking some other file first (2026-09-11 report),
+  // and a root-absolute path did not even resolve. So clicks are classified in
+  // the frame's own document: another file on this host → the container opens
+  // it like a tree click (onOpenPath); another website → a new tab; anchors,
+  // downloads and modified clicks stay with the browser. The listener runs in
+  // the BUBBLE phase, after the page's own handlers, so an `onclick="…; return
+  // false"` tab switcher keeps working. Navigation the click handler cannot see
+  // (a script setting location, a meta refresh, a container without onOpenPath)
+  // is caught on load instead and reported as `strayed`: a strip offering the
+  // way back and, when the frame landed on another file of this host, a way to
+  // open that file in the panel. Deliberately NOT automatic — two pages that
+  // redirect to each other would otherwise ping-pong the panel forever.
+  const [strayed, setStrayed] = useState<{ path?: string } | null>(null);
+  const onOpenPathRef = useRef(onOpenPath);
+  onOpenPathRef.current = onOpenPath;
+  useEffect(() => {
+    setStrayed(null);
+    if (!htmlPreviewLive) return;
+    const frame = htmlFrameRef.current;
+    if (!frame) return;
+    let doc: Document | null = null;
+    let docHref = '';
+    const current = { host, path: filePath };
+
+    const onFrameClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const el = e.target as Element | null;
+      const a = el?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || a.hasAttribute('download')) return;
+      const target = (a.getAttribute('target') || '').toLowerCase();
+      if (target && target !== '_self') return;
+      const verdict = classifyPreviewLink(a.href, docHref, current);
+      if (verdict.kind === 'external') {
+        e.preventDefault();
+        window.open(verdict.url, '_blank', 'noopener,noreferrer');
+      } else if (verdict.kind === 'file' && onOpenPathRef.current) {
+        e.preventDefault();
+        log.info('file-view', 'html preview link opens file in panel', { from: filePath, path: verdict.path, host });
+        onOpenPathRef.current(verdict.path);
+      }
+    };
+
+    const attach = (fromLoad: boolean) => {
+      doc?.removeEventListener('click', onFrameClick);
+      doc = null;
+      try { docHref = frame.contentWindow?.location.href ?? ''; } catch {
+        // Another origin now owns the frame; nothing of ours is reachable inside.
+        if (fromLoad) setStrayed({});
+        return;
+      }
+      const nav = classifyPreviewNavigation(docHref, current);
+      if (nav === 'same-file') {
+        setStrayed(null);
+        try { doc = frame.contentDocument; } catch { doc = null; }
+        doc?.addEventListener('click', onFrameClick);
+        return;
+      }
+      // Only a real load is a navigation. Before `src` has loaded the frame
+      // still holds its initial empty document (about:blank, or the parent's URL
+      // on some engines), which is not the frame having gone anywhere.
+      if (!fromLoad) return;
+      setStrayed({ path: nav ? nav.path : undefined });
+    };
+    const onLoad = () => attach(true);
+    frame.addEventListener('load', onLoad);
+    if (frame.contentDocument?.readyState === 'complete') attach(false);
+    return () => {
+      frame.removeEventListener('load', onLoad);
+      doc?.removeEventListener('click', onFrameClick);
+    };
+  }, [htmlPreviewLive, filePath, host]);
+
+  /** The "Back to <file>" strip: point the frame back at the file. Assigning the
+   *  same `src` re-navigates (unlike React's prop diff, which would see no change). */
+  const returnToFile = useCallback(() => {
+    const frame = htmlFrameRef.current;
+    if (frame) frame.src = rawFileContentUrl(filePath, host, reloadToken);
+    setStrayed(null);
+  }, [filePath, host, reloadToken]);
 
   // Live selection rect for the pill, translated to top-viewport coords when
   // the selection lives inside the HTML preview iframe.
@@ -2150,6 +2246,26 @@ export function FileContentView({
           onNav={handleSearchNav}
           onClose={closeSearch}
         />
+      )}
+      {!loading && showPreview && isHtml && strayed && (
+        <div className="fv-draft-banner fv-strayed-banner" role="status">
+          <button type="button" className="fv-html-tab" onClick={returnToFile}>
+            ← Back to {filePath.split('/').pop() || filePath}
+          </button>
+          {strayed.path && onOpenPath && (
+            <button
+              type="button"
+              className="fv-html-tab"
+              onClick={() => { const p = strayed.path!; setStrayed(null); onOpenPath(p); }}
+              title={strayed.path}
+            >
+              Open {strayed.path.split('/').pop() || strayed.path} here
+            </button>
+          )}
+          <span className="fv-strayed-where" title={strayed.path}>
+            {strayed.path ? `Preview moved to ${strayed.path}` : 'Preview moved to another page'}
+          </span>
+        </div>
       )}
       {!loading && showPreview && isHtml && (
         <iframe

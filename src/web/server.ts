@@ -51,6 +51,7 @@ import { installCalendarEventForwarder, removeCalendarEventForwarder } from '../
 import { filesRouter } from './routes/files.js'
 import { fileOpsRouter } from './routes/file-ops.js'
 import { fileRawRouter } from './routes/file-raw.js'
+import { fileRawRefererRedirect } from './file-raw-referer.js'
 import { fileHistoryRouter } from './routes/file-history.js'
 import { createCronRouter, setCronService } from './routes/cron.js'
 import { createAgentsRouter } from './routes/agents.js'
@@ -1638,6 +1639,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // could not answer: zero cost while the stage is intact, and the app stays up
     // when it is not.
     for (const root of mirror.roots) app.use(express.static(root))
+    // A previewed HTML document's root-absolute references (`/tmp/report/x.webm`)
+    // are filesystem paths, not site paths: what no static root claimed goes back
+    // onto the file-raw route before the index.html fallback can answer it.
+    app.use(fileRawRefererRedirect)
     const checkStaticRoot = (): boolean => {
       try { return fs.statSync(path.join(staticDir, 'index.html')).isFile() } catch { return false }
     }
@@ -1693,6 +1698,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
     })
   }
+
+  // Dev mode has no static stack (Vite serves the SPA); the preview redirect still
+  // applies to whatever reaches this server outside /api.
+  if (dev) app.use(fileRawRefererRedirect)
 
   // -- Error handlers (must be last) --
   app.use('/api', notFoundHandler)

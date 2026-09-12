@@ -25139,6 +25139,17 @@ a.file-link:hover {
   color: var(--fg);
 }
 
+/* The HTML preview frame was navigated away from the file (a script, a meta
+   refresh, a link the panel could not take over): the strip is the way back. */
+.fv-strayed-banner { flex-wrap: nowrap; }
+.fv-strayed-where {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
 /* File-tree row marker: this path has unsaved text waiting in a draft. */
 /* Tree marker for a file holding unsaved work. MUST stay the same colour as
    .fv-dirty-dot: they mean the identical thing in two places, and this one was
