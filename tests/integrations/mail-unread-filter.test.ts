@@ -76,6 +76,14 @@ interface Fixture {
   isSeen(flags: string[]): boolean;
   setSeen(flags: string[], read: boolean): string[];
   markRead: Array<[string, boolean]>;
+  /**
+   * What `listUnread` answers, when the test arms it: envelopes of the fixture's messages named
+   * here, or a throw. Unarmed (undefined), the provider has no `listUnread` at all, which is the
+   * shape every earlier case in this file was written against.
+   */
+  unreadFromProvider?: { messageIds: string[] } | { fail: string };
+  /** Every `listUnread` call, so a test can say a later page did not ask again. */
+  unreadCalls: Array<{ mailbox: string; limit: number }>;
 }
 
 let server: HttpServer;
@@ -203,6 +211,23 @@ function findMessage(messageId) {
   return S().messages.find((one) => one.messageId === messageId) ?? null;
 }
 
+function envelope(one, mailbox) {
+  return {
+    messageId: one.messageId,
+    rfcMessageId: '<' + one.messageId.replace(/:/g, '-') + '@example.invalid>',
+    mailboxId: mailbox,
+    from: { name: 'Alice', address: 'alice@example.invalid' },
+    to: [{ address: 'me@example.invalid' }],
+    subject: one.subject,
+    snippet: one.subject + '.',
+    sentAt: one.sentAt,
+    sentAtHeader: new Date(one.sentAt).toUTCString(),
+    flags: [...one.flags],
+    attachments: [],
+    bodyBytes: 32,
+  };
+}
+
 export function activate(walnut) {
   const base = walnut.services.require('mail:base');
   const handle = base.registerProvider({
@@ -235,23 +260,19 @@ export function activate(walnut) {
       unread: S().messages.filter((one) => !S().isSeen(one.flags)).length,
     }],
     poll: async (accountId, request) => ({
-      messages: S().messages.map((one) => ({
-        messageId: one.messageId,
-        rfcMessageId: '<' + one.messageId.replace(/:/g, '-') + '@example.invalid>',
-        mailboxId: request.mailbox,
-        from: { name: 'Alice', address: 'alice@example.invalid' },
-        to: [{ address: 'me@example.invalid' }],
-        subject: one.subject,
-        snippet: one.subject + '.',
-        sentAt: one.sentAt,
-        sentAtHeader: new Date(one.sentAt).toUTCString(),
-        flags: [...one.flags],
-        attachments: [],
-        bodyBytes: 32,
-      })),
+      messages: S().messages.map((one) => envelope(one, request.mailbox)),
       cursor: request.mailbox + ':1:end',
       more: false,
     }),
+    // Present only when the test arms it, so the cases written before 1.9.0 see the old shape.
+    ...(S().unreadFromProvider ? {
+      listUnread: async (accountId, mailbox, limit) => {
+        S().unreadCalls.push({ mailbox, limit });
+        const armed = S().unreadFromProvider;
+        if ('fail' in armed) throw new Error(armed.fail);
+        return armed.messageIds.map((id) => envelope(findMessage(id), mailbox));
+      },
+    } : {}),
     getBody: async (accountId, messageId) => {
       const message = findMessage(messageId);
       if (!message) {
@@ -294,6 +315,7 @@ beforeAll(async () => {
       return read ? [...without, SEEN] : without;
     },
     markRead: [],
+    unreadCalls: [],
   };
   await writeFixtureProvider();
   await writeConfig();
@@ -557,4 +579,63 @@ describe('the v7 migration', () => {
       await client.dispose();
     }
   }, 60_000);
+});
+
+/**
+ * The provider's own unread list (contract 1.9.0). Last in the file on purpose: it re-registers
+ * the provider plugin with `listUnread` armed and changes the fixture mailbox, and every case above
+ * was written against the poll-only shape.
+ */
+describe('the unread filter asks the provider first', () => {
+  async function rearm(armed: Fixture['unreadFromProvider']): Promise<void> {
+    marks().unreadFromProvider = armed;
+    marks().unreadCalls = [];
+    const reloaded = await fetch(`http://127.0.0.1:${port}/api/plugin-runtime/${FIXTURE_ID}/reload`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(reloaded.status).toBe(200);
+  }
+
+  it('ingests what the server says is unread before reading the cache, and only on the first page', async () => {
+    const fixture = marks();
+    // Two things the cache cannot know without a poll: a cached message marked unread on another
+    // device, and a brand-new unread message no poll has delivered yet.
+    const flipped = fixture.messages[1]!;
+    flipped.flags = fixture.setSeen(flipped.flags, false);
+    const fresh: FixtureMessage = {
+      messageId: 'INBOX:1:2000', subject: 'Harbour note fresh', sentAt: Date.UTC(2026, 4, 2, 9, 0, 0), flags: [],
+    };
+    fixture.messages.unshift(fresh);
+    await rearm({ messageIds: [flipped.messageId, fresh.messageId] });
+
+    const before = await rows<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE seen = 0");
+    const first = await listPage({ limit: PAGE, unread: '1' });
+    expect(first.status).toBe(200);
+    const subjects = first.body.messages.map((one) => one.subject);
+    expect(subjects[0]).toBe('Harbour note fresh');
+    expect(subjects).toContain(flipped.subject);
+    expect(first.body.messages).toHaveLength(before[0]!.n + 2);
+    expect(marks().unreadCalls).toEqual([{ mailbox: 'INBOX', limit: PAGE }]);
+    // The cache now agrees, so the plain list shows the fresh message too.
+    const plain = await listPage({ limit: 5 });
+    expect(plain.body.messages[0]!.subject).toBe('Harbour note fresh');
+
+    // A LATER page pages the corrected cache; the provider is not asked again.
+    const paged = await listPage({ limit: 10, unread: '1' });
+    expect(paged.body.nextBefore).toBeTruthy();
+    await listPage({ limit: 10, unread: '1', before: paged.body.nextBefore });
+    expect(marks().unreadCalls).toHaveLength(2);
+    expect(marks().unreadCalls.every((call) => call.mailbox === 'INBOX')).toBe(true);
+  });
+
+  it('answers from the cache when the provider cannot say, without an error', async () => {
+    await rearm({ fail: 'the mail server is asleep' });
+    const cached = await rows<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE seen = 0");
+
+    const page = await listPage({ limit: PAGE, unread: '1' });
+
+    expect(page.status).toBe(200);
+    expect(page.body.messages).toHaveLength(cached[0]!.n);
+    expect(marks().unreadCalls).toHaveLength(1);
+  });
 });

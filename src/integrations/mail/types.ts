@@ -316,6 +316,21 @@ export interface MailProviderSpec {
    */
   identityRevision?: string
   /**
+   * The unread envelopes of one mailbox, as the SERVER sees them right now. Optional.
+   *
+   * The cache learns a flag only when a poll page covers the row, so a message read on the phone,
+   * or marked unread there, or one the backfill has not reached yet, is wrong or missing in an
+   * unread list answered from the cache alone, while the folder count (which comes from the
+   * provider on every tick) is right. The console's unread filter calls this on its first page
+   * and ingests the answer before it reads the cache, so the list and the badge agree.
+   *
+   * INGEST-ONLY semantics: whatever comes back is upserted, nothing is removed, and an empty array
+   * means "nothing to add", never "nothing is unread". That is what lets a provider answer for the
+   * one mailbox its api can filter (an inbox) and return [] for every other without lying.
+   * `limit` is a page size; a provider may answer fewer.
+   */
+  listUnread?(accountId: string, mailbox: string, limit: number): Promise<MailEnvelope[]>
+  /**
    * The capabilities of ONE account, when they differ from the provider's own.
    *
    * Optional, and the base prefers it whenever it exists. IMAP is why it does: reading needs

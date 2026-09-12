@@ -69,6 +69,11 @@ import type {
  */
 const CAPABILITY_DEADLINE_MS = 2_000
 const CAPABILITY_TTL_MS = 60_000
+/**
+ * How long the unread filter's first page waits for the provider's own unread list. A person is
+ * looking at a spinner for this; past it the cache answers and the next filter toggle asks again.
+ */
+const UNREAD_LIST_DEADLINE_MS = 8_000
 
 export class MailService {
   /** Per account: the last `send` verdict and when it was learned. See `sendCapabilityOf`. */
@@ -267,6 +272,14 @@ export class MailService {
     unread?: boolean
     before?: MessagePageCursor
   }): Promise<{ messages: MailMessageDto[]; nextBefore?: string }> {
+    // The FIRST unread page asks the provider what is unread right now and ingests it before the
+    // cache is read: a flag flipped on the phone, or a message the backfill has not reached, is
+    // otherwise missing from a list whose folder badge (provider truth, every tick) shows it.
+    // Later pages page the cache the first one just corrected. Never awaited past its deadline,
+    // and a provider that cannot answer leaves the list exactly as the cache has it.
+    if (query.unread && !query.before && query.accountId && query.mailboxId) {
+      await this.ingestUnreadFromProvider(query.accountId, query.mailboxId, query.limit)
+    }
     const rows = await this.deps.store.listMessages(query)
     const messages = await this.withTaskIds(rows.map((row) => toDto(row)))
     // `nextBefore` is only offered when the page filled: handing one back on a short page
@@ -511,6 +524,36 @@ export class MailService {
   }
 
   // ── internals ──
+
+  /**
+   * Upsert the provider's current unread set for one mailbox, bounded by a deadline a person
+   * waiting on a list can stand. A provider without `listUnread`, or one that fails or times out,
+   * changes nothing: the cache answers as it is, and the failure is logged rather than shown,
+   * because the list itself is still a truthful (if possibly stale) answer.
+   */
+  private async ingestUnreadFromProvider(accountId: string, mailboxId: string, limit: number): Promise<void> {
+    let spec: MailProviderSpec
+    try {
+      spec = this.provider(accountId)
+    } catch {
+      return
+    }
+    if (!spec.listUnread) return
+    try {
+      const envelopes = await callProvider(
+        `the unread list of ${mailboxId}`,
+        () => spec.listUnread!(accountId, mailboxId, limit),
+        UNREAD_LIST_DEADLINE_MS,
+      )
+      // Only envelopes of the mailbox asked for: a provider that answers a broader set must not
+      // be able to move rows between folders through this door.
+      await this.ingestPage(accountId, envelopes.filter((one) => one.mailboxId === mailboxId))
+    } catch (error) {
+      this.deps.log?.debug('mail could not refresh the unread list from the provider', {
+        accountId, mailboxId, error: String(error).slice(0, 200),
+      })
+    }
+  }
 
   private async requireMessage(accountId: string, messageId: string): Promise<MessageRow> {
     // Second door: the handle as a DURABLE id. A provider whose handles carry a folder (one thread

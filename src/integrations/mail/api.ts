@@ -110,8 +110,13 @@ export type {
  * revision the base has not seen drops every cached message of that provider's accounts and forgets
  * every mailbox cursor, once, and the next poll lists each mailbox again from the top. Same shape as
  * 1.7.0 otherwise: additive, optional, per provider, recorded only after the sweep finishes.
+ *
+ * 1.9.0 is `MailProviderSpec.listUnread`, optional: the unread envelopes of one mailbox as the server
+ * sees them now. The console's unread filter ingests that answer on its first page before reading
+ * the cache, so a flag flipped on another device or a message the backfill has not reached is in
+ * the list the moment the folder badge says so. Ingest-only: nothing is removed, [] adds nothing.
  */
-export const MAIL_BASE_API_VERSION = '1.8.0'
+export const MAIL_BASE_API_VERSION = '1.9.0'
 
 /**
  * The method bag published as `mail:base`.
