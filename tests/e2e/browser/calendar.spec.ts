@@ -7,6 +7,7 @@
  * code paths a human uses — no page.goto for SPA nav (real sidebar clicks).
  */
 import { test, expect, type Page } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -94,6 +95,12 @@ async function columnPoint(
   if (!box) throw new Error(`day column ${day} not visible`)
   return { x: box.x + box.width / 2, y: box.y + hour * 48 + 1 }
 }
+
+// The home Agenda toggle is a synced layout preference (`open-walnut-home-calendar-visible`
+// rides ui-prefs). Several tests below open the agenda and leave it open; without this the
+// shared fixture would hand "agenda open" to the next context, whose toggle click would then
+// CLOSE the panel it expects to open.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 test.describe('Calendar view', () => {
   test('sidebar navigation opens week view with URL state', async ({ page }) => {

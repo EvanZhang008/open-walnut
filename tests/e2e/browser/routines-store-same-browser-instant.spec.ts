@@ -11,13 +11,19 @@
  * the server — on either surface — would fail these assertions.
  */
 import { expect, test } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const HOLD_MS = 3000
 /** How long a same-frame update may take to reach the other surface. */
 const INSTANT_MS = 700
-/** MainPage reads this on mount to decide whether the routines panel is open. */
+/** MainPage reads this on mount to decide whether the routines panel is open.
+ *  localStorage (a layout preference that survives a relaunch), which also means
+ *  it is a ui-prefs-mirrored key: without `isolateUiPrefs` the seeded `true` would
+ *  reach the shared fixture and open the routines panel in every other spec. */
 const HOME_PANEL_KEY = 'open-walnut-home-routines-visible'
+
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 async function createRoutineViaApi(name: string): Promise<{ id: string; name: string }> {
   const uniqueName = `${name} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -41,7 +47,7 @@ test('toggling a routine on /routines flips both surfaces before the POST is ans
   const routine = await createRoutineViaApi('RoutineStoreSync')
 
   try {
-    await page.addInitScript(([key]) => { sessionStorage.setItem(key, 'true') }, [HOME_PANEL_KEY])
+    await page.addInitScript(([key]) => { localStorage.setItem(key, 'true') }, [HOME_PANEL_KEY])
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
@@ -93,7 +99,7 @@ test('a refused toggle puts the switch back on both surfaces', async ({ page }) 
   const routine = await createRoutineViaApi('RoutineStoreRollback')
 
   try {
-    await page.addInitScript(([key]) => { sessionStorage.setItem(key, 'true') }, [HOME_PANEL_KEY])
+    await page.addInitScript(([key]) => { localStorage.setItem(key, 'true') }, [HOME_PANEL_KEY])
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 

@@ -12,7 +12,7 @@
  *   npx playwright test          (runs these tests)
  */
 import { test, expect, type Page } from '@playwright/test'
-import { selectProject, showEverything } from './todo-panel-helpers'
+import { isolateUiPrefs, selectProject, showEverything } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -62,6 +62,10 @@ async function groupTasksViaApi(taskIds: string[]): Promise<void> {
   })
   if (!res.ok) throw new Error(`Group API call failed: ${res.status} ${await res.text()}`)
 }
+
+// The home panel toggles (Todo collapse below) are synced layout preferences; isolate
+// ui-prefs so a collapse left behind by a failed run never reaches the shared fixture.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 // ── App loads ──
 

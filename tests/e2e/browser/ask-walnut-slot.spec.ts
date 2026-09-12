@@ -46,6 +46,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { DRAFT_PANEL, loadHome, openAskWalnutDrawer, openDraft } from './draft-helpers'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = process.env.ASK_SLOT_SHOT_DIR ?? '/tmp/ask-walnut-slot'
 
@@ -77,6 +78,12 @@ test.setTimeout(180_000)
 test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
+
+// The chat spot's open/hidden state is a ui-prefs-mirrored localStorage key. Two
+// tests below hide the slot and bring it back; a failure in between would leave
+// `open-walnut-home-chat-visible = false` on the SHARED fixture server, and every
+// later spec that waits for the slot would boot with the chat hidden.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 // ── Slot locators (the DOM contract) ─────────────────────────────────────────
 

@@ -16778,6 +16778,16 @@ a.task-kebab-info:hover {
     border-bottom: 1px solid var(--border);
   }
 
+  /* Same column logic for the Todo panel: the desktop collapse only zeroes the
+     WIDTH, which the `width: 100% !important` above wins anyway, so a hidden Todo
+     kept its 40% band as an invisible, unclickable strip above the chat. The
+     hidden state now reaches a phone from any device (it is a synced layout
+     preference), so it has to give up its height here too. */
+  .main-page-todo.collapsed {
+    height: 0;
+    border-bottom: none;
+  }
+
   /* The content row is a COLUMN here, so a collapsed sessions area has to give
      up its HEIGHT — the desktop rules only zero its width, and `height: 100%` +
      `flex-shrink: 0` then claimed the whole column and left the chat spot (the

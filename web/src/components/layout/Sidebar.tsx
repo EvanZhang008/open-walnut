@@ -20,9 +20,11 @@ import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 
-const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
-const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
-const SS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
+// Twins of MainPage's keys: localStorage, so the toggles read the same state the
+// page restores after a relaunch (sessionStorage dies with the Mac app's web view).
+const LS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
+const LS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
+const LS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
 
 // Home Dock controls stay outside the shared Core, Native Plugin, and Webview App Registry.
 
@@ -74,13 +76,13 @@ export function Sidebar({
 
   // Panel visibility state — synced from MainPage via custom events
   const [chatVisible, setChatVisible] = useState<boolean>(
-    () => sessionStorage.getItem(SS_CHAT_VISIBLE_KEY) !== 'false'
+    () => localStorage.getItem(LS_CHAT_VISIBLE_KEY) !== 'false'
   );
   const [todoVisible, setTodoVisible] = useState<boolean>(
-    () => sessionStorage.getItem(SS_TODO_VISIBLE_KEY) !== 'false'
+    () => localStorage.getItem(LS_TODO_VISIBLE_KEY) !== 'false'
   );
   const [calendarPanelVisible, setCalendarPanelVisible] = useState<boolean>(
-    () => sessionStorage.getItem(SS_CALENDAR_VISIBLE_KEY) === 'true'
+    () => localStorage.getItem(LS_CALENDAR_VISIBLE_KEY) === 'true'
   );
 
   useEffect(() => {

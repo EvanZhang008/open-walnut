@@ -307,9 +307,10 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
 
   // Self-manage active state by listening to custom events
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  // Track main chat panel visibility (toggled via Chat button)
+  // Track main chat panel visibility (toggled via Chat button). Same localStorage
+  // key MainPage persists, so the dock starts in step after a relaunch.
   const [chatVisible, setChatVisible] = useState<boolean>(
-    () => sessionStorage.getItem('open-walnut-home-chat-visible') !== 'false'
+    () => localStorage.getItem('open-walnut-home-chat-visible') !== 'false'
   );
 
   useEffect(() => {

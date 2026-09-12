@@ -14,6 +14,7 @@
  *   2. an edit on /calendar reaches the home agenda before the PATCH is answered.
  */
 import { expect, test, type Page } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const HOLD_MS = 3000
@@ -39,6 +40,10 @@ async function createEventViaApi(title: string, start: string, end: string): Pro
   const body = (await res.json()) as { event: { id: string } }
   return body.event
 }
+
+// The agenda toggle is a synced layout preference; isolate it so an agenda left open here
+// is not handed to the next context through the shared fixture's ui-prefs mirror.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 /** Open the homepage day agenda; it stays mounted for the rest of the test. */
 async function openHomeAgenda(page: Page) {

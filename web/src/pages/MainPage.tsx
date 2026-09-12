@@ -67,10 +67,25 @@ const SS_TASK_KEY = 'open-walnut-home-focused-task';
 const SS_SUPPRESS_DETAIL_KEY = 'open-walnut-home-suppress-detail';
 const SS_SESSION_COLUMNS_KEY = 'open-walnut-home-session-columns';
 const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
-const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
-const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
-const SS_ROUTINES_VISIBLE_KEY = 'open-walnut-home-routines-visible';
-const SS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
+// Panel visibility is a layout preference, so it lives in localStorage (and rides
+// the ui-prefs mirror like the other layout keys), NOT sessionStorage: the Mac app
+// drops sessionStorage on every relaunch and page-process recycle, which used to
+// bring the chat back no matter how the user had left it.
+const LS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
+const LS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
+const LS_ROUTINES_VISIBLE_KEY = 'open-walnut-home-routines-visible';
+const LS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
+/** Write a panel flag only when it changed. The persist effects also run on mount,
+ *  and an unconditional write would re-stamp the ui-prefs mirror on every page
+ *  load (a PUT + a fresh timestamp that can outrank another device's real change).
+ *  A browser that has never toggled the panel keeps no key while the state equals
+ *  the default, so it keeps adopting whatever the mirror says. */
+function persistPanelFlag(key: string, visible: boolean, defaultVisible: boolean): void {
+  const next = String(visible);
+  const stored = localStorage.getItem(key);
+  if (stored === next || (stored === null && visible === defaultVisible)) return;
+  localStorage.setItem(key, next);
+}
 
 // Legacy key for migration
 const SS_SESSION_KEY_LEGACY = 'open-walnut-home-session-panel';
@@ -265,7 +280,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Chat panel visibility — toggle via Focus Dock "Chat" button or Sidebar toggle
   const [chatVisible, setChatVisible] = useState<boolean>(
-    () => sessionStorage.getItem(SS_CHAT_VISIBLE_KEY) !== 'false'
+    () => localStorage.getItem(LS_CHAT_VISIBLE_KEY) !== 'false'
   );
   // Ref mirror for the []-dep handlers (openDraftColumn, the dock toggle).
   const chatVisibleRef = useRef(chatVisible);
@@ -282,17 +297,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Todo panel visibility — toggle via Sidebar toggle button
   const [todoVisible, setTodoVisible] = useState<boolean>(
-    () => sessionStorage.getItem(SS_TODO_VISIBLE_KEY) !== 'false'
+    () => localStorage.getItem(LS_TODO_VISIBLE_KEY) !== 'false'
   );
 
   // Routines panel visibility — hidden by default, toggle via Sidebar
   const [routinesVisible, setRoutinesVisible] = useState<boolean>(
-    () => sessionStorage.getItem(SS_ROUTINES_VISIBLE_KEY) === 'true'
+    () => localStorage.getItem(LS_ROUTINES_VISIBLE_KEY) === 'true'
   );
 
   // Calendar day-agenda panel — hidden by default, toggle via Sidebar
   const [calendarVisible, setCalendarVisible] = useState<boolean>(
-    () => sessionStorage.getItem(SS_CALENDAR_VISIBLE_KEY) === 'true'
+    () => localStorage.getItem(LS_CALENDAR_VISIBLE_KEY) === 'true'
   );
 
   // Session columns state — up to 2 sessions displayed side by side
@@ -676,24 +691,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // transient (drafts don't survive a reload), so a reload must bring the chat
     // back rather than leave it hidden with no draft to give it back. The
     // broadcast stays the ACTUAL state so the sidebar/dock toggles read true.
-    sessionStorage.setItem(SS_CHAT_VISIBLE_KEY, String(chatBorrowedByDraftRef.current ? true : chatVisible));
+    persistPanelFlag(LS_CHAT_VISIBLE_KEY, chatBorrowedByDraftRef.current ? true : chatVisible, true);
     window.dispatchEvent(new CustomEvent('main:chat-visible', { detail: { visible: chatVisible } }));
   }, [chatVisible]);
 
   // Persist todoVisible + broadcast to Sidebar
   useEffect(() => {
-    sessionStorage.setItem(SS_TODO_VISIBLE_KEY, String(todoVisible));
+    persistPanelFlag(LS_TODO_VISIBLE_KEY, todoVisible, true);
     window.dispatchEvent(new CustomEvent('main:todo-visible', { detail: { visible: todoVisible } }));
   }, [todoVisible]);
 
   // Persist routinesVisible + broadcast to Sidebar
   useEffect(() => {
-    sessionStorage.setItem(SS_ROUTINES_VISIBLE_KEY, String(routinesVisible));
+    persistPanelFlag(LS_ROUTINES_VISIBLE_KEY, routinesVisible, false);
     window.dispatchEvent(new CustomEvent('main:routines-visible', { detail: { visible: routinesVisible } }));
   }, [routinesVisible]);
 
   useEffect(() => {
-    sessionStorage.setItem(SS_CALENDAR_VISIBLE_KEY, String(calendarVisible));
+    persistPanelFlag(LS_CALENDAR_VISIBLE_KEY, calendarVisible, false);
     window.dispatchEvent(new CustomEvent('main:calendar-visible', { detail: { visible: calendarVisible } }));
   }, [calendarVisible]);
 
