@@ -6,7 +6,8 @@ import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream'
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { BackgroundTasksChip, BackgroundTasksPanelHost, type KnownAgent } from './BackgroundTasksPanel';
-import { setLiveLanes } from '@/stores/background-panel-store';
+import { setLiveLanes, setToolSource } from '@/stores/background-panel-store';
+import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
 import { SessionMessage, SessionThinking, GenericToolCall, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
@@ -2422,8 +2423,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       ));
     }
     setLiveLanes(sessionId, renderers);
+    // The panel's Command rows read their Bash tool call and output from here.
+    setToolSource(sessionId, { blocks, messages });
   });
-  useEffect(() => () => { if (sessionId) setLiveLanes(sessionId, new Map()); }, [sessionId]);
+  useEffect(() => () => {
+    if (!sessionId) return;
+    setLiveLanes(sessionId, new Map());
+    setToolSource(sessionId, EMPTY_TOOL_SOURCE);
+  }, [sessionId]);
   // A burst of Agent spawns (parallel tool_use blocks, or spawns with nothing but
   // lane traffic between them) is ONE `N running tasks` chip in the chat — never a
   // row per agent (the Background tasks panel lists them).

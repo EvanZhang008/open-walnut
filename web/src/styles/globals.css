@@ -4105,8 +4105,9 @@ select {
    a spawn, and the title takes the remaining width. */
 .bg-tasks-chip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px; /* the column gap is CHIP_GAP_PX in BackgroundTasksPanel.tsx */
   width: 100%;
   min-width: 0;
   margin: 4px 0;
@@ -4140,11 +4141,17 @@ select {
   white-space: nowrap;
 }
 .bg-tasks-chip-desc {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.bg-tasks-chip-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 .bg-tasks-chip-status {
   flex-shrink: 0;
@@ -4152,6 +4159,16 @@ select {
   color: var(--fg-muted);
   white-space: nowrap;
 }
+/* Too narrow for pills + title + status on one line (measured by the chip): the
+   title drops to a second line of its own, indented under the label, and the
+   status keeps the right end of the first line. */
+.bg-tasks-chip--stacked .bg-tasks-chip-desc {
+  order: 10;
+  flex: 0 0 calc(100% - 20px);
+  margin-left: 20px;
+  color: var(--fg);
+}
+.bg-tasks-chip--stacked .bg-tasks-chip-meta { margin-left: auto; }
 .bg-tasks-chip--running { border-color: var(--accent-subtle-hover, rgba(0, 122, 255, 0.25)); }
 .bg-tasks-chip--running .bg-tasks-chip-status { color: var(--accent); }
 .bg-tasks-chip--done { background: rgba(52, 199, 89, 0.06); }
@@ -4226,6 +4243,28 @@ select {
   color: var(--fg-muted);
   padding-left: 17px;
 }
+/* Two kinds of row, two pills: an agent wears its subagent type in the accent
+   tint (.task-group-agent-type); a background shell command wears `Command` in
+   amber, so the list never reads as one undifferentiated pile. */
+.bg-task-kind {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.bg-task-kind--command { background: rgba(255, 149, 0, 0.14); color: #B25E00; }
+.bg-task-kind--task { background: var(--bg-tertiary); color: var(--fg-muted); }
+[data-theme="dark"] .bg-task-kind--command { color: #FFB340; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .bg-task-kind--command { color: #FFB340; }
+}
+/* A command's reader: the command it ran and what it printed, both open, in the
+   same terminal styling the chat's Bash card uses when expanded. The output pre
+   is the whole reader, so it scrolls with the column instead of capping itself. */
+.bg-tasks-command { display: flex; flex-direction: column; gap: 6px; }
+.bg-tasks-command-desc { font-size: 12px; color: var(--fg-secondary); }
+.bg-tasks-command .bash-tool-pre { max-height: none; }
 .bg-tasks-detail {
   min-width: 0;
   min-height: 0;

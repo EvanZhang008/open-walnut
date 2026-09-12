@@ -551,4 +551,146 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await page.keyboard.press('Escape');
     await expect(panel).toHaveCount(0);
   });
+
+  test('a background shell command is its own kind of row: Command pill, and a reader that shows the command and its output', async ({ page }) => {
+    const base = [
+      { role: 'user', text: 'Run the tests in the background', timestamp: '2026-01-01T00:00:00.000Z' },
+      { role: 'assistant', text: 'Kicking off the tests and an explorer.', timestamp: '2026-01-01T00:00:01.000Z' },
+    ];
+    await mockHistory(page, base);
+    await mockSessionDetail(page);
+    await page.route(`**/api/sessions/${SESSION_ID}/workflow`, (route) => route.fulfill({ status: 204, body: '' }));
+
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.waitForLoadState('networkidle');
+    await waitForWs(page);
+    await page.waitForSelector('.session-msg', { timeout: 8000 });
+
+    // The CLI runs `npm test` in the background: a Bash tool_use whose result is
+    // the launch note, and a ledger row of task_type local_bash pointing at it.
+    const BASH = 'toolu_bg_bash';
+    const SHELL_TASK = 'b3lv4ei9g';
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'Bash', toolUseId: BASH,
+      input: { command: 'npm test -- --run tests/web', description: 'Run the web unit tier', run_in_background: true },
+    });
+    await injectEvent(page, 'session:tool-result', {
+      sessionId: SESSION_ID, toolUseId: BASH,
+      result: `Command running in background with ID: ${SHELL_TASK}. Output is being written to: /tmp/out.log`,
+    });
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'Agent', toolUseId: 'toolu_cmd_agent',
+      input: { description: 'audit the routes', subagent_type: 'explore', prompt: 'look' },
+    });
+    await injectEvent(page, 'session:background-tasks', {
+      sessionId: SESSION_ID, inFlight: 2, phases: [], agents: [],
+      tasks: [
+        { taskId: SHELL_TASK, toolUseId: BASH, taskType: 'local_bash', status: 'running', description: 'Run the web unit tier', startedAt: Date.now() - 3000, isBackgrounded: true },
+        { taskId: 'agent_cmd_1', toolUseId: 'toolu_cmd_agent', taskType: 'local_agent', status: 'running', description: 'audit the routes', subagentType: 'explore', tokens: 1200, toolUses: 3, startedAt: Date.now() - 2000 },
+      ],
+    });
+
+    // The chat's chip counts only the agent; the shell command is the ledger's.
+    const history = page.locator('.session-history');
+    await expect(history.locator('.bg-tasks-chip')).toHaveCount(1);
+    await expect(history.locator('.bg-tasks-chip .bg-tasks-chip-label')).toHaveText('Agent');
+    await page.locator('.wf-card').click();
+    const panel = page.locator('.wf-modal--tasks');
+    const rows = panel.locator('.bg-task-row');
+    await expect(rows).toHaveCount(2);
+    // Agents first, then commands; each kind wears its own pill.
+    await expect(rows.nth(0).locator('.task-group-agent-type')).toHaveText('explore');
+    await expect(rows.nth(0).locator('.bg-task-kind')).toHaveCount(0);
+    await expect(rows.nth(1).locator('.bg-task-kind--command')).toHaveText('Command');
+    await expect(rows.nth(1).locator('.task-group-agent-type')).toHaveCount(0);
+    await expect(rows.nth(1).locator('.bg-task-row-meta')).toContainText('Command');
+
+    // The command's reader: what it ran, and (while it runs, launch note only) that
+    // it is still running — never the launch note as if it were output.
+    await rows.nth(1).click();
+    const detail = panel.locator('.bg-tasks-detail');
+    await expect(detail.locator('.bg-tasks-detail-head .bg-task-kind--command')).toHaveText('Command');
+    await expect(detail.locator('.bg-tasks-command .bash-tool-pre').nth(0)).toContainText('$ npm test -- --run tests/web');
+    await expect(detail.locator('.bg-tasks-command .bash-tool-pre').nth(1)).toHaveText('Running…');
+    await expect(detail).not.toContainText('Command running in background');
+
+    // The model reads the output (TaskOutput) and the task finishes: the reader
+    // shows the read, in place, without reopening.
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'TaskOutput', toolUseId: 'toolu_read_1', input: { task_id: SHELL_TASK, block: true },
+    });
+    await injectEvent(page, 'session:tool-result', {
+      sessionId: SESSION_ID, toolUseId: 'toolu_read_1', result: '<status>completed</status>\n<exit_code>0</exit_code>\n<stdout>Tests 15 passed (15)</stdout>',
+    });
+    await injectEvent(page, 'session:background-tasks', {
+      sessionId: SESSION_ID, inFlight: 1, phases: [], agents: [],
+      tasks: [
+        { taskId: SHELL_TASK, toolUseId: BASH, taskType: 'local_bash', status: 'completed', description: 'Run the web unit tier', startedAt: Date.now() - 6000, endedAt: Date.now(), isBackgrounded: true },
+        { taskId: 'agent_cmd_1', toolUseId: 'toolu_cmd_agent', taskType: 'local_agent', status: 'running', description: 'audit the routes', subagentType: 'explore', tokens: 1200, toolUses: 3, startedAt: Date.now() - 5000 },
+      ],
+    });
+    await expect(detail.locator('.bg-tasks-command .bash-tool-pre').nth(1)).toContainText('Tests 15 passed (15)');
+    await expect(panel.locator('.bg-tasks-section')).toHaveText(['Running', 'Finished']);
+    await page.keyboard.press('Escape');
+  });
+
+  test('the chip keeps one line while the title fits and moves the title to its own line when it does not', async ({ page }) => {
+    const base = [
+      { role: 'user', text: 'Two spawns', timestamp: '2026-01-01T00:00:00.000Z' },
+      { role: 'assistant', text: 'Spawning.', timestamp: '2026-01-01T00:00:01.000Z' },
+    ];
+    await mockHistory(page, base);
+    await mockSessionDetail(page);
+    await page.route(`**/api/sessions/${SESSION_ID}/workflow`, (route) => route.fulfill({ status: 204, body: '' }));
+
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.waitForLoadState('networkidle');
+    await waitForWs(page);
+    await page.waitForSelector('.session-msg', { timeout: 8000 });
+
+    const history = page.locator('.session-history');
+    // Burst 1: a short title. Burst 2 (split from the first by main text): a title
+    // longer than any session column, next to type + model pills and a tool count.
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'Agent', toolUseId: 'toolu_short',
+      input: { description: 'grep enums', subagent_type: 'explore', prompt: 'x' },
+    });
+    await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: 'And a second one.', msgId: 'msg_between' });
+    const longTitle = 'Inventory every document that still refers to the old module layout after the migration and list the stale paths';
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'Agent', toolUseId: 'toolu_long',
+      input: { description: longTitle, subagent_type: 'general-purpose', model: 'opus', prompt: 'x' },
+    });
+    await injectEvent(page, 'session:background-tasks', {
+      sessionId: SESSION_ID, inFlight: 2, phases: [], agents: [],
+      tasks: [
+        { taskId: 'a_short', toolUseId: 'toolu_short', taskType: 'local_agent', status: 'running', description: 'grep enums', subagentType: 'explore', toolUses: 2, startedAt: Date.now() - 1000 },
+        { taskId: 'a_long', toolUseId: 'toolu_long', taskType: 'local_agent', status: 'running', description: longTitle, subagentType: 'general-purpose', toolUses: 12, startedAt: Date.now() - 1000 },
+      ],
+    });
+
+    const chips = history.locator('.bg-tasks-chip');
+    await expect(chips).toHaveCount(2);
+    const short = chips.nth(0);
+    const long = chips.nth(1);
+    await expect(short).not.toHaveClass(/bg-tasks-chip--stacked/);
+    await expect(long).toHaveClass(/bg-tasks-chip--stacked/);
+
+    // Geometry, not just the class: the short chip's title sits on the label's
+    // line; the long chip's title sits BELOW its label and status, full width,
+    // while the status stays on the first line at the right end.
+    const rowOf = async (el: ReturnType<Page['locator']>) => (await el.boundingBox())!;
+    const shortLabel = await rowOf(short.locator('.bg-tasks-chip-label'));
+    const shortDesc = await rowOf(short.locator('.bg-tasks-chip-desc'));
+    expect(Math.abs(shortDesc.y - shortLabel.y)).toBeLessThan(6);
+    const longLabel = await rowOf(long.locator('.bg-tasks-chip-label'));
+    const longDesc = await rowOf(long.locator('.bg-tasks-chip-desc'));
+    const longMeta = await rowOf(long.locator('.bg-tasks-chip-meta'));
+    const longChip = await rowOf(long);
+    expect(longDesc.y).toBeGreaterThan(longLabel.y + longLabel.height - 2);
+    expect(Math.abs(longMeta.y - longLabel.y)).toBeLessThan(6);
+    expect(longDesc.width).toBeGreaterThan(longChip.width * 0.8);
+    await expect(long.locator('.bg-tasks-chip-status')).toHaveText('Running');
+    await expect(long.locator('.task-group-badge')).toHaveText('12 tools');
+  });
 });

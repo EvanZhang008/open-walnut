@@ -20,7 +20,7 @@
  * is gone still lists its agents from history, with their transcripts readable.
  */
 
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
@@ -31,8 +31,9 @@ import { agentModelLabel } from './SessionMessage';
 import { TranscriptBody } from './WorkflowTranscriptModal';
 import { ICON_CLOSE } from '../common/Icons';
 import type { SessionHistoryMessage } from '@/types/session';
+import { commandOutput, commandView, type ToolSource } from '@/stream/command-view';
 import { useLiveAgentsForSession, useLiveTasksForSession, type LiveAgentStatus } from '@/stores/background-agents-store';
-import { openBackgroundPanel, closeBackgroundPanel, registerKnownAgents, unregisterKnownAgents, useBackgroundPanelOpen, useKnownAgents, useLiveLanes } from '@/stores/background-panel-store';
+import { openBackgroundPanel, closeBackgroundPanel, registerKnownAgents, unregisterKnownAgents, useBackgroundPanelOpen, useKnownAgents, useLiveLanes, useToolSource } from '@/stores/background-panel-store';
 
 /** An agent the conversation knows about (an Agent tool call), independent of the ledger. */
 export interface KnownAgent {
@@ -59,6 +60,9 @@ interface Row {
   subagentType?: string;
   status: string;
   isAgent: boolean;
+  /** A shell command the CLI runs in the background (`local_bash`): a different
+   *  thing from an agent, and shown as one — its own pill, its own reader. */
+  isCommand: boolean;
   /** Ledger data when the ledger knows this job (drives the meta line). */
   task?: BackgroundTask;
   /** Conversation data when the chat knows this agent. */
@@ -68,6 +72,7 @@ interface Row {
 }
 
 const RUNNING = new Set(['running', 'paused', 'pending']);
+const SHELL_TASK_TYPES = new Set(['local_bash', 'local_shell']);
 
 /** Union of ledger tasks and conversation-known agents, keyed by toolUseId / agentId. */
 function buildRows(tasks: readonly BackgroundTask[], known: KnownAgent[]): Row[] {
@@ -85,6 +90,7 @@ function buildRows(tasks: readonly BackgroundTask[], known: KnownAgent[]): Row[]
       subagentType: t.subagentType || k?.subagentType,
       status: t.status,
       isAgent,
+      isCommand: !isAgent && !!t.taskType && SHELL_TASK_TYPES.has(t.taskType),
       task: t,
       known: k,
       agentId: isAgent ? t.taskId : undefined,
@@ -100,11 +106,50 @@ function buildRows(tasks: readonly BackgroundTask[], known: KnownAgent[]): Row[]
       // ledger silent and neither proven, the row is pending (⏳), not a guess.
       status: k.failed ? 'failed' : k.finished ? 'completed' : k.running ? 'running' : 'pending',
       isAgent: true,
+      isCommand: false,
       known: k,
       agentId: k.agentId,
     });
   }
   return rows;
+}
+
+/** The pill that tells the two kinds of row apart at a glance: an agent wears its
+ *  subagent type (accent), a shell command wears `Command` (amber). */
+function KindPill({ row }: { row: Row }) {
+  if (row.isCommand) return <span className="bg-task-kind bg-task-kind--command" title="Background shell command">Command</span>;
+  if (row.isAgent && row.subagentType) return <span className="task-group-agent-type" title="Subagent type">{row.subagentType}</span>;
+  if (row.isAgent) return <span className="task-group-agent-type" title="Subagent">Agent</span>;
+  return <span className="bg-task-kind bg-task-kind--task" title="Background task">Task</span>;
+}
+
+/** A shell command's reader: the command it ran and what it printed, straight from
+ *  the conversation (stream while the turn runs, history after). */
+function CommandDetail({ row, source }: { row: Row; source: ToolSource }) {
+  const task = row.task!;
+  const view = commandView({ toolUseId: task.toolUseId, taskId: task.taskId }, source);
+  const running = RUNNING.has(row.status);
+  if (!view) {
+    return (
+      <div className="wf-modal-loading">
+        {running ? 'The command is running; its call has not reached this conversation yet.' : 'The command and its output are not in this conversation.'}
+      </div>
+    );
+  }
+  const output = commandOutput(view);
+  return (
+    <div className="bg-tasks-command">
+      {view.description && view.description !== row.title && (
+        <div className="bg-tasks-command-desc">{view.description}</div>
+      )}
+      <div className="chat-tool-block-section-label">Command</div>
+      <pre className="bash-tool-pre"><span className="bash-tool-prompt">$ </span>{view.command || '(command not captured)'}</pre>
+      <div className="chat-tool-block-section-label">Output</div>
+      <pre className="bash-tool-pre">
+        {output ?? (running || view.status === 'calling' ? 'Running…' : '(no output)')}
+      </pre>
+    </div>
+  );
 }
 
 /** ONE 1s clock per panel for the elapsed counters; armed only while a row runs. */
@@ -144,7 +189,7 @@ const TaskListRow = memo(function TaskListRow({
       <div className="bg-task-row-head">
         <StatusDot status={row.status} />
         <span className="bg-task-row-name" title={row.title}>{row.title}</span>
-        {row.subagentType && <span className="task-group-agent-type" title="Subagent type">{row.subagentType}</span>}
+        <KindPill row={row} />
       </div>
       <div className="bg-task-row-meta">
         {meta.map((seg, i) => <span key={i} className="wf-agent-row-meta-item">{seg}</span>)}
@@ -168,6 +213,7 @@ export function BackgroundTasksPanel({
   useModalOverlay(onClose);
   const tasks = useLiveTasksForSession(sessionId);
   const lanes = useLiveLanes(sessionId);
+  const source = useToolSource(sessionId);
   const rows = useMemo(() => buildRows(tasks, knownAgents ?? []), [tasks, knownAgents]);
   // Agents first inside each section: a fan-out's agents are what the reader came
   // for; the CLI's background shell commands follow, in ledger order.
@@ -246,8 +292,10 @@ export function BackgroundTasksPanel({
               <div className="bg-tasks-detail-head">
                 <StatusDot status={selected.status} />
                 <span className="bg-tasks-detail-title">{selected.title}</span>
+                <KindPill row={selected} />
                 {detailLive && <span className="wf-modal-live" title="Agent still running — this is its live output">{'●'}</span>}
-                <span className="wf-modal-meta">{rowMeta(selected, now).join(' · ')}</span>
+                {/* The pill already says Command; the meta keeps only the timing. */}
+                <span className="wf-modal-meta">{rowMeta(selected, now).slice(selected.isCommand ? 1 : 0).join(' · ')}</span>
               </div>
             )}
             <div className="bg-tasks-detail-body">
@@ -255,6 +303,8 @@ export function BackgroundTasksPanel({
                 <div className="bg-tasks-live-lane">{liveLane()}</div>
               ) : target ? (
                 <TranscriptBody key={target.agentId} target={target} sessionId={sessionId} />
+              ) : selected?.isCommand && selected.task ? (
+                <CommandDetail row={selected} source={source} />
               ) : selected ? (
                 <div className="wf-modal-loading">
                   {selected.task?.summary || (selected.isAgent ? 'No transcript is available for this agent in this session.' : selected.title)}
@@ -296,13 +346,55 @@ function distinct(values: (string | undefined)[]): string[] {
   return out;
 }
 
+/** Gap between the chip's flex items (keep in step with `.bg-tasks-chip` in CSS). */
+const CHIP_GAP_PX = 6;
+
+/** True when the title cannot share the chip's first line with the pills and the
+ *  status, measured, not guessed: a narrow column full of pills left the title
+ *  as a few clipped characters. The row 1 items (icon, label, type and model pills,
+ *  status, tool count) are the same width in either layout, so the answer is stable
+ *  across the switch; the ResizeObserver re-measures on every width change. */
+function useStackedTitle(ref: RefObject<HTMLElement | null>, deps: unknown[]): boolean {
+  const [stacked, setStacked] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const desc = el.querySelector<HTMLElement>('.bg-tasks-chip-desc');
+      // The inline text span keeps its full width under the clipping box, so this
+      // is the title's natural width in either layout (scrollWidth would report
+      // the box, which in the stacked layout is always the whole line).
+      const text = desc?.firstElementChild;
+      if (!desc || !text) return;
+      let others = 0;
+      let count = 0;
+      for (const child of Array.from(el.children)) {
+        count++;
+        if (child !== desc) others += child.getBoundingClientRect().width;
+      }
+      const style = getComputedStyle(el);
+      const inner = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const available = inner - others - CHIP_GAP_PX * (count - 1);
+      setStacked(text.getBoundingClientRect().width > available + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return stacked;
+}
+
 /** `● Agent  general-purpose  opus  Check the messaging code …  Running  16 tools` —
  *  the ONLY thing the chat shows for a burst of subagents (Claude Code desktop
  *  parity): one row per spawn burst carrying what the old per-agent card carried
  *  (type, model, title, tool count, state), never a card per agent and never a
  *  dropdown. A burst of several agents reads `3 agents`, the distinct types and
- *  models, the titles joined, and `2 running · 1 done`. Click opens the panel (owned
- *  by the session's `BackgroundTasksPanelHost`) with the burst's first agent selected. */
+ *  models, the titles joined, and `2 running · 1 done`. In a column too narrow for
+ *  all of that on one line the title moves to a second line of its own, full width,
+ *  under the pills. Click opens the panel (owned by the session's
+ *  `BackgroundTasksPanelHost`) with the burst's first agent selected. */
 export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; agents: KnownAgent[] }) {
   const live = useLiveAgentsForSession(sessionId);
   const chipKey = agents[0]?.toolUseId ?? agents[0]?.agentId ?? agents[0]?.description ?? '';
@@ -319,9 +411,12 @@ export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; 
   const status = n === 1
     ? (state === 'running' ? 'Running' : state === 'failed' ? 'Failed' : state === 'done' ? 'Done' : '')
     : [running > 0 && `${running} running`, done > 0 && `${done} done`, failed > 0 && `${failed} failed`].filter(Boolean).join(' · ');
+  const ref = useRef<HTMLButtonElement>(null);
+  const stacked = useStackedTitle(ref, [titles, types.join(), models.join(), status, toolUses, n]);
   return (
     <button
-      className={`bg-tasks-chip bg-tasks-chip--${state}`}
+      ref={ref}
+      className={`bg-tasks-chip bg-tasks-chip--${state}${stacked ? ' bg-tasks-chip--stacked' : ''}`}
       onClick={() => openBackgroundPanel(sessionId, agents[0]?.toolUseId ?? agents[0]?.agentId)}
       title={`${titles}\nOpen background tasks`}
     >
@@ -331,9 +426,13 @@ export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; 
       <span className="bg-tasks-chip-label">{n === 1 ? 'Agent' : `${n} agents`}</span>
       {types.map(t => <span key={t} className="task-group-agent-type" title="Subagent type">{t}</span>)}
       {models.map(m => <span key={m} className="task-group-model" title="Model">{m}</span>)}
-      <span className="bg-tasks-chip-desc">{titles}</span>
-      {status && <span className="bg-tasks-chip-status">{status}</span>}
-      {toolUses > 0 && <span className="task-group-badge">{toolUses} tool{toolUses === 1 ? '' : 's'}</span>}
+      <span className="bg-tasks-chip-desc"><span>{titles}</span></span>
+      {(status || toolUses > 0) && (
+        <span className="bg-tasks-chip-meta">
+          {status && <span className="bg-tasks-chip-status">{status}</span>}
+          {toolUses > 0 && <span className="task-group-badge">{toolUses} tool{toolUses === 1 ? '' : 's'}</span>}
+        </span>
+      )}
     </button>
   );
 }

@@ -18,6 +18,7 @@
 
 import { useSyncExternalStore, type ReactNode } from 'react';
 import type { KnownAgent } from '@/components/sessions/BackgroundTasksPanel';
+import { EMPTY_TOOL_SOURCE, type ToolSource } from '@/stream/command-view';
 
 interface OpenState {
   sessionId: string;
@@ -139,5 +140,41 @@ export function useLiveLanes(sessionId: string | undefined): ReadonlyMap<string,
       return () => { set!.delete(l); if (set!.size === 0) laneListeners.delete(sessionId); };
     },
     () => getLiveLanes(sessionId),
+  );
+}
+
+// ── Tool source: where the panel reads a shell command's input and output ──────
+// The chat publishes its current stream buffer and history rows (references, not
+// copies) so a Command row can find the Bash tool call the ledger points at and
+// the TaskOutput reads of it (stream/command-view.ts). Published from the same
+// effect as the lanes; a publish that changes neither reference is a no-op.
+
+const sourceBySession = new Map<string, ToolSource>();
+const sourceListeners = new Map<string, Set<() => void>>();
+
+export function setToolSource(sessionId: string, source: ToolSource): void {
+  const prev = sourceBySession.get(sessionId);
+  if (prev && prev.blocks === source.blocks && prev.messages === source.messages) return;
+  if (!prev && source.blocks.length === 0 && source.messages.length === 0) return;
+  sourceBySession.set(sessionId, source);
+  const set = sourceListeners.get(sessionId);
+  if (set) for (const l of set) l();
+}
+
+export function getToolSource(sessionId: string | undefined): ToolSource {
+  if (!sessionId) return EMPTY_TOOL_SOURCE;
+  return sourceBySession.get(sessionId) ?? EMPTY_TOOL_SOURCE;
+}
+
+export function useToolSource(sessionId: string | undefined): ToolSource {
+  return useSyncExternalStore(
+    (l) => {
+      if (!sessionId) return () => {};
+      let set = sourceListeners.get(sessionId);
+      if (!set) { set = new Set(); sourceListeners.set(sessionId, set); }
+      set.add(l);
+      return () => { set!.delete(l); if (set!.size === 0) sourceListeners.delete(sessionId); };
+    },
+    () => getToolSource(sessionId),
   );
 }
