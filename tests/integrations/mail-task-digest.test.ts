@@ -175,7 +175,7 @@ async function letterBody(letterId: string): Promise<string> {
 /** Cached rows that are unread and in an inbox mailbox: what the digest LISTS, not what it counts. */
 async function inboxUnreadRows(): Promise<number> {
   const found = await rows<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM messages WHERE (flags_json IS NULL OR flags_json NOT LIKE '%\\\\Seen%')"
+    "SELECT COUNT(*) AS n FROM messages WHERE seen = 0"
     + " AND mailbox_id IN (SELECT mailbox_id FROM mailboxes WHERE role = 'inbox')",
   );
   return found[0]?.n ?? 0;
@@ -758,7 +758,9 @@ describe('the daily digest letter', () => {
     // cached rows then agree with. Both halves, because the count comes from the mailbox and the
     // items from the cache, and a test that moved only one of them would prove nothing.
     marks().read = allMessageIds();
-    await runSql("UPDATE messages SET flags_json = '[\"\\\\Seen\"]'");
+    // Both columns, because `seen` is derived from the array on every STORE write and this write
+    // goes around the store: a row whose two columns disagree is a bug this test would otherwise plant.
+    await runSql("UPDATE messages SET flags_json = '[\"\\\\Seen\"]', seen = 1");
     await runSql('UPDATE meta SET value = ? WHERE key = ?', ['2020-01-01', DIGEST_DAY_KEY]);
 
     await mailSyncForTesting()!.runTick({ force: true });

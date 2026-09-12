@@ -22,17 +22,11 @@ import { MESSAGE_COLUMNS, type MailDatabase } from './db.js'
 import type { MessageRow, MessageTaskRow } from './store.js'
 
 /**
- * How a `\Seen` flag looks INSIDE the stored `flags_json` text, computed rather than typed.
- *
- * The flags are stored as a JSON array, so the flag's own backslash is doubled in the text. Writing
- * that pattern by hand means counting backslashes across a JS literal and a SQL literal at the same
- * time, and getting it wrong does not fail loudly: it silently matches nothing, which would report
- * every message as unread.
+ * Unread is the `seen` column (schema v7, derived from `flags_json` on every write and indexed by
+ * `messages_by_unread`), never a substring match on the JSON text: a substring cannot tell `\Seen`
+ * from a near miss like `$Seen`, and it cannot use the index.
  */
-const SEEN_IN_JSON = JSON.stringify('\\Seen').slice(1, -1)
-
-/** Unread, expressed the only way the cache can: the `\Seen` flag is not in the array. */
-const UNREAD_CLAUSE = '(flags_json IS NULL OR flags_json NOT LIKE ?)'
+const UNREAD_CLAUSE = 'seen = 0'
 
 const INBOX_CLAUSE =
   'mailbox_id IN (SELECT mailbox_id FROM mailboxes WHERE account_id = ? AND role = \'inbox\')'
@@ -130,7 +124,7 @@ export class MailTaskStore {
     return this.db.all<MessageRow>(
       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE account_id = ? AND ${UNREAD_CLAUSE} AND ${INBOX_CLAUSE}`
       + ' ORDER BY sent_at DESC, message_id DESC LIMIT ?',
-      [accountId, `%${SEEN_IN_JSON}%`, accountId, limit],
+      [accountId, accountId, limit],
     )
   }
 
