@@ -4,6 +4,11 @@ import { bus } from '../../core/event-bus.js'
 import type { IntegrationRegistry } from '../../core/integration-registry.js'
 import { PluginDependentsError } from '../../core/plugins/dependency-gate.js'
 import { validatePluginId } from '../../core/plugins/ids.js'
+import type {
+  LinkedCheckoutInfo,
+  LinkedCheckoutStatus,
+  LinkedUpdateResult,
+} from '../../core/plugins/linked-checkout.js'
 import {
   loadPluginCatalog,
   mergePluginRegistry,
@@ -36,6 +41,19 @@ import {
  */
 const ALREADY_LOADED_NOTE = 'already loaded; use POST /api/plugin-runtime/<id>/reload to pick up changed files'
 
+/**
+ * Linked dev checkouts, as one injectable unit.
+ *
+ * Behind an interface so route tests never touch git: the real implementation is imported
+ * lazily, keeping git-sync (and everything it drags in) off this router's import path.
+ */
+export interface LinkedCheckoutOps {
+  detect(pluginId: string, pluginDir?: string): Promise<LinkedCheckoutInfo | null>
+  list(): Promise<Map<string, LinkedCheckoutInfo>>
+  check(info: LinkedCheckoutInfo): Promise<LinkedCheckoutStatus>
+  update(info: LinkedCheckoutInfo): Promise<LinkedUpdateResult>
+}
+
 export interface PluginRuntimeRouterDeps {
   registry: IntegrationRegistry
   list(): PluginLifecycleRecord[]
@@ -60,6 +78,8 @@ export interface PluginRuntimeRouterDeps {
   unconfiguredSchemas?(): Promise<Map<string, Record<string, unknown> | undefined>>
   /** Overridable so a test can point the catalog overlay at a temp home. */
   walnutHome?: string
+  /** Linked-checkout detection and its two git actions. */
+  linked?: LinkedCheckoutOps
 }
 
 function routePluginId(value: string | string[]): string {
@@ -101,6 +121,32 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
     const { getUnconfiguredPlugins } = await import('../../core/integration-loader.js')
     return new Map(getUnconfiguredPlugins().map((plugin) => [plugin.id, plugin.configSchema]))
   })
+  /** Lazily imported for the same reason as the source owners above: git stays off this
+   *  module's import path until a caller actually asks about a linked checkout. */
+  const linked: LinkedCheckoutOps = deps.linked ?? {
+    detect: async (pluginId, pluginDir) => {
+      const { detectLinkedCheckout } = await import('../../core/plugins/linked-checkout.js')
+      return detectLinkedCheckout(pluginId, pluginDir)
+    },
+    list: async () => {
+      const { listLinkedCheckouts } = await import('../../core/plugins/linked-checkout.js')
+      return listLinkedCheckouts()
+    },
+    check: async (info) => {
+      const { checkLinkedCheckout } = await import('../../core/plugins/linked-checkout.js')
+      return checkLinkedCheckout(info)
+    },
+    update: async (info) => {
+      const { updateLinkedCheckout } = await import('../../core/plugins/linked-checkout.js')
+      return updateLinkedCheckout(info)
+    },
+  }
+  /**
+   * The linked checkout for ONE plugin, using the dir the registry recorded as a fallback
+   * matcher for a link whose name is not the plugin id.
+   */
+  const detectLinked = (pluginId: string) =>
+    linked.detect(pluginId, deps.registry.get(pluginId)?.pluginDir)
   const activePlugin = (pluginId: string) => {
     const active = deps.list().some((plugin) => plugin.id === pluginId && plugin.state === 'active')
     return active ? deps.registry.get(pluginId) : undefined
@@ -158,11 +204,17 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
       const lifecycle = cloudMode ? (await listPrimaryModules()).plugins : deps.list()
       let owners = new Map<string, { slug: string; kind: 'git' | 'npm' }>()
       let pendingSchemas = new Map<string, Record<string, unknown> | undefined>()
+      let linkedCheckouts = new Map<string, LinkedCheckoutInfo>()
       let sourcesUnavailable = cloudMode
       if (!cloudMode) {
         try {
           pendingSchemas = await resolveUnconfiguredSchemas()
         } catch { /* no Configure button for a needs-config row; the reason still shows */ }
+        try {
+          // Host-local and self-budgeting: a slow git leaves rows without the linked line,
+          // which is exactly how they read before this existed.
+          linkedCheckouts = await linked.list()
+        } catch { /* no Check/Update buttons; the row still lists */ }
         try {
           owners = await resolveSourceOwners()
         } catch {
@@ -199,6 +251,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
             )?.properties) ?? {},
           ).length > 0,
           ...(owner ? { sourceSlug: owner.slug, sourceKind: owner.kind } : {}),
+          ...(linkedCheckouts.has(record.id) ? { linked: linkedCheckouts.get(record.id) } : {}),
         }
       })
       const merged: PluginRegistryResult = mergePluginRegistry(catalog, installed)
@@ -382,6 +435,103 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         ? error.status
         : message.includes('not discovered') ? 404 : 400
       res.status(status).json({ error: message })
+    }
+  })
+
+  /**
+   * The two linked-checkout actions.
+   *
+   *   POST /:pluginId/linked/check  → { behind, ahead, dirty, sha, branch, fetched, reason? }
+   *   POST /:pluginId/linked/update → { sha, fromSha, updated, reloaded[], skipped[] }
+   *
+   * 404 when the plugin is not a linked checkout, so a caller can never be told "up to
+   * date" about a directory nobody links to. 409 `dirty` / `diverged` are refusals the
+   * store renders as a sentence, never as a crash: neither one touches the work tree.
+   *
+   * Cloud mode answers 501. These act on a git checkout that only exists on the Mac, and
+   * the plugin-manage relay carries a fixed set of actions (discover / reload / disable /
+   * clear-quarantine), and relaying through one of those would be a lie about what ran.
+   */
+  const CLOUD_LINKED_NOTE = 'Linked plugin checkouts live on your Mac. Open Settings → Plugins there to check or update one.'
+
+  /** A refusal from linked-checkout, recognised without importing it (git stays lazy). */
+  const linkedRefusal = (error: unknown): { code: 'dirty' | 'diverged'; message: string } | null => {
+    if (!(error instanceof Error) || error.name !== 'LinkedCheckoutError') return null
+    const code = (error as { code?: unknown }).code
+    return code === 'dirty' || code === 'diverged' ? { code, message: error.message } : null
+  }
+
+  router.post('/:pluginId/linked/check', async (req, res) => {
+    try {
+      const pluginId = routePluginId(req.params.pluginId)
+      if (cloudMode) {
+        res.status(501).json({ error: CLOUD_LINKED_NOTE })
+        return
+      }
+      const info = await detectLinked(pluginId)
+      if (!info) {
+        res.status(404).json({ error: `Plugin "${pluginId}" is not a linked checkout` })
+        return
+      }
+      res.json(await linked.check(info))
+    } catch (error) {
+      res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
+  router.post('/:pluginId/linked/update', async (req, res) => {
+    try {
+      const pluginId = routePluginId(req.params.pluginId)
+      if (cloudMode) {
+        res.status(501).json({ error: CLOUD_LINKED_NOTE })
+        return
+      }
+      const info = await detectLinked(pluginId)
+      if (!info) {
+        res.status(404).json({ error: `Plugin "${pluginId}" is not a linked checkout` })
+        return
+      }
+      const result = await linked.update(info)
+
+      // One checkout can hold several plugins, and after a pull they all run stale code.
+      // Only plugins that are ON get reloaded: `reload` writes `enabled: true`, so
+      // reloading an off plugin would turn it on behind the user's back. The rest are
+      // named in `skipped` rather than silently left out.
+      const live = new Map(deps.list().map((plugin) => [plugin.id, plugin.state]))
+      const siblings = [...(await linked.list().catch(() => new Map<string, LinkedCheckoutInfo>()))]
+        .filter(([id, sibling]) => id !== pluginId && sibling.checkout === info.checkout && live.has(id))
+        .map(([id]) => id)
+        .sort()
+      const reloaded: string[] = []
+      const skipped: string[] = []
+      const failed: Array<{ id: string; error: string }> = []
+      for (const id of [pluginId, ...siblings]) {
+        const state = live.get(id)
+        if (state !== 'active' && state !== 'activating') {
+          skipped.push(id)
+          continue
+        }
+        try {
+          await deps.reload(id)
+          reloaded.push(id)
+        } catch (error) {
+          failed.push({ id, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      if (reloaded.length > 0) publishCloudChange(pluginId, 'reloaded')
+      res.json({
+        ...result,
+        reloaded,
+        ...(skipped.length ? { skipped } : {}),
+        ...(failed.length ? { failed } : {}),
+      })
+    } catch (error) {
+      const refusal = linkedRefusal(error)
+      if (refusal) {
+        res.status(409).json({ error: refusal.message, code: refusal.code })
+        return
+      }
+      res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
     }
   })
 

@@ -70,6 +70,7 @@ import { isClaudeCliInstalled } from '../core/claude-cli-detect.js'
 import { subagentRunner } from '../providers/subagent-runner.js'
 import { getTask, listTasks } from '../core/task-manager.js'
 import { SyncRetrySchedule } from '../core/sync-retry-schedule.js'
+import { retryUnsyncedCreates } from '../core/sync-create-retry.js'
 import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
@@ -467,6 +468,11 @@ const pluginSyncStops = new Map<string, () => Promise<void>>()
 // have each plugin's tick wipe the others' backoff. Per process on purpose: a restart is
 // the moment a retry is welcome.
 const pushRetrySchedules = new Map<string, SyncRetrySchedule>()
+// Backoff for Step 1 of a plugin's tick (creating a remote twin), also ONE PER PLUGIN and
+// SEPARATE from the push one above: the two schedule different rows (a task with no remote
+// twin yet vs. a twin whose later edit failed), so sharing an instance would have each
+// step's `pick` prune the other's entries.
+const createRetrySchedules = new Map<string, SyncRetrySchedule>()
 // Set during startup; invoked by the plugin-sources router after add/update.
 let pluginSoftReload: () => Promise<void> = async () => {}
 let pluginMutationTail: Promise<unknown> = Promise.resolve()
@@ -4450,6 +4456,8 @@ function startPluginSyncPolling(): void {
     const intervalMs = (plugin.config.sync_interval_ms as number) ?? SYNC_INTERVAL_MS
     const pushRetrySchedule = pushRetrySchedules.get(plugin.id) ?? new SyncRetrySchedule()
     pushRetrySchedules.set(plugin.id, pushRetrySchedule)
+    const createRetrySchedule = createRetrySchedules.get(plugin.id) ?? new SyncRetrySchedule()
+    createRetrySchedules.set(plugin.id, createRetrySchedule)
 
     let timer: ReturnType<typeof setTimeout> | null = null
     let stopped = false
@@ -4502,57 +4510,23 @@ function startPluginSyncPolling(): void {
         // Step 1: Retry unsynced tasks (source matches plugin but no ext data yet).
         // Was `listTasks().filter(...)` — now pushed into SQL so we don't
         // materialize 6000+ rows just to pluck a handful of unsynced ones.
+        // The loop itself lives in retryUnsyncedCreates: same backoff as Step 1.5, plus
+        // ONE actionable notification once a task's create has been refused three times
+        // in a row. Only the DB write and the bus events stay here.
         const unsynced = await listUnsyncedTasks(plugin.id)
-        if (unsynced.length > 0) {
-          log.web.info('sync: unsynced tasks pending create', {
-            pluginId: plugin.id,
-            count: unsynced.length,
-            // Sample up to 5 to spot if the same taskId keeps showing up across ticks
-            sampleTaskIds: unsynced.slice(0, 5).map((t) => t.id),
-          })
-        }
-        let unsyncedCounter = 0
-        let unsyncedSuccesses = 0
-        let unsyncedFailures = 0
-        // Accumulate ext-merge patches across the loop and commit them in one
-        // bulk transaction after all network calls finish. Each createTask() is
-        // still awaited serially (network + per-item yield) — only the DB write
-        // is batched to avoid N sequential SQLite transactions on large backlogs.
-        const extUpdates: Array<{ id: string; patch: Partial<Task> }> = []
-        for (const task of unsynced) {
-          // Yield to the event loop periodically so HTTP/WS handlers don't starve
-          // while we await dozens of serial Graph calls (each ~500ms).
-          if (unsyncedCounter > 0 && unsyncedCounter % YIELD_EVERY === 0) {
-            await yieldToEventLoop()
-          }
-          unsyncedCounter++
-          try {
-            const ext = await plugin.sync.createTask(task)
-            if (ext) {
-              // ext is already scoped: { 'ms-todo': { id, list_id } } — spread to merge
-              const mergedExt = { ...task.ext, ...ext as Record<string, unknown> }
-              extUpdates.push({ id: task.id, patch: { ext: mergedExt } })
-              Object.assign(task, { ext: mergedExt })
-              unsyncedSuccesses++
-            }
-          } catch (err) {
-            unsyncedFailures++
-            // Promoted from debug → warn so ghost-producing repro stays visible
-            log.web.warn(`${plugin.id} sync: unsynced retry create failed`, {
-              taskId: task.id,
-              title: task.title,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
-        if (unsynced.length > 0) {
-          log.web.info('sync: unsynced batch done', {
-            pluginId: plugin.id,
-            attempted: unsynced.length,
-            succeeded: unsyncedSuccesses,
-            failed: unsyncedFailures,
-          })
-        }
+        const { extUpdates } = await retryUnsyncedCreates({
+          pluginId: plugin.id,
+          unsynced,
+          schedule: createRetrySchedule,
+          createTask: (task) => plugin.sync.createTask(task),
+          log: log.web,
+          onYield: yieldToEventLoop,
+          yieldEvery: YIELD_EVERY,
+          publishRecovery: (keys) => { void publishRecovery(keys) },
+        })
+        // Accumulated across the loop and committed in ONE bulk transaction here: each
+        // createTask() is awaited serially (network + per-item yield), but the DB write
+        // must not be N sequential SQLite transactions on a large backlog.
         if (extUpdates.length > 0) {
           const { changed } = await updateTasksBulk(extUpdates)
           // destinations: [] — only global subscribers (embedding-sync) receive

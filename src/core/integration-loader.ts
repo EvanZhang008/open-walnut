@@ -267,7 +267,16 @@ export function reloadLoadedPlugin(
     const source = pluginSources.get(registry)?.get(pluginId);
     if (!manager?.get(pluginId) || !source) throw new Error(`Plugin "${pluginId}" is not discovered`);
 
-    const manifestPath = path.join(source.dir, 'manifest.json');
+    // CONSTRAINT: a reload must bundle from the CANONICAL directory, because the esbuild
+    // rebase in bundleExternalPlugin keys on `importer.startsWith(pluginDir + '/')`. The
+    // recorded path can go stale between boot and reload (`~/.open-walnut/plugins/<id>`
+    // was a real directory at boot and became a `walnut-plugin link` symlink since), and
+    // bundling through the stale path stops matching, so the reload dies on
+    // "Could not resolve ../../constants.js". Passing the realpath to loadPlugin also
+    // self-heals the recorded dir for every later operation.
+    const dir = await fsp.realpath(source.dir).catch(() => source.dir);
+
+    const manifestPath = path.join(dir, 'manifest.json');
     let manifest: PluginManifest | null = null;
     try {
       manifest = validateManifest(JSON.parse(await fsp.readFile(manifestPath, 'utf-8')), manifestPath);
@@ -295,7 +304,7 @@ export function reloadLoadedPlugin(
     registry.unregister(pluginId, 'unloaded');
     const config = await getConfig();
     const pluginConfigs = config.plugins ?? {};
-    await loadPlugin(source.dir, source.isBuiltin, pluginConfigs, registry, manager, false, manifest);
+    await loadPlugin(dir, source.isBuiltin, pluginConfigs, registry, manager, false, manifest);
     // Runs even when the reload FAILED: a dependent that stays blocked still needs its
     // reason rewritten from "is reloading" to whatever is now true.
     const restored = await retryUnmetDependents(gate, pluginId, restoreOptions(registry, manager, pluginConfigs));

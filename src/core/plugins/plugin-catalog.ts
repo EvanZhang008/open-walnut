@@ -25,11 +25,18 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { LinkedCheckoutInfo } from './linked-checkout.js'
 import type { MissingDependency } from './plugin-manager.js'
 import { satisfiesDependencyRange } from './semver.js'
 
-/** Where a catalog entry comes from. */
-export type PluginCatalogSourceKind = 'builtin' | 'git' | 'npm' | 'example'
+/**
+ * Where a row's code comes from.
+ *
+ * `linked` is the one kind a catalog FILE can never declare: it is discovered on disk
+ * (a `walnut-plugin link` symlink into a git work tree), so `parsePluginCatalog` does not
+ * accept it and only an installed row ever carries it.
+ */
+export type PluginCatalogSourceKind = 'builtin' | 'git' | 'npm' | 'example' | 'linked'
 
 export interface PluginCatalogSource {
   kind: PluginCatalogSourceKind
@@ -39,8 +46,19 @@ export interface PluginCatalogSource {
   ref?: string
   /** npm: `name`, `name@1.2.3` or `@scope/name`. */
   spec?: string
-  /** example: repo-relative directory to `walnut-plugin link`. */
+  /** example: repo-relative directory to `walnut-plugin link`.
+   *  linked: the absolute plugin directory the link points at. */
   path?: string
+  /** linked: root of the git work tree that holds the plugin directory. */
+  checkout?: string
+  /** linked: branch name, or `HEAD` when the checkout is detached. */
+  branch?: string
+  /** linked: the commit that is running. */
+  sha?: string
+  /** linked: `origin`, with any credentials masked. */
+  remote?: string
+  /** linked: the checkout has uncommitted changes, so it cannot be updated. */
+  dirty?: boolean
 }
 
 export interface PluginCatalogEntry {
@@ -132,6 +150,8 @@ export interface InstalledPluginFacts {
   sourceSlug?: string
   /** git / npm, for an externally-sourced plugin. */
   sourceKind?: 'git' | 'npm'
+  /** Present when this plugin is a `walnut-plugin link` into a git work tree. */
+  linked?: LinkedCheckoutInfo
 }
 
 export interface PluginRegistryRow {
@@ -345,9 +365,23 @@ export function mergePluginRegistry(
     // The truth on disk beats the catalog for anything the plugin reports about
     // itself; the catalog only fills in what a manifest does not carry (what it
     // adds, where to read about it).
-    const source: PluginCatalogSource = plugin.sourceKind
-      ? { kind: plugin.sourceKind }
-      : entry?.source ?? { kind: plugin.builtin ? 'builtin' : 'git' }
+    //
+    // A link into a git work tree wins over everything, including a catalog entry that
+    // describes where the plugin normally comes from: the code that RUNS is the checkout,
+    // and that is the only copy Check and Update can act on.
+    const source: PluginCatalogSource = plugin.linked
+      ? {
+        kind: 'linked',
+        path: plugin.linked.path,
+        checkout: plugin.linked.checkout,
+        branch: plugin.linked.branch,
+        sha: plugin.linked.sha,
+        ...(plugin.linked.remote ? { remote: plugin.linked.remote } : {}),
+        dirty: plugin.linked.dirty,
+      }
+      : plugin.sourceKind
+        ? { kind: plugin.sourceKind }
+        : entry?.source ?? { kind: plugin.builtin ? 'builtin' : 'git' }
     // A blocked row already names what it is missing; the plan says what can be DONE
     // about it, which is the difference between a dead end and a button.
     const plan = status === 'needs-dependency'

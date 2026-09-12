@@ -2226,6 +2226,84 @@ export async function migrateCompletedTaskSessions(): Promise<number> {
   return count;
 }
 
+// ── Plugin defaults for a task entering a plugin's domain ───────────────────
+
+/** The only fields a plugin's prepareNewTask may default. Deliberately narrow:
+ *  scheduling and classification a provider legitimately owns, never identity
+ *  (title, project, source), content, or bookkeeping (ext, _syncedAt). A hook
+ *  that could rewrite those would be a second, unreviewable write path into
+ *  every task the plugin claims. */
+const PLUGIN_TASK_DEFAULT_KEYS = ['sprint', 'priority', 'due_date', 'start_date', 'end_date', 'tags'] as const;
+type PluginTaskDefaultKey = (typeof PLUGIN_TASK_DEFAULT_KEYS)[number];
+const PLUGIN_TASK_DEFAULT_KEY_SET: ReadonlySet<string> = new Set(PLUGIN_TASK_DEFAULT_KEYS);
+
+/** True when the task carries no value a default would overwrite. 'none' is
+ *  priority's "unset" sentinel (every row carries a priority), so a plugin can
+ *  still default it; any explicit priority wins. */
+function isDefaultableFieldEmpty(task: Task, key: PluginTaskDefaultKey): boolean {
+  const current = task[key];
+  if (current === undefined || current === null || current === '') return true;
+  if (Array.isArray(current)) return current.length === 0;
+  return key === 'priority' && current === 'none';
+}
+
+/**
+ * A task just entered a plugin's domain (created in, or moved into, a project the
+ * plugin claims): let the plugin set defaults ONCE, before the first push, so the
+ * create carries them instead of needing a second remote round-trip. A tracker uses
+ * this to file a new task in the current sprint; core knows nothing about sprints.
+ *
+ * Filtered twice (to the allowlist, and to keys the task has no value for), so an
+ * explicit value the human or the caller set always wins. A throwing hook is a warn
+ * and nothing more: a plugin must never be able to fail a task create.
+ *
+ * Persisted through updateTaskRaw (silent, O(1)) plus the same web-ui TASK_UPDATED
+ * autoPushIfConfigured emits after a push, so the console learns about the change
+ * without the model being told about a default it did not ask for.
+ */
+export async function applyPluginTaskDefaults(task: Task, reason: 'created' | 'moved'): Promise<void> {
+  const plugin = registry.get(task.source);
+  const hook = plugin?.sync.prepareNewTask;
+  if (!hook) return; // zero cost for the plugins that have no defaults
+
+  let patch: Partial<Task> | undefined;
+  try {
+    patch = await hook.call(plugin.sync, task, { reason });
+  } catch (err) {
+    log.task.warn('prepareNewTask failed, task kept without plugin defaults', {
+      taskId: task.id, source: task.source, reason,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+  if (!patch || typeof patch !== 'object') return;
+
+  const accepted: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    if (!PLUGIN_TASK_DEFAULT_KEY_SET.has(key)) { dropped.push(key); continue; }
+    if (value === undefined || value === null || value === '') continue;
+    if (!isDefaultableFieldEmpty(task, key as PluginTaskDefaultKey)) continue;
+    accepted[key] = value;
+  }
+  if (dropped.length > 0) {
+    log.task.warn('prepareNewTask returned fields outside the defaultable set, dropped', {
+      taskId: task.id, source: task.source, reason, dropped,
+    });
+  }
+  if (Object.keys(accepted).length === 0) return;
+
+  const { changed, task: updated } = await updateTaskRaw(task.id, accepted as Partial<Task>);
+  // Mutate the caller's in-memory task so the push that follows carries the defaults.
+  Object.assign(task, changed && updated ? updated : (accepted as Partial<Task>));
+  if (changed) {
+    log.task.info('plugin defaults applied to new task', {
+      taskId: task.id, source: task.source, reason, fields: Object.keys(accepted),
+    });
+    bus.emit(EventNames.TASK_UPDATED, { task, fields: Object.keys(accepted) }, ['web-ui'], { source: 'plugin-defaults' });
+  }
+}
+
 /**
  * Create a new task. Returns the created task.
  */
@@ -2407,6 +2485,12 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
   if (input._skipPluginOps || task.source === 'local') {
     return { task, syncResult: { success: true } as SyncResult };
   }
+
+  // The task landed in a project this plugin claims: let the plugin default the
+  // fields it owns before the FIRST push, so the create carries them. Awaited in
+  // both push branches (the hook is quick by contract): the async branch returns
+  // immediately, so defaulting after it would race the push it is meant to ride.
+  await applyPluginTaskDefaults(task, 'created');
 
   // Async push: write-locally-then-push. Return the local task immediately; the push
   // runs in the background and reconciles ext/external_url/sync_error via TASK_UPDATED.
@@ -3865,7 +3949,15 @@ export async function updateTask(
         }
       }
 
-      // 2. Push to new backend — AWAITED so failures (e.g. plugin rejects CJK
+      // 2. The task (and every child that migrated with it) just entered the NEW
+      //    plugin's domain, so it gets the same defaults pass a fresh create gets,
+      //    before the first push to that backend. Only a cross-source migration
+      //    reaches here: a LOCAL task filed under a provider project deliberately
+      //    stays local (see the project-move branch above), so it never enters
+      //    anybody's domain and never gets defaults.
+      if (m.task.source !== 'local') await applyPluginTaskDefaults(m.task, 'moved');
+
+      // 3. Push to new backend — AWAITED so failures (e.g. plugin rejects CJK
       //    content at the push gate) propagate to the caller. The AI/tool sees
       //    the error synchronously and can fix + retry, instead of a silent
       //    fire-and-forget that reports success while the push actually failed.
@@ -3874,7 +3966,7 @@ export async function updateTask(
         throw new Error(`Sync to ${m.task.source} failed: ${migSync.error ?? 'unknown error'}`);
       }
 
-      // 3. Notify UI for each migrated task (primary task gets a second emit from the centralized
+      // 4. Notify UI for each migrated task (primary task gets a second emit from the centralized
       //    emission below — harmless because the frontend mergeTask is idempotent).
       bus.emit(EventNames.TASK_UPDATED, { task: m.task }, ['web-ui'], { source: 'migration' });
     }

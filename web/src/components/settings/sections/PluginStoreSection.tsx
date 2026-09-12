@@ -89,7 +89,20 @@ interface RegistryRow {
   adds?: string[];
   homepage?: string;
   docs?: string;
-  source: { kind: 'builtin' | 'git' | 'npm' | 'example'; url?: string; ref?: string; spec?: string; path?: string };
+  source: {
+    kind: 'builtin' | 'git' | 'npm' | 'example' | 'linked';
+    url?: string;
+    ref?: string;
+    spec?: string;
+    /** example: repo-relative dir. linked: the absolute plugin dir the link points at. */
+    path?: string;
+    /** linked only. */
+    checkout?: string;
+    branch?: string;
+    sha?: string;
+    remote?: string;
+    dirty?: boolean;
+  };
   installed: boolean;
   status: 'active' | 'disabled' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'failed' | 'quarantined' | 'pending-restart' | 'available';
   state?: string;
@@ -165,6 +178,26 @@ function originLabel(row: RegistryRow): string {
   return 'Linked locally';
 }
 
+/**
+ * The checkout a linked plugin actually runs from: `linked · <path> · <branch> @ <sha7>`.
+ *
+ * A detached HEAD is said in words rather than shown as a branch called `HEAD`, and a
+ * dirty tree is called out because it is the one state that blocks Update.
+ */
+function linkedLine(source: RegistryRow['source']): string {
+  const branch = source.branch === 'HEAD' ? 'detached HEAD' : source.branch ?? 'unknown branch';
+  const sha = source.sha ? ` @ ${source.sha.slice(0, 7)}` : '';
+  return [
+    `linked · ${source.checkout ?? source.path ?? 'unknown checkout'} · ${branch}${sha}`,
+    ...(source.dirty ? ['uncommitted changes'] : []),
+  ].join(' · ');
+}
+
+/** "1 commit" / "2 commits": the plural is not worth a library. */
+function commits(count: number): string {
+  return `${count} commit${count === 1 ? '' : 's'}`;
+}
+
 export function PluginStoreSection({ config, onSave }: Props) {
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
   const [sources, setSources] = useState<PluginSource[]>([]);
@@ -179,6 +212,9 @@ export function PluginStoreSection({ config, onSave }: Props) {
   // Account links, by plugin id: which rows have one, and their latest state
   // (the row badge reads it; the panel under the row keeps it fresh).
   const [connections, setConnections] = useState<Record<string, ConnectionReport>>({});
+  // What Check/Update said about a linked checkout, per plugin id. Inline on the row
+  // because it answers a question asked on that row, and it is not a page-level notice.
+  const [linkedStatus, setLinkedStatus] = useState<Record<string, string>>({});
   // Turning off a plugin others run on is refused (409) until the user has seen the list.
   const [cascadeAsk, setCascadeAsk] = useState<{ target: { id: string; name: string }; dependents: string[] } | null>(null);
   // What an install (or a blocked row's "Install…") turned out to need, and where to ask.
@@ -285,6 +321,80 @@ export function PluginStoreSection({ config, onSave }: Props) {
       if (body.updated) emitPluginsChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * "Is there anything newer?" for a linked checkout. Fetches on the server and reports
+   * inline; it never touches the working copy, so it is safe to press at any time.
+   */
+  const handleLinkedCheck = async (row: RegistryRow) => {
+    setBusy(`linked:${row.id}`);
+    setError(null);
+    setLinkedStatus((prev) => ({ ...prev, [row.id]: 'Checking…' }));
+    try {
+      const res = await fetch(`/api/plugin-runtime/${encodeURIComponent(row.id)}/linked/check`, { method: 'POST' });
+      const body = await res.json().catch(() => ({} as Record<string, unknown>));
+      if (!res.ok) throw new Error((body.error as string) ?? `HTTP ${res.status}`);
+      const behind = body.behind as number | null;
+      const ahead = body.ahead as number | null;
+      const reason = body.reason as string | undefined;
+      // `behind: null` means there was nothing to count against (no upstream, detached
+      // HEAD), so the server's reason is the answer. A count that came without a fetch
+      // is only as good as the last fetch, and is never presented as "up to date".
+      const count = behind === 0 ? 'up to date' : `${commits(behind ?? 0)} behind`;
+      const parts = behind === null
+        ? [reason ?? 'Could not compare with the remote.']
+        : body.fetched === false
+          ? [`${reason ?? 'Could not fetch'}, so this is as of the last fetch: ${count}`]
+          : [count.charAt(0).toUpperCase() + count.slice(1)];
+      if (ahead) parts.push(`${commits(ahead)} of your own not pushed`);
+      if (body.dirty) parts.push('uncommitted changes');
+      setLinkedStatus((prev) => ({ ...prev, [row.id]: parts.join(' · ') }));
+    } catch (err) {
+      setLinkedStatus((prev) => ({ ...prev, [row.id]: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Fast-forward a linked checkout and reload what runs from it. Refused with 409 when the
+   * tree is dirty or the branch has diverged: both are shown as the server's sentence,
+   * because neither is an error to retry: both are something to resolve in the repo.
+   */
+  const handleLinkedUpdate = async (row: RegistryRow) => {
+    setBusy(`linked:${row.id}`);
+    setError(null);
+    setLinkedStatus((prev) => ({ ...prev, [row.id]: 'Updating…' }));
+    try {
+      const res = await fetch(`/api/plugin-runtime/${encodeURIComponent(row.id)}/linked/update`, { method: 'POST' });
+      const body = await res.json().catch(() => ({} as Record<string, unknown>));
+      if (res.status === 409) {
+        setLinkedStatus((prev) => ({ ...prev, [row.id]: (body.error as string) ?? 'Could not update this checkout.' }));
+        return;
+      }
+      if (!res.ok) throw new Error((body.error as string) ?? `HTTP ${res.status}`);
+      const to = String(body.sha ?? '').slice(0, 7);
+      const reloaded = (body.reloaded ?? []) as string[];
+      const failed = (body.failed ?? []) as Array<{ id: string; error: string }>;
+      setLinkedStatus((prev) => ({
+        ...prev,
+        [row.id]: [
+          body.updated === false
+            ? `Already up to date at ${to}.`
+            : reloaded.length > 0
+              ? `Updated to ${to}, reloaded ${reloaded.join(', ')}.`
+              : `Updated to ${to}. Nothing was running from it, so nothing was reloaded.`,
+          ...failed.map((entry) => `${entry.id} could not be reloaded: ${entry.error}`),
+        ].join(' '),
+      }));
+      await refresh();
+      if (reloaded.length > 0) emitPluginsChanged();
+    } catch (err) {
+      setLinkedStatus((prev) => ({ ...prev, [row.id]: err instanceof Error ? err.message : String(err) }));
     } finally {
       setBusy(null);
     }
@@ -499,6 +609,30 @@ export function PluginStoreSection({ config, onSave }: Props) {
                             Clear quarantine
                           </button>
                         )}
+                        {/* A dev link has no source slug to update, but it does have a
+                            checkout, so it gets the same two verbs, pointed at git. */}
+                        {row.source.kind === 'linked' && (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              data-testid={`linked-check-${row.id}`}
+                              disabled={busy === `linked:${row.id}`}
+                              onClick={() => void handleLinkedCheck(row)}
+                            >
+                              Check
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              data-testid={`linked-update-${row.id}`}
+                              disabled={busy === `linked:${row.id}`}
+                              onClick={() => void handleLinkedUpdate(row)}
+                            >
+                              Update
+                            </button>
+                          </>
+                        )}
                         {row.sourceSlug && (
                           <>
                             <button
@@ -550,6 +684,18 @@ export function PluginStoreSection({ config, onSave }: Props) {
                       {row.adds?.length ? ` · adds ${row.adds.join(', ')}` : ''}
                       {!row.adds?.length && row.capabilities?.length ? ` · ${row.capabilities.join(', ')}` : ''}
                     </span>
+                    {/* Which checkout this row's code really comes from, and what Check
+                        and Update would act on. */}
+                    {row.source.kind === 'linked' && (
+                      <span className="text-xs text-muted" data-testid={`linked-info-${row.id}`}>
+                        {linkedLine(row.source)}
+                      </span>
+                    )}
+                    {linkedStatus[row.id] && (
+                      <span className="plugin-store-why" data-testid={`linked-status-${row.id}`}>
+                        {linkedStatus[row.id]}
+                      </span>
+                    )}
                     {/* A blocked row says which plugin it waits for and offers the one
                         thing that can fix it; every other non-active row keeps the
                         server's own sentence. */}

@@ -425,6 +425,19 @@ export interface PluginIntegrationSync {
   validateContent?(task: PluginSyncTask, field: string, value: string): string | null
   contentRequirement?(field: string): string | null
   pushTask(task: PluginSyncTask): Promise<PluginSyncPushResult>
+  /**
+   * Called once when a task enters this plugin's domain: created in, or moved into, a
+   * project the plugin claims (never for tasks the plugin imported from the remote).
+   * Runs after the row is written and before its first push, outside the store lock, so
+   * it may do I/O but should be quick: the push waits for it. Returns the fields the
+   * plugin wants as defaults. The core applies only fields the task has no value for
+   * yet, and only from the defaultable set (sprint, priority, due_date, start_date,
+   * end_date, tags); anything else is dropped with a warning. A tracker uses this to
+   * put a new task in the current sprint; a plugin that has no defaults omits it.
+   *
+   * A throwing hook is logged at warn and ignored: it can never fail a task create.
+   */
+  prepareNewTask?(task: PluginSyncTask, context: { reason: 'created' | 'moved' }): Promise<Partial<PluginSyncTask> | undefined> | Partial<PluginSyncTask> | undefined
   syncPoll(context: PluginSyncPollContext): Promise<void>
   renameProjectRemote?(args: { oldRemoteName: string; newName: string }): Promise<void>
   deleteProjectRemote?(args: { project: string; remoteList?: string; tasks: PluginSyncTask[] }): Promise<

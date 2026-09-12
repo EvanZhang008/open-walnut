@@ -95,6 +95,22 @@ export interface IntegrationSync {
    *  Plugins MUST capture the server's lastModified from the API response. */
   pushTask(task: Task): Promise<PushResult>;
 
+  // ── Defaults for a task entering this plugin's domain (optional) ──
+
+  /**
+   * Called once when a task enters this plugin's domain: created in, or moved into, a
+   * project the plugin claims (never for tasks the plugin imported from the remote).
+   * Runs after the row is written and before its first push, outside the store lock, so
+   * it may do I/O but should be quick: the push waits for it. Returns the fields the
+   * plugin wants as defaults. The core applies only fields the task has no value for
+   * yet, and only from the defaultable set (sprint, priority, due_date, start_date,
+   * end_date, tags); anything else is dropped with a warning. A tracker uses this to
+   * put a new task in the current sprint; a plugin that has no defaults omits it.
+   *
+   * A throwing hook is logged at warn and ignored: it can never fail a task create.
+   */
+  prepareNewTask?(task: Task, ctx: { reason: 'created' | 'moved' }): Promise<Partial<Task> | undefined> | Partial<Task> | undefined;
+
   // ── Pull (periodic sync from remote) ──
   syncPoll(ctx: SyncPollContext): Promise<void>;
 

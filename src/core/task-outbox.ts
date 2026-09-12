@@ -329,7 +329,11 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
       const { bus, EventNames } = await import('./event-bus.js');
       bus.emit(EventNames.TASK_CREATED, { task: created }, ['web-ui'], { source: 'cloud-outbox' });
       if (created.source !== 'local') {
-        tm.autoPushIfConfigured(created).catch(() => { /* sync_error stamped inside */ });
+        // Same order as addTask: the plugin's defaults (a tracker's current sprint)
+        // go on the row first so the create that follows carries them.
+        tm.applyPluginTaskDefaults(created, 'created')
+          .then(() => tm.autoPushIfConfigured(created))
+          .catch(() => { /* sync_error stamped inside */ });
       }
       log.task.info('task-op: cloud task created on primary', {
         id: created.id, title: created.title, source: created.source,

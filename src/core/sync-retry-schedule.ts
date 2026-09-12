@@ -68,4 +68,15 @@ export class SyncRetrySchedule {
   attemptsOf(id: string): number {
     return this.entries.get(id)?.attempts ?? 0
   }
+
+  /**
+   * The ids currently carrying a backoff entry.
+   *
+   * Read BEFORE `pick` (which prunes the ones that left the candidate set) to notice a
+   * task that stopped being a candidate: its operation succeeded by another route, and
+   * whoever told the user about the failures needs that to close the story.
+   */
+  trackedIds(): string[] {
+    return [...this.entries.keys()]
+  }
 }

@@ -61,6 +61,7 @@ export const SLOW_TEST_FILES = [
   'tests/integrations/git-sync.test.ts', // 11s
   'tests/integrations/git-sync-mass-revert-guard.test.ts', // many real repos and commits
   'tests/core/git-versioning.test.ts', // 5s
+  'tests/core/plugins/linked-checkout.test.ts', // 4s: bare origin + publisher + linked clone
 
   // ── Real HTTP server + session plumbing ────────────────────────────────────
   'tests/scripts/devprod-render-check.test.ts', // ~25s — launches a headless Chromium per verdict
