@@ -302,6 +302,14 @@ interface ApiV1Message {
   /** kind:'tool' on a Task/Agent row only (additive) — the delegated subagent's
    *  label, so the phone can say WHICH agent a delegation belongs to. */
   agent?: string
+  /** kind:'tool' | kind:'thinking' (additive) — opaque handle on this row's FULL
+   *  text (`GET /api/v1/activity/detail?ref=…`), present only when the excerpts
+   *  above had to cut something. See core/activity-detail.ts for the identity
+   *  scheme and why a row's position could not be it. Rows read out of the
+   *  chat-history STORE (legacy in-process-agent turns) carry none: the store has
+   *  no per-entry id to address, and the current engine writes every turn into a
+   *  CLI session, so this only affects conversations that predate it. */
+  detailRef?: string
 }
 
 /**
@@ -652,6 +660,12 @@ function laneTranscriptToApiV1(rows: ProjectedTranscriptMessage[]): Array<Omit<A
         ...(row.inputPreview ? { inputPreview: row.inputPreview } : {}),
         ...(row.resultPreview ? { resultPreview: row.resultPreview } : {}),
         ...(row.thinkingText ? { thinkingText: row.thinkingText } : {}),
+        // The lane read builds with `full: true` (which implies `rich`), so its
+        // clipped rows carry the drawer's handle on the text they cut. Dropping it
+        // here would leave the chat surface with excerpt-only drawers while the
+        // session surface expanded — the two-surfaces-disagree shape this batch
+        // exists to end.
+        ...(row.detailRef ? { detailRef: row.detailRef } : {}),
         // The projection has carried `agent` since Task/Agent rows learned their
         // subagent label; this mapping dropped it, so the phone could never say
         // which agent a delegation belonged to even though it decodes the field.
@@ -2415,14 +2429,33 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
 // have no disk/SSH access to sessions and always serve the synced file.
 //
 // `rich=1` (additive) adds the expanded-card fields (`inputPreview`,
-// `thinkingText`) to the rows of a tail this route BUILDS. It deliberately does
-// not force a build: the sweep-exported file cannot carry the fields (the sweep
-// writes the slim shape), and making `rich=1` read live would break the phone's
-// two-phase open, whose whole point is that phase one is a fast disk read. So
-// `rich=1` alone answers without the fields, and `fresh=1&rich=1` answers with
-// them — which is the order the client already fetches in. The sweep and the
-// bridge push stay slim because neither passes the option; `rich` gates only the
-// two fields, so it can never move the tail slice, the clip, or `truncated`.
+// `thinkingText`, `detailRef`) to the rows. The sweep and the bridge push stay
+// slim because neither passes the option; `rich` gates only those fields, so it
+// can never move the tail slice, the clip, or `truncated`.
+//
+// A RICH REQUEST IS NEVER ANSWERED WITH SLIM ROWS. That is a fix, not a
+// simplification, and the version it replaces is worth stating because the
+// reasoning sounded right: `rich=1` used to decorate only a tail this route
+// BUILT, so a request that hit the sweep-exported file answered without the
+// fields — the sweep writes the slim shape and cannot carry them. Measured on a
+// live box, the same URL modulo `fresh` answered `?rich=1` with 0 of 102 rows
+// carrying `thinkingText` and `?fresh=1&rich=1` with 39 of 106. Whether a
+// client's drawer had any content at all therefore depended on cache warmth,
+// which is not a behaviour anyone can code against: it sent a careful reviewer
+// off to file two defects about fields the primary "does not produce".
+//
+// So on the primary, `rich=1` implies the same live build `fresh=1` does. What
+// that costs, exactly: the phone never asks for one, because it drops `rich`
+// unless it is already sending `fresh` (WalnutAPI.sessionTranscriptPath) — its
+// two-phase open still opens on a plain disk read. And the build itself is 3.1ms
+// p50 under the reader's 4 MB ceiling; the real cost is a remote session's daemon
+// read, which `fresh=1` was already paying on the very next call.
+//
+// Two paths still cannot produce the fields — a build that throws (unreachable
+// session, so the exported file is served instead) and a cloud replica, whose
+// bridge builder is a separate slim implementation. Neither may lie about it, so
+// the response carries `rich: true|false` saying whether these rows actually have
+// the fields. A client reads that instead of inferring from cache warmth.
 apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { readSessionTranscript, exportSessionTranscripts, buildSessionTranscript } = await import('../../core/session-projection.js')
@@ -2447,6 +2480,17 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     const buildOpts = { rich: wantRich }
     // Same safe-id alphabet readSessionTranscript enforces (ids land in filenames).
     const safeId = /^[A-Za-z0-9_-]+$/.test(sessionId)
+    /**
+     * Answer, saying whether these rows carry the rich fields.
+     *
+     * The flag rides ONLY a rich request, which keeps the default answer
+     * byte-for-byte what the bare builder produces (a property this route's tests
+     * pin, and the thing that makes the sweep, the bridge push and this read one
+     * shape). A client that did not ask has nothing to learn from it.
+     */
+    const answer = (body: object, rich: boolean): void => {
+      res.json(wantRich ? { ...body, rich } : body)
+    }
     // Just-created session (record seeded, CLI not spawned yet — no pid, no
     // outputFile): there is nothing to read, so answer 200-empty immediately.
     // Without this, the non-fresh read 404s AND triggers a pointless full
@@ -2461,15 +2505,28 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       const record = await getSessionByClaudeId(sessionId)
       if (record && isPreSpawnSession(record)) {
         // Keep this shape in sync with buildSessionTranscript's SessionTranscript
-        // output — the iOS client decodes it strictly.
-        res.json({ version: 1, sessionId, exportedAt: new Date().toISOString(), truncated: false, messages: [] })
+        // output — the iOS client decodes it strictly. `rich: true` on an empty
+        // list is not a claim about fields; it says no row is missing them.
+        answer({ version: 1, sessionId, exportedAt: new Date().toISOString(), truncated: false, messages: [] }, true)
         return
       }
     }
-    if (wantFresh && !CLOUD_MODE && safeId) {
+    // `fresh=1` ASKS for a live read; `rich=1` NEEDS one, because the exported file
+    // is written in the slim shape and can never carry the fields. Answering a rich
+    // request from it is what made the response depend on cache warmth.
+    if ((wantFresh || wantRich) && !CLOUD_MODE && safeId) {
       try {
-        res.json(await buildSessionTranscript(sessionId, buildOpts))
-        return
+        const built = await buildSessionTranscript(sessionId, buildOpts)
+        // A rich request must never cost the caller the ARCHIVE. The builder answers
+        // an EMPTY transcript rather than throwing for a session it cannot read (a
+        // stopped one whose JSONL is gone), and for those the exported file is the
+        // only copy of the conversation left. `fresh=1` keeps its existing meaning —
+        // the caller asked for live, and empty is live — but the build that `rich=1`
+        // implies falls through to the file, which then answers `rich: false`.
+        if (wantFresh || built.messages.length > 0) {
+          answer(built, wantRich)
+          return
+        }
       } catch { /* unreachable session — fall back to the exported file */ }
     }
     if (wantFresh && CLOUD_MODE && safeId) {
@@ -2479,12 +2536,18 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
         const { buildTranscriptViaBridge } = await import('./session-stream-v1.js')
         const viaBridge = await buildTranscriptViaBridge(sessionId)
         if (viaBridge) {
-          res.json(viaBridge)
+          // A replica's bridge builder is a separate slim implementation, so a rich
+          // request gets a truthful `rich: false` here rather than a silent slim
+          // answer. The row's `detailRef` is what the drawer falls back to (the
+          // detail read relays to the primary), and absent that, the excerpt.
+          answer(viaBridge, false)
           return
         }
       } catch { /* fall back to the exported file */ }
     }
     let transcript = await readSessionTranscript(sessionId)
+    /** The sweep file is slim by definition; only an inline build can be rich. */
+    let builtRich = false
     if (!transcript && !CLOUD_MODE) {
       // Primary box: the sweep may simply not have run yet. Build just THIS
       // session inline (one read) and kick the full sweep in the background —
@@ -2499,6 +2562,7 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       if (record && (record.process_status === 'running' || record.process_status === 'idle')) {
         try {
           transcript = await buildSessionTranscript(sessionId, buildOpts)
+          builtRich = wantRich
         } catch { /* unreachable session — serve 404 below */ }
       }
       exportSessionTranscripts().catch(() => { /* background; throttled internally */ })
@@ -2512,7 +2576,7 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       // on a perfectly healthy session (2026-08-07).
       const { getLaunchSeed } = await import('../../core/sessions/launch-seed.js')
       if (getLaunchSeed(sessionId)) {
-        res.json({ version: 1, sessionId, exportedAt: new Date().toISOString(), truncated: false, messages: [] })
+        answer({ version: 1, sessionId, exportedAt: new Date().toISOString(), truncated: false, messages: [] }, true)
         return
       }
     }
@@ -2520,11 +2584,156 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
       return
     }
-    res.json(transcript)
+    answer(transcript, builtRich)
   } catch (err) {
     next(err)
   }
 })
+
+// ─── GET /api/v1/activity/detail?ref=…&part=…&offset=… (additive) ───────────
+//
+// The whole text behind ONE expanded `kind:'tool'` / `kind:'thinking'` row, on
+// demand. The rows themselves stay excerpts on both list reads
+// (`/sessions/:id/transcript`, `/conversations/:id/messages`) because they ride a
+// ~100-row page a phone refetches at every turn end — inlining full reasoning
+// blocks measured ~150KB per read, per turn, over cellular. A drawer that opens
+// to "see everything" is one tap, once, so it fetches instead.
+//
+// `ref` is the row's own `detailRef` and nothing else: it names a session, a
+// message id, and the slot inside that message (core/activity-detail.ts explains
+// why those three survive a re-read and why a row's position does not). No agent
+// or conversation id is needed, which is what lets ONE route serve both surfaces.
+//
+// Degradation, in the order a client meets them, and one of them is deliberately
+// NOT a 404: `410 detail_gone` says the row can no longer be resolved (rewound,
+// compacted, or aged out of a whale's bounded read window). 404 on this path can
+// only mean "this server has no such route", i.e. a box older than this feature —
+// and those two need different client behaviour (hide the affordance vs. tell the
+// user the text is gone), which a shared 404 would make indistinguishable, since an
+// unknown route answers 404 with a DIFFERENT body shape nobody should have to sniff.
+// The rest: 400 for a ref this box did not mint, 503 when the source could not be
+// read in time. All of them leave the client on the excerpt it already has.
+//
+// THIS ROUTE NEVER ANSWERS 404. Keep it that way.
+const ACTIVITY_DETAIL_DEADLINE_MS = 10_000
+/** The read can cross the bridge to the primary; give it the local budget + slack. */
+const ACTIVITY_DETAIL_RELAY_TIMEOUT_MS = ACTIVITY_DETAIL_DEADLINE_MS + 5_000
+
+/** Query → resolver options, or an error message for a 400. */
+function parseActivityDetailQuery(
+  query: Request['query'],
+): { part?: 'reasoning' | 'input' | 'result'; offset: number } | string {
+  const partRaw = typeof query.part === 'string' ? query.part : ''
+  if (partRaw && partRaw !== 'reasoning' && partRaw !== 'input' && partRaw !== 'result') {
+    return `Unknown part: ${partRaw} (expected reasoning, input or result)`
+  }
+  const part = partRaw ? partRaw as 'reasoning' | 'input' | 'result' : undefined
+  if (query.offset === undefined) return { ...(part ? { part } : {}), offset: 0 }
+  const offset = Number(query.offset)
+  if (!Number.isSafeInteger(offset) || offset < 0) return 'offset must be a non-negative integer'
+  // A paging read must say WHICH section it is paging: the same offset means a
+  // different place in a tool row's input than in its result, and answering both
+  // from one cursor would silently interleave two streams.
+  if (!part) return 'offset requires part=reasoning|input|result'
+  return { part, offset }
+}
+
+apiV1Router.get('/activity/detail', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { parseActivityRef, resolveActivityDetail } = await import('../../core/activity-detail.js')
+    const ref = parseActivityRef(typeof req.query.ref === 'string' ? req.query.ref : '')
+    if (!ref) {
+      sendError(res, 400, 'bad_request', 'ref must be a row detailRef minted by this server')
+      return
+    }
+    const opts = parseActivityDetailQuery(req.query)
+    if (typeof opts === 'string') {
+      sendError(res, 400, 'bad_request', opts)
+      return
+    }
+    if (CLOUD_MODE) {
+      // A replica has no session record and no way to reach the JSONL, exactly as
+      // for the lane message read — so it relays rather than inventing an answer.
+      // An older primary that does not know the action answers needs_upgrade,
+      // which lands here as 503: retryable, and the client keeps its excerpt.
+      const { callPrimaryControl } = await import('./v1-control-relay.js')
+      const outcome = await callPrimaryControl(
+        'server.activity.detail', '__server__',
+        { ref: typeof req.query.ref === 'string' ? req.query.ref : '', ...opts },
+        ACTIVITY_DETAIL_RELAY_TIMEOUT_MS,
+      )
+      if (!outcome.ok) {
+        sendError(res, 503, 'unavailable', `The primary could not be reached: ${outcome.failure.kind}`)
+        return
+      }
+      if (outcome.result.found !== true) {
+        sendError(res, 410, 'detail_gone', 'This row is no longer in the session transcript')
+        return
+      }
+      res.json(outcome.result.detail)
+      return
+    }
+    const bail = deadline(ACTIVITY_DETAIL_DEADLINE_MS)
+    try {
+      // A read that THROWS is a reachability failure, not a server fault: the host is
+      // unknown or its daemon is down, and the honest answer is the same 503 a timeout
+      // gets (retryable, client keeps its excerpt). A 500 told the client "this server
+      // is broken" for a session that is merely unreachable — the errno-as-answer
+      // mistake this codebase has a rule against. Logged at error level so a genuine
+      // bug in the resolver is still loud for us rather than hidden behind the 503.
+      let detail: Awaited<ReturnType<typeof resolveActivityDetail>> | 'timeout' | 'unreadable'
+      try {
+        detail = await Promise.race([resolveActivityDetail(ref, opts), bail.promise])
+      } catch (err) {
+        log.web.error('api-v1 activity detail: reading the transcript failed', {
+          sessionId: ref.sessionId, msgId: ref.msgId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        detail = 'unreadable'
+      }
+      if (detail === 'timeout' || detail === 'unreadable') {
+        sendError(res, 503, 'unavailable', detail === 'timeout'
+          ? 'Reading the session transcript timed out — try again'
+          : 'The session transcript could not be read — try again')
+        return
+      }
+      if (!detail) {
+        sendError(res, 410, 'detail_gone', 'This row is no longer in the session transcript')
+        return
+      }
+      res.json(detail)
+    } finally {
+      bail.cancel()
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * PRIMARY side of `server.activity.detail` — the same resolve the local route
+ * does, so the two boxes can never answer one drawer differently.
+ *
+ * `found: false` rather than a thrown error: a missing row is an ordinary outcome
+ * (the transcript was rewound or compacted) and the replica has to tell it apart
+ * from "the relay failed", which is the difference between the client dropping the
+ * fetch and retrying it.
+ */
+export async function handlePrimaryActivityDetailRelay(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { parseActivityRef, resolveActivityDetail } = await import('../../core/activity-detail.js')
+  const ref = parseActivityRef(typeof params.ref === 'string' ? params.ref : '')
+  if (!ref) return { found: false }
+  const part = params.part === 'reasoning' || params.part === 'input' || params.part === 'result'
+    ? params.part
+    : undefined
+  const offset = Number.isSafeInteger(params.offset) && (params.offset as number) >= 0
+    ? params.offset as number
+    : 0
+  const detail = await resolveActivityDetail(ref, { ...(part ? { part } : {}), offset })
+  return detail ? { found: true, detail: detail as unknown as Record<string, unknown> } : { found: false }
+}
 
 // ─── Client logs (additive) — mobile apps upload diagnostic logs ───────────
 //

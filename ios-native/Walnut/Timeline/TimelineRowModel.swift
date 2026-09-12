@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 
 /// Which conversation a row belongs to, folded into every row id.
@@ -120,28 +121,61 @@ enum TimelineRowContent {
     case localImages(datas: [Data], dimmed: Bool)
     /// Markdown table — hosted grid (rare; bounded by maxRenderedTableRows).
     case table(header: [AttributedString], rows: [[AttributedString]])
-    /// Tool call chip; expanding shows an Input section (`inputPreview`) and a
-    /// Result section (`resultPreview`). Heights for BOTH states are
-    /// pre-measured — toggling swaps `height`, never re-measures. Every tool row
-    /// is expandable: a row with neither field expands to "No output", because a
-    /// chip that swallows a tap reads as a broken tap, not as an empty result.
+    /// Tool call chip. ONE line, always: tapping it opens the shared activity
+    /// drawer (`TimelineActivityDetail`) with the full Input and Result, rather
+    /// than growing the row in place.
+    ///
+    /// WHY A DRAWER AND NOT AN INLINE CARD (2026-09-11): an inline card can only
+    /// show as much as fits a phone row, so its Input/Result sections were capped
+    /// (320pt / 200pt) with a nested horizontal scroller inside the transcript's
+    /// own scroller. The reader tapped to READ the output and got a clipped
+    /// window — and the reasoning row next to it had a second, different
+    /// expansion mechanism with a third truncation rule. One tap, one drawer, no
+    /// cap: the row keeps exactly one pre-measured height, and the two surfaces
+    /// cannot drift because they share this case.
+    ///
+    /// `running` is a LIVE-turn fact (this call's `tool-result` has not landed
+    /// yet), never a history one: a transcript row is always finished, and a row
+    /// with no `resultPreview` there produced no output rather than being in
+    /// flight. The chip breathes while it is true, which is the only thing that
+    /// tells a running call from a finished one in a column of chips.
+    ///
+    /// `stacked` puts the detail on its OWN LINE under the name. It rides in the row
+    /// rather than being decided by the cell from the environment, because the row's
+    /// HEIGHT is a formula computed here and the cell must render exactly the shape
+    /// that formula reserved — a cell reading the environment could stack a row
+    /// measured for one line during the frames after a text-size change.
     case toolChip(name: String, detail: String?, inputPreview: String?,
-                  resultPreview: String?, agent: String?, expanded: Bool)
-    /// Reasoning ("thinking") row: a grey capsule with ONE line collapsed,
-    /// expanding to `body`. Collapse mirrors `.notification` — both heights are
-    /// pre-measured and `collapsible` decides whether the chevron and the tap
-    /// exist at all. Three shapes reach this case:
-    ///  - history with a fuller excerpt behind the line: collapsible, closed;
-    ///  - history with nothing more to show: `body == nil`, not collapsible,
-    ///    not expanded — no chevron, so a tap can never look broken;
-    ///  - the LIVE turn's reasoning: not collapsible and always expanded, the
-    ///    same way a short notification card is.
-    /// `maxLines` is the row's own truncation point: the cell limits the body to
-    /// it and the builder reserves exactly that many lines, so the two cannot
-    /// disagree about where the text stops (history and the live tail want
-    /// different caps, which is why this rides the row instead of a constant).
-    case thinking(line: String, body: String?, collapsible: Bool,
-                  expanded: Bool, maxLines: Int)
+                  resultPreview: String?, agent: String?, running: Bool,
+                  detailRef: String?, stacked: Bool)
+    /// Thinking row: a grey capsule reading the fixed word "Thinking" FOLLOWED BY
+    /// the server's collapsed reasoning line, with the FULL reasoning behind a tap
+    /// (same drawer the tool row opens).
+    ///
+    /// The capsule WORD is fixed and lives in the cell, not in this payload — the
+    /// live row used to print "Reasoning" while a history row printed the server's
+    /// collapsed excerpt line INSTEAD of a word, so one turn showed two different
+    /// names for one thing ("thinking is just thinking"). A constant cannot drift.
+    ///
+    /// `line` is the row's CONTENT next to that constant, exactly the way a tool
+    /// row prints its `detail` next to its name (2026-09-12): dropping it made
+    /// five stacked reasoning rows read `Thinking ›` five times, so finding the
+    /// one you wanted meant opening all five drawers. One vocabulary, one legible
+    /// line — the two are not in tension.
+    ///
+    ///  - `preview == nil` — history: one line, tap for everything.
+    ///  - `preview != nil` — the LIVE turn: the newest `maxLines` wrapped lines
+    ///    render under the capsule so the reader watches reasoning arrive (see
+    ///    `TimelineLiveThinkingWindow`). It is a PREVIEW, never the whole text:
+    ///    `fullText` is the entire accumulation and the drawer shows that. A live
+    ///    row carries no `line`: the preview card below it already shows the
+    ///    newest reasoning, and printing a line in the capsule too is the same
+    ///    words twice in one row.
+    ///
+    /// `maxLines` bounds the preview only (0 when there is none); the drawer has
+    /// no cap because it scrolls.
+    case thinking(line: String?, preview: String?, fullText: String,
+                  maxLines: Int, detailRef: String?, stacked: Bool)
     /// Small grey capsule (generic one-line status capsules).
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
@@ -225,19 +259,28 @@ extension TimelineRowContent {
             hasher.combine(header)
             hasher.combine(rows)
         case .toolChip(let name, let detail, let inputPreview, let resultPreview,
-                       let agent, let expanded):
+                       let agent, let running, let detailRef, let stacked):
             hasher.combine(name)
             hasher.combine(detail)
             hasher.combine(inputPreview)
             hasher.combine(resultPreview)
             hasher.combine(agent)
-            hasher.combine(expanded)
-        case .thinking(let line, let body, let collapsible, let expanded, let maxLines):
+            // `running` is DRAWN (the icon breathes) — a chip whose call just
+            // finished must be handed to its cell, and everything else about the
+            // row is byte-identical at that moment.
+            hasher.combine(running)
+            hasher.combine(detailRef)
+            // Drawn AND measured: a text-size change that only flips this must still
+            // reload the cell.
+            hasher.combine(stacked)
+        case .thinking(let line, let preview, let fullText, let maxLines, let detailRef,
+                       let stacked):
             hasher.combine(line)
-            hasher.combine(body)
-            hasher.combine(collapsible)
-            hasher.combine(expanded)
+            hasher.combine(preview)
+            hasher.combine(fullText)
             hasher.combine(maxLines)
+            hasher.combine(detailRef)
+            hasher.combine(stacked)
         case .chip(let icon, let text):
             hasher.combine(icon)
             hasher.combine(text)
@@ -262,6 +305,19 @@ extension TimelineRowContent {
             hasher.combine(label)
         }
         return hasher.finalize()
+    }
+
+    /// Is this row a CHIP the reader taps to open the activity drawer?
+    ///
+    /// Drives the cell's hit-target expansion (`TimelineHostedRowCell`), which is
+    /// the one thing a chip row needs and no other hosted row does: the capsule is
+    /// ~21pt of ink inside a ~27pt cell on a ~37pt pitch, so a thumb landing
+    /// between two chips used to hit nothing at all.
+    var opensActivityDrawer: Bool {
+        switch self {
+        case .toolChip, .thinking: return true
+        default: return false
+        }
     }
 
     /// Does this row's height come from a WKWebView measurement rather than
@@ -297,6 +353,21 @@ struct TimelineInput {
     /// which is rebuilt from scratch on every streaming tick. It IS covered by
     /// the diff, through the `contentKey` arm of the `.thinking` row it produces.
     var liveThinking: String = ""
+    /// Every tool call the IN-FLIGHT turn has made, running and finished alike, as
+    /// name + one-line detail rather than as the folded "name · detail" label
+    /// `activity` carries one at a time.
+    ///
+    /// WHY BOTH EXIST: the live tool used to reach the timeline only as that
+    /// folded string, which became a shimmering `.activity` row — so a `Bash`
+    /// mid-turn had no input, no result, no tap and a different shape from the
+    /// `.toolChip` the same call renders as once the transcript lands. The phone
+    /// showed a tool while it ran, then lost it. Keeping the parts separate is
+    /// what lets `liveRows` build REAL tool chips for them.
+    ///
+    /// WHY IT IS A LIST: one slot meant a finished call was dropped the instant
+    /// its `tool-result` arrived, so the chip vanished mid-turn and only came back
+    /// as a history row at turn end. See `LiveToolCall`.
+    var liveTools: [LiveToolCall] = []
     var activity: String?
     var showLoadEarlier: Bool
     /// Content width the rows must be measured at.
@@ -329,6 +400,157 @@ struct TimelineSnapshot {
     let generation: Int
 }
 
+/// What the activity drawer shows for ONE tapped row (a thinking row or a tool
+/// row). The whole payload rides the action, so the sheet needs no store lookup:
+/// a row id would have to be resolved back to a message, and the live rows have
+/// no message to resolve to.
+///
+/// ONE type for both row kinds on both surfaces — the chat and the session pass
+/// it to the same `TimelineActivitySheet`, which is what makes "tap to see it
+/// all" behave identically everywhere instead of being implemented twice.
+struct TimelineActivityDetail: Identifiable, Equatable {
+    enum Kind: Equatable {
+        /// Reasoning: prose, WRAPPED and selectable.
+        case thinking
+        /// A tool call: monospaced Input and Result sections.
+        case tool
+    }
+
+    /// The row that raised it. Identity for `.sheet(item:)`, so tapping a
+    /// different row while the drawer is open re-presents it with new content.
+    let id: String
+    let kind: Kind
+    /// Drawer title: "Thinking", or the tool's name.
+    let title: String
+    /// Tool rows only — the one-line detail from the capsule ("npm test").
+    let subtitle: String?
+    /// Tool rows only — the full input.
+    let input: String?
+    /// Thinking: the reasoning EXCERPT the list payload carried. Tool: the clipped
+    /// result (nil = none yet). Either can be a server-clipped prefix — the drawer
+    /// shows it immediately and then replaces it with the full text it fetches
+    /// (`TimelineActivityFullText`), never a spinner in place of text it has.
+    let body: String?
+    /// Tool rows only — the subagent this call belongs to.
+    let agent: String?
+    /// True while the row's turn is still running, so the drawer can say
+    /// "Running…" instead of "No output" for a tool that has not returned.
+    let running: Bool
+    /// Opaque server token for "read this row's WHOLE text", or nil when the
+    /// excerpt IS the whole thing (and on any box that does not send the field
+    /// yet). nil is the NORMAL case, not a failure: the drawer shows everything
+    /// it holds and offers no fetch at all.
+    let detailRef: String?
+
+    static func thinking(id: String, text: String, detailRef: String? = nil) -> Self {
+        Self(id: id, kind: .thinking, title: TimelineActivityVocabulary.thinking,
+             subtitle: nil, input: nil, body: text, agent: nil, running: false,
+             detailRef: detailRef)
+    }
+
+    static func tool(id: String, name: String, detail: String?, input: String?,
+                     result: String?, agent: String?, running: Bool,
+                     detailRef: String? = nil) -> Self {
+        Self(id: id, kind: .tool, title: name, subtitle: detail, input: input,
+             body: result, agent: agent, running: running, detailRef: detailRef)
+    }
+}
+
+/// The ONE word the UI uses for reasoning, on every surface and in both the
+/// collapsed capsule and the drawer title.
+///
+/// It is a constant and not a literal because the drift it fixes was two
+/// literals: the live row said "Reasoning", a history row said whatever the
+/// server put in `text`, and the same turn showed both.
+enum TimelineActivityVocabulary {
+    static let thinking = "Thinking"
+}
+
+/// What VoiceOver says for the two chip rows.
+///
+/// Pure functions so the spoken text is testable without rendering SwiftUI, and so
+/// each chip has exactly ONE description. Both chips used to expose their icon,
+/// their text and their chevron as three separate elements with no button trait, so
+/// VoiceOver read SF Symbol names out loud — measured in the real hierarchy:
+/// "wrench.and.screwdriver", "Sparkle", "Forward".
+///
+/// Composed from the same values the row DRAWS, in reading order, so a chip that
+/// looks distinguishable sounds distinguishable: the reasoning line and the tool's
+/// detail are exactly what tells one row from the next.
+enum TimelineChipAccessibility {
+    /// "Thinking" alone when the row has no line — which is only the live row,
+    /// whose preview card is its own element.
+    static func thinking(line: String?) -> String {
+        guard let line = line?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !line.isEmpty else { return TimelineActivityVocabulary.thinking }
+        return "\(TimelineActivityVocabulary.thinking), \(line)"
+    }
+
+    /// Name first (it is what the reader is looking for), then the delegation, the
+    /// detail, and finally the state — "running" only while the call is in flight,
+    /// because a chip that has returned says nothing about state at all.
+    static func tool(name: String, detail: String?, agent: String?,
+                     running: Bool) -> String {
+        var parts = [name]
+        if let agent = agent?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !agent.isEmpty {
+            parts.append("delegated to \(agent)")
+        }
+        if let detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !detail.isEmpty {
+            parts.append(detail)
+        }
+        if running { parts.append("running") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// When a tool chip's detail needs its own line.
+///
+/// At accessibility text sizes a one-line chip cannot hold both terms: measured on
+/// the pinned simulator at accessibility XXXL, "Record permission-wall handoff
+/// principle" middle-truncated to "Re…ciple" — 8 characters, which is noise. The
+/// detail is the ONLY thing telling eight stacked `Bash` rows apart, so it gets a
+/// second line rather than being squeezed to nothing (or dropped, which would put the
+/// identical-rows problem straight back).
+///
+/// ONE rule, two spellings, because the builder speaks `UIContentSizeCategory` and
+/// SwiftUI speaks `DynamicTypeSize`. They must agree for every category — the row's
+/// reserved height comes from one and its shape from the other — which
+/// `ChatRichnessRowTests` pins across the whole enumeration.
+enum TimelineChipLayout {
+    static func stacksDetail(_ category: UIContentSizeCategory) -> Bool {
+        category.isAccessibilityCategory
+    }
+
+    static func stacksDetail(_ size: DynamicTypeSize) -> Bool {
+        size.isAccessibilitySize
+    }
+
+    /// The `UIContentSizeCategory` spelling of a `DynamicTypeSize`, for the places that
+    /// have a SwiftUI environment and need a resolved `UIFont` (see
+    /// `TimelineLongText`, which measures with TextKit). Written out rather than
+    /// bridged through the ambient trait collection, so a view can be hosted at a text
+    /// size a test chose and still measure the font that size really draws with.
+    static func category(_ size: DynamicTypeSize) -> UIContentSizeCategory {
+        switch size {
+        case .xSmall: return .extraSmall
+        case .small: return .small
+        case .medium: return .medium
+        case .large: return .large
+        case .xLarge: return .extraLarge
+        case .xxLarge: return .extraExtraLarge
+        case .xxxLarge: return .extraExtraExtraLarge
+        case .accessibility1: return .accessibilityMedium
+        case .accessibility2: return .accessibilityLarge
+        case .accessibility3: return .accessibilityExtraLarge
+        case .accessibility4: return .accessibilityExtraExtraLarge
+        case .accessibility5: return .accessibilityExtraExtraExtraLarge
+        @unknown default: return .large
+        }
+    }
+}
+
 /// User actions raised by cells, routed controller → host → store.
 enum TimelineRowAction {
     case retry(messageID: String)
@@ -343,6 +565,11 @@ enum TimelineRowAction {
     /// difference between opening the file and opening the LINE.
     case previewFile(ref: FilePathRef)
     case toggleExpanded(rowID: String)
+    /// A thinking or tool row was tapped: present the activity drawer. Carries
+    /// its own content (see `TimelineActivityDetail`) — the coordinator forwards
+    /// it untouched, because unlike `toggleExpanded` nothing about the LAYOUT
+    /// changes and the page owns sheet presentation.
+    case openActivity(TimelineActivityDetail)
     /// A rich cell measured its document: the coordinator banks the height and
     /// rebuilds so the row carries the real number. Handled INSIDE the
     /// coordinator (like `toggleExpanded`) — the page never sees it.

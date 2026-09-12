@@ -141,7 +141,7 @@ final class TimelineEngineTests: XCTestCase {
                               createdAt: "2026-08-08T06:00:00Z", kind: .tool,
                               detail: "explore", resultPreview: "out", agent: "researcher")
         let snapshot = await actor.buildSnapshot(input([msg]))
-        guard case .toolChip(_, _, _, _, let agent, _) = snapshot.rows.first?.content else {
+        guard case .toolChip(_, _, _, _, let agent, _, _, _) = snapshot.rows.first?.content else {
             return XCTFail("expected toolChip row")
         }
         XCTAssertEqual(agent, "researcher")

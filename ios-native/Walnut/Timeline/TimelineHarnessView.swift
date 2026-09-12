@@ -14,6 +14,12 @@ import SwiftUI
 /// (`TimelineHarnessIdentifierTests` pins that, and says which tap it cost).
 struct TimelineHarnessView: View {
     @State private var store = TimelineHarnessStore()
+    /// The activity drawer, presented here for the same reason the product pages
+    /// present it: the host only REPORTS the tap. Without this the drawer was the
+    /// one part of the engine no device pass could reach — the states worth looking
+    /// at (a section wider than the render window, so the footer has to state the
+    /// numbers and carry `Show more`) need text no live server sends today.
+    @State private var activityDetail: TimelineActivityDetail?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,12 +36,17 @@ struct TimelineHarnessView: View {
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },
                 geometryFrozen: { false },
-                onAction: { _ in }
+                onAction: { action in
+                    if case .openActivity(let detail) = action { activityDetail = detail }
+                }
             )
             .accessibilityIdentifier("harness.timeline")
         }
         .navigationTitle("Timeline Harness")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $activityDetail) { detail in
+            TimelineActivitySheet(detail: detail)
+        }
     }
 
     /// The control bar, WRAPPED onto two rows rather than laid out on one.
@@ -79,6 +90,10 @@ struct TimelineHarnessView: View {
                     store.streamOn ? store.stopStream() : store.startRichStream()
                 }
                 .accessibilityIdentifier("harness.richStream")
+                // The drawer's withheld state, which needs text longer than any
+                // live server sends today (see `appendWithheldMessages`).
+                Button("Withheld") { store.appendWithheldMessages() }
+                    .accessibilityIdentifier("harness.withheld")
                 Spacer(minLength: 0)
             }
         }
@@ -162,6 +177,51 @@ final class TimelineHarnessStore {
         }
         messages = next
         scrollToBottomSignal += 1
+    }
+
+    /// A reasoning row and a tool row whose text is WIDER THAN THE DRAWER'S RENDER
+    /// WINDOW, appended at the end so a tap is one scroll away.
+    ///
+    /// This is the drawer's most interesting state and the hardest to reach: a live
+    /// server clips a reasoning excerpt to 2,001 characters and a tool result to 700,
+    /// both far under the 20,000-character window, so on real data the footer has
+    /// nothing to say and the controls never appear. At an accessibility text size
+    /// that mattered — the footer sat at the END of the scrolling text, 216 pages
+    /// down, and the only control that could reveal the rest was unreachable
+    /// (2026-09-12 gate). A fixture is the only way a device pass can look at it.
+    func appendWithheldMessages() {
+        var next = messages
+        counter += 1
+        let reasoning = Self.longText(prefix: "Reasoning step", target: 30_000)
+        next.append(ChatMessage(
+            id: "h-withheld-\(counter)", role: "assistant",
+            text: "Weighing the two migration orders before touching the schema",
+            createdAt: "2026-08-08T09:00:00Z", kind: .thinking,
+            thinkingText: reasoning
+        ))
+        counter += 1
+        next.append(ChatMessage(
+            id: "h-withheld-\(counter)", role: "assistant", text: "Bash",
+            createdAt: "2026-08-08T09:00:01Z", kind: .tool,
+            detail: "rg --json 'migration' -g '!node_modules'",
+            resultPreview: Self.longText(prefix: "match", target: 30_000),
+            inputPreview: Self.longText(prefix: "argv", target: 25_000)
+        ))
+        messages = next
+        scrollToBottomSignal += 1
+    }
+
+    /// Prose-shaped filler of a known length: sentences, so wrapping and truncation
+    /// behave the way they do on real text rather than on one unbreakable word.
+    private static func longText(prefix: String, target: Int) -> String {
+        var out = ""
+        var i = 1
+        while out.count < target {
+            out += "\(prefix) \(String(format: "%03d", i)) of the run held its budget "
+                + "and the next one is queued behind it. "
+            i += 1
+        }
+        return String(out.prefix(target))
     }
 
     /// Only the rich fixtures, nothing else — the screenshot view, where every

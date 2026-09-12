@@ -390,6 +390,16 @@ export interface ProjectedTranscriptMessage {
    *  excerpt (≤2000 chars) for the expanded card; `text` stays the collapsed
    *  ≤160 line. */
   thinkingText?: string
+  /** kind:'tool' | kind:'thinking' only (additive, `rich`/`full` reads only) —
+   *  opaque token for the on-demand FULL text of this row
+   *  (`GET /api/v1/activity/detail?ref=…`, see core/activity-detail.ts).
+   *
+   *  Present only when the excerpt above is NOT the whole thing, so a client can
+   *  use its presence directly as "there is more to fetch": a ref on a complete
+   *  row would offer a fuller read that returns the same text. Absent also for a
+   *  row that cannot be addressed at all (no message id — an ACP journal row, a
+   *  hand-written JSONL line), where the excerpt is all there is. */
+  detailRef?: string
   /** Task/Agent tool rows only (additive) — the subagent's name/label
    *  (team agent name, `name` input, or `subagent_type`), so mobile can show
    *  which agent a delegated run belongs to. The subagent's own transcript
@@ -475,8 +485,11 @@ export async function buildSessionTranscript(
 ): Promise<SessionTranscript> {
   const { readSessionHistoryTail } = await import('./session-history.js')
   const { getSessionByClaudeId } = await import('./session-tracker.js')
-  const { toolDetail, toolResultPreview, toolInputPreview, thinkingLine, thinkingExcerpt }
-    = await import('./tool-summary.js')
+  const {
+    toolDetail, toolResultPreview, toolInputPreview, thinkingLine, thinkingExcerpt,
+    thinkingHasFullText, toolHasFullText,
+  } = await import('./tool-summary.js')
+  const { activityRef } = await import('./activity-detail.js')
   const record = await getSessionByClaudeId(sessionId)
   // ACP/codex sessions have no claude JSONL — their history lives in the ACP
   // journal (acpJournalPath / <runtimeId>.acp.jsonl). The claude-only read
@@ -519,14 +532,26 @@ export async function buildSessionTranscript(
       // `rich` only (and `full`, which implies it) — see the tool row below for
       // why the fat fields are gated at all, and why the gate is not `full`.
       const excerpt = wantRich ? thinkingExcerpt(m.thinking) : undefined
+      // The drawer's on-demand read rides the same opt-in as the excerpt: a slim
+      // row has no expanded card to open, and the slim tail is what the sweep
+      // pushes over the bridge under a frame cap (see the tool row below).
+      const ref = wantRich && thinkingHasFullText(m.thinking)
+        ? activityRef(sessionId, m.msgId, { kind: 'thinking' })
+        : undefined
       if (line) {
         messages.push({
           role: 'assistant', text: line, timestamp: m.timestamp, kind: 'thinking',
           ...(excerpt ? { thinkingText: excerpt } : {}),
+          ...(ref ? { detailRef: ref } : {}),
         })
       }
     }
-    for (const t of m.tools ?? []) {
+    // Indexed: the tool's position in ITS OWN message is what makes a row
+    // addressable for the drawer's full-text read (core/activity-detail.ts) — the
+    // row's position in this tail is not, because the tail slides.
+    const tools = m.tools ?? []
+    for (let ti = 0; ti < tools.length; ti++) {
+      const t = tools[ti]
       const detail = toolDetail(t.name, t.input)
       const resultPreview = toolResultPreview(t.result)
       // Subagent attribution (additive): Task/Agent rows carry the subagent's
@@ -573,11 +598,17 @@ export async function buildSessionTranscript(
       // p50, 3.99 → 7.98 MiB read per request) — and on a REMOTE session those
       // are daemon reads, so it ships the same 4 MB across the tunnel twice.
       const inputPreview = wantRich ? toolInputPreview(t.input) : undefined
+      // Same opt-in, same reason: `detailRef` is the drawer's handle on the text
+      // these two previews had to cut, and it must not widen the slim tail.
+      const ref = wantRich && toolHasFullText(t.input, t.result)
+        ? activityRef(sessionId, m.msgId, { kind: 'tool', index: ti })
+        : undefined
       messages.push({
         role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool',
         ...(detail ? { detail } : {}),
         ...(inputPreview ? { inputPreview } : {}),
         ...(resultPreview ? { resultPreview } : {}),
+        ...(ref ? { detailRef: ref } : {}),
         ...(agent ? { agent } : {}),
       })
     }

@@ -23,6 +23,10 @@ struct TimelineHost: UIViewControllerRepresentable {
     /// `scope` below: an omitted reasoning region renders nothing, while an
     /// omitted scope renders the WRONG conversation.
     var liveThinking: String = ""
+    /// Every tool call the in-flight turn has made, unfolded (see
+    /// `TimelineInput.liveTools`). Defaulted like `liveThinking`: an omitted list
+    /// renders no tool rows.
+    var liveTools: [LiveToolCall] = []
     var activity: String?
     /// Which conversation these messages belong to. NOT optional and NOT
     /// defaulted on purpose: one host instance serves every conversation the
@@ -88,6 +92,7 @@ struct TimelineHost: UIViewControllerRepresentable {
             liveText: liveText,
             liveTextTruncated: liveTextTruncated,
             liveThinking: liveThinking,
+            liveTools: liveTools,
             activity: activity,
             showLoadEarlier: showLoadEarlier,
             width: 0, // stamped in resubmit()

@@ -19,40 +19,33 @@ enum TimelineMetrics {
     static let chipVPad: CGFloat = 4
     static let chipHPad: CGFloat = 10
     static let chipRowVMargin: CGFloat = 1
+    /// Gap between a stacked chip's name line and its detail line.
+    static let chipStackSpacing: CGFloat = 1
     /// Vertical padding inside a tool chip's subagent badge (its own capsule,
     /// nested in the chip's) — the term the chip's height formula used to omit.
     static let badgeVPad: CGFloat = 2
-    /// Expanded-card geometry, shared by the tool card and the thinking row so
-    /// the builder's arithmetic and the cells' padding cannot drift.
-    /// `expandCardPadding` is the card's inner inset, `expandCardGap` the gap
-    /// between the capsule and the card, `expandLabelGap` the gap under a
-    /// section's "Input"/"Result" label, `expandSectionSpacing` the gap between
-    /// two sections.
+    /// Card geometry, shared by the live thinking preview and the activity
+    /// drawer's sections so the builder's arithmetic and the cells' padding
+    /// cannot drift. `expandCardPadding` is the card's inner inset,
+    /// `expandCardGap` the gap between the capsule and the card,
+    /// `expandLabelGap` the gap under a section's "Input"/"Result" label,
+    /// `expandSectionSpacing` the gap between two sections.
     static let expandCardPadding: CGFloat = 10
     static let expandCardGap: CGFloat = 4
     static let expandLabelGap: CGFloat = 2
     static let expandSectionSpacing: CGFloat = 6
-    /// Per-section body caps. A tool RESULT is the long one (kept at the value
-    /// the single-section card shipped with); an input preview is compact by
-    /// contract, and a reasoning excerpt is capped server-side.
-    static let expandResultMaxHeight: CGFloat = 320
-    static let expandInputMaxHeight: CGFloat = 200
-    /// Reasoning is WRAPPED prose, so its cap is a line count rather than a
-    /// height: the cell truncates at exactly this many lines (a nested vertical
-    /// scroller inside the transcript's own scroller is worse than a truncation),
-    /// and the builder reserves exactly that many lines. Both sides read this
-    /// one number, so they cannot disagree about where the text stops.
+    /// The LIVE thinking row's preview cap, in WRAPPED lines. It is on screen for
+    /// the whole turn and must not push the reply off the phone, so it stays
+    /// tight — the WHOLE reasoning is one tap away in the drawer, which is why a
+    /// tight preview costs the reader nothing. The window it bounds is cut from
+    /// the NEWEST end, in this same unit — see `TimelineLiveThinkingWindow`.
     ///
-    /// Sized to the server's excerpt cap (2000 characters), which is ~45 caption
-    /// lines at the default text size — the point of the tap is to read the
-    /// reasoning, so cutting it in half would be answering half the request. The
-    /// resulting row is tall, and that is fine: it is opened deliberately and it
-    /// scrolls WITH the conversation.
-    static let expandThinkingMaxLines = 48
-    /// The LIVE reasoning row's cap, in the same unit (WRAPPED lines) as the
-    /// historical one. Much tighter than that one: it is on screen for the whole
-    /// turn and must not push the reply off the phone. The window it bounds is
-    /// cut from the NEWEST end — see `TimelineLiveThinkingWindow`.
+    /// There is deliberately NO history counterpart any more. A collapsed
+    /// history row shows no excerpt at all (one capsule, fixed word), and the
+    /// drawer that replaced the inline expansion scrolls, so nothing needs a
+    /// line cap: the old `expandThinkingMaxLines = 48` existed only to stop an
+    /// inline card growing without bound, and it truncated the tail of any
+    /// reasoning longer than itself with no way to reach the rest.
     static let liveThinkingMaxLines = 8
     static let imageSlotHeight: CGFloat = 220
     static let localImageSide: CGFloat = 120
@@ -173,11 +166,9 @@ final class TimelineRowBuilder {
         let namespace = TimelineScope.namespace(scope, message.id)
         switch message.kind {
         case .tool:
-            return [toolChipRow(message, namespace: namespace, width: width,
-                                expandedRowIDs: expandedRowIDs)]
+            return [toolChipRow(message, namespace: namespace)]
         case .thinking:
-            return [thinkingRow(message, namespace: namespace, width: width,
-                                expandedRowIDs: expandedRowIDs)]
+            return [thinkingRow(message, namespace: namespace, width: width)]
         case .notification:
             return [notificationRow(message, namespace: namespace, width: width,
                                     expandedRowIDs: expandedRowIDs)]
@@ -516,7 +507,8 @@ final class TimelineRowBuilder {
         width: CGFloat, tailRevision: Int,
         cachedHead: (key: String, rows: [TimelineRow])?,
         scope: String = TimelineScope.unscoped,
-        liveThinking: String = ""
+        liveThinking: String = "",
+        liveTools: [LiveToolCall] = []
     ) -> (rows: [TimelineRow], headCache: (key: String, rows: [TimelineRow])?) {
         var rows: [TimelineRow] = []
         var headCache = cachedHead
@@ -525,8 +517,9 @@ final class TimelineRowBuilder {
         // (a canonical history load lands), which is the same instant the fetched
         // `kind:"thinking"` rows appear — so the same reasoning is never on
         // screen twice.
-        rows.append(contentsOf: liveThinkingRows(liveThinking: liveThinking,
-                                                width: width, scope: scope))
+        let thinkingRows = liveThinkingRows(liveThinking: liveThinking,
+                                            width: width, scope: scope)
+        rows.append(contentsOf: thinkingRows)
         if !liveText.isEmpty {
             let seg = LiveMarkdownWindow.segments(liveText)
             if seg.omittedPrefix || storeTruncated {
@@ -605,11 +598,28 @@ final class TimelineRowBuilder {
         } else {
             headCache = nil
         }
-        rows.append(TimelineRow(
-            id: TimelineScope.namespace(scope, "live-activity"),
-            revision: (activity ?? "").hashValue,
-            content: .activity(activity), height: TimelineMetrics.activityHeight
-        ))
+        // This turn's tool calls, as REAL tool rows under the reply — running and
+        // finished alike, so none of them vanishes mid-turn.
+        rows.append(contentsOf: liveToolRows(liveTools, width: width, scope: scope))
+        // The shimmer is the FALLBACK pulse and never a second copy of a row above
+        // it. Two ways it used to duplicate one:
+        //  - a RUNNING tool chip names the call and breathes, and `activity` is
+        //    that very pair folded into "name · detail" — one call printed twice,
+        //    once as a row that opens and once as a status line that does not;
+        //  - a label-less shimmer renders "Thinking…", which is exactly what the
+        //    live Thinking capsule beside it already says (the 2026-09-12 gate's
+        //    "two Thinkings at once").
+        // A status only this surface has ("Starting session…") is duplicated by
+        // nothing, so it still gets the line.
+        let running = liveTools.contains { !$0.finished }
+        if !running && !(activity == nil && !thinkingRows.isEmpty) {
+            rows.append(TimelineRow(
+                id: TimelineScope.namespace(scope, "live-activity"),
+                revision: (activity ?? "").hashValue,
+                content: .activity(activity),
+                height: TimelineMetrics.activityHeight
+            ))
+        }
         return (rows, headCache)
     }
 
@@ -630,52 +640,55 @@ final class TimelineRowBuilder {
     /// nested inside this one and therefore the tallest thing on the line — the
     /// formula omitted it entirely, so every delegated tool row was 4pt short of
     /// what SwiftUI laid out.
-    private static func capsuleRowHeight(badged: Bool) -> CGFloat {
+    /// `stacked` adds the detail's own line under the first one (see
+    /// `TimelineChipLayout`): one TIGHT caption line plus the stack's spacing, because
+    /// the cushion in `hostedLineHeight` belongs to a row whose whole height is one
+    /// line, not to each term of a sum.
+    private static func capsuleRowHeight(badged: Bool, stacked: Bool = false) -> CGFloat {
         let line = TimelineMetrics.hostedLineHeight(TimelineTextStyler.captionFont)
         let badge = TimelineMetrics.hostedLineHeight(TimelineTextStyler.caption2Font)
             + TimelineMetrics.badgeVPad * 2
-        return max(line, badged ? badge : 0)
+        let second = stacked
+            ? TimelineMetrics.hostedTightLine(TimelineTextStyler.captionFont)
+                + TimelineMetrics.chipStackSpacing
+            : 0
+        return max(line, badged ? badge : 0) + second
             + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
     }
 
-    /// Reasoning row. Collapsed it is byte-for-byte the capsule it always was
-    /// (one line, same height); expanded it grows to the excerpt the server sent
-    /// under `thinkingText`, or — on a server that sends no excerpt — to the
-    /// WRAPPED collapsed line, which is itself new information because the
-    /// capsule shows only its first line.
+    /// History thinking row: ONE capsule reading the fixed word "Thinking", with
+    /// the whole reasoning behind a tap.
     ///
-    /// `body == nil` is the honest "there is nothing more here" answer: a short
-    /// line with no excerpt gets no chevron and no tap, so tapping can never
-    /// look broken. Both heights are computed here, like `notificationRow`.
-    private func thinkingRow(_ message: ChatMessage, namespace: String, width: CGFloat,
-                             expandedRowIDs: Set<String>) -> TimelineRow {
-        let id = "\(namespace)#0"
-        let line = message.text
+    /// The row has exactly one height, and no expansion state, so nothing about
+    /// it can disagree with the cell — which is the point. The two things it
+    /// replaces both truncated: the capsule printed the server's collapsed ≤160
+    /// line (so the row's own text was already a fragment), and expanding grew an
+    /// inline card capped at 48 wrapped lines with no way to reach the tail.
+    ///
+    /// `fullText` prefers the server's fuller `thinkingText` excerpt and falls
+    /// back to `text` — an older server sends no excerpt, and on that server the
+    /// collapsed line IS everything there is, so the drawer still has content and
+    /// the tap is still honest.
+    private func thinkingRow(_ message: ChatMessage, namespace: String,
+                             width: CGFloat) -> TimelineRow {
         let excerpt = message.thinkingText?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let full = (excerpt?.isEmpty == false ? excerpt! : line)
-        let capsuleHeight = Self.capsuleRowHeight(badged: false)
-        // Line count first: whether the row is expandable AT ALL depends on it
-        // (a line that already fits the capsule, with no fuller excerpt behind
-        // it, has nothing to reveal).
-        let font = TimelineTextStyler.captionFont
-        let lines = wrappedLineCount(
-            full, font: font, width: TimelineMetrics.expandCardContentWidth(width))
-        let hasMore = !full.isEmpty && (full != line || lines > 1)
-        let expanded = hasMore && expandedRowIDs.contains(id)
-        var height = capsuleHeight
-        if expanded {
-            // The cell truncates at the same line cap, so this is the row's real
-            // height rather than a clamp that shaves ink off a long excerpt.
-            let shown = min(lines, TimelineMetrics.expandThinkingMaxLines)
-            height += TimelineMetrics.hostedTextHeight(lines: shown, font: font)
-                + TimelineMetrics.expandCardPadding * 2 + TimelineMetrics.expandCardGap
-        }
+        let full = (excerpt?.isEmpty == false ? excerpt! : message.text)
+        // `message.text` IS the server's collapsed one-line reasoning
+        // (`thinkingLine`, whitespace-folded and clipped) — the row's content next
+        // to the fixed word, exactly as `detail` sits next to a tool's name. It was
+        // dropped for one round and a column of reasoning rows became five
+        // identical `Thinking ›` capsules.
+        let line = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Same rule as a tool chip's detail: at accessibility sizes the line gets its
+        // own row inside the capsule. Single-line, this chip degraded to "Thinking A
+        // s…" at XXXL while tool chips beside it stayed readable (2026-09-12 gate).
+        let stacked = Self.stacksDetail(line.isEmpty ? nil : line)
         return TimelineRow(
-            id: id, revision: expanded ? 1 : 0,
-            content: .thinking(line: line, body: hasMore ? full : nil,
-                               collapsible: hasMore, expanded: expanded,
-                               maxLines: TimelineMetrics.expandThinkingMaxLines),
-            height: height
+            id: "\(namespace)#0", revision: 0,
+            content: .thinking(line: line.isEmpty ? nil : line, preview: nil,
+                               fullText: full, maxLines: 0,
+                               detailRef: message.activityDetailRef, stacked: stacked),
+            height: Self.capsuleRowHeight(badged: false, stacked: stacked)
         )
     }
 
@@ -691,18 +704,20 @@ final class TimelineRowBuilder {
                         width: width).map { [$0] } ?? []
     }
 
-    /// The IN-FLIGHT turn's reasoning, as an always-open reasoning row: a fixed
-    /// "Reasoning" capsule with the NEWEST `liveThinkingMaxLines` wrapped lines
-    /// in the card under it, so the reader watches the reasoning arrive instead
-    /// of watching one word blink.
+    /// The IN-FLIGHT turn's reasoning: the same "Thinking" capsule a history row
+    /// shows, with the NEWEST `liveThinkingMaxLines` wrapped lines previewed in
+    /// the card under it, so the reader watches the reasoning arrive instead of
+    /// watching one word blink.
     ///
     /// The window is cut in WRAPPED lines, at the same width and font the cell
     /// renders at, and from the newest end — see `TimelineLiveThinkingWindow`
     /// for what the newline-counting version this replaces did on the phone.
     ///
-    /// Not collapsible, exactly like a short notification card: the row exists
-    /// only while the turn runs, and a chevron whose state nothing remembers
-    /// across ticks would flip back open a moment after being tapped.
+    /// The row carries the FULL accumulation as `fullText`, never the window: the
+    /// preview is bounded because it is on screen for the whole turn, and the tap
+    /// has to answer "show me all of it" — which is exactly what the windowed
+    /// card could not do when it was the only view of live reasoning (the reader
+    /// saw a middle slice, marked `… `, with no way to reach either end).
     private func liveThinkingRow(_ text: String, id: String, width: CGFloat) -> TimelineRow? {
         let font = TimelineTextStyler.captionFont
         let contentWidth = TimelineMetrics.expandCardContentWidth(width)
@@ -721,67 +736,97 @@ final class TimelineRowBuilder {
             // text changes underneath that stable id. Hashed on the WINDOW, never
             // on the accumulation, so the per-tick cost is bounded.
             id: id, revision: window.body.hashValue,
-            content: .thinking(line: TimelineLiveThinkingWindow.capsuleLabel,
-                               body: window.body, collapsible: false,
-                               expanded: true,
-                               maxLines: TimelineMetrics.liveThinkingMaxLines),
+            // No `line`: the preview card under the capsule already shows the
+            // newest reasoning, so a line in the capsule would be the same
+            // sentence twice in one row. And no `detailRef`: a live turn's
+            // reasoning is not in any transcript the server can be asked for yet —
+            // `fullText` here IS everything there is.
+            content: .thinking(line: nil, preview: window.body,
+                               fullText: TimelineLiveThinkingWindow.normalized(text),
+                               maxLines: TimelineMetrics.liveThinkingMaxLines,
+                               // No line to stack, at any text size.
+                               detailRef: nil, stacked: false),
             height: height
         )
     }
 
-    /// Tool row. Expanded it is TWO labelled sections, Input then Result — the
-    /// input is what the reader is actually asking for when they tap a tool name
-    /// ("what did it run?"), and the card used to show only the output.
+    /// Tool row: ONE capsule, one height, tap opens the drawer with the full
+    /// Input and Result.
     ///
-    /// Every tool row is expandable, including one with neither field: a row
-    /// still running has an input and no result yet, and a row that produced
-    /// nothing has to SAY so ("No output"). Swallowing the tap instead is what
-    /// reads as "tapping does nothing".
-    private func toolChipRow(_ message: ChatMessage, namespace: String, width: CGFloat,
-                             expandedRowIDs: Set<String>) -> TimelineRow {
-        let id = "\(namespace)#0"
-        let expanded = expandedRowIDs.contains(id)
-        let capsuleHeight = Self.capsuleRowHeight(badged: message.agent?.isEmpty == false)
-        var height = capsuleHeight
-        if expanded {
-            height += expandedToolCardHeight(message, width: width)
-                + TimelineMetrics.expandCardGap
-        }
+    /// Nothing here measures an expanded state any more. The inline card it
+    /// replaces had to model its own SwiftUI subtree as arithmetic (a second
+    /// description of the same layout, pinned by a parity test) and still capped
+    /// both sections — so "what did it run?" was answered with a clipped window.
+    private func toolChipRow(_ message: ChatMessage, namespace: String) -> TimelineRow {
+        let stacked = Self.stacksDetail(message.detail)
         return TimelineRow(
-            id: id, revision: expanded ? 1 : 0,
+            id: "\(namespace)#0", revision: 0,
+            // `running: false` unconditionally: a transcript row is a call that
+            // ALREADY RETURNED. A history row with no `resultPreview` produced no
+            // output; only the live region knows about a call still in flight.
             content: .toolChip(name: message.text, detail: message.detail,
                                inputPreview: message.inputPreview,
                                resultPreview: message.resultPreview,
-                               agent: message.agent, expanded: expanded),
-            height: height
+                               agent: message.agent, running: false,
+                               detailRef: message.activityDetailRef, stacked: stacked),
+            height: Self.capsuleRowHeight(badged: message.agent?.isEmpty == false,
+                                          stacked: stacked)
         )
     }
 
-    /// Height of the expanded tool card: inner padding + each present section +
-    /// the gap between two sections. Mirrors `TimelineToolChipView`'s expanded
-    /// subtree exactly — the two are the same layout described twice, once as
-    /// arithmetic and once as SwiftUI, and `TimelineHostedHeightParityTests`
-    /// pins them together.
-    private func expandedToolCardHeight(_ message: ChatMessage, width: CGFloat) -> CGFloat {
-        let label = TimelineMetrics.hostedTightLine(TimelineTextStyler.caption2Font)
-            + TimelineMetrics.expandLabelGap
-        let input = message.inputPreview?.isEmpty == false ? message.inputPreview : nil
-        let result = message.resultPreview?.isEmpty == false ? message.resultPreview : nil
-        var sections: [CGFloat] = []
-        if let input {
-            let size = measurer.codeSize(input, font: TimelineTextStyler.codePreviewFont)
-            sections.append(label + min(size.height, TimelineMetrics.expandInputMaxHeight))
+    /// Does this chip's detail need its own line? The rule lives in
+    /// `TimelineChipLayout`; the CATEGORY comes from the styler the actor has already
+    /// adopted for this build, so the height computed here and the shape the cell
+    /// draws are answers to the same question.
+    static func stacksDetail(_ detail: String?) -> Bool {
+        guard let detail, !detail.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return false
         }
-        if let result {
-            let size = measurer.codeSize(result, font: TimelineTextStyler.codePreviewFont)
-            sections.append(label + min(size.height, TimelineMetrics.expandResultMaxHeight))
-        } else {
-            // "Running…" (an input but no result yet) / "No output" — one line
-            // of caption under the Result label.
-            sections.append(label + TimelineMetrics.hostedTightLine(TimelineTextStyler.captionFont))
+        return TimelineChipLayout.stacksDetail(TimelineTextStyler.adoptedCategory)
+    }
+
+    /// The tool running RIGHT NOW, as a real tool row.
+    ///
+    /// WHY THIS EXISTS: the live stream's `tool` event carries only `{name,
+    /// detail}`, and that pair used to reach the timeline folded into ONE string
+    /// on the shimmering `.activity` row. So a `Bash` mid-turn rendered as a
+    /// status line with no input, no result and no tap — a different shape from
+    /// the `.toolChip` the very same call becomes once the transcript lands, and
+    /// on the Personal AI chat (whose history carried no tool rows at all) it was
+    /// the ONLY form the tool ever took, which is why it vanished at turn end.
+    ///
+    /// The rows are deliberately built from the same case the transcript uses, so
+    /// the poorer payload shows up as an empty Result ("Running…") rather than as
+    /// a different-looking row: `detail` is all the input the wire gives us.
+    ///
+    /// EVERY call the turn made gets a row, finished ones included. A finished call
+    /// used to be dropped by its own `tool-result`, so the chip appeared and then
+    /// vanished mid-turn, reappearing only when the whole turn ended and the
+    /// transcript landed (sampled once a second by the 2026-09-12 gate). A call is
+    /// on screen continuously from `tool` to history; the result frame changes the
+    /// chip's STATE, not whether it exists.
+    ///
+    /// Row ids are ordinal, not id-derived: `toolUseId` is absent on older servers,
+    /// and a stable position is what keeps a chip's cell from being re-created on
+    /// every tick. Since the list only ever grows within a turn (and its head is
+    /// dropped only past `maxLiveTools`), position is stable in practice.
+    func liveToolRows(_ tools: [LiveToolCall], width: CGFloat,
+                      scope: String = TimelineScope.unscoped) -> [TimelineRow] {
+        tools.enumerated().compactMap { index, call in
+            guard !call.name.isEmpty else { return nil }
+            let stacked = Self.stacksDetail(call.detail)
+            return TimelineRow(
+                id: TimelineScope.namespace(scope, "live-tool-\(index)"),
+                // Content-derived: the same id has to be reloaded when the call
+                // finishes (the icon stops breathing) or its detail is re-relayed.
+                revision: (call.detail ?? "").hashValue &+ (call.finished ? 1 : 0),
+                content: .toolChip(name: call.name, detail: call.detail,
+                                   inputPreview: call.detail, resultPreview: nil,
+                                   agent: nil, running: !call.finished,
+                                   detailRef: nil, stacked: stacked),
+                height: Self.capsuleRowHeight(badged: false, stacked: stacked)
+            )
         }
-        let spacing = TimelineMetrics.expandSectionSpacing * CGFloat(max(0, sections.count - 1))
-        return sections.reduce(0, +) + spacing + TimelineMetrics.expandCardPadding * 2
     }
 
     /// How many lines SwiftUI will wrap `text` into at `width` — a TextKit line

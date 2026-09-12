@@ -111,6 +111,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | POST | `/api/v1/sessions/:id/execute-continue` | Execute a completed plan with bypass (cloud relays) |
 | GET | `/api/v1/sessions/:id/changes` | Changed-files data for the session (cloud relays) |
 | GET | `/api/v1/sessions/:id/history` | Full rich-block history, tail-windowed (cloud relays) |
+| GET | `/api/v1/activity/detail?ref=&part=&offset=` | The FULL text behind one `tool`/`thinking` row (cloud relays) |
 | PATCH | `/api/v1/conversations/:id` | Rename/pin a Personal AI conversation |
 | DELETE | `/api/v1/conversations/:id` | Delete a conversation (main is protected) |
 | POST | `/api/v1/conversations/:id/stop` | Stop the agent's active turn(s) |
@@ -337,6 +338,15 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
 - `kind: "thinking"` — a reasoning step; `text` is a short (≤160+`…`,
   whitespace folded onto one line) excerpt. `thinkingText` (additive) carries a
   fuller ≤2000+`…` excerpt with newlines kept, for a card that expands on tap.
+- `detailRef` (additive, 2026-09): an **opaque** handle on this row's FULL text,
+  fetched from `GET /api/v1/activity/detail?ref=<detailRef>`. Present **only when
+  the excerpts above had to cut something**, so its presence is exactly the
+  client's "offer a full-text affordance" predicate: no ref means the excerpt IS
+  the whole thing, and a ref means there is more. Never parse it; pass it back
+  verbatim (percent-encoded as a query value). Rows read out of the chat-history
+  store instead of a CLI session (legacy conversations from before the lane
+  engine) carry no ref, so a drawer must always be able to render the excerpt
+  alone.
 - `kind: "notification"` — a system-generated card (additive); `source` says
   which system produced it (`"session-error"`, `"agent-error"`, `"cron"`,
   `"compaction"`, …). Render as a distinct card, not a chat bubble. Noisy
@@ -345,6 +355,21 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
   console's default visibility. `<task-ref/>`/`<session-ref/>` XML is resolved
   to plain labels before text reaches this API.
 - No `kind` — a plain chat message.
+- **The `tool` and `thinking` rows ride the DEFAULT read: there is no `rich=1`
+  here, and adding one would be a regression.** The session transcript
+  (`/sessions/:id/transcript`) gates its expanded-card fields behind `rich=1`
+  because that route is polled every few seconds and its slim shape is also what
+  the sweep pushes to the cloud under a 1 MB frame cap. This route has neither
+  problem: it is read on open and once per turn end, and it already builds the
+  whole conversation to page it. A flag here would mean a client that did not know
+  to send it sees a turn's tools while the turn runs (the SSE `tool` frames) and
+  loses them the moment it ends, which is the exact defect these rows exist to
+  prevent.
+- **Budget the page for them: `limit` counts ROWS, not turns.** They are most of
+  the rows and most of the bytes. Measured on a real tool-heavy conversation, 41 of
+  a 50-row page were `tool`/`thinking` rows (9 prose messages) and they carried 72%
+  of a 52.9 KB payload; two lighter conversations measured 40% and 67%. A client
+  that wants N prose messages on screen has to raise `limit` or page back.
 - Paging: pass the **first** (oldest) message's `id` of the current page as
   `before` to fetch the previous page. Cursors are positional and ephemeral —
   history compaction can rewrite them, so on a suspicious result just re-fetch
@@ -424,6 +449,13 @@ The additive `engine` field on the terminal frame reports which engine answered
   Subagent activity is deliberately NOT relayed: a delegated agent's own tool
   calls would overwrite the `Task` row the human needs to see.
 - Nothing is emitted after a turn's `message-end` / `error`.
+- **The live frames and the stored rows describe the same activity**, so a
+  finished turn does not lose it: a `thinking` frame becomes a `kind:"thinking"`
+  row and a `tool` frame becomes a `kind:"tool"` row on
+  `GET /conversations/:id/messages` (same collapsed `text`, same `detail`), because
+  both are read out of the CLI session's own transcript. A client may therefore
+  render the live activity with the same row component it uses for history, and
+  refetch at `message-end` instead of discarding what it drew.
 
 - A `: ping` comment is sent every 25 s — treat it as keep-alive noise.
 - **Replay**: the server keeps a ring buffer of the current turn's events.
@@ -682,9 +714,9 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 - Provenance/laggy-replica semantics identical to `/tasks` (`syncedAt`,
   `503 unavailable` on a fresh companion).
 - `GET /api/v1/sessions/:id/transcript?fresh=1&rich=1` →
-  `{ "sessionId", "exportedAt", "truncated", "messages": [ { role, text,
+  `{ "sessionId", "exportedAt", "truncated", "rich"?, "messages": [ { role, text,
   timestamp, kind?, detail?, resultPreview?, agent?, inputPreview?,
-  thinkingText? } ] }`: a slim transcript tail (last ~100 entries; text
+  thinkingText?, detailRef? } ] }`: a slim transcript tail (last ~100 entries; text
   capped at 4 KB/row, or 12 KB for a row that
   carries HTML, and the cut is made where it cannot leave half a tag behind so a
   rich reply is never truncated mid-attribute; `kind: "tool"` rows carry
@@ -721,12 +753,26 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   Nothing else about the response changes: same ~100-entry tail, same 4 KB row
   clip, same `truncated`. Parsed like `fresh`: **only the exact value `1` counts**,
   anything else (`rich=true`, `rich=0`, a bare `rich`) reads as absent.
-  Two things to know before wiring a client to it:
-  - **Pair it with `fresh=1`.** `rich=1` decorates a tail the box BUILDS; it never
-    forces a build. The sweep-exported file is written in the slim shape and can
-    never carry the fields, so a cached (non-fresh) read answers without them.
-    That is deliberate: it keeps the two-phase open (cached paint, then a fresh
-    reconcile) fast. `fresh=1&rich=1` is the read that answers with them.
+  `kind: "tool"`/`kind: "thinking"` rows also gain `detailRef` when their excerpt
+  had to cut something: it is the handle for `GET /api/v1/activity/detail` (below),
+  so a drawer can show the whole reasoning block or tool output without this tail
+  carrying it. Three things to know before wiring a client to it:
+  - **A rich request is never answered with slim rows** (fixed 2026-09). On the
+    primary, `rich=1` implies the same live read `fresh=1` asks for, because the
+    sweep-exported file is written in the slim shape and can never carry the
+    fields. Before the fix, `?rich=1` was answered from that file whenever it
+    existed, so the SAME URL returned rich or slim rows depending on cache warmth
+    (measured on a live box: 0 of 102 rows with `thinkingText` vs 39 of 106 with
+    `fresh=1` added). The response now also carries **`rich: true|false`** on any
+    request that asked for it, so the two cases that genuinely cannot produce the
+    fields (a session whose history is unreadable, and a cloud replica) say so
+    instead of looking empty. One thing that did NOT change: a plain read (no
+    `rich`) still serves the exported file, and a rich request whose live build
+    comes back empty still falls back to it. The file is the archive for a stopped
+    session, and a rich request must not cost a caller the archive.
+  - **Pairing it with `fresh=1` is still right.** They now mean the same thing on
+    this box, so `fresh=1&rich=1` costs nothing extra, and a client that keeps its
+    fast cached first phase (plain read, no `rich`) keeps it.
   - **Cost, so you can choose a cadence.** Measured on a 50-row page: raw p90
     36.8 → 54.3 KB, gzipped p90 13.8 → 17.8 KB, i.e. about +4 KB gzipped per
     read. Fine at open/foreground/turn-end cadence (tens of reads per session);
@@ -740,7 +786,134 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   - **Not on a cloud companion.** A replica has no session on disk: without
     `fresh` it serves the synced slim file, and with `fresh=1` it builds over
     the daemon bridge, which is a separate parser that emits no `thinking` rows
-    at all and no `inputPreview`. `rich=1` is accepted and ignored there.
+    at all and no `inputPreview`. `rich=1` is accepted there and answers
+    `rich: false`.
+
+### GET /api/v1/activity/detail (additive, 2026-09): the full text behind one row
+
+The `kind: "tool"` and `kind: "thinking"` rows on both list reads carry
+EXCERPTS, and they stay excerpts: they ride a ~100-row page a client refetches
+at every turn end, where inlining whole reasoning blocks measured ~150 KB per
+read. This endpoint is how a drawer shows the rest: one row, on the tap that
+asks for it.
+
+```
+GET /api/v1/activity/detail?ref=<detailRef>[&part=reasoning|input|result][&offset=<n>]
+```
+
+- `ref` (required): the row's `detailRef`, verbatim and percent-encoded. It is
+  **opaque**: it names a session, a message id and the slot inside that message,
+  and that is deliberately not a row position (this tail slides, and the chat
+  read's `m<n>` ids are its paging cursor space). No `agentId`, `sessionId` or
+  conversation id is needed, which is what lets one endpoint serve both surfaces.
+
+**The ref's stability contract**, because a client has to know when to stop trusting
+one:
+
+- It is derived from the CLI's own ids: the message id (the API `message.id`, else
+  the JSONL line `uuid`, both written once and never rewritten) plus the slot inside
+  that message (the reasoning, or the n-th tool call, in the order the message's
+  content blocks are stored). Nothing positional, so appending turns, paging, or
+  re-reading the same transcript never moves it.
+- Only the PRIMARY mints refs and only the primary resolves them; a replica passes
+  them through in both directions. So a row read on the LAN and tapped later through
+  the cloud (or the reverse) resolves against the same box either way.
+- What invalidates one: a rewind that deletes the message, a compaction that rewrites
+  it, and a transcript so large (>4 MB) that the bounded read window no longer
+  contains the message. A session that no longer exists does too.
+- When a ref cannot be resolved the answer is **`410` with `code: "detail_gone"`**,
+  and this route never answers `404`. That is the point: a `404` here means the
+  server has no such route (a box older than this feature), and the two need
+  different client behaviour: hide the affordance entirely, versus tell the user the
+  text is no longer in the transcript. Never treat one as the other.
+- `200` →
+
+```json
+{
+  "version": 1,
+  "kind": "thinking",
+  "text": "…the whole reasoning block…",
+  "textChars": 4380,
+  "offset": 0,
+  "truncated": false
+}
+```
+
+  and for a tool row:
+
+```json
+{
+  "version": 1,
+  "kind": "tool",
+  "toolName": "Bash",
+  "input": "command: deploy --stage prod …\ndescription: Deploy",
+  "inputChars": 4021,
+  "result": "…the tool's output…",
+  "resultChars": 3187,
+  "offset": 0,
+  "truncated": false
+}
+```
+
+- One request returns every section the row has: `text` for a reasoning row,
+  `input` and `result` (either may be absent) for a tool row.
+- **`<name>Chars` is measured on the text as DELIVERED, after redaction.** For a
+  section that is not truncated it equals the length of the string in the same
+  response exactly, so "showing the first N of M" has N === M and never promises
+  characters that do not exist. (Redaction shrinks: `AKIA…` becomes `[REDACTED]`. A
+  source-based count made a complete 6,838-character result claim 6,999 and a drawer
+  offered 161 characters that no request could return.) For a section that IS
+  truncated the number is the source-based estimate of the whole, because the
+  remainder has not been redacted yet and so has no delivered length, so act on the
+  truncation flag, never on arithmetic over this number.
+- **Each section says whether it fell short: `textTruncated` / `inputTruncated` /
+  `resultTruncated`** (additive; present only when `true`, absent means the section is
+  whole). Read these, not the numbers: a section is incomplete whenever it carries
+  less than the row's text, INCLUDING when no `<name>NextOffset` is offered because
+  the remainder cannot be fetched at all, and including the one case arithmetic cannot
+  see (a clipped `input`, whose `inputChars` is a lower bound and can equal the text
+  it came with). A cursor, in turn, is only ever offered when asking for it would
+  advance, so chasing `<name>NextOffset` can never loop.
+- `truncated` (top level) is the OR of those flags: useful for "is anything missing
+  here", useless for labelling a section, since it cannot say which one. It is kept
+  because it shipped first.
+- **Redaction is unchanged at full length.** Every section passes the same masker
+  the previews use, so a credential sitting past the 700-character
+  `resultPreview` (one the excerpt never even reached) still arrives as
+  `[REDACTED]`. The drawer is not a raw dump.
+- **Ceilings, stated plainly.** One response returns at most 200,000 characters
+  per section; a longer section sets `<name>NextOffset` (and `truncated: true`),
+  and the rest is fetched with `part=<that section>&offset=<that number>`.
+  Offsets count SOURCE characters (positions before redaction, not indices into the
+  delivered string), so pages join back with nothing dropped at the seam. `offset`
+  without `part` is a `400` (the same number means a different place in a tool's input
+  than in its result). This 200,000 is the ONLY ceiling on a section: a long tool result
+  reads to its end here, by re-reading that one row from the transcript, even though the
+  row a LIST read carries keeps just the first 5,000 characters of it (a whole-transcript
+  parse holds every row's result at once, which is a bound worth having there and
+  pointless for one row). In the rare case where that re-read cannot happen (the message
+  has slid out of a large transcript's bounded window, its host is unreachable, or the
+  session's transcript is served from a stream snapshot rather than the canonical JSONL),
+  the answer degrades to the retained prefix with `resultTruncated: true`, the true
+  `resultChars`, and **no cursor**, because the rest genuinely cannot be fetched and a
+  cursor there would advertise a page that answers with an empty string.
+- Errors, all of which mean "keep showing the excerpt":
+  - `400 bad_request`: a ref this server did not mint, an unknown `part`, or a
+    bad/ambiguous `offset`.
+  - `410 detail_gone`: the row can no longer be resolved (see the stability
+    contract above). Terminal for that ref; never a neighbouring row's text.
+  - `503 unavailable`: the transcript could not be read, because it timed out (10 s
+    budget), the read failed outright (an unknown or unreachable host), or a replica's
+    primary is offline. Retryable, and the only 5xx this route produces, because a read failure
+    is a reachability fact about one session, not a fault of the server.
+  - `404`: **not** produced by this route. It means the server predates the
+    feature, in which case rows carry no `detailRef` either.
+- A cloud companion CAN serve this route: it relays the read to the primary, which
+  owns the transcript, as the box-level control action `server.activity.detail`
+  (host `__local__`, sessionId `__server__`), and hands the primary's body back
+  unchanged. A replica never resolves a ref locally, because it has neither the
+  session record nor the JSONL. An offline bridge, and a primary too old to know the
+  action, both answer `503`.
 
 ### Session talk (additive) — send into + stream out of a session
 

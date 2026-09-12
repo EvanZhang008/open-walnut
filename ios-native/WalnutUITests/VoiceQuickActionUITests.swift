@@ -272,13 +272,12 @@ final class VoiceQuickActionUITests: XCTestCase {
                     + "runner (it has to be in the .xctestrun)."
             )
         }
-        let app = XCUIApplication()
-        app.launchArguments = [
+        // Pairs itself against its own throwaway server, so the helper leaves the URL
+        // alone (see `UITestLaunch.app`).
+        return UITestLaunch.launch([
             "-walnut.serverUrl", server,
             "-walnut.deviceToken", token,
-        ]
-        app.launch()
-        return app
+        ])
     }
 
     /// Go Home, find the Walnut icon wherever it lives, and long-press it.
@@ -297,7 +296,7 @@ final class VoiceQuickActionUITests: XCTestCase {
     /// long-pressing THAT produced a menu with no shortcuts — which reads
     /// exactly like the feature being broken.
     private func openIconContextMenu(terminateFirst: Bool = true) throws -> [String] {
-        if terminateFirst { XCUIApplication().terminate() }
+        if terminateFirst { UITestLaunch.terminate() }
         let board = springboard
         // Two presses, not one: the first dismisses whatever is open (a context
         // menu left by an earlier test in this run, an app), the second returns
@@ -356,7 +355,7 @@ final class VoiceQuickActionUITests: XCTestCase {
                 // In the WARM case this must NOT terminate: killing the process
                 // here would silently convert the retry into a cold launch, and
                 // the test would then pass while proving the wrong path.
-                if terminateFirst { XCUIApplication().terminate() }
+                if terminateFirst { UITestLaunch.terminate() }
                 XCUIDevice.shared.press(.home)
                 XCUIDevice.shared.press(.home)
             }

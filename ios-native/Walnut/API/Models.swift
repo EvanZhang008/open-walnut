@@ -107,6 +107,16 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// (additive 2026-09). `detail` is the one-line summary on the capsule;
     /// this is what the expanded card's Input section shows.
     let inputPreview: String?
+    /// kind == .tool / .thinking only — OPAQUE token for "read this row's whole
+    /// text" (additive 2026-09; see `TimelineActivityFullText`). Present only when
+    /// there is more than the excerpt above, so nil means "the excerpt IS all of it".
+    ///
+    /// nil is also what an older PRIMARY sends. The cloud replica normally relays this
+    /// list to the primary and hands back its rows, so its own age does not matter —
+    /// except on the one path where the relay fails and it serves its locally mirrored
+    /// history instead, which it projects with its own code. Either way nil is the
+    /// NORMAL case and never an error: the drawer shows the excerpt it has.
+    let detailRef: String?
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -132,12 +142,12 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
-        case thinkingText, inputPreview
+        case thinkingText, inputPreview, detailRef
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
          detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
-         thinkingText: String? = nil, inputPreview: String? = nil) {
+         thinkingText: String? = nil, inputPreview: String? = nil, detailRef: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -149,6 +159,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         self.agent = agent
         self.thinkingText = thinkingText
         self.inputPreview = inputPreview
+        self.detailRef = detailRef
     }
 
     var isUser: Bool { role == "user" }

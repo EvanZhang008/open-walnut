@@ -59,13 +59,12 @@ final class BoardRingTapUITests: XCTestCase {
                     + ".xctestrun, which the script guarantees)"
             )
         }
-        let app = XCUIApplication()
-        app.launchArguments = [
+        // Pairs itself against its own throwaway server, so the helper leaves the URL
+        // alone (see `UITestLaunch.app`).
+        return UITestLaunch.launch([
             "-walnut.serverUrl", server,
             "-walnut.deviceToken", token,
-        ]
-        app.launch()
-        return app
+        ])
     }
 
     /// Open the Tasks tab and wait for the board to have rows.

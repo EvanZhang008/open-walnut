@@ -89,7 +89,9 @@ final class TimelineCollectionController: UIViewController {
                                 forCellWithReuseIdentifier: TimelineRichHTMLCell.contentReuseID)
         collectionView.register(TimelineRichHTMLCell.self,
                                 forCellWithReuseIdentifier: TimelineRichHTMLCell.islandReuseID)
-        collectionView.register(UICollectionViewCell.self,
+        // A subclass, not the bare cell: chip rows expand their hit target into the
+        // inter-row gap, which only the cell can accept (see `TimelineHostedRowCell`).
+        collectionView.register(TimelineHostedRowCell.self,
                                 forCellWithReuseIdentifier: TimelineHostedCell.reuseID)
         view.addSubview(collectionView)
         // The hosted cells adopt a new text size on their own, immediately; the

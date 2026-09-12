@@ -102,6 +102,11 @@ final class SessionConversationStore {
     /// accumulation must stay off the observation graph and only
     /// `flushLiveThinking` may publish it.
     @ObservationIgnored private var live = LiveAgentActivity()
+    /// Every tool call THIS TURN has made, UNFOLDED — see `ChatStore.liveTools`.
+    /// The timeline builds real tool rows from the parts; `activity` keeps carrying
+    /// the folded label for the shimmer (and for the non-tool statuses only this
+    /// store has, e.g. "Starting session…").
+    private(set) var liveTools: [LiveToolCall] = []
     var activity: String?
     /// Delta coalescing (freeze fix, mirrors ChatStore): re-rendering the live
     /// markdown row per SSE delta saturated the main thread on long replies.
@@ -126,6 +131,12 @@ final class SessionConversationStore {
 
     private func setActivity(_ value: String?) {
         if activity != value { activity = value }
+    }
+
+    /// Mirror the shared handler's tool list onto the observed field,
+    /// equality-gated for the same reason `setActivity` is.
+    private func setLiveTools(_ tools: [LiveToolCall]) {
+        if liveTools != tools { liveTools = tools }
     }
 
     var processStatus: String
@@ -827,6 +838,7 @@ final class SessionConversationStore {
         if let handled = LiveStreamEvents.apply(event: event.event, data: data, to: &live) {
             if handled.impliesStreaming { setStreaming(true) }
             setActivity(live.activityLabel)
+            setLiveTools(live.tools)
             if handled.needsFlush { scheduleLiveFlush() }
             return
         }
@@ -1080,6 +1092,9 @@ final class SessionConversationStore {
     private func clearLiveThinking() {
         live.reset()
         if !liveThinking.isEmpty { liveThinking = "" }
+        // `live.reset()` already dropped the turn's calls; the observed mirror has
+        // to go with it or a finished turn's tool rows outlive their turn.
+        setLiveTools([])
     }
 
     /// Internal (not private) for WalnutTests — lets the watchdog repro tests

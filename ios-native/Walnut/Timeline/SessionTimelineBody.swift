@@ -32,6 +32,9 @@ struct SessionTimelineBody: View {
     @State private var textTarget: TextFileTarget?
     /// Extensionless path taps: the directory browser, rooted there.
     @State private var dirTarget: DirectoryTarget?
+    /// A tapped thinking / tool row — the SAME sheet the Personal AI chat
+    /// presents, from the same action, so the two surfaces cannot drift.
+    @State private var activityDetail: TimelineActivityDetail?
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29) — same fix as
@@ -46,6 +49,7 @@ struct SessionTimelineBody: View {
                 liveText: store.liveText,
                 liveTextTruncated: store.liveTextTruncated,
                 liveThinking: store.liveThinking,
+                liveTools: store.liveTools,
                 activity: store.activity,
                 // Session transcripts are numbered per session, so a session's
                 // rows must live in that session's id space (see TimelineScope).
@@ -64,6 +68,8 @@ struct SessionTimelineBody: View {
                         if let message = store.messages.first(where: { $0.id == messageID }) {
                             store.discardFailed(message)
                         }
+                    case .openActivity(let detail):
+                        activityDetail = detail
                     case .previewFile(let ref):
                         // HTML keeps the rendered WKWebView preview (and its dock
                         // seat); every other extension is text, where a line
@@ -107,6 +113,9 @@ struct SessionTimelineBody: View {
         }
         .sheet(item: $dirTarget) { target in
             DirectoryPreviewSheet(target: target)
+        }
+        .sheet(item: $activityDetail) { detail in
+            TimelineActivitySheet(detail: detail)
         }
     }
 }

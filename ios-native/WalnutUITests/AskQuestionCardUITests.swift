@@ -20,10 +20,9 @@ final class AskQuestionCardUITests: XCTestCase {
     }
 
     private func launch() -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchArguments = ["-askq-harness"]
-        app.launch()
-        return app
+        // Pointed at nothing: this harness's data comes from `-askq-harness`, and an
+        // unpinned launch talked to whatever the simulator was paired to.
+        UITestLaunch.launch(["-askq-harness"])
     }
 
     private func id(_ identifier: String, in app: XCUIApplication) -> XCUIElement {

@@ -21,11 +21,10 @@ final class CalendarInteractionUITests: XCTestCase {
 
     /// Launch straight into the calendar harness.
     private func launch(view: String, day: String? = nil) -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchArguments = ["-calendar-harness", "-calendar-view", view]
-        if let day { app.launchArguments += ["-calendar-day", day] }
-        app.launch()
-        return app
+        var arguments = ["-calendar-harness", "-calendar-view", view]
+        if let day { arguments += ["-calendar-day", day] }
+        // Pointed at nothing: the harness supplies the days, not the server.
+        return UITestLaunch.launch(arguments)
     }
 
     private func id(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
@@ -156,9 +155,7 @@ final class CalendarInteractionUITests: XCTestCase {
         XCTAssertTrue(id("calendar.list", in: app).waitForExistence(timeout: 10))
         app.terminate()
 
-        let relaunched = XCUIApplication()
-        relaunched.launchArguments = ["-calendar-harness"] // no forced view
-        relaunched.launch()
+        let relaunched = UITestLaunch.launch(["-calendar-harness"]) // no forced view
         XCTAssertTrue(
             id("calendar.list", in: relaunched).waitForExistence(timeout: 30),
             "the remembered view should be restored on the next open"

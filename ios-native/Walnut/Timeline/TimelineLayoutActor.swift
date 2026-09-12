@@ -130,7 +130,7 @@ actor TimelineLayoutActor {
                 liveText: input.liveText, storeTruncated: input.liveTextTruncated,
                 activity: input.activity, width: input.width,
                 tailRevision: tailRevision, cachedHead: headCache, scope: input.scope,
-                liveThinking: input.liveThinking
+                liveThinking: input.liveThinking, liveTools: input.liveTools
             )
             headCache = live.headCache
             rows.append(contentsOf: live.rows)

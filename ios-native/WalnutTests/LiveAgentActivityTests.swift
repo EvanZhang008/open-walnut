@@ -72,15 +72,80 @@ final class LiveAgentActivityTests: XCTestCase {
     func testActivityLabelNamesTheToolAndClearsOnItsResult() {
         var live = LiveAgentActivity()
         XCTAssertNil(live.activityLabel, "no tool running ⇒ the row shows its own shimmer")
-        live.toolStarted(name: "Read", detail: "src/agent/tools.ts")
+        live.toolStarted(id: "a", name: "Read", detail: "src/agent/tools.ts")
         XCTAssertEqual(live.activityLabel, "Read · src/agent/tools.ts")
-        live.toolStarted(name: "TodoWrite", detail: nil)
-        XCTAssertEqual(live.activityLabel, "TodoWrite", "no detail ⇒ just the name")
-        live.toolStarted(name: "TodoWrite", detail: "")
-        XCTAssertEqual(live.activityLabel, "TodoWrite", "an empty detail is not a detail")
-        live.toolFinished()
+        live.toolFinished(id: "a")
         XCTAssertNil(live.activityLabel,
                      "leaving the name set is what made the row keep naming a returned tool")
+        live.toolStarted(id: "b", name: "TodoWrite", detail: nil)
+        XCTAssertEqual(live.activityLabel, "TodoWrite", "no detail ⇒ just the name")
+        live.toolFinished(id: "b")
+        live.toolStarted(id: "c", name: "TodoWrite", detail: "")
+        XCTAssertEqual(live.activityLabel, "TodoWrite", "an empty detail is not a detail")
+    }
+
+    /// THE FINISHED CALL STAYS. Clearing the single live-tool slot on `tool-result`
+    /// is what made the chip vanish the instant the tool returned, and reappear only
+    /// when the turn ended and the transcript landed (2026-09-12 gate). The result
+    /// frame marks the call done; only `reset()` (a turn boundary or a canonical
+    /// history load) removes it.
+    ///
+    /// RED PROOF: making `toolFinished` remove the entry empties `tools` here.
+    func testAFinishedCallStaysInTheTurnsToolList() {
+        var live = LiveAgentActivity()
+        live.toolStarted(id: "a", name: "Read", detail: "src/agent/tools.ts")
+        live.toolStarted(id: "b", name: "Bash", detail: "npm test")
+        live.toolFinished(id: "a")
+        XCTAssertEqual(live.tools.map(\.name), ["Read", "Bash"],
+                       "both calls stay on screen; the result changes state, not existence")
+        XCTAssertEqual(live.tools.map(\.finished), [true, false])
+        XCTAssertEqual(live.activityLabel, "Bash · npm test",
+                       "the label follows the call still in flight, out of order or not")
+        live.toolFinished(id: "b")
+        XCTAssertEqual(live.tools.count, 2)
+        XCTAssertNil(live.activityLabel)
+        live.reset()
+        XCTAssertTrue(live.tools.isEmpty, "a turn boundary is what retires the list")
+    }
+
+    /// A REPEATED `tool` frame for one id (a re-relay, a replay) updates that call
+    /// rather than stacking a second chip for it.
+    func testARepeatedToolFrameUpdatesTheSameCall() {
+        var live = LiveAgentActivity()
+        live.toolStarted(id: "a", name: "Bash", detail: "npm test")
+        live.toolStarted(id: "a", name: "Bash", detail: "npm run test:quick")
+        XCTAssertEqual(live.tools.count, 1)
+        XCTAssertEqual(live.tools.first?.detail, "npm run test:quick")
+    }
+
+    /// An UNKNOWN id is a no-op: both relays only announce results for calls they
+    /// announced, so an id we never saw belongs to somebody else (a subagent's, a
+    /// replay), and "the newest must be it" would retire a chip still running.
+    /// An EMPTY id is the one place guessing is right — an older server sends none.
+    func testToolResultIdRoutingIsExactWithAnHonestFallback() {
+        var live = LiveAgentActivity()
+        live.toolStarted(id: "a", name: "Bash", detail: "npm test")
+        live.toolFinished(id: "somebody-elses-call")
+        XCTAssertEqual(live.tools.first?.finished, false,
+                       "a foreign result must not retire this turn's running call")
+
+        var old = LiveAgentActivity()
+        old.toolStarted(name: "Bash", detail: "npm test")
+        old.toolFinished()
+        XCTAssertEqual(old.tools.first?.finished, true,
+                       "with no ids at all, the newest unfinished call is the only candidate")
+    }
+
+    /// A long agentic turn can call dozens of tools; the live region is bounded.
+    func testTheLiveToolListIsBounded() {
+        var live = LiveAgentActivity()
+        for index in 0..<(LiveAgentActivity.maxLiveTools + 10) {
+            live.toolStarted(id: "t\(index)", name: "Bash", detail: "step \(index)")
+        }
+        XCTAssertEqual(live.tools.count, LiveAgentActivity.maxLiveTools)
+        XCTAssertEqual(live.tools.last?.detail,
+                       "step \(LiveAgentActivity.maxLiveTools + 9)",
+                       "the NEWEST calls are the ones kept")
     }
 
     func testResetDropsEverythingAboutThePreviousTurn() {

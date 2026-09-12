@@ -24,7 +24,11 @@ enum TimelineLiveThinkingWindow {
     /// the card printed the oldest, and even with both ends fixed an echo of the
     /// card's last sentence is the same sentence twice in one row (the
     /// "first line printed twice" half of the same report).
-    static let capsuleLabel = "Reasoning"
+    ///
+    /// The word itself now comes from `TimelineActivityVocabulary` — it used to
+    /// be the literal "Reasoning" here while history rows showed a different
+    /// word, which is the drift this alias closes.
+    static let capsuleLabel = TimelineActivityVocabulary.thinking
 
     /// Prefix marking a window that dropped older reasoning off its head. It
     /// rides the measured string, so the line it may cost is paid for honestly.

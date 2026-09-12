@@ -527,11 +527,31 @@ export function extractImageFilePathFromInput(input: Record<string, unknown>): s
 export { encodeProjectPath };
 export { findLocalJsonlPath as findSessionJsonlPath } from './session-file-reader.js';
 
+/**
+ * Characters of a tool_result a parsed row RETAINS.
+ *
+ * The bound is on what every row of a whole-transcript parse keeps at once (and
+ * what the mtime cache then holds for the session's lifetime) — a 25 MB `result`
+ * on one row would be paid for by every reader of that cache. It is deliberately
+ * NOT a bound on how much of a result a human can read: a single-row read lifts it
+ * for exactly one tool_use_id (see readSessionRowToolResult), because there the
+ * whole-transcript argument buys nothing.
+ *
+ * A row that was cut carries `resultChars` = the length it HAD, so no reader can
+ * mistake a prefix for the whole output.
+ */
+export const HISTORY_TOOL_RESULT_MAX = 5_000;
+
 export interface SessionHistoryTool {
   name: string;
   input: Record<string, unknown>;
   toolUseId?: string;
   result?: string;
+  /** Characters the tool_result HAD when `result` is only its first
+   *  HISTORY_TOOL_RESULT_MAX (absent = `result` is the whole output). Counted on
+   *  the source, so a reader can say "showing the first N of M" and a full-text
+   *  read knows there is more to fetch. */
+  resultChars?: number;
   /** True when the tool_result carried is_error — the tool FAILED. Without this
    *  flag the UI renders failed tools with the same ✓ as successes after any
    *  history reload (streaming had the error state; persisted history lost it). */
@@ -784,6 +804,19 @@ export interface ParseSessionMessagesOptions {
    *  looked up by the CALLER — this function does no I/O. Only meaningful with
    *  'auto'; absent/empty = identity (never-rewound sessions pay nothing). */
   rewindCuts?: readonly InPlaceRewindCut[];
+  /** Retain up to `max` characters of ONE tool's result instead of
+   *  HISTORY_TOOL_RESULT_MAX. Scoped to a single tool_use_id on purpose: the
+   *  single-row detail read needs one row whole, and raising the cap for every
+   *  row of the same parse would multiply the peak by the number of long results
+   *  in the transcript. Every other row keeps the default. */
+  toolResultMax?: { toolUseId: string; max: number };
+}
+
+/** `result` (cut to `max`) plus `resultChars` when there WAS more — see
+ *  HISTORY_TOOL_RESULT_MAX. `>` not `>=`: a result of exactly `max` characters
+ *  lost nothing, so it must not be reported as cut. */
+function toolResultFields(text: string, max: number): { result: string; resultChars?: number } {
+  return text.length > max ? { result: text.slice(0, max), resultChars: text.length } : { result: text };
 }
 
 /** Shared empty set — the no-filter path never allocates per parse. */
@@ -1233,6 +1266,11 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   }
 
   // Convert to SessionHistoryMessage array
+  const rowResultMax = opts?.toolResultMax;
+  const resultMaxFor = (toolUseId: string | undefined): number =>
+    toolUseId && rowResultMax && rowResultMax.toolUseId === toolUseId
+      ? rowResultMax.max
+      : HISTORY_TOOL_RESULT_MAX;
   // Track the last plan content written to ~/.claude/plans/ across messages
   let lastPlanContent: string | null = null;
   // A side-thread cache warm-up is plumbing: its tagged user line is dropped
@@ -1315,7 +1353,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
             name: block.name,
             input: block.input ?? {},
             toolUseId,
-            ...(toolResult ? { result: toolResult.slice(0, 5000) } : {}),
+            ...(toolResult ? toolResultFields(toolResult, resultMaxFor(toolUseId)) : {}),
             ...(toolUseId && errorResultIds.has(toolUseId) ? { isError: true } : {}),
             ...(agentId ? { agentId } : {}),
             // Subagent-run-over proof, one per agent flavor (inc-1783746028392):
@@ -1929,6 +1967,48 @@ async function readSessionHistoryTailWindow(
     });
     return null;
   }
+}
+
+/**
+ * ONE tool's result, read from the JSONL without the retained-row cap.
+ *
+ * Why this exists: HISTORY_TOOL_RESULT_MAX bounds what a WHOLE-transcript parse
+ * keeps for every row at once, which is a real constraint on a list read and no
+ * constraint at all on "show me this one step's output". Reading the row again
+ * with the cap lifted for its tool_use_id alone is what makes a long result
+ * readable to its end, at the cost of one bounded read + parse per expansion
+ * (the caller only pays it for a row it already knows was cut).
+ *
+ * `maxChars` still bounds the answer: the caller pages, so a 25 MB result is never
+ * materialized whole. `resultChars` on the returned row reports the true source
+ * length even when this read is itself the thing that stopped short.
+ *
+ * Selection is by tool_use_id, never by position: the id is unique across the file,
+ * so a rewound branch or a re-split message cannot be mistaken for the live row.
+ * Returns undefined when the window has no such tool (rewound away, compacted, or
+ * outside the bounded window) — the caller keeps the capped text it already has.
+ */
+export async function readSessionRowToolResult(
+  sessionId: string,
+  toolUseId: string,
+  maxChars: number,
+  cwd?: string,
+  host?: string,
+): Promise<{ text: string; sourceChars: number } | undefined> {
+  if (!toolUseId || maxChars <= 0) return undefined;
+  const parsed = await readSessionHistoryTailWindow(
+    sessionId, cwd, host, HISTORY_COLD_TAIL_READ_BYTES,
+    { toolResultMax: { toolUseId, max: maxChars } },
+  );
+  if (!parsed) return undefined;
+  // Newest-first: a drawer is opened on something the user just watched happen.
+  for (let i = parsed.length - 1; i >= 0; i--) {
+    for (const tool of parsed[i].tools ?? []) {
+      if (tool.toolUseId !== toolUseId || typeof tool.result !== 'string') continue;
+      return { text: tool.result, sourceChars: tool.resultChars ?? tool.result.length };
+    }
+  }
+  return undefined;
 }
 
 export async function readSessionHistoryTail(

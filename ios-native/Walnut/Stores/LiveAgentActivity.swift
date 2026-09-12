@@ -19,14 +19,47 @@ import Foundation
 /// pending buffer; `flush()` is what folds it into `thinkingText`, so the
 /// stores can publish it on their existing ~8Hz cadence instead of at the
 /// cloud bridge's measured 10.7 events/s (microbursts to ~700/s).
+/// One tool call made during the LIVE turn.
+///
+/// WHY IT OUTLIVES ITS RESULT (2026-09-12 gate): the live region used to hold ONE
+/// running tool, cleared by its `tool-result` — so the chip appeared, then
+/// vanished the instant the tool returned, and only came back as a history row
+/// when the whole turn ended. Sampled every second on a real turn, that is a
+/// tool the reader watched disappear mid-turn. A call is on screen CONTINUOUSLY
+/// from its `tool` frame until the canonical transcript replaces it; the result
+/// frame changes its STATE, never its existence.
+struct LiveToolCall: Equatable, Sendable, Identifiable {
+    /// The wire's `toolUseId`. Empty when the frame carried none (an older
+    /// server) — see `LiveAgentActivity.toolFinished`.
+    let id: String
+    let name: String
+    let detail: String?
+    /// False until this call's own `tool-result` frame lands. The chip renders a
+    /// breathing icon while true, so a running call and a finished one are
+    /// distinguishable in a column of them.
+    var finished: Bool
+}
+
 struct LiveAgentActivity {
     /// Reasoning accumulated so far this turn, newest at the end (bounded).
     private(set) var thinkingText = ""
     /// True once the accumulation dropped its head to stay under the cap.
     private(set) var thinkingTruncated = false
-    /// The tool running right now, cleared by its `tool-result`.
-    private(set) var toolName: String?
-    private(set) var toolDetail: String?
+    /// Every tool call this turn has made, in call order, running and finished
+    /// alike (see `LiveToolCall`). Bounded: a long agentic turn can make dozens,
+    /// and the canonical transcript is what carries the whole list at turn end.
+    private(set) var tools: [LiveToolCall] = []
+
+    /// Retained live calls. Deliberately generous but finite — a turn with more
+    /// tool calls than this has its oldest chips retired early rather than
+    /// growing the live region without bound; they come back with the transcript.
+    static let maxLiveTools = 24
+
+    /// The call the agent is inside RIGHT NOW (newest unfinished), if any.
+    var runningTool: LiveToolCall? { tools.last { !$0.finished } }
+    /// Back-compat readers of "the tool running right now".
+    var toolName: String? { runningTool?.name }
+    var toolDetail: String? { runningTool?.detail }
 
     /// Deltas since the last `flush()`. Not observed by anything: the whole
     /// point is that a 700/s microburst costs one string append apiece.
@@ -43,9 +76,9 @@ struct LiveAgentActivity {
     /// its plain "Thinking…" shimmer — the reasoning itself gets a row of its
     /// own now rather than being squeezed into this one line.
     var activityLabel: String? {
-        guard let toolName, !toolName.isEmpty else { return nil }
-        guard let toolDetail, !toolDetail.isEmpty else { return toolName }
-        return "\(toolName) · \(toolDetail)"
+        guard let running = runningTool, !running.name.isEmpty else { return nil }
+        guard let detail = running.detail, !detail.isEmpty else { return running.name }
+        return "\(running.name) · \(detail)"
     }
 
     /// A turn boundary (turn-start / message-start) or a canonical history load:
@@ -54,8 +87,7 @@ struct LiveAgentActivity {
         thinkingText = ""
         thinkingTruncated = false
         pendingThinking = ""
-        toolName = nil
-        toolDetail = nil
+        tools = []
         bound = LiveMarkdownWindow.TailBound()
     }
 
@@ -65,16 +97,47 @@ struct LiveAgentActivity {
         pendingThinking += delta
     }
 
-    mutating func toolStarted(name: String, detail: String?) {
-        toolName = name
-        toolDetail = detail
+    /// A tool call started. `id` is the wire's `toolUseId`; an empty one (older
+    /// server) always appends, which is the honest reading — with no id there is
+    /// nothing to recognise a repeat by.
+    mutating func toolStarted(id: String = "", name: String, detail: String?) {
+        if !id.isEmpty, let existing = tools.firstIndex(where: { $0.id == id }) {
+            // A repeated `tool` frame for one id (a replay, a re-relay) UPDATES
+            // that call rather than stacking a second chip for it.
+            tools[existing] = LiveToolCall(id: id, name: name, detail: detail,
+                                           finished: tools[existing].finished)
+            return
+        }
+        tools.append(LiveToolCall(id: id, name: name, detail: detail, finished: false))
+        if tools.count > Self.maxLiveTools {
+            tools.removeFirst(tools.count - Self.maxLiveTools)
+        }
     }
 
-    /// A tool finished. The NAME goes with it: leaving it set is what made the
-    /// activity row keep naming a tool that had already returned.
-    mutating func toolFinished() {
-        toolName = nil
-        toolDetail = nil
+    /// A tool finished. The call STAYS (see `LiveToolCall`) and is marked done, so
+    /// the activity shimmer stops naming it while its chip remains on screen.
+    ///
+    /// Routing, most→least specific:
+    ///  1. an id we ANNOUNCED — the exact call, in or out of order;
+    ///  2. no id to match on at all (an empty one, or a turn whose calls all
+    ///     arrived without ids because the server is older): this turn is not being
+    ///     tracked by id, so ORDER is the only signal and the newest unfinished
+    ///     call is the only call the frame can mean;
+    ///  3. an id we never announced while this turn IS id-tracked — a no-op. Both
+    ///     relays only announce results for calls they announced, so such an id
+    ///     describes somebody else's call (a subagent's, a replay), and guessing
+    ///     "the newest one must be it" would retire a chip still running.
+    mutating func toolFinished(id: String = "") {
+        let index: Int?
+        if !id.isEmpty, let exact = tools.firstIndex(where: { $0.id == id }) {
+            index = exact
+        } else if id.isEmpty || !tools.contains(where: { !$0.id.isEmpty }) {
+            index = tools.lastIndex(where: { !$0.finished })
+        } else {
+            index = nil
+        }
+        guard let index else { return }
+        tools[index].finished = true
     }
 
     /// Fold the buffered deltas into `thinkingText`, trimming the head FIRST so
@@ -106,7 +169,15 @@ enum LiveStreamEvents {
     /// and a replica that has not been redeployed sends the event with no
     /// payload at all. A missing delta must still mean "a turn is running".
     private struct ThinkingPayload: Decodable { let delta: String? }
-    private struct ToolPayload: Decodable { let name: String; let detail: String? }
+    /// `toolUseId` is optional for the same reason `delta` is: both relays send it
+    /// today (api-v1 `tool`/`tool-result`, session-stream-v1 likewise), an older
+    /// one does not, and a missing id must still mean "a tool started/ended".
+    private struct ToolPayload: Decodable {
+        let name: String
+        let detail: String?
+        let toolUseId: String?
+    }
+    private struct ToolResultPayload: Decodable { let toolUseId: String? }
 
     /// What the caller still has to do with its own (observable, gated) state.
     struct Handled {
@@ -134,11 +205,13 @@ enum LiveStreamEvents {
                 // A malformed payload is still evidence of a running turn.
                 return Handled(impliesStreaming: true, toolName: nil, needsFlush: false)
             }
-            live.toolStarted(name: payload.name, detail: payload.detail)
+            live.toolStarted(id: payload.toolUseId ?? "", name: payload.name,
+                             detail: payload.detail)
             return Handled(impliesStreaming: true, toolName: payload.name,
                            needsFlush: false)
         case "tool-result":
-            live.toolFinished()
+            let id = (try? JSONDecoder().decode(ToolResultPayload.self, from: data))?.toolUseId
+            live.toolFinished(id: id ?? "")
             return Handled(impliesStreaming: false, toolName: nil, needsFlush: false)
         default:
             return nil

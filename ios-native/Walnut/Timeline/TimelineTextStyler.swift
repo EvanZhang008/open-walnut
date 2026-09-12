@@ -41,6 +41,22 @@ enum TimelineTextStyler {
     static var codeFont: UIFont { fonts.resolveMonospaced(.footnote) }
     static var codePreviewFont: UIFont { fonts.resolveMonospaced(.caption2) }
 
+    /// A fixed point size, scaled by whatever the ADOPTED text size did to
+    /// `textStyle` — `UIFontMetrics`, read through the same box the fonts are.
+    ///
+    /// WHY: the chips' chevron was a literal `.font(.system(size: 8))`, so at XXXL
+    /// the caption beside it had nearly doubled while the one glyph that says the
+    /// row OPENS stayed 8pt and all but vanished. A glyph paired with text has to
+    /// move with that text; a magic number in the cell cannot.
+    static func scaled(_ value: CGFloat, relativeTo textStyle: UIFont.TextStyle) -> CGFloat {
+        fonts.scaled(value, relativeTo: textStyle)
+    }
+
+    /// The category the fonts are currently resolved FOR (`.unspecified` = whatever
+    /// the system is set to). Read by the row builder so a row's SHAPE and its
+    /// measured height come off one value — see `TimelineChipLayout`.
+    static var adoptedCategory: UIContentSizeCategory { fonts.current }
+
     /// Adopt a content size category: a no-op unless it actually changed.
     ///
     /// Called from the layout actor, and the fonts are read from the actor AND
@@ -58,6 +74,18 @@ enum TimelineTextStyler {
         private var category: UIContentSizeCategory = .unspecified
         private var resolved: [UIFont.TextStyle: UIFont] = [:]
         private var monospaced: [UIFont.TextStyle: UIFont] = [:]
+
+        /// Deliberately NOT resolved against the system when `.unspecified`: this is
+        /// read from the layout actor, and every API that knows the device's setting
+        /// (`UIApplication`, `UIScreen.traitCollection`) is main-actor only. The app
+        /// always adopts a real category (`TimelineHost` reads the hosting
+        /// controller's trait collection), so `.unspecified` means "a test that did
+        /// not set one" — and `TimelineChipLayout` treats it as an ordinary size.
+        var current: UIContentSizeCategory {
+            lock.lock()
+            defer { lock.unlock() }
+            return category
+        }
 
         func adopt(_ next: UIContentSizeCategory) {
             lock.lock()
@@ -85,6 +113,20 @@ enum TimelineTextStyler {
                                                    weight: .regular)
             monospaced[style] = font
             return font
+        }
+
+        /// Scale a fixed point size for the adopted category (see
+        /// `TimelineTextStyler.scaled`). Same lock and same `category` the fonts
+        /// use, so a glyph and the text beside it can never be sized for two
+        /// different text sizes.
+        func scaled(_ value: CGFloat, relativeTo style: UIFont.TextStyle) -> CGFloat {
+            lock.lock()
+            defer { lock.unlock() }
+            let metrics = UIFontMetrics(forTextStyle: style)
+            guard category != .unspecified else { return metrics.scaledValue(for: value) }
+            return metrics.scaledValue(
+                for: value,
+                compatibleWith: UITraitCollection { $0.preferredContentSizeCategory = category })
         }
 
         /// Caller holds the lock.

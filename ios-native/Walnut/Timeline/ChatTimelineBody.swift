@@ -15,6 +15,9 @@ struct ChatTimelineBody: View {
     @State private var textTarget: TextFileTarget?
     /// Extensionless path taps: the directory browser, rooted there.
     @State private var dirTarget: DirectoryTarget?
+    /// A tapped thinking / tool row — presented in the SAME sheet the session
+    /// surface uses, so "tap to see it all" cannot behave differently here.
+    @State private var activityDetail: TimelineActivityDetail?
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29). The empty state used to be
@@ -33,6 +36,7 @@ struct ChatTimelineBody: View {
                 liveText: chat.streamText,
                 liveTextTruncated: chat.streamTextTruncated,
                 liveThinking: chat.liveThinking,
+                liveTools: chat.liveTools,
                 activity: chat.activity,
                 // Reading activeID here is what makes a conversation switch
                 // visible to the timeline at all: the host outlives the switch,
@@ -56,6 +60,8 @@ struct ChatTimelineBody: View {
                         }
                     case .loadEarlier:
                         Task { await chat.loadOlder() }
+                    case .openActivity(let detail):
+                        activityDetail = detail
                     case .previewFile(let ref):
                         // Personal AI chat always runs on the primary box.
                         // HTML keeps the rendered WKWebView preview (and its dock
@@ -74,11 +80,16 @@ struct ChatTimelineBody: View {
                 },
                 onRefresh: onRefresh
             )
-            if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
+            // A conversation whose first page has not resolved gets a SKELETON, not
+            // white space, and not the "listening" empty state either — that state
+            // is a claim about an empty conversation, and during a switch it is a
+            // claim we cannot make yet.
+            if chat.messages.isEmpty && chat.firstPageInFlight {
+                ChatTimelineSkeleton()
+            } else if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
                 ChatTimelineEmptyState()
             }
         }
-        .redacted(reason: chat.loadingMessages && chat.messages.isEmpty ? .placeholder : [])
         // First open only (a link tap in the transcript). Collapsing this sheet
         // banks the scroll position and leaves the report in the app-level dock
         // bar; REOPENING is presented by `FilePreviewDockOverlay`, so it works
@@ -96,6 +107,83 @@ struct ChatTimelineBody: View {
         .sheet(item: $dirTarget) { target in
             DirectoryPreviewSheet(target: target)
         }
+        .sheet(item: $activityDetail) { detail in
+            TimelineActivitySheet(detail: detail)
+        }
+    }
+}
+
+/// What a conversation looks like while its first page is still being read.
+///
+/// Measured cold on a 200-row page (2026-09-12 gate): 3.23 SECONDS of pure white,
+/// 1845ms of it the server's first JSONL parse. Nothing can paint sooner — the rows
+/// genuinely do not exist yet — so the fix is not speed, it is telling the truth
+/// while waiting. Shaped like a transcript (alternating assistant lines and a
+/// right-aligned bubble, plus a chip row) so the wait previews the thing arriving
+/// rather than being a generic spinner in the middle of the screen.
+///
+/// `.redacted(.placeholder)` does the drawing: same treatment the rest of the app
+/// uses for unresolved content, so it dims and shimmers with the system rather than
+/// with hand-rolled colours. It takes NO touches — pull-to-refresh on the transcript
+/// underneath has to keep working, and there is nothing here to tap.
+struct ChatTimelineSkeleton: View {
+    /// Widths as fractions of the content width, so the bars read as sentences
+    /// rather than as a bar chart.
+    private static let assistantRuns: [[CGFloat]] = [
+        [0.92, 0.78, 0.44],
+        [0.86, 0.62],
+        [0.9, 0.83, 0.7, 0.35],
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(Array(Self.assistantRuns.enumerated()), id: \.offset) { index, run in
+                if index > 0 { userBubble }
+                chipRow
+                assistantRun(run)
+            }
+        }
+        .padding(.horizontal, TimelineMetrics.hMargin)
+        .padding(.top, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .redacted(reason: .placeholder)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier("chat.skeleton")
+        .accessibilityLabel("Loading the conversation")
+    }
+
+    private func assistantRun(_ widths: [CGFloat]) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(widths.enumerated()), id: \.offset) { _, fraction in
+                bar(fraction)
+            }
+        }
+    }
+
+    private var userBubble: some View {
+        HStack {
+            Spacer(minLength: TimelineMetrics.bubbleLeadingGap)
+            RoundedRectangle(cornerRadius: TimelineMetrics.bubbleCorner, style: .continuous)
+                .fill(Color(.tertiarySystemFill))
+                .frame(height: 34)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var chipRow: some View {
+        Capsule()
+            .fill(Color(.tertiarySystemFill))
+            .frame(width: 130, height: 21)
+    }
+
+    private func bar(_ fraction: CGFloat) -> some View {
+        GeometryReader { geo in
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color(.tertiarySystemFill))
+                .frame(width: geo.size.width * fraction, height: 12)
+        }
+        .frame(height: 12)
     }
 }
 

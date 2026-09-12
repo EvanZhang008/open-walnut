@@ -25,8 +25,37 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     private let pageWidth: CGFloat = 393
 
     /// Rendered height of exactly the content the cell hosts, at page width.
-    private func renderedHeight(_ row: TimelineRow) -> CGFloat {
-        let host = UIHostingController(rootView: TimelineHostedCell.content(for: row, delegate: nil))
+    ///
+    /// `category` overrides the hosted content's text size. It is REQUIRED for any
+    /// row the actor measured at a non-default size: SwiftUI's `.caption` comes from
+    /// the environment while the row's height came from `TimelineInput.sizeCategory`,
+    /// so leaving it out compares a row measured at XXXL against content laid out at
+    /// the simulator's size — a gate that fails on arithmetic that is actually
+    /// correct.
+    ///
+    /// IT HAS TO BE `dynamicTypeSize`, NOT `traitOverrides`. Measured on the pinned
+    /// simulator: a `UIHostingController` whose
+    /// `traitOverrides.preferredContentSizeCategory` is AccessibilityXXXL still
+    /// lays `Text(…).font(.caption)` out at 13.33pt — the same number it gives at
+    /// `.large` — because nothing propagates that trait through `sizeThatFits` on a
+    /// controller that was never in a window. `.dynamicTypeSize` moves it for real
+    /// (13.33 → 44.33 on the same probe). The trait override is set ANYWAY, for the
+    /// UIKit-font paths inside hosted content (the chevron reads
+    /// `TimelineTextStyler`, which the actor has already adopted), so the two halves
+    /// of a chip cannot be sized for two different text sizes.
+    private func renderedHeight(_ row: TimelineRow,
+                                category: UIContentSizeCategory = .unspecified) -> CGFloat {
+        let content = TimelineHostedCell.content(for: row, delegate: nil)
+        let host: UIHostingController<AnyView>
+        if category != .unspecified, let size = DynamicTypeSize(category) {
+            host = UIHostingController(rootView: AnyView(content.dynamicTypeSize(size)))
+            host.traitOverrides.preferredContentSizeCategory = category
+        } else {
+            XCTAssertEqual(category, .unspecified,
+                           "\(category.rawValue) has no DynamicTypeSize — the override "
+                               + "would silently measure at the simulator's own size")
+            host = UIHostingController(rootView: AnyView(content))
+        }
         host.view.backgroundColor = .clear
         let fitted = host.sizeThatFits(in: CGSize(width: pageWidth, height: .greatestFiniteMagnitude))
         return fitted.height
@@ -67,26 +96,26 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     /// the NUMBER of blocks — a flat percentage of the row either fails an
     /// honest multi-block card or stops catching a genuinely wrong one-block row.
     ///
-    /// Concretely: an expanded tool card used to be ONE block (the result) and is
-    /// now up to four (an Input label + body, a Result label + body), and an
-    /// expanded reasoning card adds a wrapped prose block to its capsule.
+    /// Concretely: only ONE row kind still models more than a single line, the
+    /// LIVE thinking row (a capsule plus a wrapped prose preview). Tool rows and
+    /// history thinking rows became flat capsules when their inline expansion
+    /// moved to the activity drawer, so they model one line and get no allowance
+    /// at all — which is the tighter bar, and the right one.
     private func blockSlack(_ row: TimelineRow) -> CGFloat {
         switch row.content {
-        case .toolChip(_, _, let input, _, _, let expanded):
-            guard expanded else { return 0 }
-            return input?.isEmpty == false ? 8 : 4
-        case .thinking(_, let body, _, let expanded, _):
-            return expanded && body != nil ? 4 : 0
+        case .thinking(_, let preview, _, _, _, _):
+            return preview != nil ? 4 : 0
         default:
             return 0
         }
     }
 
     private func assertFits(_ rows: [TimelineRow], _ label: String,
+                            category: UIContentSizeCategory = .unspecified,
                             file: StaticString = #filePath, line: UInt = #line) -> Int {
         var checked = 0
         for row in rows where Self.hostedKinds.contains(row.content.reuseKind) {
-            let rendered = renderedHeight(row)
+            let rendered = renderedHeight(row, category: category)
             let kind = row.content.reuseKind
             checked += 1
             XCTAssertLessThanOrEqual(
@@ -220,17 +249,61 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         // height model gets wrong most often.
         let reasoning = (0..<20).map { "step \($0): 读取下一个候选路径并核对 mtime" }
             .joined(separator: "\n")
+        // The turn's TOOL CHIPS ride along too: a live turn now keeps a row per
+        // call, running and finished, and a running chip animates its icon — which
+        // must not change the height the row was measured at.
+        let tools = [
+            LiveToolCall(id: "t1", name: "Read", detail: "src/agent/tools.ts", finished: true),
+            LiveToolCall(id: "t2", name: "mcp__walnut__task_create",
+                         detail: "title: 把远端会话的镜像路径改成按 build 分目录", finished: true),
+            LiveToolCall(id: "t3", name: "WebFetch",
+                         detail: "https://example.com/a/very/long/path/that/cannot/break/nicely/at/all",
+                         finished: false),
+        ]
         for activity in ["Thinking", "Bash · npm run test:quick in the repo root",
                          "正在读取 /tmp 下的会话流文件并核对时间戳", nil] {
             let snapshot = await actor.buildSnapshot(TimelineInput(
                 messages: [], streaming: true,
                 liveText: "第一段结论已经写完,继续第二段。\n\n- 一\n- 二",
                 liveTextTruncated: true, liveThinking: reasoning,
+                liveTools: tools,
                 activity: activity, showLoadEarlier: true,
                 width: pageWidth, expandedRowIDs: []))
             let checked = assertFits(snapshot.rows, "live turn (\(activity ?? "no activity"))")
             XCTAssertGreaterThanOrEqual(checked, 4, "gate checked nothing (n=\(checked))")
         }
+    }
+
+    /// The COLLAPSED rows at an accessibility text size, which is where a chip's
+    /// one-line height model is under the most pressure: the capsule's font grows,
+    /// the chevron scales with it, and the row still may not outgrow the number the
+    /// actor computed (the cell clips). Both chips, both with a long line to
+    /// truncate, at the two extremes.
+    func testChipRowsFitAtAccessibilityTextSizes() async {
+        let long = "checking the pgid files before adopting them, because a daemon "
+            + "restart must skip any sid the reconcile pass already took over"
+        var checked = 0
+        for category in [UIContentSizeCategory.extraSmall,
+                         .large,
+                         .accessibilityExtraExtraExtraLarge] {
+            var reasoning = message("k-1", text: long, kind: .thinking)
+            reasoning = ChatMessage(id: reasoning.id, role: "assistant", text: long,
+                                    createdAt: reasoning.createdAt, kind: .thinking,
+                                    thinkingText: long + " " + long)
+            let tool = ChatMessage(id: "t-1", role: "assistant",
+                                   text: "mcp__walnut__task_create",
+                                   createdAt: "2026-09-12T06:00:00Z", kind: .tool,
+                                   detail: long, resultPreview: "ok", agent: "reviewer")
+            let actor = TimelineLayoutActor()
+            let snapshot = await actor.buildSnapshot(TimelineInput(
+                messages: [reasoning, tool], streaming: false, liveText: "",
+                liveTextTruncated: false, activity: nil, showLoadEarlier: false,
+                width: pageWidth, expandedRowIDs: [], sizeCategory: category))
+            checked += assertFits(snapshot.rows, "chips at \(category.rawValue)",
+                                  category: category)
+        }
+        TimelineTextStyler.adopt(.unspecified)
+        XCTAssertGreaterThanOrEqual(checked, 6, "gate checked nothing (n=\(checked))")
     }
 
     func testFailedNoticeFitsBothWordings() async {

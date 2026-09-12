@@ -832,6 +832,13 @@ export type SessionControlAction =
   // projection, which excludes lane records), so it relays the read — otherwise a
   // phone paired to the replica opens every web-sent conversation empty.
   | 'server.chat.messages'
+  // The FULL text behind one expanded activity row (a reasoning block, a tool's
+  // input/result), read on the box that owns the session's JSONL. Same reason as
+  // server.chat.messages, one layer down: the list reads carry excerpts, and the
+  // text they cut only exists in the transcript on the primary's disk. Without
+  // this, a phone paired to a replica opens every drawer on a clipped excerpt with
+  // no way to see the rest.
+  | 'server.activity.detail'
   // Which engine ANSWERS a relayed chat turn, and the lane session behind it.
   // The companion to server.chat.turn: since the turn runs on the primary, the
   // engine and model belong to the primary too — a replica answering from its
@@ -1308,6 +1315,15 @@ export async function handleSessionControlRelay(
       case 'server.chat.messages': {
         const { handlePrimaryChatMessagesRelay } = await import('../../web/routes/api-v1.js');
         result = await handlePrimaryChatMessagesRelay(p);
+        break;
+      }
+      // The full text behind ONE activity row, resolved where the JSONL lives.
+      // Read-only, and the same function the primary's own
+      // GET /api/v1/activity/detail runs — a second resolver is how the two boxes
+      // would start disagreeing about what a row's full text is.
+      case 'server.activity.detail': {
+        const { handlePrimaryActivityDetailRelay } = await import('../../web/routes/api-v1.js');
+        result = await handlePrimaryActivityDetailRelay(p);
         break;
       }
       // Report (and optionally mint) the lane behind a relayed conversation, so

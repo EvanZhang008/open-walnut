@@ -99,6 +99,18 @@ final class ChatStore {
 
     var loadingList = false
     var loadingMessages = false
+    /// True from the instant a conversation is selected until its first page
+    /// RESOLVES — landed, empty, or failed.
+    ///
+    /// WHY IT IS NOT `loadingMessages`: that flag is store-wide and only goes up
+    /// once the fetch task actually runs, and it is also raised by the 5s poll and
+    /// the turn-end refetch. This one answers exactly one question — "is this
+    /// conversation's transcript still unknown?" — which is what the skeleton needs.
+    /// Measured cold on a 200-row page: 3.23s of pure white, 1845ms of it the
+    /// server's first JSONL parse, with no skeleton and no spinner. A blank screen
+    /// for three seconds is read as a broken app, and nothing can paint sooner
+    /// because there is genuinely nothing to paint yet.
+    private(set) var firstPageInFlight = false
     var sending = false
     /// A turn is running on the active conversation (composer disabled).
     var streaming = false
@@ -114,6 +126,16 @@ final class ChatStore {
     /// the same coalesced cadence as `streamText`, from the shared
     /// `LiveAgentActivity` below. Empty = nothing to show.
     private(set) var liveThinking = ""
+    /// Every tool call THIS TURN has made, UNFOLDED — the same pairs `activity`
+    /// carries one at a time as a "name · detail" string. The timeline needs the
+    /// parts to build real tool rows (see `TimelineInput.liveTools`); the folded
+    /// string could only ever be a status line, which is why a tool used mid-turn
+    /// left no trace once the turn ended.
+    ///
+    /// A finished call STAYS in this list until the canonical transcript replaces
+    /// it (`clearLiveThinking`). Retiring it on its own `tool-result` is what made
+    /// the chip vanish the instant the tool returned — see `LiveToolCall`.
+    private(set) var liveTools: [LiveToolCall] = []
     /// The `thinking` / `tool` / `tool-result` arms, shared with
     /// SessionConversationStore. NOT observed: the accumulation is a hot buffer
     /// (the stream repeats `thinking` at whatever rate the agent emits), and only
@@ -144,7 +166,32 @@ final class ChatStore {
     /// (free text) instead of option buttons.
     var pendingQuestion = false
 
-    private static let pageSize = 50
+    /// Rows per page of `/conversations/:id/messages`.
+    ///
+    /// `limit` COUNTS ROWS, NOT MESSAGES, and a row is now a prose message OR a
+    /// tool row OR a thinking row. Measured over 25 real conversations on the
+    /// primary: 897 rows for 222 prose messages, i.e. **4.0 rows per prose
+    /// message** on average, 6-8 on a tool-heavy one and 50 on the worst outlier
+    /// (100 rows carrying 2 prose messages). So the 50 that shipped here bought
+    /// 9-13 prose messages on the long conversations — five or six exchanges,
+    /// after which "Load earlier messages" appears. Before history carried
+    /// tool/thinking rows, the same 50 bought 50 prose messages, so this is a
+    /// regression in felt depth that arrived with the richer payload rather than
+    /// a new bug.
+    ///
+    /// 200 restores it: on the two genuinely long conversations measured it
+    /// yields 46 and 41 prose messages (against 13 and 9) for 202KB and 278KB,
+    /// and for 23 of the 25 it simply fetches the WHOLE conversation (≤60 rows,
+    /// ≤60KB) — the byte cost lands only where the depth is needed. Server time
+    /// does not move at all (40-270ms, uncorrelated with the limit): the route
+    /// parses the whole JSONL before the slice is applied, so the page size buys
+    /// bytes, not work. Still well inside the timeline's own ≤400-message design
+    /// ceiling (see TimelineLayoutActor's row cache).
+    ///
+    /// Re-measure before raising it further: this page is refetched at every turn
+    /// end (`loadMessages` from the turn-end path), so it is a per-turn cost on
+    /// cellular, not a one-time open cost.
+    private static let pageSize = 200
     private static let cacheTail = 60
 
     // MARK: - Lifecycle
@@ -239,6 +286,10 @@ final class ChatStore {
         messages = []
         localRowConversation.removeAll()
         hasOlder = false
+        // This path clears `activeID` without going through `select`, so it owns
+        // the reset too — otherwise the outgoing conversation's in-flight flag
+        // would keep a skeleton up over the new agent's (empty) resting state.
+        firstPageInFlight = false
         if let saved = UserDefaults.standard.string(forKey: activeConversationKey) {
             select(saved)
         }
@@ -295,6 +346,17 @@ final class ChatStore {
         errorMessage = nil
         initialPaintDone = false
         messages = []
+        // `hasOlder` belongs to the conversation that was on screen, and NOTHING
+        // reset it here: opening New chat straight after a long conversation left
+        // it true, so a brand-new empty chat offered "Load earlier messages" at the
+        // top of nothing (2026-09-12 gate). The first page for the new selection is
+        // what re-establishes it.
+        hasOlder = false
+        // A conversation being opened is on the hook for its first page from THIS
+        // instant, not from whenever the fetch task gets scheduled — the gap is what
+        // let the "Your Personal AI is listening" empty state flash during a switch,
+        // and it is where the skeleton has to start.
+        firstPageInFlight = id != nil
         // Nothing the previous conversation invented may outlive it: the owner
         // map is what tells a later merge that a leftover echo is not ours, and
         // an entry whose row is gone would be a lie about the next conversation.
@@ -341,7 +403,15 @@ final class ChatStore {
         // fetch would redact the timeline of the conversation the user did open.
         guard stillViewing(id) else { return }
         loadingMessages = true
-        defer { loadingMessages = false }
+        // Resolved either way — landed, empty, or thrown. A skeleton that outlives
+        // a FAILED first page is a permanent fake-loading screen, which is the one
+        // way a placeholder is worse than the blank it replaced. Deliberately after
+        // the `stillViewing` guard: a load for a conversation nobody is looking at
+        // must not clear the flag the VISIBLE conversation's own load raised.
+        defer {
+            loadingMessages = false
+            firstPageInFlight = false
+        }
         do {
             let agentID = activeAgentID
             let fetched = try await transport.messages(
@@ -851,6 +921,13 @@ final class ChatStore {
         if activity != value { activity = value }
     }
 
+    /// Mirror the shared handler's tool list onto the observed field.
+    /// Equality-gated for exactly the reason `setActivity` is: this runs per SSE
+    /// event and @Observable has no same-value suppression.
+    private func setLiveTools(_ tools: [LiveToolCall]) {
+        if liveTools != tools { liveTools = tools }
+    }
+
     /// Test seam: WalnutTests drives the REAL handler (it is private because
     /// its guard needs activeID; tests set that up first). Production code
     /// must keep calling `handle` via the SSE callback only.
@@ -871,6 +948,7 @@ final class ChatStore {
         // policy would freeze this composer on somebody else's turn.
         if let handled = LiveStreamEvents.apply(event: event.event, data: data, to: &live) {
             setActivity(live.activityLabel)
+            setLiveTools(live.tools)
             if handled.needsFlush { scheduleLiveFlush() }
             // The agent is now blocked on a structured question — surface the
             // answer card. (The stream carries only the tool name; the question
@@ -971,6 +1049,10 @@ final class ChatStore {
     private func clearLiveThinking() {
         live.reset()
         if !liveThinking.isEmpty { liveThinking = "" }
+        // `live.reset()` already dropped the turn's calls; the observed mirror has
+        // to go with it or a finished turn's tool rows outlive their turn (this is
+        // the handoff point where the canonical `kind:"tool"` rows take over).
+        setLiveTools([])
     }
 
     private func flushPendingDelta() {
