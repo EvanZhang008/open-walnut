@@ -132,9 +132,9 @@ describe('migratePhase', () => {
     }
   });
 
-  it('unknown phase → TODO', () => {
-    expect(migratePhase('GARBAGE')).toBe('TODO');
-    expect(migratePhase('')).toBe('TODO');
+  it('does not invent a phase for an unknown value', () => {
+    expect(migratePhase('GARBAGE')).toBeUndefined();
+    expect(migratePhase('')).toBeUndefined();
   });
 });
 

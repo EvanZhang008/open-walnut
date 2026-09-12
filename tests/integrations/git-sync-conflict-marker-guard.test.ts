@@ -17,6 +17,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { removeTempTree } from '../helpers/temp-home.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-markerguard-test'));
 
@@ -68,7 +69,7 @@ async function writeFile(rel: string, content: string): Promise<string> {
 
 beforeEach(async () => {
   repo = WALNUT_HOME;
-  await fsp.rm(repo, { recursive: true, force: true });
+  await removeTempTree(repo);
   await fsp.mkdir(repo, { recursive: true });
   resetSyncGuardForTest();
   initSync(); // real repo + .gitignore + initial commit
@@ -76,7 +77,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fsp.rm(repo, { recursive: true, force: true });
+  await removeTempTree(repo);
 });
 
 describe('commitIfDirty (the auto-save path that committed the incident)', () => {

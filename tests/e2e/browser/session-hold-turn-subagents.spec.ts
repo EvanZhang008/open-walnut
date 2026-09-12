@@ -22,8 +22,9 @@ import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
+import { selectSection } from './todo-panel-helpers'
 
-const SCREENSHOT_DIR = '/tmp/session-hold-turn-subagents'
+const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-hold-turn-subagents'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 
 /** The followup summary the mock CLI streams AFTER the early result+idle. */
@@ -32,11 +33,55 @@ const HOLD_PROMPT = `hold-turn-test:${FOLLOWUP_SUMMARY}`
 
 let fixtureRoot = ''
 
-test.describe.configure({ mode: 'serial' })
+const densityTaskIds: string[] = []
+const densityProject = `Status checks ${Date.now()}`
 
-test.beforeAll(async () => {
+test.describe.configure({ mode: 'serial' })
+test.use({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 })
+
+test.beforeAll(async ({ request }) => {
+  test.setTimeout(120_000)
   ;({ fixtureRoot } = await discoverBrowserFixture(TEST_PORT))
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
+  let index = 0
+  for (const [tier, count] of [['focus', 21], ['satellite', 50], ['wait', 23], ['backlog', 11]] as const) {
+    for (let i = 0; i < count; i++, index++) {
+      const response = await request.post('/api/tasks', {
+        data: {
+          title: `Status board ${index + 1}: verify background work and followup delivery`,
+          project: densityProject, pinned: true, focus_tier: tier,
+        },
+      })
+      expect(response.status()).toBe(201)
+      const { task } = await response.json()
+      densityTaskIds.push(task.id)
+      const phase = index < 6 ? 'IN_PROGRESS' : index < 11 ? 'AGENT_COMPLETE' : index < 25 ? 'COMPLETE' : 'TODO'
+      if (phase !== 'TODO') {
+        const updated = await request.patch(`/api/tasks/${task.id}`, { data: { phase } })
+        expect(updated.ok()).toBe(true)
+      }
+    }
+  }
+  const response = await request.get(`/api/tasks?working_set=true&project=${encodeURIComponent(densityProject)}`)
+  expect(response.ok()).toBe(true)
+  const { tasks, truncated } = await response.json()
+  expect(truncated).toBe(false)
+  expect(tasks).toHaveLength(105)
+  for (const [phase, count] of [['TODO', 80], ['AGENT_COMPLETE', 5], ['COMPLETE', 14], ['IN_PROGRESS', 6]]) {
+    expect(tasks.filter((task: { phase: string }) => task.phase === phase)).toHaveLength(count)
+  }
+})
+
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: 'wait' })
+})
+
+test.afterAll(async ({ request }) => {
+  test.setTimeout(120_000)
+  for (const id of densityTaskIds) {
+    const response = await request.delete(`/api/tasks/${id}`)
+    expect(response.ok()).toBe(true)
+  }
 })
 
 /**
@@ -46,9 +91,18 @@ test.beforeAll(async () => {
  * folder picker. The draft morphs into the pending → real column in place, so
  * every session assertion below is untouched.
  */
+async function openHome(page: Page): Promise<void> {
+  await page.setContent(`<a href="http://localhost:${TEST_PORT}/">Open Walnut</a>`)
+  await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
+  await expect(page.locator('.main-page')).toBeVisible()
+  if (process.env.PW_BUILT_SPA === '1') {
+    await expect(page.locator('script[src^="/assets/"]')).toHaveCount(1)
+    await expect(page.locator('script[src*="/@vite/client"]')).toHaveCount(0)
+  }
+}
+
 async function openQuickStart(page: Page): Promise<void> {
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+  await openHome(page)
   await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
 }
 
@@ -126,4 +180,172 @@ test('a plain turn with no subagents still completes instantly (no added latency
   await expect.poll(() => processStatus(page, sessionId), { timeout: 20_000 })
     .toMatch(/idle|stopped/)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/plain-turn-control.png`, fullPage: true })
+})
+
+test('a late session hint cannot erase a red task row, but committed task changes can', async ({ page }) => {
+  const taskId = densityTaskIds[6]
+  const sessionId = 'phase-hint-fixture'
+  let socket: import('@playwright/test').WebSocketRoute | undefined
+  await page.routeWebSocket(/\/ws(?:\?|$)/, (route) => {
+    socket = route
+    route.connectToServer()
+  })
+  await page.route('**/api/tasks?**', async (route) => {
+    const response = await route.fetch()
+    expect(response.ok()).toBe(true)
+    const body = await response.json()
+    body.tasks = body.tasks.map((task: { id: string }) => task.id === taskId
+      ? { ...task, session_id: sessionId } : task)
+    await route.fulfill({ response, json: body })
+  })
+  await openHome(page)
+  await selectSection(page, 'Focus')
+  const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
+  await expect(card).toBeVisible()
+  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/red-before-session-hint.png` })
+  await expect.poll(() => Boolean(socket)).toBe(true)
+  socket!.send(JSON.stringify({
+    type: 'event', name: 'session:status-changed', seq: Date.now(),
+    data: { sessionId, taskId, phase: 'IN_PROGRESS', process_status: 'idle' },
+  }))
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/red-after-session-hint.png` })
+  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  expect(await card.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe('rgba(255, 59, 48, 0.08)')
+  const persisted = await page.request.get(`/api/tasks/${taskId}`)
+  expect(persisted.ok()).toBe(true)
+  expect((await persisted.json()).task.phase).toBe('AGENT_COMPLETE')
+  for (const phase of ['IN_PROGRESS', 'AGENT_COMPLETE'] as const) {
+    const updated = await page.request.patch(`/api/tasks/${taskId}`, { data: { phase } })
+    expect(updated.ok()).toBe(true)
+    if (phase === 'IN_PROGRESS') await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+    else await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  }
+  const read = await page.request.patch(`/api/tasks/${taskId}`, { data: { unread: false } })
+  expect(read.ok()).toBe(true)
+  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/red-retained-after-read.png` })
+  await card.getByRole('button', { name: 'Mark complete', exact: true }).click()
+  await expect(card).toHaveClass(/todo-pinned-card-done/)
+  const completed = await page.request.get(`/api/tasks/${taskId}`)
+  expect(completed.ok()).toBe(true)
+  socket!.send(JSON.stringify({
+    type: 'event', name: 'task:updated', seq: Date.now(),
+    data: { task: { ...(await completed.json()).task, session_id: sessionId } },
+  }))
+  socket!.send(JSON.stringify({
+    type: 'event', name: 'session:status-changed', seq: Date.now(),
+    data: { sessionId, taskId, phase: 'IN_PROGRESS', process_status: 'running' },
+  }))
+  await page.waitForTimeout(300)
+  await expect(card).toHaveClass(/todo-pinned-card-done/)
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+})
+
+test('red task rows stay current across tiers, reading races, and reconnects', async ({ page }) => {
+  test.setTimeout(60_000)
+  const sockets: import('@playwright/test').WebSocketRoute[] = []
+  await page.routeWebSocket(/\/ws(?:\?|$)/, (route) => {
+    sockets.push(route)
+    route.connectToServer()
+  })
+  await openHome(page)
+  await expect.poll(() => sockets.length).toBe(1)
+  for (const [tier, index] of [['Focus', 6], ['Satellite', 26], ['Wait', 71], ['Backlog', 94]] as const) {
+    const id = densityTaskIds[index]
+    const update = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'AGENT_COMPLETE', unread: true } })
+    expect(update.ok()).toBe(true)
+    await selectSection(page, tier)
+    const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${id}"]`)
+    await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+    await expect(card.locator('.task-unread-dot')).toBeVisible()
+    await card.locator('.todo-pinned-title').click()
+    await expect(card.locator('.task-unread-dot')).toHaveCount(0)
+    await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/red-read-${tier.toLowerCase()}.png` })
+  }
+
+  const id = densityTaskIds[6]
+  await selectSection(page, 'Focus')
+  const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${id}"]`)
+  const reset = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'IN_PROGRESS', unread: true } })
+  expect(reset.ok()).toBe(true)
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+  await expect(card.locator('.task-unread-dot')).toBeVisible()
+  let releaseRead!: () => void
+  const holdRead = new Promise<void>((resolve) => { releaseRead = resolve })
+  let readStarted = false
+  await page.route(`**/api/tasks/${id}`, async (route) => {
+    if (route.request().method() !== 'PATCH' || route.request().postDataJSON()?.unread !== false) {
+      await route.continue()
+      return
+    }
+    readStarted = true
+    await holdRead
+    await route.continue()
+  })
+  try {
+    await card.locator('.todo-pinned-title').click()
+    await expect.poll(() => readStarted).toBe(true)
+    const settled = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'AGENT_COMPLETE', unread: true } })
+    expect(settled.ok()).toBe(true)
+    await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  } finally {
+    releaseRead()
+  }
+  await expect(card.locator('.task-unread-dot')).toHaveCount(0)
+  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+
+  const firstSocket = sockets[0]
+  await firstSocket.close({ code: 1012, reason: 'test reconnect' })
+  const offlineUpdate = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'IN_PROGRESS' } })
+  expect(offlineUpdate.ok()).toBe(true)
+  await expect.poll(() => sockets.length, { timeout: 15_000 }).toBeGreaterThan(1)
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+  const handback = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'AGENT_COMPLETE' } })
+  expect(handback.ok()).toBe(true)
+  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/red-after-reconnect.png` })
+})
+
+test('a cold Home whose socket connects late still paints the hand-back red', async ({ page }) => {
+  test.setTimeout(90_000)
+  // Index 0: focus tier, seeded IN_PROGRESS (so not red, no dot) and untouched
+  // by every other test in this file.
+  const taskId = densityTaskIds[0]
+  let allowServer = false
+  let serverConnects = 0
+  await page.routeWebSocket(/\/ws(?:\?|$)/, (route) => {
+    if (!allowServer) {
+      route.close()
+      return
+    }
+    serverConnects++
+    route.connectToServer()
+  })
+  await openHome(page)
+  await selectSection(page, 'Focus')
+  const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
+  await expect(card).toBeVisible()
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+
+  const handback = await page.request.patch(`/api/tasks/${taskId}`, { data: { phase: 'AGENT_COMPLETE' } })
+  expect(handback.ok()).toBe(true)
+  const persisted = await page.request.get(`/api/tasks/${taskId}`)
+  expect(persisted.ok()).toBe(true)
+  const committed = (await persisted.json()).task
+  expect(committed.phase).toBe('AGENT_COMPLETE')
+  expect(committed.unread).toBe(true)
+  // Committed on the server, unreachable by this page: no socket carried it.
+  await page.waitForTimeout(1_000)
+  expect(serverConnects).toBe(0)
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-open-stale-before-connect.png` })
+
+  allowServer = true
+  await expect.poll(() => serverConnects, { timeout: 45_000 }).toBeGreaterThan(0)
+  await expect(card).toHaveClass(/todo-pinned-card-needs-action/, { timeout: 20_000 })
+  await expect(card.locator('.task-unread-dot')).toBeVisible()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-open-red-after-late-connect.png` })
 })

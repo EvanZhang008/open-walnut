@@ -182,7 +182,7 @@ export function applyPhase(task: Task, phase: TaskPhase): void {
  * PEER_CODE_REVIEW / RELEASE_IN_PIPELINE pointed at the deleted
  * HUMAN_VERIFIED / POST_WORK_COMPLETED, so they land on AGENT_COMPLETE.
  */
-export function migratePhase(phase: string): TaskPhase {
+export function migratePhase(phase: string): TaskPhase | undefined {
   if (phase === 'INVESTIGATION') return 'TODO';
   if (phase === 'WAIT') return 'TODO';
   if (phase === 'AWAIT_HUMAN_ACTION') return 'TODO';
@@ -192,7 +192,7 @@ export function migratePhase(phase: string): TaskPhase {
   if (phase === 'HUMAN_VERIFIED') return 'AGENT_COMPLETE';
   if (phase === 'POST_WORK_COMPLETED') return 'AGENT_COMPLETE';
   if (VALID_PHASES.has(phase)) return phase as TaskPhase;
-  return 'TODO';
+  return undefined;
 }
 
 // WHY unconditional: The old computeSessionCompletionPhase only advanced forward

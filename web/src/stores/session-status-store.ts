@@ -120,6 +120,7 @@ const STATUS_FIELDS = [
   'errorMessage',
   'provider',
   'engine',
+  'pendingPermissionTool',
   'statusRevision',
   'statusUpdatedAt',
 ] as const;
@@ -183,6 +184,7 @@ function snapshotsEqual(a: SessionStatusSnapshot, b: SessionStatusSnapshot): boo
     && a.errorMessage === b.errorMessage
     && a.provider === b.provider
     && a.engine === b.engine
+    && a.pendingPermissionTool === b.pendingPermissionTool
     && a.statusRevision === b.statusRevision
     && a.statusUpdatedAt === b.statusUpdatedAt;
 }
@@ -575,8 +577,10 @@ export class SessionStatusStore {
       const versioned = normalizeVersionedStatus(candidate, providerId);
       if (versioned) this.applyVersioned(versioned, source);
       else if (isProcessStatus(rawStatus.process_status)) {
+        const patch = legacyPatchFromRecord(candidate);
         this.applyLegacy(providerId, {
-          ...legacyPatchFromRecord(candidate),
+          ...patch,
+          pendingPermissionTool: patch.pendingPermissionTool ?? null,
           taskId,
         }, source);
       }

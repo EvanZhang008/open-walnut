@@ -19,6 +19,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { removeTempTree } from '../helpers/temp-home.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-orphanrebase-test'));
 
@@ -60,14 +61,14 @@ async function backdate(p: string, ageMs = ORPHAN_SURGERY_MIN_AGE_MS + 60_000): 
 
 beforeEach(async () => {
   repo = WALNUT_HOME;
-  await fsp.rm(repo, { recursive: true, force: true });
+  await removeTempTree(repo);
   await fsp.mkdir(repo, { recursive: true });
   run('git init -q -b main', repo);
   run('git config user.email t@t && git config user.name t', repo);
 });
 
 afterEach(async () => {
-  await fsp.rm(repo, { recursive: true, force: true });
+  await removeTempTree(repo);
 });
 
 describe('recoverOrphanedGitSurgery — age gate', () => {

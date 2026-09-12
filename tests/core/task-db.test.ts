@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-db'));
@@ -23,6 +24,7 @@ import {
   taskToRow,
   TASK_COLUMNS,
   TASK_DB_PATH,
+  SCHEMA_VERSION,
 } from '../../src/core/task-db.js';
 import { runMigrationIfNeeded } from '../../src/core/task-db-migration.js';
 import {
@@ -102,6 +104,31 @@ describe('task-db: schema idempotency', () => {
       | { id: string; title: string }
       | undefined;
     expect(row?.title).toBe('t');
+  });
+
+  it('refuses a newer schema before changing its tables, journal, or rows', () => {
+    const raw = new Database(TASK_DB_PATH);
+    raw.exec('CREATE TABLE future_task_state (id TEXT PRIMARY KEY, phase TEXT)');
+    raw.prepare('INSERT INTO future_task_state VALUES (?, ?)').run('future', 'FUTURE_ACTION');
+    raw.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
+    const journal = raw.pragma('journal_mode', { simple: true });
+    raw.close();
+
+    expect(() => getDb()).toThrow(`Task database schema ${SCHEMA_VERSION + 1} is newer than supported schema ${SCHEMA_VERSION}`);
+    expect(() => getDb()).toThrow('use a newer Walnut build');
+
+    const check = new Database(TASK_DB_PATH, { readonly: true });
+    expect(check.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION + 1);
+    expect(check.pragma('journal_mode', { simple: true })).toBe(journal);
+    expect(check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([{ name: 'future_task_state' }]);
+    expect(check.prepare('SELECT * FROM future_task_state').all()).toEqual([{ id: 'future', phase: 'FUTURE_ACTION' }]);
+    check.close();
+
+    const repair = new Database(TASK_DB_PATH);
+    repair.pragma('user_version = 0');
+    repair.close();
+    closeDb();
+    expect(getDb()).not.toBeNull();
   });
 
   it('a failed open rethrows the ORIGINAL error on every later call (never silent null)', async () => {
@@ -335,6 +362,60 @@ describe('task-db: composable-query pushdown', () => {
 // ── 2. CRUD round-trip ─────────────────────────────────────────────────────
 
 describe('task-db: rowToTask / taskToRow round trip', () => {
+  it.each(['raw', 'bulk-update', 'bulk-add', 'bulk-delete', 'whole-store'] as const)(
+    'exposes committed %s data before asynchronous lock cleanup finishes', async (operation) => {
+      const { task } = await addTask({ title: 'Before', project: '', source: 'local' });
+      await listTasks();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let reached!: () => void;
+      const unlocking = new Promise<void>((resolve) => { reached = resolve; });
+      const rm = fsp.rm;
+      const spy = vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
+        if (String(target) === `${TASKS_FILE}.lock`) {
+          reached();
+          await gate;
+        }
+        return rm(target, options);
+      });
+      const mutation = operation === 'raw' ? updateTaskRaw(task.id, { title: 'After' })
+        : operation === 'bulk-update' ? updateTasksBulk([{ id: task.id, patch: { title: 'After' } }])
+        : operation === 'bulk-add' ? addTasksBulk([{ ...task, id: 'new-task', title: 'After' }])
+        : operation === 'bulk-delete' ? deleteTasksBulk([task.id])
+        : addTask({ title: 'After', project: '', source: 'local' });
+      try {
+        await unlocking;
+        const tasks = await listTasks();
+        if (operation === 'bulk-delete') expect(tasks.some((t) => t.id === task.id)).toBe(false);
+        else expect(tasks.some((t) => t.title === 'After')).toBe(true);
+      } finally {
+        release();
+        await mutation;
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it('preserves an unknown phase through another task edit without blocking the list', async () => {
+    const { task } = await addTask({ title: 'Unrelated task', project: '', source: 'local' });
+    const db = getDb()!;
+    db.prepare(`INSERT INTO tasks (id, title, phase, status, updated_at)
+      VALUES (?, ?, ?, ?, ?)`).run('future', 'Newer task', 'FUTURE_ACTION', 'in_progress', '2026-01-01T00:00:00Z');
+    _resetForTesting();
+
+    expect((await listTasks()).find((t) => t.id === 'future')?.phase).toBe('FUTURE_ACTION');
+    await addTask({ title: 'Another task', project: '', source: 'local' });
+    expect(db.prepare('SELECT phase, status, updated_at FROM tasks WHERE id = ?').get('future')).toEqual({
+      phase: 'FUTURE_ACTION', status: 'in_progress', updated_at: '2026-01-01T00:00:00Z',
+    });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM tasks').get()).toEqual({ count: 3 });
+    expect(db.prepare('SELECT title FROM tasks WHERE id = ?').get(task.id)).toEqual({ title: 'Unrelated task' });
+
+    db.prepare('UPDATE tasks SET phase = ? WHERE id = ?').run('NEED_ACTION', 'future');
+    _resetForTesting();
+    expect((await listTasks()).find((t) => t.id === 'future')?.phase).toBe('NEED_ACTION');
+  });
+
   it('preserves all explicit columns + JSON array columns + ext payload', () => {
     const db = getDb()!;
     const insertCols = [...TASK_COLUMNS, 'payload'];
@@ -500,6 +581,7 @@ describe('task-db: updateTasksBulk atomicity', () => {
   it('applies 100 updates in a single transaction', async () => {
     const created = await addTasksBulk(
       Array.from({ length: 100 }, (_, i) => ({
+        id: `bulk-update-${i}`,
         title: `Bulk ${i}`,
         project: 'Local',
         source: 'local' as const,

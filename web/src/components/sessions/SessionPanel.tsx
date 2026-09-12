@@ -506,14 +506,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [sessionId]);
 
-  // Task phase is not part of SessionStatusSnapshot; keep only that sibling
-  // record synchronized from the event.
   useEvent('session:status-changed', (data) => {
-    const d = data as { sessionId?: string; phase?: string };
+    const d = data as { sessionId?: string };
     if (d.sessionId === sessionId) {
-      if (d.phase) {
-        setFetchedTask(prev => prev ? { ...prev, phase: d.phase as import('@open-walnut/core').Task['phase'] } : prev);
-      }
       // Model backfill for idle launches (todo-launcher quick start): quick-start
       // pre-seeds the record model-less (Auto) and returns before the CLI's init
       // event writes the real model onto it. The status snapshot doesn't carry

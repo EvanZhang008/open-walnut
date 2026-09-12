@@ -240,6 +240,7 @@ function commitRowShadow(): void {
 function invalidateRowShadow(): void {
   rowShadow = null;
   rowShadowDataVersion = null;
+  invalidateTaskStoreCache();
 }
 
 /** Reset internal flags for test isolation (call in beforeEach). */

@@ -492,7 +492,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       setRefreshing(true);
       setError(null);
       // Reset WS event counters on fresh fetch
-      wsEventCounts.current = { created: 0, updated: 0, completed: 0, sessionChanged: 0, lastLogAt: 0 };
+      wsEventCounts.current = { created: 0, updated: 0, completed: 0, lastLogAt: 0 };
     }
     const endPerf = attempt === 0 ? perf.start('tasks:fetch') : undefined;
     const t0 = performance.now();
@@ -557,8 +557,6 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     refetchGroups();
   }, [refetch, refetchGroups]);
 
-  // Track WS connection state — refetch tasks on reconnect (server restart, network blip)
-  const isFirstConnect = useRef(true);
   const [wsConnected, setWsConnected] = useState(wsClient.state === 'connected');
   useEffect(() => {
     const onStateChange = (state: ConnectionState) => {
@@ -570,15 +568,11 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   }, []);
   useEffect(() => {
     if (wsConnected) {
-      if (isFirstConnect.current) {
-        isFirstConnect.current = false;
-        return; // skip — initial fetch already handled above
-      }
       // Debounced: WS flaps (disconnect→connect within seconds) would otherwise
       // refetch the whole list per flap, contributing to reconnect-storm
       // main-thread freezes (starvation report 2026-07-15).
       const timer = setTimeout(() => {
-        log.info('tasks', 'ws reconnected → refetching tasks');
+        log.info('tasks', 'ws connected → refetching tasks');
         refetch();
       }, 1_000);
       return () => clearTimeout(timer);
@@ -586,7 +580,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   }, [wsConnected, refetch]);
 
   // WS event counters for startup diagnostics — resets on refetch
-  const wsEventCounts = useRef({ created: 0, updated: 0, completed: 0, sessionChanged: 0, lastLogAt: 0 });
+  const wsEventCounts = useRef({ created: 0, updated: 0, completed: 0, lastLogAt: 0 });
 
   // Bulk-signal refetch coalescing: several payload-less bulk events inside a
   // window (multi-plugin syncs, git pull + import) used to trigger a full
@@ -623,7 +617,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const now = Date.now();
     if (c.created === 1 || c.created % 10 === 0 || now - c.lastLogAt > 5000) {
       c.lastLogAt = now;
-      log.info('tasks', 'ws event counts', { created: c.created, updated: c.updated, completed: c.completed, sessionChanged: c.sessionChanged });
+      log.info('tasks', 'ws event counts', { created: c.created, updated: c.updated, completed: c.completed });
     }
     // Upsert: merge when the task already exists (the task:updated upsert path
     // may have inserted it first — fork emits pin/tier updates BEFORE created —
@@ -712,35 +706,6 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     refetchGroups();
   });
 
-  // Session status is owned by the centralized store. Task phase remains a
-  // separate task field, so only apply that part of the compatibility event.
-  useEvent('session:status-changed', (data) => {
-    wsEventCounts.current.sessionChanged++;
-    const { sessionId, phase, status } = data as {
-      sessionId?: string;
-      phase?: string;
-      status?: { sessionId?: string };
-    };
-    const providerSessionId = status?.sessionId ?? sessionId;
-    if (!providerSessionId || !phase) return;
-    setTasks((prev) => {
-      // No-op bail: this event fires for EVERY session transition (several per
-      // minute with a few agents running). Returning a fresh array when zero
-      // tasks changed re-rendered the whole tree each time.
-      let changed = false;
-      const next = prev.map((t) => {
-        const matchesSingle = t.session_id === providerSessionId;
-        const matchesPlan = t.plan_session_id === providerSessionId;
-        const matchesExec = t.exec_session_id === providerSessionId;
-        if (!matchesSingle && !matchesPlan && !matchesExec) return t;
-        if (t.phase === phase) return t;
-        changed = true;
-        return { ...t, phase: phase as Task['phase'] };
-      });
-      return changed ? next : prev;
-    });
-  });
-
   // Shared error handler for optimistic operations: show banner + refetch truth from server
   const onOpError = useCallback((err: Error) => {
     showOperationError(err.message);
@@ -794,7 +759,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // `tags` array is computable from the row (applyTagInstructions).
     const hasOptimistic = Object.keys(updates).some(k => OPTIMISTIC_FIELDS.has(k) || TAG_INSTRUCTION_FIELDS.has(k));
     if (hasOptimistic) {
-      guardEcho(`update:${id}`);
+      const onlyReadMarker = Object.keys(updates).every((key) => READ_MARKER_KEYS.includes(key));
+      if (!onlyReadMarker) guardEcho(`update:${id}`);
       setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
     }
     withRetry(() => tasksApi.updateTask(id, updates)).catch(onOpError);

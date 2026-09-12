@@ -129,6 +129,11 @@ export function getDb(): DatabaseType | null {
   try {
     fs.mkdirSync(path.dirname(TASK_DB_PATH), { recursive: true });
     const handle = new Database(TASK_DB_PATH);
+    const schemaVersion = handle.pragma('user_version', { simple: true }) as number;
+    if (schemaVersion > SCHEMA_VERSION) {
+      handle.close();
+      throw new Error(`Task database schema ${schemaVersion} is newer than supported schema ${SCHEMA_VERSION}; use a newer Walnut build.`);
+    }
     handle.pragma('journal_mode = WAL');
     handle.pragma('busy_timeout = 5000');
     // wal_autocheckpoint: SQLite moves WAL → main file every N pages (default
@@ -269,7 +274,7 @@ export function rowToTask(row: Record<string, any>): Task {
   // an old value survives hydration, fails VALID_PHASES, and renders as a blank
   // phase — migratePhase existed for exactly this and had NO caller at all
   // until now.
-  if (typeof task.phase === 'string') task.phase = migratePhase(task.phase);
+  if (typeof task.phase === 'string') task.phase = migratePhase(task.phase) ?? task.phase;
 
   return task as Task;
 }

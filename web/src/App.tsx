@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef } from 'react';
+import { useWebSocket } from './hooks/useWebSocket';
 import { Routes, Route, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
 import { AppHostPage } from './apps/AppHostPage';
@@ -45,6 +46,7 @@ function SessionsRedirect() {
 }
 
 export function App() {
+  useWebSocket();
   const location = useLocation();
   const navigate = useNavigate();
   const pluginUi = usePluginUi();

@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { removeTempTree } from '../helpers/temp-home.js';
 
 const constantsBase = createMockConstants('walnut-task-queue');
 
@@ -89,7 +90,7 @@ async function wipeHome(mods?: Modules): Promise<void> {
     mods.taskDb.closeDb();
     mods.tm._resetForTesting();
   }
-  await fsp.rm(constantsBase.WALNUT_HOME as string, { recursive: true, force: true });
+  await removeTempTree(constantsBase.WALNUT_HOME as string);
   await fsp.mkdir(constantsBase.TASKS_DIR as string, { recursive: true });
 }
 

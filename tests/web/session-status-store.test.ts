@@ -61,6 +61,54 @@ describe('SessionStatusStore', () => {
     expect(store.getStatus(current.sessionId)?.process_status).toBe('idle');
   });
 
+  it('does not treat a conflicting permission at the same revision as a duplicate', () => {
+    const store = new SessionStatusStore();
+    store.applyVersioned(status(2, { process_status: 'running', pendingPermissionTool: 'Bash' }), 'ws');
+    expect(store.applyVersioned(status(2, { process_status: 'running' }), 'rest:session'))
+      .toBe('rejected-conflict');
+    expect(store.getStatus('provider-session-1')?.pendingPermissionTool).toBe('Bash');
+  });
+
+  it('keeps the newest waiting state across late REST records in both directions', () => {
+    const store = new SessionStatusStore();
+    const idle = status(1);
+    const waiting = status(2, { process_status: 'running', pendingPermissionTool: 'Bash' });
+    store.applyVersioned(waiting, 'ws');
+    expect(store.applyVersioned(idle, 'rest:session')).toBe('rejected-stale');
+    expect(store.getStatus('provider-session-1')?.pendingPermissionTool).toBe('Bash');
+    store.applyVersioned(status(3), 'ws');
+    expect(store.applyVersioned(waiting, 'rest:session')).toBe('rejected-stale');
+    expect(store.getStatus('provider-session-1')?.pendingPermissionTool).toBeNull();
+  });
+
+  it('clears omitted permission data on a full legacy task snapshot but not a partial event', () => {
+    const store = new SessionStatusStore();
+    store.seedTaskRecord({
+      id: 'task-1', session_id: 'provider-session-1',
+      session_status: { process_status: 'running', pendingPermissionTool: 'Bash' },
+    });
+    store.ingestStatusEvent({ sessionId: 'provider-session-1', process_status: 'running' });
+    expect(store.getStatus('provider-session-1')?.pendingPermissionTool).toBe('Bash');
+    store.seedTaskRecord({
+      id: 'task-1', session_id: 'provider-session-1',
+      session_status: { process_status: 'running' },
+    });
+    expect(store.getStatus('provider-session-1')?.pendingPermissionTool).toBeNull();
+  });
+
+  it('notifies when only the legacy pending permission changes', () => {
+    const store = new SessionStatusStore();
+    store.applyLegacy('provider-session-1', { process_status: 'running' }, 'ws');
+    const listener = vi.fn();
+    store.subscribe(listener);
+    for (const tool of ['Bash', 'AskUserQuestion', null]) {
+      expect(store.applyLegacy('provider-session-1', { pendingPermissionTool: tool }, 'ws'))
+        .toBe('accepted');
+      expect(store.getStatus('provider-session-1')?.pendingPermissionTool).toBe(tool);
+    }
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
   it('uses full snapshots so explicit null and false values clear prior state', () => {
     const store = new SessionStatusStore();
     store.applyVersioned(status(1, {
