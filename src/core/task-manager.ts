@@ -240,6 +240,7 @@ function commitRowShadow(): void {
 function invalidateRowShadow(): void {
   rowShadow = null;
   rowShadowDataVersion = null;
+  // Invalidate before async lock cleanup lets a result handler read pre-commit task state.
   invalidateTaskStoreCache();
 }
 

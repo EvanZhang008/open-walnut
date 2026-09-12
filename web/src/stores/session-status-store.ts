@@ -184,6 +184,7 @@ function snapshotsEqual(a: SessionStatusSnapshot, b: SessionStatusSnapshot): boo
     && a.errorMessage === b.errorMessage
     && a.provider === b.provider
     && a.engine === b.engine
+    // Permission changes can switch Waiting without changing process_status.
     && a.pendingPermissionTool === b.pendingPermissionTool
     && a.statusRevision === b.statusRevision
     && a.statusUpdatedAt === b.statusUpdatedAt;
@@ -580,6 +581,7 @@ export class SessionStatusStore {
         const patch = legacyPatchFromRecord(candidate);
         this.applyLegacy(providerId, {
           ...patch,
+          // A full snapshot's omission clears Waiting; a partial event's omission must not.
           pendingPermissionTool: patch.pendingPermissionTool ?? null,
           taskId,
         }, source);

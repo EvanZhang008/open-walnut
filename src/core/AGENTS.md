@@ -17,6 +17,8 @@ walnut adapter (serializers, event-bus wiring, backfill). Read
 search, the tokenizer, embedding models, or the indexing path. The library must keep ZERO walnut
 imports (`tests/lib/hybrid-search-boundary.test.ts` enforces it).
 
+**Task and session status:** read [Task/session status decisions](../../docs/decision/task-session-status.md) before changing phase migrations, cache invalidation, turn settlement, FIFO markers, or snapshot guards. It maps failure modes to code and regression tests.
+
 ## Invariants you must not break (even without reading the skill)
 
 - **Daemon-uniform file access (THE one rule):** every read of a Claude Code session-data file

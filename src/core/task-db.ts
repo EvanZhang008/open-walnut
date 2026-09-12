@@ -130,6 +130,7 @@ export function getDb(): DatabaseType | null {
     fs.mkdirSync(path.dirname(TASK_DB_PATH), { recursive: true });
     const handle = new Database(TASK_DB_PATH);
     const schemaVersion = handle.pragma('user_version', { simple: true }) as number;
+    // Reject newer data before any pragma/schema write; see docs/decision/task-session-status.md.
     if (schemaVersion > SCHEMA_VERSION) {
       handle.close();
       throw new Error(`Task database schema ${schemaVersion} is newer than supported schema ${SCHEMA_VERSION}; use a newer Walnut build.`);

@@ -566,6 +566,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     wsClient.onConnectionChange(onStateChange);
     return () => { wsClient.offConnectionChange(onStateChange); };
   }, []);
+  // First connect can miss commits after the initial fetch, just like a reconnect.
   useEffect(() => {
     if (wsConnected) {
       // Debounced: WS flaps (disconnect→connect within seconds) would otherwise
@@ -634,6 +635,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     });
   });
 
+  // Session phase hints are not task commits; see docs/decision/task-session-status.md.
   useEvent('task:updated', (data) => {
     wsEventCounts.current.updated++;
     const { task } = data as { task?: Task };
@@ -760,6 +762,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const hasOptimistic = Object.keys(updates).some(k => OPTIMISTIC_FIELDS.has(k) || TAG_INSTRUCTION_FIELDS.has(k));
     if (hasOptimistic) {
       const onlyReadMarker = Object.keys(updates).every((key) => READ_MARKER_KEYS.includes(key));
+      // A read's generic echo guard can swallow an unrelated phase commit arriving first.
       if (!onlyReadMarker) guardEcho(`update:${id}`);
       setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
     }

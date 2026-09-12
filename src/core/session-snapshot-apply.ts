@@ -210,6 +210,7 @@ export async function applySnapshot(
   snapshot: SessionSnapshot,
   source: string,
 ): Promise<ApplyOutcome> {
+  // Stream offsets cannot order every state change; see docs/decision/task-session-status.md.
   const mode = getSnapshotStatusMode()
   if (mode === 'off') return { outcome: 'disabled' }
   if (!snapshot || typeof snapshot.v !== 'number' || !Number.isFinite(snapshot.v)) {

@@ -192,6 +192,7 @@ export function migratePhase(phase: string): TaskPhase | undefined {
   if (phase === 'HUMAN_VERIFIED') return 'AGENT_COMPLETE';
   if (phase === 'POST_WORK_COMPLETED') return 'AGENT_COMPLETE';
   if (VALID_PHASES.has(phase)) return phase as TaskPhase;
+  // Unknown may mean newer data; guessing TODO corrupts it on the next whole-store write.
   return undefined;
 }
 

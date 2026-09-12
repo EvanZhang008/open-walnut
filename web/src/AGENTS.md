@@ -11,6 +11,8 @@ chat, turn boundaries, or streaming block rendering** — that area has an incid
 stale-response handling, or result merging: the search races and merge rules it documents are
 still live on the client.
 
+**Task and session status:** read [Task/session status decisions](../../docs/decision/task-session-status.md) before changing red rows, read markers, Waiting badges, or connection hydration. Task commits and session status have separate authority.
+
 ## Invariants you must not break (even without reading the skill)
 
 - **Streaming blocks are APPEND-ONLY.** No event handler deletes blocks. Absorption is a

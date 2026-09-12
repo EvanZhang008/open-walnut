@@ -27,6 +27,8 @@ must live under one of these top-level categories instead of directly under
 
 ## Decisions
 
+- [Task/session status](decision/task-session-status.md): task phase versus unread and process state, migration data loss, cache timing, and regression entry points.
+
 - [ACP agent lifecycle](decision/acp-agent-lifecycle.md) - one daemon-owned ACP
   worker per session, with lazy `session/load` recovery.
 - [No session-end gist](decision/no-session-end-gist.md) - `session:ended` is a
