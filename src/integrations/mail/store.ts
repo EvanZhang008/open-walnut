@@ -455,6 +455,15 @@ export class MailStore {
     )
   }
 
+  /** The newest row carrying this durable id; several rows may (one message cached in two folders). */
+  getMessageByRfcId(accountId: string, rfcMessageId: string): Promise<MessageRow | undefined> {
+    return this.db.get<MessageRow>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE account_id = ? AND rfc_message_id = ?`
+      + ' ORDER BY sent_at DESC, rowid DESC LIMIT 1',
+      [accountId, rfcMessageId],
+    )
+  }
+
   /**
    * Newest inbox envelopes with no body yet: the tick's prefetch step reads this.
    *

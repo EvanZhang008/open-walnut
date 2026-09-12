@@ -28,6 +28,7 @@ import {
   type IdentityRevisionResult,
 } from '../../src/integrations/mail/identity-revision.js';
 import { MailProviderRegistry } from '../../src/integrations/mail/provider-registry.js';
+import { MailService } from '../../src/integrations/mail/service.js';
 import { MailStore } from '../../src/integrations/mail/store.js';
 import type { MailCapabilities, MailProviderSpec } from '../../src/integrations/mail/types.js';
 
@@ -42,6 +43,7 @@ interface Harness {
   store: MailStore;
   bodies: MailBodyStore;
   api: MailBaseApi;
+  service: MailService;
   scheduled: Array<() => void>;
   sweeps: IdentityRevisionResult[];
   runDeferred(): Promise<void>;
@@ -64,6 +66,7 @@ async function openBase(existingRoot?: string): Promise<Harness> {
   const bodies = new MailBodyStore(root);
   const providers = new MailProviderRegistry(() => undefined);
   const events = new MailEvents(() => undefined);
+  const service = new MailService({ store, bodies, providers });
 
   const scheduled: Array<() => void> = [];
   const sweeps: IdentityRevisionResult[] = [];
@@ -85,7 +88,7 @@ async function openBase(existingRoot?: string): Promise<Harness> {
   });
 
   return {
-    root, db, store, bodies, api, scheduled, sweeps,
+    root, db, store, bodies, api, service, scheduled, sweeps,
     runDeferred: async () => {
       for (const run of scheduled.splice(0)) run();
       await Promise.all(inflight.splice(0));
@@ -283,4 +286,33 @@ describe('a changed identity revision', () => {
     for (const ref of refs) if (await exists(one, ref)) stillThere.push(ref);
     expect(stillThere).toEqual([]);
   }, 60_000);
+});
+
+describe('a handle the cache only knows as a durable id', () => {
+  it('opens the newest row carrying it, and still answers 404 for a handle known in neither column', async () => {
+    // A folder-scoped provider caches one thread once per folder; its search api names no folder, so
+    // a hit arrives under the bare thread id. That id is the rfc id of every row the thread has.
+    const one = await openBase();
+    await seedAccount(one, 'fake:one');
+    one.api.registerProvider(fixtureProvider('fake', 'folder-scoped-1'));
+    await one.runDeferred();
+    const older = await one.store.insertMessage({
+      accountId: 'fake:one', messageId: 'inbox:thread-9', rfcMessageId: 'thread-9', mailboxId: 'inbox',
+      threadId: 'thread-9', fromAddr: 'quartz@example.invalid', subject: 'In the inbox', snippet: '',
+      sentAt: Date.UTC(2026, 0, 10), receivedAt: null, flagsJson: '[]', attachmentsJson: '[]',
+      payload: '{}', envelopeHash: 'h-inbox',
+    }, Date.UTC(2026, 0, 10));
+    await one.store.insertMessage({
+      accountId: 'fake:one', messageId: 'sent:thread-9', rfcMessageId: 'thread-9', mailboxId: 'sent',
+      threadId: 'thread-9', fromAddr: 'me@example.invalid', subject: 'In the inbox', snippet: '',
+      sentAt: Date.UTC(2026, 0, 11), receivedAt: null, flagsJson: '["\\Seen"]', attachmentsJson: '[]',
+      payload: '{}', envelopeHash: 'h-sent',
+    }, Date.UTC(2026, 0, 11));
+    expect(older).toBeGreaterThan(0);
+
+    const opened = await one.service.readEnvelope('fake:one', 'thread-9');
+    expect(opened.messageId).toBe('sent:thread-9');
+    expect((await one.service.readEnvelope('fake:one', 'inbox:thread-9')).mailboxId).toBe('inbox');
+    await expect(one.service.readEnvelope('fake:one', 'thread-10')).rejects.toMatchObject({ code: 'unknown_message' });
+  });
 });

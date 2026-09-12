@@ -513,7 +513,13 @@ export class MailService {
   // ── internals ──
 
   private async requireMessage(accountId: string, messageId: string): Promise<MessageRow> {
+    // Second door: the handle as a DURABLE id. A provider whose handles carry a folder (one thread
+    // cached once per folder it appears in) cannot put a folder on a search hit, because the search
+    // api names none, so the hit arrives under the bare durable id. That id is on every row the
+    // thread has, and any of them opens the same conversation. Nothing else changes: a handle no
+    // row knows in either column is still a 404.
     const row = await this.deps.store.getMessage(accountId, messageId)
+      ?? (messageId ? await this.deps.store.getMessageByRfcId(accountId, messageId) : undefined)
     if (!row) {
       throw new MailServiceError('unknown_message', `No cached message "${messageId}" for "${accountId}".`, 404)
     }
