@@ -15,6 +15,7 @@ import { SYNC_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import {
   addTasksBulk,
+  autoPushIfConfigured,
   deleteTasksBulk,
   ensureProject,
   InvalidProjectNameError,
@@ -57,7 +58,85 @@ interface ReconcileDiffResult {
    *  adopts the remote's current id instead of a duplicate being created. */
   toAdopt: Array<{ local: Task; remote: RemoteSyncItem }>;
   toRemove: Task[];
+  /** Local tasks completed here whose completion the remote never received:
+   *  the remote is still open and was not touched after the local completion.
+   *  The reconciler pushes them again (see `remoteMissedOurCompletion`). */
+  toRepush: Task[];
   unchanged: number;
+}
+
+/**
+ * How many lost completions one full reconcile pushes again. Each push is a
+ * serial remote round trip (~1-3s), so the batch bounds the tick; the rest wait
+ * for the next cycle.
+ */
+const REPUSH_BATCH = 50;
+/** Two at a time: four tripped the tracker's rate limit (22 of 50 pushes throttled). */
+const REPUSH_CONCURRENCY = 2;
+
+/** Clock skew allowance between this machine and the remote server. */
+const ECHO_GRACE_MS = 10_000;
+
+/** The remote refused for rate, not for content (the tracker says "ThrottlingException: Rate exceeded"). */
+function isRateLimitError(error: string | undefined): boolean {
+  return /throttl|rate exceeded|rate limit|too many requests|\b429\b/i.test(error ?? '');
+}
+
+/** The remote item is closed, as the plugin's mapper reports it. */
+function remoteIsClosed(remote: RemoteSyncItem): boolean {
+  return remote.fields.phase === 'COMPLETE' || remote.fields.status === 'done';
+}
+
+/** The remote item is open, as the plugin's mapper reports it (a mapper that
+ *  reports neither phase nor status says nothing, and nothing is inferred). */
+function remoteIsOpen(remote: RemoteSyncItem): boolean {
+  if (remote.fields.phase !== undefined) return remote.fields.phase !== 'COMPLETE';
+  if (remote.fields.status !== undefined) return remote.fields.status !== 'done';
+  return false;
+}
+
+/** Epoch ms of an ISO timestamp, 0 when absent or unparseable. */
+function timeOf(iso: string | undefined | null): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * The local task is COMPLETE, the remote twin is still open, and nothing touched
+ * the remote after the local completion: the close never landed. Two plugin
+ * failures produce this shape. A plugin that dropped a push while another was in
+ * flight reported success (the remote's last update is the stale push, within a
+ * second of the completion), and a plugin that was not loaded never pushed at all
+ * (the remote's last update predates the completion). A remote edit AFTER the
+ * completion (a teammate reopening it) is not this case and is left alone: the
+ * remote's word stands, as it always has for phase. The completion time is the
+ * intent, not `updated_at`: a later local edit to a finished task (or a bulk
+ * migration bumping every row) must not turn a teammate's reopen into "lost".
+ * A row that already carries a sync_error belongs to the sync loop's retry
+ * schedule (with backoff); this path is for the pushes Walnut believed landed.
+ */
+function remoteMissedOurCompletion(local: Task, remote: RemoteSyncItem, graceMs: number): boolean {
+  if (local.phase !== 'COMPLETE' || local.sync_error || !remoteIsOpen(remote)) return false;
+  const remoteTime = timeOf(remote.remoteUpdatedAt);
+  const localIntent = timeOf(local.completed_at) || timeOf(local.updated_at);
+  return remoteTime > 0 && localIntent > 0 && remoteTime <= localIntent + graceMs;
+}
+
+/**
+ * The remote twin was closed at or after the last local edit while the task is
+ * still open here. Ordinarily the LWW check already takes this (remote newer than
+ * the watermark), but the watermark can lie: see the toUpdate branch that
+ * re-checks against updated_at alone. The grace runs in the REMOTE's favour on
+ * purpose: the tracker's last-updated stamp has been observed a second behind the
+ * push that closed the task, and a close is terminal, so a local reopen inside
+ * that window whose own push was lost gives way to the remote (a reopen that did
+ * reach the remote leaves it open and never enters this branch).
+ */
+function remoteClosedSinceLocalEdit(local: Task, remote: RemoteSyncItem, graceMs: number): boolean {
+  if (local.phase === 'COMPLETE' || !remoteIsClosed(remote)) return false;
+  const remoteTime = timeOf(remote.remoteUpdatedAt);
+  return remoteTime > 0 && remoteTime + graceMs >= timeOf(local.updated_at);
 }
 
 // ── Apply outcome ──
@@ -84,6 +163,9 @@ interface ApplyOutcome {
   created: number;
   updated: number;
   removed: number;
+  /** Lost completions pushed again this cycle, and how many of those the remote accepted. */
+  repushed: number;
+  repushFailed: number;
   /** Remote items refused by a project gate, by project name. */
   refusals: Map<string, { reason: RefusalReason; items: number; claimedBy?: string }>;
 }
@@ -215,6 +297,9 @@ export class SyncReconciler {
         removed: outcome.removed,
         unchanged: diff.unchanged,
         ...(outcome.adopted > 0 ? { adopted: outcome.adopted } : {}),
+        ...(diff.toRepush.length > 0
+          ? { repushed: outcome.repushed, repushFailed: outcome.repushFailed, repushPending: diff.toRepush.length - outcome.repushed - outcome.repushFailed }
+          : {}),
         ...(diff.toCreate.length !== outcome.created ? { createsIntended: diff.toCreate.length } : {}),
         ...(diff.toUpdate.length !== outcome.updated ? { updatesIntended: diff.toUpdate.length } : {}),
         ...(sentinelsDropped > 0 ? { sentinelsDropped } : {}),
@@ -316,6 +401,7 @@ export class SyncReconciler {
     const toUpdate: Array<{ local: Task; remote: RemoteSyncItem }> = [];
     const toAdopt: Array<{ local: Task; remote: RemoteSyncItem }> = [];
     const toRemove: Task[] = [];
+    const toRepush: Task[] = [];
     let unchanged = 0;
     // A task adopted via alias is accounted for — its current id pointing at
     // nothing remote is EXPECTED (the remote item wears the alias id).
@@ -337,12 +423,18 @@ export class SyncReconciler {
         // expired, network error, etc.): _syncedAt stays stale but updated_at
         // reflects the unsynced local edit, so the reconciler won't clobber it.
         // Grace period accounts for clock skew between local and remote servers.
-        const ECHO_GRACE_MS = 10_000;
         const remoteTime = new Date(remote.remoteUpdatedAt).getTime();
         const syncedAt = local._syncedAt ? new Date(local._syncedAt).getTime() : 0;
         const localUpdatedAt = local.updated_at ? new Date(local.updated_at).getTime() : 0;
         const threshold = Math.max(syncedAt, localUpdatedAt);
         if (remoteTime > threshold + ECHO_GRACE_MS) {
+          toUpdate.push({ local, remote });
+        } else if (remoteMissedOurCompletion(local, remote, ECHO_GRACE_MS)) {
+          toRepush.push(local);
+        } else if (remoteClosedSinceLocalEdit(local, remote, ECHO_GRACE_MS)) {
+          // Judged against updated_at alone, not the watermark: an earlier cycle
+          // stamped _syncedAt with this very close while dropping its phase, so
+          // the watermark is the thing that hid it.
           toUpdate.push({ local, remote });
         } else {
           unchanged++;
@@ -401,7 +493,7 @@ export class SyncReconciler {
     // Tasks without remote ID are left alone (can't reconcile without a join key)
     unchanged += localWithoutRemoteId.length;
 
-    return { toCreate, toUpdate, toAdopt, toRemove, unchanged };
+    return { toCreate, toUpdate, toAdopt, toRemove, toRepush, unchanged };
   }
 
   // ── Private: Apply diff ──
@@ -413,7 +505,7 @@ export class SyncReconciler {
   ): Promise<ApplyOutcome> {
     const source = `${pluginId}-reconcile`;
     let changeCount = 0;
-    const outcome: ApplyOutcome = { adopted: 0, created: 0, updated: 0, removed: 0, refusals: new Map() };
+    const outcome: ApplyOutcome = { adopted: 0, created: 0, updated: 0, removed: 0, repushed: 0, repushFailed: 0, refusals: new Map() };
     /** Count this item against the project that refused it (for the caller's log). */
     const noteRefusal = (project: string, reason: RefusalReason, claimedBy?: string): void => {
       const entry = outcome.refusals.get(project);
@@ -633,9 +725,26 @@ export class SyncReconciler {
         // Never overwrite phase/status/read-marker from remote (RC8 fix). BOTH
         // marker keys must be dropped — leaving the legacy one through would let a
         // remote echo resurrect the dot on a task the user already read.
+        const remoteClosed = remoteIsClosed(remote);
+        const remoteCompletedAt = remote.fields.completed_at;
         delete (updates as any).phase;
         delete (updates as any).status;
         delete (updates as any).unread;
+        // …with ONE exception: a remote CLOSE of a task still open here is applied.
+        // It cannot be an echo (an echo of our own close would find the task already
+        // COMPLETE), and it is the one state change a teammate makes that must land.
+        // Skipping it while stamping _syncedAt below buried every remote close the
+        // delta poll had missed: the watermark advanced past the close, so no later
+        // cycle ever looked at it again. Same field set as applyPhase's COMPLETE
+        // (read marker cleared); the raw bulk write does not derive it.
+        if (remoteClosed && local.phase !== 'COMPLETE') {
+          updates.phase = 'COMPLETE';
+          updates.status = 'done';
+          updates.unread = false;
+          // The mapper's close time when it reports one; the remote's last-modified
+          // stamp otherwise (the close is the last thing that happened to it).
+          updates.completed_at = remoteCompletedAt ?? remote.remoteUpdatedAt;
+        }
         // Claim conflict → keep the local project rather than moving the task
         // into another provider's group.
         if ((await resolveProject(updates)) === 'conflict') delete updates.project;
@@ -709,6 +818,46 @@ export class SyncReconciler {
           });
         }
       }
+    }
+
+    // ── Re-push completions the remote never received (batch limit: REPUSH_BATCH) ──
+    // Through autoPushIfConfigured, the same path a fresh edit takes: success clears
+    // sync_error and stamps _syncedAt, failure records sync_error for the retry loop.
+    // A few pushes at a time: a plugin may debounce each push (2s for the tracker
+    // plugin), so a serial batch of 50 would hold the tick for minutes.
+    const repushQueue = diff.toRepush.slice(0, REPUSH_BATCH);
+    let throttled = false;
+    await Promise.all(Array.from({ length: Math.min(REPUSH_CONCURRENCY, repushQueue.length) }, async () => {
+      while (!throttled) {
+        const task = repushQueue.shift();
+        if (!task) break;
+        // autoPushIfConfigured reports plugin failures as {success:false}; only its
+        // own bookkeeping (the ext write) can throw. Either way this task is one
+        // failure and the batch goes on; a throw must not abort applyDiff after the
+        // writes above already landed.
+        const result = await autoPushIfConfigured(task).catch((err: unknown) => ({
+          success: false as const, error: err instanceof Error ? err.message : String(err),
+        }));
+        if (result.success) {
+          outcome.repushed++;
+          log.web.info('sync-reconciler: pushed a completion the remote had never received', {
+            pluginId, taskId: task.id, title: task.title, completedAt: task.completed_at,
+          });
+        } else {
+          outcome.repushFailed++;
+          log.web.warn('sync-reconciler: re-push of a lost completion failed', {
+            pluginId, taskId: task.id, title: task.title, error: result.error,
+          });
+          // A rate limit answers every further push the same way until it cools
+          // down: the rest of the batch waits for the retry loop / next cycle.
+          if (isRateLimitError(result.error)) throttled = true;
+        }
+      }
+    }));
+    if (throttled) {
+      log.web.warn('sync-reconciler: remote rate limit hit, re-push batch stopped early', {
+        pluginId, pushed: outcome.repushed, failed: outcome.repushFailed, leftForNextCycle: repushQueue.length,
+      });
     }
 
     // Single bulk signal to web-ui (mirrors the delta-sync batching in server.ts
