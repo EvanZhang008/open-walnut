@@ -30,7 +30,7 @@ import {
 } from '../../src/core/chat-history.js';
 import { WALNUT_HOME, conversationFile } from '../../src/constants.js';
 import { getActiveConversationId } from '../../src/core/conversations.js';
-import type { MessageParam } from '../../src/agent/model.js';
+import type { MessageParam } from '../../src/model/model.js';
 
 const AGENT = 'general';
 let conv: string;

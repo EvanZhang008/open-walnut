@@ -28,7 +28,7 @@ vi.mock('../../src/core/sessions/session-lifecycle.js', async (importOriginal) =
 }))
 // Deterministic, offline model: promote groups the new task with the parent's,
 // and a fresh folder asks the model for a name in the background.
-vi.mock('../../src/agent/model.js', () => ({
+vi.mock('../../src/model/model.js', () => ({
   sendMessage: vi.fn(async () => ({
     content: [{ type: 'text', text: 'Reaper Work' }],
     stopReason: 'end_turn',

@@ -15,7 +15,7 @@ import { chatHistoryRouter } from '../../../src/web/routes/chat-history.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import * as chatHistory from '../../../src/core/chat-history.js';
 import { getActiveConversationId } from '../../../src/core/conversations.js';
-import type { MessageParam } from '../../../src/agent/model.js';
+import type { MessageParam } from '../../../src/model/model.js';
 import type { DisplayMessage } from '../../../src/core/types.js';
 
 function createApp() {

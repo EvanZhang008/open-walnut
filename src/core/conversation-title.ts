@@ -17,7 +17,7 @@
  *   failure path is swallowed. NEVER throws into the chat flow.
  */
 
-import { sendMessage } from '../agent/model.js';
+import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor } from './cheap-model.js';
 import { listConversations, renameConversation } from './conversations.js';

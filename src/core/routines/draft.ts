@@ -9,7 +9,7 @@
  * routine creation.
  */
 
-import { sendMessage } from '../../agent/model.js';
+import { sendMessage } from '../../model/model.js';
 import { normalizeCronJobCreate } from '../cron/normalize.js';
 import type { CronJobCreate } from '../cron/types.js';
 import { getExecutor, listExecutors } from './registry.js';

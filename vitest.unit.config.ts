@@ -2,7 +2,7 @@ import { defineConfig, mergeConfig } from 'vitest/config';
 import baseConfig from './vitest.config.js';
 
 /**
- * UNIT tier — logic-level tests for src/core, src/agent, src/providers, src/utils.
+ * UNIT tier — logic-level tests for src/core, src/model, src/providers, src/utils.
  *
  * NOTE ON `include`: it is assigned by OVERWRITING the merged value, not passed
  * through mergeConfig's second argument. mergeConfig CONCATENATES arrays, so
@@ -23,7 +23,7 @@ const config = mergeConfig(
 );
 
 config.test!.include = [
-  'tests/agent/**/*.test.ts',
+  'tests/model/**/*.test.ts',
   'tests/core/**/*.test.ts',
   'tests/providers/**/*.test.ts',
   'tests/utils/**/*.test.ts',

@@ -49,7 +49,7 @@ vi.mock('../../src/providers/acp-session-history.js', async (importOriginal) => 
 // Backend title channel: Walnut's own fast model. Mocked at the model edge so
 // the test never touches credentials or the network.
 const sendMessageMock = vi.fn();
-vi.mock('../../src/agent/model.js', async (importOriginal) => ({
+vi.mock('../../src/model/model.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   sendMessage: (...args: unknown[]) => sendMessageMock(...args),
 }));

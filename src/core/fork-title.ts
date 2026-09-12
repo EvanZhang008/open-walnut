@@ -18,7 +18,7 @@
  *   throws — the fork must not depend on the LLM being reachable.
  */
 
-import { sendMessage } from '../agent/model.js';
+import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor } from './cheap-model.js';
 

@@ -8,11 +8,11 @@ import { CLOUD_MODE, WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
-import { buildProviderMap, resolveProvider, type ProviderConfig } from '../../agent/providers/index.js'
-import { autoDetectApiKey } from '../../agent/providers/secret.js'
-import { getModelsForProvider } from '../../agent/providers/model-catalog.js'
-import { KNOWN_PROVIDERS, DEFAULT_BASE_URLS } from '../../agent/providers/defaults.js'
-import type { ModelEntry } from '../../agent/providers/types.js'
+import { buildProviderMap, resolveProvider, type ProviderConfig } from '../../model/providers/index.js'
+import { autoDetectApiKey } from '../../model/providers/secret.js'
+import { getModelsForProvider } from '../../model/providers/model-catalog.js'
+import { KNOWN_PROVIDERS, DEFAULT_BASE_URLS } from '../../model/providers/defaults.js'
+import type { ModelEntry } from '../../model/providers/types.js'
 
 export const configRouter = Router()
 
@@ -322,7 +322,7 @@ export async function buildProvidersPayload(): Promise<{
       status: 'ready' | 'no_key' | 'not_implemented'
       key_hint?: string  // last 4 chars of resolved key
       auto_detected: boolean
-      models: import('../../agent/providers/types.js').ModelEntry[]
+      models: import('../../model/providers/types.js').ModelEntry[]
       credential_source?: string  // bedrock: 'bearer_token' | 'api_key' | 'aws_credentials_file'
       credential_detail?: string  // claude-cli: how the CLI signs in, e.g. "Bedrock (us-west-2)"
     }> = {}

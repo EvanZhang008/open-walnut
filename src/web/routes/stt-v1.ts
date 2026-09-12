@@ -256,7 +256,7 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
     }
 
     const { getConfig } = await import('../../core/config-manager.js')
-    const { resolveSecret } = await import('../../agent/providers/secret.js')
+    const { resolveSecret } = await import('../../model/providers/secret.js')
     const config = await getConfig()
     const apiKey = resolveSecret(config.stt?.openai_api_key) ?? process.env.OPENAI_API_KEY ?? ''
     if (!apiKey) {

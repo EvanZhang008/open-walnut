@@ -17,7 +17,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-fork-focus'));
 
 // Deterministic, offline model so async title refinement doesn't hit the network.
-vi.mock('../../src/agent/model.js', () => ({
+vi.mock('../../src/model/model.js', () => ({
   sendMessage: vi.fn(async () => ({
     content: [{ type: 'text', text: 'New Task' }],
     stopReason: 'end_turn',

@@ -3,7 +3,7 @@
  *
  * ARCHITECTURE NOTE:
  * This is the ONLY provider that spawns Claude Code CLI processes.
- * The main agent (open-walnut's "brain") uses Bedrock SDK directly via agent/model.ts.
+ * The main agent (open-walnut's "brain") uses Bedrock SDK directly via model/model.ts.
  * This file manages delegated coding sessions — long-running claude -p workers
  * that execute tasks in the background, returning results via the event bus.
  *
@@ -70,7 +70,7 @@ import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/
 import type { WorkflowPhaseInfo, WorkflowAgentInfo, SessionBackgroundTasksPayload } from '../core/event-types.js'
 import { recordTurn } from '../core/observability/recorder.js'
 import type { SessionServerClient } from './session-server-client.js'
-import { sanitizeInitModel } from '../agent/providers/defaults.js'
+import { sanitizeInitModel } from '../model/providers/defaults.js'
 import {
   resolveContextWindow, shortModelId,
   rememberAutoCompactWindow, recallAutoCompactWindow,
@@ -9030,7 +9030,7 @@ export class SessionRunner {
       // Session context (walnut gateway + walnut skill pointer). Task-independent —
       // every managed session gets it, taskless ones included.
       try {
-        const { buildSessionContext } = await import('../agent/session-context.js')
+        const { buildSessionContext } = await import('../core/sessions/session-context.js')
         const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
         if (ctx.systemPrompt) {
           // Combine: caller-provided prompt takes priority, task context appended after
@@ -9309,7 +9309,7 @@ export class SessionRunner {
       systemPrompt = data.appendSystemPrompt
     }
     try {
-      const { buildSessionContext } = await import('../agent/session-context.js')
+      const { buildSessionContext } = await import('../core/sessions/session-context.js')
       const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
       if (ctx.systemPrompt) {
         systemPrompt = systemPrompt

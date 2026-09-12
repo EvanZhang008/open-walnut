@@ -17,7 +17,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('session-organize-cl
 
 // Pin the model suggestion so the test controls what the "AI" picks.
 const suggestMock = vi.fn();
-vi.mock('../../src/agent/model.js', () => ({
+vi.mock('../../src/model/model.js', () => ({
   sendMessage: (...args: unknown[]) => suggestMock(...args),
 }));
 

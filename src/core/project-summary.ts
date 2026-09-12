@@ -24,7 +24,7 @@
  * definition the unfiled pile, not a stream of work worth describing.
  */
 
-import { sendMessage } from '../agent/model.js';
+import { sendMessage } from '../model/model.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { fastModelFor, backgroundAiDisabled } from './cheap-model.js';

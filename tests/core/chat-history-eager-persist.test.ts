@@ -22,7 +22,7 @@ import {
 import { WALNUT_HOME, conversationFile } from '../../src/constants.js';
 import { getActiveConversationId } from '../../src/core/conversations.js';
 import { listNotifications } from '../../src/core/notifications/store.js';
-import type { MessageParam } from '../../src/agent/model.js';
+import type { MessageParam } from '../../src/model/model.js';
 
 // Chat storage is conversation-scoped: inject the General agent's active
 // conversation so the store layer's Phase-0 tripwire (rejects bare undefined

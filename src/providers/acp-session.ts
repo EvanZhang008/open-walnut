@@ -1072,7 +1072,7 @@ export class AcpSession {
       defaultInstructions = renderSelfKnowledgeContract()
     } else {
       try {
-        const { buildSessionContext } = await import('../agent/session-context.js')
+        const { buildSessionContext } = await import('../core/sessions/session-context.js')
         defaultInstructions = (await buildSessionContext(this.taskId, this.cfg.cwd)).systemPrompt || undefined
       } catch { /* context is additive — never block establish */ }
     }

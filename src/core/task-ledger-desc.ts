@@ -11,9 +11,9 @@
  * the tasks themselves are bilingual, so the model answers in the task's own
  * language.
  */
-import { sendMessage } from '../agent/model.js';
-import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
-import { resolveMainProviderName } from '../agent/providers/default-provider.js';
+import { sendMessage } from '../model/model.js';
+import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
+import { resolveMainProviderName } from '../model/providers/default-provider.js';
 import { log } from '../logging/index.js';
 import { updateTaskRaw, getTask } from './task-manager.js';
 import type { Task } from './types.js';

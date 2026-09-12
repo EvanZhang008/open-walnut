@@ -26,13 +26,13 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-compaction-summarizer'))
 
 const sendMessage = vi.hoisted(() => vi.fn())
-vi.mock('../../../src/agent/model.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../src/agent/model.js')>()
+vi.mock('../../../src/model/model.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/model/model.js')>()
   return { ...actual, sendMessage }
 })
 
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js'
-import type { MessageParam } from '../../../src/agent/model.js'
+import type { MessageParam } from '../../../src/model/model.js'
 import { createCompactionCallbacks } from '../../../src/web/routes/chat.js'
 
 const HISTORY: MessageParam[] = [

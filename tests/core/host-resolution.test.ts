@@ -1,7 +1,7 @@
 /**
  * Tests for the host/cwd resolution chain used by start_session.
  *
- * The resolution chain (from agent/tools.ts resolveSessionContext):
+ * The host/cwd resolution chain:
  *   host:  params.host → project registry metadata (default_host) → undefined (local)
  *   cwd:   params.working_directory → task.cwd → parent chain → project registry
  *          metadata (default_cwd) → error (in this harness; tools.ts additionally

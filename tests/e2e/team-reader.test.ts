@@ -17,33 +17,6 @@ import { WebSocket } from 'ws';
 import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('team-reader-test'));
 
-// ── Mock runAgentLoop → no AI calls ──
-vi.mock('../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async (
-    message: string,
-    history: unknown[],
-    callbacks?: { onText?: (t: string) => void },
-  ) => {
-    const response = `Mock result for: ${message.slice(0, 200)}`;
-    callbacks?.onText?.(response);
-    return {
-      messages: [
-        ...history,
-        { role: 'user', content: message },
-        { role: 'assistant', content: [{ type: 'text', text: response }] },
-      ],
-      response,
-    };
-  }),
-}));
-
-// ── Mock buildSystemPrompt → avoid real config/memory ──
-vi.mock('../../src/agent/context.js', () => ({
-  buildSystemPrompt: vi.fn(async () => 'Mock system prompt'),
-  buildRoleSection: vi.fn(() => 'Mock role section'),
-  buildMemoryContext: vi.fn(() => 'Mock memory context'),
-}));
-
 // ── Imports (after mocks) ──
 import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';

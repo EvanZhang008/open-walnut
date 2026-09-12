@@ -1,4 +1,4 @@
-import { sendMessage } from '../agent/model.js';
+import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor } from './cheap-model.js';
 import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from './types.js';

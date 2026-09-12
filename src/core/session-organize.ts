@@ -17,7 +17,7 @@
  * wait for the spawn — it runs fire-and-forget right from quick-start.ts.
  */
 
-import { sendMessage } from '../agent/model.js';
+import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor } from './cheap-model.js';
 

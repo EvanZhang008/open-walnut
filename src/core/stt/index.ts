@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { WALNUT_HOME, STT_VOCAB_FILE } from '../../constants.js';
 import type { Config } from '../types.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
-import { resolveSecret } from '../../agent/providers/secret.js';
+import { resolveSecret } from '../../model/providers/secret.js';
 import { log } from '../../logging/index.js';
 import { createSherpaEngine } from './engine-sherpa.js';
 import { createOpenAiEngine } from './engine-openai.js';

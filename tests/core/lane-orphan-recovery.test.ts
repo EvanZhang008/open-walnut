@@ -43,7 +43,7 @@ import {
 } from '../../src/core/sessions/lane-orphan-recovery.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { getActiveConversationId } from '../../src/core/conversations.js';
-import type { MessageParam } from '../../src/agent/model.js';
+import type { MessageParam } from '../../src/model/model.js';
 
 const AGENT = 'general';
 const SESSION_ID = 'bb7aa950-lane-session';

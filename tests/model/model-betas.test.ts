@@ -21,9 +21,7 @@ const capturingAdapter: ProtocolAdapter = {
   resetClient: vi.fn(),
 };
 
-// resolveForCall() is private; intercept at the registry seam it depends on.
-// Path is the model layer's real home (src/model/): model.ts imports the registry
-// directly, so a mock aimed at the src/model/providers/ shim would never be seen.
+// Intercept the registry so this test observes provider calls without network access.
 vi.mock('../../src/model/providers/registry.js', () => ({
   resolveProvider: vi.fn((providerName: string) => ({
     config: { api: providerName, region: 'us-east-1' },

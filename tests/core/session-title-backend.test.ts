@@ -19,7 +19,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-title-backend'));
 
 const sendMessage = vi.hoisted(() => vi.fn());
-vi.mock('../../src/agent/model.js', () => ({ sendMessage }));
+vi.mock('../../src/model/model.js', () => ({ sendMessage }));
 
 const configRef = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 vi.mock('../../src/core/config-manager.js', () => ({
@@ -34,8 +34,8 @@ vi.mock('../../src/core/cheap-model.js', async (importOriginal) => ({
 }));
 
 const cliInstalled = vi.hoisted(() => ({ value: false }));
-vi.mock('../../src/agent/providers/default-provider.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/agent/providers/default-provider.js')>();
+vi.mock('../../src/model/providers/default-provider.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/model/providers/default-provider.js')>();
   return {
     ...actual,
     resolveMainProviderName: (config: { agent?: { main_provider?: string } }) =>

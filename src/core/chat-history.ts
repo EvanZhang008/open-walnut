@@ -9,8 +9,8 @@
  * Migrates v1 stores (parallel apiMessages/displayMessages) on first read.
  */
 
-import type { MessageParam } from '../agent/model.js';
-import { getContextThreshold } from '../agent/model.js';
+import type { MessageParam } from '../model/model.js';
+import { getContextThreshold } from '../model/model.js';
 import type { ChatHistoryStore, ChatEntry, DisplayMessage } from './types.js';
 import { CHAT_HISTORY_FILE, chatHistoryFile, conversationFile } from '../constants.js';
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';

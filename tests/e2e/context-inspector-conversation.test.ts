@@ -33,7 +33,7 @@ import { WALNUT_HOME, CHAT_HISTORY_FILE, conversationFile } from '../../src/cons
 import { startServer, stopServer } from '../../src/web/server.js';
 import * as chatHistory from '../../src/core/chat-history.js';
 import { createConversation, getActiveConversationId } from '../../src/core/conversations.js';
-import type { MessageParam } from '../../src/agent/model.js';
+import type { MessageParam } from '../../src/model/model.js';
 
 let server: HttpServer;
 let port: number;

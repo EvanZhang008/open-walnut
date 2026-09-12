@@ -4,7 +4,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 const sendMessageMock = vi.fn();
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-test-quick-task-route'));
-vi.mock('../../../src/agent/model.js', () => ({
+vi.mock('../../../src/model/model.js', () => ({
   sendMessage: (...args: unknown[]) => sendMessageMock(...args),
 }));
 

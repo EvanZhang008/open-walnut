@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the model layer so summarizeForkPrompt never hits the network.
 const sendMessageMock = vi.fn();
-vi.mock('../../src/agent/model.js', () => ({
+vi.mock('../../src/model/model.js', () => ({
   sendMessage: (...args: unknown[]) => sendMessageMock(...args),
 }));
 // Mock config so summarizeForkPrompt's getConfig() resolves a provider.

@@ -802,8 +802,7 @@ export interface AddTaskInput {
    * that no longer exists — throws InvalidFocusTierError; filing the task in
    * Satellite instead would be a confident wrong answer. Matching is exact
    * (lower-case ids), the same strictness setFocusTier and
-   * PUT /focus/tasks/:id/tier use; label / case tolerance belongs to the
-   * model-facing layer (see resolveTierInput in agent/tools.ts).
+   * PUT /focus/tasks/:id/tier use.
    *
    * Two rules this encodes:
    *  - A tier IMPLIES pinned — a tier on an unpinned task is invisible and no

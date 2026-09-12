@@ -18,7 +18,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-lane-title'));
 
 const sendMessageMock = vi.fn();
-vi.mock('../../src/agent/model.js', () => ({
+vi.mock('../../src/model/model.js', () => ({
   sendMessage: (...args: unknown[]) => sendMessageMock(...args),
 }));
 

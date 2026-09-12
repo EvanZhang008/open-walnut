@@ -8,7 +8,7 @@ import {
   type PushTokenEntry,
   type TaskPriority,
 } from './types.js';
-import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
+import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
 
 const DEFAULT_CONFIG: Config = {

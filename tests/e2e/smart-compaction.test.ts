@@ -20,7 +20,7 @@ import {
 import { startServer, stopServer } from '../../src/web/server.js';
 import * as chatHistory from '../../src/core/chat-history.js';
 import type { DisplayMessage } from '../../src/core/types.js';
-import type { MessageParam } from '../../src/agent/model.js';
+import type { MessageParam } from '../../src/model/model.js';
 
 let server: HttpServer;
 let port: number;

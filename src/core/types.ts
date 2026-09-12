@@ -825,7 +825,7 @@ export interface AgentConfig {
   };
   /** Predefined model IDs shown in the agent form dropdown. Supports both string[] (legacy Bedrock IDs)
    *  and ModelEntry[] (new multi-provider format). */
-  available_models?: string[] | import('../agent/providers/types.js').ModelEntry[];
+  available_models?: string[] | import('../model/providers/types.js').ModelEntry[];
   /** Default reasoning-effort passed as --effort to claude CLI sessions (low/medium/high/max).
    *  Unset = let the CLI/API pick its default (resolves to 'high'). */
   session_effort?: SessionEffort;
@@ -860,7 +860,7 @@ export interface Config {
   };
   /** Multi-provider configuration. Each key is a provider name, value is protocol + auth config.
    *  When absent, auto-synthesized from legacy `provider.*` fields + env var auto-detection. */
-  providers?: Record<string, import('../agent/providers/types.js').ProviderConfig>;
+  providers?: Record<string, import('../model/providers/types.js').ProviderConfig>;
   agent?: AgentConfig;
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
@@ -1488,19 +1488,9 @@ export interface ConversationMeta {
    *  excluded from the oldest-is-main self-heal — a recovered thread must
    *  never silently capture the notification/cron stream. */
   recovered?: boolean;
-  /** Per-conversation model override for the IN-PROCESS engine (the model the
-   *  agent loop runs this conversation's turns on). Absent = follow
-   *  `config.agent.main_model`. Written by PUT /api/v1/chat/model.
-   *
-   *  Deliberately NOT used on the lane engine: there the conversation's turns run
-   *  inside a `claude` session, and that session record already owns model/effort
-   *  (one switch, reachable through /sessions/:id/model). Two writable copies of
-   *  "which model" would drift the moment either side changed. */
+  /** Legacy stored preference; the linked session owns the active model. */
   model?: string;
-  /** Per-conversation reasoning-effort override, same ownership rule as `model`.
-   *  Accepted and persisted for every engine, but the in-process agent loop has
-   *  no effort concept today (nothing in src/agent/ reads it), so it is a no-op
-   *  there rather than something faked into the request. */
+  /** Legacy stored preference; the linked session owns the active effort. */
   effort?: string;
 }
 

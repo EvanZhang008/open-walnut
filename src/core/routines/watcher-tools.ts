@@ -1,11 +1,8 @@
 /**
  * The watcher's tool belt: two memory tools and three outcome tools.
  *
- * These are the ONLY way a watcher reaches the user. That is the point — the
- * READ_ONLY_TOOL_NAMES comment in agent/tools.ts records what happens when a
- * background agent loop gets the ordinary `task_create` instead: a trimmed
- * history dropped the "do not use tools" line and it spawned near-duplicate
- * tasks in a self-propagating loop. So every limit that matters lives HERE, at
+ * A background loop with unrestricted task_create can create duplicate work
+ * after its history drops a prompt-only limit. Every limit therefore lives at
  * the tool boundary, where the model has no say:
  *
  *   - a per-run outcome cap,

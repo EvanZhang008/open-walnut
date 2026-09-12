@@ -758,8 +758,8 @@ async function resolveCredentialHealth(): Promise<{
   try {
     const { getConfig } = await import('../core/config-manager.js')
     const { resolveCredentials } = await import('../core/credential-resolver.js')
-    const { buildProviderMap } = await import('../agent/providers/registry.js')
-    const { resolveMainProviderName, mainProviderIsImplicit } = await import('../agent/providers/default-provider.js')
+    const { buildProviderMap } = await import('../model/providers/registry.js')
+    const { resolveMainProviderName, mainProviderIsImplicit } = await import('../model/providers/default-provider.js')
     const { detectClaudeCli } = await import('../core/claude-cli-detect.js')
     const config = await getConfig()
     const cli = detectClaudeCli()

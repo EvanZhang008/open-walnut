@@ -307,25 +307,6 @@ describe('<attached-images> annotation in chat.ts', () => {
   });
 });
 
-// ── System prompt includes image instruction ──
-
-describe('Agent system prompt image instruction', () => {
-  it('tells the agent to pass image file paths into session prompts', async () => {
-    // The CONTRACT: a session can only read an image if its path is in the prompt,
-    // so the Personal AI's prompt must say so. Asserting the old exact headings
-    // ('### Image attachments', '<attached-images>') made this fail when the same
-    // instruction was reworded into a numbered list (commit ae0cd90) — a false
-    // alarm on unchanged behaviour. Assert the substance instead of the wording.
-    const contextContent = await fs.readFile(
-      path.resolve(import.meta.dirname, '../../src/agent/context.ts'),
-      'utf-8',
-    );
-    expect(contextContent).toMatch(/image/i);
-    expect(contextContent).toContain('file paths in the session prompt');
-    expect(contextContent).toMatch(/Read tool/);
-  });
-});
-
 // ── No MAX_IMAGE_SIZE check ──
 
 describe('MAX_IMAGE_SIZE removal', () => {

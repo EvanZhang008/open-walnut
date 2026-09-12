@@ -17,7 +17,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-fork-title'));
 
 // Deterministic, offline model: returns a fixed label for the fork prompt.
-vi.mock('../../src/agent/model.js', () => ({
+vi.mock('../../src/model/model.js', () => ({
   sendMessage: vi.fn(async () => ({
     content: [{ type: 'text', text: 'Add Retry Backoff' }],
     stopReason: 'end_turn',

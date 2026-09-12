@@ -315,7 +315,7 @@ death).
 
 | Subsystem | Entry point | Details |
 |---|---|---|
-| Model calls (providers, catalog) | `src/model/` | `sendMessage` + provider adapters; `src/agent/` is re-export shims only |
+| Model calls (providers, catalog) | `src/model/` | `sendMessage` + provider adapters |
 | Core (tasks/sessions data) | `src/core/` | skill `walnut-core-internals` + [src/core/AGENTS.md](./src/core/AGENTS.md) |
 | Sessions (local + SSH) | `src/providers/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Session daemon (twins) | `src/providers/daemon-standalone.ts` + `daemon-source.ts` | "Remote Session Daemon" section above |

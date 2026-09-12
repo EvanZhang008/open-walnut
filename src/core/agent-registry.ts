@@ -8,7 +8,7 @@
  */
 
 import { getConfig, updateConfig, _resetWriteLockForTest } from './config-manager.js';
-import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
+import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { ensureProjectDir } from './project-memory.js';
 import type { AgentDefinition } from './types.js';
 import type { Disposable } from './plugins/disposable.js';

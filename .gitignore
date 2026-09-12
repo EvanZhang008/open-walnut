@@ -73,7 +73,7 @@ test-*-tmp.*
 sessions-list-*.md
 playwright-responses/
 tests/MEMORY_V2_*_PLAN.md
-# repo-root scratch dir ONLY — a bare `tools/` would swallow src/agent/tools/ additions
+# Root-only scratch directory; nested source tools directories must stay tracked.
 /tools/
 # one-off Playwright probe scripts dropped at the repo root while debugging a UI
 # behavior — throwaway by nature; a real spec belongs in tests/e2e/browser/

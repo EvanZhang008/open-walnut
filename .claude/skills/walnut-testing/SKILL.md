@@ -50,13 +50,13 @@ must do the same.**
                 ├──────────────────────┤
               │   Integration (super)    │  tests/web/routes/ — supertest, parallel
               ├──────────────────────────┤
-            │       Unit (vitest)           │  tests/core/, tests/agent/ — parallel
+            │       Unit (vitest)           │  tests/core/, tests/model/ (unit tests)
             └──────────────────────────────┘
 ```
 
 | Tier | Location | What's real | What's mocked |
 |---|---|---|---|
-| **Unit** | `tests/core/`, `tests/agent/` | Logic, data structures | File paths → tmpdir |
+| **Unit** | `tests/core/`, `tests/model/` | Logic, data structures | File paths → tmpdir |
 | **Integration** | `tests/web/routes/` | Express app, middleware | File paths → tmpdir |
 | **E2E** | `tests/e2e/` | Server, WS, bus, disk I/O | `constants.js` → tmpdir, Claude CLI → mock script |
 | **Browser** | `tests/e2e/browser/` | Browser, server, full SPA | `constants.js` → tmpdir, Claude CLI → mock script |

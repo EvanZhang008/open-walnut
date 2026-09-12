@@ -18,7 +18,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 import { WALNUT_HOME } from '../../src/constants.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { getAgent } from '../../src/core/agent-registry.js'
-import { resolveProvider } from '../../src/agent/providers/registry.js'
+import { resolveProvider } from '../../src/model/providers/registry.js'
 import { IntegrationRegistry } from '../../src/core/integration-registry.js'
 import { PluginContext, type PluginLogger } from '../../src/core/plugins/plugin-context.js'
 import { createServerPluginApi } from '../../src/core/plugins/server-api.js'

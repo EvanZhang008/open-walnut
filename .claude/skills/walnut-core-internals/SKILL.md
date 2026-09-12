@@ -195,7 +195,7 @@ Each session has two JSONL files:
 ## Chat History & Compaction Details
 
 The main agent chat persists via `~/.open-walnut/chat-history.json`. Unified `entries[]` array (v2 schema):
-- **`tag: 'ai'`**: Model-facing messages (Anthropic `ContentBlock[]` format). Fed to `runAgentLoop()` via `getModelContext()`.
+- **`tag: 'ai'`**: Conversation messages (Anthropic `ContentBlock[]` format). `getModelContext()` projects them for compaction and context statistics; CLI sessions own their execution history.
 - **`tag: 'ui'`**: Display-only notifications. Never sent to the model.
 
 Key API: `addAIMessages()`, `addNotification()`, `getModelContext()`, `getDisplayEntries()`. Auto-migrates from v1 on first read. Also runs one-time migration to mark orphan `tool_result` entries as compacted.
@@ -204,15 +204,13 @@ Key API: `addAIMessages()`, `addNotification()`, `getModelContext()`, `getDispla
 
 Threshold is dynamic: 80% of the model's context window (160K for 200K models, 800K for `[1m]` 1M models). Reads `agent.main_model` from config. See `getContextWindowSize()` in `src/model/model.ts`.
 
-1. **Memory flush** (`MEMORY_FLUSH_MESSAGE`): Real agent turn via `runAgentLoop()` with full default tool set. Agent uses `memory` tool to persist knowledge. Only runs when `aiEntries.length >= 8`. Uses default tools to preserve Bedrock prompt cache prefix alignment.
-2. **Summarize** (`buildCompactionInstruction()`): LLM call with full message history as `MessageParam[]` produces structured checkpoint summary (10-section format).
-3. **Parallel execution**: Steps 1 and 2 run concurrently via `Promise.all`.
-4. **Turn-boundary cutting**: `findTurnBoundaryIndex()` scans from end counting user messages to find where last 10 turns begin. Guarantees no split `tool_use`/`tool_result` pairs.
-5. **Entries before the boundary are deleted** from `entries[]` — both old AI conversation and older UI notifications (triage/cron/subagent/session-error) are discarded together. Kept entries are slimmed. Guard: must have >= 4 old messages.
-6. Summary stored as `compactionSummary` and injected into system prompt.
+1. **Summarize** (`buildCompactionInstruction()`): one `sendMessage` call receives the message history as `MessageParam[]` and produces a structured checkpoint summary. No tools or memory-flush agent turn run before pruning.
+2. **Turn-boundary cutting**: `findTurnBoundaryIndex()` scans backward to keep the last 10 turns without splitting `tool_use`/`tool_result` pairs.
+3. **Prune**: old AI entries and UI notifications are deleted together; kept entries are slimmed. At least four old messages are required.
+4. **Persist**: the summary is stored as `compactionSummary`. This store-level compaction does not replace the CLI session's own context management.
 
 **Why delete instead of marking `compacted: true`?** The model never reads old entries (they're filtered out), and the UI notification source data always lives in each subagent's own JSONL file (`~/.open-walnut/sessions/streams/<runId>.jsonl`). Retaining them only grew `chat-history.json` unboundedly (35 MB observed before the switch) and froze the Node event loop on every turn. The `compacted: true` marker is still checked defensively in `getModelContext()` for backward compatibility with older data, but new compactions never produce it.
 
 **Defense layer**: `getModelContext()` strips any user message whose `tool_result` blocks have no matching `tool_use` in the preceding assistant message.
 
-Both WebSocket auto-compaction and REST `/compact` endpoint share `createCompactionCallbacks()` factory in `src/web/routes/chat.ts`.
+The REST `/compact` endpoint calls `triggerBackgroundCompaction()` in `src/web/background-compaction.ts`, which uses the one-shot summarizer from `createCompactionCallbacks()` in `src/web/routes/chat.ts`. No in-process chat loop triggers automatic compaction.

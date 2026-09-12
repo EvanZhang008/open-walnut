@@ -36,7 +36,7 @@ const isolatedDaemonEnv = vi.hoisted(() => {
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-acp-session'))
 
 // Offline model for async task-title refinement.
-vi.mock('../../src/agent/model.js', () => ({
+vi.mock('../../src/model/model.js', () => ({
   sendMessage: vi.fn(async () => ({
     content: [{ type: 'text', text: 'Codex Task' }],
     stopReason: 'end_turn',

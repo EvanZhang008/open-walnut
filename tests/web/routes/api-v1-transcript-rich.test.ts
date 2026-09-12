@@ -35,8 +35,8 @@
  * Real: Express server (startServer), the api-v1 router, session records in
  * SQLite, and the whole read pipeline (buildSessionTranscript →
  * readSessionHistoryTail → DaemonFileReader → parseSessionMessages) against
- * JSONL written to disk. Mocked: constants (temp dirs), the agent loop (never
- * invoked — no turn is posted), and the '__local__' daemon file reader, which in
+ * JSONL written to disk. Mocked: constants (temp dirs) and the '__local__'
+ * daemon file reader, which in
  * production expands `~/.claude` via its own process HOME and so cannot see
  * fixtures under the mocked CLAUDE_HOME.
  */
@@ -49,10 +49,6 @@ import { mockLocalDaemonReader } from '../../helpers/mock-local-daemon-reader.js
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-transcript-rich'))
 vi.mock('../../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
-
-vi.mock('../../../src/agent/loop.js', () => ({
-  runAgentLoop: vi.fn(async () => ({ messages: [], newMessages: [], response: '', aborted: false })),
-}))
 
 import { WALNUT_HOME, CLAUDE_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'

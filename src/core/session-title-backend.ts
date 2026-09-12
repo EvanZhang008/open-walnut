@@ -81,7 +81,7 @@ export function backendTitleAvailable(): boolean {
  */
 export async function titleBudgetMs(config: Config): Promise<number> {
   const { resolveMainProviderName, CLAUDE_CLI_PROVIDER } =
-    await import('../agent/providers/default-provider.js');
+    await import('../model/providers/default-provider.js');
   return resolveMainProviderName(config) === CLAUDE_CLI_PROVIDER ? 60_000 : 15_000;
 }
 
@@ -99,7 +99,7 @@ export async function titleViaBackendModel(
   if (!backendTitleAvailable()) return null;
 
   const askOnce = async (): Promise<string | null> => {
-    const { sendMessage } = await import('../agent/model.js');
+    const { sendMessage } = await import('../model/model.js');
     const { getConfig } = await import('./config-manager.js');
     const config = await getConfig();
     const model = fastModelFor(config);

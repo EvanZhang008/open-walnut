@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sendMessageMock = vi.fn();
 const config = { agent: { main_provider: 'bedrock', fast_model: undefined as string | undefined } };
-vi.mock('../../src/agent/model.js', () => ({
+vi.mock('../../src/model/model.js', () => ({
   sendMessage: (...args: unknown[]) => sendMessageMock(...args),
 }));
 vi.mock('../../src/core/config-manager.js', () => ({

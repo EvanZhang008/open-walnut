@@ -23,7 +23,7 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => {
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { buildPlugin } from '../../packages/plugin-cli/src/build.js'
-import { resolveProvider } from '../../src/agent/providers/registry.js'
+import { resolveProvider } from '../../src/model/providers/registry.js'
 import { getAgent } from '../../src/core/agent-registry.js'
 import { getCommand } from '../../src/core/command-store.js'
 import { bus } from '../../src/core/event-bus.js'

@@ -388,7 +388,7 @@ describe('Session context injection', () => {
   // matching itself (findRepoByPath, tested above) still works; it's just no
   // longer fed into the system prompt. These tests pin the no-op contract.
   it('does not inject repo context even when CWD matches a configured repo', async () => {
-    const { buildSessionContext } = await import('../../src/agent/session-context.js')
+    const { buildSessionContext } = await import('../../src/core/sessions/session-context.js')
 
     const createRes = await api('POST', '/api/tasks', {
       title: 'Context injection test task',
@@ -405,7 +405,7 @@ describe('Session context injection', () => {
   })
 
   it('returns an empty prompt when CWD does not match any repo', async () => {
-    const { buildSessionContext } = await import('../../src/agent/session-context.js')
+    const { buildSessionContext } = await import('../../src/core/sessions/session-context.js')
 
     const createRes = await api('POST', '/api/tasks', {
       title: 'No-match context test',

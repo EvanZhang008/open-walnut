@@ -53,12 +53,12 @@ import { countOwnerOps, definePluginOp, listOpEntries, type HttpBinding, type Wa
 import { jsonSchemaToZodShape } from '../../ops/schema-to-zod.js'
 import { registerOwnedMethod } from '../../web/ws/handler.js'
 import { registerOwnedAgent } from '../agent-registry.js'
-import { registerOwnedProviderAdapter } from '../../agent/providers/registry.js'
+import { registerOwnedProviderAdapter } from '../../model/providers/registry.js'
 import type {
   AdapterCallOptions,
   ModelResult,
   ProtocolAdapter,
-} from '../../agent/providers/types.js'
+} from '../../model/providers/types.js'
 
 /** Plugins already warned about agentContext — once each, not once per reload. */
 const agentContextWarned = new Set<string>()

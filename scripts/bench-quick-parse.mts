@@ -6,7 +6,7 @@
  * Requires real provider credentials. Add --dry-run to print the synthetic
  * fixture, digest, and model matrix without making provider calls.
  */
-import { MODEL_CATALOG } from '../src/agent/providers/model-catalog.js';
+import { MODEL_CATALOG } from '../src/model/providers/model-catalog.js';
 import { getConfig } from '../src/core/config-manager.js';
 import {
   parseQuickTask,

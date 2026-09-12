@@ -12,13 +12,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import fs from 'node:fs/promises'
-import { createMockConstants } from '../helpers/mock-constants.js'
+import { createMockConstants } from '../../helpers/mock-constants.js'
 
-vi.mock('../../src/constants.js', () => createMockConstants('walnut-session-context'))
+vi.mock('../../../src/constants.js', () => createMockConstants('walnut-session-context'))
 
-import { WALNUT_HOME } from '../../src/constants.js'
-import { buildSessionContext } from '../../src/agent/session-context.js'
-import { addTask } from '../../src/core/task-manager.js'
+import { WALNUT_HOME } from '../../../src/constants.js'
+import { buildSessionContext } from '../../../src/core/sessions/session-context.js'
+import { addTask } from '../../../src/core/task-manager.js'
 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -51,6 +51,22 @@ describe('buildSessionContext (identity note)', () => {
     const id = await seedTask('')
     const { systemPrompt } = await buildSessionContext(id)
     expect(systemPrompt).toContain('Inbox')
+  })
+
+  it('preserves long Unicode task titles and projects across concurrent reads', async () => {
+    const title = '\u4fee\u590d\u4f1a\u8bdd '.repeat(50).trim()
+    const project = '\u6d4b\u8bd5\u9879\u76ee'
+    const { task } = await addTask({ title, project })
+    const otherId = await seedTask('Other project')
+    const [first, other, missing] = await Promise.all([
+      buildSessionContext(task.id), buildSessionContext(otherId), buildSessionContext(''),
+    ])
+    expect(first.systemPrompt).toContain(title)
+    expect(first.systemPrompt).toContain(`project "${project}"`)
+    expect(other.systemPrompt).toContain('Other project')
+    expect(other.systemPrompt).not.toContain(title)
+    expect(missing.systemPrompt).not.toContain('You are working on')
+    expect((await buildSessionContext(task.id)).systemPrompt).toBe(first.systemPrompt)
   })
 
   it('drops only the task line for a nonexistent task', async () => {
@@ -102,14 +118,13 @@ describe('buildSessionContext (identity note)', () => {
   })
 
   it('injects no vault / server-safety preamble and stays short', async () => {
-    const id = await seedTask('marina')
-    const { systemPrompt } = await buildSessionContext(id, '/x', 'h')
+    const { systemPrompt } = await buildSessionContext('', '/x', 'h')
     expect(systemPrompt).not.toContain('<server_safety>')
     expect(systemPrompt).not.toContain('<notes_context>')
     expect(systemPrompt).not.toContain('<task>')
     // An identity note, not a blanket preamble (the old one ran to several KB);
     // anything bigger belongs in the manual (pulled live with `walnut guide`).
-    // The budget covers five short paragraphs plus a task line with a long title.
+    // User-supplied titles are preserved; this ceiling guards the fixed preamble.
     expect(systemPrompt.length).toBeLessThan(1200)
   })
 })

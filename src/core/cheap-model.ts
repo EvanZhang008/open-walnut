@@ -1,5 +1,5 @@
-import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
-import { resolveMainProviderName } from '../agent/providers/default-provider.js';
+import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
+import { resolveMainProviderName } from '../model/providers/default-provider.js';
 import type { Config } from './types.js';
 
 /**

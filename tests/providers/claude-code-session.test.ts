@@ -1349,7 +1349,7 @@ describe('SessionRunner context enrichment', () => {
   // buildSessionContext injects EXACTLY the short walnut context hint (wn
   // gateway + skill pointer) — task-independent, no task/vault/server preamble
   // (that blanket was removed 2026-06-18 and must stay gone; the unit tests in
-  // tests/agent/session-context.test.ts pin the content and a size ceiling).
+  // tests/core/sessions/session-context.test.ts pin the content and a size ceiling).
   it('handleStart injects the walnut context hint as the system prompt', async () => {
     const tasksDir = path.join(tmpBase, 'tasks');
     await fsp.mkdir(tasksDir, { recursive: true });

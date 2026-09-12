@@ -9,7 +9,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { MessageParam } from '../../agent/model.js'
+import type { MessageParam } from '../../model/model.js'
 import type { DisplayMessageBlock } from '../../core/types.js'
 import type { CompactionResult } from '../../core/chat-history.js'
 import { registerMethod, broadcastEvent } from '../ws/handler.js'
@@ -65,7 +65,7 @@ function answerText(content: Array<{ type: string; text?: string }> | undefined)
 export async function createCompactionCallbacks(options?: { trackUsage?: boolean }): Promise<{
   summarizer: (instruction: string, history: MessageParam[]) => Promise<string>
 }> {
-  const { sendMessage } = await import('../../agent/model.js')
+  const { sendMessage } = await import('../../model/model.js')
   // The usage row's model label: a one-shot answer does not carry one (only the
   // agent loop stamped it), so read the configured main model once here rather
   // than filing every compaction call under 'unknown'.

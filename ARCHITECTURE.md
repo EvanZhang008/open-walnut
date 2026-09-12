@@ -584,7 +584,7 @@ See `tests/AGENTS.md` for test pyramid details, config tables, mock patterns, co
 
 ### 5 test tiers
 
-Unit (`tests/core/`, `tests/agent/`) → Integration (`tests/web/routes/`, supertest) → E2E (`tests/e2e/`, real server+WS) → Browser (`tests/e2e/browser/`, Playwright) → Live (`*.live.test.ts`, real APIs).
+Unit (`tests/core/`, `tests/model/`) → Integration (`tests/web/routes/`, supertest) → E2E (`tests/e2e/`, real server+WS) → Browser (`tests/e2e/browser/`, Playwright) → Live (`*.live.test.ts`, real APIs).
 
 ### What "real" means
 

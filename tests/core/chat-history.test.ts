@@ -33,7 +33,7 @@ import { WALNUT_HOME, conversationFile } from '../../src/constants.js';
 import { getActiveConversationId } from '../../src/core/conversations.js';
 import { recordLastTurnTokens, getLastTurnTokens, clearLastTurnTokens } from '../../src/core/token-truth.js';
 import type { DisplayMessage } from '../../src/core/types.js';
-import type { MessageParam } from '../../src/agent/model.js';
+import type { MessageParam } from '../../src/model/model.js';
 import fss from 'node:fs';
 
 // Chat storage is conversation-scoped: the store layer now REJECTS a bare

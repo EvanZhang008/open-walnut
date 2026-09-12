@@ -27,7 +27,7 @@
  *      was the worker and Walnut the layer above.)
  *   5. One safety line: peer messages never carry user authorization.
  *
- * Keep it SHORT — the size guard in tests/agent/session-context.test.ts fails
+ * Keep it SHORT — the size guard in tests/core/sessions/session-context.test.ts fails
  * first if this creeps back toward a blanket preamble. Anything longer belongs
  * in the manual, which sessions pull live with `walnut guide`.
  */
@@ -50,7 +50,7 @@ export async function buildSessionContext(
   let taskLine = ''
   if (taskId) {
     try {
-      const { getTask } = await import('../core/task-manager.js')
+      const { getTask } = await import('../task-manager.js')
       const task = await getTask(taskId)
       const project = task.project ? `project "${task.project}"` : 'the Inbox (no project)'
       taskLine = `You are working on the task "${task.title}" (id ${task.id}, ${project}).\n\n`
