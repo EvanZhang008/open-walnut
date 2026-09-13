@@ -2475,43 +2475,6 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   return handOff(messages);
 }
 
-/**
- * Format a source session's conversation history for injection into a forked session.
- * Returns a text summary suitable for `append-system-prompt`, truncated to tokenBudget.
- *
- * Each message is formatted as:
- *   [turn N] User: <text>
- *   [turn N] Assistant [tool1, tool2]: <text>
- */
-export function formatForkHistory(messages: SessionHistoryMessage[], tokenBudget = 50_000): string {
-  const CHARS_PER_TOKEN = 3.5;
-  const charBudget = Math.floor(tokenBudget * CHARS_PER_TOKEN);
-  const MAX_PER_MSG = 2000;
-
-  const lines: string[] = [];
-  let turn = 0;
-  for (const msg of messages) {
-    if (msg.role === 'system') continue; // UI notices (compact/api_error) — not conversation
-    if (msg.role === 'user') turn++;
-    const toolInfo = msg.tools?.length ? ` [${msg.tools.map(t => t.name).join(', ')}]` : '';
-    const role = msg.role === 'user' ? 'User' : `Assistant${toolInfo}`;
-    const text = msg.text.length > MAX_PER_MSG
-      ? msg.text.slice(0, MAX_PER_MSG) + `... [${msg.text.length} chars total]`
-      : msg.text;
-    if (text.trim()) {
-      lines.push(`[turn ${turn}] ${role}: ${text}`);
-    }
-  }
-
-  const full = lines.join('\n\n');
-  if (full.length <= charBudget) return full;
-
-  // Tail-truncate: keep the most recent turns
-  const truncated = full.slice(-charBudget);
-  const firstNewline = truncated.indexOf('\n');
-  const clean = firstNewline > 0 ? truncated.slice(firstNewline + 1) : truncated;
-  return '[...earlier conversation omitted]\n\n' + clean;
-}
 
 /**
  * Extract only the plan content from a session's JSONL file.

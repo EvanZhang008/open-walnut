@@ -189,25 +189,50 @@ const section = (s: FullTextSection | undefined): Section | undefined =>
  * with `resultChars` alongside it the answer then reports how much is missing AND
  * offers no cursor, because there is no request that would return the rest. A cursor
  * in that state advertised a page which answered `200` with an empty string.
+ *
+ * The invariant, learned on device: **this may only say "complete" when it has
+ * POSITIVE EVIDENCE that the text it holds is the whole output.** A prefix sitting at
+ * the retained cap with no `resultChars` is not evidence, it is a missing stamp — and
+ * a parse cached before that stamp existed produces exactly that shape (18 of 54 real
+ * rows answered `4,999 of 4,999, complete` for a 17,781-character result). Such a row
+ * is treated as CUT: re-read the source, and if the source cannot be reached, say
+ * truncated with no cursor. Hitting the cap exactly with a genuinely whole result then
+ * costs one row re-read, which is the cheap side of this trade.
  */
 async function fullResultFor(
   tool: import('./session-history.js').SessionHistoryTool,
   sessionId: string,
   jsonl: { cwd?: string; host?: string } | undefined,
   offset: number,
-): Promise<{ text: string | undefined; sourceChars?: number; reachable: boolean }> {
+): Promise<{
+  text: string | undefined
+  sourceChars?: number
+  reachable: boolean
+  /** The prefix is at the cap, carries no stamp, and the source could not be re-read:
+   *  there is no honest total to report, only "this is not all of it". */
+  unknownRemainder?: boolean
+}> {
   const kept = { text: tool.result, sourceChars: tool.resultChars, reachable: false }
-  if (tool.resultChars === undefined || !tool.toolUseId || !jsonl) return kept
+  const { HISTORY_TOOL_RESULT_MAX, readSessionRowToolResult } = await import('./session-history.js')
+  // `>=  max - 1`, not `=== max`: the cap walks back one unit when it would split a
+  // surrogate pair (core/text-cut.ts), so both lengths are the same missing stamp.
+  // Scoped to JSONL-parsed rows because only that parse applies the cap at all — an
+  // ACP journal row with no `resultChars` really is whole.
+  const unstampedCap = tool.resultChars === undefined
+    && jsonl !== undefined
+    && typeof tool.result === 'string'
+    && tool.result.length >= HISTORY_TOOL_RESULT_MAX - 1
+  const ambiguous = unstampedCap ? { ...kept, unknownRemainder: true } : kept
+  if ((tool.resultChars === undefined && !unstampedCap) || !tool.toolUseId || !jsonl) return ambiguous
   try {
-    const { readSessionRowToolResult } = await import('./session-history.js')
     const full = await readSessionRowToolResult(
       sessionId, tool.toolUseId, offset + FULL_TEXT_SECTION_MAX, jsonl.cwd, jsonl.host,
     )
     // reachable only when THIS read reached the source: a wider budget then returns
     // more, which is exactly what a cursor promises.
-    return full ? { text: full.text, sourceChars: full.sourceChars, reachable: true } : kept
+    return full ? { text: full.text, sourceChars: full.sourceChars, reachable: true } : ambiguous
   } catch {
-    return kept
+    return ambiguous
   }
 }
 
@@ -258,6 +283,15 @@ export async function resolveActivityDetail(
       output.text, offset,
       output.sourceChars === undefined ? undefined : { chars: output.sourceChars, reachable: output.reachable },
     ))
+    // An unstamped cap-length prefix whose source could not be re-read: the honest
+    // answer is "this is not all of it, and I cannot tell you how much there is".
+    // `chars` stays the DELIVERED length (there is no source total to quote) and the
+    // cursor is dropped, because no request would return the rest — the truncation
+    // flag is the only thing a client should act on here.
+    if (result && output?.unknownRemainder) {
+      result.more = true
+      delete result.next
+    }
     return {
       version: 1, kind: 'tool', toolName: tool.name, offset,
       ...(input ? { input: input.text, inputChars: input.chars } : {}),
