@@ -85,6 +85,102 @@ final class UITestLaunchRatchetTests: XCTestCase {
         }
     }
 
+    /// AN APP THE OS LAUNCHED CANNOT BE PINNED, so a test that attaches to one has to
+    /// SAY it is opting into live traffic.
+    ///
+    /// `XCUIApplication(bundleIdentifier:)` stays allowed (it is how a test reaches
+    /// SpringBoard), but attaching to the APP UNDER TEST means the app came up outside
+    /// XCUITest's control: a SpringBoard shortcut tap takes no launch arguments, so
+    /// `-walnut.serverUrl` cannot reach it and the process runs against whatever server
+    /// this simulator is paired to. On the dogfood-paired simulator that is real traffic
+    /// at a real server — the hole the blackhole was built to close, reopened from the
+    /// other side (2026-09-12 gate).
+    ///
+    /// So every such attach must sit inside a test that carries the opt-in skip. Read as
+    /// TEXT, like the cases above: the property is about the call sites.
+    func testEveryAttachToTheAppUnderTestIsGatedOnTheSpringBoardOptIn() throws {
+        for source in try uiTestSources() {
+            for use in Self.attachSites(in: source.text) {
+                XCTAssertTrue(
+                    use.enclosing.hasPrefix("test"),
+                    """
+                    \(source.name) attaches to \(use.bundleID) from `\(use.enclosing)`, \
+                    which is not a test case — the opt-in skip can only be enforced \
+                    inside one. Move the attach into the test that needs it.
+                    """
+                )
+                XCTAssertTrue(
+                    use.body.contains(Self.optInVariable) && use.body.contains("XCTSkipUnless"),
+                    """
+                    \(source.name)/\(use.enclosing) attaches to \(use.bundleID) — an app \
+                    the OS launched, which cannot be pointed at the discard port. Gate it \
+                    on `XCTSkipUnless(ProcessInfo.processInfo.environment["\
+                    \(Self.optInVariable)"] == "1", …)` with a message saying why, or \
+                    launch through `UITestLaunch.launch([…])` instead.
+                    """
+                )
+            }
+        }
+    }
+
+    /// The one environment variable that admits an unpinnable launch. Nothing sets it by
+    /// default — an ordinary run skips that test rather than sending the traffic.
+    private static let optInVariable = "WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH"
+
+    /// SpringBoard is not the app under test: attaching to the OS shell launches nothing
+    /// and sends no traffic, and it is how a test reads a Home-screen menu at all.
+    private static let springBoardID = "com.apple.springboard"
+
+    /// One `XCUIApplication(bundleIdentifier:)` on something other than SpringBoard,
+    /// with the declaration it sits in.
+    private struct AttachSite {
+        let bundleID: String
+        let enclosing: String
+        /// The enclosing declaration's source, from its `func` to the next one.
+        let body: String
+    }
+
+    /// Every attach site in one (comment-stripped) source.
+    ///
+    /// Deliberately text, and deliberately crude: the enclosing declaration is the LAST
+    /// `func` before the attach and its body runs to the NEXT `func`. A nested helper
+    /// therefore reads as the enclosing declaration, which fails closed (the author moves
+    /// the gate up) rather than open.
+    private static func attachSites(in text: String) -> [AttachSite] {
+        let needle = "XCUIApplication(bundleIdentifier:"
+        let funcStarts = ranges(of: "func ", in: text).map(\.lowerBound)
+        var out: [AttachSite] = []
+        for use in ranges(of: needle, in: text) {
+            let tail = text[use.upperBound...]
+            guard let quoted = tail.firstIndex(of: "\""),
+                  let closing = tail[tail.index(after: quoted)...].firstIndex(of: "\"")
+            else { continue }
+            let bundleID = String(tail[tail.index(after: quoted)..<closing])
+            guard bundleID != springBoardID else { continue }
+            guard let start = funcStarts.last(where: { $0 < use.lowerBound }) else {
+                out.append(AttachSite(bundleID: bundleID, enclosing: "<file scope>",
+                                      body: text))
+                continue
+            }
+            let after = text.index(start, offsetBy: "func ".count)
+            let end = funcStarts.first(where: { $0 > use.lowerBound }) ?? text.endIndex
+            let name = text[after...].prefix(while: { $0.isLetter || $0.isNumber || $0 == "_" })
+            out.append(AttachSite(bundleID: bundleID, enclosing: String(name),
+                                  body: String(text[start..<end])))
+        }
+        return out
+    }
+
+    private static func ranges(of needle: String, in text: String) -> [Range<String.Index>] {
+        var out: [Range<String.Index>] = []
+        var from = text.startIndex
+        while let found = text.range(of: needle, range: from..<text.endIndex) {
+            out.append(found)
+            from = found.upperBound
+        }
+        return out
+    }
+
     /// And the helper still has to be the thing that does it — a rename or a refactor
     /// that drops the blackhole would leave both cases above green.
     func testTheHelperStillPinsTheBlackhole() throws {

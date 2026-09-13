@@ -81,6 +81,7 @@ import { engineCaps } from './agents/engine-registry.js'
 // web/routes/session-stream-v1.ts: an HTML-bearing reply gets a larger budget and
 // the cut is made where it cannot leave half a tag behind.
 import { clipTranscriptText } from './sessions/transcript-clip.js'
+import { cutEnd } from './text-cut.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
  *  is on (see projection-cache.ts); the cache/ paths are the live copies. */
@@ -214,7 +215,10 @@ export function projectSession(
     ...(task?.pinned ? { pinned: true } : {}),
     ...(task?.pinned && task?.focus_tier ? { focus_tier: task.focus_tier } : {}),
     ...(description
-      ? { description: description.length > DESCRIPTION_MAX ? description.slice(0, DESCRIPTION_MAX) + '…' : description }
+      // Cut on a code-point boundary (core/text-cut.ts): a description ending
+      // mid-emoji ships a lone surrogate, which a strict JSON decoder rejects for the
+      // whole projection, not just this row.
+      ? { description: description.length > DESCRIPTION_MAX ? description.slice(0, cutEnd(description, DESCRIPTION_MAX)) + '…' : description }
       : {}),
   }
 }

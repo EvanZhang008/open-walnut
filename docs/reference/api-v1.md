@@ -857,8 +857,12 @@ one:
 
 - One request returns every section the row has: `text` for a reasoning row,
   `input` and `result` (either may be absent) for a tool row.
-- **`<name>Chars` is measured on the text as DELIVERED, after redaction.** For a
-  section that is not truncated it equals the length of the string in the same
+- **`<name>Chars` is measured on the text as DELIVERED, after redaction.** Every count
+  and offset on this route is in **UTF-16 code units** (what `String.prototype.length`
+  and Swift's `String.utf16.count` return), never graphemes and never bytes, so a
+  client must compare in that unit: a grapheme count (Swift's `String.count`) reads a
+  COMPLETE section as clipped as soon as the text carries emoji or CRLF line endings.
+  For a section that is not truncated it equals the length of the string in the same
   response exactly, so "showing the first N of M" has N === M and never promises
   characters that do not exist. (Redaction shrinks: `AKIA…` becomes `[REDACTED]`. A
   source-based count made a complete 6,838-character result claim 6,999 and a drawer
@@ -885,9 +889,12 @@ one:
   per section; a longer section sets `<name>NextOffset` (and `truncated: true`),
   and the rest is fetched with `part=<that section>&offset=<that number>`.
   Offsets count SOURCE characters (positions before redaction, not indices into the
-  delivered string), so pages join back with nothing dropped at the seam. `offset`
-  without `part` is a `400` (the same number means a different place in a tool's input
-  than in its result). This 200,000 is the ONLY ceiling on a section: a long tool result
+  delivered string), so pages join back with nothing dropped at the seam. `offset` and
+  every `<name>NextOffset` count in those same UTF-16 code units and always land on a
+  character boundary, so no page begins or ends inside an emoji (a cursor is never
+  adjusted; an `offset` a caller invented mid-character moves forward to the next
+  boundary). `offset` without `part` is a `400` (the same number means a different
+  place in a tool's input than in its result). This 200,000 is the ONLY ceiling on a section: a long tool result
   reads to its end here, by re-reading that one row from the transcript, even though the
   row a LIST read carries keeps just the first 5,000 characters of it (a whole-transcript
   parse holds every row's result at once, which is a bound worth having there and

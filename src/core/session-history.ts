@@ -27,6 +27,7 @@ import {
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
 import { toDisplayedUserText } from './sessions/reference-cards.js';
+import { cutEnd } from './text-cut.js';
 import { computeRewindDeadSet, queueEnqueueKey, type SkippedRewindCut } from './transcript-chain.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
@@ -816,7 +817,11 @@ export interface ParseSessionMessagesOptions {
  *  HISTORY_TOOL_RESULT_MAX. `>` not `>=`: a result of exactly `max` characters
  *  lost nothing, so it must not be reported as cut. */
 function toolResultFields(text: string, max: number): { result: string; resultChars?: number } {
-  return text.length > max ? { result: text.slice(0, max), resultChars: text.length } : { result: text };
+  // The cut lands on a code-point boundary (see core/text-cut.ts): this text is
+  // delivered verbatim in a row's `resultPreview` and in the detail read, and a cut
+  // through an emoji leaves a lone surrogate that a strict JSON decoder rejects for
+  // the WHOLE response. `resultChars` keeps counting the source in UTF-16 code units.
+  return text.length > max ? { result: text.slice(0, cutEnd(text, max)), resultChars: text.length } : { result: text };
 }
 
 /** Shared empty set — the no-filter path never allocates per parse. */

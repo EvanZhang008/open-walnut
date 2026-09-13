@@ -753,7 +753,7 @@ struct TimelineActivityWithheldRow: View {
     var body: some View {
         let words = (label.map { "\($0) · " } ?? "")
             + TimelineActivitySheet.withheldText(
-                shown: min(section.chars, section.window), total: section.total)
+                shown: section.shownChars, total: section.total)
         TimelineActivityBarRow(stacked: TimelineChipLayout.stacksDetail(typeSize)) {
             Text(verbatim: words)
                 .font(.caption2)
@@ -929,18 +929,30 @@ private struct OptionalMaxHeight: ViewModifier {
 /// One section's text as the drawer holds it: what the row already carried, what a
 /// fetch replaced it with, and how much of it is currently rendered.
 ///
-/// `chars` is banked at assignment because `String.count` is O(n) and a tool result
-/// can be hundreds of KB — a per-render count would be paid on every scroll tick.
+/// EVERY NUMBER HERE IS A COUNT OF UTF-16 CODE UNITS, because the server's are. Its
+/// `*Chars` and `offset` come from JavaScript's `string.length`, which counts UTF-16
+/// units: one emoji is 2, and `\r\n` is 2. Swift's `String.count` counts GRAPHEMES —
+/// one for the emoji, and one for `\r\n` as well, since Swift treats CRLF as a single
+/// Character. So a section carrying 40 emoji reported 2,717 from the server against
+/// 2,605 counted locally and a COMPLETE section announced "Showing the first 2,605 of
+/// 2,717 characters." with no Show more to press (2026-09-12 gate; 120 CRLF line
+/// endings did the same). Mixing the two units is not a rounding error, it is a
+/// different question, so this type asks the server's question everywhere.
+///
+/// `chars` is banked at assignment because counting is O(n) and a tool result can be
+/// hundreds of KB — a per-render count would be paid on every scroll tick.
 struct TimelineDrawerSection: Equatable {
     var text = ""
+    /// `text` measured in UTF-16 code units, i.e. in the server's units.
     private(set) var chars = 0
-    /// Total the SERVER holds for this section (may exceed what it sent).
+    /// Total the SERVER holds for this section (may exceed what it sent), in UTF-16
+    /// code units — see the type comment.
     var serverChars: Int?
     /// The server had more than it put in this page.
     var cut = false
-    /// Characters rendered right now. Raised by the reader, never automatically:
-    /// a 200,000-character page in one `Text` is a frozen sheet, and a drawer that
-    /// takes three seconds to open is its own bug.
+    /// UTF-16 code units rendered right now. Raised by the reader, never
+    /// automatically: a 200,000-character page in one `Text` is a frozen sheet, and a
+    /// drawer that takes three seconds to open is its own bug.
     var window = TimelineDrawerSection.renderWindow
 
     static let renderWindow = 20_000
@@ -949,19 +961,46 @@ struct TimelineDrawerSection: Equatable {
 
     init(_ text: String, serverChars: Int? = nil, cut: Bool = false) {
         self.text = text
-        self.chars = text.count
+        self.chars = text.utf16.count
         self.serverChars = serverChars
         self.cut = cut
     }
 
     var isEmpty: Bool { text.isEmpty }
-    /// What to draw: everything, or the first `window` characters of it.
-    var visible: String { chars <= window ? text : String(text.prefix(window)) }
+    /// What to draw: everything, or the first `window` code units of it.
+    var visible: String {
+        chars <= window ? text : Self.prefix(text, utf16Limit: window)
+    }
+    /// What `visible` ACTUALLY renders, in the server's units — never more than
+    /// `window`, and a little less when the cut lands inside a cluster. The footer
+    /// prints this rather than `window`, so its two numbers describe the same text.
+    var shownChars: Int { chars <= window ? chars : visible.utf16.count }
     /// Everything that exists, as far as anyone knows.
     var total: Int { max(serverChars ?? chars, chars) }
     /// Is text being withheld right now — by the render window or by the server's
     /// own page cut? If so the drawer SAYS so, with both numbers.
     var withholding: Bool { chars > window || cut }
+
+    /// The first `utf16Limit` code units of `text`, cut back to a Character boundary.
+    ///
+    /// A UTF-16 offset can land INSIDE a surrogate pair or a multi-scalar cluster,
+    /// where `String` has no index at all — so the cut walks back until it finds one.
+    /// Never `text.prefix(utf16Limit)`: that counts graphemes, so a window of 20,000
+    /// would hand `Text` up to 40,000 code units of emoji while the footer claimed
+    /// 20,000.
+    static func prefix(_ text: String, utf16Limit: Int) -> String {
+        guard utf16Limit > 0 else { return "" }
+        let units = text.utf16
+        guard units.count > utf16Limit else { return text }
+        var cursor = units.index(units.startIndex, offsetBy: utf16Limit)
+        while cursor > units.startIndex {
+            if let boundary = String.Index(cursor, within: text) {
+                return String(text[..<boundary])
+            }
+            cursor = units.index(before: cursor)
+        }
+        return ""
+    }
 }
 
 /// The activity drawer: the ONE surface that shows a thinking or tool row's full
@@ -1206,14 +1245,30 @@ struct TimelineActivitySheet: View {
 
     /// Paint what the row carried, then ask for the rest exactly once.
     ///
-    /// A FAILED FETCH SAYS NOTHING, with ONE exception. The drawer keeps the excerpt
-    /// it already has, and the only outcome that earns a line is the server's typed
-    /// 410 `detail_gone` — "the ref parsed, the row is really unreachable". A 404 is
-    /// mute on purpose: it means this box predates the route (the deployed Mac today,
-    /// the cloud replica for longer), and while those two shared a status code, ANY
-    /// wording would have announced "the text is gone" on nearly every drawer the
-    /// user opens with the excerpt sitting right there. 400 and 503 stay mute too:
-    /// one is a bug on one side, the other is a stall the reader cannot act on.
+    /// EVERY FAILED FETCH IS STATED; WHAT DIFFERS IS THE WORDS AND THE BUTTON. A silent
+    /// dead end is a defect on its own (2026-09-12 gate: the reader was left at "Step
+    /// 005 of …" with a clipped excerpt, no statement, and no way on), so the excerpt
+    /// stays on screen and the status bar carries a line beside it:
+    ///
+    ///  - 410 `detail_gone` — the ref parsed and the row is genuinely unreachable
+    ///    (rewound, compacted, slid out of the window). The one outcome worded as
+    ///    itself (`goneText`), because the server states it unambiguously and no retry
+    ///    can change it. It is why 410 and 404 had to stop sharing a status code.
+    ///  - 404 — this box predates the route. Says `excerptOnly` and offers NO retry:
+    ///    the route is not there and asking again cannot make it appear. Deliberately
+    ///    NOT worded as "the text is gone", which is what a shared status code forced
+    ///    and what would have announced a missing row on nearly every drawer.
+    ///  - 400 — a malformed ref, i.e. a bug on one side. Same `excerptOnly` line, no
+    ///    retry: the reader cannot act on it and the next attempt is rejected too.
+    ///  - 503 / transport — the box could not read the source in time. `excerptOnly`
+    ///    plus `Try again`, the only outcome where pressing it can change the answer.
+    ///
+    /// So the words never name a status code (the reader cannot act on one) and the
+    /// button appears exactly where retrying is not a lie — `explains` and
+    /// `shouldRetry` are those two questions, asked per outcome.
+    ///
+    /// A row with NO `detailRef` is not a failure and reaches none of this: the excerpt
+    /// IS the whole text, which is also what an older PRIMARY reports.
     private func load() async {
         reseedIfRowChanged()
         guard let ref = detail.detailRef, resolvedID != detail.id else { return }
@@ -1329,12 +1384,15 @@ struct TimelineActivitySheet: View {
     ///    shipped the flags still answers with. Version skew is a PRIMARY question
     ///    only: the cloud replica relays the primary's response body verbatim, so it
     ///    cannot strip a field it has never heard of, however old the replica is.
+    ///    COMPARED IN UTF-16 CODE UNITS, which is what the server counted: against
+    ///    `String.count` (graphemes) this test reported a whole section as clipped
+    ///    for any text carrying emoji or CRLF — see `TimelineDrawerSection`.
     ///
     /// The payload-wide `truncated` is NOT one of them, deliberately: it is the OR of
     /// all three sections, so applying it to a section would make a complete input
     /// claim it was elided next to a cut result.
     static func drawerSection(_ s: TimelineActivityFullText.Section) -> TimelineDrawerSection {
-        let holdsLess = (s.totalChars ?? 0) > s.text.count
+        let holdsLess = (s.totalChars ?? 0) > s.text.utf16.count
         return TimelineDrawerSection(s.text, serverChars: s.totalChars,
                                      cut: s.truncated || s.nextOffset != nil || holdsLess)
     }
@@ -1357,6 +1415,9 @@ struct TimelineActivitySheet: View {
     /// beside it (when retrying can help) is the actionable half.
     static let excerptOnly = "Excerpt only — the rest of this step could not be loaded."
 
+    /// Both numbers are UTF-16 code units, the units the server counts in (see
+    /// `TimelineDrawerSection`) — so `shown` is `section.shownChars`, never a
+    /// grapheme count and never the raw window.
     static func withheldText(shown: Int, total: Int) -> String {
         total > shown
             ? "Showing the first \(shown.formatted()) of \(total.formatted()) characters."

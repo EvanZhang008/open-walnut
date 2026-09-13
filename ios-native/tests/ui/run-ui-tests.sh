@@ -118,6 +118,10 @@ say "simulator lease held"
 # 1. Generate the .xctestrun WITH the runner env baked in. This is the step that
 #    has to carry TEST_RUNNER_*; a later `test` action cannot add them.
 say "build-for-testing → $DD"
+# WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH=1 (not passed here on purpose) opts into the
+# one test whose launch comes from SpringBoard and therefore CANNOT be pinned to
+# $SERVER — it runs against whatever server the simulator is paired to. Add it by hand
+# only on an unpaired / throwaway-paired simulator.
 xcodebuild build-for-testing \
   -project "$PROJ" -scheme Walnut \
   -destination "platform=iOS Simulator,id=$UDID" \

@@ -25,6 +25,7 @@
  */
 
 import { splitPendingMarkup } from '../stream/pending-markup.js';
+import { cutEnd } from '../text-cut.js';
 
 /** Budget for an ordinary prose message (unchanged behaviour). */
 export const TRANSCRIPT_TEXT_MAX = 4_000;
@@ -62,7 +63,11 @@ export function clipTranscriptText(text: string): string {
   if (text.length <= TRANSCRIPT_TEXT_MAX) return text;
   const limit = looksLikeMarkup(text) ? TRANSCRIPT_RICH_TEXT_MAX : TRANSCRIPT_TEXT_MAX;
   if (text.length <= limit) return text;
-  const cut = text.slice(0, limit);
+  // Cut on a code-point boundary (core/text-cut.ts): a cut through an emoji leaves a
+  // lone surrogate, and one row of the tail carrying one makes a strict client reject
+  // the entire response. `splitPendingMarkup` only ever cuts at a `<`, so the safe
+  // half it hands back stays boundary-safe too.
+  const cut = text.slice(0, cutEnd(text, limit));
   const { safe } = splitPendingMarkup(cut);
   // `safe` is empty only when the whole cut is one unfinished construct (a
   // `<style>` body longer than the budget). Showing the raw cut would print CSS

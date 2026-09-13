@@ -425,6 +425,10 @@ final class ChatStore {
             // — the conversation the user actually opened has its own fetch, and
             // that one is the authority for what is rendered under its title.
             guard stillViewing(id), agentID == activeAgentID else { return }
+            // A read that landed retracts the previous read's banner (and only that
+            // one), so pull-to-refresh visibly resolves instead of leaving a stale
+            // complaint above a transcript that is now correct.
+            retractMessagesLoadFailure()
             // Carry local-only bubbles across the replace — server history
             // doesn't know about them and a refetch must never erase them.
             // Besides failed/in-flight optimistic bubbles, this keeps
@@ -469,7 +473,57 @@ final class ChatStore {
             DiskCache.save(Array(fetched.suffix(Self.cacheTail)), key: "messages-\(id)")
         } catch {
             reportIfNetwork(error)
+            noteMessagesLoadFailure(error, conversationID: id)
         }
+    }
+
+    /// A MESSAGES FETCH THAT DID NOT LAND HAS TO BE SEEN.
+    ///
+    /// `reportIfNetwork` only reacts to `APIError.network`, so every other failure left
+    /// the transcript showing "Your Personal AI is listening" — no banner, no retry,
+    /// nothing in the log. That is the honest empty state for an empty conversation and
+    /// a lie for a failed read, and it is how a server emitting one lone surrogate
+    /// escape (which `JSONDecoder` rejects for the whole document) blanked a
+    /// conversation with 24 messages in it (2026-09-12 gate).
+    ///
+    /// Two failures stay mute on purpose: a CANCELLATION is the app's own doing (a
+    /// conversation switch tears the previous fetch down), and a TRANSPORT failure is
+    /// already the offline banner's sentence — saying it twice, in two different
+    /// registers, is worse than saying it once.
+    private func noteMessagesLoadFailure(_ error: Error, conversationID: String) {
+        guard isActive, !Task.isCancelled, stillViewing(conversationID) else { return }
+        if error is CancellationError { return }
+        if let apiError = error as? APIError {
+            if apiError.isCancelled { return }
+            if case .network = apiError { return }
+        }
+        AppLog.error("chat", "messages load failed", [
+            "conversation": conversationID,
+            "agent": activeAgentID,
+            "error": String(describing: error),
+            "detail": Self.messagesLoadFailureBanner(error),
+        ])
+        errorMessage = Self.messagesLoadFailureBanner(error)
+    }
+
+    /// ONE sentence for a failed read, and it names the retry the transcript really
+    /// offers: pull-to-refresh re-runs `loadMessages` (see `MessageListView.onRefresh`).
+    /// The cause is carried through verbatim from `APIError` rather than replaced with a
+    /// generic apology — "Unexpected server response" is what tells a reporter that the
+    /// body was undecodable rather than the server refusing them.
+    nonisolated static func messagesLoadFailureBanner(_ error: Error) -> String {
+        let cause = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        return "\(messagesLoadFailurePrefix) \(cause). Pull down to try again."
+    }
+
+    /// How a load-failure banner is RECOGNISED later, so a load that finally succeeds can
+    /// retract its own sentence and nothing else. A send error ("Still replying…") and a
+    /// turn error belong to the reader's last action and must survive a background poll.
+    nonisolated static let messagesLoadFailurePrefix = "Couldn't load this conversation:"
+
+    /// Take down a load-failure banner once a load has actually landed.
+    private func retractMessagesLoadFailure() {
+        if errorMessage?.hasPrefix(Self.messagesLoadFailurePrefix) == true { errorMessage = nil }
     }
 
     /// How long a solidified local echo (the user bubble after its 202, the

@@ -10,6 +10,7 @@
  */
 
 import { redactSensitiveText } from '../logging/redact.js'
+import { cutEnd, cutStart } from './text-cut.js'
 
 /** The marker `redactSensitiveText` substitutes — same string, so a preview that
  *  is masked by both that function and the PEM cut below reads as one rule. */
@@ -75,8 +76,12 @@ const UNRESOLVED_PEM = /-----BEGIN[\w\s]*PRIVATE KEY-----\s*[A-Za-z0-9+/=]{40,}/
  * offset 0.
  */
 function maskRange(text: string, offset: number, len: number): string {
-  const end = offset + len
-  const windowed = offset === 0 && text.length <= end ? text : text.slice(offset, end)
+  // Both edges land on a code-point boundary ({@link cutEnd}/{@link cutStart}): a
+  // window that ends between the halves of an emoji ships a lone surrogate, which a
+  // strict JSON decoder rejects OUTRIGHT — one row poisons the whole response.
+  const start = cutStart(text, offset)
+  const end = cutEnd(text, start + len)
+  const windowed = start === 0 && text.length <= end ? text : text.slice(start, end)
   const masked = redactSensitiveText(windowed)
   const pem = masked.search(UNRESOLVED_PEM)
   return pem === -1 ? masked : masked.slice(0, pem) + REDACTED
@@ -84,6 +89,20 @@ function maskRange(text: string, offset: number, len: number): string {
 
 function maskPreview(text: string, cap: number): string {
   return maskRange(text, 0, cap + REDACT_WINDOW_SLACK)
+}
+
+/**
+ * Clip to `cap`, on a code-point boundary, and say whether anything was left out.
+ *
+ * `clipped` is a returned FLAG rather than something a caller re-derives from the
+ * length, because a boundary-safe cut can come back one character SHORT of the cap:
+ * `length > cap` (still the right test for deciding whether to cut at all) would then
+ * read a clipped excerpt as whole, and a row that lost its tail would advertise no
+ * fuller read.
+ */
+function clipTo(text: string, cap: number): { text: string; clipped: boolean } {
+  if (text.length <= cap) return { text, clipped: false }
+  return { text: text.slice(0, cutEnd(text, cap)) + '…', clipped: true }
 }
 
 const DETAIL_MAX = 160
@@ -102,7 +121,9 @@ const DETAIL_MAX = 160
 function foldHead(text: string, need: number): string {
   let take = Math.min(text.length, need * 4 + REDACT_WINDOW_SLACK)
   for (;;) {
-    const folded = text.slice(0, take).replace(/\s+/g, ' ').trim()
+    // Boundary-safe: the fold would otherwise carry a half-character into every
+    // downstream clip (see text-cut.ts).
+    const folded = text.slice(0, cutEnd(text, take)).replace(/\s+/g, ' ').trim()
     if (folded.length >= need || take >= text.length) return folded
     take = Math.min(text.length, take * 4)
   }
@@ -121,7 +142,7 @@ function foldHead(text: string, need: number): string {
  */
 function clipDetail(s: string): string {
   const oneLine = maskPreview(foldHead(s, DETAIL_MAX + REDACT_WINDOW_SLACK), DETAIL_MAX)
-  return oneLine.length > DETAIL_MAX ? oneLine.slice(0, DETAIL_MAX) + '…' : oneLine
+  return clipTo(oneLine, DETAIL_MAX).text
 }
 
 /** Input keys tried per tool name — first present string wins. */
@@ -218,7 +239,10 @@ function boundedJson(value: unknown, budget: number): string {
     if (v === null) { left -= 4; return null }
     if (typeof v === 'string') {
       left -= Math.min(v.length, budget) + 2
-      if (v.length > budget) { truncated = true; return v.slice(0, budget) }
+      // Boundary-safe like every other cut here. `JSON.stringify` escapes a lone
+      // surrogate rather than emitting it, so this one renders as a literal
+      // `\udXXX` in the drawer instead of poisoning the response — still garbage.
+      if (v.length > budget) { truncated = true; return v.slice(0, cutEnd(v, budget)) }
       return v
     }
     if (typeof v === 'number' || typeof v === 'boolean') { left -= JSON_SCALAR_COST; return v }
@@ -309,8 +333,9 @@ function renderToolInput(
       // JSON, so this cannot be confused with a string value that ends in one.
       if (rendered.endsWith('…')) clipped = true
     }
-    if (rendered.length > valueMax) clipped = true
-    const line = `${key}: ${rendered.length > valueMax ? rendered.slice(0, valueMax) + '…' : rendered}`
+    const value = clipTo(rendered, valueMax)
+    if (value.clipped) clipped = true
+    const line = `${key}: ${value.text}`
     lines.push(line)
     budget -= line.length + 1
     // Enough text to fill the budget already — stop reading keys.
@@ -322,9 +347,8 @@ function renderToolInput(
     }
   }
   if (lines.length === 0) return undefined
-  const masked = maskPreview(lines.join('\n'), max)
-  if (masked.length > max) return { text: masked.slice(0, max) + '…', clipped: true }
-  return { text: masked, clipped }
+  const joined = clipTo(maskPreview(lines.join('\n'), max), max)
+  return { text: joined.text, clipped: joined.clipped || clipped }
 }
 
 /** Documented cap for the collapsed `kind:'thinking'` row's `text`. */
@@ -343,8 +367,7 @@ const THINKING_EXCERPT_MAX = 2_000
  * KB and `/\s+/g` over 2MB measured 7.56ms, all of it to produce 160 characters.
  */
 export function thinkingLine(text: string): string {
-  const oneLine = foldHead(text, THINKING_LINE_MAX + 1)
-  return oneLine.length > THINKING_LINE_MAX ? oneLine.slice(0, THINKING_LINE_MAX) + '…' : oneLine
+  return clipTo(foldHead(text, THINKING_LINE_MAX + 1), THINKING_LINE_MAX).text
 }
 
 /**
@@ -359,10 +382,15 @@ export function thinkingLine(text: string): string {
  * fields out of the rule is how it becomes the documented hole nobody remembers.
  */
 export function thinkingExcerpt(text: string): string | undefined {
+  return thinkingExcerptOf(text)?.text
+}
+
+/** The excerpt plus the producer's own "did I cut" verdict — see {@link clipTo} for
+ *  why that verdict cannot be recovered from the length. */
+function thinkingExcerptOf(text: string): { text: string; clipped: boolean } | undefined {
   const trimmed = text.trim()
   if (!trimmed) return undefined
-  const masked = maskPreview(trimmed, THINKING_EXCERPT_MAX)
-  return masked.length > THINKING_EXCERPT_MAX ? masked.slice(0, THINKING_EXCERPT_MAX) + '…' : masked
+  return clipTo(maskPreview(trimmed, THINKING_EXCERPT_MAX), THINKING_EXCERPT_MAX)
 }
 
 const RESULT_PREVIEW_MAX = 700
@@ -376,11 +404,15 @@ const RESULT_PREVIEW_MAX = 700
  * echo, a curl that prints the request it sent.
  */
 export function toolResultPreview(result: string | undefined | null): string | undefined {
+  return toolResultPreviewOf(result)?.text
+}
+
+/** The preview plus the producer's own "did I cut" verdict ({@link clipTo}). */
+function toolResultPreviewOf(result: string | undefined | null): { text: string; clipped: boolean } | undefined {
   if (typeof result !== 'string') return undefined
   const trimmed = result.trim()
   if (!trimmed) return undefined
-  const masked = maskPreview(trimmed, RESULT_PREVIEW_MAX)
-  return masked.length > RESULT_PREVIEW_MAX ? masked.slice(0, RESULT_PREVIEW_MAX) + '…' : masked
+  return clipTo(maskPreview(trimmed, RESULT_PREVIEW_MAX), RESULT_PREVIEW_MAX)
 }
 
 // ── The full-text read behind an expanded row (the drawer) ──────────────────
@@ -422,7 +454,11 @@ export const FULL_TEXT_SECTION_MAX = 200_000
 export interface FullTextSection {
   /** The window `[offset, end)` of the section, masked. */
   text: string
-  /** How long the section is, in the units of the text a client can actually show.
+  /** How long the section is, in the units of the text a client can actually show:
+   *  UTF-16 code units (`String.prototype.length`, Swift's `String.utf16.count`), the
+   *  same unit `end`/`nextOffset` index in and the unit the API contract names. Never
+   *  graphemes — a client comparing this against a grapheme count reports a complete
+   *  section as clipped the moment the text carries an emoji or a CRLF.
    *
    *  When `more` is false this is EXACT: the delivered length, measured after
    *  masking, so "showing the first N of M" has N === M and names no characters that
@@ -461,8 +497,14 @@ export interface FullTextSection {
 function fullTextSection(source: string, offset: number): FullTextSection | undefined {
   const trimmed = source.trim()
   if (!trimmed) return undefined
-  const start = Math.min(Math.max(0, offset), trimmed.length)
-  const end = Math.min(start + FULL_TEXT_SECTION_MAX, trimmed.length)
+  // Both edges are code-point boundaries, so `end`/`nextOffset` can be chased for as
+  // many pages as it takes without any page ever ending (or starting) inside a
+  // character — a lone surrogate here is rejected by the whole response, not just
+  // this section. A client that invents an offset mid-character is nudged forward by
+  // one unit; one chasing `nextOffset` is never adjusted, since that number came from
+  // `cutEnd` already.
+  const start = cutStart(trimmed, Math.min(Math.max(0, offset), trimmed.length))
+  const end = cutEnd(trimmed, Math.min(start + FULL_TEXT_SECTION_MAX, trimmed.length))
   const text = maskRange(trimmed, start, end - start)
   const more = end < trimmed.length
   return {
@@ -583,7 +625,7 @@ export function sectionHasMore(section: FullTextSection): boolean {
 export function thinkingHasFullText(text: string): boolean {
   // Asks the excerpt whether it cut, for the reason spelled out in
   // {@link toolHasFullText}: masking can grow the text past the cap on its own.
-  return (thinkingExcerpt(text)?.length ?? 0) > THINKING_EXCERPT_MAX
+  return thinkingExcerptOf(text)?.clipped === true
 }
 
 /**
@@ -591,15 +633,16 @@ export function thinkingHasFullText(text: string): boolean {
  *
  * The result arm asks the preview whether it CUT rather than comparing the raw
  * length to the cap, because masking can grow text ("token=x" →
- * "token=[REDACTED]") — a 690-character result can still lose its tail. The
- * preview returns at most cap+1 characters (the cap plus the ellipsis), so its
- * length is a precise answer to "was anything left out".
+ * "token=[REDACTED]") — a 690-character result can still lose its tail. It reads the
+ * preview's own flag rather than measuring the string it returned: a cut on a
+ * code-point boundary can land one character short of the cap, so a length test would
+ * call a preview that ends in an emoji complete and lose that row's tail.
  */
 export function toolHasFullText(
   input: Record<string, unknown> | undefined | null,
   result: string | undefined | null,
 ): boolean {
-  if ((toolResultPreview(result)?.length ?? 0) > RESULT_PREVIEW_MAX) return true
+  if (toolResultPreviewOf(result)?.clipped === true) return true
   return renderToolInput(input, INPUT_PREVIEW_MAX, INPUT_PREVIEW_VALUE_MAX)?.clipped === true
 }
 

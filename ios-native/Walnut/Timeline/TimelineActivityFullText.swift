@@ -22,6 +22,10 @@ import Foundation
 ///    total the server holds" when redaction made the delivered text shorter than
 ///    its source and the footer started announcing withheld characters on a row that
 ///    was entirely on screen.
+///  - `*Chars` AND `offset` COUNT UTF-16 CODE UNITS, not Characters: the server
+///    measures with JavaScript's `string.length`. Anything on this side that compares
+///    with them, prints them, or sends one back has to say `utf16.count` — see
+///    `TimelineDrawerSection` for what comparing against `String.count` did.
 ///  - `*Truncated` is the authority on completeness; nothing derives it by comparing
 ///    numbers any more. `*NextOffset` means "asking again advances", and a truncated
 ///    section can legitimately have none (the remainder is unreachable).
@@ -38,9 +42,9 @@ enum TimelineActivityFullText {
     /// One section as the server returned it.
     struct Section: Equatable {
         var text: String
-        /// Total characters available server-side (nil = it did not say).
+        /// Total available server-side, in UTF-16 code units (nil = it did not say).
         var totalChars: Int?
-        /// Offset to continue from; nil = this is all of it.
+        /// Offset to continue from, in UTF-16 code units; nil = this is all of it.
         var nextOffset: Int?
         /// The section's OWN `<name>Truncated` flag: the server saying this section
         /// carries less than the row's text. Absent on the wire means whole, and it is
@@ -58,8 +62,9 @@ enum TimelineActivityFullText {
         var result: Section?
     }
 
-    /// Why a fetch could not answer. Exactly ONE of these is ever worded to the
-    /// reader (`gone`); the rest leave the excerpt on screen and say nothing (see
+    /// Why a fetch could not answer. ALL of them are stated to the reader — a silent
+    /// dead end is a defect — but only `gone` is worded as itself; the rest share the
+    /// "excerpt only" line, and only `unavailable` earns a retry button (see
     /// `TimelineActivitySheet.load`).
     enum Failure: Error, Equatable {
         /// 410 `detail_gone`: the ref parsed and the row is genuinely unreachable —
@@ -87,6 +92,11 @@ enum TimelineActivityFullText {
     ///
     /// This is the seam — the only function that talks to the server about a row's
     /// full text — so a route change is a change to this body and nothing else.
+    ///
+    /// `offset` is a count of UTF-16 CODE UNITS and the only honest source for one is
+    /// a `nextOffset` the server sent (or a `text.utf16.count` measured on what it
+    /// sent). A grapheme count computed on this side names a different position in the
+    /// server's string, which is a silently wrong page rather than an error.
     static func fetch(ref: String, part: Part? = nil,
                       offset: Int? = nil) async throws -> Detail {
         guard !ref.isEmpty else { throw Failure.rejected }

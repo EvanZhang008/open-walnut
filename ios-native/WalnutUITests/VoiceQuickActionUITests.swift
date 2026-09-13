@@ -126,6 +126,26 @@ final class VoiceQuickActionUITests: XCTestCase {
     /// itself is greppable in the uploaded log as
     /// `voice: quick action armed {source: launch}`.
     func testTappingTheVoiceShortcutColdLaunchesTheApp() throws {
+        // OPT-IN, and the reason is the launch itself: SPRINGBOARD starts the app here,
+        // and a SpringBoard launch carries no launch arguments — there is no way to hand
+        // it `-walnut.serverUrl`, so the app comes up on whatever server this simulator
+        // is PAIRED to and issues real traffic at it. That is precisely what the
+        // UITestLaunch blackhole exists to stop, and on the dogfood-paired simulator the
+        // paired server is the human's production one (2026-09-12 gate).
+        //
+        // `UITestLaunchRatchetTests` requires this gate around every attach to the app
+        // under test, so the name is duplicated as a literal on purpose: a constant
+        // would let a rename slip past a text-reading ratchet.
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH"] == "1",
+            """
+            skipped: this test lets SpringBoard cold-launch the app, which cannot be \
+            pinned away from the server this simulator is paired to — on a dogfood \
+            pairing it sends live traffic at a real server. Set \
+            WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH=1 (see ios-native/tests/ui/run-ui-tests.sh) \
+            only on a simulator that is unpaired or paired to a throwaway server.
+            """
+        )
         let menu = try openIconContextMenu()
         try XCTSkipUnless(
             menu.contains { $0.hasPrefix(shortcutTitle) },

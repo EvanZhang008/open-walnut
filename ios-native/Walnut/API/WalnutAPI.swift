@@ -670,13 +670,35 @@ struct WalnutAPI {
         return "/" + segments.prefix(2).joined(separator: "/")
     }
 
+    /// THE ONE PLACE a `/api/v1` body becomes a model, which is why both the repair and
+    /// the diagnosis live here rather than at a call site: the activity-detail route, the
+    /// messages route and the session transcript all arrive through it.
+    ///
+    /// A LONE SURROGATE ESCAPE IS REPAIRED, NOT FATAL. `JSONDecoder` rejects the whole
+    /// document over one, so a single truncated emoji in a 100-row page used to blank an
+    /// entire conversation (see `JSONResponseRepair`). And a decode failure that survives
+    /// the repair is LOGGED with its coding path: "Unexpected server response" alone
+    /// names neither the row nor the field, so a field report could not be diagnosed.
     static func decode<T: Decodable>(_ type: T.Type, data: Data, response: URLResponse) throws -> T {
         guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
         switch http.statusCode {
         case 200...299:
+            let repair = JSONResponseRepair.repairingLoneSurrogates(data)
+            if repair.repaired > 0 {
+                AppLog.error("network", "repaired lone surrogate escapes in response", [
+                    "path": Self.sanitizedPath(response.url),
+                    "count": String(repair.repaired),
+                ])
+            }
             do {
-                return try JSONDecoder().decode(type, from: data)
+                return try JSONDecoder().decode(type, from: repair.data)
             } catch {
+                AppLog.error("network", "response could not be decoded", [
+                    "path": Self.sanitizedPath(response.url),
+                    "type": String(describing: type),
+                    "bytes": String(data.count),
+                    "detail": JSONResponseRepair.describe(decodeFailure: error),
+                ])
                 throw APIError.badResponse
             }
         case 401:
