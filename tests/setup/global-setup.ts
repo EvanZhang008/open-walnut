@@ -27,6 +27,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { acquireTestSlot, releaseTestSlot } from './test-gate';
+import { sweepStaleTmpDirs } from './stale-tmp';
 
 /**
  * Fail fast when the running Node can't load better-sqlite3.
@@ -79,6 +80,7 @@ export async function setup(): Promise<void> {
   // test server at the production /tmp/open-walnut/. Done before the early-return
   // below so a caller-supplied OPEN_WALNUT_HOME still gets runtime isolation.
   isolateRuntimeDir();
+  sweepRuntimeDirs();
 
   // If WALNUT_HOME is already set to a safe (non-production) path, keep it
   if (current && current !== prodHome && !current.startsWith(prodHome + path.sep)) {
@@ -115,11 +117,37 @@ function isolateRuntimeDir(): void {
     || current.startsWith(PROD_RUNTIME_DIR + path.sep);
   if (!isProd) return;
 
-  const testRuntime = path.join(os.tmpdir(), `open-walnut-test-runtime-${process.pid}`);
+  const testRuntime = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`);
   fs.mkdirSync(testRuntime, { recursive: true });
   process.env.WALNUT_DAEMON_DIR = testRuntime;
 }
 
+/** Shared with tests/setup/runtime-dir-isolation.ts (workers) — one name, one sweep rule. */
+const RUNTIME_DIR_PREFIX = 'open-walnut-test-runtime-';
+
+/**
+ * Reclaim runtime dirs whose worker or runner is gone.
+ *
+ * Every worker gets its own `<prefix><pid>` dir (plus a `-streams` sibling) and
+ * removes it on exit, but a SIGKILLed run — an agent session timing out, the OOM
+ * killer, Ctrl-C mid-hang — leaves them behind, one per test FILE. Measured
+ * 2026-09-13: 26,073 of them in $TMPDIR. The pid in the name says whether the
+ * owner is alive, so a concurrent run's dirs are never touched.
+ */
+function sweepRuntimeDirs(): void {
+  const removed = sweepStaleTmpDirs([{ prefix: RUNTIME_DIR_PREFIX, pidFrom: 'name' }]);
+  if (removed.length > 0) {
+    console.log(`[runtime-dir] reclaimed ${removed.length} runtime dir(s) left by dead test processes`);
+  }
+}
+
 export function teardown(): void {
+  const own = process.env.WALNUT_DAEMON_DIR;
+  if (own && path.basename(own) === `${RUNTIME_DIR_PREFIX}${process.pid}`) {
+    for (const dir of [own, `${own}-streams`]) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  }
+  sweepRuntimeDirs();
   releaseTestSlot();
 }

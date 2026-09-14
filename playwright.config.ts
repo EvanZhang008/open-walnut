@@ -55,5 +55,11 @@ export default defineConfig({
     timeout: 120_000,
     stdout: 'pipe',
     stderr: 'pipe',
+    // Without this Playwright ends EVERY run with SIGKILL on the fixture's process
+    // group (playwright-core processLauncher), so test-server.ts's SIGTERM handler
+    // — the only thing that stops its isolated daemon and removes its tmpdir —
+    // never ran, and each run left a `walnut-pw-<ts>` dir behind (401 of them on
+    // 2026-09-13). SIGTERM first; SIGKILL still follows if the handler hangs.
+    gracefulShutdown: { signal: 'SIGTERM', timeout: 15_000 },
   },
 })

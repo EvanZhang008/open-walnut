@@ -71,6 +71,16 @@ if (pointsAtProduction || inheritedFromRunner) {
   const testRuntime = path.join(os.tmpdir(), ours)
   fs.mkdirSync(testRuntime, { recursive: true })
   process.env.WALNUT_DAEMON_DIR = testRuntime
+  // The dir is this worker's alone (pid-named), so it goes when the worker goes.
+  // This covers a worker that exits on its own; the pool usually ends a worker
+  // with a signal instead, which skips 'exit', so global-setup's setup/teardown
+  // sweep is the path that actually reclaims most of them (by dead pid).
+  // 2026-09-13: with neither, 26k of these had piled up in $TMPDIR.
+  process.on('exit', () => {
+    for (const dir of [testRuntime, `${testRuntime}-streams`]) {
+      try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
+  })
 }
 
 // Search v2 is default-ON (2026-08-26 cutover), and its semantic lane spawns an

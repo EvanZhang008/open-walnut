@@ -12,6 +12,7 @@
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import zlib from 'node:zlib'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
@@ -69,10 +70,15 @@ const DAY_MS = 24 * HOUR_MS
 /** ISO timestamp `msAgo` before the seed instant. */
 const agoIso = (msAgo: number): string => new Date(SEED_NOW - msAgo).toISOString()
 
-// Ensure directories exist
+// Ensure directories exist. First reclaim siblings left by fixture servers that
+// were SIGKILLed before their shutdown handler ran (see tests/setup/stale-tmp.ts);
+// then claim this one, so the next run can tell it apart from debris.
+const { sweepStaleTmpDirs, writeOwnerPid } = await import('../../setup/stale-tmp.js')
+sweepStaleTmpDirs([{ prefix: 'walnut-pw-', name: /^walnut-pw-\d+$/, pidFrom: 'owner-file' }])
 await fs.rm(tmpBase, { recursive: true, force: true })
 const tasksDir = path.join(tmpBase, 'tasks')
 await fs.mkdir(tasksDir, { recursive: true })
+writeOwnerPid(tmpBase)
 
 // The main agent still gets messages from other flows (chat, notifications).
 // Keep that process local and deterministic; session/ACP processes are mocked
@@ -2663,20 +2669,54 @@ await viteServer.listen()
 console.log(`Playwright test server ready on http://localhost:${testPort}`)
 
 // Graceful shutdown
+let shuttingDown = false
 const shutdown = async () => {
-  sessionRunner.setTestDaemonUrl(undefined)
-  await viteServer.close().catch(() => {})
-  await stopServer()
-  if (mockDaemon) await mockDaemon.stop().catch(() => {})
-  // startServer() also warmed the REAL local daemon (singleton) into this
-  // run's isolated WALNUT_DAEMON_DIR — reap it or it outlives the fixture.
-  // (SIGKILLed runs skip this; the daemon's parent-pid watchdog covers those.)
-  try {
-    const { localDaemon } = await import('../../../src/providers/local-daemon.js')
-    await localDaemon.stopIfIsolated()
-  } catch { /* best-effort */ }
+  // The group SIGTERM Playwright sends reaches this process directly AND via
+  // tsx's signal relay; one teardown, not two racing ones.
+  if (shuttingDown) return
+  shuttingDown = true
+  const teardown = (async () => {
+    sessionRunner.setTestDaemonUrl(undefined)
+    await viteServer?.close().catch(() => {})
+    await stopServer()
+    if (mockDaemon) await mockDaemon.stop().catch(() => {})
+    // startServer() also warmed the REAL local daemon (singleton) into this
+    // run's isolated WALNUT_DAEMON_DIR — reap it or it outlives the fixture.
+    // (SIGKILLed runs skip this; the daemon's parent-pid watchdog covers those.)
+    try {
+      const { localDaemon } = await import('../../../src/providers/local-daemon.js')
+      await localDaemon.stopIfIsolated()
+    } catch { /* best-effort */ }
+  })()
+  // Bounded: stopIfIsolated() polls the daemon pid for up to 30s, and Playwright
+  // SIGKILLs the group 15s after SIGTERM (playwright.config.ts gracefulShutdown).
+  // Waiting past that deadline is how the tmpdir survived every run: the rm below
+  // must happen while the process is still alive to run it.
+  await Promise.race([teardown.catch(() => {}), new Promise((r) => setTimeout(r, 8_000))])
   await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {})
   process.exit(0)
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
+// Two other SIGTERM handlers in this process would end it before `shutdown`
+// gets past its first await, leaving the isolated daemon and tmpBase behind on
+// every run (2026-09-13: 401 `walnut-pw-*` dirs, and Playwright had been
+// SIGKILLing the group anyway — see playwright.config.ts gracefulShutdown):
+//  1. startServer() re-raises SIGTERM with the default disposition unless told
+//     an owner will exit after teardown.
+//  2. Vite's dev server registers `parentSigtermCallback` (and the same on
+//     stdin 'end'), which closes itself and calls process.exit() — exit code 143
+//     mid-teardown, observed. Vite has no API to opt out, so it is unhooked by
+//     name; `shutdown` closes the Vite server itself.
+const { armGracefulSignalExit } = await import('../../../src/web/server.js')
+armGracefulSignalExit()
+for (const l of process.listeners('SIGTERM')) if (l.name === 'parentSigtermCallback') process.off('SIGTERM', l)
+for (const l of process.stdin.listeners('end')) if (l.name === 'parentSigtermCallback') process.stdin.off('end', l)
+// Last word on the tmpdir. startServer()'s exit diagnostics append a final
+// "SERVER EXIT" line to the log INSIDE tmpBase from their own 'exit' handler,
+// which re-creates the dir after `shutdown` removed it; a concurrent append can
+// also make the async rm fail ENOTEMPTY. 'exit' handlers run in registration
+// order, so this one, registered after startServer()'s, runs after that write.
+process.on('exit', () => {
+  try { fsSync.rmSync(tmpBase, { recursive: true, force: true, maxRetries: 3 }) } catch { /* best effort */ }
+})
