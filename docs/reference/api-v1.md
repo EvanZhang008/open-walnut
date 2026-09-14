@@ -952,7 +952,7 @@ primary box the same endpoints serve directly — no bridge involved.
     daemon-owned directory, generated filename). `text` may be empty when
     images are present; with no images an empty `text` is still
     `400 bad_request` (unchanged for old clients).
-  - `404 not_found` — unknown session.
+  - `404 not_found`: unknown session. On a replica that verdict belongs to the PRIMARY (the companion asks it over the `detail` relay for any session its bounded synced list does not carry), so a primary the companion cannot reach answers `503 bridge_offline` (retryable, same as any other unreachable hop) and never `404`; the same rule covers the session stream and the `fresh=1` transcript read.
   - `400 { "error": { "code": "images_need_daemon_upgrade" } }` — (cloud only)
     the session's host runs a daemon that predates `image.save`. The daemon
     auto-upgrades on the next primary-box reconnect; retry later or send from

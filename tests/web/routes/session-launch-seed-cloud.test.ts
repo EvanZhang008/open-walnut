@@ -14,8 +14,8 @@
  * Before the launch-seed fix every one of those returned 404 "Session not
  * found" and the phone showed "Not sent — tap to retry" on a session whose
  * CLI was alive and waiting on the primary. The launch relay now seeds the
- * id→host mapping at 201 time; projectedSession() falls back to it when the
- * projection misses, and the projection takes over once it lands.
+ * id→host mapping at 201 time; resolveCloudSessionHost() falls back to it when
+ * the projection misses, and the projection takes over once it lands.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -198,13 +198,23 @@ describe('mobile launch through the replica → immediate use (projection gap)',
     expect(calls.some((c) => c.cmd === 'bridgeResume')).toBe(false)
   }, 30_000)
 
-  it('an unknown session id (never launched here, not in projection) still 404s', async () => {
-    daemonAnswers()
+  it('an unknown session id (no seed, not in projection) still 404s — on the PRIMARY\'s verdict', async () => {
+    // Neither the seed nor the projection knows it, so the last stop is the
+    // primary. It is the ONLY party that may answer "no such session": the
+    // projection is a bounded list and drops long-stopped sessions, which is
+    // how a real 2026-08-09 session got a local 404 on 2026-09-11.
+    const calls: Array<{ host: string; cmd: string; action?: string }> = []
+    bridgeRequestMock.mockImplementation(async (host: string, cmd: string, params: Record<string, unknown> = {}) => {
+      calls.push({ host, cmd, action: typeof params.action === 'string' ? params.action : undefined })
+      if (cmd === 'session.control') return { ok: false, errorKind: 'not_found', error: 'session not found' }
+      return { ok: true }
+    })
     const send = await fetch(apiUrl('/api/v1/sessions/never-launched-here/messages'), {
       method: 'POST', headers: authHeaders(), body: JSON.stringify({ text: 'hi' }),
     })
     expect(send.status).toBe(404)
     expect((await send.json()).error.code).toBe('not_found')
+    expect(calls).toEqual([{ host: '__local__', cmd: 'session.control', action: 'detail' }])
   })
 
   it('once the projection lands it wins over the seed (host change follows the projection)', async () => {

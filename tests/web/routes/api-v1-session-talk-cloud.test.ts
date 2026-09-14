@@ -240,14 +240,43 @@ describe('POST /api/v1/sessions/:id/messages with images (CLOUD_MODE)', () => {
     expect((relay![2] as { message: string }).message).toBe('text only, no images')
   })
 
-  it('unknown session → 404 before any bridge traffic', async () => {
-    daemonAnswers()
+  it('unknown session → 404 spoken by the PRIMARY, and no image traffic', async () => {
+    // Absence from the replica's projection is NOT proof of absence: that list
+    // drops a session stopped for more than STOPPED_RETENTION_DAYS, and the
+    // 2026-09-11 report was exactly such a session being told "not found" by
+    // the replica itself. The verdict now comes from the primary's own lookup
+    // over the `detail` relay, and nothing else touches the bridge.
+    daemonAnswers({
+      'session.control': () => ({ ok: false, errorKind: 'not_found', error: 'session not found' }),
+    })
     const res = await fetch(apiUrl('/api/v1/sessions/no-such-session/messages'), {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ text: 'hi', images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }] }),
     })
     expect(res.status).toBe(404)
-    expect(bridgeRequestMock).not.toHaveBeenCalled()
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('not_found')
+    expect(bridgeRequestMock.mock.calls.map((c) => c[1])).toEqual(['session.control'])
+    expect((bridgeRequestMock.mock.calls[0][2] as { action: string }).action).toBe('detail')
+  })
+
+  it('a session the primary cannot be asked about is 503 bridge_offline, never 404', async () => {
+    // A 404 would tell the phone to forget a session that exists. Only the
+    // primary may say "no such session"; an unreachable primary means UNKNOWN,
+    // and it reports with the same retryable code as every other missing hop so
+    // the app's silent retry ladder covers it.
+    daemonAnswers({
+      'session.control': () => { throw new BridgeOfflineError('__local__') },
+    })
+    const res = await fetch(apiUrl('/api/v1/sessions/no-such-session/messages'), {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ text: 'hi' }),
+    })
+    expect(res.status).toBe(503)
+    const body = await res.json() as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('bridge_offline')
+    expect(body.error.message).toMatch(/primary/i)
+    expect(body.error.message).not.toMatch(/not found/i)
   })
 })

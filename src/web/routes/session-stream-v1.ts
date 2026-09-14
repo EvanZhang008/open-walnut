@@ -12,7 +12,9 @@
  * interest set for streaming.
  *
  * Cloud box: proxied over the daemon bridge (ws/bridge-registry.ts). The
- * session's host comes from the git-synced projection. Sends ride the narrow
+ * session's host comes from core/sessions/cloud-session-host.ts (synced
+ * projection first, the primary asked directly when the projection's bounded
+ * list does not carry the session). Sends ride the narrow
  * `session.message` relay: daemon → connected walnut server → the SAME
  * durable message queue web sends use (sendMessageToSession + reconnect
  * redelivery), so a daemon/CLI death anywhere mid-flight converts to delayed
@@ -24,7 +26,8 @@
  * deliver FIRST and append the transcript marker only after confirmed
  * delivery, so a ghost bubble can no longer outlive its message. No bridge
  * is 503 bridge_offline (retryable); only a genuinely unknown/dead session
- * is 404/409.
+ * is 404/409, and "unknown" here means the PRIMARY said so — a primary that
+ * cannot be reached is 503 bridge_offline like every other unreachable hop.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -36,6 +39,9 @@ import { bus } from '../../core/event-bus.js'
 import { emitSse, attachSse, sseConnCount } from '../sse-channels.js'
 import { sessionStreamBuffer, budgetSnapshotBlocks } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
+import {
+  resolveCloudSessionHost, PrimaryUnreachableError, type CloudSessionHost,
+} from '../../core/sessions/cloud-session-host.js'
 import { clipTranscriptText } from '../../core/sessions/transcript-clip.js'
 import { toDisplayedUserText } from '../../core/sessions/reference-cards.js'
 import { log } from '../../logging/index.js'
@@ -198,34 +204,39 @@ function ensureBusSubscriber(): void {
 
 // ─── Cloud path: session → host lookup + bridge send sequence ───────────────
 
-async function projectedSession(sessionId: string): Promise<{ host: string; cwd?: string; model?: string } | null> {
-  // OWN-REGISTRY FIRST. A session THIS companion spawned (cloud.exec) never
-  // appears in the Mac-authored projection — see core/cloud-owned-session.ts for
-  // why the order matters in both directions. Cheap no-op on a relay-only box.
-  const { cloudOwnedSession, cloudOwnedHostAlias } = await import('../../core/cloud-owned-session.js')
-  const owned = await cloudOwnedSession(sessionId)
-  if (owned) {
-    return { host: cloudOwnedHostAlias, ...(owned.cwd ? { cwd: owned.cwd } : {}), ...(owned.model ? { model: owned.model } : {}) }
-  }
-  const { readSessionProjection } = await import('../../core/session-projection.js')
-  const projection = await readSessionProjection()
-  const s = projection?.sessions.find((p) => p.id === sessionId)
-  if (s) {
-    // Projection: '' = the primary box; daemons register as '__local__'.
-    return { host: s.host === '' ? '__local__' : s.host, cwd: s.cwd, model: s.model }
-  }
-  // Projection miss ≠ unknown session: a session THIS replica just launched
-  // won't appear in the git-synced projection for 1–3 minutes (primary's 60s
-  // sweep + 30s git ticks both ways). The launch relay seeded its id→host at
-  // 201 time — without this fallback every stream/transcript/send in that
-  // window 404'd and the phone showed "Not sent" on a healthy session
-  // (2026-08-07). Seeds are TTL'd; once the projection lands it wins above.
-  const { getLaunchSeed } = await import('../../core/sessions/launch-seed.js')
-  return getLaunchSeed(sessionId)
-}
+// Host lookup lives in core/sessions/cloud-session-host.ts: own registry →
+// projection → launch seed → ask the PRIMARY over the existing `detail` control
+// relay. Every cloud branch below goes through it, because the projection is a
+// bounded LIST projection ("what to show") and was being used as an EXISTENCE
+// oracle ("does it exist") — existence is the primary's to answer. A session
+// stopped for more than STOPPED_RETENTION_DAYS is not in the list, and the send
+// answered its own local 404 for a session the primary knew about.
 
-async function projectedHostForSession(sessionId: string): Promise<string | null> {
-  return (await projectedSession(sessionId))?.host ?? null
+/**
+ * Resolve a session's host for a cloud branch, or ANSWER the client and return
+ * null: 404 not_found when the PRIMARY says so, 503 bridge_offline when the
+ * primary could not be asked at all — never 404 on an unknown answer.
+ *
+ * bridge_offline, not a new code: "the companion cannot reach the primary" is
+ * the same condition the other 503s on this path report, and the phone's silent
+ * retry ladder keys on exactly that code (SendRetryPolicy.isRetryable) — a
+ * fresh code would make this the one bridge outage the user has to retry by
+ * hand. The message still names the primary, since the session's host may be
+ * perfectly healthy.
+ */
+async function resolveHostOrAnswer(res: Response, sessionId: string): Promise<CloudSessionHost | null> {
+  try {
+    const resolved = await resolveCloudSessionHost(sessionId)
+    if (resolved) return resolved
+    sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
+    return null
+  } catch (err) {
+    if (err instanceof PrimaryUnreachableError) {
+      sendError(res, 503, 'bridge_offline', err.message)
+      return null
+    }
+    throw err
+  }
 }
 
 /**
@@ -274,11 +285,8 @@ async function cloudSend(
   images: SessionImage[] = [],
   clientMessageId?: string,
 ): Promise<void> {
-  const projected = await projectedSession(sessionId)
-  if (!projected) {
-    sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
-    return
-  }
+  const projected = await resolveHostOrAnswer(res, sessionId)
+  if (!projected) return
   const host = projected.host
   // Stable id: a client-supplied one (phone retry) makes the durable-queue
   // enqueue idempotent end-to-end — the relay dedupes on it, so a retry after a
@@ -539,7 +547,14 @@ const TRANSCRIPT_TAIL_BYTES = 512 * 1024
  * git-synced file. Main lane only, mirroring buildSessionTranscript's shape.
  */
 export async function buildTranscriptViaBridge(sessionId: string): Promise<Record<string, unknown> | null> {
-  const host = await projectedHostForSession(sessionId)
+  // A session outside the projection's retention window resolves through the
+  // primary; an unreachable primary is just another "no live read available
+  // right now", and this caller already degrades to the synced file.
+  const resolved = await resolveCloudSessionHost(sessionId).catch((err: unknown) => {
+    if (err instanceof PrimaryUnreachableError) return null
+    throw err
+  })
+  const host = resolved?.host
   if (!host) return null
   const { bridgeRequest, bridgeForHost } = await import('../ws/bridge-registry.js')
   if (!bridgeForHost(host).connected) return null
@@ -792,11 +807,9 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
       // hook this response onto the session's SSE channel. Whether the bridge
       // is up or not the response is 200 — the client keys off the
       // bridge-online/offline events (single code path, falls back to polling).
-      const host = await projectedHostForSession(sessionId)
-      if (!host) {
-        sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
-        return
-      }
+      const resolved = await resolveHostOrAnswer(res, sessionId)
+      if (!resolved) return
+      const host = resolved.host
       const { bridgeAttachSession, bridgeDetachSession, bridgeForHost } = await import('../ws/bridge-registry.js')
       let online = bridgeForHost(host).connected
       if (online) {
