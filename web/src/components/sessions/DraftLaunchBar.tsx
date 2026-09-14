@@ -15,7 +15,7 @@
  *      let the row hold eight chips: unlabelled and flush against the rows below,
  *      the whole stack read as one wall of buttons with no way to tell which button
  *      answered which question (user feedback).
- *   2. task — pin tier · "⋯ More" (priority / dates / unread). The SAME MetaFooter
+ *   2. task — pin tier · "More" (priority / dates / unread). The SAME MetaFooter
  *      the folder picker uses, minus its model select AND engine toggle
  *      (`hideModel`): the model belongs with the message, so the draft renders it
  *      inside the composer's controls row, exactly where a real session's model
@@ -93,7 +93,7 @@ export function DraftLaunchBar({
   // pill — "pops from where you clicked", not a centered modal.
   const cwdPillRef = useRef<HTMLButtonElement>(null);
   const [projectOpen, setProjectOpen] = useState(false);
-  // Ask Walnut folds the tier/priority/dates row behind ONE "⋯ More" — the
+  // Ask Walnut folds the tier/priority/dates row behind ONE "More" — the
   // mode's whole point is the defaults. Collapses again on leaving the tab.
   const [walnutMetaOpen, setWalnutMetaOpen] = useState(false);
   useEffect(() => {
@@ -208,7 +208,7 @@ export function DraftLaunchBar({
           too: the fork API takes only message+model (no tier/priority/
           engine — the sibling task inherits from the source), so every control
           in this row would be a lie. The model select lives in the composer.
-          Ask Walnut collapses the row to ONE muted "⋯ More" (user: 极简 — the
+          Ask Walnut collapses the row to ONE muted "More" (user: 极简 — the
           defaults are the point; the full controls are an explicit opt-in). */}
       {!pickerOpen && !isFork && isWalnut && !walnutMetaOpen && (
         <div className="draft-meta-row">
@@ -218,7 +218,7 @@ export function DraftLaunchBar({
             onClick={() => setWalnutMetaOpen(true)}
             title={`Tier, ${showPriority ? 'priority, ' : ''}dates — defaults: Ask Walnut project, Focus tier`}
           >
-            ⋯ More
+            More
           </button>
         </div>
       )}

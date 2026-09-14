@@ -12,7 +12,7 @@
  *   header             title + Draft badge + (bound task) + ✕
  *   body               nothing but one centered muted line of "what happens next"
  *   DraftLaunchBar     quick-access folder chips → provider/task row (engine ·
- *                      pin tier · ⋯ More) → cwd pill · project pill (fixed last),
+ *                      pin tier · More) → cwd pill · project pill (fixed last),
  *                      with the folder picker POPPING OUT over the page (fixed,
  *                      anchored to the cwd pill — a ~300px column can't contain it)
  *   composer           shared ChatInput; its controls row holds the model select

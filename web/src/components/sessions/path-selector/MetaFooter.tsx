@@ -323,7 +323,7 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
             aria-expanded={moreOpen}
             onClick={() => setMoreOpen(open => !open)}
           >
-            <span>⋯ More</span>
+            <span>More</span>
             {nonDefaultCount > 0 && <span className="sps-meta-more-badge">· {nonDefaultCount}</span>}
           </button>
         </div>
