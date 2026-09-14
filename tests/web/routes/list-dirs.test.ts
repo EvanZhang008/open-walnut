@@ -140,6 +140,13 @@ describe('GET /api/sessions/list-dirs — local', () => {
     expect(res.body.parent).toBe('/');
     // Every Unix root has /usr as a real directory; the rest differs per OS.
     expect(res.body.dirs).toContain('/usr');
+    // macOS: /tmp, /etc and /var are symlinks into /private. The dirent-only
+    // filter used to drop all three from the Local tab's root listing.
+    if (process.platform === 'darwin') {
+      expect(res.body.dirs).toEqual(expect.arrayContaining(['/tmp', '/etc', '/var']));
+      // Listed, never descended: nothing under a symlinked root reaches depth 2.
+      expect((res.body.dirs as string[]).some(d => d.startsWith('/tmp/'))).toBe(false);
+    }
   });
 
   it('a symlink to a directory is listed (not recursed into); a symlink to a file is not', async () => {
