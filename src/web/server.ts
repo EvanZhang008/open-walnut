@@ -62,7 +62,7 @@ import { createSlashCommandsRouter } from './routes/slash-commands.js'
 import { timelineRouter } from './routes/timeline.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
-import { CLOUD_MODE, CRON_FILE, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
+import { CLOUD_MODE, CRON_FILE, IS_EPHEMERAL, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
@@ -84,7 +84,8 @@ import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideCo
 import { syncReconciler } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { createPluginSourcesRouter } from './routes/plugin-sources.js'
-import { createPluginRuntimeRouter } from './routes/plugin-runtime.js'
+import { createPluginRuntimeRouter, defaultLinkedCheckoutOps } from './routes/plugin-runtime.js'
+import { createPluginUpdatesRouter } from './routes/plugin-updates.js'
 import { relayPrimaryPluginHttpRequest } from './routes/plugin-runtime-bridge.js'
 import { appsRouter, pluginAppStaticRouter } from './routes/apps.js'
 import { createPluginBodyParser, createPluginRouteDispatcher } from './plugin-route-dispatcher.js'
@@ -1391,11 +1392,43 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       return plugin
     } finally { startPluginSyncPolling() }
   })
+  // ONE update-status cache for the store: the batch route reads it, the per-row
+  // check/update actions write it, so a chip flips with the action. The module runs git
+  // for a linked checkout, so it is imported here (git-sync is already on this file's
+  // path) and its ops import the two checkers at call time, exactly as the runtime
+  // router does. Loading the persisted file is best-effort: an unreadable cache only
+  // means "not checked" until the next batch.
+  const { UpdateStatusCache } = await import('../core/plugins/update-status-cache.js')
+  const pluginUpdateCache = new UpdateStatusCache({
+    ops: {
+      checkLinked: async (info, env) => {
+        const { checkLinkedCheckout } = await import('../core/plugins/linked-checkout.js')
+        return checkLinkedCheckout(info, { env })
+      },
+      checkSource: async (slug) => {
+        const { checkSource } = await import('../core/plugin-sources.js')
+        const { fetchEnv } = await import('../core/plugins/update-status.js')
+        return checkSource(slug, { env: fetchEnv() })
+      },
+    },
+  })
+  await pluginUpdateCache.load().catch(() => undefined)
+  const linkedCheckoutOps = defaultLinkedCheckoutOps()
   // Lazy indirection: pluginSoftReload is assigned later in startup, after the
   // initial loadPlugins — the router must call the CURRENT value, not capture it.
-  app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload(), { reloadPlugin }))
+  app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload(), { reloadPlugin, cache: pluginUpdateCache }))
+  app.use('/api/plugin-updates', createPluginUpdatesRouter({
+    cache: pluginUpdateCache,
+    linked: linkedCheckoutOps,
+    listSources: async () => (await import('../core/plugin-sources.js')).listSources(),
+    // Same rule as plugin-sources' cloneDirFor, spelled out so that module stays lazy here.
+    sourceDir: (slug) => path.join(PLUGIN_STORES_DIR, slug),
+    installedIds: () => getPluginLifecycleRecords(registry).filter((record) => !record.builtin).map((record) => record.id),
+  }))
   app.use('/api/plugin-runtime', createPluginRuntimeRouter({
     registry,
+    linked: linkedCheckoutOps,
+    cache: pluginUpdateCache,
     list: () => getPluginLifecycleRecords(registry),
     discover: async (pluginId) => {
       // pluginSoftReload is loadNewPlugins, which is ADDITIVE: an id that is already

@@ -83,8 +83,12 @@ export interface MenuPlacementOptions {
    * 'center' centers the menu on the anchor's midpoint (spreads evenly both
    * ways) and clamps at the viewport edges: used by the draft column's folder
    * picker, which opens from a pill and should grow symmetrically around it.
+   * 'start' puts the menu's LEFT edge on the anchor's LEFT edge (a flyout that
+   * reads as belonging to a small trigger, like the plugin provenance info
+   * button); like 'left' it falls back to right-aligned when the right side of
+   * the viewport leaves no room.
    */
-  align?: 'right' | 'left' | 'center';
+  align?: 'right' | 'left' | 'center' | 'start';
   /**
    * Which side to PREFER when both fit. Default 'down' (the classic dropdown
    * expectation). 'up' inverts it — open upward unless it doesn't fit above
@@ -126,7 +130,7 @@ export interface PlacementInput {
    */
   forceSide?: OpenSide;
   /** See MenuPlacementOptions.align. */
-  align?: 'right' | 'left' | 'center';
+  align?: 'right' | 'left' | 'center' | 'start';
   /** See MenuPlacementOptions.preferSide. */
   preferSide?: 'up' | 'down';
 }
@@ -181,14 +185,17 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   // menu OVER the very day column being clicked), or align:'center' (menu's
   // midpoint at the anchor's midpoint — spreads evenly both ways; the shared
   // clamps below keep it on screen near the edges).
-  const anchorMid = ((anchor.left ?? anchor.right) + anchor.right) / 2;
+  const anchorLeft = anchor.left ?? anchor.right;
+  const anchorMid = (anchorLeft + anchor.right) / 2;
   let right =
     input.align === 'center' && menuWidth > 0
       ? viewportWidth - anchorMid - menuWidth / 2
       : input.align === 'left' && menuWidth > 0
         ? viewportWidth - anchor.right - menuWidth
-        : viewportWidth - anchor.right;
-  if (input.align === 'left' && menuWidth > 0 && right < margin) {
+        : input.align === 'start' && menuWidth > 0
+          ? viewportWidth - anchorLeft - menuWidth
+          : viewportWidth - anchor.right;
+  if ((input.align === 'left' || input.align === 'start') && menuWidth > 0 && right < margin) {
     right = viewportWidth - anchor.right;
   }
   if (menuWidth > 0) {

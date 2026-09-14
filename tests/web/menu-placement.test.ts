@@ -75,6 +75,25 @@ describe('computePlacement: normal case', () => {
   });
 });
 
+describe("computePlacement: align 'start' (plugin provenance flyout, N15)", () => {
+  it("puts the menu's left edge on the anchor's LEFT edge, not its right", () => {
+    const { out } = place({ anchor: { top: 100, bottom: 120, left: 876, right: 900 }, align: 'start' });
+    const menuLeft = 1440 - out.right - 260;
+    expect(menuLeft).toBe(876);
+  });
+
+  it('falls back to right-aligned when the menu would run off the right edge', () => {
+    const { out } = place({ anchor: { top: 100, bottom: 120, left: 1300, right: 1324 }, align: 'start' });
+    expect(out.right).toBeGreaterThanOrEqual(MARGIN);
+    expect(1440 - out.right - 260).toBeGreaterThanOrEqual(MARGIN);
+  });
+
+  it('uses the anchor right edge when no left edge is known (cursor anchors)', () => {
+    const { out } = place({ anchor: { top: 100, bottom: 100, right: 500 }, align: 'start' });
+    expect(1440 - out.right - 260).toBe(500);
+  });
+});
+
 describe('computePlacement: the reported bug — tall menu, short window', () => {
   // The reported geometry: an 800px-tall viewport, the kebab in the session
   // header (bottom ≈ 90), and a two-section menu (task actions + inline date

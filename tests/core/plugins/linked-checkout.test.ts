@@ -12,14 +12,23 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   checkLinkedCheckout,
   detectLinkedCheckout,
   LinkedCheckoutError,
   listLinkedCheckouts,
+  listLinkedCheckoutsDetailed,
   updateLinkedCheckout,
+  type LinkedCheckoutInfo,
 } from '../../../src/core/plugins/linked-checkout.js'
+import {
+  CHECKOUT_MOVED_REASON,
+  UNSUPPORTED_HINT_NO_UPSTREAM,
+  deriveUpdateState,
+  linkedRowKey,
+} from '../../../src/core/plugins/update-status.js'
+import { UpdateStatusCache, readLocalFacts } from '../../../src/core/plugins/update-status-cache.js'
 
 const exec = promisify(execFile)
 
@@ -273,5 +282,169 @@ describe('linked plugin checkouts', () => {
     } finally {
       await git(['checkout', 'main'], work)
     }
+  })
+})
+
+/**
+ * The update-status layer on top, against the same real repositories. Its own clone
+ * (`lab`) so the sequence above keeps its assumptions about `work`.
+ */
+describe('update status from a real checkout', () => {
+  let lab = ''
+  let labExternal = ''
+  const labInfo = async (): Promise<LinkedCheckoutInfo> => (await detectLinkedCheckout('sample', undefined, { externalDir: labExternal }))!
+
+  beforeAll(async () => {
+    lab = path.join(root, 'lab')
+    labExternal = path.join(root, 'lab-home', 'plugins')
+    await git(['clone', origin, lab], root)
+    await fsp.mkdir(labExternal, { recursive: true })
+    await fsp.symlink(path.join(lab, 'sample'), path.join(labExternal, 'sample'), 'dir')
+  })
+
+  it('maps a clean checkout that tracks the remote to current, and the fetched upstream sha rides along', async () => {
+    const status = await checkLinkedCheckout(await labInfo())
+    expect(deriveUpdateState({ kind: 'linked', status })).toEqual({ kind: 'current' })
+    expect(status.upstreamSha).toBe(await git(['rev-parse', 'HEAD'], publisher))
+  })
+
+  it('maps an uncommitted change to dirty, whatever the counts say', async () => {
+    await fsp.appendFile(path.join(lab, 'sample', 'index.ts'), '// scratch\n')
+    try {
+      const status = await checkLinkedCheckout(await labInfo())
+      expect(deriveUpdateState({ kind: 'linked', status })).toEqual({ kind: 'dirty', behind: 0 })
+    } finally {
+      await git(['checkout', '--', '.'], lab)
+    }
+  })
+
+  it('maps behind-only to available with the count, ahead-only to current with the count', async () => {
+    await publishCommit('lab behind')
+    let status = await checkLinkedCheckout(await labInfo())
+    expect(deriveUpdateState({ kind: 'linked', status })).toEqual({ kind: 'available', behind: 1 })
+
+    await git(['pull', '--ff-only'], lab)
+    await fsp.appendFile(path.join(lab, 'sample', 'index.ts'), '// local only\n')
+    await git(['add', '.'], lab)
+    await git(['commit', '-m', 'lab ahead'], lab)
+    status = await checkLinkedCheckout(await labInfo())
+    expect(deriveUpdateState({ kind: 'linked', status })).toEqual({ kind: 'current', ahead: 1 })
+  })
+
+  it('maps behind AND ahead to diverged (amber, not an error)', async () => {
+    await publishCommit('lab diverge')
+    const status = await checkLinkedCheckout(await labInfo())
+    expect(deriveUpdateState({ kind: 'linked', status })).toEqual({ kind: 'diverged', behind: 1, ahead: 1 })
+    // Back to a clean tracking state for the tests below.
+    await git(['reset', '--hard', 'origin/main'], lab)
+  })
+
+  it('maps a branch with no upstream to unsupported with the push-or-set hint', async () => {
+    await git(['checkout', '-b', 'lab-local'], lab)
+    try {
+      const status = await checkLinkedCheckout(await labInfo())
+      expect(deriveUpdateState({ kind: 'linked', status })).toMatchObject({ kind: 'unsupported', hint: UNSUPPORTED_HINT_NO_UPSTREAM })
+    } finally {
+      await git(['checkout', 'main'], lab)
+    }
+  })
+
+  it('passes the env option through to the git child (a config injected by env redirects the fetch)', async () => {
+    const info = await labInfo()
+    // `url.<x>.insteadOf` is single-valued and env config has command-line precedence, so
+    // this rewrites the origin URL for the fetch of THIS call only.
+    const status = await checkLinkedCheckout(info, {
+      env: {
+        ...process.env,
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: `url.${path.join(root, 'env-redirected-origin.git')}.insteadOf`,
+        GIT_CONFIG_VALUE_0: origin,
+      },
+    })
+    expect(status.fetched).toBe(false)
+    expect(status.reason).toMatch(/env-redirected-origin/)
+    // Without the option the same checkout fetches fine: the default path is unchanged.
+    expect((await checkLinkedCheckout(info)).fetched).toBe(true)
+  })
+
+  it('lists what the budget left out instead of dropping it silently', async () => {
+    const listing = await listLinkedCheckoutsDetailed({ externalDir, budgetMs: 0 })
+    expect(listing.found.size).toBe(0)
+    expect(listing.skipped).toEqual(expect.arrayContaining(['sample', 'second']))
+    const full = await listLinkedCheckoutsDetailed({ externalDir })
+    expect(full.skipped).toEqual([])
+    expect([...full.found.keys()].sort()).toEqual(['sample', 'second'])
+  })
+})
+
+describe('local facts recomputed on every snapshot (no fetch)', () => {
+  let facts = ''
+  let factsExternal = ''
+  const factsInfo = async (): Promise<LinkedCheckoutInfo> => (await detectLinkedCheckout('sample', undefined, { externalDir: factsExternal }))!
+
+  beforeAll(async () => {
+    facts = path.join(root, 'facts')
+    factsExternal = path.join(root, 'facts-home', 'plugins')
+    await git(['clone', origin, facts], root)
+    await fsp.mkdir(factsExternal, { recursive: true })
+    await fsp.symlink(path.join(facts, 'sample'), path.join(factsExternal, 'sample'), 'dir')
+  })
+
+  it('dirty then commit reads current with zero fetches; pull turns available into current; a reset reads as moved', async () => {
+    const checkLinked = vi.fn((info: LinkedCheckoutInfo, env: NodeJS.ProcessEnv) => checkLinkedCheckout(info, { env }))
+    const cache = new UpdateStatusCache({
+      filePath: path.join(root, 'facts-cache.json'),
+      ops: { checkLinked, checkSource: vi.fn(async () => ({ behind: 0 })) },
+    })
+    const info = await factsInfo()
+    const rowKey = linkedRowKey(info.checkout)
+    const targets = [{ rowKey, kind: 'linked' as const, info, pluginIds: ['sample'] }]
+
+    await publishCommit('facts behind')
+    await cache.refreshAll(targets, { force: true })
+    expect(checkLinked).toHaveBeenCalledTimes(1)
+    expect((await cache.snapshot(targets)).rows[rowKey].state).toEqual({ kind: 'available', behind: 1 })
+
+    // The user pulls by hand: the next snapshot says current, and nothing was fetched.
+    await git(['pull', '--ff-only'], facts)
+    expect((await cache.snapshot(targets)).rows[rowKey].state).toEqual({ kind: 'current' })
+
+    // The user edits: dirty. Then commits: current, one ahead. Still no fetch.
+    await fsp.appendFile(path.join(facts, 'sample', 'index.ts'), '// wip\n')
+    expect((await cache.snapshot(targets)).rows[rowKey].state).toEqual({ kind: 'dirty', behind: 0 })
+    await git(['add', '.'], facts)
+    await git(['commit', '-m', 'facts local'], facts)
+    expect((await cache.snapshot(targets)).rows[rowKey].state).toEqual({ kind: 'current', ahead: 1 })
+    expect(checkLinked).toHaveBeenCalledTimes(1)
+
+    // A reset below the HEAD the fetch saw AND below the fetched upstream commit: the
+    // cached counts describe nothing real. (HEAD~2 would land exactly on the fetched HEAD,
+    // where "1 behind" is still the true answer; the moved rule needs both to differ.)
+    await git(['reset', '--hard', 'HEAD~3'], facts)
+    const moved = await cache.snapshot(targets, { autoRefresh: false })
+    expect(moved.rows[rowKey].state).toEqual({ kind: 'unchecked', reason: CHECKOUT_MOVED_REASON })
+    expect(checkLinked).toHaveBeenCalledTimes(1)
+    // With auto refresh the moved row is re-checked in the background.
+    const kicked = await cache.snapshot(targets)
+    expect(kicked.refreshing).toBe(true)
+    await cache.refreshRow(rowKey, targets[0])
+    expect(checkLinked).toHaveBeenCalledTimes(2)
+    // HEAD~3 of (upstream + one local commit) is upstream~2, so two behind.
+    expect((await cache.snapshot(targets)).rows[rowKey].state).toEqual({ kind: 'available', behind: 2 })
+  })
+
+  it('readLocalFacts answers behind/ahead against the given commit and flags an unknown one as moved', async () => {
+    await git(['reset', '--hard', 'origin/main'], facts)
+    const upstream = await git(['rev-parse', 'origin/main'], facts)
+    const clean = await readLocalFacts(facts, upstream, { headAtFetch: upstream })
+    expect(clean).toEqual({ dirty: false, head: upstream, behind: 0, ahead: 0, moved: false })
+
+    const unknown = await readLocalFacts(facts, 'f'.repeat(40), { headAtFetch: upstream })
+    expect(unknown.moved).toBe(true)
+    expect(unknown.behind).toBeNull()
+
+    // A directory that is not a repository: dirty (the safe direction), nothing counted.
+    const notRepo = await readLocalFacts(root, upstream, { deadlineMs: 2_000 })
+    expect(notRepo.dirty).toBe(true)
   })
 })

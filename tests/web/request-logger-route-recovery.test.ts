@@ -21,6 +21,7 @@ import { EventEmitter } from 'node:events';
 import {
   requestLogger, setRouteRecoveryPublisher, _resetRouteHealthForTest,
 } from '../../src/web/middleware/request-logger.js';
+import { HANDLED_FAILURE_HEADER } from '../../src/web/middleware/handled-failure.js';
 import { errorHandler } from '../../src/web/middleware/error-handler.js';
 import { setErrorNotificationSink } from '../../src/logging/subsystem.js';
 import { log } from '../../src/logging/index.js';
@@ -32,11 +33,12 @@ let errorLogs: Logged[] = [];
 let recoveries: string[][] = [];
 
 /** A minimal req/res pair that drives the middleware's res.on('finish') path. */
-function fire(method: string, url: string, status: number, durationMs = 0): void {
+function fire(method: string, url: string, status: number, durationMs = 0, headers: Record<string, string> = {}): void {
   const res = new EventEmitter() as unknown as Response & EventEmitter;
   (res as unknown as { statusCode: number }).statusCode = status;
-  (res as unknown as Record<string, unknown>).setHeader = () => res;
-  (res as unknown as Record<string, unknown>).getHeader = () => undefined;
+  const sent: Record<string, string> = { ...headers };
+  (res as unknown as Record<string, unknown>).setHeader = (name: string, value: string) => { sent[name.toLowerCase()] = value; return res; };
+  (res as unknown as Record<string, unknown>).getHeader = (name: string) => sent[name.toLowerCase()];
 
   const [pathOnly, qs] = url.split('?');
   const query: Record<string, string> = {};
@@ -127,6 +129,32 @@ describe('5xx → one stable, keyed error record', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it('a 5xx the route marked as a HANDLED failure never becomes a card (N3-1): warn, like a 4xx', () => {
+    // POST .../linked/update answers 502 when the user's own remote refuses the fetch and 504
+    // when git outruns its deadline; the row already says so. A red card with "Ask AI to fix"
+    // for a condition Walnut cannot fix was the second, louder report of the same thing.
+    const warn = vi.spyOn(log.web, 'warn').mockImplementation(() => {});
+    try {
+      fire('POST', '/api/plugin-runtime/acme-tracker/linked/update', 502, 40, { [HANDLED_FAILURE_HEADER]: '1' });
+      fire('POST', '/api/plugin-sources/acme-plugins/update', 504, 60_000, { [HANDLED_FAILURE_HEADER]: '1' });
+      expect(errorLogs).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(String(warn.mock.calls[0][0])).toContain('→ 502');
+      // Any other header value, or none, keeps the incident path.
+      fire('POST', '/api/plugin-runtime/acme-tracker/linked/update', 502, 40, { [HANDLED_FAILURE_HEADER]: 'yes' });
+      fire('POST', '/api/plugin-runtime/acme-tracker/linked/update', 502);
+      expect(errorLogs).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a handled 5xx counts as the endpoint answering: it recovers a route that HAD failed', () => {
+    fire('POST', '/api/plugin-sources/acme-plugins/update', 500);
+    fire('POST', '/api/plugin-sources/acme-plugins/update', 502, 0, { [HANDLED_FAILURE_HEADER]: '1' });
+    expect(recoveries).toEqual([['route:POST /api/plugin-sources/acme-plugins/update']]);
   });
 
   it('a 501 counts as the endpoint answering: it recovers a route that HAD failed', () => {

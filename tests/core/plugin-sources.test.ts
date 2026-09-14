@@ -329,6 +329,28 @@ describe('source lifecycle', () => {
     expect((await getStorePluginDirs()).some((dir) => dir.endsWith('/store-restore'))).toBe(true);
   });
 
+  it('a source whose clone is gone still names the plugins it carried, and forgets them once it is back (N2-3)', async () => {
+    const url = makeGitRepo('store-gone', { 'manifest.json': MANIFEST('gone-plugin') });
+    await addSource(url);
+    // A listing while the files are here writes the memo; a present source never exposes it.
+    const [present] = await listSources();
+    expect(present.cloned).toBe(true);
+    expect(present.lastKnownPlugins).toBeUndefined();
+
+    await fsp.rm(path.join(PLUGIN_STORES_DIR, 'store-gone'), { recursive: true, force: true });
+    const [gone] = await listSources();
+    expect(gone.cloned).toBe(false);
+    expect(gone.plugins).toEqual([]);
+    expect(gone.lastKnownPlugins?.map((plugin) => plugin.id)).toEqual(['gone-plugin']);
+
+    // Restore clones it again: the scan is authoritative once more.
+    await updateSource('store-gone');
+    const [back] = await listSources();
+    expect(back.cloned).toBe(true);
+    expect(back.plugins.map((plugin) => plugin.id)).toEqual(['gone-plugin']);
+    expect(back.lastKnownPlugins).toBeUndefined();
+  });
+
   it('updateSource records error instead of throwing', async () => {
     const url = makeGitRepo('store-err', { 'manifest.json': MANIFEST('e') });
     await addSource(url);

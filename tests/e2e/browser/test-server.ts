@@ -2527,6 +2527,87 @@ export function activate(walnut) {
     }))
     return { stdout: 'added 1 package', stderr: '' }
   })
+
+  // Linked plugin fixture: ONE private checkout (`linked-work`, tracking the bare
+  // `linked-origin.git`) hosts two plugins, each symlinked at <home>/plugins/<id>, so a
+  // spec can see two Installed rows share one update row. `linked-publisher` is a second
+  // clone of the same origin: a commit pushed from it puts `linked-work` behind. Knobs a
+  // spec turns by hand: write a file in linked-work (dirty), commit in linked-work
+  // without pushing (ahead / diverged), rename linked-origin.git (unreachable).
+  // Ids and display names differ on purpose so a test can assert that copy never shows an id.
+  // On by default with the native fixture; PW_PLUGIN_UPDATE_FIXTURE=0 leaves it out.
+  if (process.env.PW_PLUGIN_UPDATE_FIXTURE !== '0') await (async () => {
+  const linkedOrigin = path.join(tmpBase, 'linked-origin.git')
+  const linkedWork = path.join(tmpBase, 'linked-work')
+  const linkedPublisher = path.join(tmpBase, 'linked-publisher')
+  const gitIn = (cwd: string, ...args: string[]) => execFileAsync(
+    'git',
+    ['-c', 'user.name=Walnut Test', '-c', 'user.email=walnut-test@example.invalid', ...args],
+    { cwd },
+  )
+  const linkedPlugins: Array<[id: string, name: string, description: string]> = [
+    ['acme-tracker', 'Acme Tracker', 'Two-way sync with the Acme tracker'],
+    ['acme-notes', 'Acme Notes', 'Notes shared with the Acme workspace'],
+  ]
+  await fs.mkdir(linkedOrigin, { recursive: true })
+  await gitIn(linkedOrigin, 'init', '--bare', '--initial-branch=main')
+  await fs.mkdir(linkedWork, { recursive: true })
+  await gitIn(linkedWork, 'init', '--initial-branch=main')
+  for (const [id, name, description] of linkedPlugins) {
+    const dir = path.join(linkedWork, id)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({
+      id,
+      name,
+      description,
+      version: '1.2.0',
+      apiVersion: 1,
+      engines: { walnut: '>=0.3.2' },
+      server: 'server.mjs',
+    }, null, 2))
+    await fs.writeFile(path.join(dir, 'server.mjs'), `
+export function activate(walnut) {
+  walnut.registry.command({
+    id: 'hello',
+    description: '${name} fixture command',
+    content: 'Reply with the ${name} status.',
+  })
+}
+`)
+  }
+  await gitIn(linkedWork, 'add', '.')
+  await gitIn(linkedWork, 'commit', '-m', 'Add linked plugin fixture')
+  await gitIn(linkedWork, 'remote', 'add', 'origin', linkedOrigin)
+  await gitIn(linkedWork, 'push', '-u', 'origin', 'main')
+  await gitIn(tmpBase, 'clone', linkedOrigin, linkedPublisher)
+  await fs.mkdir(path.join(tmpBase, 'plugins'), { recursive: true })
+  for (const [id] of linkedPlugins) {
+    await fs.symlink(path.join(linkedWork, id), path.join(tmpBase, 'plugins', id))
+  }
+  // A plugin COPIED into the plugins dir by hand: a plain directory, no link, no store
+  // source. Nothing can update it, so it must never get an update chip (a real install
+  // had two of these and each drew a "Not checked" chip whose click did nothing).
+  const copiedDir = path.join(tmpBase, 'plugins', 'acme-copied')
+  await fs.mkdir(copiedDir, { recursive: true })
+  await fs.writeFile(path.join(copiedDir, 'manifest.json'), JSON.stringify({
+    id: 'acme-copied',
+    name: 'Acme Copied',
+    description: 'A plugin folder copied here by hand',
+    version: '0.9.0',
+    apiVersion: 1,
+    engines: { walnut: '>=0.3.2' },
+    server: 'server.mjs',
+  }, null, 2))
+  await fs.writeFile(path.join(copiedDir, 'server.mjs'), `
+export function activate(walnut) {
+  walnut.registry.command({
+    id: 'hello',
+    description: 'Acme Copied fixture command',
+    content: 'Reply with the Acme Copied status.',
+  })
+}
+`)
+  })()
 }
 
 // Now import server (it reads WALNUT_HOME from constants.ts which checks env var)

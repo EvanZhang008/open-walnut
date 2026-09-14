@@ -1,0 +1,575 @@
+/*
+ * Settings → Plugins: update chip, Update button wrapper, feedback line, provenance flyout
+ * and the Installed header cluster. Imported by the components that render them.
+ *
+ * Two pill vocabularies on one row: the solid `.badge` answers "is it running?", this
+ * OUTLINE chip answers "is it current?". Same colour on both would fuse the two axes.
+ * Colour ladder, quietest first: current has no border and the muted foreground; available
+ * is the accent (good news, act); dirty / diverged / auth are amber (blocked, not urgent).
+ * Red is reserved for a failed action in the feedback line and never appears on a chip.
+ * WebKit constraints: no :has() for layout, transform-only spinner, no animation-timeline.
+ */
+
+/*
+ * Chip colours are THEME TOKENS, never hex: the quiet chip reads the secondary foreground
+ * (muted grey measures 3.3:1 on the light card at 10.5px), available reads `--accent-text`
+ * and dirty / diverged / auth read `--priority-important-text`. Those two are globals.css
+ * twins of `--accent` / `--priority-important` that clear WCAG's 4.5:1 on the light card
+ * (the fill colours measure 3.7:1 and 2.0:1 there) and equal the originals on dark.
+ * `native-plugin.spec.ts` measures every chip kind in both themes (C34, C53).
+ */
+.plugin-update-chip {
+  --plugin-update-chip-quiet: var(--fg-secondary, var(--fg));
+  --plugin-update-chip-available: var(--accent-text, var(--accent));
+  --plugin-update-chip-amber: var(--priority-important-text, var(--priority-important));
+}
+
+:root[data-theme='dark'] .plugin-update-chip {
+  --plugin-update-chip-quiet: var(--fg-muted, var(--text-muted));
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .plugin-update-chip {
+    --plugin-update-chip-quiet: var(--fg-muted, var(--text-muted));
+  }
+}
+
+/*
+ * Same box as the `.badge` beside it (N3-7): 11px text on the inherited line height plus
+ * 2px of vertical padding on the badge equals 1px padding plus the 1px border here, so the two
+ * pills on a title line share one height and their edges align at 2x.
+ */
+.plugin-update-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  box-sizing: border-box;
+  min-width: 7.5em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 60%, transparent);
+  background: transparent;
+  color: var(--plugin-update-chip-quiet);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: inherit;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: border-color 0.15s;
+}
+
+.plugin-update-chip:hover {
+  border-color: currentColor;
+}
+
+.plugin-update-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A clickable chip is a button and says so; only the static span and the busy chip do not. */
+button.plugin-update-chip:not([aria-busy='true']) {
+  cursor: pointer;
+}
+
+.plugin-update-chip[data-static='true'],
+.plugin-update-chip[aria-busy='true'] {
+  cursor: default;
+}
+
+.plugin-update-chip .plugin-update-icon {
+  flex: none;
+}
+
+/* Quietest state: no border at rest, just icon + words. Hover is the SAME step the other
+   chips take (border to full currentColor) plus a 10% wash, both from the resolved token
+   rather than currentColor mixes, so "Up to date" visibly reads as the click-to-check
+   control it is (N12, N2-8). The wash is not transitioned: it lands with the pointer. */
+.plugin-update-chip--current {
+  border-color: transparent;
+  color: var(--plugin-update-chip-quiet);
+}
+
+button.plugin-update-chip--current:hover {
+  border-color: var(--plugin-update-chip-quiet);
+  background-color: color-mix(in srgb, var(--plugin-update-chip-quiet) 10%, transparent);
+}
+
+.plugin-update-chip--unchecked,
+.plugin-update-chip--unsupported,
+.plugin-update-chip--missing {
+  color: var(--plugin-update-chip-quiet);
+}
+
+.plugin-update-chip--available {
+  color: var(--plugin-update-chip-available);
+}
+
+.plugin-update-chip--dirty,
+.plugin-update-chip--diverged,
+.plugin-update-chip--auth {
+  color: var(--plugin-update-chip-amber);
+}
+
+/* Remote unreachable: keep the last known words, mark them as possibly old. Opacity is
+   NOT used here: the chip text must still clear 4.5:1 on the card. */
+.plugin-update-chip--stale .plugin-update-chip-label {
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* The "remote unreachable" mark rides INSIDE the pill after the words (a 9px badge on the
+   corner notched the outline and read as a rendering glitch). */
+.plugin-update-chip-stale-mark {
+  margin-left: 1px;
+  opacity: 0.8;
+}
+
+/* Placeholder before the first GET: same box, no words, no border, no flash of "Not checked". */
+.plugin-update-chip--pending {
+  border-color: transparent;
+  cursor: default;
+}
+
+.plugin-update-chip--busy {
+  color: var(--plugin-update-chip-quiet);
+}
+
+.plugin-update-chip--busy .plugin-update-icon--spinner {
+  animation: plugin-update-spin 0.9s linear infinite;
+}
+
+@keyframes plugin-update-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ---- Update button (disabled wrapper carries the reason; see PluginUpdateButton) ---- */
+
+.plugin-update-disabled {
+  display: inline-flex;
+  border-radius: var(--radius-sm);
+  cursor: not-allowed;
+}
+
+.plugin-update-disabled:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/*
+ * The primary action gets the same 2px accent ring every other control in this slice has;
+ * the UA's 1px auto outline was near invisible on the blue primary (N3-8). A card-coloured
+ * inner ring separates the accent ring from the accent fill.
+ */
+.plugin-update-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--bg-secondary, var(--bg));
+}
+
+/*
+ * One width for every label (N3-5): the visible label and the invisible widest one
+ * (`data-wide`) share a grid cell, so `Update` -> `Updating…` changes nothing but the text.
+ * WebKit-safe: plain grid, no :has(), no measurement.
+ */
+.plugin-update-label {
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  text-align: center;
+}
+
+.plugin-update-label::after {
+  content: attr(data-wide);
+  visibility: hidden;
+  height: 0;
+  overflow: hidden;
+  grid-area: 1 / 1;
+  pointer-events: none;
+  user-select: none;
+}
+
+.plugin-update-label > * {
+  grid-area: 1 / 1;
+}
+
+/*
+ * Disabled reads as disabled in BOTH themes: muted foreground, no border, a 6% wash for the
+ * button shape. Opacity alone was the wrong tool (N2-5): 0.72 on the dark card left the
+ * text, background and border computed identical to an enabled secondary button, so the
+ * only clue that Update was dead was clicking it. The muted token keeps the label legible
+ * (light 3.3:1, dark 5.2:1), which is what a dimmed control should measure.
+ */
+.plugin-update-disabled .btn[disabled],
+.plugin-update-disabled .btn[disabled]:hover {
+  opacity: 1;
+  color: var(--fg-muted, var(--text-muted));
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-color: transparent;
+  cursor: not-allowed;
+}
+
+/* ---- Feedback line: one sentence, optional Details, never a timer ---- */
+
+.plugin-update-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  color: var(--fg-secondary, var(--fg));
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Success reads as success (N3-16): the row's own foreground and a check icon before it. */
+.plugin-update-feedback--ok {
+  color: var(--fg);
+}
+
+.plugin-update-feedback-icon {
+  flex: none;
+  align-self: center;
+  margin-right: -4px;
+  color: var(--plugin-update-chip-available, var(--accent-text, var(--accent)));
+}
+
+/* The text span sits in the row copy, whose `span` rule (muted, 11px) outranks a bare class:
+   take the line's own colour and size back, then the error colour on top. */
+.settings-row-copy span.plugin-update-feedback-text {
+  color: inherit;
+  font-size: inherit;
+}
+
+.plugin-update-feedback--error .plugin-update-feedback-text,
+.plugin-update-feedback--error span.plugin-update-feedback-text {
+  color: var(--priority-immediate);
+}
+
+/* Details / Hide details: one width for both labels (the cell trick above), so the control
+   the user just clicked stays put and never wraps onto its own line (N3-6). */
+.plugin-update-feedback-toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text, var(--accent));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.plugin-update-feedback-toggle .plugin-update-label {
+  justify-items: start;
+  text-align: left;
+}
+
+.plugin-update-detail {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  max-height: calc(12 * 1.45em);
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary, var(--fg));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The disabled Update's reason, as a small tip under the button while its wrapper has focus
+ * or was clicked (N3-14). Portalled and fixed-positioned (inline style from useMenuPlacement),
+ * so the row keeps its height; card-coloured so the text measures the same 4.5:1 it did in
+ * the row (secondary, not muted: muted grey at 12px was 3.6:1 on the light card, N20).
+ */
+.plugin-update-reason {
+  box-sizing: border-box;
+  display: block;
+  max-width: min(360px, calc(100vw - 16px));
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary, var(--bg));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+  color: var(--fg-secondary, var(--fg));
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Provenance: info trigger + portalled flyout ---- */
+
+.plugin-provenance-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  margin: -4px 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--fg-muted, var(--text-muted));
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.plugin-provenance-trigger:hover,
+.plugin-provenance-trigger[aria-expanded='true'] {
+  color: var(--fg);
+}
+
+.plugin-provenance-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.plugin-provenance-flyout {
+  box-sizing: border-box;
+  min-width: 280px;
+  max-width: min(420px, calc(100vw - 16px));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated, var(--bg-secondary));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.plugin-provenance-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.plugin-provenance-row {
+  display: contents;
+}
+
+.plugin-provenance-list dt {
+  color: var(--fg-muted, var(--text-muted));
+  font-weight: 500;
+}
+
+.plugin-provenance-list dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 0;
+  min-width: 0;
+}
+
+.plugin-provenance-list code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.plugin-provenance-path {
+  overflow-wrap: anywhere;
+}
+
+.plugin-provenance-muted {
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.plugin-provenance-copy {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.plugin-provenance-copy:hover {
+  text-decoration: underline;
+}
+
+.plugin-provenance-foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted, var(--text-muted));
+  font-size: 11px;
+}
+
+/* ---- Installed header: "Checked 3 min ago · Check now", right-aligned on the title row ---- */
+
+.plugin-store-updates-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--fg-secondary, var(--fg));
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* The text-safe accent twin, as on the chip: the fill accent measures 4.02:1 on the light
+   card at 12px, under 4.5:1 (N3-9). */
+.plugin-store-updates-head .btn-link {
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent-text, var(--accent));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plugin-store-updates-head .btn-link:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* While a check runs the verb is dead and must not read as the tail of the status sentence
+   next to it (N2-11): muted, not the same secondary grey as the text. */
+.plugin-store-updates-head .btn-link:disabled {
+  color: var(--fg-muted, var(--text-muted));
+  cursor: default;
+}
+
+.plugin-store-updates-head .btn-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/*
+ * Row layout (N2-1). The copy column and the actions cluster are the two flex children of
+ * `.settings-row`; the row WRAPS, so the breakpoint is the real minimum and never a fixed
+ * container width: the copy asks for 320px, the actions cluster is content-sized and never
+ * shrinks, and when the two no longer fit side by side the WHOLE cluster drops under the copy
+ * (left-aligned) as one line. A 626px card keeps its controls on the right; a 280px floor
+ * used to eat the copy column and wrap the chip while 160px sat empty.
+ *
+ * Alignment across rows is not a floor either: an Update that comes and goes leaves an
+ * invisible placeholder of the same size (`.plugin-update-slot`, PluginUpdateButton), so a
+ * row's actions width is constant through Update / Updating / gone (C15) without reserving
+ * room no row in the list uses.
+ */
+.plugin-store-installed {
+  container-type: inline-size;
+}
+
+.plugin-store-installed .settings-row {
+  flex-wrap: wrap;
+}
+
+.plugin-store-installed .settings-row-copy {
+  flex: 1 1 320px;
+}
+
+/*
+ * `margin-left: auto`: side by side with the copy this changes nothing (the copy fills), but
+ * once the cluster wraps under the copy it sits flush RIGHT, like a System Settings row and
+ * like the Sources card (N3-3, N3-15). Left-aligned, the invisible Update placeholder that
+ * keeps rows aligned started every control 82px in from the text edge.
+ */
+.plugin-store-installed .settings-row-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+/* Update, Updating…, Restore: one width for all three labels (the `.plugin-update-label` cell
+   reserves the widest), so the cluster does not breathe while a row updates. */
+.plugin-update-button,
+.plugin-update-slot .btn {
+  justify-content: center;
+}
+
+/* The reserved slot: same box as the button it stands in for, invisible and inert. */
+.plugin-update-slot {
+  display: inline-flex;
+  visibility: hidden;
+}
+
+/*
+ * One control height on the row: `.btn-sm` is 28px, but `.btn-danger-outline` is declared
+ * after it in globals.css with the same specificity, so its 6px/13px padding won (34px).
+ * The compound selector wins on specificity and brings Remove to the same 28px (N14).
+ */
+.plugin-store-installed .btn-danger-outline.btn-sm,
+.plugin-sources-group .btn-danger-outline.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/*
+ * The copy column must be able to shrink below its longest unbreakable token (an origin
+ * label, a sha, a scrubbed reason): grid items default to min-width:auto, which is what
+ * made the Installed group 5px wider than its box at 960px (N6). Nothing on the row may
+ * make the group scroll sideways.
+ */
+.plugin-store-installed .settings-row {
+  min-width: 0;
+}
+
+/* `1fr` is minmax(auto, 1fr): ONE row with a wide min-content widens the shared track and
+   every row with it. minmax(0, 1fr) keeps the track at the group's width. */
+.plugin-store-installed .settings-row-list,
+.plugin-store-installed .plugin-store-entry {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.plugin-store-installed .settings-row-copy > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plugin-store-installed .settings-row-copy code {
+  overflow-wrap: normal;
+}
+
+/*
+ * A row with a disabled Update grows a reason line under its copy. The actions column stays
+ * centred on the ROW, so that growth used to shift every button 9px; anchor the column to
+ * the top of the copy instead, with the same 12px/3px offsets the copy's first line has,
+ * so the buttons sit where they sat and only the copy grows (N11).
+ */
+.plugin-store-installed .settings-row {
+  align-items: flex-start;
+}
+
+/* -5px centres a 28px control on the 18px title line (the copy's first row). */
+.plugin-store-installed .settings-row-actions {
+  align-self: flex-start;
+  margin-top: -5px;
+}
+
+/* Only the header needs a container step: under 480px "Checked … · Check now" moves under
+   the title, left-aligned. Rows wrap on their own (see above). */
+@container (max-width: 480px) {
+  .plugin-store-installed .plugin-store-group-head {
+    flex-wrap: wrap;
+  }
+
+  .plugin-store-updates-head {
+    width: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+}

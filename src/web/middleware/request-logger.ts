@@ -16,9 +16,12 @@
  * IDENTITY block below — nine cards for one broken endpoint is what the old
  * shape produced.
  *
- * One 5xx is exempt: 501 is this codebase's `not_supported_cloud` degradation, a
+ * Two 5xx shapes are exempt: 501 is this codebase's `not_supported_cloud` degradation, a
  * deliberate answer rather than a failure, so it logs at warn and never becomes a
- * card (see the 501 block below).
+ * card (see the 501 block below); and a response the route marked with
+ * `markHandledFailure` (handled-failure.ts) is a failure it expected and already reported
+ * to the user in place (a plugin Update refused by the user's own git remote), so it too
+ * logs at warn and never becomes a card.
  *
  * A RESPONSE THAT IS NEVER ENDED USED TO LOG NOTHING AT ALL. `finish` fires when
  * `res.end()` has been called; an SSE stream is ended by the client going away, so
@@ -36,6 +39,7 @@ import { log } from '../../logging/index.js'
 import { observe } from '../../core/observability/metrics.js'
 import { routeLogMessage, routeRecoveryKey } from '../../core/notifications/route-condition.js'
 import { createRecoveryTransitionTracker } from '../../core/notifications/recovery-transition.js'
+import { isHandledFailure } from './handled-failure.js'
 
 // Extend Express Request to carry the request ID
 declare global {
@@ -229,8 +233,11 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     // condition they describe cannot even exist. So a 501 logs at WARN (still in
     // the request log, never a notification) and is treated like a 4xx: the
     // endpoint responded, which also counts as recovery for a route that HAD been
-    // throwing. Every other 5xx keeps the error path below.
-    if (status >= 500 && status !== 501) {
+    // throwing. Every other 5xx keeps the error path below, unless the route marked
+    // the response as a failure it expected and already reported to the user
+    // (handled-failure.ts: a plugin Update refused by the user's own remote answers
+    // 502 with the row saying why; that is not an endpoint incident either).
+    if (status >= 500 && status !== 501 && !isHandledFailure(res)) {
       // ── ERROR-LINE IDENTITY (the nine-cards bug) ────────────────────────────
       // log.error routes into the notification center, and the bridge's dedup
       // fingerprint is the MESSAGE. `${url}` carries the query string and

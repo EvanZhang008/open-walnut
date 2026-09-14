@@ -32,11 +32,14 @@ import { satisfiesDependencyRange } from './semver.js'
 /**
  * Where a row's code comes from.
  *
- * `linked` is the one kind a catalog FILE can never declare: it is discovered on disk
- * (a `walnut-plugin link` symlink into a git work tree), so `parsePluginCatalog` does not
- * accept it and only an installed row ever carries it.
+ * `linked` and `local` are the two kinds a catalog FILE can never declare: both are
+ * discovered on disk, so `parsePluginCatalog` does not accept them and only an installed
+ * row ever carries them. `linked` is a `walnut-plugin link` symlink into a git work tree;
+ * `local` is a plain directory under `~/.open-walnut/plugins/` that no store source owns
+ * (copied there by hand). Nothing can check or update a `local` row, and saying `git`
+ * about it (the old default) made the console draw an update chip that could never answer.
  */
-export type PluginCatalogSourceKind = 'builtin' | 'git' | 'npm' | 'example' | 'linked'
+export type PluginCatalogSourceKind = 'builtin' | 'git' | 'npm' | 'example' | 'linked' | 'local'
 
 export interface PluginCatalogSource {
   kind: PluginCatalogSourceKind
@@ -152,6 +155,8 @@ export interface InstalledPluginFacts {
   sourceKind?: 'git' | 'npm'
   /** Present when this plugin is a `walnut-plugin link` into a git work tree. */
   linked?: LinkedCheckoutInfo
+  /** The linked scan ran out of budget before it reached this plugin: "not scanned", not "not linked". */
+  linkedScanSkipped?: boolean
 }
 
 export interface PluginRegistryRow {
@@ -186,6 +191,8 @@ export interface PluginRegistryRow {
   sourceSlug?: string
   /** Can the ON/OFF toggle act on this row at all. */
   toggleable: boolean
+  /** Only when true: the linked scan never reached this row, so its chip reads "not checked". */
+  linkedScanSkipped?: boolean
 }
 
 export interface PluginRegistryResult {
@@ -368,7 +375,9 @@ export function mergePluginRegistry(
     //
     // A link into a git work tree wins over everything, including a catalog entry that
     // describes where the plugin normally comes from: the code that RUNS is the checkout,
-    // and that is the only copy Check and Update can act on.
+    // and that is the only copy Check and Update can act on. The same goes for a plain
+    // directory nobody owns: the catalog may know a git URL for that id, but the copy on
+    // disk did not come through the store, so there is nothing to update it FROM.
     const source: PluginCatalogSource = plugin.linked
       ? {
         kind: 'linked',
@@ -381,7 +390,7 @@ export function mergePluginRegistry(
       }
       : plugin.sourceKind
         ? { kind: plugin.sourceKind }
-        : entry?.source ?? { kind: plugin.builtin ? 'builtin' : 'git' }
+        : { kind: plugin.builtin ? 'builtin' : 'local' }
     // A blocked row already names what it is missing; the plan says what can be DONE
     // about it, which is the difference between a dead end and a button.
     const plan = status === 'needs-dependency'
@@ -421,6 +430,7 @@ export function mergePluginRegistry(
       catalog: !!entry,
       ...(plugin.sourceSlug ? { sourceSlug: plugin.sourceSlug } : {}),
       toggleable: isToggleable(status),
+      ...(plugin.linkedScanSkipped ? { linkedScanSkipped: true } : {}),
     })
   }
 

@@ -37,9 +37,19 @@ import {
   getUnconfiguredPlugins, getUnsupportedPlugins, getDuplicatePluginIds, getUnmetDependencyPlugins,
   getPluginLifecycleRecords,
 } from '../../core/integration-loader.js';
+import type { UpdateStatusCache } from '../../core/plugins/update-status-cache.js';
+import {
+  ROW_CHECK_DEADLINE_MS, ROW_TIMEOUT_REASON, describeGitFailure, fetchEnv, maskCredentials, sourceRowKey, withDeadline,
+} from '../../core/plugins/update-status.js';
+import { isRestartPending, markRestartPending } from '../../core/plugins/restart-pending.js';
 import { createSubsystemLogger } from '../../logging/index.js';
+import { markHandledFailure } from '../middleware/handled-failure.js';
 
 const log = createSubsystemLogger('plugin-sources');
+
+/** An update that outlives this many ms answers 504; git or npm may still finish on its own. */
+export const SOURCE_UPDATE_DEADLINE_MS = 60_000;
+export const SOURCE_UPDATE_TIMEOUT_MESSAGE = 'Update timed out after 60 s. The checkout was not changed unless git finished on its own; check again.';
 
 /** A dependency's own dependencies are followed through the catalog, never deeper: past
  *  three hops an "install this one plugin" click stops being something a user agreed to. */
@@ -78,6 +88,10 @@ export interface PluginSourcesRouterDeps {
   reloadPlugin?(pluginId: string): Promise<{ state?: string } | undefined>;
   /** Overridable so a test can point the catalog overlay at a temp home. */
   walnutHome?: string;
+  /** The update-status cache check/update write into (shared with /api/plugin-updates). */
+  cache?: UpdateStatusCache;
+  /** Override for the 60 s update deadline (tests only). */
+  updateDeadlineMs?: number;
 }
 
 export type PluginStatus = 'loaded' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
@@ -96,6 +110,8 @@ export type PluginStatus = 'loaded' | 'needs-config' | 'needs-dependency' | 'uns
  */
 function statusFor(pluginId: string | null, error?: string): PluginStatus {
   if (error || !pluginId) return 'error';
+  // Updated on disk while loaded: the running code is the OLD one until a restart.
+  if (isRestartPending(pluginId)) return 'pending-restart';
   if (registry.has(pluginId)) return 'loaded';
   if (getUnconfiguredPlugins().some(p => p.id === pluginId)) return 'needs-config';
   if (getUnmetDependencyPlugins().some(p => p.id === pluginId)) return 'needs-dependency';
@@ -392,11 +408,34 @@ export function createPluginSourcesRouter(
       // Ids loaded from this source BEFORE the pull — if the pull changed their
       // code, the in-memory version is now stale and only a restart refreshes it.
       const loadedBefore = source.plugins.filter(p => p.id && registry.has(p.id)).map(p => p.id);
-      const result = await updateSource(slug);
+      const rowKey = sourceRowKey(slug);
+      const cache = deps.cache;
+      cache?.setBusy(rowKey, true);
+      const TIMED_OUT = Symbol('timeout');
+      let result: Awaited<ReturnType<typeof updateSource>>;
+      try {
+        const outcome = await withDeadline<typeof result | typeof TIMED_OUT>(updateSource(slug), deps.updateDeadlineMs ?? SOURCE_UPDATE_DEADLINE_MS, () => TIMED_OUT);
+        if (outcome === TIMED_OUT) {
+          // The row reports this itself; no incident card for a slow remote (N3-1).
+          markHandledFailure(res).status(504).json({ error: SOURCE_UPDATE_TIMEOUT_MESSAGE });
+          return;
+        }
+        result = outcome;
+      } finally {
+        cache?.setBusy(rowKey, false);
+      }
       if (result.error) {
-        res.status(502).json({ ...result, restartRequired: false });
+        // One scrubbed sentence for the row (no path, no host, no `fatal:`), the cause for
+        // the client's copy, and the raw masked text for the Details disclosure.
+        const raw = maskCredentials(result.error);
+        const { cause, sentence } = describeGitFailure(raw);
+        // Expected and already reported on the row: honest 502, but no red card (N3-1).
+        markHandledFailure(res).status(502).json({ ...result, error: sentence, cause, detail: raw, restartRequired: false });
         return;
       }
+      // The row is current at what landed: a git sha, an npm `name@version`, or (a pull
+      // that found nothing new) whatever the source already recorded.
+      const row = cache?.recordUpdated(rowKey, result.toSha ?? result.resolved ?? source.lastSha ?? source.resolved ?? '');
       if (result.updated) {
         try {
           await softReload();
@@ -405,7 +444,10 @@ export function createPluginSourcesRouter(
         }
       }
       const restartRequired = result.updated && loadedBefore.length > 0;
-      res.json({ ...result, restartRequired });
+      // The row badge says RESTART TO ACTIVATE from here on (registry + sources list), so the
+      // feedback line is not the only place that says it.
+      if (restartRequired) markRestartPending(loadedBefore.filter((id): id is string => !!id));
+      res.json({ ...result, restartRequired, ...(row ? { state: row.state, checkedAt: row.checkedAt } : {}) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -419,11 +461,20 @@ export function createPluginSourcesRouter(
     }
     try {
       const sources = await listSources();
-      if (!sources.some((source) => source.slug === slug)) {
+      const source = sources.find((candidate) => candidate.slug === slug);
+      if (!source) {
         res.status(404).json({ error: 'source not found' });
         return;
       }
-      res.json(await checkSource(slug));
+      // Unattended fetch env (no prompt, no askpass window, ssh batch mode), bounded: past
+      // the row deadline the answer is an error result, never a hung request.
+      const result = await withDeadline(
+        checkSource(slug, { env: fetchEnv() }),
+        ROW_CHECK_DEADLINE_MS,
+        () => ({ behind: 0, updateAvailable: false, error: ROW_TIMEOUT_REASON, detail: ROW_TIMEOUT_REASON }),
+      );
+      const row = deps.cache?.recordCheck(sourceRowKey(slug), { kind: source.kind === 'npm' ? 'npm' : 'git', result, cloned: source.cloned });
+      res.json({ ...result, ...(row ? { state: row.state, checkedAt: row.checkedAt } : {}) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }

@@ -77,6 +77,52 @@ describe('linked checkouts in the store list', () => {
     expect(byId.get('from-npm')!.source).toEqual({ kind: 'npm' })
   })
 
+  it('carries a skipped linked scan through as a flag, and only when true', () => {
+    // The scan never reached this row: it may well be linked, so the store must say "not
+    // checked" instead of "not linked". A row the scan did reach carries no such key at
+    // all (which is why the toEqual assertions above stay exact).
+    const { rows } = mergePluginRegistry([], [
+      installed({ id: 'unscanned', linkedScanSkipped: true }),
+      installed({ id: 'scanned', linkedScanSkipped: false }),
+      installed({ id: 'sample', linked }),
+    ])
+    const byId = new Map(rows.map((row) => [row.id, row]))
+
+    expect(byId.get('unscanned')!.linkedScanSkipped).toBe(true)
+    expect(byId.get('unscanned')!.source).toEqual({ kind: 'local' })
+    expect('linkedScanSkipped' in byId.get('scanned')!).toBe(false)
+    expect('linkedScanSkipped' in byId.get('sample')!).toBe(false)
+  })
+
+  it('calls a plain folder nobody owns `local`, even when the catalog knows a git URL for that id', () => {
+    // A directory copied into the plugins dir by hand: not linked, no store slug. The old
+    // default said `git`, and the console drew an update chip whose click could never
+    // answer (there is no source to update FROM). The catalog's URL says where the plugin
+    // normally comes from, not where this copy came from.
+    const entry: PluginCatalogEntry = {
+      id: 'copied',
+      name: 'Copied',
+      source: { kind: 'git', url: 'https://example.invalid/team/plugins.git' },
+    }
+    const { rows } = mergePluginRegistry([entry], [
+      installed({ id: 'copied' }),
+      installed({ id: 'unknown-to-catalog' }),
+    ])
+    const byId = new Map(rows.map((row) => [row.id, row]))
+
+    expect(byId.get('copied')!.source).toEqual({ kind: 'local' })
+    expect(byId.get('unknown-to-catalog')!.source).toEqual({ kind: 'local' })
+    expect('sourceSlug' in byId.get('copied')!).toBe(false)
+  })
+
+  it('never accepts `local` from a catalog file either', () => {
+    const parsed = parsePluginCatalog({
+      plugins: [{ id: 'sample', name: 'Sample', source: { kind: 'local' } }],
+    })
+
+    expect(parsed[0]!.source.kind).toBe('git')
+  })
+
   it('never accepts `linked` from a catalog file', () => {
     // A linked checkout is DISCOVERED on disk. A catalog document claiming it would put a
     // Check button on a row with no checkout behind it, so the kind falls back to git.

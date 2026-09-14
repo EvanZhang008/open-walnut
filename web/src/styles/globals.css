@@ -11,6 +11,11 @@
   --accent: #007AFF;
   --accent-hover: #0066D6;
   --accent-subtle: rgba(0, 122, 255, 0.08);
+  /* Text-safe twins for SMALL TEXT on the secondary card: the fill colours above measure
+     3.7:1 (accent) and 2.0:1 (amber) against #F5F5F7, under WCAG's 4.5:1; these clear it
+     (5.4:1 and 5.2:1). Dark surfaces do not need them, there the twins equal the originals. */
+  --accent-text: #0060CC;
+  --priority-important-text: #9E5300;
   /* Virtual-group cluster outline — soft accent, strong enough to read as one box
      but never competing with a task's own status background. */
   --group-outline: rgba(0, 122, 255, 0.32);
@@ -101,6 +106,8 @@
   --accent: #0A84FF;
   --accent-hover: #409CFF;
   --accent-subtle: rgba(10, 132, 255, 0.12);
+  --accent-text: var(--accent);
+  --priority-important-text: var(--priority-important);
   /* Brighter on dark so the thin cluster outline stays visible on near-black cards. */
   --group-outline: rgba(10, 132, 255, 0.45);
   /* iOS dark separators (UIColor.separator dark family) — hairlines that stay
@@ -137,6 +144,8 @@
     --accent: #0A84FF;
     --accent-hover: #409CFF;
     --accent-subtle: rgba(10, 132, 255, 0.12);
+    --accent-text: var(--accent);
+    --priority-important-text: var(--priority-important);
     --group-outline: rgba(10, 132, 255, 0.45);
     --border: rgba(84, 84, 88, 0.42);
     --border-strong: rgba(84, 84, 88, 0.6);
@@ -1763,6 +1772,11 @@ select {
 
 .form-row .form-group {
   flex: 1;
+  /* A text input's intrinsic width (about 190px in WebKit, less in Chromium) is the
+     group's automatic minimum, so three groups in a row overflowed a 534px settings pane
+     in Safari and scrolled the whole pane sideways. Let the group shrink; the input inside
+     stretches to it. */
+  min-width: 0;
 }
 
 .form-actions {
@@ -21645,6 +21659,9 @@ td.usage-share-col {
 
 .kv-editor-add input {
   flex: 1;
+  /* Two inputs keep their intrinsic width (about 190px each in WebKit) unless told they may
+     shrink; in a 388px group that pushed the Add button 70px past the settings pane. */
+  min-width: 0;
 }
 
 /* Status Indicator */

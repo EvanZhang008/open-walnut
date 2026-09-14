@@ -61,6 +61,8 @@ export interface LinkedCheckoutStatus {
   fetched: boolean
   /** Why `behind` could not be counted, in plain words. */
   reason?: string
+  /** The upstream commit the counts were taken against (what the update cache keeps as `remoteRef`). */
+  upstreamSha?: string
 }
 
 export interface LinkedUpdateResult {
@@ -94,23 +96,39 @@ function maskUrl(url: string): string {
   return url.replace(/^(https?:\/\/)[^/@\s]+@/, '$1***@')
 }
 
+/** The same rule under the name the rest of the update-status code uses. */
+export const maskRemote = maskUrl
+
 /** Any credential that rode into a git message, in any position. */
-function maskMessage(message: string): string {
+export function maskMessage(message: string): string {
   return message.replace(/(https?:\/\/)[^/\s@]+@/gi, '$1***@')
 }
 
-async function git(args: string[], cwd: string, timeout = GIT_TIMEOUT): Promise<string> {
+/** Knobs a caller may pass to any git-running function here. Omitted = today's behaviour. */
+export interface LinkedGitOptions {
+  /** Environment for the git child (an unattended fetch passes `fetchEnv()`). */
+  env?: NodeJS.ProcessEnv
+  /** Budget for the one call that talks to the remote. */
+  fetchTimeoutMs?: number
+}
+
+async function git(args: string[], cwd: string, timeout = GIT_TIMEOUT, env?: NodeJS.ProcessEnv): Promise<string> {
   try {
-    return await execGitArgsGroup(args, { cwd, timeout })
+    return await execGitArgsGroup(args, { cwd, timeout, ...(env ? { env } : {}) })
   } catch (error) {
     throw new Error(maskMessage(error instanceof Error ? error.message : String(error)))
   }
 }
 
 /** The git call that is ALLOWED to fail: absent upstream, no remote, not a repo. */
-async function gitOrNull(args: string[], cwd: string, timeout = GIT_TIMEOUT): Promise<string | null> {
+async function gitOrNull(
+  args: string[],
+  cwd: string,
+  timeout = GIT_TIMEOUT,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | null> {
   try {
-    return await git(args, cwd, timeout)
+    return await git(args, cwd, timeout, env)
   } catch {
     return null
   }
@@ -224,26 +242,51 @@ async function manifestId(pluginDir: string): Promise<string | null> {
 export async function listLinkedCheckouts(
   opts: LinkedCheckoutOptions & { budgetMs?: number } = {},
 ): Promise<Map<string, LinkedCheckoutInfo>> {
+  return (await listLinkedCheckoutsDetailed(opts)).found
+}
+
+export interface LinkedCheckoutListing {
+  found: Map<string, LinkedCheckoutInfo>
+  /** Link names the budget ran out before, so a caller can say "not scanned" instead of nothing. */
+  skipped: string[]
+}
+
+/**
+ * `listLinkedCheckouts` plus the names it had to leave out. A row whose link was never
+ * looked at must not read as "not linked": the store marks it `linkedScanSkipped`.
+ */
+export async function listLinkedCheckoutsDetailed(
+  opts: LinkedCheckoutOptions & { budgetMs?: number } = {},
+): Promise<LinkedCheckoutListing> {
   const dir = externalPluginsDir(opts)
   const found = new Map<string, LinkedCheckoutInfo>()
+  const skipped: string[] = []
   let entries: fs.Dirent[]
   try {
     entries = await fsp.readdir(dir, { withFileTypes: true })
   } catch {
-    return found
+    return { found, skipped }
   }
+  const links = entries.filter((entry) => entry.isSymbolicLink())
   const deadline = Date.now() + (opts.budgetMs ?? LIST_BUDGET_MS)
-  for (const entry of entries) {
-    if (!entry.isSymbolicLink()) continue
+  for (let i = 0; i < links.length; i++) {
+    const entry = links[i]
     const remaining = deadline - Date.now()
-    if (remaining <= 0) break
+    if (remaining <= 0) {
+      for (const rest of links.slice(i)) skipped.push(rest.name)
+      break
+    }
     const real = await resolveLink(path.join(dir, entry.name))
     if (!real) continue
     const info = await describeCheckout(real, Math.min(remaining, GIT_TIMEOUT))
-    if (!info) continue
+    if (!info) {
+      // Ran out of clock mid-describe: that is a skip, not "no checkout".
+      if (deadline - Date.now() <= 0) skipped.push(entry.name)
+      continue
+    }
     found.set(await manifestId(real) ?? entry.name, info)
   }
-  return found
+  return { found, skipped }
 }
 
 /** The branch this checkout tracks (`origin/main`), or null when nothing is set. */
@@ -259,12 +302,15 @@ async function upstreamOf(checkout: string): Promise<string | null> {
  * against the LAST fetch, flagged `fetched: false` with the reason, so the caller must
  * never present that count as "up to date".
  */
-export async function checkLinkedCheckout(info: LinkedCheckoutInfo): Promise<LinkedCheckoutStatus> {
+export async function checkLinkedCheckout(
+  info: LinkedCheckoutInfo,
+  opts: LinkedGitOptions = {},
+): Promise<LinkedCheckoutStatus> {
   const { checkout } = info
   let fetched = true
   let fetchError: string | undefined
   try {
-    await git(['fetch'], checkout, GIT_NETWORK_TIMEOUT)
+    await git(['fetch'], checkout, opts.fetchTimeoutMs ?? GIT_NETWORK_TIMEOUT, opts.env)
   } catch (error) {
     fetched = false
     fetchError = error instanceof Error ? error.message : String(error)
@@ -287,6 +333,7 @@ export async function checkLinkedCheckout(info: LinkedCheckoutInfo): Promise<Lin
   }
   const behindRaw = await gitOrNull(['rev-list', '--count', 'HEAD..@{upstream}'], checkout)
   const aheadRaw = await gitOrNull(['rev-list', '--count', '@{upstream}..HEAD'], checkout)
+  const upstreamSha = await gitOrNull(['rev-parse', '@{upstream}'], checkout)
   if (behindRaw === null) {
     return { ...base, behind: null, ahead: null, reason: `Could not compare with ${upstream}.` }
   }
@@ -294,12 +341,13 @@ export async function checkLinkedCheckout(info: LinkedCheckoutInfo): Promise<Lin
     ...base,
     behind: Number.parseInt(behindRaw, 10) || 0,
     ahead: aheadRaw === null ? null : Number.parseInt(aheadRaw, 10) || 0,
+    ...(upstreamSha ? { upstreamSha } : {}),
     ...(fetched ? {} : { reason: `Could not fetch: ${gitErrorGist(fetchError ?? 'unknown error')}` }),
   }
 }
 
 /** The one line of a git failure worth showing a person: no exit code, no "Please make sure" advice. */
-function gitErrorGist(message: string): string {
+export function gitErrorGist(message: string): string {
   const lines = message
     .replace(/^git exited \d+:\s*/i, '')
     .split(/\r?\n/)
@@ -324,7 +372,10 @@ function isDivergedMessage(message: string): boolean {
  * Refuses a dirty tree (checked FRESH, never from a flag someone passed in) and never
  * does anything but a fast-forward, so no local commit or edit can be lost here.
  */
-export async function updateLinkedCheckout(info: LinkedCheckoutInfo): Promise<LinkedUpdateResult> {
+export async function updateLinkedCheckout(
+  info: LinkedCheckoutInfo,
+  opts: LinkedGitOptions = {},
+): Promise<LinkedUpdateResult> {
   const { checkout } = info
   if (await isDirty(checkout)) {
     throw new LinkedCheckoutError(
@@ -334,7 +385,7 @@ export async function updateLinkedCheckout(info: LinkedCheckoutInfo): Promise<Li
   }
   const fromSha = await gitOrNull(['rev-parse', 'HEAD'], checkout) ?? info.sha
   try {
-    await git(['pull', '--ff-only'], checkout, GIT_NETWORK_TIMEOUT)
+    await git(['pull', '--ff-only'], checkout, opts.fetchTimeoutMs ?? GIT_NETWORK_TIMEOUT, opts.env)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (isDivergedMessage(message)) {

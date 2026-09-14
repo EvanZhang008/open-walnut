@@ -82,6 +82,19 @@ export interface PluginSourceState {
   integrity?: string;
   lastSyncedAt?: string;
   lastError?: string;
+  /**
+   * The plugins the source carried the last time its directory was scanned. Written by
+   * `listSources` when the scan changes, read only while the directory is GONE, so a
+   * source whose clone was deleted keeps its display name and its plugin ids (the store
+   * row and the update-status row for a plugin that is still loaded from memory).
+   */
+  lastKnownPlugins?: KnownStorePlugin[];
+}
+
+/** The two facts a source remembers about a plugin it carried: enough to name it. */
+export interface KnownStorePlugin {
+  id: string;
+  name: string | null;
 }
 
 export interface DiscoveredStorePlugin {
@@ -118,6 +131,8 @@ export interface PluginSourceView {
   lastSyncedAt?: string;
   lastError?: string;
   plugins: DiscoveredStorePlugin[];
+  /** Only while `cloned` is false: what the source carried before its files went away. */
+  lastKnownPlugins?: KnownStorePlugin[];
   /** Paste-able snippet for teammates ("Copy share snippet" button). git only —
    *  absent when the URL embeds credentials, since those must never be shared. */
   shareSnippet?: string;
@@ -177,7 +192,8 @@ export function slugForSource(source: PluginSourceConfig): string {
   return slugForUrl(source.url);
 }
 
-function cloneDirFor(slug: string): string {
+/** Where a git source is cloned. Exported so the update-status snapshot can read local facts there. */
+export function cloneDirFor(slug: string): string {
   return path.join(PLUGIN_STORES_DIR, slug);
 }
 
@@ -377,11 +393,22 @@ function gitCredentialArgs(url?: string): string[] {
   return url && /https?:\/\/[^/\s]+@/.test(url) ? ['-c', 'credential.helper='] : [];
 }
 
-async function runSourceGit(args: string[], cwd: string, url?: string): Promise<string> {
+/** Knobs for a git call here. `env` is what an unattended fetch passes (`fetchEnv()`). */
+export interface SourceGitOptions {
+  env?: NodeJS.ProcessEnv;
+}
+
+async function runSourceGit(
+  args: string[],
+  cwd: string,
+  url?: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<string> {
   try {
     return await execGitArgsGroup([...gitCredentialArgs(url), ...args], {
       cwd,
       timeout: CLONE_TIMEOUT,
+      ...(env ? { env } : {}),
     });
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
@@ -702,13 +729,18 @@ export interface CheckResult {
   /** npm: the version the registry would install right now. */
   resolved?: string;
   error?: string;
+  /** The raw (credential-masked) git or npm text behind `error`, for a Details disclosure. */
+  detail?: string;
+  /** git: the upstream commit the fetch saw (what an update moves to) and the clone's HEAD. */
+  upstreamSha?: string;
+  sha?: string;
 }
 
 /**
  * "Is there something newer?" without touching the installed tree.
  * git: fetch + count commits behind. npm: re-resolve the spec and compare.
  */
-export async function checkSource(slug: string): Promise<CheckResult> {
+export async function checkSource(slug: string, opts: SourceGitOptions = {}): Promise<CheckResult> {
   if (!isValidSlug(slug)) throw new Error('Invalid source slug.');
   return withSourceLock(slug, async () => {
     const source = await findSourceBySlug(slug);
@@ -723,19 +755,32 @@ export async function checkSource(slug: string): Promise<CheckResult> {
           || current.integrity !== resolved.integrity;
         return { behind: changed ? 1 : 0, updateAvailable: changed, resolved: resolved.resolved };
       } catch (error) {
-        return { behind: 0, updateAvailable: false, error: error instanceof Error ? error.message : String(error) };
+        const message = error instanceof Error ? error.message : String(error);
+        return { behind: 0, updateAvailable: false, error: message, detail: message };
       }
     }
 
     const dir = cloneDirFor(slug);
     try {
       await assertGitCheckout(dir);
-      await runSourceGit(['fetch'], dir, source.url);
+      await runSourceGit(['fetch'], dir, source.url, opts.env);
       const behind = await runSourceGit(['rev-list', '--count', 'HEAD..@{upstream}'], dir);
       const count = parseInt(behind, 10) || 0;
-      return { behind: count, updateAvailable: count > 0 };
+      // The two shas are optional extras: the chip tooltip names the target, and the
+      // status cache compares local facts against the upstream commit between fetches.
+      const [upstreamSha, sha] = await Promise.all([
+        runSourceGit(['rev-parse', '@{upstream}'], dir).then((out) => out.trim()).catch(() => undefined),
+        runSourceGit(['rev-parse', 'HEAD'], dir).then((out) => out.trim()).catch(() => undefined),
+      ]);
+      return {
+        behind: count,
+        updateAvailable: count > 0,
+        ...(upstreamSha ? { upstreamSha } : {}),
+        ...(sha ? { sha } : {}),
+      };
     } catch (error) {
-      return { behind: 0, updateAvailable: false, error: error instanceof Error ? error.message : String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      return { behind: 0, updateAvailable: false, error: message, detail: message };
     }
   });
 }
@@ -767,6 +812,10 @@ async function buildView(
     cloned = (await fsp.stat(dir)).isDirectory();
   } catch { /* not installed */ }
   const plugins = cloned ? await scanStorePlugins(dir) : [];
+  // Gone from disk: name it by what it carried last time, never by its slug.
+  const remembered = !cloned && state?.lastKnownPlugins?.length
+    ? { lastKnownPlugins: state.lastKnownPlugins }
+    : {};
 
   if (isNpmSourceConfig(source)) {
     // No share snippet for npm: the spec IS the shareable thing, and it is
@@ -785,6 +834,7 @@ async function buildView(
       lastSyncedAt: state?.lastSyncedAt,
       lastError: state?.lastError,
       plugins,
+      ...remembered,
     };
   }
 
@@ -800,16 +850,43 @@ async function buildView(
     lastSyncedAt: state?.lastSyncedAt,
     lastError: state?.lastError,
     plugins,
+    ...remembered,
     ...(hasCredentials ? {} : { shareSnippet: buildShareSnippet(source.url, source.ref) }),
   };
+}
+
+/** The memo `lastKnownPlugins` keeps for a scanned source: ids and names, in scan order. */
+function knownPluginsOf(view: PluginSourceView): KnownStorePlugin[] {
+  return view.plugins
+    .filter((plugin): plugin is DiscoveredStorePlugin & { id: string } => typeof plugin.id === 'string')
+    .map((plugin) => ({ id: plugin.id, name: plugin.name }));
+}
+
+function sameKnownPlugins(a: KnownStorePlugin[] | undefined, b: KnownStorePlugin[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  return a.every((item, i) => item.id === b[i].id && item.name === b[i].name);
 }
 
 export async function listSources(): Promise<PluginSourceView[]> {
   const config = await getConfig();
   const state = await readState();
   const sources = config.plugin_sources ?? [];
-  return Promise.all(sources.map(s => {
+  const views = await Promise.all(sources.map(s => {
     const slug = slugForSource(s);
     return buildView(slug, s, state[slug]);
   }));
+  // Remember what each PRESENT source carries, so a source whose directory later
+  // disappears can still be named. One write, only when a scan changed something.
+  const changed = views.filter((view) => view.cloned && view.plugins.length > 0
+    && !sameKnownPlugins(state[view.slug]?.lastKnownPlugins, knownPluginsOf(view)));
+  if (changed.length > 0) {
+    await updateState((current) => {
+      for (const view of changed) {
+        current[view.slug] = { ...current[view.slug], lastKnownPlugins: knownPluginsOf(view) };
+      }
+    }).catch((error) => {
+      log.warn('could not remember plugin source contents', { error: String(error) });
+    });
+  }
+  return views;
 }

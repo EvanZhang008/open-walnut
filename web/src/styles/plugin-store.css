@@ -183,3 +183,44 @@
   color: var(--priority-immediate, #ff3b30);
   white-space: normal;
 }
+
+/*
+ * Sources card head (Settings, Plugins): the same two-cluster shape as an Installed row
+ * (spec 6.2, N2-2). The title cluster wraps its badges and chip; the actions cluster is one
+ * unbreakable line that drops UNDER the title as a whole when the card is too narrow, so a
+ * long title never strands Remove alone on a second line.
+ */
+.plugin-store-source-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px 16px;
+}
+
+/* The copy column (title line, then origin), the same shape as an Installed row's copy so
+   both groups stack the same way when the actions drop under it (N3-15). */
+.plugin-store-source-copy {
+  display: flex;
+  flex: 1 1 320px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.plugin-store-source-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plugin-store-source-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}

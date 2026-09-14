@@ -1,6 +1,7 @@
 import { apiGet, apiGetText } from '@/api/client'
 import { wsClient } from '@/api/ws'
 import { PLUGINS_CHANGED_EVENT } from '@/utils/plugin-events'
+import { coalesceRefresh } from '@/utils/coalesce-refresh'
 import { log } from '@/utils/log'
 import { appRegistry } from '@/apps/registry'
 import { refreshAppsCatalogue } from '@/hooks/useApps'
@@ -316,8 +317,11 @@ export function initWebPlugins(): Promise<void> {
   if (initialized) return operationTail
   initialized = true
   const refresh = () => { void refreshWebPlugins() }
-  // A plugin came, went, or reloaded — its commands/skills changed with it.
-  const refreshWithCommands = () => { void refreshWebPluginsWithCommands() }
+  // A plugin came, went, or reloaded — its commands/skills changed with it. One update
+  // announces itself several times within a second (a WS event per reloaded plugin, then
+  // the client's own plugins-changed); they collapse into one catalogue read (N2-10).
+  const coalesced = coalesceRefresh(refreshWebPluginsWithCommands)
+  const refreshWithCommands = () => { void coalesced.request() }
   window.addEventListener(PLUGINS_CHANGED_EVENT, refreshWithCommands)
   wsClient.onEvent('plugin:runtime-changed', refreshWithCommands)
   wsClient.onConnectionChange((state) => {

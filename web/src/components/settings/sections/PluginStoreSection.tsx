@@ -26,12 +26,20 @@
  * Turning a plugin off persists: the disable route writes `plugins.<id>.enabled: false`
  * to config.yaml (integration-loader.disableLoadedPlugin), so it stays off across a
  * restart, and turning it on writes `enabled: true` before reloading it.
+ *
+ * Update status (linked checkouts, git and npm sources) comes from ONE batch request
+ * through `usePluginUpdates`, never from the registry: every updatable row carries a
+ * chip on its title line, Update is the only verb and appears only when there is
+ * something to do, results land on the row as a feedback line, and the checkout's
+ * path, branch and sha live in the Provenance flyout rather than in the row copy.
+ * Built-in rows take no part in any of it.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SettingsSection, SettingsRow, SettingsSubCard, SettingsEmpty, SettingsNotice } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { PluginConfigCards } from './PluginConfigCards';
+import { PluginSourcesGroup, UpdatesHead, sourceProvenance, type PluginSource } from './PluginSourcesGroup';
 import {
   dependencyBusyKey,
   PluginAlsoNeeds,
@@ -50,36 +58,23 @@ import { BuildPluginCard } from '../BuildPluginCard';
 // settings registry. `plugin:runtime-changed` is the same signal, one WS event away.
 import { useEvent } from '@/hooks/useWebSocket';
 import { PLUGINS_CHANGED_EVENT, emitPluginsChanged } from '@/utils/plugin-events';
+import { coalesceRefresh, type CoalescedRefresh } from '@/utils/coalesce-refresh';
+import { usePluginUpdates } from '@/hooks/usePluginUpdates';
+import { PluginUpdateChip } from '../PluginUpdateChip';
+import { PluginUpdateButton } from '../PluginUpdateButton';
+import { PluginUpdateFeedback } from '../PluginUpdateFeedback';
+import { PluginProvenanceFlyout } from '../PluginProvenanceFlyout';
+import {
+  CLOUD_LINKED_NOTE,
+  failureFeedback,
+  resolveRowState,
+  sourceShortLabel,
+  successFeedback,
+  updateButtonMode,
+  type Feedback,
+} from '../plugin-update-view';
+import { RESTART_PENDING_STATE, sourceRowKey, type UpdateState, type UpdateStatusRow } from '../plugin-update-types';
 import '@/styles/plugin-store.css';
-
-interface StorePlugin {
-  dir: string;
-  id: string | null;
-  name: string | null;
-  version: string | null;
-  error?: string;
-  status: 'loaded' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
-}
-
-interface PluginSource {
-  slug: string;
-  kind?: 'git' | 'npm';
-  type?: 'npm';
-  url?: string;
-  ref?: string;
-  spec?: string;
-  resolved?: string;
-  packageName?: string;
-  version?: string;
-  integrity?: string;
-  enabled: boolean;
-  cloned: boolean;
-  lastSha?: string;
-  lastSyncedAt?: string;
-  lastError?: string;
-  plugins: StorePlugin[];
-  shareSnippet?: string;
-}
 
 /** Mirrors PluginRegistryRow in src/core/plugins/plugin-catalog.ts. */
 interface RegistryRow {
@@ -90,7 +85,8 @@ interface RegistryRow {
   homepage?: string;
   docs?: string;
   source: {
-    kind: 'builtin' | 'git' | 'npm' | 'example' | 'linked';
+    /** `local`: a plain folder under the plugins dir that no source owns; nothing can update it. */
+    kind: 'builtin' | 'git' | 'npm' | 'example' | 'linked' | 'local';
     url?: string;
     ref?: string;
     spec?: string;
@@ -102,7 +98,11 @@ interface RegistryRow {
     sha?: string;
     remote?: string;
     dirty?: boolean;
+    /** linked only: `checkout` with the home directory folded to `~` by the server. */
+    checkoutDisplay?: string;
   };
+  /** linked only: the registry's checkout scan ran out of budget before this row. */
+  linkedScanSkipped?: boolean;
   installed: boolean;
   status: 'active' | 'disabled' | 'needs-config' | 'needs-dependency' | 'unsupported' | 'failed' | 'quarantined' | 'pending-restart' | 'available';
   state?: string;
@@ -128,7 +128,21 @@ interface RegistryResponse {
   availableCount: number;
   sourcesUnavailable?: boolean;
   cloud?: boolean;
+  /** The server's home directory, for folding checkout paths to `~` on the client. */
+  homeDir?: string;
 }
+
+/** Only rows from one of these origins have an update state; built-in rows never do. */
+const UPDATABLE_KINDS = new Set<RegistryRow['source']['kind']>(['linked', 'git', 'npm']);
+
+/**
+ * Rows that get an update chip: a linked checkout, a store source, or a plain folder the
+ * registry's linked scan never reached (it may be a link; only a check can tell, C30). A
+ * built-in and a plain `local` folder the scan DID reach have nothing to update from, so
+ * they get no chip at all: a chip whose click can never answer is a dead control.
+ */
+const isUpdatableRow = (row: RegistryRow): boolean =>
+  UPDATABLE_KINDS.has(row.source.kind) || row.linkedScanSkipped === true;
 
 interface Props {
   config: Config;
@@ -139,22 +153,6 @@ interface Props {
 function looksLikeGitUrl(value: string): boolean {
   return /^(https?:\/\/|ssh:\/\/|git@[\w.-]+:|file:\/\/)/.test(value);
 }
-
-/** Integrity hashes are long — show enough to compare, not enough to wrap. */
-function shortIntegrity(integrity: string): string {
-  const [algo, digest = ''] = integrity.split('-');
-  return digest.length > 12 ? `${algo}-${digest.slice(0, 12)}…` : integrity;
-}
-
-const STATUS_LABELS: Record<StorePlugin['status'], { label: string; className: string }> = {
-  loaded: { label: 'active', className: 'badge badge-done' },
-  'needs-config': { label: 'needs setup', className: 'badge badge-important' },
-  'needs-dependency': { label: 'needs another plugin', className: 'badge badge-important' },
-  unsupported: { label: 'needs newer Walnut', className: 'badge badge-none' },
-  duplicate: { label: 'shadowed', className: 'badge badge-none' },
-  error: { label: 'invalid', className: 'badge badge-immediate' },
-  'pending-restart': { label: 'restart to activate', className: 'badge badge-important' },
-};
 
 /** One word per state, and the same word everywhere it appears. */
 const ROW_STATUS: Record<RegistryRow['status'], { label: string; className: string }> = {
@@ -171,31 +169,58 @@ const ROW_STATUS: Record<RegistryRow['status'], { label: string; className: stri
 /** A state this build has no word for: say so, never assert "off" about it. */
 const UNKNOWN_ROW_STATUS = { label: 'unknown', className: 'badge badge-none' };
 
-/** Where an installed plugin came from, in the user's terms. */
-function originLabel(row: RegistryRow): string {
+/**
+ * Where an installed plugin came from, in the user's terms: `Built in`, `Linked`,
+ * `Local folder`, `git · host/owner/repo`, `npm · @acme/plugin`. Never a path, a slug or
+ * a bare URL: the Provenance flyout next to it carries those.
+ */
+function originLabel(row: RegistryRow, source: PluginSource | undefined): string {
   if (row.builtin) return 'Built in';
-  if (row.sourceSlug) return `${row.source.kind === 'npm' ? 'npm' : 'git'} · ${row.sourceSlug}`;
-  return 'Linked locally';
+  // What the plugin ADDS (`· sync`, `· adds Task sync`) is appended by the caller from the
+  // manifest; the label names only where the code comes from.
+  if (row.source.kind === 'linked') return 'Linked';
+  if (row.source.kind === 'local') return 'Local folder';
+  if (source) return sourceShortLabel(source);
+  return sourceShortLabel({ kind: row.source.kind === 'npm' ? 'npm' : 'git', url: row.source.url, spec: row.source.spec });
+}
+
+/** The state a source's update row would carry from the server's `updated` answer. */
+function updatedState(body: Record<string, unknown>): UpdateState {
+  const state = body.state as UpdateState | undefined;
+  if (state && typeof state.kind === 'string') return state;
+  return { kind: 'current' };
 }
 
 /**
- * The checkout a linked plugin actually runs from: `linked · <path> · <branch> @ <sha7>`.
- *
- * A detached HEAD is said in words rather than shown as a branch called `HEAD`, and a
- * dirty tree is called out because it is the one state that blocks Update.
+ * The state a 409 refusal proves: the server just saw the checkout dirty or diverged, so
+ * the chip may say so before the next check. Falls back to the body's own counts.
  */
-function linkedLine(source: RegistryRow['source']): string {
-  const branch = source.branch === 'HEAD' ? 'detached HEAD' : source.branch ?? 'unknown branch';
-  const sha = source.sha ? ` @ ${source.sha.slice(0, 7)}` : '';
-  return [
-    `linked · ${source.checkout ?? source.path ?? 'unknown checkout'} · ${branch}${sha}`,
-    ...(source.dirty ? ['uncommitted changes'] : []),
-  ].join(' · ');
+function refusedState(body: Record<string, unknown>): UpdateState | null {
+  const state = body.state as UpdateState | undefined;
+  if (state && (state.kind === 'dirty' || state.kind === 'diverged')) return state;
+  if (body.code === 'dirty') return { kind: 'dirty', behind: typeof body.behind === 'number' ? body.behind : null };
+  if (body.code === 'diverged') {
+    return {
+      kind: 'diverged',
+      behind: typeof body.behind === 'number' ? body.behind : 1,
+      ahead: typeof body.ahead === 'number' ? body.ahead : 1,
+    };
+  }
+  return null;
 }
 
-/** "1 commit" / "2 commits": the plural is not worth a library. */
-function commits(count: number): string {
-  return `${count} commit${count === 1 ? '' : 's'}`;
+/**
+ * The home directory the flyout folds to `~`. The registry may say it outright; failing
+ * that, a server-shortened `checkoutDisplay` (`~/code/x` for `/home/me/code/x`) implies it,
+ * which also survives a realpath'd checkout under a symlinked home.
+ */
+function homeDirFor(source: RegistryRow['source'], homeDir: string | undefined): string | undefined {
+  if (homeDir) return homeDir;
+  const full = source.checkout ?? source.path;
+  const display = source.checkoutDisplay;
+  if (!full || !display || !display.startsWith('~')) return undefined;
+  const tail = display.slice(1);
+  return full.endsWith(tail) ? full.slice(0, full.length - tail.length) : undefined;
 }
 
 export function PluginStoreSection({ config, onSave }: Props) {
@@ -212,9 +237,11 @@ export function PluginStoreSection({ config, onSave }: Props) {
   // Account links, by plugin id: which rows have one, and their latest state
   // (the row badge reads it; the panel under the row keeps it fresh).
   const [connections, setConnections] = useState<Record<string, ConnectionReport>>({});
-  // What Check/Update said about a linked checkout, per plugin id. Inline on the row
-  // because it answers a question asked on that row, and it is not a page-level notice.
-  const [linkedStatus, setLinkedStatus] = useState<Record<string, string>>({});
+  // What the last Update on a row said, keyed by row id (a plugin id, or `source-<slug>`
+  // for a Sources card). Inline because it answers a question asked on that row; it never
+  // expires on a timer (a collapsing line would move the row under the pointer), only the
+  // row's next action, Check now, or leaving the section replaces it.
+  const [feedback, setFeedback] = useState<Record<string, Feedback>>({});
   // Turning off a plugin others run on is refused (409) until the user has seen the list.
   const [cascadeAsk, setCascadeAsk] = useState<{ target: { id: string; name: string }; dependents: string[] } | null>(null);
   // What an install (or a blocked row's "Install…") turned out to need, and where to ask.
@@ -224,7 +251,17 @@ export function PluginStoreSection({ config, onSave }: Props) {
   >(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
 
+  // One read at a time: a second call while one is in flight shares it. StrictMode mounts the
+  // effect twice in development, which used to issue the registry GET twice in the same
+  // millisecond (N3-18); a mid-flight change still gets its own read through the coalescer.
+  const refreshInFlight = useRef<Promise<void> | null>(null);
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const run = refreshOnce().finally(() => { refreshInFlight.current = null; });
+    refreshInFlight.current = run;
+    return run;
+  }, []);
+  async function refreshOnce() {
     // Independent reads: a plugin-sources (or connections) failure must not blank the plugin list.
     const [registryRes, sourcesRes, connectionsRes] = await Promise.allSettled([
       fetch('/api/plugin-runtime/registry'),
@@ -243,7 +280,14 @@ export function PluginStoreSection({ config, onSave }: Props) {
         setConnections(Object.fromEntries((body.connections ?? []).map((c) => [c.pluginId, c])));
       } catch { /* keep the last map */ }
     }
-  }, []);
+  }
+
+  // Every "reload the lists" signal (an action here, the plugins-changed event, a WS
+  // runtime-changed per reloaded plugin) goes through ONE coalescer, so an Update costs one
+  // registry read and one sources read, not four of each (N2-10).
+  const coalesced = useRef<CoalescedRefresh | null>(null);
+  if (!coalesced.current) coalesced.current = coalesceRefresh(refresh);
+  const requestRefresh = useCallback(() => coalesced.current!.request(), []);
 
   const onConnectionReport = useCallback((report: ConnectionReport) => {
     setConnections((prev) => ({ ...prev, [report.pluginId]: report }));
@@ -253,18 +297,112 @@ export function PluginStoreSection({ config, onSave }: Props) {
     void refresh();
     // Refetch when a plugin config save activates a plugin, or when the store itself
     // changed something, so a status badge flips without a page reload.
-    const onChanged = () => void refresh();
+    const onChanged = () => void requestRefresh();
     window.addEventListener(PLUGINS_CHANGED_EVENT, onChanged);
-    return () => window.removeEventListener(PLUGINS_CHANGED_EVENT, onChanged);
-  }, [refresh]);
+    return () => {
+      window.removeEventListener(PLUGINS_CHANGED_EVENT, onChanged);
+      coalesced.current?.cancel();
+    };
+  }, [refresh, requestRefresh]);
 
   // A change made anywhere else — another tab, the author CLI, a soft reload after an
   // install — arrives as this event, so the list is never stale-but-confident.
-  useEvent('plugin:runtime-changed', () => { void refresh(); });
+  useEvent('plugin:runtime-changed', () => { void requestRefresh(); });
 
   /** A plugin's display name. Ids belong in URLs, not in sentences a person reads. */
   const nameOf = (pluginId: string) =>
     registry?.rows.find((row) => row.id === pluginId)?.name ?? pluginId;
+
+  // ── Update status ──
+  // One GET for every updatable row, fired when the section MOUNTS, in parallel with the
+  // registry read rather than serialised behind it (N3-18): it is cheap and cached, and the
+  // chips settle as soon as the rows render. The hook owns caching, polling, offline and
+  // re-check timing; built-in rows never take part.
+  const updatable = (registry?.rows ?? []).filter((row) => row.installed && isUpdatableRow(row));
+  const updates = usePluginUpdates();
+  // The header says "Checking for updates…" only when the first GET is genuinely slow
+  // (3 s); a normal load swaps the pending chips in without ever looking busy.
+  const [slowLoad, setSlowLoad] = useState(false);
+  useEffect(() => {
+    if (updates.loaded || updatable.length === 0) { setSlowLoad(false); return; }
+    const timer = setTimeout(() => setSlowLoad(true), 3_000);
+    return () => clearTimeout(timer);
+  }, [updates.loaded, updatable.length]);
+  /**
+   * A row that IS (or may be) a linked checkout. When the registry's scan ran out of budget
+   * it never looked at this row, so `source.kind` reads `local` with no slug;
+   * `linkedScanSkipped` is the only trace, and the linked check route is the one that can
+   * find out (C30).
+   */
+  const isLinkedRow = (row: RegistryRow): boolean => row.source.kind === 'linked' || row.linkedScanSkipped === true;
+
+  /**
+   * The update row shared by every plugin from one checkout, or one source's row. A linked
+   * row the server has not keyed yet (its checkout scan was skipped) gets a private key so
+   * a click on its chip can still check it; the real shared key takes over on the next GET.
+   */
+  const rowKeyFor = (row: RegistryRow): string | undefined =>
+    updates.rowKeyOf[row.id]
+      ?? (row.sourceSlug ? sourceRowKey(row.sourceSlug) : undefined)
+      ?? (isLinkedRow(row) ? `linked:${row.id}` : undefined);
+
+  /**
+   * `undefined` is the pending placeholder (first GET not back yet); a row the server is
+   * still checking shows Checking; once the batch is over, a row it has no entry for is
+   * `unchecked`, with the scan-budget note when the registry admits it skipped this checkout.
+   */
+  const stateFor = (row: RegistryRow, rowKey: string | undefined): UpdateState | undefined => resolveRowState({
+    known: rowKey ? updates.rows[rowKey]?.state : undefined,
+    loaded: updates.loaded,
+    refreshing: updates.refreshing,
+    scanSkipped: row.linkedScanSkipped === true,
+  });
+
+  /** Display names of the OTHER installed plugins served from the same checkout (N3-4). */
+  const siblingNamesOf = (row: RegistryRow, rowKey: string | undefined): string[] => {
+    if (!rowKey || !isLinkedRow(row)) return [];
+    return installed
+      .filter((other) => other.id !== row.id && isLinkedRow(other) && rowKeyFor(other) === rowKey)
+      .map((other) => other.name)
+      .sort((a, b) => a.localeCompare(b));
+  };
+
+  const setRowFeedback = (rowId: string, next: Feedback | null) => {
+    setFeedback((prev) => {
+      const copy = { ...prev };
+      if (next) copy[rowId] = next; else delete copy[rowId];
+      return copy;
+    });
+  };
+
+  /**
+   * Rows whose Update was pressed and is still running. Busy is per row KEY (siblings of
+   * one checkout share it), but the `Updating…` label belongs to the pressed row only.
+   */
+  const [pressedRows, setPressedRows] = useState<Record<string, true>>({});
+  const markPressed = (rowId: string, on: boolean) => {
+    setPressedRows((prev) => {
+      if (on ? prev[rowId] : !prev[rowId]) return prev;
+      const copy = { ...prev };
+      if (on) copy[rowId] = true; else delete copy[rowId];
+      return copy;
+    });
+  };
+
+  /** Header Check now: every row's feedback goes with it, the chips flip to Checking. */
+  const checkAll = () => {
+    setFeedback({});
+    void updates.checkAll();
+  };
+
+  /** Chip click: re-check ONE row (and its checkout siblings, which share the row key). */
+  const checkRow = (rowKey: string, row: RegistryRow, feedbackId: string) => {
+    setRowFeedback(feedbackId, null);
+    const target = isLinkedRow(row)
+      ? { kind: 'linked' as const, pluginId: row.id }
+      : { kind: 'source' as const, slug: row.sourceSlug ?? rowKey.replace(/^source:/, '') };
+    void updates.checkRow(rowKey, target);
+  };
 
   const handleAdd = async () => {
     const value = url.trim();
@@ -294,31 +432,11 @@ export function PluginStoreSection({ config, onSave }: Props) {
       setNotice(count > 0
         ? `Added${what}: found ${count} plugin${count === 1 ? '' : 's'}. New plugins are active now; use Configure on a row that needs setup.`
         : `Added${what}, but no plugins found (no manifest.json at the root or in top-level folders).`);
-      await refresh();
+      // The new row needs a chip without a click: one passive GET now (the server checks
+      // the new source in the background and the hook polls until it settles).
+      updates.reload();
       emitPluginsChanged();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleUpdate = async (slug: string) => {
-    setBusy(slug);
-    setError(null);
-    setNotice(null);
-    try {
-      const res = await fetch(`/api/plugin-sources/${slug}/update`, { method: 'POST' });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
-      if (body.restartRequired) setRestartNeeded(true);
-      // git reports a SHA, npm reports the resolved name@version.
-      const to = body.resolved ?? (body.toSha ?? '').slice(0, 7);
-      setNotice(body.updated
-        ? `Updated ${slug} to ${to}${body.restartRequired ? '. Restart Walnut to run the new code.' : '.'}`
-        : `${slug} is already up to date.`);
-      await refresh();
-      if (body.updated) emitPluginsChanged();
+      await requestRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -327,76 +445,84 @@ export function PluginStoreSection({ config, onSave }: Props) {
   };
 
   /**
-   * "Is there anything newer?" for a linked checkout. Fetches on the server and reports
-   * inline; it never touches the working copy, so it is safe to press at any time.
+   * Update (or Restore) one source. The result lands on the row that was pressed as a
+   * feedback line, and the shared update row flips so every chip for this slug (the
+   * Installed row and the Sources card) agrees. A restart is said ONCE, on the row: the
+   * badge already reads RESTART TO ACTIVATE, so there is no page banner for it.
    */
-  const handleLinkedCheck = async (row: RegistryRow) => {
-    setBusy(`linked:${row.id}`);
+  const handleUpdate = async (slug: string, kind: 'git' | 'npm', feedbackId: string) => {
+    const rowKey = sourceRowKey(slug);
+    updates.setBusy(rowKey, 'updating');
+    markPressed(feedbackId, true);
+    setRowFeedback(feedbackId, null);
     setError(null);
-    setLinkedStatus((prev) => ({ ...prev, [row.id]: 'Checking…' }));
     try {
-      const res = await fetch(`/api/plugin-runtime/${encodeURIComponent(row.id)}/linked/check`, { method: 'POST' });
-      const body = await res.json().catch(() => ({} as Record<string, unknown>));
-      if (!res.ok) throw new Error((body.error as string) ?? `HTTP ${res.status}`);
-      const behind = body.behind as number | null;
-      const ahead = body.ahead as number | null;
-      const reason = body.reason as string | undefined;
-      // `behind: null` means there was nothing to count against (no upstream, detached
-      // HEAD), so the server's reason is the answer. A count that came without a fetch
-      // is only as good as the last fetch, and is never presented as "up to date".
-      const count = behind === 0 ? 'up to date' : `${commits(behind ?? 0)} behind`;
-      const parts = behind === null
-        ? [reason ?? 'Could not compare with the remote.']
-        : body.fetched === false
-          ? [`${reason ?? 'Could not fetch'}, so this is as of the last fetch: ${count}`]
-          : [count.charAt(0).toUpperCase() + count.slice(1)];
-      if (ahead) parts.push(`${commits(ahead)} of your own not pushed`);
-      if (body.dirty) parts.push('uncommitted changes');
-      setLinkedStatus((prev) => ({ ...prev, [row.id]: parts.join(' · ') }));
+      const res = await fetch(`/api/plugin-sources/${encodeURIComponent(slug)}/update`, { method: 'POST' });
+      const body = await res.json().catch(() => ({} as Record<string, unknown>)) as Record<string, unknown>;
+      if (!res.ok) {
+        setRowFeedback(feedbackId, failureFeedback(res.status, body, `HTTP ${res.status}`));
+        return;
+      }
+      // Feedback, chip and button flip in ONE render (N2-6): the row state and the end of
+      // busy are set together as the POST resolves, and the list reload runs after.
+      setRowFeedback(feedbackId, successFeedback(kind, body, nameOf));
+      const checkedAt = typeof body.checkedAt === 'string' ? body.checkedAt : new Date().toISOString();
+      const previous: UpdateStatusRow | undefined = updates.rows[rowKey];
+      updates.applyRow(rowKey, { ...previous, state: updatedState(body), checkedAt }, checkedAt);
+      updates.setBusy(rowKey, null);
+      markPressed(feedbackId, false);
+      // A Restore brings a row back into the list; the rowKeyOf map has to learn it.
+      if (previous?.state.kind === 'missing') updates.reload();
+      if (body.updated) emitPluginsChanged();
+      await requestRefresh();
     } catch (err) {
-      setLinkedStatus((prev) => ({ ...prev, [row.id]: err instanceof Error ? err.message : String(err) }));
+      setRowFeedback(feedbackId, failureFeedback(0, null, err instanceof Error ? err.message : String(err)));
     } finally {
-      setBusy(null);
+      updates.setBusy(rowKey, null);
+      markPressed(feedbackId, false);
     }
   };
 
   /**
    * Fast-forward a linked checkout and reload what runs from it. Refused with 409 when the
-   * tree is dirty or the branch has diverged: both are shown as the server's sentence,
-   * because neither is an error to retry: both are something to resolve in the repo.
+   * tree is dirty or the branch has diverged: the chip takes that state (the server just
+   * saw it) and the row says why in one sentence; neither is an error to retry. Siblings
+   * from the same checkout share the row key, so their chips flip together, but only the
+   * pressed row gets the feedback line.
    */
-  const handleLinkedUpdate = async (row: RegistryRow) => {
-    setBusy(`linked:${row.id}`);
+  const handleLinkedUpdate = async (row: RegistryRow, rowKey: string) => {
+    updates.setBusy(rowKey, 'updating');
+    markPressed(row.id, true);
+    setRowFeedback(row.id, null);
     setError(null);
-    setLinkedStatus((prev) => ({ ...prev, [row.id]: 'Updating…' }));
+    const stamp = (body: Record<string, unknown>) =>
+      typeof body.checkedAt === 'string' ? body.checkedAt : new Date().toISOString();
     try {
       const res = await fetch(`/api/plugin-runtime/${encodeURIComponent(row.id)}/linked/update`, { method: 'POST' });
-      const body = await res.json().catch(() => ({} as Record<string, unknown>));
-      if (res.status === 409) {
-        setLinkedStatus((prev) => ({ ...prev, [row.id]: (body.error as string) ?? 'Could not update this checkout.' }));
+      const body = await res.json().catch(() => ({} as Record<string, unknown>)) as Record<string, unknown>;
+      if (!res.ok) {
+        setRowFeedback(row.id, failureFeedback(res.status, body, `HTTP ${res.status}`));
+        // Any other failure leaves the chip exactly as it was: nothing was changed.
+        const refused = res.status === 409 ? refusedState(body) : null;
+        if (refused) {
+          const checkedAt = stamp(body);
+          updates.applyRow(rowKey, { ...updates.rows[rowKey], state: refused, checkedAt }, checkedAt);
+        }
         return;
       }
-      if (!res.ok) throw new Error((body.error as string) ?? `HTTP ${res.status}`);
-      const to = String(body.sha ?? '').slice(0, 7);
-      const reloaded = (body.reloaded ?? []) as string[];
-      const failed = (body.failed ?? []) as Array<{ id: string; error: string }>;
-      setLinkedStatus((prev) => ({
-        ...prev,
-        [row.id]: [
-          body.updated === false
-            ? `Already up to date at ${to}.`
-            : reloaded.length > 0
-              ? `Updated to ${to}, reloaded ${reloaded.join(', ')}.`
-              : `Updated to ${to}. Nothing was running from it, so nothing was reloaded.`,
-          ...failed.map((entry) => `${entry.id} could not be reloaded: ${entry.error}`),
-        ].join(' '),
-      }));
-      await refresh();
-      if (reloaded.length > 0) emitPluginsChanged();
+      // One render for feedback, chip and button (N2-6); the reload of the lists follows.
+      setRowFeedback(row.id, successFeedback('linked', body, nameOf));
+      const checkedAt = stamp(body);
+      updates.applyRow(rowKey, { ...updates.rows[rowKey], state: updatedState(body), checkedAt }, checkedAt);
+      updates.setBusy(rowKey, null);
+      markPressed(row.id, false);
+      if (((body.reloaded ?? []) as string[]).length > 0) emitPluginsChanged();
+      await requestRefresh();
     } catch (err) {
-      setLinkedStatus((prev) => ({ ...prev, [row.id]: err instanceof Error ? err.message : String(err) }));
+      setRowFeedback(row.id, failureFeedback(0, null, err instanceof Error ? err.message : String(err)));
     } finally {
-      setBusy(null);
+      updates.setBusy(rowKey, null);
+      markPressed(row.id, false);
     }
   };
 
@@ -408,8 +534,9 @@ export function PluginStoreSection({ config, onSave }: Props) {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
       if (body.restartRequired) setRestartNeeded(true);
-      await refresh();
+      updates.reload();
       emitPluginsChanged();
+      await requestRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -454,8 +581,8 @@ export function PluginStoreSection({ config, onSave }: Props) {
         : cascade
           ? `${row.name} is off, and everything that runs on it is waiting for it. Turn it back on and they come back.`
           : `${row.name} is off. It stays off until you turn it back on.`);
-      await refresh();
       emitPluginsChanged();
+      await requestRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -489,8 +616,8 @@ export function PluginStoreSection({ config, onSave }: Props) {
           ? `${nameOf(entry.id)} has to be linked by hand: ${entry.command}`
           : `${nameOf(entry.id)} was skipped (${entry.error ?? entry.state ?? entry.reason}).`),
       ].join(' '));
-      await refresh();
       emitPluginsChanged();
+      await requestRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -512,8 +639,8 @@ export function PluginStoreSection({ config, onSave }: Props) {
       const res = await fetch(`/api/plugin-runtime/${encodeURIComponent(row.id)}/clear-quarantine`, { method: 'POST' });
       const body = await res.json().catch(() => ({} as { error?: string }));
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
-      await refresh();
       emitPluginsChanged();
+      await requestRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -540,6 +667,12 @@ export function PluginStoreSection({ config, onSave }: Props) {
 
   const rows = registry?.rows ?? [];
   const installed = rows.filter((row) => row.installed);
+  // Slugs whose Installed row owns the Update verb. A source whose files are gone
+  // (`missing`) is not owned: its row may still be loaded from memory, but the thing to
+  // restore is the source, so the Sources card carries Restore (N2-3).
+  const ownedSlugs = new Set(installed
+    .map((row) => row.sourceSlug)
+    .filter((slug): slug is string => Boolean(slug) && updates.rows[sourceRowKey(slug!)]?.state.kind !== 'missing'));
   const available = rows.filter((row) => !row.installed);
 
   return (
@@ -548,8 +681,10 @@ export function PluginStoreSection({ config, onSave }: Props) {
       title="Plugins"
       description="Everything installed on this machine, what each one adds, and a switch for each. Install more from a git repository or an npm package."
     >
+      {/* Only Remove needs a page-level word: no row survives to carry the badge. An
+          update says "restart" on its own row (feedback + RESTART TO ACTIVATE), once. */}
       {restartNeeded && (
-        <SettingsNotice kind="warn">Restart Walnut to apply updated plugin code.</SettingsNotice>
+        <SettingsNotice kind="warn">Restart Walnut to finish removing that plugin&apos;s code.</SettingsNotice>
       )}
       {error && <SettingsNotice kind="error">{error}</SettingsNotice>}
       {notice && <SettingsNotice kind="success">{notice}</SettingsNotice>}
@@ -559,10 +694,13 @@ export function PluginStoreSection({ config, onSave }: Props) {
       <BuildPluginCard />
 
       {/* ── Installed ── */}
-      <div className="plugin-store-group" data-testid="plugin-store-installed">
+      <div className="plugin-store-group plugin-store-installed" data-testid="plugin-store-installed">
         <div className="plugin-store-group-head">
           <h4 className="settings-subcard-title">Installed</h4>
           <span className="plugin-store-count">{installed.length}</span>
+          {/* Only when something here CAN be updated: a list of built-ins has no
+              "Not checked yet" to report. */}
+          {updatable.length > 0 && <UpdatesHead updates={updates} slowLoad={slowLoad} onCheckAll={checkAll} />}
         </div>
         {installed.length === 0 ? (
           <SettingsEmpty>
@@ -572,7 +710,9 @@ export function PluginStoreSection({ config, onSave }: Props) {
           <div className="settings-row-list">
             {installed.map((row) => {
               const status = ROW_STATUS[row.status] ?? UNKNOWN_ROW_STATUS;
-              const isOn = row.status === 'active';
+              // A plugin whose files an update replaced is STILL running its old code: the
+              // switch stays on next to the RESTART TO ACTIVATE badge (N7).
+              const isOn = row.status === 'active' || row.state === RESTART_PENDING_STATE;
               // Never auto-open. In a LIST, expanding an eight-field form on mount
               // buries every row under it — the row already says NEEDS SETUP, names
               // the missing field, and offers Configure.
@@ -582,6 +722,22 @@ export function PluginStoreSection({ config, onSave }: Props) {
               // the panel below, not as a second "on" badge in the title.
               const connectionBadge = connection && connection.state !== 'connected'
                 ? CONNECTION_BADGE[connection.state] : null;
+              // Update status: one shared row per checkout or source; built-ins have none.
+              const isUpdatable = isUpdatableRow(row);
+              const rowKey = isUpdatable ? rowKeyFor(row) : undefined;
+              const updateRow = rowKey ? updates.rows[rowKey] : undefined;
+              const updateState = isUpdatable ? stateFor(row, rowKey) : undefined;
+              const rowBusy = rowKey ? updates.busy[rowKey] : undefined;
+              const updating = rowBusy === 'updating';
+              // A replica reads the Mac's checkouts and cannot touch them: static chip, no verbs.
+              const cloudLinked = Boolean(registry?.cloud) && row.source.kind === 'linked';
+              const source = row.sourceSlug ? sources.find((entry) => entry.slug === row.sourceSlug) : undefined;
+              const sourceKind: 'git' | 'npm' = row.source.kind === 'npm' || source?.kind === 'npm' ? 'npm' : 'git';
+              // A source whose clone is gone (`missing`) is restored from its Sources card,
+              // which owns Restore; this row keeps the chip and reserves the button's space.
+              const buttonMode = isUpdatable && !cloudLinked && updateState?.kind !== 'missing'
+                ? updateButtonMode(updateState, rowBusy, Boolean(pressedRows[row.id]), { siblingNames: siblingNamesOf(row, rowKey) })
+                : { render: false as const };
               return (
                 <div key={row.id} className="plugin-store-entry">
                   <SettingsRow
@@ -594,6 +750,7 @@ export function PluginStoreSection({ config, onSave }: Props) {
                             type="button"
                             className="btn btn-secondary btn-sm"
                             data-testid={`plugin-configure-${row.id}`}
+                            disabled={updating}
                             onClick={() => setConfiguring(open ? null : row.id)}
                           >
                             {open ? 'Done' : 'Configure'}
@@ -609,49 +766,29 @@ export function PluginStoreSection({ config, onSave }: Props) {
                             Clear quarantine
                           </button>
                         )}
-                        {/* A dev link has no source slug to update, but it does have a
-                            checkout, so it gets the same two verbs, pointed at git. */}
-                        {row.source.kind === 'linked' && (
-                          <>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              data-testid={`linked-check-${row.id}`}
-                              disabled={busy === `linked:${row.id}`}
-                              onClick={() => void handleLinkedCheck(row)}
-                            >
-                              Check
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              data-testid={`linked-update-${row.id}`}
-                              disabled={busy === `linked:${row.id}`}
-                              onClick={() => void handleLinkedUpdate(row)}
-                            >
-                              Update
-                            </button>
-                          </>
+                        {/* The ONE update verb. Rendered only when there is something to do
+                            (available, missing), or disabled with its reason when a local
+                            state blocks it; an up-to-date row shows nothing here, the chip
+                            already answered. Remove and the switch stay live while it runs:
+                            updating is not deleting. */}
+                        {isUpdatable && !cloudLinked && (
+                          <PluginUpdateButton
+                            rowId={row.id}
+                            mode={buttonMode}
+                            onClick={() => (isLinkedRow(row) && rowKey
+                              ? void handleLinkedUpdate(row, rowKey)
+                              : void handleUpdate(row.sourceSlug!, sourceKind, row.id))}
+                          />
                         )}
                         {row.sourceSlug && (
-                          <>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              disabled={busy === row.sourceSlug}
-                              onClick={() => void handleUpdate(row.sourceSlug!)}
-                            >
-                              Update
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-danger-outline"
-                              disabled={busy === row.sourceSlug}
-                              onClick={() => void handleRemove(row.sourceSlug!)}
-                            >
-                              Remove
-                            </button>
-                          </>
+                          <button
+                            type="button"
+                            className="btn-danger-outline btn-sm"
+                            disabled={busy === row.sourceSlug}
+                            onClick={() => void handleRemove(row.sourceSlug!)}
+                          >
+                            Remove
+                          </button>
                         )}
                         {/* needs-config, needs-dependency, unsupported and quarantined are
                             refused by the plugin manager itself, so a switch would flip straight back.
@@ -677,24 +814,57 @@ export function PluginStoreSection({ config, onSave }: Props) {
                         </span>
                       )}
                       {row.version && <span className="plugin-store-version">v{row.version}</span>}
+                      {/* "Is it current?" sits on the title line next to "is it running?":
+                          the eye scans titles, and the two badges are styled apart (solid
+                          pill vs outline chip). Pending until the first GET answers. */}
+                      {isUpdatable && (
+                        <PluginUpdateChip
+                          rowId={row.id}
+                          state={updateState}
+                          checkedAt={updateRow?.checkedAt ?? null}
+                          busy={rowBusy}
+                          transient={updateRow?.transient}
+                          toRef={updateRow?.target?.toRef}
+                          offline={updates.offline}
+                          isStatic={cloudLinked}
+                          staticTitle={cloudLinked ? CLOUD_LINKED_NOTE : undefined}
+                          onCheck={rowKey && !cloudLinked ? () => checkRow(rowKey, row, row.id) : undefined}
+                        />
+                      )}
                     </strong>
                     {row.description && <span>{row.description}</span>}
-                    <span>
-                      {originLabel(row)}
+                    <span className="plugin-store-origin">
+                      {originLabel(row, source)}
                       {row.adds?.length ? ` · adds ${row.adds.join(', ')}` : ''}
                       {!row.adds?.length && row.capabilities?.length ? ` · ${row.capabilities.join(', ')}` : ''}
+                      {/* Where the code really runs from, one click away and never inline:
+                          a path, a branch and a sha are answers to a question rarely asked. */}
+                      {row.source.kind === 'linked' && (
+                        <PluginProvenanceFlyout
+                          rowId={row.id}
+                          kind="linked"
+                          rows={{
+                            checkout: row.source.checkout ?? row.source.path ?? '',
+                            branch: row.source.branch ?? 'HEAD',
+                            sha: row.source.sha ?? '',
+                            remote: row.source.remote,
+                          }}
+                          homeDir={homeDirFor(row.source, registry?.homeDir)}
+                          checkedAt={updateRow?.checkedAt ?? null}
+                        />
+                      )}
+                      {row.source.kind !== 'linked' && row.sourceSlug && (
+                        <PluginProvenanceFlyout
+                          rowId={row.id}
+                          kind="source"
+                          rows={sourceProvenance(row.sourceSlug, sourceKind, source, row.source)}
+                          checkedAt={updateRow?.checkedAt ?? null}
+                        />
+                      )}
                     </span>
-                    {/* Which checkout this row's code really comes from, and what Check
-                        and Update would act on. */}
-                    {row.source.kind === 'linked' && (
-                      <span className="text-xs text-muted" data-testid={`linked-info-${row.id}`}>
-                        {linkedLine(row.source)}
-                      </span>
-                    )}
-                    {linkedStatus[row.id] && (
-                      <span className="plugin-store-why" data-testid={`linked-status-${row.id}`}>
-                        {linkedStatus[row.id]}
-                      </span>
+                    {/* The result of the row's last action. Nothing here at rest: no fourth line. */}
+                    {isUpdatable && (
+                      <PluginUpdateFeedback rowId={row.id} feedback={feedback[row.id]} />
                     )}
                     {/* A blocked row says which plugin it waits for and offers the one
                         thing that can fix it; every other non-active row keeps the
@@ -914,73 +1084,20 @@ export function PluginStoreSection({ config, onSave }: Props) {
         </div>
       </SettingsSubCard>
 
-      {/* ── Sources ──
-          A source is not a plugin: one repo can carry several, and it is the source
-          that gets updated or removed. So it keeps its own list, below the plugins. */}
-      {sources.length > 0 && (
-        <div className="plugin-store-group" data-testid="plugin-store-sources">
-          <div className="plugin-store-group-head">
-            <h4 className="settings-subcard-title">Sources</h4>
-            <span className="plugin-store-count">{sources.length}</span>
-          </div>
-          {sources.map(source => (
-            <div key={`${source.kind ?? 'git'}:${source.slug}:${source.spec ?? source.url ?? ''}`} className="settings-collapsible" style={{ padding: '10px 12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <strong>{source.slug}</strong>
-                <span className="badge badge-none">{source.kind === 'npm' ? 'npm' : 'git'}</span>
-                <span className="text-xs text-muted">{source.spec ?? source.url}</span>
-                {source.resolved && <span className="text-xs text-muted">→ {source.resolved}</span>}
-                {source.integrity && (
-                  <span className="text-xs text-muted" title={source.integrity}>{shortIntegrity(source.integrity)}</span>
-                )}
-                {source.lastSha && <span className="text-xs text-muted">@ {source.lastSha.slice(0, 7)}</span>}
-                <span style={{ flex: 1 }} />
-                {source.shareSnippet && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => copy(source.shareSnippet!, source.slug)}
-                  >
-                    {copiedSlug === source.slug ? 'Copied ✓' : 'Copy share snippet'}
-                  </button>
-                )}
-                <button type="button" className="btn btn-sm" disabled={busy === source.slug} onClick={() => void handleUpdate(source.slug)}>
-                  {busy === source.slug ? 'Working…' : 'Update'}
-                </button>
-                <button type="button" className="btn-danger-outline" disabled={busy === source.slug} onClick={() => void handleRemove(source.slug)}>
-                  Remove
-                </button>
-              </div>
-              {source.lastError && (
-                <p className="text-xs" style={{ color: 'var(--priority-immediate)', marginTop: 4 }}>{source.lastError}</p>
-              )}
-              {!source.cloned ? (
-                <p className="text-xs" style={{ color: 'var(--priority-immediate)', marginTop: 6 }}>
-                  This source is not installed on this machine. Update to restore it or Remove to clear it.
-                </p>
-              ) : source.plugins.length === 0 ? (
-                <p className="text-xs text-muted" style={{ marginTop: 6 }}>
-                  No plugins found in this {source.kind === 'npm' ? 'package' : 'repo'}.
-                </p>
-              ) : (
-                <ul style={{ listStyle: 'none', padding: 0, margin: '6px 0 0' }}>
-                  {source.plugins.map(plugin => {
-                    const status = STATUS_LABELS[plugin.status] ?? STATUS_LABELS.error;
-                    return (
-                      <li key={plugin.dir} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
-                        <span>{plugin.name ?? plugin.id ?? 'unnamed'}</span>
-                        {plugin.version && <span className="text-xs text-muted">v{plugin.version}</span>}
-                        <span className={status.className}>{status.label}</span>
-                        {plugin.error && <span className="text-xs text-muted">{plugin.error}</span>}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      {/* ── Sources ── a source is not a plugin: one repo can carry several, and it is the
+          source that gets updated or removed, so it keeps its own list below the plugins. */}
+      <PluginSourcesGroup
+        sources={sources}
+        ownedSlugs={ownedSlugs}
+        updates={updates}
+        busy={busy}
+        copiedKey={copiedSlug}
+        feedback={feedback}
+        onCopy={copy}
+        onUpdate={(slug, kind, feedbackId) => void handleUpdate(slug, kind, feedbackId)}
+        onRemove={(slug) => void handleRemove(slug)}
+        setRowFeedback={setRowFeedback}
+      />
 
       {registry?.sourcesUnavailable && !registry.cloud && (
         <p className="text-xs text-muted">

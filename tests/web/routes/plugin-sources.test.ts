@@ -29,6 +29,8 @@ vi.mock('../../../src/core/integration-loader.js', () => ({
   getPluginLifecycleRecords: vi.fn(() => []),
 }))
 
+import { UpdateStatusCache } from '../../../src/core/plugins/update-status-cache.js'
+import { sourceRowKey } from '../../../src/core/plugins/update-status.js'
 import { createPluginSourcesRouter, type PluginSourcesRouterDeps } from '../../../src/web/routes/plugin-sources.js'
 
 function app(deps: PluginSourcesRouterDeps = {}, softReload = async () => undefined) {
@@ -38,7 +40,7 @@ function app(deps: PluginSourcesRouterDeps = {}, softReload = async () => undefi
   return instance
 }
 
-function source(slug = 'demo') {
+function source(slug = 'demo', overrides: Record<string, unknown> = {}) {
   return {
     slug,
     kind: 'git' as const,
@@ -46,6 +48,7 @@ function source(slug = 'demo') {
     enabled: true,
     cloned: true,
     plugins: [],
+    ...overrides,
   }
 }
 
@@ -429,5 +432,165 @@ describe('Two-phase dependency install', () => {
       .post('/api/plugin-sources/orphan/dependencies')
       .expect(404, { error: 'source not found' })
     expect(sourceMocks.addSource).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The check and update actions feed the update-status cache the store's chips read from,
+ * and both are bounded. Old response fields stay exactly as they were; `state` and
+ * `checkedAt` ride alongside. The cache has fake ops: these routes only write it.
+ */
+describe('Plugin source check/update and the update-status cache', () => {
+  function cacheFor() {
+    return new UpdateStatusCache({
+      filePath: path.join(os.tmpdir(), `plugin-sources-cache-${process.pid}-${Math.random().toString(36).slice(2)}.json`),
+      ops: {
+        checkLinked: vi.fn(async () => ({ behind: 0, ahead: 0, dirty: false, sha: 'a'.repeat(40), branch: 'main', fetched: true })),
+        checkSource: vi.fn(async () => ({ behind: 0, updateAvailable: false })),
+      },
+    })
+  }
+
+  it('check answers the old fields plus the derived state, and writes the cache', async () => {
+    const cache = cacheFor()
+    sourceMocks.listSources.mockResolvedValue([source('acme-plugins')])
+    sourceMocks.checkSource.mockResolvedValue({ behind: 3, updateAvailable: true })
+
+    const response = await request(app({ cache })).post('/api/plugin-sources/acme-plugins/check').expect(200)
+
+    expect(response.body).toMatchObject({ behind: 3, updateAvailable: true })
+    expect(response.body.state).toEqual({ kind: 'available', behind: 3 })
+    expect(Date.parse(response.body.checkedAt)).not.toBeNaN()
+    expect(cache.entry(sourceRowKey('acme-plugins'))?.state).toEqual({ kind: 'available', behind: 3 })
+    // The fetch ran unattended: no terminal prompt, no askpass window.
+    const [, opts] = sourceMocks.checkSource.mock.calls[0] as [string, { env?: NodeJS.ProcessEnv }]
+    expect(opts.env?.GIT_TERMINAL_PROMPT).toBe('0')
+    expect(opts.env?.GIT_ASKPASS).toBe('/usr/bin/true')
+  })
+
+  it('check without a cache answers exactly what it always did', async () => {
+    sourceMocks.listSources.mockResolvedValue([source('acme-plugins')])
+    sourceMocks.checkSource.mockResolvedValue({ behind: 0, updateAvailable: false })
+
+    const response = await request(app()).post('/api/plugin-sources/acme-plugins/check').expect(200)
+
+    expect(response.body).toEqual({ behind: 0, updateAvailable: false })
+  })
+
+  it('check on a source that is not cloned here derives missing, never unreachable (C47)', async () => {
+    const cache = cacheFor()
+    sourceMocks.listSources.mockResolvedValue([source('acme-plugins', { cloned: false })])
+    sourceMocks.checkSource.mockResolvedValue({ behind: 0, updateAvailable: false, error: 'fatal: not a git repository' })
+
+    const response = await request(app({ cache })).post('/api/plugin-sources/acme-plugins/check').expect(200)
+
+    expect(response.body.state).toEqual({ kind: 'missing' })
+  })
+
+  it('npm check carries the version an update would move to', async () => {
+    const cache = cacheFor()
+    sourceMocks.listSources.mockResolvedValue([source('npm-sample', { kind: 'npm', url: undefined, spec: '@acme/plugin', resolved: '@acme/plugin@1.2.0' })])
+    sourceMocks.checkSource.mockResolvedValue({ behind: 1, updateAvailable: true, resolved: '@acme/plugin@1.3.0' })
+
+    const response = await request(app({ cache })).post('/api/plugin-sources/npm-sample/check').expect(200)
+
+    expect(response.body).toMatchObject({ behind: 1, updateAvailable: true, resolved: '@acme/plugin@1.3.0' })
+    expect(response.body.state).toEqual({ kind: 'available', toVersion: '1.3.0' })
+  })
+
+  it('update marks the row current at the sha that landed and keeps restartRequired', async () => {
+    const cache = cacheFor()
+    sourceMocks.listSources.mockResolvedValue([source('acme-plugins')])
+    sourceMocks.updateSource.mockResolvedValue({ updated: true, fromSha: 'a'.repeat(40), toSha: 'b'.repeat(40) })
+    const softReload = vi.fn(async () => undefined)
+
+    const response = await request(app({ cache }, softReload)).post('/api/plugin-sources/acme-plugins/update').expect(200)
+
+    expect(response.body).toMatchObject({ updated: true, fromSha: 'a'.repeat(40), toSha: 'b'.repeat(40), restartRequired: false, state: { kind: 'current' } })
+    expect(Date.parse(response.body.checkedAt)).not.toBeNaN()
+    expect(cache.entry(sourceRowKey('acme-plugins'))?.state).toEqual({ kind: 'current' })
+    expect(softReload).toHaveBeenCalledTimes(1)
+  })
+
+  it('a restored clone (was cloned:false) is current afterwards, so Restore turns into Up to date', async () => {
+    const cache = cacheFor()
+    sourceMocks.listSources.mockResolvedValue([source('acme-plugins', { cloned: false, plugins: [] })])
+    sourceMocks.checkSource.mockResolvedValue({ behind: 0, updateAvailable: false, error: 'ENOENT: no such file or directory' })
+    await request(app({ cache })).post('/api/plugin-sources/acme-plugins/check').expect(200)
+    expect(cache.entry(sourceRowKey('acme-plugins'))?.state).toEqual({ kind: 'missing' })
+    sourceMocks.updateSource.mockResolvedValue({ updated: true, toSha: 'c'.repeat(40) })
+
+    const response = await request(app({ cache })).post('/api/plugin-sources/acme-plugins/update').expect(200)
+
+    expect(response.body.state).toEqual({ kind: 'current' })
+    expect(cache.entry(sourceRowKey('acme-plugins'))?.state).toEqual({ kind: 'current' })
+  })
+
+  it('a failed update answers 502 with one scrubbed sentence, the cause and the raw text as detail (N1), leaving the row as it was', async () => {
+    const cache = cacheFor()
+    sourceMocks.listSources.mockResolvedValue([source('acme-plugins')])
+    sourceMocks.updateSource.mockResolvedValue({ updated: false, error: 'fatal: Not possible to fast-forward, aborting.' })
+
+    const response = await request(app({ cache })).post('/api/plugin-sources/acme-plugins/update').expect(502)
+
+    // The row reports it; the request logger must not add an incident card (N3-1).
+    expect(response.headers['x-walnut-handled-failure']).toBe('1')
+    expect(response.body).toEqual({
+      updated: false,
+      error: 'not possible to fast-forward, aborting.',
+      cause: 'unknown',
+      detail: 'fatal: Not possible to fast-forward, aborting.',
+      restartRequired: false,
+    })
+    expect(cache.entry(sourceRowKey('acme-plugins'))).toBeUndefined()
+
+    // A remote that is gone: the sentence names no path and no host; Details keeps the raw text (credentials masked).
+    sourceMocks.updateSource.mockResolvedValue({ updated: false, error: "git exited 1: fatal: 'https://someone:tok@example.invalid/acme/plugins.git' does not appear to be a git repository\nfatal: Could not read from remote repository." })
+    const gone = await request(app({ cache })).post('/api/plugin-sources/acme-plugins/update').expect(502)
+    expect(gone.body.error).toBe("'the remote' does not appear to be a git repository.")
+    expect(gone.body.error).not.toMatch(/\/|@|fatal|git exited/)
+    expect(gone.body.detail).toContain('***@example.invalid')
+    expect(gone.body.detail).not.toContain('tok@')
+    sourceMocks.updateSource.mockResolvedValue({ updated: false, error: 'ssh: Could not resolve hostname example.invalid: nodename nor servname provided' })
+    const offline = await request(app({ cache })).post('/api/plugin-sources/acme-plugins/update').expect(502)
+    expect(offline.body).toMatchObject({ error: 'the remote could not be reached.', cause: 'network' })
+  })
+
+  it('an update that replaced loaded code marks those plugins pending-restart in the sources list (N7)', async () => {
+    const { registry } = await import('../../../src/core/integration-registry.js')
+    const { clearRestartPendingForTesting, isRestartPending } = await import('../../../src/core/plugins/restart-pending.js')
+    clearRestartPendingForTesting()
+    ;(registry.has as ReturnType<typeof vi.fn>).mockImplementation((id: string) => id === 'acme-tracker')
+    const loaded = source('acme-plugins', { plugins: [{ dir: '/x/acme-plugins/acme-tracker', id: 'acme-tracker', name: 'Acme Tracker', version: '1.0.0' }] })
+    sourceMocks.listSources.mockResolvedValue([loaded])
+    sourceMocks.updateSource.mockResolvedValue({ updated: true, fromSha: 'a'.repeat(40), toSha: 'b'.repeat(40) })
+    try {
+      const before = await request(app()).get('/api/plugin-sources').expect(200)
+      expect(before.body[0].plugins[0].status).toBe('loaded')
+
+      const updated = await request(app()).post('/api/plugin-sources/acme-plugins/update').expect(200)
+      expect(updated.body.restartRequired).toBe(true)
+      expect(isRestartPending('acme-tracker')).toBe(true)
+
+      const after = await request(app()).get('/api/plugin-sources').expect(200)
+      expect(after.body[0].plugins[0].status).toBe('pending-restart')
+    } finally {
+      clearRestartPendingForTesting()
+      ;(registry.has as ReturnType<typeof vi.fn>).mockImplementation(() => false)
+    }
+  })
+
+  it('update answers 504 past its deadline and does not mark the row current', async () => {
+    const cache = cacheFor()
+    sourceMocks.listSources.mockResolvedValue([source('acme-plugins')])
+    sourceMocks.updateSource.mockReturnValue(new Promise(() => undefined))
+    const softReload = vi.fn(async () => undefined)
+
+    const response = await request(app({ cache, updateDeadlineMs: 50 }, softReload)).post('/api/plugin-sources/acme-plugins/update').expect(504)
+
+    expect(response.body).toEqual({ error: 'Update timed out after 60 s. The checkout was not changed unless git finished on its own; check again.' })
+    expect(response.headers['x-walnut-handled-failure']).toBe('1')
+    expect(cache.entry(sourceRowKey('acme-plugins'))).toBeUndefined()
+    expect(softReload).not.toHaveBeenCalled()
   })
 })
