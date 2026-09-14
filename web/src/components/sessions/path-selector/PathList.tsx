@@ -45,6 +45,8 @@ interface Props {
   loadError: string | null;
   /** Live listing state per host — drives empty states and host-down rows. */
   hostStates: Map<string, HostLiveState>;
+  /** Host alias → human label for the per-host rows. */
+  hostLabels?: Map<string, string>;
   /** True when the input is path-like (live listing applies). */
   pathMode: boolean;
   /** Label of the host whose live section is empty/missing (single-host mode). */
@@ -55,32 +57,50 @@ interface Props {
   onItemClick: (item: RankedItem) => void;
   onItemHover: (flatIdx: number) => void;
   onCreate: () => void;
+  /** Retry a remote host whose connect failed. */
+  onRetryHost?: (hostKey: string) => void;
 }
+
+type LiveNote =
+  | { key: string; kind: 'missing' | 'empty'; label: string }
+  | { key: string; kind: 'connecting'; label: string; detail: string }
+  | { key: string; kind: 'down'; label: string; message: string; hint?: string };
 
 export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   {
-    sections, selectedIdx, expandSelected, loading, loadError, hostStates, pathMode,
-    activeHostLabel, createOption, emptyHint, onItemClick, onItemHover, onCreate,
+    sections, selectedIdx, expandSelected, loading, loadError, hostStates, hostLabels, pathMode,
+    activeHostLabel, createOption, emptyHint, onItemClick, onItemHover, onCreate, onRetryHost,
   },
   ref,
 ) {
   const totalItems = sections.reduce((n, s) => n + s.items.length, 0);
 
-  // Per-host live diagnostics (path mode): missing dir, empty dir, host down.
-  const liveNotes: { key: string; kind: 'missing' | 'empty' | 'down'; label: string }[] = [];
+  // Per-host live diagnostics (path mode): missing dir, empty dir, host still
+  // connecting (with the connect step), host down (with cause + next step).
+  const liveNotes: LiveNote[] = [];
   if (pathMode) {
     for (const [hostKey, state] of hostStates) {
-      const label = hostKey === '__local__' ? 'Local' : hostKey;
-      if (state.status === 'error') liveNotes.push({ key: hostKey, kind: 'down', label });
-      else if (state.status === 'done' && !state.exists) liveNotes.push({ key: hostKey, kind: 'missing', label });
+      const label = hostKey === '__local__' ? 'Local' : (hostLabels?.get(hostKey) ?? hostKey);
+      if (state.status === 'error') {
+        liveNotes.push({
+          key: hostKey, kind: 'down', label,
+          message: state.hostError?.message ?? state.error ?? 'not responding',
+          hint: state.hostError?.hint,
+        });
+      } else if (state.status === 'loading' && state.pending) {
+        liveNotes.push({ key: hostKey, kind: 'connecting', label, detail: state.pending.label });
+      } else if (state.status === 'done' && !state.exists) liveNotes.push({ key: hostKey, kind: 'missing', label });
       else if (state.status === 'done' && state.exists && state.dirs.length === 0) liveNotes.push({ key: hostKey, kind: 'empty', label });
     }
   }
+  // A host-specific "connecting…" row already says what is loading; the generic
+  // line on top of it would read as two spinners for one wait.
+  const showGenericLoading = loading && totalItems === 0 && !liveNotes.some(n => n.kind === 'connecting');
 
   let flatIdx = -1;
   return (
     <div className="sps-path-list" ref={ref}>
-      {loading && totalItems === 0 && <div className="sps-empty">Loading paths...</div>}
+      {showGenericLoading && <div className="sps-empty">Loading paths...</div>}
       {/* A stale history error next to a live "Loading paths..." reads as a
           contradiction (both rendered in the 2026-07-19 freeze incident) —
           suppress the error while a load is in flight. */}
@@ -157,13 +177,42 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
       ))}
 
       {/* Explicit live empty states — never let history matches impersonate live results */}
-      {liveNotes.map(note => (
-        <div key={note.key} className={note.kind === 'down' ? 'sps-host-down' : 'sps-live-note'}>
-          {note.kind === 'down' && `${note.label} not responding`}
-          {note.kind === 'missing' && `Directory does not exist on ${note.label}`}
-          {note.kind === 'empty' && `No subdirectories on ${note.label}`}
-        </div>
-      ))}
+      {liveNotes.map(note => {
+        if (note.kind === 'connecting') {
+          return (
+            <div key={note.key} className="sps-host-connecting" role="status" data-host={note.key}>
+              <span className="sps-host-spinner" aria-hidden="true" />
+              <span>{note.detail}…</span>
+            </div>
+          );
+        }
+        if (note.kind === 'down') {
+          return (
+            <div key={note.key} className="sps-host-down" role="alert" data-host={note.key}>
+              <div className="sps-host-down-head">
+                <span className="sps-host-down-title">Could not connect to {note.label}</span>
+                {onRetryHost && (
+                  <button
+                    type="button"
+                    className="sps-host-retry"
+                    onClick={(e) => { e.stopPropagation(); onRetryHost(note.key); }}
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+              <div className="sps-host-down-message" title={note.message}>{note.message}</div>
+              {note.hint && <div className="sps-host-down-hint">{note.hint}</div>}
+            </div>
+          );
+        }
+        return (
+          <div key={note.key} className="sps-live-note">
+            {note.kind === 'missing' && `Directory does not exist on ${note.label}`}
+            {note.kind === 'empty' && `No subdirectories on ${note.label}`}
+          </div>
+        );
+      })}
 
       {createOption && (
         <div className="sps-create-row" onClick={onCreate}>

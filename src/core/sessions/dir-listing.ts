@@ -25,6 +25,15 @@ export const DIR_LIST_MAX_ENTRIES = 500
  *  browser's 6 connections) for tens of seconds. */
 export const REMOTE_BFS_BUDGET_MS = 8_000
 
+/** Same idea for the local walk, which runs on the web server's one event loop
+ *  and answers a request the browser holds a connection open for. */
+export const LOCAL_BFS_BUDGET_MS = 4_000
+/** A symlink into an unresponsive mount (an autofs home, a NAS off-VPN) makes
+ *  stat() block for the mount's own timeout, tens of seconds. The link is
+ *  dropped from the listing when it does not answer in this long. The stat
+ *  keeps running in libuv's threadpool, but the request no longer waits. */
+export const SYMLINK_STAT_TIMEOUT_MS = 1_500
+
 export interface DirListing {
   dirs: string[]
   parent: string
@@ -46,27 +55,48 @@ export async function listLocalDirs(dir: string, depth: number): Promise<DirList
   }
 
   const entries: string[] = []
+  const deadline = Date.now() + LOCAL_BFS_BUDGET_MS
   const walk = async (d: string, currentDepth: number) => {
-    if (currentDepth > depth || entries.length >= DIR_LIST_MAX_ENTRIES) return
+    if (currentDepth > depth || entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) return
     let dirents
     try {
       dirents = await fsp.readdir(d, { withFileTypes: true })
     } catch {
       return // unreadable — skip subtree
     }
+    // A symlink to a directory is a directory to the user (~/work → a volume,
+    // /tmp → /private/tmp on macOS): list it, but never walk through it — a
+    // link cycle would otherwise eat the whole entry budget. readdir has lstat
+    // semantics, so links need one stat() each; they run together, bounded.
+    const linkIsDir = new Map<string, boolean>()
+    await Promise.all(dirents.filter(e => e.isSymbolicLink()).map(async e => {
+      linkIsDir.set(e.name, await symlinkPointsToDir(path.join(d, e.name)))
+    }))
     for (const dirent of dirents) {
-      if (entries.length >= DIR_LIST_MAX_ENTRIES) break
-      if (!dirent.isDirectory()) continue
+      if (entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) break
+      const full = path.join(d, dirent.name)
+      const isLink = dirent.isSymbolicLink()
+      if (isLink ? !linkIsDir.get(dirent.name) : !dirent.isDirectory()) continue
       const hidden = dirent.name.startsWith('.')
       // Hidden dirs: emit at depth 1 only, never recurse into them.
       if (hidden && currentDepth > 1) continue
-      const full = path.join(d, dirent.name)
       entries.push(full)
-      if (!hidden && currentDepth < depth) await walk(full, currentDepth + 1)
+      if (!hidden && !isLink && currentDepth < depth) await walk(full, currentDepth + 1)
     }
   }
   await walk(dir, 1)
   return { dirs: entries, parent: dir, exists: true }
+}
+
+/** false for a dangling link, a link to a file, or a link that does not answer in time. */
+async function symlinkPointsToDir(full: string): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), SYMLINK_STAT_TIMEOUT_MS) })
+  try {
+    return await Promise.race([fsp.stat(full).then(st => st.isDirectory(), () => false), timeout])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** Minimal shape of a daemon connection's send() we depend on (keeps this module testable). */
@@ -99,15 +129,18 @@ export async function listRemoteDirs(conn: DaemonLsConnection, dir: string, dept
   }
 
   const queue: { dirPath: string; currentDepth: number }[] = []
-  const rootEntries = rootResult.entries as Array<{ name: string; type: string }>
+  // `symlink` is set by daemons that follow links (a linked dir is `type: 'dir'`);
+  // older daemons report a symlink as 'other' and never set it. A linked dir is
+  // listed like hidden dirs are: shown, never walked into (link loops).
+  const rootEntries = rootResult.entries as Array<{ name: string; type: string; symlink?: boolean }>
   for (const e of rootEntries) {
     if (e.type !== 'dir') continue
     const fullPath = resolvedDir.endsWith('/')
       ? `${resolvedDir}${e.name}`
       : `${resolvedDir}/${e.name}`
     entries.push(fullPath)
-    // Hidden dirs surface at depth 1 but are never walked into.
-    if (depth > 1 && !e.name.startsWith('.')) {
+    // Hidden dirs and symlinked dirs surface at depth 1 but are never walked into.
+    if (depth > 1 && !e.name.startsWith('.') && !e.symlink) {
       queue.push({ dirPath: fullPath, currentDepth: 1 })
     }
   }
@@ -119,13 +152,13 @@ export async function listRemoteDirs(conn: DaemonLsConnection, dir: string, dept
       try {
         const result = await conn.send('fs.ls', { path: item.dirPath })
         if (!result.ok) continue
-        const lsEntries = result.entries as Array<{ name: string; type: string }>
+        const lsEntries = result.entries as Array<{ name: string; type: string; symlink?: boolean }>
         for (const e of lsEntries) {
           if (entries.length >= DIR_LIST_MAX_ENTRIES) break
           if (e.type !== 'dir' || e.name.startsWith('.')) continue
           const fullPath = `${item.dirPath}/${e.name}`
           entries.push(fullPath)
-          if (item.currentDepth + 1 < depth) {
+          if (item.currentDepth + 1 < depth && !e.symlink) {
             queue.push({ dirPath: fullPath, currentDepth: item.currentDepth + 1 })
           }
         }

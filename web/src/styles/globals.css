@@ -17678,13 +17678,71 @@ a.task-kebab-info:hover {
   font-style: italic;
 }
 
-/* Host unreachable — subtle, never a modal */
+/* Host still connecting (first connect installs the daemon): say which step. */
+.sps-host-connecting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.sps-host-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+/* Host unreachable — readable, with the cause and a next step; never a modal.
+   (The old 0.55-opacity italic line was reported as "no error shown".) */
 .sps-host-down {
-  padding: 6px 12px;
+  margin: 4px 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: 8px;
+}
+.sps-host-down-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sps-host-down-title {
+  font-weight: 600;
+}
+.sps-host-retry {
+  flex: none;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.sps-host-retry:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.sps-host-down-message {
+  margin-top: 3px;
+  font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--fg-muted);
-  opacity: 0.55;
-  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sps-host-down-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
 }
 
 /* "Create <path> & start session" row for nonexistent leaf dirs */

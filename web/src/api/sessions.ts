@@ -723,21 +723,59 @@ export async function fetchAskWalnutLaunch(): Promise<{ model?: string; effort?:
  */
 export function peekWorkingDirs(): WorkingDirsResult | null { return _workingDirsCache; }
 
+export interface DirListingPending {
+  phase: string;
+  /** Sentence for the UI ("Installing the session daemon runtime on X…"). */
+  label: string;
+  elapsedMs: number;
+}
+
+export interface DirListingHostError {
+  message: string;
+  kind: string;
+  /** What to do next. */
+  hint: string;
+}
+
 export interface DirListing {
   dirs: string[];
   parent: string;
   /** false = the listed directory itself doesn't exist (still HTTP 200). */
   exists: boolean;
+  /** Remote host still connecting — `dirs` is not known yet, poll again. */
+  pending?: DirListingPending;
+  /** Remote host connect failed — `dirs` is not known. */
+  hostError?: DirListingHostError;
 }
 
-export async function listDirs(prefix: string, host?: string | null, opts?: { signal?: AbortSignal }): Promise<DirListing> {
+/** How long a remote list-dirs waits for a connecting host before answering `pending`. */
+export const LIST_DIRS_PENDING_WAIT_MS = 3000;
+
+export interface ListDirsOpts {
+  signal?: AbortSignal;
+  /** Server-side wait for a still-connecting host before it answers `pending` (default 3s). */
+  waitMs?: number;
+}
+
+export async function listDirs(prefix: string, host?: string | null, opts?: ListDirsOpts): Promise<DirListing> {
   const params = new URLSearchParams({ prefix });
-  if (host) params.set('host', host);
-  const res = await apiGet<{ dirs: string[]; parent: string; exists?: boolean }>(
-    `/api/sessions/list-dirs?${params}`, undefined, opts,
+  if (host) {
+    params.set('host', host);
+    // A first connect to a fresh host installs the daemon (can take a minute):
+    // ask for progress after a short wait instead of a 15s hang + 400.
+    params.set('pending', '1');
+    params.set('wait', String(opts?.waitMs ?? LIST_DIRS_PENDING_WAIT_MS));
+  }
+  const res = await apiGet<{ dirs: string[]; parent: string; exists?: boolean; pending?: DirListingPending; hostError?: DirListingHostError }>(
+    `/api/sessions/list-dirs?${params}`, undefined, { signal: opts?.signal },
   );
   // Tolerate old servers that don't send `exists` (mixed-version window)
-  return { dirs: res.dirs, parent: res.parent, exists: res.exists ?? true };
+  return { dirs: res.dirs, parent: res.parent, exists: res.exists ?? true, pending: res.pending, hostError: res.hostError };
+}
+
+/** Deliberate human retry of a failed remote host: clears the server's connect failure cache. */
+export async function retryHostConnect(host: string): Promise<void> {
+  await apiPost<{ ok: true }>('/api/sessions/host-retry', { host });
 }
 
 // Client-side listing cache — survives popover close/reopen (module-level, 30s TTL).
@@ -750,7 +788,7 @@ function liveDirCacheKey(host: string | null | undefined, parent: string): strin
 }
 
 /** Cached listDirs. Serves from cache when the request's parent dir was fetched <30s ago. */
-export async function listDirsCached(prefix: string, host?: string | null, opts?: { signal?: AbortSignal }): Promise<DirListing> {
+export async function listDirsCached(prefix: string, host?: string | null, opts?: ListDirsOpts): Promise<DirListing> {
   // Request-side key uses the raw parent-of-prefix; on response we also store
   // under the server-resolved parent so `~`-prefixed requests hit next time.
   const rawParent = prefix.endsWith('/') ? prefix : prefix.slice(0, prefix.lastIndexOf('/') + 1);
@@ -758,6 +796,9 @@ export async function listDirsCached(prefix: string, host?: string | null, opts?
   const hit = _liveDirCache.get(key);
   if (hit && Date.now() - hit.ts < LIVE_DIR_CACHE_TTL) return hit.listing;
   const listing = await listDirs(prefix, host, opts);
+  // A "still connecting" / "connect failed" answer is a moment in time, not a
+  // listing: caching it would freeze the picker on that state for 30s.
+  if (listing.pending || listing.hostError) return listing;
   const entry = { listing, ts: Date.now() };
   _liveDirCache.set(key, entry);
   const resolvedKey = liveDirCacheKey(host, listing.parent.endsWith('/') ? listing.parent : listing.parent + '/');

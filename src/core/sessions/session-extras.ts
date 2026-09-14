@@ -23,6 +23,7 @@ import { log } from '../../logging/index.js';
 import type { SessionEffort, SessionEngine, SessionMode } from '../types.js';
 import { VALID_SESSION_EFFORT_IDS, SESSION_MODE_LABELS } from '../types.js';
 import { listLocalDirs, listRemoteDirs } from './dir-listing.js';
+import { classifyHostConnectError, describeConnectPhase, describeListingError } from './host-connect-hint.js';
 import { engineCaps } from '../agents/engine-registry.js';
 
 // ── Provider controls ────────────────────────────────────────────────────────
@@ -550,16 +551,58 @@ export async function deleteSessionQueuedMessage(sessionId: string, messageId: s
 
 // ── Host directory listing (path picker auto-complete) ──────────────────────
 
-/** In-memory cache for SSH directory listings (avoid re-SSHing for 60s). */
-const dirCache = new Map<string, { dirs: string[]; exists: boolean; ts: number }>();
+/** In-memory cache for SSH directory listings (avoid re-SSHing for 60s).
+ *  `parent` is the daemon-RESOLVED dir (~ expanded): the client filters `dirs`
+ *  by `parent`, so a cached hit that echoed the raw `~/` back made every dir
+ *  fall out and the picker showed "No matches" only when the cache was warm. */
+const dirCache = new Map<string, { dirs: string[]; parent: string; exists: boolean; ts: number }>();
 const DIR_CACHE_TTL = 60_000;
 const LIST_DIRS_TIMEOUT_MS = 15_000;
+/** Default wait before a `pending`-mode caller gets a progress answer instead of dirs. */
+const LIST_DIRS_PENDING_WAIT_MS = 3_000;
+const STILL_CONNECTING = Symbol('still-connecting');
+
+export interface ListDirsPending {
+  phase: string;
+  /** Sentence for the UI ("Installing the session daemon runtime on X…"). */
+  label: string;
+  /** How long the current phase has been running (ms). */
+  elapsedMs: number;
+}
+
+export interface ListDirsHostError {
+  /** One-line failure summary (the greppable truth, e.g. "Permission denied (publickey)"). */
+  message: string;
+  kind: string;
+  /** What to do next. */
+  hint: string;
+  /** ms until an automatic retry is allowed (the connect failure cache). */
+  retryInMs?: number;
+}
 
 export interface ListDirsResult {
   dirs: string[];
   parent: string;
   exists: boolean;
   cached?: boolean;
+  /**
+   * Set (with `dirs: []`) when the host is still connecting and the caller opted
+   * into `pending` mode: the listing is not known yet, poll again shortly.
+   */
+  pending?: ListDirsPending;
+  /** Set (with `dirs: []`) when the host connect failed and the caller opted into `pending` mode. */
+  hostError?: ListDirsHostError;
+}
+
+export interface ListDirsOptions {
+  /**
+   * Answer a still-connecting host with `{ pending }` after `waitMs` (default
+   * 3s) and a failed connect with `{ hostError }`, both HTTP 200, instead of
+   * waiting the full 15s and throwing. Opt-in so the frozen mobile contract
+   * (wait, then 400) is untouched.
+   */
+  pending?: boolean;
+  waitMs?: number;
 }
 
 /**
@@ -570,6 +613,7 @@ export async function listSessionDirs(
   rawPrefix: unknown,
   host: string | undefined,
   rawDepth: unknown,
+  opts: ListDirsOptions = {},
 ): Promise<ListDirsResult> {
   const prefix = String(rawPrefix ?? '/');
   const depth = Math.min(Number(rawDepth) || 2, 4); // preload depth, default 2, max 4
@@ -605,41 +649,74 @@ export async function listSessionDirs(
   const cacheKey = `${host}::${dir}::${depth}`;
   const cached = dirCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < DIR_CACHE_TTL) {
-    return { dirs: cached.dirs, parent: dir, exists: cached.exists, cached: true };
+    return { dirs: cached.dirs, parent: cached.parent, exists: cached.exists, cached: true };
   }
 
-  const { getDaemonConnection } = await import('../../providers/daemon-connection.js');
+  const { getDaemonConnection, getDaemonConnectState } = await import('../../providers/daemon-connection.js');
   const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port };
-  // Race against a timeout to cap HTTP request wait time; the failure cache in
-  // daemon-connection.ts prevents retries for 60s after a failure.
+  const hostLabel = hostDef.label ?? host;
+  const sshTargetText = hostDef.user ? `${hostDef.user}@${hostDef.hostname}` : hostDef.hostname;
+  const hostNames = [host, hostDef.label ?? '', hostDef.hostname, hostDef.user ?? ''];
+  const hostErrorResult = (hostError: ListDirsHostError): ListDirsResult =>
+    ({ dirs: [], parent: dir, exists: true, hostError });
+  // Race against a timeout to cap HTTP request wait time. The connect itself
+  // keeps running after the race is lost (getDaemonConnection dedups callers on
+  // one in-flight promise), so a later call picks it up where it is. In
+  // `pending` mode the wait is short and the answer says which connect step is
+  // running; otherwise the legacy 15s-then-400 contract holds. The failure
+  // cache in daemon-connection.ts prevents retries for 60s after a failure.
+  const requestedWait = opts.waitMs;
+  const waitMs = opts.pending
+    ? Math.min(Math.max(typeof requestedWait === 'number' && Number.isFinite(requestedWait) ? requestedWait : LIST_DIRS_PENDING_WAIT_MS, 0), LIST_DIRS_TIMEOUT_MS)
+    : LIST_DIRS_TIMEOUT_MS;
   let timeoutId: ReturnType<typeof setTimeout>;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new SessionControlError(`Remote connection to ${host} timed out`, 400)), LIST_DIRS_TIMEOUT_MS);
+  const timeoutPromise = new Promise<typeof STILL_CONNECTING>((resolve) => {
+    timeoutId = setTimeout(() => resolve(STILL_CONNECTING), waitMs);
   });
   let conn;
   try {
-    conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
+    const raced = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
       .finally(() => clearTimeout(timeoutId!));
+    if (raced === STILL_CONNECTING) {
+      if (!opts.pending) throw new SessionControlError(`Remote connection to ${host} timed out`, 400);
+      const state = getDaemonConnectState(host);
+      return {
+        dirs: [], parent: dir, exists: true,
+        pending: { phase: state.phase, label: describeConnectPhase(state.phase, hostLabel), elapsedMs: state.phaseElapsedMs },
+      };
+    }
+    conn = raced;
   } catch (err) {
     if (err instanceof SessionControlError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    if (opts.pending) {
+      const state = getDaemonConnectState(host);
+      const { kind, hint } = classifyHostConnectError(message, sshTargetText, hostNames);
+      return hostErrorResult({ message: state.error ?? message, kind, hint, retryInMs: state.retryInMs });
+    }
     // SSH failures are client-visible 400s (matches the web route's contract).
-    throw new SessionControlError(err instanceof Error ? err.message : String(err), 400);
+    throw new SessionControlError(message, 400);
   }
 
   // BFS listing via daemon fs.ls. ENOENT → exists:false (success); other
-  // daemon/SSH errors throw and map to 400.
+  // daemon errors throw and map to 400. The host is connected at this point,
+  // so a failure here is about the directory, never about SSH.
   let listing;
   try {
     listing = await listRemoteDirs(conn, dir, depth);
   } catch (err) {
-    throw new SessionControlError(err instanceof Error ? err.message : String(err), 400);
+    const message = err instanceof Error ? err.message : String(err);
+    if (opts.pending) {
+      const { kind, hint } = describeListingError(hostLabel);
+      return hostErrorResult({ message, kind, hint });
+    }
+    throw new SessionControlError(message, 400);
   }
 
   // Cache results (also under the resolved path — the daemon may have expanded ~).
   const resolvedCacheKey = `${host}::${listing.parent}::${depth}`;
-  dirCache.set(cacheKey, { dirs: listing.dirs, exists: listing.exists, ts: Date.now() });
-  if (resolvedCacheKey !== cacheKey) {
-    dirCache.set(resolvedCacheKey, { dirs: listing.dirs, exists: listing.exists, ts: Date.now() });
-  }
+  const entry = { dirs: listing.dirs, parent: listing.parent, exists: listing.exists, ts: Date.now() };
+  dirCache.set(cacheKey, entry);
+  if (resolvedCacheKey !== cacheKey) dirCache.set(resolvedCacheKey, entry);
   return { dirs: listing.dirs, parent: listing.parent, exists: listing.exists };
 }

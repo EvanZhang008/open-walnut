@@ -4721,6 +4721,20 @@ async function cmdFsLs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
     // default so high-frequency callers (git-root walks) don't pay the stats.
     const detail = cmd.detail === true
     const result = await Promise.all(entries.map(async e => {
+      // readdir dirents carry lstat semantics: a symlink is never a dir or a
+      // file by itself. Follow it once so a linked directory (dev boxes where
+      // /home/<user> -> /local/home/<user>) lists as a dir instead of vanishing
+      // as 'other'. `symlink: true` tells walkers not to descend (link loops).
+      if (e.isSymbolicLink()) {
+        try {
+          const st = await fs.promises.stat(dirPath + '/' + e.name)
+          const type = st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other'
+          if (detail && type === 'file') return { name: e.name, type, symlink: true, size: st.size, mtimeMs: st.mtimeMs }
+          return { name: e.name, type, symlink: true }
+        } catch {
+          return { name: e.name, type: 'other', symlink: true } // dangling link
+        }
+      }
       const type = e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other'
       if (!detail || type !== 'file') return { name: e.name, type }
       try {

@@ -131,6 +131,25 @@ function rememberMobileEnqueue(messageId: string): void {
   }
 }
 
+/**
+ * Where a connect() attempt currently is. A first connect to a fresh host can
+ * run well over a minute (bun download on the remote, source upload, daemon
+ * start), and a UI that only sees "not connected yet" reads that as "broken".
+ * Each step of connect() stamps its phase so callers can say what is going on.
+ */
+export type DaemonConnectPhase =
+  | 'idle'
+  | 'ssh'
+  | 'probe'
+  | 'install-runtime'
+  | 'upload'
+  | 'start'
+  | 'tunnel'
+  | 'handshake'
+  | 'connected'
+  | 'reconnecting'
+  | 'failed'
+
 // ── DaemonConnection ──
 
 export class DaemonConnection {
@@ -144,6 +163,8 @@ export class DaemonConnection {
   private _connecting = false
   private _destroyed = false
   private _disconnectedSince: number | null = null
+  private _phase: DaemonConnectPhase = 'idle'
+  private _phaseSince = Date.now()
   private cmdCounter = 0
   private pendingCommands = new Map<number, PendingCommand>()
   private eventHandlers: EventHandler[] = []
@@ -351,6 +372,16 @@ export class DaemonConnection {
   /** Last bridge.configure reply's connected flag (null = never pushed / bridge disabled). */
   get lastBridgeConnected(): boolean | null { return this._lastBridgeConnected }
   get lastBridgeCheckedAt(): number | null { return this._lastBridgeCheckedAt }
+  /** Which connect() step is running (or 'connected' / 'failed' / 'idle'). */
+  get connectPhase(): DaemonConnectPhase { return this._phase }
+  /** When the current phase began (ms epoch). */
+  get connectPhaseSince(): number { return this._phaseSince }
+
+  private setPhase(phase: DaemonConnectPhase): void {
+    if (this._phase === phase) return
+    this._phase = phase
+    this._phaseSince = Date.now()
+  }
 
   /**
    * Centralized setter for _connected — fires the pool-level callback
@@ -363,8 +394,10 @@ export class DaemonConnection {
     if (value) {
       this._disconnectedSince = null
       this._reconnectAttempts = 0
+      this.setPhase('connected')
     } else if (changed) {
       this._disconnectedSince = Date.now()
+      this.setPhase('reconnecting')
     }
     if (!value) {
       // Bridge liveness rode this (now dead) connection — a stale `true` would
@@ -679,9 +712,11 @@ export class DaemonConnection {
       }
 
       // Step 0: Establish SSH ControlMaster (one connection for all subsequent commands)
+      this.setPhase('ssh')
       await this.ensureControlMaster()
 
       // Step 1: Check if daemon is already running
+      this.setPhase('probe')
       let daemonPort = await this.checkDaemonRunning()
 
       if (daemonPort === null) {
@@ -694,19 +729,22 @@ export class DaemonConnection {
             `sandboxes do not deploy/start remote daemons (attach-only)`,
           )
         }
-        // Step 2: Deploy daemon
+        // Step 2: Deploy daemon (stamps install-runtime / upload itself)
         await this.deployDaemon()
 
         // Step 3: Start daemon
+        this.setPhase('start')
         daemonPort = await this.startDaemon()
       }
 
       this.remotePort = daemonPort
 
       // Step 4: Create SSH tunnel
+      this.setPhase('tunnel')
       this.localPort = await this.createTunnel(daemonPort)
 
       // Step 5: Connect WebSocket
+      this.setPhase('handshake')
       await this.connectWebSocket(this.localPort)
 
       // Step 6: Capability handshake — final guard against protocol drift.
@@ -757,6 +795,7 @@ export class DaemonConnection {
       this.recoverDisconnectedSessions().catch(() => {})
     } catch (err) {
       this._connecting = false
+      this.setPhase('failed')
       throw err
     }
   }
@@ -1775,7 +1814,9 @@ export class DaemonConnection {
     // wire). Bun is a single static binary so probe-or-install completes in a
     // few seconds when missing. Falls through to binary on probe/install
     // failure (offline hosts, restrictive networks, glibc-too-old for bun).
+    this.setPhase('install-runtime')
     const bunPath = await this.probeOrInstallBun()
+    this.setPhase('upload')
     if (bunPath) {
       try {
         await this.deploySource()
@@ -3592,6 +3633,45 @@ export interface DaemonStatus {
   connected: boolean
   /** Cloud-bridge liveness reported by the daemon (null = unknown / bridge not configured). */
   bridgeConnected: boolean | null
+  /** Which connect() step the host is in; see DaemonConnectPhase. */
+  phase: DaemonConnectPhase
+}
+
+/**
+ * Snapshot of where a host's connection stands, for callers that need to tell
+ * the user WHY there is no answer yet rather than just that there is none.
+ * `error` and `retryInMs` come from the failure cache: a failed connect is
+ * fast-failed for FAILURE_CACHE_TTL_MS, so "why" and "when it will try again"
+ * are both known here.
+ */
+export interface DaemonConnectState {
+  host: string
+  connected: boolean
+  phase: DaemonConnectPhase
+  /** How long the current phase has been running (ms). */
+  phaseElapsedMs: number
+  /** One-line summary of the last connect failure, while it is still cached. */
+  error?: string
+  /** ms until the failure cache expires and an automatic retry is allowed. */
+  retryInMs?: number
+}
+
+export function getDaemonConnectState(hostKey: string): DaemonConnectState {
+  const conn = connectionPool.get(hostKey)
+  const now = Date.now()
+  const state: DaemonConnectState = {
+    host: hostKey,
+    connected: conn?.connected ?? false,
+    phase: conn?.connectPhase ?? 'idle',
+    phaseElapsedMs: conn ? Math.max(0, now - conn.connectPhaseSince) : 0,
+  }
+  const failure = failureCache.get(hostKey)
+  if (failure && now - failure.time < FAILURE_CACHE_TTL_MS) {
+    state.phase = 'failed'
+    state.error = failure.error
+    state.retryInMs = Math.max(0, FAILURE_CACHE_TTL_MS - (now - failure.time))
+  }
+  return state
 }
 
 /**
@@ -3656,7 +3736,7 @@ export function getPooledSnapshotConnection(host: string | null | undefined): Da
 export function getDaemonPoolStatus(): DaemonStatus[] {
   const result: DaemonStatus[] = []
   for (const [host, conn] of connectionPool) {
-    result.push({ host, connected: conn.connected, bridgeConnected: conn.lastBridgeConnected })
+    result.push({ host, connected: conn.connected, bridgeConnected: conn.lastBridgeConnected, phase: conn.connectPhase })
   }
   return result
 }

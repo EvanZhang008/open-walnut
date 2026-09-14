@@ -15,7 +15,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, typ
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { fetchWorkingDirs, prewarmWorkingDirs, type WorkingDirEntry, type ConfiguredHost } from '@/api/sessions';
+import { fetchWorkingDirs, prewarmWorkingDirs, retryHostConnect, type WorkingDirEntry, type ConfiguredHost } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import type { LaunchEngine, LaunchMemory } from '@/utils/engines';
@@ -243,7 +243,13 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     : preState.kind === 'dir-browse' ? preState.dir
     : preState.dir + preState.partial;
 
-  const { byHost, anyLoading } = useLiveDirs(activePath, hostFilter, configuredHosts);
+  const { byHost, anyLoading, retryHost } = useLiveDirs(activePath, hostFilter, configuredHosts);
+
+  // Human retry of a failed remote host: clear the server's 60s connect failure
+  // cache first (otherwise the re-list fast-fails against it), then re-list.
+  const handleRetryHost = useCallback((hostKey: string) => {
+    retryHostConnect(hostKey).catch(() => {}).then(() => retryHost(hostKey));
+  }, [retryHost]);
 
   // Space-ambiguity: once live children of the base are known, a literal dir
   // named "b keyword" flips scoped-search back to a path interpretation.
@@ -696,6 +702,8 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
 
   // Live host states drive per-host empty states / host-down rows in path mode.
   const visibleHostStates: Map<string, HostLiveState> = pathMode ? byHost : new Map();
+  // Alias → label for the per-host rows ("Big remote host", not "clouddev-2").
+  const hostLabels = new Map<string, string>(hostTabs.map(t => [t.key, t.label]));
 
   const emptyHint = editMode
     ? (anyLoading ? 'Listing directories...' : 'No matches. Press ⇧Enter or click Go to use this path.')
@@ -810,6 +818,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
         loading={loading || (anyLoading && flatItems.length === 0)}
         loadError={error}
         hostStates={visibleHostStates}
+        hostLabels={hostLabels}
         pathMode={pathMode}
         activeHostLabel={currentHostLabel ?? 'Local'}
         createOption={createOption}
@@ -817,6 +826,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
         onItemClick={drillOrFill}
         onItemHover={(idx) => { setSelectionByHover(true); setSelectedIdx(idx); }}
         onCreate={handleCreate}
+        onRetryHost={handleRetryHost}
       />
 
       {/* Key hints live here (not in the placeholder) so the placeholder can say

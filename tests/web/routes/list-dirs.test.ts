@@ -130,6 +130,30 @@ describe('GET /api/sessions/list-dirs — local', () => {
     expect(res.status).toBe(200);
     expect(res.body.parent).toBe(os.homedir() + '/');
   });
+
+  it('a bare "/" lists the filesystem root (the picker used to skip 1-char paths)', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/list-dirs')
+      .query({ prefix: '/' });
+    expect(res.status).toBe(200);
+    expect(res.body.exists).toBe(true);
+    expect(res.body.parent).toBe('/');
+    // Every Unix root has /usr as a real directory; the rest differs per OS.
+    expect(res.body.dirs).toContain('/usr');
+  });
+
+  it('a symlink to a directory is listed (not recursed into); a symlink to a file is not', async () => {
+    await fs.mkdir(path.join(root, 'links/target/inner'), { recursive: true });
+    await fs.symlink(path.join(root, 'links/target'), path.join(root, 'links/dirlink'));
+    await fs.symlink(path.join(root, 'projects/file.txt'), path.join(root, 'links/filelink'));
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/list-dirs')
+      .query({ prefix: path.join(root, 'links') + '/' });
+    expect(res.status).toBe(200);
+    expect(res.body.dirs).toContain(path.join(root, 'links/dirlink'));
+    expect(res.body.dirs).not.toContain(path.join(root, 'links/dirlink/inner'));
+    expect(res.body.dirs).not.toContain(path.join(root, 'links/filelink'));
+  });
 });
 
 describe('listRemoteDirs — daemon branch (fake connection)', () => {
@@ -168,6 +192,50 @@ describe('listRemoteDirs — daemon branch (fake connection)', () => {
     expect(listing.dirs).toContain('/h/.claude');   // hidden depth-1 visible
     expect(listing.dirs).toContain('/h/proj/sub');  // depth-2 preload
     expect(listing.dirs).not.toContain('/h/proj/.git'); // hidden depth-2 invisible
+  });
+
+  /** fakeConn that also records every path the walker asked for. */
+  const recordingConn = (responses: Record<string, unknown>) => {
+    const asked: string[] = [];
+    const conn = fakeConn(responses);
+    return {
+      asked,
+      send: async (cmd: string, params: Record<string, unknown>) => {
+        asked.push(params.path as string);
+        return conn.send(cmd, params);
+      },
+    };
+  };
+
+  it('a symlinked dir (daemon reports type:dir + symlink:true) is listed but never walked into', async () => {
+    // Dev boxes: /home/<user> -> /local/home/<user>. The user's own home must
+    // show up under /home/, and the walker must not follow the link (loops).
+    const conn = recordingConn({
+      '/home/': { ok: true, resolvedPath: '/home', entries: [
+        { name: 'ec2-user', type: 'dir' },
+        { name: 'marina', type: 'dir', symlink: true },
+        { name: 'broken', type: 'other', symlink: true },
+      ]},
+      '/home/ec2-user': { ok: true, entries: [{ name: 'bin', type: 'dir' }] },
+    });
+    const listing = await listRemoteDirs(conn, '/home/', 2);
+    expect(listing.dirs).toContain('/home/marina');
+    expect(listing.dirs).toContain('/home/ec2-user');
+    expect(listing.dirs).toContain('/home/ec2-user/bin');
+    expect(listing.dirs).not.toContain('/home/broken');
+    expect(conn.asked).not.toContain('/home/marina');
+  });
+
+  it('a symlinked dir at depth 2 is listed but not queued deeper', async () => {
+    const conn = recordingConn({
+      '/r/': { ok: true, resolvedPath: '/r', entries: [{ name: 'a', type: 'dir' }] },
+      '/r/a': { ok: true, entries: [{ name: 'link', type: 'dir', symlink: true }, { name: 'real', type: 'dir' }] },
+      '/r/a/real': { ok: true, entries: [{ name: 'deep', type: 'dir' }] },
+    });
+    const listing = await listRemoteDirs(conn, '/r/', 3);
+    expect(listing.dirs).toContain('/r/a/link');
+    expect(listing.dirs).toContain('/r/a/real/deep');
+    expect(conn.asked).not.toContain('/r/a/link');
   });
 
   it('isEnoentLike matches cwd-check semantics', () => {

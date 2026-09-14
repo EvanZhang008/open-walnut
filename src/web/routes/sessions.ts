@@ -234,12 +234,37 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response) => {
   // shared with the /api/v1 mobile route and the daemon control relay.
   try {
     const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
-    res.json(await listSessionDirs(req.query.prefix, host, req.query.depth))
+    // `pending=1`: a still-connecting host answers 200 `{ pending }` after `wait`
+    // ms (default 3s) and a failed connect answers 200 `{ hostError }`, so the
+    // picker can show progress and a next step instead of a 15s hang + 400.
+    const pending = req.query.pending === '1'
+    const waitMs = typeof req.query.wait === 'string' ? Number(req.query.wait) : undefined
+    res.json(await listSessionDirs(req.query.prefix, host, req.query.depth, { pending, waitMs }))
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     // SSH failures return 400, not 500 (SessionControlError carries 400 too)
     res.status(400).json({ error: msg })
   }
+})
+
+// POST /api/sessions/host-retry { host } — a deliberate human retry of a remote
+// host whose connect failed. The 60s failure cache exists to throttle AUTOMATIC
+// reconnects; a person who has just fixed their VPN or SSH key must not wait it
+// out. Clears the cache only; the next list-dirs (or session start) reconnects.
+sessionsRouter.post('/host-retry', async (req: Request, res: Response) => {
+  const host = typeof req.body?.host === 'string' ? req.body.host.trim() : ''
+  if (!host || host === '__local__') {
+    res.status(400).json({ error: 'host is required' })
+    return
+  }
+  const config = await getConfig()
+  if (!config.hosts?.[host]) {
+    res.status(404).json({ error: `Unknown host: ${host}` })
+    return
+  }
+  const { clearDaemonFailureCache } = await import('../../providers/daemon-connection.js')
+  clearDaemonFailureCache(host)
+  res.json({ ok: true })
 })
 
 /**
