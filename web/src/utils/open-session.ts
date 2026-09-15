@@ -20,7 +20,23 @@ export function openSessionOnHome(
   navigate: (to: string) => void,
   opts?: OpenSessionOptions,
 ): void {
-  // Park the tab request BEFORE the column opens: the panel is what consumes it,
+  // Opening the column asks every fullscreen sheet to yield (useFullscreen); the
+  // Inbox request below asks the target panel to go fullscreen on its Inbox tab.
+  // Both are synchronous dispatches in this one tick, so their ORDER decides the
+  // final state for a panel that is already mounted AND already fullscreen (on
+  // Files, say) when its own inbox link arrives: yield first, then arm, and the
+  // panel lands fullscreen on the letter; the other way round the yield lands
+  // last, drops the sheet, and the panel's exit guard closes the tab the link
+  // just opened. The same order is what makes the batch SAFE for a panel that is
+  // mounted but NOT fullscreen: the hook subscribes its yield listener only while
+  // fullscreen, one commit behind the state, so an enter queued in this tick can
+  // never be undone by a yield dispatched after it. A freshly mounted panel is
+  // unaffected either way: it claims the parked request on mount, after this tick.
+  // Both dispatches MUST stay synchronous in this tick; pushing either into a
+  // microtask / rAF / flushSync splits the batch and lets the exit guard run
+  // between them (pinned in tests/e2e/browser/fullscreen-yields-to-column-open.spec.ts).
+  window.dispatchEvent(new CustomEvent('main:open-session', { detail: { sessionId } }));
+  // Park the tab request BEFORE the column mounts: the panel is what consumes it,
   // and it does not exist yet (session-inbox-link.ts explains the mailbox).
   //
   // Note for anyone tempted to defer this until after `navigate('/')`: it does not
@@ -29,7 +45,6 @@ export function openSessionOnHome(
   // is on that route and then sees a pathname change. SessionPanel absorbs that
   // (see DEEP_LINK_SETTLE_MS there) rather than this function guessing at timing.
   if (opts?.inboxTab || opts?.inboxLetterId) armSessionInboxLink(sessionId, opts.inboxLetterId);
-  window.dispatchEvent(new CustomEvent('main:open-session', { detail: { sessionId } }));
   navigate('/');
 }
 

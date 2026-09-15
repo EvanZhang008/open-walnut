@@ -295,8 +295,12 @@ describe('navigateToTarget', () => {
   it('arms the Inbox tab + letter when the link asks for them', () => {
     navigateToTarget('/sessions?id=sess-a&tab=inbox&letter=lt-1', (to) => navigated.push(to));
     expect(navigated).toEqual(['/']);
+    // Order is load-bearing: opening the column makes every fullscreen sheet
+    // yield, arming makes the target panel go fullscreen on its Inbox tab. A panel
+    // that is already mounted and already fullscreen must hear them in THIS order,
+    // or the yield lands last and its exit guard closes the tab the link opened.
     expect(dispatched.map(d => d.type))
-      .toEqual([SESSION_INBOX_LINK_EVENT, 'main:open-session']);
+      .toEqual(['main:open-session', SESSION_INBOX_LINK_EVENT]);
     expect(consumeSessionInboxLink('sess-a')).toEqual({ letterId: 'lt-1' });
   });
 

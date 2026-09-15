@@ -13,6 +13,7 @@ import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
+import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
 import { RoutinesView } from '@/components/routines/RoutinesView';
@@ -822,6 +823,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * path is no longer worth the surprise of a draft silently pointing elsewhere.
    */
   const openDraftColumn = useCallback((seed?: DraftSeed): string => {
+    // Every exit below puts a draft in front of the user (new or refocused), and a
+    // fullscreen panel — the Fork chip lives in one — would cover it (useFullscreen).
+    yieldFullscreen(seed?.forkOf ? 'fork-draft' : 'draft-column');
     // Anti-spam valve: repeated "+" on an untouched empty draft just refocuses it
     // instead of stacking another. Only the LEFTMOST column counts — drafts are
     // PINNED to the far left (sessionColumns.ts insertLeftmost: real inserts land
@@ -1263,6 +1267,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       showOperationError('All session panels are locked. Unlock one to open a new session.');
       return;
     }
+    // A fullscreen panel would cover the column this opens (useFullscreen explains).
+    // After the lock check: a refused open changes nothing on screen, so it must
+    // not collapse the view the user is in either.
+    yieldFullscreen('open-session');
     const active = document.activeElement;
     if (active instanceof HTMLElement && active !== document.body) {
       sessionOpenersRef.current.set(sessionId, active);

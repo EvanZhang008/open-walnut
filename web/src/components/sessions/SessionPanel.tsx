@@ -1119,8 +1119,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     return () => window.removeEventListener(SESSION_INBOX_LINK_EVENT, onLink);
   }, [sessionId, openInboxTab]);
 
-  // If the user exits fullscreen (ESC / backdrop) while a split view is open, close
-  // it too so the body returns to the normal single-column chat.
+  // If the user exits fullscreen (ESC / backdrop, or the `fullscreen:yield` that
+  // opening another column fires — useFullscreen.tsx) while a split view is open,
+  // close it too so the body returns to the normal single-column chat. The yield
+  // and an Inbox deep link for THIS panel can arrive in one tick; open-session.ts
+  // orders them so the batch never commits with fullscreen off and the tab open,
+  // which is the only way this guard would eat a view a link just asked for.
   //
   // …UNLESS a deep link is still SETTLING. A link followed from another route
   // (`/sessions?id=…&tab=inbox`, or a notification clicked on /tasks) opens the

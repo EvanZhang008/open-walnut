@@ -5,6 +5,22 @@ import { useLocation } from 'react-router-dom';
 import { lockScroll, unlockScroll } from './useModalOverlay';
 import { traceInteraction } from '@/utils/interaction-timer';
 
+/** Window event every live fullscreen sheet exits on. Fired by `yieldFullscreen`. */
+export const FULLSCREEN_YIELD_EVENT = 'fullscreen:yield';
+
+/**
+ * Drop every fullscreen sheet because the user's action opened or revealed a
+ * column on the home page (the COLUMN-OPEN EXIT documented on the hook below).
+ * Call it FROM the code that opens the column (MainPage's openSessionOrToast /
+ * openDraftColumn), not from the button: the buttons are many (toast, letter,
+ * task row, dock, chat session link, chat task link, the header's "Go to task",
+ * fork chip, slash command) and the columns they open are few. `reason` lands in
+ * the perf log as `interaction {name: fullscreen-yield, reason}`.
+ */
+export function yieldFullscreen(reason: string): void {
+  window.dispatchEvent(new CustomEvent(FULLSCREEN_YIELD_EVENT, { detail: { reason } }));
+}
+
 /**
  * CSS-promotion fullscreen hook — promotes an existing component to fullscreen
  * via CSS class toggle instead of creating a new component instance.
@@ -25,6 +41,24 @@ import { traceInteraction } from '@/utils/interaction-timer';
  * (the fullscreened panel it belonged to was hidden). Reported 2026-08-09 as
  * "click Open in Notes, everything is blur". Fixing it per-consumer would just
  * wait for the next consumer to forget, so the exit lives here.
+ *
+ * ⚠️ COLUMN-OPEN EXIT (same reasoning, same place). A pathname change is not the
+ * only way the user leaves a fullscreen panel: on the home page, "Open session ↗"
+ * on a permission toast (the toaster stacks ABOVE the sheet, so it is clickable
+ * while fullscreen) and "Fork" in the panel's own chip row both open ANOTHER
+ * column without touching the URL. The sheet stayed up and covered the column
+ * the click had just opened, so the click read as "nothing happened" (reported
+ * 2026-09-15). MainPage's column-opening entry points now call `yieldFullscreen`,
+ * and every live sheet drops. Two consequences are DECIDED, not accidental:
+ *  - the panel whose OWN session was asked for drops too: "take me to the
+ *    session" is answered by the plain column, never by a silent no-op under a
+ *    Files view;
+ *  - "Go to task" in the header and a task link in the chat drop it as well, even
+ *    when the task's session is this very panel: what they reveal is the task in
+ *    the todo list, which sits under the sheet exactly like a new column does.
+ *  A background event never yields: quick-start / fork resolution, restore and
+ *  `session:status-changed` write the columns directly, not through those two
+ *  entry points, so a sheet only ever drops on the user's own gesture.
  */
 export function useFullscreen() {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -50,7 +84,9 @@ export function useFullscreen() {
     setIsFullscreen(false);
   }, [pathname]);
 
-  // ESC key handler + ref-counted body scroll lock (shares count with useModalOverlay)
+  // ESC key handler + column-open yield + ref-counted body scroll lock (shares
+  // count with useModalOverlay). All subscribed only WHILE fullscreen, so a page
+  // with twenty idle panels pays nothing per yield.
   useEffect(() => {
     if (!isFullscreen) return;
     lockScroll();
@@ -60,9 +96,19 @@ export function useFullscreen() {
         setIsFullscreen(false);
       }
     };
+    // Its own interaction name, not `fullscreen-exit`: the frame after a yield
+    // also mounts the column that caused it, so timing it as an exit would inflate
+    // the collapse baseline this file's tracing exists to watch.
+    const handleYield = (e: Event) => {
+      const reason = (e as CustomEvent<{ reason?: string }>).detail?.reason ?? 'unknown';
+      traceInteraction('fullscreen-yield', { reason });
+      setIsFullscreen(false);
+    };
     document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener(FULLSCREEN_YIELD_EVENT, handleYield);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener(FULLSCREEN_YIELD_EVENT, handleYield);
       unlockScroll();
     };
   }, [isFullscreen]);
