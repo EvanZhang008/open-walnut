@@ -6,8 +6,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     globalSetup: ['tests/setup/global-setup.ts'],
-    // Per-worker parent-liveness watchdog — see vitest.config.ts.
-    setupFiles: ['tests/setup/worker-watchdog.ts'],
+    // Per-worker parent-liveness watchdog and temp-dir reaper — see vitest.config.ts.
+    setupFiles: ['tests/setup/tmp-reaper.ts', 'tests/setup/worker-watchdog.ts'],
     include: ['tests/e2e/**/*.test.ts'],
     exclude: ['**/*.live.test.ts'],
     testTimeout: 60_000,

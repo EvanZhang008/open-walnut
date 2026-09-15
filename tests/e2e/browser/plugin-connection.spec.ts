@@ -105,7 +105,11 @@ test.afterAll(async () => {
   await fs.writeFile(`${SCREENSHOT_DIR}/fixture-output.log`, output).catch(() => {})
   if (!child) return
   child.kill('SIGTERM')
-  await new Promise((resolve) => setTimeout(resolve, 2000))
+  // The fixture's SIGTERM handler stops its server and daemon, then removes its
+  // tmpdir; 2s was not enough and the SIGKILL below leaked the dir every run.
+  for (let waited = 0; child.exitCode === null && waited < 20_000; waited += 250) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
   if (child.exitCode === null) child.kill('SIGKILL')
 })
 

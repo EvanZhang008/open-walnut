@@ -26,6 +26,7 @@
  */
 
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -49,8 +50,13 @@ const PLUGIN_NAME = 'Linkfix'
 const SIGN_IN_COMPLETES_MS = 4000
 const SYNC_INTERVAL_MS = 1500
 
+// Reclaim siblings left by fixture servers that were SIGKILLed before their shutdown
+// handler ran, then claim this dir so the next run can tell it from debris.
+const { sweepStaleTmpDirs, writeOwnerPid } = await import('../../setup/stale-tmp.js')
+sweepStaleTmpDirs([{ prefix: 'walnut-plugin-connection-', name: /^walnut-plugin-connection-\d+-\d+$/, pidFrom: 'owner-file' }])
 await fs.rm(tmpBase, { recursive: true, force: true })
 await fs.mkdir(path.join(tmpBase, 'tasks'), { recursive: true })
+writeOwnerPid(tmpBase)
 await fs.mkdir(path.join(tmpBase, 'plugins', PLUGIN_ID, 'dist'), { recursive: true })
 
 const mockMainAgent = path.join(repoRoot, 'tests/providers/mock-main-agent.mjs')
@@ -179,15 +185,40 @@ const fixture = { port, home: tmpBase, pluginId: PLUGIN_ID, pluginName: PLUGIN_N
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`PLUGIN_CONNECTION_READY ${JSON.stringify(fixture)}`)
 
+let shuttingDown = false
 const shutdown = async () => {
-  await viteServer.close().catch(() => {})
-  await stopServer()
-  try {
-    const { localDaemon } = await import('../../../src/providers/local-daemon.js')
-    await localDaemon.stopIfIsolated()
-  } catch { /* best effort */ }
+  // SIGTERM arrives both directly and relayed by tsx; one teardown, not two.
+  if (shuttingDown) return
+  shuttingDown = true
+  const teardown = (async () => {
+    await viteServer.close().catch(() => {})
+    await stopServer()
+    try {
+      const { localDaemon } = await import('../../../src/providers/local-daemon.js')
+      await localDaemon.stopIfIsolated()
+    } catch { /* best effort */ }
+  })()
+  // Bounded: stopIfIsolated() polls the daemon pid for up to 30s while the spec
+  // SIGKILLs us well before that; the rm must run while this process still can.
+  await Promise.race([teardown.catch(() => {}), new Promise((r) => setTimeout(r, 8_000))])
   await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {})
   process.exit(0)
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
+// Two other SIGTERM handlers in this process used to end it before `shutdown` got
+// past its first await, so the tmpdir (and its daemon) survived every run — the
+// same defect test-server.ts had (2026-09-13 disk-full incident):
+//  1. startServer() re-raises SIGTERM with the default disposition unless told an
+//     owner will exit after teardown.
+//  2. Vite's dev server registers `parentSigtermCallback` (also on stdin 'end'),
+//     which closes itself and process.exit()s. No opt-out API; unhooked by name.
+const { armGracefulSignalExit } = await import('../../../src/web/server.js')
+armGracefulSignalExit()
+for (const l of process.listeners('SIGTERM')) if (l.name === 'parentSigtermCallback') process.off('SIGTERM', l)
+for (const l of process.stdin.listeners('end')) if (l.name === 'parentSigtermCallback') process.stdin.off('end', l)
+// Last word on the tmpdir: startServer()'s own 'exit' handler appends a final log
+// line inside tmpBase after `shutdown` removed it. Registered after it, runs after it.
+process.on('exit', () => {
+  try { fsSync.rmSync(tmpBase, { recursive: true, force: true, maxRetries: 3 }) } catch { /* best effort */ }
+})
