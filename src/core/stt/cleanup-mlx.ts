@@ -14,11 +14,9 @@
 
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFile, mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
+import { PYTHON_STDIN_SCRIPT, feedDaemonSource } from './daemon-source.js';
 import { validateCleanup } from './cleanup-guard.js';
 import type { Config } from '../types.js';
 
@@ -132,11 +130,10 @@ export interface CleanupResult {
 interface CleanupState {
   port: number | null;
   starting: Promise<number> | null;
-  scriptDir: string | null;
   importOk: boolean;
 }
 
-const state: CleanupState = { port: null, starting: null, scriptDir: null, importOk: false };
+const state: CleanupState = { port: null, starting: null, importOk: false };
 
 function cleanupCfg(config: Config) {
   const stt = config.stt ?? {};
@@ -197,18 +194,18 @@ async function startDaemon(cfg: { pythonPath: string; model: string; port: numbe
     await new Promise(r => setTimeout(r, 500));
   }
 
-  if (!state.scriptDir) state.scriptDir = await mkdtemp(join(tmpdir(), 'walnut-cleanup-'));
-  const scriptPath = join(state.scriptDir, 'server.py');
-  await writeFile(scriptPath, CLEANUP_SERVER_PY);
-
-  log.stt.info(`Starting cleanup daemon: ${cfg.pythonPath} ${scriptPath} ${cfg.model} :${cfg.port}`);
-  const proc = spawn(cfg.pythonPath, [scriptPath, cfg.model, String(cfg.port), String(IDLE_TTL_MS / 1000)], {
-    stdio: ['ignore', 'ignore', 'ignore'],
+  log.stt.info(`Starting cleanup daemon: ${cfg.pythonPath} - ${cfg.model} :${cfg.port} (source over stdin)`);
+  const proc = spawn(cfg.pythonPath, [PYTHON_STDIN_SCRIPT, cfg.model, String(cfg.port), String(IDLE_TTL_MS / 1000)], {
+    stdio: ['pipe', 'ignore', 'ignore'],
     detached: true, // survive launchd group kills on redeploy, like the ASR daemon
     env: sttSpawnEnv(),
   });
+  feedDaemonSource(proc, CLEANUP_SERVER_PY);
   let exited = false;
   proc.once('exit', () => { exited = true; });
+  // A spawn failure (interpreter moved after the import probe was cached) is an
+  // 'error' with no 'exit'; unhandled it would take the whole server down.
+  proc.once('error', () => { exited = true; });
   proc.unref();
 
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;

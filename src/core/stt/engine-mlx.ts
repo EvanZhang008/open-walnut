@@ -7,8 +7,9 @@
  * engine's lifecycle exactly: auto-start on first transcription, health-checked
  * reuse, idle TTL, shutdown() kill, singleton via getOrCreateEngine.
  *
- * The daemon is a small stdlib-only Python script (embedded below, written to
- * the temp dir at spawn). It needs a Python env with `mlx-audio` installed —
+ * The daemon is a small stdlib-only Python script (embedded below, fed to the
+ * interpreter over stdin at spawn, see daemon-source.ts). It needs a Python env
+ * with `mlx-audio` installed —
  * configured via stt.mlx_python_path. Requests carry a WAV path (the file is
  * produced by our own ffmpeg conversion in a private temp dir), never raw audio,
  * and the server binds 127.0.0.1 only.
@@ -22,11 +23,10 @@
 
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { stat } from 'node:fs/promises';
 import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
+import { PYTHON_STDIN_SCRIPT, feedDaemonSource } from './daemon-source.js';
 import { convertToWav, cleanupTempFile, isFfmpegAvailable } from './audio-convert.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
@@ -210,10 +210,6 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
   // Requests currently against the daemon — the idle TTL must not fire while
   // one is in flight (a dictation longer than the TTL would be killed mid-run).
   let inFlight = 0;
-  // Private per-instance dir for the daemon script: a fixed name in the shared
-  // /tmp would be a symlink/replace target for other local users (the ffmpeg
-  // temp files in audio-convert.ts use random names for the same reason).
-  let scriptDir: string | null = null;
   // Import check is ~1s of Python startup — cache SUCCESS only, so isAvailable()
   // stays cheap once probed but `pip install mlx-audio` is picked up without a
   // walnut restart after a failed probe.
@@ -231,7 +227,7 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
       log.stt.info(`Killing mlx daemon (pid=${serverProcess.pid})`);
       serverProcess.kill('SIGTERM');
       const proc = serverProcess;
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000).unref();
     } else if (serverPort && !only) {
       log.stt.info(`Shutting down adopted mlx daemon on :${serverPort}`);
       void fetch(`http://127.0.0.1:${serverPort}/shutdown`, {
@@ -333,22 +329,16 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
       log.stt.warn(`Port ${port} is held by a non-walnut process — using an ephemeral port`);
       port = await findFreePort();
     }
-    if (!scriptDir) {
-      const { mkdtemp } = await import('node:fs/promises');
-      scriptDir = await mkdtemp(join(tmpdir(), 'walnut-mlx-'));
-    }
-    const scriptPath = join(scriptDir, 'server.py');
-    await writeFile(scriptPath, MLX_SERVER_PY);
-
-    log.stt.info(`Starting mlx daemon: ${cfg.pythonPath} ${scriptPath} ${model} :${port}`);
+    log.stt.info(`Starting mlx daemon: ${cfg.pythonPath} - ${model} :${port} (source over stdin)`);
     // detached: the server often runs as a launchd job, and launchd kills the
     // job's whole process group on `launchctl remove` (every redeploy). A
     // daemon in its own group survives that, which is the point of adoption.
-    const proc = spawn(cfg.pythonPath, [scriptPath, model, String(port), String(idleTtlMs / 1000)], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+    const proc = spawn(cfg.pythonPath, [PYTHON_STDIN_SCRIPT, model, String(port), String(idleTtlMs / 1000)], {
+      stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
       env: sttSpawnEnv(),
     });
+    feedDaemonSource(proc, MLX_SERVER_PY);
 
     const outputTail: string[] = [];
     const captureOutput = (d: Buffer) => {
@@ -423,11 +413,6 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     shutdown() {
       // Config changed (model/TTL/port) — the daemon really is stale, retire it.
       killServer();
-      if (scriptDir) {
-        void import('node:fs/promises').then(({ rm }) =>
-          rm(scriptDir!, { recursive: true, force: true })).catch(() => {});
-        scriptDir = null;
-      }
     },
 
     async isAvailable() {
