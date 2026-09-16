@@ -41,7 +41,7 @@ function draft(over: Partial<DraftColumn> = {}): DraftColumn {
     id: 'draft:1',
     cwd: '',
     host: null,
-    meta: { unread: false, priority: 'none', pinTier: 'satellite', model: undefined, engine: undefined },
+    meta: { unread: false, priority: 'none', pinTier: 'focus', model: undefined, engine: undefined },
     ...over,
   };
 }
@@ -191,24 +191,38 @@ describe('applyDraftParse — AI may only fill what nobody claimed (R9)', () => 
     expect(out.aiFields?.has('cwd')).toBe(false);
   });
 
-  it('fills tier/priority while metaTouched is false — WITHOUT setting it', () => {
-    const out = applyDraftParse(draft(), { pinTier: 'focus', priority: 'important' }, noDefaults);
-    expect(out.meta.pinTier).toBe('focus');
+  it('fills priority while metaTouched is false — WITHOUT setting it, and WITHOUT a badge', () => {
+    const out = applyDraftParse(draft(), { priority: 'important' }, noDefaults);
     expect(out.meta.priority).toBe('important');
     // THE regression guard: metaTouched is also the per-directory launch-memory
     // switch, so an AI write must never latch it.
     expect(out.metaTouched).toBeUndefined();
-    expect(out.aiFields?.has('pinTier')).toBe(true);
+    // No ✦ and no ledger row: the launch bar shows no priority, so there is
+    // nothing to badge and no human verdict to measure.
+    expect(out.aiFields?.size ?? 0).toBe(0);
+    expect(out.aiSuggested).toBeUndefined();
+  });
+
+  it('NEVER writes the pin tier, and does not even record it as a proposal', () => {
+    // The draft column draws no tier control, so a guessed tier would be invisible
+    // until the user failed to find the task in Focus. The parse endpoint still
+    // returns one (the Quick Task form uses it) — here it must be inert: the row
+    // stays on the default tier, no ✦, no ledger entry, and with nothing else
+    // proposed the SAME row comes back (no re-render).
+    const d = draft();
+    const out = applyDraftParse(d, { pinTier: 'backlog' }, noDefaults);
+    expect(out).toBe(d);
+    expect(out.meta.pinTier).toBe('focus');
+    expect(out.aiSuggested).toBeUndefined();
   });
 
   it('writes NO meta once the user has edited it', () => {
     const d = draft({ metaTouched: true });
-    const out = applyDraftParse(d, { pinTier: 'focus', priority: 'important' }, noDefaults);
-    expect(out.meta).toBe(d.meta);   // the meta object itself is untouched
-    expect(out.meta.pinTier).toBe('satellite');
-    expect(out.aiFields?.has('pinTier')).toBeFalsy();
-    // …but the overridden suggestion is recorded (see the project case above).
-    expect(out.aiSuggested).toEqual({ pinTier: 'focus', priority: 'important' });
+    const out = applyDraftParse(d, { priority: 'important', due_date: '2026-08-14T17:00:00' }, noDefaults);
+    // Nothing changed and nothing is ledgered (meta fields are not ledger fields),
+    // so the SAME row comes back — no re-render for a refused meta parse.
+    expect(out).toBe(d);
+    expect(out.meta.priority).toBe('none');
   });
 
   it('fills the date trio ("by Friday 3-5pm") while metaTouched is false', () => {
@@ -220,17 +234,17 @@ describe('applyDraftParse — AI may only fill what nobody claimed (R9)', () => 
     expect(out.meta.dueDate).toBe('2026-08-14T17:00:00Z');
     expect(out.meta.startDate).toBe('2026-08-14T15:00:00Z');
     expect(out.meta.endDate).toBe('2026-08-14T17:00:00Z');
-    expect(out.aiFields?.has('dueDate')).toBe(true);
-    expect(out.aiFields?.has('startDate')).toBe(true);
-    expect(out.aiFields?.has('endDate')).toBe(true);
+    // Dates ride the create unseen (the task card shows them the moment it
+    // exists) — no badge, no ledger entry, see applyDraftParse.
+    expect(out.aiFields?.size ?? 0).toBe(0);
+    expect(out.aiSuggested).toBeUndefined();
     expect(out.metaTouched).toBeUndefined();
   });
 
   it('writes NO dates once the user has edited the meta', () => {
     const d = draft({ metaTouched: true });
     const out = applyDraftParse(d, { due_date: '2026-08-14T17:00:00Z' }, noDefaults);
-    expect(out.meta).toBe(d.meta);
-    expect(out.aiSuggested).toEqual({ dueDate: '2026-08-14T17:00:00Z' });
+    expect(out).toBe(d);
   });
 
   it('returns the SAME row when the parse says nothing new', () => {
@@ -239,9 +253,10 @@ describe('applyDraftParse — AI may only fill what nobody claimed (R9)', () => 
     const d = draft({
       project: 'Marina',
       projectSource: 'ai',
-      aiSuggested: { project: 'Marina', pinTier: 'satellite' },
+      aiSuggested: { project: 'Marina' },
+      meta: { unread: false, priority: 'important', pinTier: 'focus', model: undefined, engine: undefined },
     });
-    expect(applyDraftParse(d, { project: 'Marina', pinTier: 'satellite' }, noDefaults)).toBe(d);
+    expect(applyDraftParse(d, { project: 'Marina', priority: 'important' }, noDefaults)).toBe(d);
   });
 
   it('returns the SAME row for an empty parse', () => {
@@ -254,14 +269,19 @@ describe('suggestDiff — what the AI proposed vs. what the launch carried', () 
   const noDefaults = () => undefined;
 
   it('pairs each proposal with the value the launch actually carries', () => {
-    // The user overrode the project by hand and moved the tier; the ledger has to
-    // show BOTH sides, or "the suggestions feel wrong" stays unfalsifiable.
-    let d = applyDraftParse(draft(), { project: 'Marina', pinTier: 'focus' }, noDefaults);
-    d = { ...d, project: 'Acme', projectSource: 'user', meta: { ...d.meta, pinTier: 'satellite' } };
+    // The user overrode the project by hand but kept the folder it brought along;
+    // the ledger has to show BOTH sides, or "the suggestions feel wrong" stays
+    // unfalsifiable.
+    let d = applyDraftParse(
+      draft(),
+      { project: 'Marina' },
+      (name) => (name === 'Marina' ? { cwd: '/work/marina', host: null } : undefined),
+    );
+    d = { ...d, project: 'Acme', projectSource: 'user' };
 
     expect(suggestDiff(d)).toEqual([
       { field: 'project', suggested: 'Marina', chosen: 'Acme' },
-      { field: 'pinTier', suggested: 'focus', chosen: 'satellite' },
+      { field: 'cwd', suggested: '/work/marina', chosen: '/work/marina' },
     ]);
   });
 
@@ -271,18 +291,28 @@ describe('suggestDiff — what the AI proposed vs. what the launch carried', () 
   });
 
   it('omits `chosen` when the user cleared the field', () => {
-    let d = applyDraftParse(draft(), { pinTier: 'focus' }, noDefaults);
-    d = { ...d, meta: { ...d.meta, pinTier: undefined } };   // clicked the active tier = unpin
-    expect(suggestDiff(d)).toEqual([{ field: 'pinTier', suggested: 'focus' }]);
+    let d = applyDraftParse(draft(), { project: 'Marina' }, noDefaults);
+    d = { ...d, project: '', projectSource: 'user' };   // picked Inbox on the pill
+    expect(suggestDiff(d)).toEqual([{ field: 'project', suggested: 'Marina' }]);
   });
 
-  it("normalizes priority 'none' to absent, so an unset priority reads as cleared", () => {
-    // 'none' is the UI's sentinel for "no priority", not a value the AI could have
-    // meant — recording it as `chosen: 'none'` would classify a cleared suggestion
-    // as "changed to none" and inflate the changed count.
-    let d = applyDraftParse(draft(), { priority: 'important' }, noDefaults);
-    d = { ...d, meta: { ...d.meta, priority: 'none' } };
-    expect(suggestDiff(d)).toEqual([{ field: 'priority', suggested: 'important' }]);
+  it('never carries a pin-tier entry, whatever the parse said and however the tier ended up', () => {
+    // A tier "+" seed can put a non-default tier on the row (that is the user
+    // asking), and the parse may keep answering with one — neither is evidence
+    // about a suggestion, because no tier was ever suggested TO the user.
+    let d = applyDraftParse(draft(), { project: 'Marina', pinTier: 'backlog' }, noDefaults);
+    d = { ...d, meta: { ...d.meta, pinTier: 'wait' } };
+    expect(suggestDiff(d).map((e) => e.field)).toEqual(['project']);
+  });
+
+  it('never carries priority or date entries: the bar shows neither, so nobody could have judged them', () => {
+    let d = applyDraftParse(draft(), {
+      project: 'Marina', priority: 'important', due_date: '2026-08-14T17:00:00', start_date: '2026-08-14T15:00:00',
+    }, noDefaults);
+    // Whatever happened to them afterwards (kept, changed in the picker footer,
+    // cleared) is not a verdict on a suggestion the user never saw.
+    d = { ...d, meta: { ...d.meta, priority: 'none', dueDate: undefined } };
+    expect(suggestDiff(d).map((e) => e.field)).toEqual(['project']);
   });
 
   it('records the folder the AI derived from its project', () => {
@@ -298,8 +328,8 @@ describe('suggestDiff — what the AI proposed vs. what the launch carried', () 
   });
 
   it('records NOTHING for fields the AI never proposed', () => {
-    // A draft always carries a folder and (by default) Satellite, so counting
-    // silence as "the AI missed it" would bury every real signal under defaults.
+    // A draft always carries a folder, so counting silence as "the AI missed it"
+    // would bury every real signal under defaults.
     const d = draft({ cwd: '/picked', project: 'Chosen', projectSource: 'user' });
     expect(suggestDiff(d)).toEqual([]);
   });
@@ -311,11 +341,11 @@ describe('suggestDiff — what the AI proposed vs. what the launch carried', () 
 
 describe('clearAiFields — a user edit drops the badge, not the authority', () => {
   it('removes only the named fields', () => {
-    const d = draft({ aiFields: new Set(['project', 'cwd', 'pinTier'] as const) });
+    const d = draft({ aiFields: new Set(['project', 'cwd', 'priority'] as const) });
     const out = clearAiFields(d, ['project']);
     expect(out.aiFields?.has('project')).toBe(false);
     expect(out.aiFields?.has('cwd')).toBe(true);
-    expect(out.aiFields?.has('pinTier')).toBe(true);
+    expect(out.aiFields?.has('priority')).toBe(true);
   });
 
   it('is a no-op (same object) when there is nothing to clear', () => {

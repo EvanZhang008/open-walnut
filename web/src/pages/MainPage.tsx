@@ -37,6 +37,7 @@ import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
 import { fetchTask, recordSuggestFeedback, type QuickTaskParse } from '@/api/tasks';
+import { isBuiltinTier } from '@/api/focus';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { AskWalnutSlot } from '@/components/chat/AskWalnutSlot';
@@ -1082,9 +1083,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *
    * Purely additive back-fill of the launch pills — which fields it MAY write is
    * `applyDraftParse`'s rule, not this handler's: project only while unclaimed,
-   * tier/priority only while `metaTouched` is false, and NEITHER may latch an
-   * authority flag (an AI value must not masquerade as a user pick, or it would
-   * switch off per-directory launch memory). Registry lookup only — no fetch.
+   * priority/dates only while `metaTouched` is false, the tier never, and NONE
+   * may latch an authority flag (an AI value must not masquerade as a user pick,
+   * or it would switch off per-directory launch memory). Registry lookup only —
+   * no fetch.
    */
   const projectDefaultsRef = useRef(projectDefaults);
   projectDefaultsRef.current = projectDefaults;
@@ -1113,22 +1115,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     [projectRegistry.loaded, projectRegistry.isKnownProject],
   );
 
-  /** A launch-meta edit from the draft's launch bar (model / engine / pin tier /
-   *  unread / priority). Every route in is a USER action, so this is also
-   *  the one place that flips `metaTouched` — from then on the row's meta is
-   *  authoritative and per-directory launch memory stops overwriting it (same
-   *  contract as SessionPathSelector's `launchTouchedRef`). */
+  /** A launch-meta edit from the draft column (the composer's model / engine
+   *  pill; the launch bar itself carries no meta controls any more). Every route
+   *  in is a USER action, so this is also the one place that flips `metaTouched`
+   *  — from then on the row's meta is authoritative and per-directory launch
+   *  memory stops overwriting it (same contract as SessionPathSelector's
+   *  `launchTouchedRef`). */
   const handleDraftMetaChange = useCallback((
     draftId: string,
     updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta,
   ) => {
     setDraftColumns(prev => prev.map(d => (d.id === draftId
-      // metaTouched already stops the AI from writing these — dropping the ✦
-      // badges keeps the display honest about who chose what.
-      ? {
-          ...clearAiFields(d, ['pinTier', 'priority', 'dueDate', 'startDate', 'endDate']),
-          meta: updater(d.meta), metaTouched: true, userTouched: true,
-        }
+      // No ✦ to drop here: the launch bar badges only project/cwd, and a meta edit
+      // touches neither. metaTouched is what stops the AI writing the meta.
+      ? { ...d, meta: updater(d.meta), metaTouched: true, userTouched: true }
       : d)));
   }, []);
 
@@ -1719,6 +1719,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Quick Add form (explicit project picker) is NOT a capture and keeps its choice.
     const captureProject = taskDefaults.project ?? '';
     const captureSource = taskDefaults.platform || 'local';
+    // The tier rides the CREATE's own store write (pinned + focus_tier + bottom
+    // pin_order, see addTask). It used to be a follow-up (`commitPin`: pin, then
+    // tier, then reorder) that ran after the create returned, so a page closed
+    // in between, or one failed request, left the task in the server's pin
+    // default, Satellite — invisible while Satellite was also the launcher
+    // default, a wrong tier now that new tasks land in Focus. The follow-up is
+    // gone entirely: every one of its writes is now a no-op, and it armed one
+    // more update-echo guard than echoes came back, which swallowed the next
+    // genuine task:updated (the asyncPush ext/sync backfill) for 5s.
+    //
+    // A tier the registry no longer knows (a custom tier deleted in another
+    // client since this one loaded it) is sent as a bare pin: the create then
+    // lands in Satellite, the same degrade the Start path applies
+    // (quick-start.ts), instead of the 400 resolveNewTaskTier would answer.
+    const tierKnown = !!tier && (isBuiltinTier(tier) || focusBar.customTiers.some((t) => t.id === tier));
     const task = await create(
       {
         title: input.title,
@@ -1731,16 +1746,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         start_date: input.start_date,
         end_date: input.end_date,
         ...(input.capture ? { source: captureSource } : {}),
+        ...(tier ? { pinned: true, ...(tierKnown ? { focus_tier: tier } : {}) } : {}),
       },
       tier
         ? {
             onOptimistic: (tempId) => focusBar.addLocalPin(tempId, tier),
-            onReconcile: (tempId, realId) => {
-              focusBar.replaceLocalPinId(tempId, realId);
-              // Persist to the server (pin + tier). Optimistic state already shows it,
-              // so a failure just rolls the row back out of the tier.
-              focusBar.commitPin(realId, tier).catch(() => focusBar.removeLocalPin(realId));
-            },
+            // The server row arrives already pinned in `tier`; this only moves the
+            // local pin bookkeeping from the temp id to the real one.
+            onReconcile: (tempId, realId) => focusBar.replaceLocalPinId(tempId, realId),
             onError: (tempId) => focusBar.removeLocalPin(tempId),
           }
         : undefined,

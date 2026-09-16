@@ -521,15 +521,15 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     const sessionMessage = isFixWalnut ? buildFixWalnutMessage(message) : message
     const reportSnippet = message.replace(/\s+/g, ' ').trim().slice(0, 60)
     // Fix Walnut follows the SAME launch defaults as a regular quick session —
-    // the web client sends its sticky launcher tier explicitly, and headless
-    // clients (iOS/cloud) that send no pick get the launcher's Satellite
-    // baseline instead of a hardcoded Focus override (the old behavior, which
-    // ignored the user's remembered tier on every repair). `pinTier: null`
+    // the web client sends its launcher tier explicitly, and headless clients
+    // (iOS/cloud) that send no pick get the launcher's baseline, so a repair
+    // lands in the same tier whichever surface reported the bug. `pinTier: null`
     // still opts out of pinning entirely. Keep this literal in sync with the
     // frontend baseline: DEFAULT_META.pinTier in
-    // web/src/components/sessions/task-meta-constants.ts.
+    // web/src/components/sessions/task-meta-constants.ts (Focus since
+    // 2026-09-15, when the draft column lost its tier control; Satellite before).
     const fixWalnutTaskMeta = isFixWalnut && taskMeta?.pinTier === undefined
-      ? { ...taskMeta, pinTier: 'satellite' as const }
+      ? { ...taskMeta, pinTier: 'focus' as const }
       : taskMeta
     // Repairs file under the real 'Walnut' project (recognizable via the title
     // prefix), NOT a parallel 'Fix Walnut' project — that split scattered the

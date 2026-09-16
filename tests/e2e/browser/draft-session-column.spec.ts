@@ -12,9 +12,9 @@
  *   `.draft-session-body`   ONE centered muted line, nothing actionable
  *   `.session-panel-input`  the whole bottom stack:
  *     `.draft-launch-bar`   "Quick folders" caption over up to 8 basename chips +
- *                           divider → bare pin-tier row → cwd pill · project pill,
- *                           every row on ONE left edge, with the folder picker
- *                           opening UPWARD from it
+ *                           divider → cwd pill · project pill (no tier/More row
+ *                           since 2026-09-15), every row on ONE left edge, with
+ *                           the folder picker opening UPWARD from it
  *     the composer          whose controls row holds the model select + two verbs
  *
  * What moved in v4, and therefore what this file asserts POSITIONALLY rather than
@@ -26,9 +26,10 @@
  * container marker through both moves, so the ~12 specs that reach the folder
  * picker through a draft are untouched.
  *
- * Nine scenarios, all about the column's LIFECYCLE — open → configure → Start /
- * task / discard. Each guards a hard requirement rather than a rendering detail;
- * the "why" for each lives at the test itself, not in a duplicated index here.
+ * Ten scenarios: nine about the column's LIFECYCLE — open → configure → Start /
+ * task / discard — and one fault injection on the create it commits. Each guards
+ * a hard requirement rather than a rendering detail; the "why" for each lives at
+ * the test itself, not in a duplicated index here.
  *
  * Two sibling files share this one's helpers (./draft-helpers) and cover the rest of
  * the feature. Split by SUBJECT, not for length:
@@ -116,22 +117,17 @@ test('"+" opens a focused draft column with no network in the open path', async 
   // ordering check. Details of each row live in `expectV4Stack`.
   await expectV4Stack(panel)
 
-  // The launch meta the user can see WITHOUT opening the folder picker: the pin
-  // tier (the model AND the provider moved to the composer's model picker — see
-  // expectV4Stack). Before the earlier revision this was reachable only by opening
-  // the picker, so a draft's actual launch config was invisible. The group carries
-  // NO caption: the four tier names are self-describing, and the caption pushed the
-  // row off the stack's shared left edge (expectV4Stack pins both facts).
-  const meta = draftLaunchBar(panel).locator('.sps-meta-footer')
-  await expect(meta.locator('.pin-tier-options')).toBeVisible()
-  await expect(meta.locator('.pin-tier-label')).toBeHidden()
-  // …and NEITHER the model select nor the engine toggle is in that row any more.
-  // Asserted here (not only as "they are in the composer") because leaving a
-  // second copy behind would give the column two competing controls for one
-  // question — which is exactly what the Claude|Codex toggle became once the
-  // model pill grew its provider rail.
-  await expect(meta.locator('.sps-meta-model-select')).toHaveCount(0)
-  await expect(meta.locator('.sps-engine-toggle')).toHaveCount(0)
+  // The launch bar carries NO task-meta controls: no pin-tier group, no More menu,
+  // no model select, no engine toggle (2026-09-15: the tier · More row went, "too
+  // complicated for people"; the model and the provider live in the composer's
+  // model picker, see expectV4Stack). What the user can configure without the
+  // folder picker is exactly the two pills above — folder and project.
+  const bar = draftLaunchBar(panel)
+  await expect(bar.locator('.sps-meta-footer')).toHaveCount(0)
+  await expect(bar.locator('.pin-tier-options')).toHaveCount(0)
+  await expect(bar.locator('.sps-meta-more-btn')).toHaveCount(0)
+  await expect(bar.locator('.sps-meta-model-select')).toHaveCount(0)
+  await expect(bar.locator('.sps-engine-toggle')).toHaveCount(0)
 
   // The caret is in THIS draft COLUMN's composer — a "+" you then have to click
   // into is not the "instant open" being shipped. Scoped through
@@ -353,6 +349,7 @@ test('Create task for later turns the draft into a task: first line = title, res
   await page.screenshot({ path: `${SCREENSHOT_DIR}/05-save-for-later.png`, fullPage: false })
 })
 
+
 // ── 6. Project header "+" seeds the project (R7: one click, no menu) ────────
 
 test('project header "+" pre-fills the project pill, and Create task for later files the task there', async ({ page }) => {
@@ -525,4 +522,86 @@ test('title-only task ▶ Start opens a bound draft (no launch), and its Start r
   await expect.poll(async () => (await tasksTitled(page, `${stamp}`))[0]?.id, { timeout: 5_000 }).toBe(taskId)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/08b-bound-started.png`, fullPage: false })
+})
+
+// ── 9. Broadcast-before-response create (fault injection) ──────────────────
+// LAST in this serial file on purpose: it holds a response open, so a flake here
+// must not take later scenarios down with it.
+
+test('a create whose task:created broadcast beats its HTTP response shows the task ONCE on the board', async ({ page }) => {
+  // The route emits task:created BEFORE it writes the response, so the broadcast
+  // routinely reaches the creating browser first. A client that only learns the
+  // real id from the response cannot recognise that broadcast and inserts a
+  // second row beside its optimistic one — on the pinned board both sat in Focus
+  // for the width of the response (found by a strict locator resolving to two
+  // cards). The create now carries a client_request_id the broadcast echoes, and
+  // whichever arrives first reconciles. Fault injection: hold the response while
+  // letting the server (and its broadcast) run at full speed.
+  await presetPanelView(page, { section: 'all', project: '' })
+  await loadHome(page)
+  const stamp = Date.now()
+  const title = `broadcast-first create ${stamp}`
+
+  let released: (() => void) | null = null
+  let responseDelivered = false
+  const held = new Promise<void>((resolve) => { released = resolve })
+  await page.route('**/api/tasks', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    const response = await route.fetch()
+    const body = await response.text()
+    // Held until the assertions below have run. The cap only guards a hang; the
+    // 30s test timeout is the real budget, and a loaded box needs the headroom.
+    await Promise.race([held, new Promise((r) => setTimeout(r, 25_000))])
+    responseDelivered = true
+    await route.fulfill({ response, body })
+  })
+  // A list refetch inside the window would ALSO leave one real row (the temp row
+  // is never noteInserted, so the merge drops it) — with the bug still present.
+  // Make that path a failure, not a false pass.
+  let listRefetches = 0
+  const onResponse = (res: import('@playwright/test').Response) => {
+    const u = new URL(res.url())
+    if (res.request().method() === 'GET' && u.pathname === '/api/tasks') listRefetches++
+  }
+  page.on('response', onResponse)
+
+  const panel = await openDraft(page)
+  await draftComposer(page).fill(title)
+  await panel.locator('.draft-later-btn').click()
+
+  // Two scopes. The Focus TIER's cards (`.todo-focus-card`, FocusSatelliteCards)
+  // pin the tier; the tier-agnostic pair (`.todo-pinned-card` is every other
+  // tier's card) pins the count even if a regression parked the duplicate in
+  // Satellite. The Recent strip (`.todo-pinned-list-recent`, same card class) and
+  // the project list render the task too, legitimately, so both are excluded.
+  const focusCard = page.locator('.todo-focus-card', { hasText: title })
+  const anyTierCard = page.locator(
+    '.todo-pinned-list:not(.todo-pinned-list-recent) :is(.todo-focus-card, .todo-pinned-card)',
+    { hasText: title },
+  )
+  const realCard = page.locator('.todo-focus-card[data-task-id]:not([data-task-id^="tmp-"])', { hasText: title })
+  const tmpCard = page.locator('[data-task-id^="tmp-"]', { hasText: title })
+  // The broadcast lands (server answered within milliseconds) while the response
+  // is still held: the REAL card is on the board, in Focus...
+  await expect(realCard).toHaveCount(1, { timeout: 5_000 })
+  expect(responseDelivered, 'the assertions must run inside the held window').toBe(false)
+  // ...and it REPLACED the optimistic row rather than joining it, in any tier.
+  await expect(tmpCard).toHaveCount(0)
+  await expect(anyTierCard).toHaveCount(1)
+  await expect(focusCard).toHaveCount(1)
+  await page.waitForTimeout(400)
+  await expect(anyTierCard).toHaveCount(1)
+  expect(responseDelivered, 'still inside the held window').toBe(false)
+  expect(listRefetches, 'no list refetch may have reconciled the row for us').toBe(0)
+
+  released?.()
+  // After the response: still one card, still pinned in Focus server-side.
+  await expect.poll(() => responseDelivered).toBe(true)
+  await page.waitForTimeout(800)
+  await expect(anyTierCard).toHaveCount(1)
+  const id = await focusCard.getAttribute('data-task-id')
+  const tiers = (await (await page.request.get('/api/focus/tasks')).json()) as { focus_tasks: string[] }
+  expect(tiers.focus_tasks).toContain(id)
+  page.off('response', onResponse)
+  await page.unroute('**/api/tasks')
 })

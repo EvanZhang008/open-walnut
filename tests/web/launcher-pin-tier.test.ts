@@ -2,18 +2,19 @@
  * Session-launcher pin-tier default — and the deliberate ABSENCE of stickiness.
  *
  * Contract under test (the user-visible behavior):
- *   - EVERY launcher opens on SATELLITE. Not just a brand-new browser: the tier
- *     used to be remembered from the last pick and mirrored across browsers, so
- *     one "Focus" on a genuinely urgent session made every later ordinary session
- *     open on Focus — which is how the pinned working set filled up with work
- *     nobody was doing. A per-launch decision is not a preference.
+ *   - EVERY launcher opens on FOCUS (since 2026-09-15; Satellite before, while the
+ *     draft column still drew a tier control). Not just a brand-new browser: the
+ *     tier used to be remembered from the last pick and mirrored across browsers,
+ *     so one pick rode every later launch. A per-launch decision is not a
+ *     preference, and with no tier control in the draft column the default IS the
+ *     tier every new task lands in — so it has to be the one the user looks at.
  *   - The retired pref is never READ again, whatever is left in storage: a value
  *     mirrored from another browser (or from before the change) must not resurrect
  *     the old behavior. MainPage's mount-time sweep deletes it; this file pins the
  *     half that matters — that reading it is gone.
- *   - Moving off Satellite is still a one-click override in the picker, and the
- *     background parse may write the tier (covered by the draft-parse tests) —
- *     neither is persisted between launches.
+ *   - Moving off Focus is still a one-click override in the folder picker's
+ *     footer; the background parse never writes the tier (covered by the
+ *     draft-parse tests). Nothing is persisted between launches.
  *
  * Node env: localStorage is stubbed with the minimal surface the module touches
  * (same style as crash-report.test.ts).
@@ -53,9 +54,9 @@ beforeEach(() => {
 });
 
 describe('session launcher pin tier', () => {
-  it('defaults every launch to satellite', () => {
-    expect(DEFAULT_META.pinTier).toBe('satellite');
-    expect(freshLauncherMeta().pinTier).toBe('satellite');
+  it('defaults every launch to focus', () => {
+    expect(DEFAULT_META.pinTier).toBe('focus');
+    expect(freshLauncherMeta().pinTier).toBe('focus');
   });
 
   it('keeps the rest of the launcher defaults intact', () => {
@@ -68,17 +69,17 @@ describe('session launcher pin tier', () => {
 
   it('hands back a FRESH object each time (callers mutate it)', () => {
     const first = freshLauncherMeta();
-    first.pinTier = 'focus';
-    expect(freshLauncherMeta().pinTier).toBe('satellite');
-    expect(DEFAULT_META.pinTier).toBe('satellite');
+    first.pinTier = 'wait';
+    expect(freshLauncherMeta().pinTier).toBe('focus');
+    expect(DEFAULT_META.pinTier).toBe('focus');
   });
 
   it('ignores a leftover sticky-tier value, whatever it says', () => {
-    // The exact regression the stickiness caused: a stored 'focus' (this browser's
+    // The exact regression the stickiness caused: a stored tier (this browser's
     // own old pick, or one synced in from another) must NOT steer a new launch.
-    for (const stale of ['focus', 'wait', 'backlog', 'none', 'ct_abcd1234', 'top', '']) {
+    for (const stale of ['satellite', 'wait', 'backlog', 'none', 'ct_abcd1234', 'top', '']) {
       localStorage.setItem(LEGACY_LAUNCHER_PIN_TIER_KEY, stale);
-      expect(freshLauncherMeta().pinTier).toBe('satellite');
+      expect(freshLauncherMeta().pinTier).toBe('focus');
     }
   });
 
@@ -104,7 +105,7 @@ describe('session launcher pin tier', () => {
       throw new Error('SecurityError');
     });
     try {
-      expect(freshLauncherMeta().pinTier).toBe('satellite');
+      expect(freshLauncherMeta().pinTier).toBe('focus');
     } finally {
       spyGet.mockRestore();
     }

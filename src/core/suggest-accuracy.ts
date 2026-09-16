@@ -31,8 +31,11 @@ import { WALNUT_HOME } from '../constants.js';
 import { withFileLock } from '../utils/file-lock.js';
 import { log } from '../logging/index.js';
 
-/** The launch fields the background parse can propose. Mirrors DraftAiField in
- *  web/src/components/sessions/draft-column.ts — the client sends these names. */
+/** Every launch field a draft has ever ledgered. A SUPERSET of the client's
+ *  DraftAiField (web/src/components/sessions/draft-column.ts): since 2026-09-15
+ *  new records carry only project/cwd (the draft column shows nothing else the
+ *  user could override), but pinTier/priority/dates stay accepted and summarized
+ *  because older records on disk carry them. */
 export const SUGGEST_FIELDS = [
   'project', 'cwd', 'pinTier', 'priority', 'dueDate', 'startDate', 'endDate',
 ] as const;

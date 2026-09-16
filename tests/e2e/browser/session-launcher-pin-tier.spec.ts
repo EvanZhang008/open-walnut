@@ -2,17 +2,21 @@
  * Session launcher pin tier — the default and its deliberate NON-stickiness,
  * driven through the real UI.
  *
- * Two reported behaviors, fixed in two rounds. First: the launcher always opened
- * pinned to Focus with the tier picker buried in "More", so every launch cost a
- * trip into the menu to move the task out of Focus. Then the fix that replaced it
- * (remember the last tier picked, mirrored across browsers) turned out to have the
- * same shape of bug one level up: one Focus pick on a genuinely urgent session made
- * every later ordinary session open on Focus, and the pinned area filled up again.
+ * Three rounds of history. First the launcher always opened pinned to Focus with
+ * the tier picker buried in "More", so every launch cost a trip into the menu to
+ * move the task out of Focus. The fix that replaced it (remember the last tier
+ * picked, mirrored across browsers) had the same shape of bug one level up: one
+ * Focus pick on a genuinely urgent session made every later ordinary session open
+ * on Focus. So the default became Satellite with a visible one-click picker in the
+ * draft column. Then (2026-09-15) the user asked for that picker row to go
+ * altogether ("complicated for people") and for every new task to land in Focus:
+ * the default is Focus again, but this time NOTHING is remembered and the only
+ * up-front override left is the folder picker's footer, which this spec drives.
  *
  * Asserts what the user sees:
- *   1. the tier picker sits in the launcher's PRIMARY row (no More click),
- *   2. every launcher defaults to Satellite,
- *   3. a pick applies to THAT launch only — a fresh "+" is back on Satellite,
+ *   1. the tier picker sits in the picker footer's PRIMARY row (no More click),
+ *   2. every launcher defaults to Focus,
+ *   3. a pick applies to THAT launch only — a fresh "+" is back on Focus,
  *   4. the picked tier reaches the quick-start payload,
  *   5. an explicit unpin reaches it as `null`, not as an omitted field.
  */
@@ -65,42 +69,42 @@ async function closeLauncher(page: Page) {
   await expect(draftPanels(page)).toHaveCount(0)
 }
 
-test('launcher defaults to Satellite, and a pick lasts exactly one launch', async ({ page }) => {
+test('launcher defaults to Focus, and a pick lasts exactly one launch', async ({ page }) => {
   await page.goto('/')
 
   let { selector } = await openLauncher(page)
   let tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
 
-  // 1 + 2: visible in the primary row (no More menu click) and defaulting to Satellite.
+  // 1 + 2: visible in the primary row (no More menu click) and defaulting to Focus.
   await expect(tiers).toBeVisible()
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
-  await page.screenshot({ path: '/tmp/launcher-pin-tier/default-satellite.png' })
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'false')
+  await page.screenshot({ path: '/tmp/launcher-pin-tier/default-focus.png' })
 
   // The pick lands on THIS draft.
   await tiers.getByRole('button', { name: 'Wait' }).click()
   await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
 
-  // 3: THE regression guard. A fresh launcher is back on Satellite — the previous
-  // pick was for that launch, not a preference. This is the assertion that used to
-  // read the other way round (expecting Wait), and flipping it is the whole change.
+  // 3: THE regression guard. A fresh launcher is back on Focus — the previous
+  // pick was for that launch, not a preference. This is the assertion that once
+  // read the other way round (expecting Wait), and flipping it was the whole change.
   await closeLauncher(page)
   ;({ selector } = await openLauncher(page))
   tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
   await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'false')
-  await page.screenshot({ path: '/tmp/launcher-pin-tier/fresh-back-to-satellite.png' })
+  await page.screenshot({ path: '/tmp/launcher-pin-tier/fresh-back-to-focus.png' })
 
   // Clicking the active tier unpins — and THAT does not persist either.
-  await tiers.getByRole('button', { name: 'Satellite' }).click()
+  await tiers.getByRole('button', { name: 'Focus' }).click()
   for (const label of ['Focus', 'Satellite', 'Backlog', 'Wait']) {
     await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
   }
   await closeLauncher(page)
   ;({ selector } = await openLauncher(page))
   tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
 })
 
 test('the launcher sends the picked tier in the quick-start payload', async ({ page }) => {
@@ -108,7 +112,7 @@ test('the launcher sends the picked tier in the quick-start payload', async ({ p
 
   const { panel, selector } = await openLauncher(page)
   const tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
 
   // Pick a folder → the popover closes onto the draft's cwd pill, and the first
   // message launches. The payload is the contract the server pins from.
@@ -138,14 +142,14 @@ test('the launcher sends the picked tier in the quick-start payload', async ({ p
   const payload = (await launchRequest).postDataJSON() as {
     taskMeta?: { pinTier?: string | null }
   }
-  expect(payload.taskMeta?.pinTier).toBe('satellite')
+  expect(payload.taskMeta?.pinTier).toBe('focus')
 })
 
 /**
  * An explicit unpin must reach the server as `pinTier: null`, NOT as an omitted
  * field. JSON.stringify drops undefined, and the server reads an absent pinTier
- * as "client didn't choose" — which for a fix-walnut launch means it pins to
- * Focus. So unpinning used to be silently overridden back to Focus.
+ * as "client didn't choose" and applies its own default pin. So unpinning used to
+ * be silently overridden back into a tier.
  */
 test('an explicit unpin is sent as null, not dropped from the payload', async ({ page }) => {
   await page.goto('/')
@@ -153,8 +157,8 @@ test('an explicit unpin is sent as null, not dropped from the payload', async ({
   const { panel, selector } = await openLauncher(page)
   const tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
   // Click the ACTIVE tier to toggle it off — the "don't pin this one" gesture.
-  await tiers.getByRole('button', { name: 'Satellite' }).click()
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'false')
+  await tiers.getByRole('button', { name: 'Focus' }).click()
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
 
   const input = selector.locator('.sps-search input').first()
   await input.click()

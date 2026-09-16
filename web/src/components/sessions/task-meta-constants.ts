@@ -13,11 +13,14 @@ import type { QuickStartTaskMeta } from './SessionPathSelector';
 export const DEFAULT_META: QuickStartTaskMeta = {
   unread: false,         // the phase machine marks it unread when the turn ends
   priority: 'none',
-  // Satellite, not Focus: a launched session is "in flight", not necessarily
-  // what the user is staring at right now — Focus filled up with every session
-  // ever started. This is the tier EVERY fresh launcher opens on; see
-  // freshLauncherMeta for why nothing is remembered across launches.
-  pinTier: 'satellite',
+  // Focus: the draft column no longer shows a tier control (user: the row was
+  // "complicated for people"), so the tier a new task lands in has to be the one
+  // the user will look for first. Satellite was the default while the row was
+  // visible and a pick was one click away; with nothing to click, "in flight but
+  // not in front of me" is a judgement the user can only make AFTER creating the
+  // task, from the board. See freshLauncherMeta for why nothing is remembered
+  // across launches.
+  pinTier: 'focus',
   model: undefined,      // Auto — Claude/config default picks the model unless user overrides
   engine: undefined,     // Claude (native) unless the user picks Codex in the model picker
 };
@@ -75,16 +78,17 @@ export function rememberLaunchPath(path: LastLaunchPath): void {
 
 /**
  * Meta a freshly-opened launcher starts from — a plain copy of the defaults, so
- * EVERY new draft opens on Satellite.
+ * EVERY new draft opens on the same tier (Focus, see DEFAULT_META).
  *
  * It used to apply the last tier the user picked (a mirrored `open-walnut-`
  * pref). That single pick then rode every later launch: one "Focus" on a genuinely
  * urgent session made months of ordinary sessions open on Focus, which is exactly
- * how the pinned working set filled up with things nobody was working on. Satellite
- * is the honest baseline for "in flight", and moving off it is a per-task judgement
- * — the background parse makes it (applyDraftParse writes pinTier while the human
- * hasn't touched the meta), and the human overrides in one click. Nothing is
- * remembered between launches on purpose.
+ * how the pinned working set filled up with things nobody was working on. Nothing
+ * is remembered between launches on purpose; moving a task off the default is a
+ * per-task decision made where the tiers are visible (the board, or the folder
+ * picker's footer for a launch). The background parse never writes the tier
+ * (applyDraftParse): with no tier control in the draft column there is nothing
+ * the user could check a guess against.
  *
  * Still a function, not a const: callers mutate the object they get back.
  */

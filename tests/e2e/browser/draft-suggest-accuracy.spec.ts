@@ -9,11 +9,19 @@
  * Settings → Diagnostics → Suggestion Accuracy shows the per-field tally.
  *
  * Two claims no unit test can make:
- *   1. an OVERRIDDEN suggestion is recorded, not silently dropped — the parse says
- *      focus, the user clicks Backlog, and ONE record carries both a kept field and
- *      a changed one;
+ *   1. an OVERRIDDEN suggestion is recorded, not silently dropped — the parse names
+ *      one project (which drags its declared folder along), the user picks another
+ *      project through the pill, and ONE record carries both a kept field (the
+ *      folder) and a changed one (the project);
  *   2. the reader shows it: the Settings card reaches the same ledger through the
  *      HTTP route and renders the field, both values and the verdict.
+ *
+ * The override used to be the TIER (parse says focus, user clicks Backlog). The
+ * draft column has had no tier control since 2026-09-15; the parse no longer
+ * proposes a tier, and dates/priority ride the create unseen and unledgered
+ * (draft-column.ts applyDraftParse / suggestDiff). Project and folder are the two
+ * fields the bar still shows, so they are the two the ledger measures — and this
+ * file pins that a stubbed `pinTier`/`due_date` never reach a record.
  *
  * Committed through "◌ Create task for later" rather than Start: both exits record
  * (`surface` tells them apart), and the task exit needs no folder and spawns no CLI,
@@ -28,8 +36,9 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import {
-  draftComposer, draftMetaAiSlot, draftPanels, draftProjectPill, draftTierBtn, loadHome, openDraft,
+  basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftPanels, draftProjectPill, loadHome, openDraft,
 } from './draft-helpers'
+import { armParse, createTaskForLater, pickDraftProject } from './draft-outcome-helpers'
 
 const SCREENSHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-suggest-accuracy'
 
@@ -70,48 +79,61 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   // in the run, so each assertion below finds ITS OWN record instead of counting
   // rows — a global count would race a concurrent draft spec.
   const stamp = Date.now()
+  // The project the parse suggests DECLARES a folder, so the suggestion fills both
+  // pills (project + cwd) — the folder is the field that stays "kept" below.
   const AI_PROJECT = `SuggestLedger${stamp}`
+  const aiCwd = `${await discoverFixtureRoot()}/projects/mcps`
+  const seeded = await page.request.put(`/api/projects/${AI_PROJECT}/metadata`, { data: { default_cwd: aiCwd } })
+  expect(seeded.ok(), await seeded.text()).toBe(true)
+  // The project the human picks INSTEAD. It has to exist in the registry to be
+  // offered by the pill's flyout; an empty metadata PUT creates the row and
+  // declares no folder, so the pick moves nothing but the project.
+  const USER_PROJECT = `LedgerPick${stamp}`
+  const registered = await page.request.put(`/api/projects/${USER_PROJECT}/metadata`, { data: {} })
+  expect(registered.ok(), await registered.text()).toBe(true)
 
   await page.setViewportSize({ width: 2400, height: 1000 })
-  await stubParse(page, { title: 'ship the ledger', project: AI_PROJECT, pinTier: 'focus' })
+  // `pinTier` and `due_date` are in the stub on purpose: the endpoint does return
+  // them (the Quick Task form uses them), and the draft must RECORD neither — the
+  // tier is not applied at all, the date is applied but not shown, so there is no
+  // human verdict on either.
+  await stubParse(page, {
+    title: 'ship the ledger', project: AI_PROJECT, due_date: '2026-08-14T17:00:00', pinTier: 'backlog',
+  })
   await loadHome(page)
 
   const panel = await openDraft(page)
   // The starting state, so every flip below is a real change.
   await expect(draftProjectPill(panel)).toHaveText('Inbox')
-  await expect(draftTierBtn(panel, 'satellite')).toHaveAttribute('aria-pressed', 'true')
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
 
   // Typing is the only trigger (the draft OPEN path is contractually network-free).
   // `type`, not `fill`, so the 500ms debounce sees a real keystroke burst.
-  const parsed = page.waitForRequest((req) =>
-    req.method() === 'POST' && new URL(req.url()).pathname === '/api/tasks/quick-parse')
+  const parsed = armParse(page)
   const text = `Ship the accuracy ledger ${stamp}`
   await draftComposer(page).type(text)
-  await parsed
+  await parsed()
 
-  // Both suggestions landed, badged ✦. Matched as CONTAINS + the ai class, not as
-  // exact text: the stamped project has no registry row, so the pill also carries
-  // its "new" badge ("starting will create it") — asserting the exact string would
-  // pin an unrelated feature's copy.
-  await expect(draftProjectPill(panel)).toContainText(AI_PROJECT, { timeout: 10_000 })
+  // Both suggestions landed, badged ✦: the project, and the folder it declares.
+  await expect(draftProjectPill(panel)).toHaveText(`${AI_PROJECT}✦`, { timeout: 10_000 })
   await expect(draftProjectPill(panel)).toHaveClass(/session-action-chip-ai/)
-  await expect(draftTierBtn(panel, 'focus')).toHaveAttribute('aria-pressed', 'true')
-  await expect(draftMetaAiSlot(panel)).toHaveText('✦')
+  await expect(draftCwdPill(panel)).toHaveText(`${basenameOf(aiCwd)}✦`)
 
-  // ── The override: the human disagrees about the tier, keeps the project ──
+  // ── The override: the human disagrees about the project, keeps the folder ──
   // This is the case the whole feature exists to count, and one record carrying a
   // kept field beside a changed one is what makes the per-field table meaningful.
-  await draftTierBtn(panel, 'backlog').click()
-  await expect(draftTierBtn(panel, 'backlog')).toHaveAttribute('aria-pressed', 'true')
+  await pickDraftProject(page, panel, USER_PROJECT)
+  await expect(draftCwdPill(panel), 'the folder stays as the AI left it').toHaveText(`${basenameOf(aiCwd)}✦`)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01-override-before-commit.png`, fullPage: false })
 
   const feedback = page.waitForRequest((req) =>
     req.method() === 'POST' && new URL(req.url()).pathname === '/api/tasks/suggest-feedback',
   { timeout: 20_000 })
-  await panel.locator('.draft-later-btn').click()
+  await createTaskForLater(page, panel)
 
-  // CLAIM 1 — the commit posts both sides of every field the parse proposed.
+  // CLAIM 1 — the commit posts both sides of every field the parse proposed AND the
+  // user could see; nothing else.
   const payload = (await feedback).postDataJSON() as {
     surface?: string
     textLen?: number
@@ -120,9 +142,11 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   expect(payload.surface).toBe('draft-task')
   expect(payload.textLen, 'the LENGTH rides along, never the text').toBe(text.length)
   const byField = new Map((payload.entries ?? []).map((e) => [e.field, e]))
-  expect(byField.get('project')).toMatchObject({ suggested: AI_PROJECT, chosen: AI_PROJECT })
-  expect(byField.get('pinTier'), 'the tier override is the record that matters')
-    .toMatchObject({ suggested: 'focus', chosen: 'backlog' })
+  expect(byField.get('project'), 'the project override is the record that matters')
+    .toMatchObject({ suggested: AI_PROJECT, chosen: USER_PROJECT })
+  expect(byField.get('cwd')).toMatchObject({ suggested: aiCwd, chosen: aiCwd })
+  expect([...byField.keys()].sort(), 'tier and date are not ledger fields: no human could have overridden them')
+    .toEqual(['cwd', 'project'])
   // The composer text must never ride along — only its length.
   expect(JSON.stringify(payload)).not.toContain('Ship the accuracy ledger')
 
@@ -132,7 +156,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   // CLAIM 2 — the reader, reached the way a user reaches it.
   const table = await openAccuracyCard(page)
   await expect(table.locator('tbody tr', { hasText: 'Project' })).toBeVisible()
-  await expect(table.locator('tbody tr', { hasText: 'Pin tier' })).toBeVisible()
+  await expect(table.locator('tbody tr', { hasText: 'Folder' })).toBeVisible()
   // The total row is always last, so a field row can't be mistaken for it.
   await expect(table.locator('tbody tr.suggest-accuracy-total')).toContainText('All fields')
 
@@ -140,9 +164,9 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   // project name, so another spec's records can't satisfy the assertion.
   const record = page.locator('.suggest-accuracy-record', { hasText: AI_PROJECT }).first()
   await expect(record).toBeVisible({ timeout: 20_000 })
-  await expect(record.locator('.suggest-accuracy-entry.verdict-kept')).toContainText(AI_PROJECT)
+  await expect(record.locator('.suggest-accuracy-entry.verdict-kept')).toContainText(aiCwd)
   await expect(record.locator('.suggest-accuracy-entry.verdict-changed'))
-    .toContainText('focus → backlog')
+    .toContainText(`${AI_PROJECT} → ${USER_PROJECT}`)
 
   // Scroll the card fully into frame for the artifact — the assertions above are
   // done, and a screenshot of the section header proves nothing to a human reviewer.
@@ -164,18 +188,17 @@ test('a commit the parse had no opinion about records nothing', async ({ page })
     if (new URL(req.url()).pathname === '/api/tasks/suggest-feedback') posted = true
   })
 
-  // Wait for the RESPONSE (not just the request), so the client has actually
-  // handled a proposal-free parse before the commit. There is nothing observable to
-  // wait for beyond that — a parse that proposes nothing changes no pill, which is
-  // exactly the state under test — so the ✦ slot is asserted empty as a sanity
-  // check rather than as the arrival signal.
-  const parsed = page.waitForResponse((res) =>
-    new URL(res.url()).pathname === '/api/tasks/quick-parse' && res.status() === 200)
+  // Wait for the parse to be APPLIED (armParse), so the client has actually
+  // handled a proposal-free parse before the commit. There is nothing observable
+  // to wait for beyond that — a parse that proposes nothing changes no pill, which
+  // is exactly the state under test — so the pill is asserted unchanged as a
+  // sanity check rather than as the arrival signal.
+  const parsed = armParse(page)
   await draftComposer(page).type(`Run the build ${Date.now()}`)
-  await parsed
-  await expect(draftMetaAiSlot(panel)).toHaveText('')
+  await parsed()
+  await expect(draftProjectPill(panel)).toHaveText('Inbox')
 
-  await panel.locator('.draft-later-btn').click()
+  await createTaskForLater(page, panel)
   await expect(draftPanels(page)).toHaveCount(0, { timeout: 30_000 })
   expect(posted, 'nothing suggested → nothing recorded').toBe(false)
 })

@@ -604,12 +604,48 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     }
   }, [refetch]);
 
+  // Optimistic creates still waiting for their HTTP response, keyed by the
+  // client_request_id the request carried. The server echoes that id on the
+  // task:created broadcast, which is emitted before the response is written and
+  // often reaches this browser first; whichever of the two arrives first runs
+  // reconcileCreate, the other finds `realId` set and skips.
+  const inflightCreates = useRef(new Map<string, { tmpId: string; hooks?: CreateHooks; real?: Task }>());
+
+  const reconcileCreate = useCallback((tmpId: string, task: Task, hooks: CreateHooks | undefined, via: 'response' | 'event') => {
+    // HTTP first: the broadcast is still coming — suppress it. (Event first: this
+    // IS the broadcast, nothing to guard.)
+    if (via === 'response') guardEcho(`create:${task.id}`);
+    noteInserted(task.id);
+    setTasks((prev) => {
+      const withoutTmp = prev.filter((t) => t.id !== tmpId);
+      const idx = withoutTmp.findIndex((t) => t.id === task.id);
+      if (idx === -1) return [task, ...withoutTmp];
+      // Already present (a task:updated upsert can precede the create payload):
+      // the created payload is the authoritative final state, merge it in like
+      // the task:created fallthrough below does.
+      withoutTmp[idx] = mergeTask(withoutTmp[idx], task);
+      return withoutTmp;
+    });
+    hooks?.onReconcile?.(tmpId, task.id);
+  }, [guardEcho]);
+
   // Real-time event handlers — single source of truth for state changes
   // Server emits { task: <Task> } wrapper objects
   useEvent('task:created', (data) => {
-    const { task } = data as { task: Task };
+    const { task, clientRequestId } = data as { task: Task; clientRequestId?: string };
     // Skip tasks with missing or empty titles (e.g. from sync race conditions)
     if (!task.title || task.title.trim() === '') return;
+    // Our own create, arriving BEFORE its HTTP response (the route emits first):
+    // reconcile now — swap the optimistic row for the real one and fire the
+    // caller's reconcile hook — and let the response find it already done.
+    // Without this the row existed twice for the width of the response: the
+    // pinned board showed the optimistic card AND the real one in the same tier.
+    const inflight = clientRequestId ? inflightCreates.current.get(clientRequestId) : undefined;
+    if (inflight && !inflight.real) {
+      inflight.real = task;
+      reconcileCreate(inflight.tmpId, task, inflight.hooks, 'event');
+      return;
+    }
     // Suppress the echo of our own optimistic create (already reconciled locally).
     if (consumeEcho(`create:${task.id}`)) return;
     wsEventCounts.current.created++;
@@ -735,24 +771,31 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // Fired in the same tick as the insert so dependent optimistic UI (e.g. the
     // Focus tier) renders the card in the same frame — React 19 batches both.
     hooks?.onOptimistic?.(tmpId);
+    // Correlates the task:created broadcast with THIS create (see inflightCreates).
+    const clientRequestId = crypto.randomUUID();
+    const inflight: { tmpId: string; hooks?: CreateHooks; real?: Task } = { tmpId, hooks };
+    inflightCreates.current.set(clientRequestId, inflight);
     try {
-      const task = await tasksApi.createTask(input);
-      // Suppress the incoming task:created WS echo so we don't double-insert.
-      guardEcho(`create:${task.id}`);
-      noteInserted(task.id);
-      setTasks((prev) => {
-        const withoutTmp = prev.filter((t) => t.id !== tmpId);
-        return withoutTmp.some((t) => t.id === task.id) ? withoutTmp : [task, ...withoutTmp];
-      });
-      hooks?.onReconcile?.(tmpId, task.id);
-      return task;
+      const task = await tasksApi.createTask(input, clientRequestId);
+      // The broadcast may have reconciled this create already (event-first);
+      // otherwise do it here and suppress the echo still on its way.
+      if (!inflight.real) {
+        inflight.real = task;
+        reconcileCreate(tmpId, task, hooks, 'response');
+      }
+      return inflight.real;
     } catch (err) {
+      // The broadcast proves the server committed the task even if its response
+      // was lost in transit: keep the reconciled row, no error, no rollback.
+      if (inflight.real) return inflight.real;
       setTasks((prev) => prev.filter((t) => t.id !== tmpId));
       hooks?.onError?.(tmpId);
       onOpError(err as Error);
       throw err;
+    } finally {
+      inflightCreates.current.delete(clientRequestId);
     }
-  }, [guardEcho, onOpError]);
+  }, [reconcileCreate, onOpError]);
 
   const update = useCallback((id: string, updates: tasksApi.UpdateTaskInput) => {
     // Only guard echo + apply optimistic update when the update contains optimistic-safe fields.

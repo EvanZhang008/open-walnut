@@ -1,9 +1,18 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { openDraft } from './draft-helpers'
+
+/** Flip `ui.show_priority` on the fixture server (merging the rest of `ui`), the
+ *  same way task-filters.spec.ts does. GET /api/config wraps the file under
+ *  `config`; the merge keeps sibling keys alive. */
+async function setShowPriority(page: Page, on: boolean): Promise<void> {
+  const body = (await (await page.request.get('/api/config')).json()) as { config?: { ui?: Record<string, unknown> } }
+  const res = await page.request.put('/api/config', { data: { ui: { ...(body.config?.ui ?? {}), show_priority: on } } })
+  if (!res.ok()) throw new Error(`config write failed: ${res.status()} ${await res.text()}`)
+}
 
 test('Quick Start footer keeps primary controls visible and opens task settings upward', async ({ page }) => {
   // No pin-tier seeding: the tier is no longer sticky (and no longer mirrored to
-  // the shared fixture's ui-prefs), so every launcher opens on Satellite whatever
+  // the shared fixture's ui-prefs), so every launcher opens on Focus whatever
   // any other spec picked. That is what makes the assertion below stable.
   await page.goto('/')
 
@@ -19,10 +28,11 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   await expect(footer.getByRole('combobox', { name: 'Session model' })).toBeVisible()
   await expect(footer.getByRole('group', { name: 'Coding agent engine' })).toBeVisible()
   // The pin tier is a per-launch decision — it stays in the PRIMARY row, and a
-  // fresh launcher defaults to Satellite.
+  // fresh launcher defaults to Focus (DEFAULT_META). This footer is the one place
+  // a launch can still pick a tier: the draft column's own bar has no tier row.
   const tiers = footer.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers).toBeVisible()
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
 
   await expect(footer.getByTitle('Start this task marked unread')).toHaveCount(0)
   await expect(footer.getByText('Priority', { exact: true })).toHaveCount(0)
@@ -39,7 +49,11 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   // the working set now).
   await expect(popover.getByTitle('Star this task')).toHaveCount(0)
   await expect(popover.getByTitle('Start this task marked unread')).toBeVisible()
-  await expect(popover.getByText('Priority', { exact: true })).toBeVisible()
+  // Priority is hidden site-wide by default (Settings → Tasks → Show task
+  // priority, `ui.show_priority`), so the menu draws no Priority row either —
+  // a control for a value the user cannot see anywhere else would be a trap.
+  // (The "comes back when on" half is the second test below.)
+  await expect(popover.getByText('Priority', { exact: true })).toHaveCount(0)
   // The task dates trio lives here too (start leads; end/due ghost when empty) —
   // the launch IS a task create, so the Quick Task form's dates exist on it.
   await expect(popover.locator('.sps-meta-dates .dp-trigger')).toHaveCount(3)
@@ -58,4 +72,24 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   await page.keyboard.press('Escape')
   await expect(popover).toHaveCount(0)
   await expect(selector).toBeVisible()
+})
+
+test('the More menu draws the Priority row once ui.show_priority is on', async ({ page }) => {
+  // Same footer, opposite setting: the row is gated, not gone. Restored in
+  // `finally` because the fixture server is shared by every spec in the run.
+  await setShowPriority(page, true)
+  try {
+    await page.goto('/')
+    const panel = await openDraft(page)
+    await panel.locator('.draft-composer-bar .session-action-chip').first().click()
+    const footer = page.locator('.session-path-selector .sps-meta-footer')
+    await expect(footer).toBeVisible({ timeout: 10_000 })
+    await footer.getByRole('button', { name: /More/ }).click()
+    const popover = page.getByRole('dialog', { name: 'More task settings' })
+    await expect(popover).toBeVisible()
+    await expect(popover.getByText('Priority', { exact: true })).toBeVisible()
+    await expect(popover.locator('.sps-meta-priority-options .badge')).toHaveCount(4)
+  } finally {
+    await setShowPriority(page, false)
+  }
 })

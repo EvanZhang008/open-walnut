@@ -1,11 +1,15 @@
 /**
  * SuggestAccuracyPanel — how good the draft column's auto-suggestions actually are.
  *
- * The background parse fills a draft's launch pills (project, folder, pin tier,
- * priority, dates) while you type, which is the one part of a launch nobody sees
- * happen. This panel is the receipt: per field, how often the launch kept the
- * suggestion, replaced it, or cleared it — plus the newest raw diffs, because a
- * percentage tells you there IS a problem and only the values tell you what it is.
+ * The background parse fills a draft's launch pills (project and folder) while
+ * you type, which is the one part of a launch nobody sees happen. This panel is
+ * the receipt: per field, how often the launch kept the suggestion, replaced it,
+ * or cleared it — plus the newest raw diffs, because a percentage tells you there
+ * IS a problem and only the values tell you what it is.
+ *
+ * FIELD_LABELS still names pin tier, priority and the dates: records written
+ * before 2026-09-15 carry them (the draft column drew those controls then). New
+ * records only ever hold project/folder — see draft-column.ts suggestDiff.
  *
  * Read-only, and fetched only once the card actually SCROLLS INTO VIEW. The
  * Settings page renders every section at once (one long anchored page), so a
@@ -59,7 +63,7 @@ function when(iso: string): string {
  * inner heading would repeat them.
  */
 export const SUGGEST_ACCURACY_BLURB =
-  'A new session\u2019s draft guesses its project, folder and pin tier from what you type. ' +
+  'A new session\u2019s draft guesses its project and folder from what you type. ' +
   'This compares every guess against what the launch actually carried. Only the field names ' +
   'and values are recorded \u2014 never the text you typed.';
 

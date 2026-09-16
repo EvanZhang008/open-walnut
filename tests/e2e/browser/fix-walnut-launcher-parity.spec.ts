@@ -21,13 +21,20 @@
 
 import { test, expect } from '@playwright/test'
 import { openAskWalnutDrawer } from './draft-helpers'
+import { expectTaskInTier } from './draft-outcome-helpers'
 
 const API = 'http://localhost:3457'
 
-test('fix walnut inherits the launcher tier instead of forcing Focus', async ({ page }) => {
+test('fix walnut inherits the launcher tier instead of carrying its own', async ({ page }) => {
   // Nothing to seed: the launcher tier is no longer sticky, so the value the
-  // repair must inherit is the plain default (Satellite). Focus is what the bug
-  // produced, so 'satellite' vs 'focus' is still the discriminating assertion.
+  // repair must inherit is the plain default (DEFAULT_META.pinTier). Since
+  // 2026-09-15 that default IS Focus (the draft column lost its tier row and every
+  // new task lands there), so this assertion can no longer tell "inherited" from
+  // "hardcoded to focus" by value alone — what it still pins is that the repair
+  // sends the launcher's meta at all (a real `pinTier`, not an omitted field the
+  // server would fill with ITS default) and that the task lands where the
+  // launcher's default says. The model half of the parity (folder launch memory,
+  // not a forced Auto) is covered by the draft launch-memory specs.
   await page.goto('/')
 
   const drawer = await openAskWalnutDrawer(page)
@@ -57,7 +64,8 @@ test('fix walnut inherits the launcher tier instead of forcing Focus', async ({ 
     taskMeta?: { pinTier?: string | null }
   }
   expect(payload.intent).toBe('fix-walnut')
-  expect(payload.taskMeta?.pinTier).toBe('satellite')
+  expect('pinTier' in (payload.taskMeta ?? {}), 'the launcher meta rides the repair launch').toBe(true)
+  expect(payload.taskMeta?.pinTier).toBe('focus')
 
   // Find the task the launch created. Title is server-built as "Fix Walnut: <report>".
   const titleNeedle = report.slice(0, 40)
@@ -72,20 +80,8 @@ test('fix walnut inherits the launcher tier instead of forcing Focus', async ({ 
   const taskId = (await findTask())!.id
 
   // The focus API is exactly what the tier UI renders from: the task must land in
-  // the launcher's default tier (satellite), not in focus.
-  await expect.poll(async () => {
-    const res = await fetch(`${API}/api/focus/tasks`)
-    if (!res.ok) return 'api-error'
-    const body = (await res.json()) as { focus_tasks?: string[]; satellite_tasks?: string[]; wait_tasks?: string[] }
-    if (body.focus_tasks?.includes(taskId)) return 'focus'
-    if (body.wait_tasks?.includes(taskId)) return 'wait'
-    // Satellite is the DEFAULT bucket: a pinned task in no named tier is in it.
-    // Read it positively when the API reports it, else infer from "pinned, not
-    // focus/wait" the same way the panel splits the tiers.
-    if (body.satellite_tasks?.includes(taskId)) return 'satellite'
-    return 'unpinned'
-  }, { timeout: 15_000, message: 'fix-walnut task never reached the default (satellite) tier' })
-    .toBe('satellite')
+  // the launcher's default tier (Focus).
+  await expectTaskInTier(page, taskId, 'focus')
 
   await page.screenshot({ path: '/tmp/fix-walnut-parity/default-tier.png', fullPage: true })
 })

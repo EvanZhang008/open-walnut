@@ -34,12 +34,6 @@ interface Props {
   /** Host the session will spawn on (null/undefined = local; drives which
    *  host's model catalog fills the dropdown). */
   host?: string | null;
-  /** Render the row WITHOUT the model select AND without the engine toggle, for a
-   *  surface that shows the model somewhere else (the draft column puts it in the
-   *  composer, mirroring a real session where the model pill lives in the mode
-   *  bar). The provider is part of that control there, so it leaves with it.
-   *  Default false — every other caller keeps both in the primary row. */
-  hideModel?: boolean;
 }
 
 /** Model dropdown rows: the host's last-known CLI catalog (values = full
@@ -115,12 +109,11 @@ export function MetaModelSelect({ meta, onChange, host, className }: Pick<Props,
 
 /** Segmented engine toggle — one button per engine in the catalog.
  *
- *  Renders ONLY on a surface that also owns the model control (`hideModel` false
- *  — the folder picker's footer, whose model control is a plain `<select>` with no
- *  provider rail). Where the model lives elsewhere the provider goes with it: the
- *  draft column's composer pill opens the shared two-pane provider|models picker,
- *  which already answers "which engine", so a second segmented control in the
- *  meta row was the same question asked twice, two rows apart.
+ *  Sits next to the model `<select>` because the two are one decision: the
+ *  footer's model control is a plain select with no provider rail, so the
+ *  engine needs its own control here. (The draft column asks neither question
+ *  in its launch bar: its composer pill opens the shared two-pane provider|models
+ *  picker, which answers both.)
  *
  *  Buttons the launch can't use are disabled with the reason as their tooltip: an
  *  engine whose CLI isn't installed, and every ACP engine on a remote host tab
@@ -161,8 +154,10 @@ function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' 
 /** Pin-tier picker. Lives in the PRIMARY row (not the More menu): which tier the
  *  new task lands in is a per-launch decision, so it has to be visible and one
  *  click away. The buttons are the shared PinTierPicker (same control as Quick
- *  Task). Deliberately NOT sticky: every fresh launcher opens on Satellite
- *  (freshLauncherMeta) and a pick applies to this launch only. */
+ *  Task). Deliberately NOT sticky: every fresh launcher opens on the default
+ *  tier (DEFAULT_META, Focus) and a pick applies to this launch only. This
+ *  footer is the ONE place a launch can still choose a tier up front: the draft
+ *  column's launch bar dropped its tier row (see DraftLaunchBar). */
 function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
   return (
     <PinTierPicker
@@ -173,16 +168,17 @@ function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
   );
 }
 
-export function MetaFooter({ meta, onChange, compact, host, hideModel = false }: Props) {
+export function MetaFooter({ meta, onChange, compact, host }: Props) {
   const showPriority = useShowPriority();
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  // POPPED OUT of the host, like every draft-column overlay (user: overlays
-  // "没有必要完全占满,大小不应该跟着 session 列走"): portalled to <body> at its
-  // own fixed width and PLACED at the More button by useMenuPlacement (measure →
-  // open upward → viewport clamp), instead of an absolutely-positioned child
+  // POPPED OUT of the host, like every launcher overlay (user: overlays need
+  // not fill the column, and must not size with the session column): portalled
+  // to <body> at its own fixed width and PLACED at the More button by
+  // useMenuPlacement (measure → open upward → viewport clamp), instead of an
+  // absolutely-positioned child
   // whose width the host column dictated (full row width in a draft, and inside
   // a session panel its stacking context let siblings paint over it).
   const morePlacement = useMenuPlacement(moreOpen, moreBtnRef, popoverRef, {
@@ -243,8 +239,8 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
     <div className={`sps-meta-footer${compact ? ' compact' : ''}`}>
       <div className="sps-meta-row">
         {/* Model + provider travel together — see EngineToggle's note. */}
-        {!hideModel && <MetaModelSelect meta={meta} onChange={onChange} host={host} />}
-        {!hideModel && <EngineToggle meta={meta} onChange={onChange} host={host} />}
+        <MetaModelSelect meta={meta} onChange={onChange} host={host} />
+        <EngineToggle meta={meta} onChange={onChange} host={host} />
         <TierPicker meta={meta} onChange={onChange} />
         <div className="sps-meta-more" ref={moreRef}>
           {moreOpen && createPortal(

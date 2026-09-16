@@ -64,10 +64,17 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onSelect: (path: QuickStartPath, taskMeta: QuickStartTaskMeta) => void;
-  /** Meta to seed the footer with on open (e.g. re-opening to edit an already
-   *  confirmed Quick Start). undefined → defaults + the remembered pin tier. Lets a
-   *  prior model/priority choice survive a reopen instead of silently resetting. */
+  /** Meta to seed the footer with on open — the host row's CURRENT meta, so a tier
+   *  "+" seed, an AI-filled date or a prior pick survives the trip through the
+   *  picker instead of silently resetting to the defaults (the draft column draws
+   *  no meta of its own any more, so a reset there would be invisible).
+   *  undefined → freshLauncherMeta(). Seeding alone does NOT lock the model/engine:
+   *  see `lockLaunchMemory`. */
   initialMeta?: QuickStartTaskMeta;
+  /** The user already chose the model/engine on the host row (the draft's
+   *  `metaTouched`): keep their pick, never apply a directory's remembered launch
+   *  config on top of it. Default false — launch memory previews and applies. */
+  lockLaunchMemory?: boolean;
   /** Path to seed on open (e.g. re-opening to edit an already-confirmed Quick Start).
    *  When set, the picker opens directly in edit mode with this cwd pre-filled and the
    *  host tab selected — an "edit this selection" view, not a blank search. */
@@ -89,7 +96,9 @@ interface Props {
 }
 
 
-export function SessionPathSelector({ open, onClose, onSelect, initialMeta, initialPath, confirmOnDismiss = true, popoutAnchor }: Props) {
+export function SessionPathSelector({
+  open, onClose, onSelect, initialMeta, lockLaunchMemory = false, initialPath, confirmOnDismiss = true, popoutAnchor,
+}: Props) {
   const navigate = useNavigate();
   const [dirs, setDirs] = useState<WorkingDirEntry[]>([]);
   // All hosts from config.hosts — a freshly added remote host must show as a tab
@@ -108,13 +117,16 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const [editingPath, setEditingPath] = useState('');
 
   // Task metadata the user picks in the footer — applied to the new task when the session starts.
-  // A fresh open starts from the defaults with the LAST tier the user picked
-  // (freshLauncherMeta) so the choice is sticky across launches and browsers.
+  // Each open starts from the host row's current meta (initialMeta) or, without a
+  // host, from the plain defaults (freshLauncherMeta — nothing is sticky).
   const [meta, setMeta] = useState<QuickStartTaskMeta>(initialMeta ?? freshLauncherMeta);
   // True once the user touches the model/engine controls during THIS open —
   // their explicit pick (including an explicit reset to Auto) beats the
   // per-directory launch memory applied at confirm time.
   const launchTouchedRef = useRef(false);
+  // Same read-latest-without-deps pattern as initialMetaRef below.
+  const lockLaunchMemoryRef = useRef(lockLaunchMemory);
+  lockLaunchMemoryRef.current = lockLaunchMemory;
   const handleMetaChange = useCallback((updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => {
     setMeta(prev => {
       const next = updater(prev);
@@ -142,7 +154,8 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
     gap: 6,
     margin: 12,
     minHeight: 320,
-    // Spread evenly around the pill ("以这个东西为中心向左右铺开") — the panel's
+    // Spread evenly around the pill (user: centered on it, fanning out to both
+    // sides) — the panel's
     // midpoint sits on the pill's midpoint, clamped at the viewport edges.
     align: 'center',
     onAnchorLost: onClose,
@@ -461,11 +474,13 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   // Per-directory launch memory: merge the remembered model/engine of the picked
   // directory into the footer meta — unless the user explicitly touched those
   // controls this open (their pick wins, including an explicit reset to Auto),
-  // or the picker was seeded with a prior confirmed meta (re-edit flow).
+  // or the host row says they already chose (lockLaunchMemory). Only model and
+  // engine move: the rest of the meta (tier, dates, priority, unread) is the
+  // host row's and rides through untouched.
   // No memory on the picked dir → reset to Auto/Claude so a preview from a
   // previously highlighted row can't leak onto an unrelated directory.
   const withLaunchMemory = useCallback((launch: LaunchMemory | undefined): QuickStartTaskMeta => {
-    if (launchTouchedRef.current || initialMetaRef.current) return meta;
+    if (launchTouchedRef.current || lockLaunchMemoryRef.current) return meta;
     return { ...meta, model: launch?.model, engine: launch?.engine };
   }, [meta]);
 
@@ -478,7 +493,7 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   //    typed path, so its memory drives the preview). Host match mirrors
   //    handleConfirm: the explicit tab is host authority, All infers.
   useEffect(() => {
-    if (!open || launchTouchedRef.current || initialMetaRef.current) return;
+    if (!open || launchTouchedRef.current || lockLaunchMemoryRef.current) return;
     let launch: LaunchMemory | undefined;
     if (editMode) {
       const trimmed = editingPath.replace(/\/+$/, '') || '/';

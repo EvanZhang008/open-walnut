@@ -15,19 +15,25 @@
  *      let the row hold eight chips: unlabelled and flush against the rows below,
  *      the whole stack read as one wall of buttons with no way to tell which button
  *      answered which question (user feedback).
- *   2. task — pin tier · "More" (priority / dates / unread). The SAME MetaFooter
- *      the folder picker uses, minus its model select AND engine toggle
- *      (`hideModel`): the model belongs with the message, so the draft renders it
- *      inside the composer's controls row, exactly where a real session's model
- *      pill sits — and the provider rides along inside that same picker rather
- *      than being asked a second time up here.
- *   3. path + project — the cwd/host pill and the project pill, LEFT-ALIGNED.
+ *   2. path + project — the cwd/host pill and the project pill, LEFT-ALIGNED.
  *      FIXED as the last row: "where does this run" is the statement the composer
  *      answers, so it stays glued to it and never moves.
  * Plus:  the folder picker — POPPED OUT of the column: portalled to <body>
  *        (a ~300px column can't contain a browsing surface, and any in-column
  *        placement gets painted over by sibling panels) but ANCHORED to the
  *        cwd pill via useMenuPlacement, so it opens from where you clicked.
+ *
+ * There is deliberately NO task-meta row (pin tier · More: priority / dates /
+ * unread) between the two. It sat there until 2026-09-15 and the user asked for it
+ * to go: a segmented Focus / Satellite / Backlog / Wait control plus a More menu
+ * was "complicated for people" on a surface whose job is "type, start". Every new
+ * task lands in Focus (DEFAULT_META); tier, dates and priority are edited on the
+ * task afterwards. A Start Task draft that really needs them up front still has
+ * the folder picker's footer (SessionPathSelector → MetaFooter); an Ask Walnut
+ * draft has no picker (the server owns its folder) and a fork inherits the source
+ * task's meta by contract, so neither offers launch meta at all any more — edit
+ * the task on the board. The model stays in the composer's controls row, where a
+ * real session's model pill sits.
  *
  * The pills keep their original class names AND the `.draft-composer-bar`
  * container marker: that pair is the documented DOM hook the browser specs use to
@@ -38,10 +44,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ProjectPickerFlyout } from '@/components/tasks/TaskKebabMenu';
 import type { WorkingDirEntry } from '@/api/sessions';
-import { MetaFooter } from './path-selector/MetaFooter';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from './SessionPathSelector';
 import { applyLaunchMemory, quickDirsFor, type DraftAiField, type DraftColumn } from './draft-column';
-import { useShowPriority } from '@/hooks/useShowPriority';
 
 /** `host::cwd` — one directory's identity (same as draft-column's dirKey). */
 function chipKey(d: { cwd: string; host: string | null }): string {
@@ -55,7 +59,6 @@ interface Props {
   onClosePicker: () => void;
   onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta) => void;
   onProjectChange: (draftId: string, project: string) => void;
-  onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   /** Registry membership (case-insensitive) — drives the project pill's "new"
    *  badge when the launch will auto-create the project (folder-derived name). */
   isKnownProject: (name: string) => boolean;
@@ -84,21 +87,14 @@ function basename(cwd: string): string {
 
 export function DraftLaunchBar({
   draft, pickerOpen, onOpenPicker, onClosePicker,
-  onPathChange, onProjectChange, onMetaChange, isKnownProject, onAfterQuickPick,
+  onPathChange, onProjectChange, isKnownProject, onAfterQuickPick,
 }: Props) {
-  const showPriority = useShowPriority();
   const projectBtnRef = useRef<HTMLButtonElement>(null);
   // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
   // column can't clip it and siblings can't paint over it) but opens FROM this
   // pill — "pops from where you clicked", not a centered modal.
   const cwdPillRef = useRef<HTMLButtonElement>(null);
   const [projectOpen, setProjectOpen] = useState(false);
-  // Ask Walnut folds the tier/priority/dates row behind ONE "More" — the
-  // mode's whole point is the defaults. Collapses again on leaving the tab.
-  const [walnutMetaOpen, setWalnutMetaOpen] = useState(false);
-  useEffect(() => {
-    if (!draft.walnut) setWalnutMetaOpen(false);
-  }, [draft.walnut]);
 
   // The project flyout is portalled to <body> and owns no closer (its usual host
   // is a kebab menu that provides one) — so this bar does, exempting the portal
@@ -151,11 +147,6 @@ export function DraftLaunchBar({
   const chips = isFork || isWalnut ? [] : quickDirsFor();
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
-  // The meta row carries ONE badge for its AI-fillable fields (tier / priority /
-  // the More menu's dates) — see the row's comment below. A field the row does not
-  // DRAW is left out: with priority hidden the badge would point at nothing.
-  const metaHasAi = isAi('pinTier') || (showPriority && isAi('priority'))
-    || isAi('dueDate') || isAi('startDate') || isAi('endDate');
 
   return (
     <div className="draft-launch-bar">
@@ -168,16 +159,15 @@ export function DraftLaunchBar({
       {chips.length > 0 && (
         <div className="draft-quick-block">
           {/* The group's CAPTION, on its own line ABOVE the chips.
-              Not decoration: these chips are folders, the row below is tiers, and
-              the one below that is folder + project — eight unlabelled pills
-              stacked on two more unlabelled rows is where the panel stopped being
-              readable (user feedback). It sits above rather than inline because an
-              inline key indents only the FIRST wrapped line: at eight chips the
-              row wraps, and rows two and three then started a key-width to the
-              left of row one while the tier row and the pills each started
-              somewhere else again. Above the group, every row in the stack shares
-              ONE left edge and the chips get the full width. A caption, not a
-              control: no tab stop, no click target. */}
+              Not decoration: these chips are folders and the row below is folder
+              + project — eight unlabelled pills stacked on another unlabelled row
+              is where the panel stopped being readable (user feedback). It sits
+              above rather than inline because an inline key indents only the
+              FIRST wrapped line: at eight chips the row wraps, and rows two and
+              three then started a key-width to the left of row one while the
+              pills started somewhere else again. Above the group, every row in
+              the stack shares ONE left edge and the chips get the full width. A
+              caption, not a control: no tab stop, no click target. */}
           <span className="draft-quick-key">Quick folders</span>
           <div className="draft-quick-chips" role="group" aria-label="Quick folders">
             {chips.map(d => {
@@ -202,55 +192,7 @@ export function DraftLaunchBar({
         </div>
       )}
 
-      {/* ROW 2 — HIDDEN while the picker is open: the picker carries its own copy
-          of this footer, and two identical control rows ~40px apart is both
-          confusing and a duplicated control on the page. Hidden on a FORK draft
-          too: the fork API takes only message+model (no tier/priority/
-          engine — the sibling task inherits from the source), so every control
-          in this row would be a lie. The model select lives in the composer.
-          Ask Walnut collapses the row to ONE muted "More" (user: 极简 — the
-          defaults are the point; the full controls are an explicit opt-in). */}
-      {!pickerOpen && !isFork && isWalnut && !walnutMetaOpen && (
-        <div className="draft-meta-row">
-          <button
-            type="button"
-            className="draft-walnut-more"
-            onClick={() => setWalnutMetaOpen(true)}
-            title={`Tier, ${showPriority ? 'priority, ' : ''}dates — defaults: Ask Walnut project, Focus tier`}
-          >
-            More
-          </button>
-        </div>
-      )}
-      {!pickerOpen && !isFork && (!isWalnut || walnutMetaOpen) && (
-        <div className="draft-meta-row">
-          {/* ONE badge for the whole row rather than three inside MetaFooter: the
-              tier/priority controls are SHARED with the picker's footer, and
-              teaching them about a draft-only concept would leak it everywhere.
-              The slot is an absolute OVERLAY on the row's right edge (see the
-              CSS): out of the flex flow, so it can neither indent this row
-              relative to its neighbours nor nudge the controls when a
-              suggestion lands. */}
-          <span
-            className="draft-meta-ai-slot"
-            aria-hidden={!metaHasAi || undefined}
-            aria-label={metaHasAi ? 'AI suggested' : undefined}
-          >
-            {metaHasAi ? '✦' : ''}
-          </span>
-          <MetaFooter
-            meta={draft.meta}
-            onChange={(updater) => onMetaChange(draft.id, updater)}
-            compact
-            host={draft.host}
-            // The model lives in the composer's controls row for a draft (mirroring
-            // a real session, where the model pill sits in the mode bar).
-            hideModel
-          />
-        </div>
-      )}
-
-      {/* ROW 3 — FIXED last: directly above the composer, always.
+      {/* ROW 2 — FIXED last: directly above the composer, always.
           A FORK draft resumes the source conversation in place, so its folder
           and project are facts, not choices — both pills render read-only.
           Ask Walnut renders NO pills at all: folder and project are server
@@ -308,20 +250,24 @@ export function DraftLaunchBar({
         open={pickerOpen}
         onClose={onClosePicker}
         onSelect={(path, meta) => { onPathChange(draft.id, path, meta); onClosePicker(); }}
-        // POP OUT of the column (user: the panel "没有必要只放在这一个 component
-        // 里面…它应该直接跳出来" + "你点哪里它就从哪里 pop 出来,不应该全屏"):
-        // portalled to <body> (siblings can't paint over it) but anchored to the
-        // cwd pill, so it opens from the click point instead of centering.
+        // POP OUT of the column (user: the panel need not stay inside this one
+        // component, it should jump out; and it should pop from where you clicked,
+        // never go fullscreen): portalled to <body> (siblings can't paint over it)
+        // but anchored to the cwd pill, so it opens from the click point instead
+        // of centering.
         popoutAnchor={cwdPillRef}
         initialPath={draft.cwd ? { cwd: draft.cwd, host: draft.host } : undefined}
-        // ONLY once the user has edited the launch meta. The picker reads a
-        // non-undefined initialMeta as "the user already chose — don't touch
-        // model/engine", which switches OFF per-directory launch memory (its
-        // withLaunchMemory + preview effect both bail on it). The gate is
-        // `metaTouched`, NOT "a path was picked": with the meta now visible in the
-        // bar, gating on the path would freeze the model at the first folder's
-        // memory and every later folder change would launch with it.
-        initialMeta={draft.metaTouched ? draft.meta : undefined}
+        // ALWAYS the row's current meta: a tier "+" seed and any AI-filled date
+        // ride `draft.meta` and nothing in this bar shows them, so a picker that
+        // started from the defaults would silently reset them on the very folder
+        // pick a seeded draft has to make before it can Start (the picker's
+        // onSelect meta replaces the row's wholesale).
+        initialMeta={draft.meta}
+        // Launch memory (per-directory model/engine) keeps applying until the user
+        // has edited the meta. The gate is `metaTouched`, NOT "a path was picked":
+        // gating on the path would freeze the model at the first folder's memory
+        // and every later folder change would launch with it.
+        lockLaunchMemory={!!draft.metaTouched}
       />
     </div>
   );

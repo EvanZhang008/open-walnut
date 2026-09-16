@@ -7220,7 +7220,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   {showSection('satellite') && (satelliteTasksDisplay.length > 0 || !isAll) && (
                     <div className="todo-pinned-subgroup">
                       {isAll && (
-                      <div className="todo-pinned-sublabel" onClick={() => toggleSection('satellite')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('satellite'); }} style={{ cursor: 'pointer' }} title="Satellite — needs doing soon, the default pinned tier">
+                      <div className="todo-pinned-sublabel" onClick={() => toggleSection('satellite')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('satellite'); }} style={{ cursor: 'pointer' }} title="Satellite — needs doing soon">
                         <span className={`todo-pinned-chevron todo-pinned-sub-chevron${chevronCollapsed('satellite') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                         <span className="todo-pinned-sublabel-icon todo-tier-icon-satellite">{ICONS.ICON_TIER_SATELLITE}</span>
                         <span className="todo-pinned-sublabel-text">Satellite</span>

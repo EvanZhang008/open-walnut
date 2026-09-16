@@ -11,8 +11,8 @@
  * the composer, because a normal chat has NO folder/project controls inside it:
  *   header             title + Draft badge + (bound task) + ✕
  *   body               nothing but one centered muted line of "what happens next"
- *   DraftLaunchBar     quick-access folder chips → provider/task row (engine ·
- *                      pin tier · More) → cwd pill · project pill (fixed last),
+ *   DraftLaunchBar     quick-access folder chips → cwd pill · project pill (fixed
+ *                      last; no tier/More row since 2026-09-15, see that file),
  *                      with the folder picker POPPING OUT over the page (fixed,
  *                      anchored to the cwd pill — a ~300px column can't contain it)
  *   composer           shared ChatInput; its controls row holds the model select
@@ -463,7 +463,7 @@ export function DraftSessionPanel({
 
       {/* Empty body. On a plain draft it carries the ENTRY FORK, made before
           the first keystroke: two big intent cards (the approved mockup's
-          grammar — user: not a thin tab strip, "两个大的圆的"). Start Task is
+          grammar — user: not a thin tab strip, "two big rounded ones"). Start Task is
           pre-selected so the common case costs zero clicks; Ask Walnut opts
           into the Personal-AI session. Bound/fork drafts are already committed
           to a shape and keep the one-line hint instead. */}
@@ -543,7 +543,6 @@ export function DraftSessionPanel({
           onClosePicker={() => setPickerOpen(false)}
           onPathChange={onPathChange}
           onProjectChange={onProjectChange}
-          onMetaChange={onMetaChange}
           isKnownProject={isKnownProject}
           onAfterQuickPick={focusComposer}
         />
@@ -593,7 +592,7 @@ export function DraftSessionPanel({
               )}
               {/* Enabled even with an empty composer: spawn-and-idle is legal —
                   the CLI starts, initializes and waits on stdin. Ask Walnut has
-                  NO extra button (user: 极简 — the composer's send arrow, amber
+                  NO extra button (user: keep it minimal — the composer's send arrow, amber
                   in this mode, is the one send affordance; an empty ask is
                   pointless anyway). */}
               {!isWalnut && (

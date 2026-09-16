@@ -119,11 +119,12 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
     }
   });
 
-  // A taskMeta-less Fix Walnut launch (headless clients — iOS/cloud) gets the
-  // SAME default tier as a regular quick session (Satellite), not a hardcoded
-  // Focus override: the pill must follow the user's normal launch settings.
-  // (The web client sends its sticky launcher tier explicitly.)
-  it('pins the task to the Satellite baseline when the client sends no taskMeta', async () => {
+  // A taskMeta-less Fix Walnut launch (headless clients — iOS/cloud, the
+  // notification "Ask AI to fix" card) gets the SAME default tier as the web
+  // launcher (DEFAULT_META.pinTier, Focus since 2026-09-15), so a repair lands
+  // in one tier whichever surface reported it. (The web client sends its
+  // launcher tier explicitly.)
+  it('pins the task to the launcher baseline (Focus) when the client sends no taskMeta', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/sessions/quick-start')
@@ -136,10 +137,7 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
     expect(task!.pinned).toBe(true);
-    // Satellite is the tier-less pinned state: setFocusTier only writes
-    // focus_tier for 'focus'/'wait' (splitTiers buckets everything else
-    // into satellite_tasks).
-    expect(task!.focus_tier).toBeUndefined();
+    expect(task!.focus_tier).toBe('focus');
   });
 
   it('honors an explicit non-focus tier instead of forcing focus', async () => {

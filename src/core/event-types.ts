@@ -17,7 +17,13 @@ import type {
 
 // ── Task events ──
 
-export interface TaskCreatedEvent { task: Task }
+export interface TaskCreatedEvent {
+  task: Task;
+  /** Echo of the `client_request_id` the creating client sent (POST /api/tasks),
+   *  so an optimistic client can match this broadcast to its own in-flight
+   *  create even when it arrives before the HTTP response. Never stored. */
+  clientRequestId?: string;
+}
 export interface TaskUpdatedEvent {
   /** Null denotes a bulk mutation that requires consumers to refetch. */
   task: Task | null;

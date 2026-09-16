@@ -194,8 +194,9 @@ async function startRepair(dedupKey: string, record: NotificationRecord): Promis
     taskTitle: fixTaskTitle(record),
     project: 'Walnut',
     projectFromFolder: false,
-    // Same headless baseline as a fix-walnut launch with no client pick.
-    taskMeta: { pinTier: 'satellite' },
+    // Same headless baseline as a fix-walnut launch with no client pick (the
+    // launcher default, DEFAULT_META.pinTier — see routes/sessions.ts).
+    taskMeta: { pinTier: 'focus' },
     source: 'notification-fix',
     requestTs: Date.now(),
     preassignedSessionId: sessionId,

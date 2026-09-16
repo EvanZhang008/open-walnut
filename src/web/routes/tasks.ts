@@ -796,9 +796,22 @@ tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
 tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { title, priority, status, pinned, focus_tier: focusTier } = req.body
+    // Everything else goes to addTask by name; the correlation id never does.
+    const { client_request_id: clientRequestId, ...body } = req.body
 
     if (typeof title !== 'string' || title.trim() === '') {
       res.status(400).json({ error: 'title must be a non-empty string' })
+      return
+    }
+    // Opaque correlation id an optimistic client minted for THIS create. It is
+    // echoed on the task:created event (never stored) so the client can match the
+    // broadcast to its in-flight request: the event is emitted before the HTTP
+    // response is written and regularly reaches the same browser first, and a
+    // client that only learns the real id from the response cannot tell that
+    // echo from a stranger's create — it inserted a second row next to its own
+    // optimistic one for the width of the response.
+    if (clientRequestId !== undefined && (typeof clientRequestId !== 'string' || clientRequestId.length > 64)) {
+      res.status(400).json({ error: 'client_request_id must be a string of at most 64 characters' })
       return
     }
     if (pinned !== undefined && typeof pinned !== 'boolean') {
@@ -845,7 +858,7 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     // or a pinned:false + tier contradiction throws InvalidFocusTierError → 400
     // below, never a silent fall-through to Satellite.
     const result = await addTask({
-      ...req.body,
+      ...body,
       pinned: newTaskPinDefault(pinned),
       // Overwrite whatever the spread carried (`null` is a legal "not
       // specified" on the wire but not a legal AddTaskInput value).
@@ -853,7 +866,10 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
       asyncPush: true,
     })
     log.web.info('task created via REST', { taskId: result.task.id, project: result.task.project || '' })
-    bus.emit(EventNames.TASK_CREATED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_CREATED, {
+      task: result.task,
+      ...(typeof clientRequestId === 'string' ? { clientRequestId } : {}),
+    }, ['web-ui', 'main-agent'], { source: 'api' })
     res.status(201).json(result)
   } catch (err) {
     if (err instanceof ProjectSourceConflictError) {

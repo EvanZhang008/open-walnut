@@ -41,10 +41,10 @@
 
 import { test, expect } from '@playwright/test'
 import {
-  basenameOf, discoverFixtureRoot, draftCwdPill, draftMetaAiSlot, draftPanel, draftProjectPill,
-  draftPanels,
-  draftTierBtn, loadHome, watchForbiddenRequests,
+  basenameOf, discoverFixtureRoot, draftCwdPill, draftPanel, draftPanels, draftProjectPill,
+  loadHome, watchForbiddenRequests,
 } from './draft-helpers'
+import { expectSeededTierLands } from './draft-outcome-helpers'
 import {
   navigateToTasksPage, openSessionFromPlus, pinToTier, plusControl, presetTierViewModes,
   restVisibility, tasksPageGroupHeader, tierProjectLabel, tierViewBar,
@@ -110,10 +110,10 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
   // names the tier), so there was no route to a session from the tab a user
   // actually works in. The control now lives in that tab's view-mode bar.
   //
-  // WAIT, not Satellite: every draft now opens on Satellite (there is no sticky
-  // tier pref to preset any more), so a Satellite assertion could not tell "the seed
-  // was applied" from "it was already there". Wait is not the default, so an active
-  // Wait button can only mean the tab's own tier reached meta.pinTier.
+  // WAIT, not Focus: every draft opens on Focus (there is no sticky tier pref to
+  // preset any more), so a Focus outcome could not tell "the seed was applied" from
+  // "it was already there". Wait is not the default, so a task landing in Wait can
+  // only mean the tab's own tier reached meta.pinTier.
   await page.setViewportSize({ width: 2400, height: 1000 })
   await presetPanelView(page, { section: 'wait', project: '' })
   await loadHome(page)
@@ -144,12 +144,10 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
   // The menu closed behind the choice — it must not sit over the fresh column.
   await expect(page.getByTestId('plus-menu')).toHaveCount(0)
 
-  // THE assertion, read off the control the user sees: Wait is the active tier in
-  // the draft's meta row, and the Satellite default it replaced is not.
-  await expect(draftTierBtn(panel, 'wait')).toHaveAttribute('aria-pressed', 'true')
-  await expect(draftTierBtn(panel, 'satellite')).toHaveAttribute('aria-pressed', 'false')
-  // Not ✦-badged: a "+" seed is the user asking, not an AI suggestion.
-  await expect(draftMetaAiSlot(panel)).toHaveText('')
+  // The draft column draws NO tier control (the Focus / Satellite / Backlog / Wait
+  // row was removed 2026-09-15), so the seed is invisible until it commits — and
+  // nothing in the column may pretend otherwise.
+  await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
   // A tier seed leaves everything else neutral — this is not a project route.
   await expect(draftProjectPill(panel)).toHaveText('Inbox')
 
@@ -159,6 +157,11 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
     'the tier "+" must not flip the tier view mode').toBe(modeWasOn)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-01-tier-tab-plus.png`, fullPage: false })
+
+  // THE assertion, read off the OUTCOME the user sees on the board: the task the
+  // seeded draft creates lands in Wait, not in the Focus default. Committed through
+  // "Create task for later" (needs no folder, spawns no CLI).
+  await expectSeededTierLands(page, panel, 'wait', `wait tab seed probe ${Date.now()}`)
 })
 
 test('every built-in tier tab exposes its own "+" with its own tier', async ({ page }) => {

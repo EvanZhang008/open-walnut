@@ -157,6 +157,12 @@ export interface CreateTaskInput {
    *  project already claimed by a provider still wins — the registry row's source
    *  outranks this field (see task-manager addTask). */
   source?: string;
+  /** Pin state + tier for the create's OWN store write. A create that lands in a
+   *  tier must carry it here, not in a follow-up tier write: if the page dies (or
+   *  the request fails) between the two, the task sits in the server's pin default
+   *  (Satellite) instead of the tier the user saw it land in. */
+  pinned?: boolean;
+  focus_tier?: string;
 }
 
 export interface UpdateTaskInput {
@@ -209,8 +215,15 @@ export async function fetchTask(id: string): Promise<TaskDetail> {
   return seedTask(res.task);
 }
 
-export async function createTask(input: CreateTaskInput): Promise<Task> {
-  const res = await apiPost<{ task: Task }>('/api/tasks', input);
+/**
+ * `clientRequestId`: an opaque id the server echoes on the task:created event
+ * (never stored), so an optimistic caller can recognise its own broadcast when it
+ * lands before this response does — see useTasks.create.
+ */
+export async function createTask(input: CreateTaskInput, clientRequestId?: string): Promise<Task> {
+  const res = await apiPost<{ task: Task }>('/api/tasks', clientRequestId
+    ? { ...input, client_request_id: clientRequestId }
+    : input);
   return seedTask(res.task);
 }
 

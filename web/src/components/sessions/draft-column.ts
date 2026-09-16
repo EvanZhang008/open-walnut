@@ -29,10 +29,11 @@ export function draftComposerKey(draftId: string): string {
   return DRAFT_COMPOSER_KEY_PREFIX + draftId;
 }
 
-/** A draft field the background AI parse filled in (✦-badged in the launch bar).
- *  `cwd` only ever comes from an AI-chosen project's `default_cwd`. */
-export type DraftAiField =
-  'project' | 'cwd' | 'pinTier' | 'priority' | 'dueDate' | 'startDate' | 'endDate';
+/** A draft field the background AI parse filled in AND the launch bar shows
+ *  (✦-badged on its pill): the project and, through the project's `default_cwd`,
+ *  the folder. Only these two are badged and ledgered — the launch bar draws no
+ *  other meta (see applyDraftParse for what happens to the rest). */
+export type DraftAiField = 'project' | 'cwd';
 
 /** Who put the current `project` on the row — the ownership rule the AI backfill
  *  obeys. 'seed' = a project/tier "+" seeded it, 'user' = an explicit pick on the
@@ -395,18 +396,29 @@ export function followProjectRegistryChange(
  *   · `project` — only while `projectSource` is unset or a previous 'ai' write.
  *     A 'user' pick (project pill / quick chip) or a 'seed' (project & tier "+")
  *     is FINAL.
- *   · `pinTier` / `priority` — only while `metaTouched` is false, and
- *     applying them must NOT set it: `metaTouched` means "the human chose", and it
- *     is also the per-directory launch-memory switch, so latching it here would
- *     silently freeze the model at whatever folder was selected first.
  *   · `cwd`/`host` — only as a consequence of an AI project, and only when the cwd
  *     is not pinned (no explicit folder pick) and the project actually declares a
  *     `default_cwd`. Never sets `cwdPinned` for the same reason.
+ *   · `priority` / dates — only while `metaTouched` is false, and applying them
+ *     must NOT set it: `metaTouched` means "the human chose", and it is also the
+ *     per-directory launch-memory switch, so latching it here would silently
+ *     freeze the model at whatever folder was selected first. These ride the
+ *     create ("by Friday 3-5pm" becomes the due date) but are NOT badged or
+ *     ledgered: the launch bar draws no meta row (DraftLaunchBar, 2026-09-15), so
+ *     there is nothing to badge and no human decision to measure against; the
+ *     value shows on the task card the moment it exists, where it is one click to
+ *     fix.
+ *   · `pinTier` — NEVER, not even applied. A date the user did not see is a
+ *     detail on a task they can still find; a tier they did not see moves the
+ *     task to a section they are not looking at. Every task lands on the default
+ *     (or a tier "+" seed, which is the user asking). The parse endpoint still
+ *     returns `pinTier` for the Quick Task form, which does draw the picker.
  * Returns the SAME object when nothing applies, so a no-op parse can't re-render.
  *
- * Separately from all of that it records what the parse PROPOSED (`aiSuggested`),
- * including proposals the ownership rules refused — an overridden suggestion is
- * precisely the evidence the accuracy ledger needs.
+ * Separately from all of that it records what the parse PROPOSED (`aiSuggested`)
+ * for the two fields the bar shows, including proposals the ownership rules
+ * refused — an overridden suggestion is precisely the evidence the accuracy
+ * ledger needs, and a field the user could not have overridden is no evidence.
  */
 export function applyDraftParse(
   draft: DraftColumn,
@@ -435,11 +447,6 @@ export function applyDraftParse(
     proposed.project = project;
     if (home?.cwd) proposed.cwd = home.cwd;
   }
-  if (parse.pinTier) proposed.pinTier = parse.pinTier;
-  if (parse.priority) proposed.priority = parse.priority;
-  if (parse.due_date) proposed.dueDate = parse.due_date;
-  if (parse.start_date) proposed.startDate = parse.start_date;
-  if (parse.end_date) proposed.endDate = parse.end_date;
   if (differs(proposed, draft.aiSuggested)) {
     next.aiSuggested = proposed;
     changed = true;
@@ -468,22 +475,19 @@ export function applyDraftParse(
   if (!draft.metaTouched) {
     const meta = { ...draft.meta };
     let metaChanged = false;
-    if (parse.pinTier && parse.pinTier !== meta.pinTier) {
-      meta.pinTier = parse.pinTier; ai.add('pinTier'); metaChanged = true;
-    }
     if (parse.priority && parse.priority !== meta.priority) {
-      meta.priority = parse.priority; ai.add('priority'); metaChanged = true;
+      meta.priority = parse.priority; metaChanged = true;
     }
-    // Dates ("by Friday", "3-5pm") — same ownership rule as tier/priority: any
-    // user edit of the meta (metaTouched) freezes ALL of it, dates included.
+    // Dates ("by Friday", "3-5pm") — same ownership rule as priority: any user
+    // edit of the meta (metaTouched) freezes ALL of it, dates included.
     if (parse.due_date && parse.due_date !== meta.dueDate) {
-      meta.dueDate = parse.due_date; ai.add('dueDate'); metaChanged = true;
+      meta.dueDate = parse.due_date; metaChanged = true;
     }
     if (parse.start_date && parse.start_date !== meta.startDate) {
-      meta.startDate = parse.start_date; ai.add('startDate'); metaChanged = true;
+      meta.startDate = parse.start_date; metaChanged = true;
     }
     if (parse.end_date && parse.end_date !== meta.endDate) {
-      meta.endDate = parse.end_date; ai.add('endDate'); metaChanged = true;
+      meta.endDate = parse.end_date; metaChanged = true;
     }
     // `meta` is REPLACED, never mutated in place; metaTouched deliberately stays
     // as it was (an AI value must not read as a user pick — see the doc above).
@@ -541,23 +545,19 @@ export interface SuggestDiffEntry {
  * actually carried turns "the AI feels inaccurate" into a per-field number.
  *
  * Only fields the AI actually PROPOSED are recorded. A field it stayed silent on
- * carries no evidence about it: the pin tier always ends up at its Satellite
- * default and the folder is always set (a launch needs one), so counting those as
- * "the AI missed it" would bury the real signal under defaults. `priority`
- * normalizes its 'none' sentinel to absent so an unset priority reads as "the
- * suggestion was dropped", not "changed to none".
+ * carries no evidence about it: the folder is always set (a launch needs one), so
+ * counting it as "the AI missed it" would bury the real signal under defaults.
+ * Only the project and the folder are ledger fields now: they are the two the
+ * launch bar shows and the user can override before committing. The tier is
+ * never proposed, and priority/dates ride the create unseen (applyDraftParse), so
+ * for them "kept" would just mean "nobody could have changed it".
  */
 export function suggestDiff(draft: DraftColumn): SuggestDiffEntry[] {
   const chosen: Partial<Record<DraftAiField, string | undefined>> = {
     project: draft.project || undefined,
     cwd: draft.cwd || undefined,
-    pinTier: draft.meta.pinTier,
-    priority: draft.meta.priority && draft.meta.priority !== 'none' ? draft.meta.priority : undefined,
-    dueDate: draft.meta.dueDate,
-    startDate: draft.meta.startDate,
-    endDate: draft.meta.endDate,
   };
-  const fields: DraftAiField[] = ['project', 'cwd', 'pinTier', 'priority', 'dueDate', 'startDate', 'endDate'];
+  const fields: DraftAiField[] = ['project', 'cwd'];
   const out: SuggestDiffEntry[] = [];
   for (const field of fields) {
     const suggested = draft.aiSuggested?.[field];

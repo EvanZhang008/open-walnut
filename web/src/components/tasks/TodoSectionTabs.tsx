@@ -38,7 +38,7 @@ const LABELS: Record<string, string> = {
 const TITLES: Record<string, string> = {
   all: 'All sections stacked — the only view with cross-tier drag',
   focus: 'Focus — current sprint, finish these first',
-  satellite: 'Satellite — needs doing soon, the default pinned tier',
+  satellite: 'Satellite — needs doing soon',
   backlog: 'Backlog — someday work you still want pinned',
   wait: 'Wait — parked tasks, pinned but not actively worked on',
   recent: 'Recent — recently touched tasks',

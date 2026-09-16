@@ -22465,7 +22465,7 @@ td.usage-share-col {
    which the shared rule already opens UPWARD from here. */
 .draft-launch-bar {
   position: relative;
-  z-index: 20;   /* the picker + the More popover overlay the body above */
+  z-index: 20;   /* the project flyout overlays the body above */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -22512,8 +22512,8 @@ td.usage-share-col {
 /* .session-action-chip is borderless by design INSIDE a session's composer row,
    where its neighbours make it read as a control. On its own row it just looked
    like two muted labels, so the folder/project pills get an outline here — same
-   affordance as the meta row's controls. Bigger type too: these two are the
-   most-clicked controls in the panel and were rendering at 10px. */
+   affordance as the quick-folder chips above them. Bigger type too: these two are
+   the most-clicked controls in the panel and were rendering at 10px. */
 .draft-launch-pills .session-action-chip {
   max-width: 100%;
   overflow: hidden;
@@ -22529,45 +22529,13 @@ td.usage-share-col {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* The MetaFooter inside the stack is the SAME component as the picker's, so it
-   arrives with the popover's footer chrome (top hairline, secondary fill). Strip
-   that here — in the stack it is a plain row among rows. */
-.draft-launch-bar .sps-meta-footer {
-  border-top: none;
-  background: transparent;
-  padding: 0;
-}
+/* No MetaFooter lives inside the stack any more (the tier · More row was removed
+   2026-09-15, see DraftLaunchBar); the picker's own footer renders in the POPOUT
+   below, outside this bar, with its regular popover chrome. */
 
 /* The draft's picker no longer anchors inside the column — it POPS OUT
    (`.sps-popout` below): position/top/right/maxHeight arrive inline from
    useMenuPlacement, so no anchored-geometry override is needed here. */
-/* The MetaFooter's "More" popover is a <body> portal placed by useMenuPlacement
-   (see .sps-meta-more-popover) — no per-host geometry override needed here. */
-.draft-launch-bar .sps-meta-more {
-  /* No `margin-left: auto` here (the shared rule's): in the picker's footer the
-     model select anchors the left and pushing More to the far right balances the
-     row, but this row starts at the pin-tier group and both the model select and
-     the engine toggle are gone — an auto margin stranded "⋯ More" against the panel
-     edge, a whole column away from the controls it belongs to. Hugging the tier
-     group is the approved shape. */
-  margin-left: 0;
-}
-/* No "Pin" key in the draft bar: the four tier names say what they are, and a
-   second inline caption bought nothing while pushing this row's content a
-   key-width right of every other row (user feedback: "I want them beautifully
-   aligned"). With the label gone the tier group starts at the bar's left edge on
-   its own — no nudge needed, and none wanted: the tier buttons are borderless with
-   10px padding while the chips and pills are bordered with 10px padding, so
-   box-aligned rows put every glyph within 1px of the same line. Pulling the group
-   left by its padding (an earlier attempt) aligned the TEXT and misaligned all
-   three boxes by 10px instead.
-
-   Hiding it explicitly, NOT via the footer's `@container sps-footer (max-width:
-   520px)` rule: a single-panel draft column is wider than 520px, so leaning on
-   that query would make "Pin" reappear in the widest layout and only there. */
-.draft-launch-bar .pin-tier-label {
-  display: none;
-}
 
 /* ── Popout mode (draft column) ──
    The picker POPS OUT of its host instead of boxing itself into it: a draft
@@ -22591,10 +22559,6 @@ td.usage-share-col {
   width: min(560px, calc(100vw - 24px));
   height: min(60vh, 600px);
 }
-/* The picker's footer is a real popover footer at 560px — the draft bar's
-   row-level MetaFooter strips (borderless, static More, row-width popover)
-   don't apply, because the popout renders OUTSIDE .draft-launch-bar. */
-
 /* ── Empty body = ONE muted line ──
    "What happens next", centered, nothing else: every control lives in the bottom
    stack now, within reach of the composer. */
@@ -22710,35 +22674,6 @@ td.usage-share-col {
 .draft-launch-pills .session-action-chip-ai {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
-/* The meta row wraps MetaFooter plus ONE row-level ✦ slot (the tier/priority/star
-   controls are shared with the picker's footer, so the badge can't live inside them
-   without teaching every other launcher surface about a draft-only concept).
-   The slot is an ABSOLUTE overlay pinned to the row's right edge — out of the flex
-   flow entirely. An in-flow leading slot (the first shape shipped) permanently
-   indented this row 11px relative to the chips row above and the pills row below,
-   which read as broken alignment; out of flow, the three rows share one left edge
-   and a landing suggestion can't nudge any control either. */
-.draft-meta-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  position: relative;
-}
-.draft-meta-row > .sps-meta-footer {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.draft-meta-ai-slot {
-  position: absolute;
-  right: 2px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--accent);
-  font-size: 9px;
-  line-height: 1;
-  pointer-events: none;
-}
-
 /* The composer wrapper stays positioned: ChatInput's own overlays (command
    palette, file-mention popup) place themselves against it. */
 .draft-session-panel .session-panel-input {

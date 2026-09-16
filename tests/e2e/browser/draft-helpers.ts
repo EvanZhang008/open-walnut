@@ -205,31 +205,13 @@ export function expectedChips(dirs: readonly WorkingDir[]): string[] {
   return [...top, ...recent].map(chipTitle)
 }
 
-/** One pin-tier button in the draft's meta row. `tier` is the built-in name
- *  ('focus' | 'satellite' | 'backlog' | 'wait') — the class suffix the shared
- *  PinTierPicker emits. Active state is BOTH a class and aria-pressed. */
-export function draftTierBtn(panel: Locator, tier: string): Locator {
-  return draftLaunchBar(panel).locator(`.pin-tier-options .pin-tier-${tier}`)
-}
-
-/**
- * The meta row's single ✦ slot (R9).
- *
- * ALWAYS present, empty when no AI value is showing — the slot is an absolute
- * overlay on the row's right edge, out of the flex flow, so a landing suggestion
- * can't shift the controls (and the row's left edge stays aligned with the chips
- * and pills rows). So assert its TEXT ('✦' vs ''), never its presence.
- */
-export function draftMetaAiSlot(panel: Locator): Locator {
-  return draftLaunchBar(panel).locator('.draft-meta-ai-slot')
-}
-
 // NOTE for spec authors: there is no sticky pin-tier pref to preset any more (the
-// old `presetStickyTier` helper went with it). EVERY draft opens on Satellite, so
-// a spec that asserts a tier change knows what it started from without touching
+// old `presetStickyTier` helper went with it). EVERY draft opens on Focus, so a
+// spec that asserts a tier knows what it started from without touching
 // localStorage, and one spec's pick can no longer leak into another's through the
 // shared fixture's ui-prefs mirror. To prove a tier SEED was applied, seed a tier
-// that is not Satellite — anything else is indistinguishable from the default.
+// that is not Focus and read the outcome with `pinnedTierOf` — anything else is
+// indistinguishable from the default.
 
 /** Top edge of an element, for the ordering assertions below. */
 async function topOf(loc: Locator, what: string): Promise<number> {
@@ -289,23 +271,24 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   const composer = panel.locator('.session-panel-input > .chat-input-container')
   await expect(composer).toBeVisible()
 
-  // 3. Row order, top → bottom (R6): body hint · quick chips · meta row · pills ·
-  //    composer. Read as top edges so the assertion survives restyling.
-  //    The chips moved ABOVE the meta row in R6 — that row's CONTENT churns (top-4
-  //    by use + 4 most recent), so it must not sit where the user aims for the
-  //    fixed controls; the pills stay glued to the composer.
-  const [hintY, chipsY, metaY, pillsY, composerY] = await Promise.all([
+  // 3. Row order, top → bottom (R6): body hint · quick chips · pills · composer.
+  //    Read as top edges so the assertion survives restyling. The chips are the
+  //    TOP row — that row's CONTENT churns (top-4 by use + 4 most recent), so it
+  //    must not sit where the user aims for the fixed controls; the pills stay
+  //    glued to the composer. There is NO tier/More row between them any more
+  //    (removed 2026-09-15, "complicated for people"); the count assertions
+  //    below keep it from growing back under its old class names.
+  const [hintY, chipsY, pillsY, composerY] = await Promise.all([
     topOf(body.locator('.draft-intent-stack, .draft-quick-hint'), 'the body block'),
     // The whole quick GROUP (its caption + the chips), which is what row 1 is now.
     topOf(bar.locator('.draft-quick-block'), 'the quick-access group'),
-    topOf(bar.locator('.sps-meta-footer .sps-meta-row').first(), 'the pin-tier row'),
     topOf(bar.locator('.draft-composer-bar'), 'the cwd/project pills row'),
     topOf(composer, 'the composer'),
   ])
   expect(hintY, 'the body block sits above the launch stack').toBeLessThan(chipsY)
-  expect(chipsY, 'quick-access chips are the TOP row of the stack').toBeLessThan(metaY)
-  expect(metaY, 'the pin-tier row sits between the chips and the pills').toBeLessThan(pillsY)
+  expect(chipsY, 'quick-access chips are the TOP row of the stack').toBeLessThan(pillsY)
   expect(pillsY, 'the pills are the LAST row before the composer').toBeLessThan(composerY)
+  await expect(bar.locator('.sps-meta-footer, .pin-tier-options, .sps-meta-more-btn')).toHaveCount(0)
 
   // 4. The pills are LEFT-ALIGNED as a pair (v4): the cwd pill starts at the row's
   //    left edge and the project pill follows it on the SAME line — they used to
@@ -318,39 +301,23 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   expect(project.x, 'the project pill follows the cwd pill').toBeGreaterThan(cwd.x)
   expect(Math.abs(project.y - cwd.y), 'both pills share one line').toBeLessThan(4)
 
-  // 4b. ONE LEFT EDGE for the whole stack — the caption, the first chip, the tier
-  //     group's first button and the cwd pill all start at the same x (user
-  //     feedback: "I want them beautifully aligned"). Two shapes are ruled out by
-  //     this: the in-flow ✦ slot that once pushed the meta row 11px right of its
-  //     neighbours (it is an absolute overlay now), and the inline "Quick" key that
-  //     indented only the FIRST chip line, leaving wrapped rows on a different edge
-  //     from the row above them. Compared as first-CHILD edges, not container
-  //     edges, because a container can be full-width regardless of where its
-  //     content starts.
+  // 4b. ONE LEFT EDGE for the whole stack — the caption, the first chip and the
+  //     cwd pill all start at the same x (user feedback: "I want them beautifully
+  //     aligned"). The inline "Quick" key is what this rules out: it indented only
+  //     the FIRST chip line, leaving wrapped rows on a different edge from the row
+  //     above them. Compared as first-CHILD edges, not container edges, because a
+  //     container can be full-width regardless of where its content starts.
   const quickKey = await bar.locator('.draft-quick-block > .draft-quick-key').boundingBox()
   const firstChip = await bar.locator('.draft-quick-chips .draft-quick-chip').first().boundingBox()
-  // The tier button is compared BOX-to-box like the rest: it is borderless with the
-  // same 10px padding the bordered chips/pills carry, so box-aligned rows land every
-  // glyph within 1px of one line. (Nudging the group left by its padding to align
-  // the TEXT instead is what this number rejects — it threw all three boxes 10px
-  // out.)
-  const firstTier = await bar.locator('.pin-tier-options .pin-tier-btn').first().boundingBox()
-  if (!quickKey || !firstChip || !firstTier) throw new Error('the chips/meta rows did not render')
+  if (!quickKey || !firstChip) throw new Error('the chips row did not render')
   expect(Math.abs(quickKey.x - cwd.x), 'the caption shares the pills\' left edge').toBeLessThan(3)
   expect(Math.abs(firstChip.x - cwd.x), 'the chips share the pills\' left edge').toBeLessThan(3)
-  expect(Math.abs(firstTier.x - cwd.x), 'the tier group shares the pills\' left edge').toBeLessThan(3)
   expect(quickKey.y, 'the caption sits ABOVE the chips, not inline with them')
     .toBeLessThan(firstChip.y)
 
-  // 4b-2. No "Pin" caption: the four tier names say what they are, and a second
-  //       inline key both duplicated the Quick caption's job and pushed this row's
-  //       content off the shared left edge asserted above (user feedback).
-  await expect(bar.locator('.pin-tier-label')).toBeHidden()
-
-  // 4c. The provider question is asked ONCE, in the composer's model picker. The
-  //     meta row's Claude|Codex toggle is gone: the model pill below already opens
-  //     a provider rail, and two segmented controls two rows apart asked the same
-  //     question twice (user feedback).
+  // 4c. The provider question is asked ONCE, in the composer's model picker: the
+  //     model pill below opens a provider rail, so no segmented engine toggle
+  //     anywhere in the bar (user feedback, back when the meta row still existed).
   await expect(bar.locator('.sps-engine-toggle')).toHaveCount(0)
 
   // 5. The model select moved into the COMPOSER's controls row, leftmost — the
@@ -398,7 +365,21 @@ export async function openDraftOnCwd(
   opts: { engine?: 'Codex' } = {},
 ): Promise<Locator> {
   const panel = await openDraft(page)
+  await pickDraftFolder(page, panel, cwd, opts)
+  return panel
+}
 
+/**
+ * Point an OPEN draft at `cwd` through the full folder picker (cwd pill → type →
+ * Shift+Enter). The picker's onSelect meta replaces the row's wholesale, so this
+ * is also the path a seeded tier or an AI-filled date has to survive.
+ */
+export async function pickDraftFolder(
+  page: Page,
+  panel: Locator,
+  cwd: string,
+  opts: { engine?: 'Codex' } = {},
+): Promise<void> {
   // The cwd/host pill. Label is the folder basename once a path is set, and
   // "Choose folder…" on a fresh browser with no launch memory — match either,
   // and take the FIRST chip (the project pill sits right after it).
@@ -436,8 +417,6 @@ export async function openDraftOnCwd(
   // landed on THIS draft (a stale pill means onPathChange never fired).
   await expect(picker).toBeHidden()
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
-
-  return panel
 }
 
 /** Folder basename — the cwd pill's label, and (in v4) the WHOLE label of a

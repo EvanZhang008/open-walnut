@@ -150,33 +150,6 @@
   background: var(--walnut-accent);
 }
 
-/* "⋯ More" — walnut mode folds the tier/priority/dates row behind this one
-   pill. Same outline grammar as the draft launch pills (globals
-   ".draft-launch-pills .session-action-chip"): bare text on its own row read
-   as orphaned, not as a control (user). Sits flush left like every other row
-   in the launch-bar stack. */
-.draft-meta-row .draft-walnut-more {
-  align-self: flex-start;
-  /* Flush with the launch-bar rows' shared left edge (= the composer box
-     border) — the same line every chip row sits on in Start Task mode. No
-     extra indent: the pill's own border is what aligns, exactly like the
-     folder/tier chips above the composer. */
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: none;
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-.draft-meta-row .draft-walnut-more:hover {
-  color: var(--walnut-accent);
-  border-color: var(--walnut-accent);
-}
-
 /* ── Task lists: amber TITLE TEXT is the only marker of an Ask-Walnut task. ──
    Keyed on the per-task flag (task.walnut_agent), NEVER on the project name —
    ordinary dev tasks filed under the same project must not light up.
