@@ -1285,7 +1285,7 @@ await fs.writeFile(
           message: { role: 'assistant', content: [{ type: 'text', text: `filler answer ${i + 1}` }] },
         }),
       ]).flat(),
-      // LAST turn, deliberately: the timeline renders a WINDOW anchored at the
+      // Near the END, deliberately: the timeline renders a WINDOW anchored at the
       // bottom, so a link buried above the fillers is not in the DOM at all.
       // stale-build-no-flash.spec.ts needs this one clickable on first paint.
       JSON.stringify({
@@ -1295,6 +1295,19 @@ await fs.writeFile(
         message: {
           role: 'assistant',
           content: [{ type: 'text', text: `The agent lives in ${goPath} if you want the source.` }],
+        },
+      }),
+      // A markdown LINK whose destination is a local path, with a GitHub-style
+      // line anchor, inside CJK full-width parentheses (U+FF08/U+FF09): the exact
+      // shape of the 2026-09-15 report (link-to-local-path.spec.ts). The label is
+      // the text a user sees; the path must not appear as text at all.
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-vscode-session',
+        timestamp: new Date(sessionFixtureNow - 19_000).toISOString(),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `Start from main \uFF08[entry point:6-8](${goPath}#L6)\uFF09 and read down.` }],
         },
       }),
       '',

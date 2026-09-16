@@ -9,6 +9,11 @@ import {
   lookupSessionTitle,
   lookupTaskLabel,
 } from '../stores/entity-label-store';
+// Relative for the same reason. Shared with the server's path resolver and its
+// HTTP edges so that "what position does `file.go#L58` name" and "is this a
+// traversal" each have exactly one definition; the module is dependency-free by
+// contract (no fs, no async, no imports) and is bundled into the browser here.
+import { hasTraversalSegment, parsePathDestination } from '../../../src/providers/path-ref-parse';
 
 /**
  * GFM `del` retuned to require DOUBLE tildes — shared by EVERY renderer here.
@@ -264,6 +269,17 @@ export function renderImageBlock(imgPath: string, captionText: string): string {
   return `<span class="inline-image-block">${renderImageTag(imgPath)}<span class="inline-image-path">${escapeHtmlText(captionText)}</span></span>`;
 }
 
+/**
+ * The in-app render in progress, read by the `link` renderer below to turn a
+ * local-path destination into a file-link (and, with a cwd, a relative one).
+ *
+ * Set by renderMarkdownWithRefs around its marked.parse() call; parsing is
+ * synchronous, so one slot is enough. Null on every other path through the
+ * shared singleton (copy-as-rich-text, tool results, note previews), which is
+ * what keeps in-app anchors out of text that leaves the app.
+ */
+let fileLinkRenderCtx: { cwd?: string } | null = null;
+
 marked.use({
   renderer: {
     // Override codespan renderer: detect image paths inside backtick code spans.
@@ -277,8 +293,10 @@ marked.use({
       }
       return false as unknown as string;
     },
-    // Override link renderer: when href points to an image path, render as image + caption
-    link({ href, tokens }) {
+    // Override link renderer: an image href renders as image + caption; a LOCAL
+    // PATH href renders as the same `a.file-link` a bare path becomes (see
+    // fileLinkAttrsForDestination); everything else falls through to marked.
+    link({ href, title, tokens }) {
       if (href) {
         // Check local image paths
         if (isImageHref(href)) {
@@ -292,6 +310,20 @@ marked.use({
           const text = this.parser.parseInline(tokens).replace(/<[^>]*>/g, '');
           const caption = (text && text !== href) ? text : href;
           return renderImageBlock(apiPath, caption);
+        }
+        // `href` here is the destination as the author wrote it (marked cleans
+        // and percent-encodes only inside its DEFAULT renderer), so the path is
+        // compared and stored verbatim.
+        const fileAttrs = fileLinkRenderCtx ? fileLinkAttrsForDestination(href, fileLinkRenderCtx.cwd) : null;
+        if (fileAttrs) {
+          // The label stays markdown (a code-span label renders as <code>), but
+          // an anchor already inside it (a task pill injected before marked, or
+          // model-written HTML) would nest, and the HTML parser splits nested
+          // anchors into an empty file-link plus loose text. Keep its text only.
+          let label = this.parser.parseInline(tokens).replace(/<\/?a\b[^>]*>/gi, '');
+          if (!label.trim()) label = escapeHtmlText(href);
+          const titleAttr = title ? ` title="${escapeHtmlText(title)}"` : '';
+          return `<a class="file-link" ${fileAttrs}${titleAttr} href="#">${label}</a>`;
         }
       }
       // marked v15: return false to fall through to the default link renderer
@@ -834,6 +866,125 @@ const PATH_SEG_SP = `${PATH_SEG}(?: ${PATH_SP_CHUNK}){0,9}?`;
  * carry lastIndex state across callers. */
 const ABS_FILE_RE_SRC = `(?<![\\/\\w])(~?\\/(?:${PATH_SEG_SP}\\/)+(?:${PATH_SEG}|${PATH_SEG_SP})\\.[\\w]+)(?::(\\d+))?`;
 
+// ── Markdown links whose destination is a LOCAL path ──
+//
+// `[eventprocessor.go:58-75](/repo/pkg/eventprocessor.go#L58)` is how a model
+// cites a file when it wants a label of its own: the path is the destination.
+// Two things went wrong with that shape (2026-09-15 report, both markdown and
+// rich mode). First, the absolute-path pass below saw the path inside the
+// parentheses and wrapped it in an anchor, so marked received
+// `[label](<a …>/repo/…</a>#L58)`, no longer link syntax, and printed the
+// brackets, the parentheses and `#L58` as literal text around a bare path link.
+// Second, even had marked parsed it, the result would have been a plain
+// `<a href="/repo/…">`, which the click handler does not know; clicking one is a
+// real page navigation (the SPA reloads on that URL and drops its panels).
+//
+// The work is split so that marked keeps owning its own grammar:
+//   · filePathsToHtml only FENCES: it finds the spans that marked will read as a
+//     link, image or reference definition (markdownLinkSpans) and keeps the path
+//     passes out of them, so the destination reaches marked intact. The fence
+//     is a shape test, not a grammar: it errs toward fencing too much, which at
+//     worst leaves a path un-linkified, never a link broken.
+//   · the `link` renderer override (top of file) decides what a parsed
+//     destination IS, with fileLinkAttrsForDestination. Nested-bracket labels,
+//     angle-bracket destinations, escapes, titles and reference-style links all
+//     arrive already parsed, exactly as marked understands them.
+// Every other link (http, mailto, `#anchor`, an in-app route such as `/tasks`)
+// falls through to marked's default anchor, and a path inside ITS label is left
+// alone too: `[/src/x.ts](https://github.com/…/x.ts)` must stay one external
+// link, not an anchor nested inside an anchor (the HTML parser splits those apart
+// and the label reads as two links).
+
+// A label with one level of nested brackets (`[a [b] c]`); every alternative is
+// decided by its first character, so an unclosed run cannot backtrack.
+const MD_LINK_LABEL = `!?\\[(?:[^\\[\\]\\n]|\\[[^\\[\\]\\n]*\\])*\\]`;
+// CommonMark's destination: `<…>`, or a run without spaces holding one level of
+// balanced parentheses. Spaces outside `<…>` make marked reject the link, in
+// which case the text stays literal and the paths in it are linkified as before.
+const MD_LINK_DEST = `<[^<>\\n]*>|[^\\s()]*(?:\\([^\\s()]*\\)[^\\s()]*)*`;
+const MD_LINK_TITLE = `(?:[ \\t]+(?:"[^"\\n]*"|'[^'\\n]*'|\\([^()\\n]*\\)))?`;
+const MD_LINK_SPAN_RE_SRC = `${MD_LINK_LABEL}\\([ \\t]*(?:${MD_LINK_DEST})${MD_LINK_TITLE}[ \\t]*\\)`;
+// A link still streaming in: its closing parenthesis has not arrived, and until
+// it does the half-written destination must not become a link to a prefix of
+// the path (a click during that frame would open the wrong directory).
+const MD_LINK_TAIL_RE_SRC = `${MD_LINK_LABEL}\\([ \\t]*(?:<[^<>\\n]*|[^\\s()]*)$`;
+// `[ref]: /path` definitions, which marked resolves for `[label][ref]`.
+const MD_REF_DEF_RE_SRC = `^ {0,3}\\[[^\\]\\n]+\\]:[ \\t]*(?:<[^<>\\n]*>|\\S+)[^\\n]*$`;
+
+/** Byte ranges of `text` that marked will read as a link, image or reference
+ *  definition (code regions excluded by the caller). */
+function markdownLinkSpans(text: string, skip: (idx: number) => boolean): [number, number][] {
+  const spans: [number, number][] = [];
+  const add = (re: RegExp) => {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (!skip(m.index)) spans.push([m.index, m.index + m[0].length]);
+      if (m[0].length === 0) re.lastIndex++;
+    }
+  };
+  add(new RegExp(MD_LINK_SPAN_RE_SRC, 'g'));
+  add(new RegExp(MD_REF_DEF_RE_SRC, 'gm'));
+  const tail = new RegExp(MD_LINK_TAIL_RE_SRC).exec(text);
+  if (tail && !skip(tail.index)) spans.push([tail.index, text.length]);
+  return spans;
+}
+
+/** Characters no destination may carry into an attribute or a path lookup
+ *  (quotes, angle brackets, backslashes, control characters). */
+// eslint-disable-next-line no-control-regex
+const DEST_FORBIDDEN_RE = /["<>\\\x00-\x1f]/;
+
+/**
+ * The anchor attributes a markdown link DESTINATION maps to, or null when it is
+ * not a local path: a URL, an in-page anchor, a query, a traversal, a relative
+ * path with no cwd to resolve against, or too little to go on.
+ *
+ * Floors follow the bare-path passes (a file needs a directory above it, an
+ * absolute directory three segments, an extensionless segment only the
+ * characters Pass 1b accepts), so `/tasks/<id>` and `/apps/<app>~main/inbox`
+ * stay in-app routes. Two deliberate differences, both because the alternative
+ * for an EXPLICIT link is a page navigation rather than "not a link": a relative
+ * directory needs two segments, not three, and an image marked does not render
+ * inline (svg, ico, …) opens in the Files panel instead of nowhere. A single
+ * segment (`README.md`) is still declined: the host resolver keeps one directory
+ * of context for multi-segment references and would answer a bare name with
+ * any same-named file in the tree.
+ */
+function fileLinkAttrsForDestination(rawDest: string, cwd?: string): string | null {
+  const dest = rawDest.trim();
+  if (!dest || dest.startsWith('#') || dest.startsWith('//')) return null;
+  const ref = parsePathDestination(dest);
+  // A heading fragment (`guide.md#tiers`) is not addressable in the viewer; the
+  // file is what the link is for. Numeric fragments were already taken as a line.
+  const p = ref.path.replace(/#[A-Za-z][\w-]*$/, '');
+  // Scheme test runs AFTER the position is split off: `README.md:12` is a file at
+  // line 12, not a `README.md:` scheme. `mailto:`/`https:`/`vscode:` still fail.
+  if (!p || p.includes('?') || p.includes('#') || DEST_FORBIDDEN_RE.test(p)) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(p.split('/')[0] ?? '')) return null;
+  if (hasTraversalSegment(p)) return null;
+  const lineAttr = ref.line ? ` data-file-line="${ref.line}"` : '';
+  const segs = p.replace(/^~?\//, '').replace(/\/+$/, '').split('/');
+  const leaf = segs[segs.length - 1] ?? '';
+  const hasExt = /^[^.].*\.\w+$|^\.\w+$/.test(leaf);
+  if (/^~?\//.test(p)) {
+    let path: string | null = null;
+    if (hasExt && segs.length >= 2) path = p;
+    else if (!hasExt && segs.length >= 3 && segs.every((s) => /^[\w@.+-]+$/.test(s))) path = p.replace(/\/+$/, '');
+    if (!path) return null;
+    return `data-file-path="${escapeHtmlText(path)}"${lineAttr}`;
+  }
+  if (!cwd) return null;
+  let rel: string | null = null;
+  const ext = hasExt ? leaf.split('.').pop()!.toLowerCase() : '';
+  if (hasExt) {
+    if (segs.length >= 2 && CODE_EXTENSIONS.has(ext)) rel = p;
+  } else if (segs.length >= 2 && segs.every((s) => /^[\w@][\w@.+-]*$/.test(s))) {
+    rel = p.replace(/\/+$/, '');
+  }
+  if (!rel) return null;
+  return `data-rel-path="${escapeHtmlText(rel.replace(/^\.\//, ''))}" data-cwd="${escapeHtmlText(cwd)}"${lineAttr}`;
+}
+
 /**
  * Convert file paths in text to clickable <a class="file-link"> elements.
  * Runs as a preprocessing step before marked.parse().
@@ -842,7 +993,8 @@ const ABS_FILE_RE_SRC = `(?<![\\/\\w])(~?\\/(?:${PATH_SEG_SP}\\/)+(?:${PATH_SEG}
  * 1. Absolute paths: /dir/dir/file.ext (with optional :line suffix)
  * 2. Relative paths with extension: dir/file.ext (needs sessionCwd to resolve)
  *
- * Exclusions: URLs, image paths, code fences, already-linked text.
+ * Exclusions: URLs, image paths, code fences, already-linked text, and the
+ * label and destination of every markdown link (see markdownLinkSpans).
  */
 export function filePathsToHtml(text: string, sessionCwd?: string): string {
   // Code regions (fenced/indented blocks + inline spans) are off-limits: raw HTML
@@ -866,17 +1018,25 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
     return urlRanges.some(([start, end]) => idx >= start && idx < end);
   }
 
-  // Also skip if inside a URL, a code fence, or a markdown image
+  // Spans marked will read as a link, image or reference definition (label and
+  // destination). The passes never inject inside one; the `link` renderer
+  // decides what each destination is once marked has parsed it.
+  const linkRanges = markdownLinkSpans(text, isInFence);
+  function isInLink(idx: number): boolean {
+    return linkRanges.some(([start, end]) => idx >= start && idx < end);
+  }
+
+  // Also skip if inside a URL, a code fence, or a markdown link / image
   function shouldSkip(matchIdx: number, matchStr: string): boolean {
     if (isInFence(matchIdx)) return true;
     if (isInUrl(matchIdx)) return true;
-    // Check for markdown image ![...](path)
-    if (matchIdx >= 2 && text[matchIdx - 1] === '(' && text.slice(0, matchIdx).lastIndexOf('![') > text.slice(0, matchIdx).lastIndexOf(']')) return true;
+    if (isInLink(matchIdx)) return true;
     return false;
   }
 
   let result = text;
   const replacements: { start: number; end: number; replacement: string }[] = [];
+  let m: RegExpExecArray | null;
 
   // Pass 1: Absolute paths — /dir/file.ext, ~/dir/file.ext, optional :42 suffix.
   // Negative lookbehind: leading `/` must NOT be preceded by a word char or another `/`.
@@ -885,7 +1045,6 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
   // dropped, both visually and from data-file-path — backend expands `~`).
   // Segments may contain spaces (Title Case chunks) — see ABS_FILE_RE_SRC.
   const absRe = new RegExp(ABS_FILE_RE_SRC, 'g');
-  let m: RegExpExecArray | null;
   while ((m = absRe.exec(text)) !== null) {
     const fullMatch = m[0];
     const filePath = m[1];
@@ -982,6 +1141,16 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
   return result;
 }
 
+/** Complete `<a …>…</a>` pairs in `html`, in document order. A self-closing
+ *  `<a …/>` is not an open (it would pair with some later, unrelated `</a>`). */
+function anchorPairRanges(html: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  const re = /<a(?:>|\s[^>]*[^/>]>)[\s\S]*?<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) ranges.push([m.index, m.index + m[0].length]);
+  return ranges;
+}
+
 /**
  * Linkify file paths that ended up *inside* <code> blocks after marked ran.
  * filePathsToHtml() deliberately skips code fences (injecting <a> before marked
@@ -989,7 +1158,19 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
  * blocks. Operates on the already-escaped inner text of each <code> element.
  */
 function linkifyPathsInCode(html: string, sessionCwd?: string): string {
-  return html.replace(/(<code[^>]*>)([\s\S]*?)(<\/code>)/g, (full, open: string, inner: string, close: string) => {
+  // A code span that IS an anchor's text (`` [`src/x.ts`](…) ``, which marked has
+  // already wrapped in <a>) must not grow a second anchor inside the first: the
+  // HTML parser splits nested anchors and the visible text ends up in the inner
+  // one. Complete `<a>…</a>` pairs only, found once up front and consumed in
+  // document order: a running open/close count would latch on a self-closing
+  // `<a/>`, an anchor still streaming, or a stray `</a>` in model-written HTML,
+  // and silently stop linkifying every code span after it.
+  const enclosing = anchorPairRanges(html);
+  let nextAnchor = 0;
+  return html.replace(/(<code[^>]*>)([\s\S]*?)(<\/code>)/g, (full, open: string, inner: string, close: string, offset: number) => {
+    while (nextAnchor < enclosing.length && enclosing[nextAnchor]![1] <= offset) nextAnchor++;
+    const a = enclosing[nextAnchor];
+    if (a && a[0] < offset && offset < a[1]) return full;
     if (inner.includes('<a ')) return full; // already linkified
     let changed = false;
 
@@ -1230,7 +1411,15 @@ export function renderMarkdownWithRefs(
     let preprocessed = stripLeakedToolCalls(text);
     preprocessed = entityRefsToHtml(preprocessed);
     preprocessed = filePathsToHtml(preprocessed, sessionCwd);
-    const raw = marked.parse(preprocessed);
+    // In-app render: the `link` renderer may turn a local-path destination into
+    // a file-link (see fileLinkRenderCtx). parse() is synchronous.
+    fileLinkRenderCtx = { cwd: sessionCwd };
+    let raw: string | Promise<string>;
+    try {
+      raw = marked.parse(preprocessed);
+    } finally {
+      fileLinkRenderCtx = null;
+    }
     let parsed = typeof raw === 'string' ? raw : '';
     parsed = linkifyPathsInCode(parsed, sessionCwd);
     // Models write raw HTML in replies now and we render it natively, so this

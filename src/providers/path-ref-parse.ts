@@ -59,27 +59,61 @@ const LEADING_NOISE = /^[-*+\s>]+/;
  *   file.ts#L42       file.ts#L10-L20     file.ts#42
  *   file.ts(42)       file.ts(42,7)       file.ts, line 42
  *   file.ts:L42
+ *
+ * `destination` marks the forms that also apply to a markdown link DESTINATION
+ * (`[label](path#L42)`). A destination is not prose: there `(2024)` is the tail of
+ * a directory called `Report (2024)` and `, line 3` is part of a filename, so the
+ * prose-only forms would invent a line number and truncate the path.
  */
-const POSITION_PATTERNS: Array<{ re: RegExp; map: (m: RegExpMatchArray) => Omit<ParsedRef, 'path'> }> = [
+const POSITION_PATTERNS: Array<{
+  re: RegExp;
+  map: (m: RegExpMatchArray) => Omit<ParsedRef, 'path'>;
+  destination: boolean;
+}> = [
   // #L10-L20 / #L10-20 — a GitHub range
-  { re: /#L(\d+)[-–]L?(\d+)$/i, map: (m) => ({ line: +m[1]!, endLine: +m[2]! }) },
+  { re: /#L(\d+)[-–]L?(\d+)$/i, map: (m) => ({ line: +m[1]!, endLine: +m[2]! }), destination: true },
   // :10-20 — a plain range
-  { re: /:(\d+)[-–](\d+)$/, map: (m) => ({ line: +m[1]!, endLine: +m[2]! }) },
+  { re: /:(\d+)[-–](\d+)$/, map: (m) => ({ line: +m[1]!, endLine: +m[2]! }), destination: true },
   // #L42 / #42 — a GitHub single line
-  { re: /#L?(\d+)$/i, map: (m) => ({ line: +m[1]! }) },
+  { re: /#L?(\d+)$/i, map: (m) => ({ line: +m[1]! }), destination: true },
   // (42,7) / (42, 7) — a compiler-style position
-  { re: /\((\d+),\s*(\d+)\)$/, map: (m) => ({ line: +m[1]!, column: +m[2]! }) },
+  { re: /\((\d+),\s*(\d+)\)$/, map: (m) => ({ line: +m[1]!, column: +m[2]! }), destination: false },
   // (42)
-  { re: /\((\d+)\)$/, map: (m) => ({ line: +m[1]! }) },
+  { re: /\((\d+)\)$/, map: (m) => ({ line: +m[1]! }), destination: false },
   // , line 42 / " line 42" — prose
-  { re: /[,\s]+lines?\s+(\d+)$/i, map: (m) => ({ line: +m[1]! }) },
+  { re: /[,\s]+lines?\s+(\d+)$/i, map: (m) => ({ line: +m[1]! }), destination: false },
   // :42:7 — the editor/grep convention
-  { re: /:(\d+):(\d+)$/, map: (m) => ({ line: +m[1]!, column: +m[2]! }) },
+  { re: /:(\d+):(\d+)$/, map: (m) => ({ line: +m[1]!, column: +m[2]! }), destination: true },
   // :L42
-  { re: /:L(\d+)$/i, map: (m) => ({ line: +m[1]! }) },
+  { re: /:L(\d+)$/i, map: (m) => ({ line: +m[1]! }), destination: true },
   // :42 — last, because it is the least specific
-  { re: /:(\d+)$/, map: (m) => ({ line: +m[1]! }) },
+  { re: /:(\d+)$/, map: (m) => ({ line: +m[1]! }), destination: true },
 ];
+
+/**
+ * Split the position off a markdown link DESTINATION. No unwrapping, no noise
+ * trimming, no separator normalization: the markdown parser has already
+ * delimited the destination, so everything in it is the author's path.
+ */
+export function parsePathDestination(dest: string): ParsedRef {
+  if (typeof dest !== 'string') return { path: '' };
+  const s = dest.trim();
+  for (const { re, map, destination } of POSITION_PATTERNS) {
+    if (!destination) continue;
+    const m = s.match(re);
+    if (m) return { path: s.slice(0, m.index), ...map(m) };
+  }
+  return { path: s };
+}
+
+/**
+ * True when some segment IS `..`. Checked segment-wise, not by substring:
+ * `mod..old/thing.ts` is an ordinary filename. Both separators are split on
+ * because callers pass raw, unnormalized input.
+ */
+export function hasTraversalSegment(ref: string): boolean {
+  return ref.split(/[/\\]/).some((seg) => seg === '..');
+}
 
 /** Strip one layer of matched wrappers, repeatedly (``"path"`` happens). */
 function unwrap(s: string): string {
@@ -174,8 +208,8 @@ export function isUnsafePathRef(ref: string): boolean {
   if (typeof ref !== 'string' || ref.length === 0 || ref.length > 4096) return true;
   if (ref.includes('\0')) return true;
   if (/[;&|`$(){}!<>\n\r]/.test(ref)) return true;
-  // Split on BOTH separators: this function is also called on raw, unparsed input
-  // (the HTTP edges guard the reference before anything normalizes it), where a
-  // Windows-style `a\..\b` is the same escape as `a/../b`.
-  return ref.split(/[/\\]/).some((seg) => seg === '..');
+  // This function is also called on raw, unparsed input (the HTTP edges guard the
+  // reference before anything normalizes it), where a Windows-style `a\..\b` is
+  // the same escape as `a/../b`.
+  return hasTraversalSegment(ref);
 }
