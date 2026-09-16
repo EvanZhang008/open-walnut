@@ -20,7 +20,6 @@ import {
   createMailAccount,
   listMailAccounts,
   listMailMessages,
-  listMailProviders,
   listMailboxes,
   mailFailure,
   readMailMessage,
@@ -31,6 +30,7 @@ import {
 import { log } from '@/utils/log';
 import { closeMailComposer, onMailDraftEvent } from './compose/compose-actions';
 import { loadMailDrafts } from './compose/compose-drafts';
+import { loadProviders } from './mail-providers';
 import { markReadIfAllowed } from './mail-read-flag';
 import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
 import { keepOpenRow, readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
@@ -51,17 +51,6 @@ import {
 } from './mail-store';
 
 // ── reads ──
-
-function loadProviders(force = false): Promise<void> {
-  return run('providers', async () => {
-    try {
-      const answer = await listMailProviders();
-      patch({ providers: answer.providers ?? [] });
-    } catch (error) {
-      log.warn('mail', 'provider list failed', { error: mailFailure(error).message });
-    }
-  }, force);
-}
 
 function loadAccounts(force = false): Promise<void> {
   return run('accounts', async () => {

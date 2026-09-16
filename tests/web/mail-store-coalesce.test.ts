@@ -22,6 +22,7 @@ import {
   retryOpenMessageBody,
   selectMailbox,
 } from '../../web/src/apps/mail/mail-actions';
+import { markReadIfAllowed } from '../../web/src/apps/mail/mail-read-flag';
 import { __resetMailStore, getMailSnapshot } from '../../web/src/apps/mail/mail-store';
 
 const ACCOUNT = 'fake:one';
@@ -30,6 +31,8 @@ interface Call { url: string; method: string }
 
 let calls: Call[] = [];
 let readStatus = 200;
+/** 404 = the mail plugin is not mounted yet, which is what a tab opening mid-reload really gets. */
+let providersStatus = 200;
 /** When set, the message route answers with an envelope and a remembered body failure. */
 let bodyError: string | null = null;
 
@@ -89,6 +92,7 @@ const MESSAGES = { messages: [envelope('m-unread', false), envelope('m-read', tr
 beforeEach(() => {
   calls = [];
   readStatus = 200;
+  providersStatus = 200;
   bodyError = null;
   __resetMailStore();
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -113,7 +117,11 @@ beforeEach(() => {
     if (url.includes('/mail/messages')) return Promise.resolve(json(MESSAGES));
     if (url.includes('/mail/mailboxes')) return Promise.resolve(json(MAILBOXES));
     if (url.includes('/mail/accounts')) return Promise.resolve(json(ACCOUNTS));
-    if (url.includes('/mail/providers')) return Promise.resolve(json(PROVIDERS));
+    if (url.includes('/mail/providers')) {
+      return Promise.resolve(providersStatus === 200
+        ? json(PROVIDERS)
+        : json({ error: 'not-found', message: 'Not found: GET /api/plugins/mail/providers' }, providersStatus));
+    }
     return Promise.resolve(json({ error: 'not-found', message: url }, 404));
   }));
 });
@@ -222,6 +230,81 @@ describe('the optimistic read flag', () => {
     await openMailMessage(ACCOUNT, 'm-unread');
     await retryOpenMessageBody();
     expect(calls.some((call) => call.url.includes('retry=1'))).toBe(false);
+  });
+
+  it('marks read anyway when the provider list never landed, and says so in the store', async () => {
+    // The reported bug (2026-09-16): a tab that opened while the mail plugin was still starting got
+    // `Not found: GET /api/plugins/mail/providers`, which left `providers: []` — indistinguishable
+    // from a healthy empty list — so every click silently did nothing, no request, for hours.
+    providersStatus = 404;
+    await openMailConsole();
+    expect(getMailSnapshot().providersKnown).toBe(false);
+
+    const before = countOf('/mail/providers');
+    await openMailMessage(ACCOUNT, 'm-unread');
+
+    // It asked again before deciding, then let the SERVER decide, which is the one authority here.
+    expect(countOf('/mail/providers')).toBeGreaterThan(before);
+    expect(calls.some((call) => call.method === 'POST' && call.url.includes('/read'))).toBe(true);
+    const snapshot = getMailSnapshot();
+    expect(snapshot.messages.find((one) => one.messageId === 'm-unread')!.flags).toContain('\\Seen');
+    expect(snapshot.mailboxes[ACCOUNT]!.find((one) => one.mailboxId === 'INBOX')!.unread).toBe(1);
+  });
+
+  it('rolls the badge back when the server refuses a flag it could not ask about first', async () => {
+    providersStatus = 404;
+    readStatus = 409;
+    await openMailConsole();
+    await openMailMessage(ACCOUNT, 'm-unread');
+
+    // The POST is the point: without it this assertion would pass on the very bug it guards, since a
+    // console that never asks also never has anything to roll back.
+    expect(calls.filter((call) => call.method === 'POST' && call.url.includes('/read'))).toHaveLength(1);
+    const snapshot = getMailSnapshot();
+    expect(snapshot.messages.find((one) => one.messageId === 'm-unread')!.flags).not.toContain('\\Seen');
+    expect(snapshot.mailboxes[ACCOUNT]!.find((one) => one.mailboxId === 'INBOX')!.unread).toBe(2);
+    expect(snapshot.accounts[0]!.unread).toBe(2);
+  });
+
+  it('heals without a reload once the list can be read again', async () => {
+    providersStatus = 404;
+    await openMailConsole();
+    expect(getMailSnapshot().providersKnown).toBe(false);
+
+    providersStatus = 200;
+    await openMailMessage(ACCOUNT, 'm-unread');
+
+    const snapshot = getMailSnapshot();
+    expect(snapshot.providersKnown).toBe(true);
+    expect(snapshot.providers.map((one) => one.id)).toEqual(['fake']);
+    expect(calls.some((call) => call.url.includes('/read'))).toBe(true);
+  });
+
+  it('stays silent when the list DID land and this account has no provider in it', async () => {
+    // A list that answered is the truth: nothing can move this flag, and asking would only make the
+    // row flash read and back. This is the case the unknown-list path must not be confused with.
+    const held = PROVIDERS.providers.splice(0, 1);
+    try {
+      await openMailConsole();
+      expect(getMailSnapshot().providersKnown).toBe(true);
+      await openMailMessage(ACCOUNT, 'm-unread');
+      expect(calls.some((call) => call.url.includes('/read'))).toBe(false);
+      expect(getMailSnapshot().mailboxes[ACCOUNT]!.find((one) => one.mailboxId === 'INBOX')!.unread).toBe(2);
+    } finally {
+      PROVIDERS.providers.push(...held);
+    }
+  });
+
+  it('moves the badge once when two callers mark the same message at the same time', async () => {
+    // Both callers pass the capability check before either applies (the check awaits), so without a
+    // re-read of the row the badge would be decremented twice and the count would sit a mail short.
+    await openMailConsole();
+    const message = getMailSnapshot().messages.find((one) => one.messageId === 'm-unread')!;
+    await Promise.all([markReadIfAllowed(message), markReadIfAllowed(message)]);
+
+    expect(calls.filter((call) => call.method === 'POST' && call.url.includes('/read'))).toHaveLength(1);
+    expect(getMailSnapshot().mailboxes[ACCOUNT]!.find((one) => one.mailboxId === 'INBOX')!.unread).toBe(1);
+    expect(getMailSnapshot().accounts[0]!.unread).toBe(1);
   });
 
   it('asks nothing of a provider that cannot change the flag', async () => {

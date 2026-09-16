@@ -352,3 +352,65 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
 
   expect(pageErrors, 'the mail console must not throw in the browser').toEqual([])
 })
+
+/**
+ * A tab whose FIRST provider read failed still marks a message read.
+ *
+ * The reported failure (2026-09-16): a tab that opened while the mail plugin was still starting got
+ * `Not found: GET /api/plugins/mail/providers`, kept an empty provider list, and read that as "this
+ * account cannot mark read" — so clicking a message did nothing at all for the life of the tab: no
+ * request, no error, no visible change. The 404 is injected here because that is exactly what the
+ * browser log recorded, and the account and mailbox this runs against are the ones the story above
+ * left behind (one message still unread).
+ */
+test('a tab that could not read the provider list still marks a message read', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  let providerReads = 0
+  await page.route(
+    (url) => url.pathname === '/api/plugins/mail/providers',
+    (route) => {
+      providerReads += 1
+      if (providerReads > 1) return route.continue()
+      return route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'not-found', message: 'Not found: GET /api/plugins/mail/providers' }),
+      })
+    },
+  )
+
+  await page.goto(`http://127.0.0.1:${fixture!.port}/`)
+  await page.waitForLoadState('domcontentloaded')
+  await expandSidebar(page)
+  await page.getByTestId('sidebar-core-app-mail').click()
+
+  const rows = page.getByTestId('mail-row')
+  await expect(rows.first()).toBeVisible({ timeout: 60_000 })
+  // Pinned by message id, not by the unread flag: a locator whose own predicate is the thing under
+  // test stops matching the moment the fix works, which reads as "element not found".
+  const firstUnread = page.locator('[data-testid="mail-row"][data-unread="true"]').first()
+  await expect(firstUnread).toBeVisible({ timeout: 30_000 })
+  const messageId = await firstUnread.getAttribute('data-message-id')
+  const unread = page.locator(`[data-testid="mail-row"][data-message-id="${messageId}"]`)
+  const inbox = page.locator('.mail-mailbox[data-mailbox-id="INBOX"]')
+  const badge = inbox.locator('.mail-unread-badge')
+  // A mailbox with nothing unread has NO badge, so the count is read as a number either way.
+  const unreadCount = async () => ((await badge.count()) === 0 ? 0 : Number((await badge.textContent()) ?? '0'))
+  const badgeBefore = await unreadCount()
+  expect(badgeBefore).toBeGreaterThan(0)
+
+  await unread.click()
+  await expect(page.getByTestId('mail-reader-subject')).toBeVisible({ timeout: 30_000 })
+
+  // The flag actually moved — the row, the mailbox badge, and the provider itself, which holds read
+  // state like a server — and the console asked for the list again rather than assuming. Polled,
+  // because the read flag rides an answer that lands after the body is on screen.
+  await expect(unread).toHaveAttribute('data-unread', 'false', { timeout: 30_000 })
+  await expect.poll(unreadCount, { timeout: 30_000 }).toBe(badgeBefore - 1)
+  await expect
+    .poll(() => providerReads, { message: 'the console must re-read a provider list it never got', timeout: 15_000 })
+    .toBeGreaterThan(1)
+  await page.getByTestId('mail-reader').screenshot({ path: `${SCREENSHOT_DIR}/mail-read-after-provider-404.png` })
+  expect(pageErrors, 'the mail console must not throw in the browser').toEqual([])
+})

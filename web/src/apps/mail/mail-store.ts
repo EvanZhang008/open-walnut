@@ -179,6 +179,15 @@ export interface MailSnapshot {
   stand: MailStand | null;
   error: string | null;
   providers: MailProviderSummary[];
+  /**
+   * A `/providers` answer LANDED, so `providers` is the truth and `[]` means there are none.
+   *
+   * The distinction is load-bearing. A tab that opened while the mail plugin was still starting got
+   * `Not found: GET /api/plugins/mail/providers`, kept `providers: []`, and every capability gate
+   * then read "this account cannot mark read" — so clicking a message did nothing at all, silently,
+   * for the life of the tab (2026-09-16). A failed read is not an empty list.
+   */
+  providersKnown: boolean;
   accounts: MailAccountDto[];
   mailboxes: Record<string, MailboxDto[]>;
   selected: MailSelection | null;
@@ -210,6 +219,7 @@ function initialState(): MailSnapshot {
     stand: null,
     error: null,
     providers: [],
+    providersKnown: false,
     accounts: [],
     mailboxes: {},
     selected: null,

@@ -11,11 +11,12 @@
  * why: an action that is missing is a mystery, and an action that fails on the click is worse.
  */
 import { useState } from 'react';
-import { providerIdOf, type MailAccountDto, type MailProviderSummary } from '@/api/mail';
+import type { MailAccountDto, MailProviderSummary } from '@/api/mail';
 import { formatSize } from '@/utils/format';
 import { openMailForwardComposer, openMailReplyComposer } from './compose/compose-actions';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 import { attachmentLabel, formatMailDate, isUnread, recipientLabel, senderLabel } from './mail-format';
+import { mayOfferMarkRead } from './mail-providers';
 import { attachmentKind, senderMark, type AttachmentKind } from './mail-reader-format';
 import { setOpenMessageRead } from './mail-read-flag';
 import { MailTaskButton } from './MailTaskButton';
@@ -174,15 +175,14 @@ function rawDate(message: Message): string {
  * not a claim this header is able to make.
  *
  * Make a task is NOT gated on anything: it writes a Walnut task and touches no mail server. The
- * read flag is gated on the PROVIDER's declared capability, which is data, never a guess: a
- * provider that cannot move the flag would answer 409 and the mailbox would drift from what every
- * other mail client shows.
+ * read flag follows the provider's declared capability, which is data, never a guess: a provider
+ * that cannot move the flag would answer 409 and the mailbox would drift from what every other mail
+ * client shows. An answer nobody has YET is not a no (see mayOfferMarkRead).
  */
 function ReaderActions({ open, message, accounts, providers }: Props) {
   const account = accounts.find((one) => one.accountId === open.accountId);
   const canSend = canSendFrom(providers, open.accountId, accounts);
-  const provider = providers.find((one) => one.id === providerIdOf(open.accountId));
-  const canMark = !!provider?.capabilities.markRead;
+  const canMark = mayOfferMarkRead(providers, open.accountId);
   const unread = isUnread(message.flags);
   const sendTitle = (live: string) => (canSend ? live : CANNOT_SEND_TITLE);
 

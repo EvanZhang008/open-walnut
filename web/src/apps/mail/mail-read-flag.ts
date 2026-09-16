@@ -8,21 +8,35 @@
  * provider refuses. It is split into its own file because it is the part that is worth reading in
  * one sitting.
  */
-import { mailFailure, markMailMessageRead, providerIdOf, type MailMessageDto } from '@/api/mail';
+import { mailFailure, markMailMessageRead, type MailMessageDto } from '@/api/mail';
 import { log } from '@/utils/log';
+import { providerFor } from './mail-providers';
 import { SEEN, patch, publishBadge, store } from './mail-store';
 
 /**
- * Mark the opened message read, if the provider says it can.
+ * May this account's read flag be moved? Three answers, and the third is what this bug was about.
  *
- * `capabilities.markRead` is DATA read from `/providers`, never a guess: a provider that cannot
- * change the flag answers 409 and the console must not pretend, or the mailbox drifts from what
- * every other mail client shows.
+ * `true`/`false` come from the provider's declared `capabilities.markRead`, which is DATA: a provider
+ * that cannot change the flag answers 409 and the console must not pretend, or the mailbox drifts
+ * from what every other mail client shows. But a provider list that never LOADED is not an empty
+ * one, and treating the two the same is what made a click do nothing at all, silently, for hours
+ * (see mail-providers.ts). When the list still cannot be read, the call goes out and the SERVER
+ * decides: its refusal is the same 409 both callers below already roll back.
  */
-export function markReadIfAllowed(message: MailMessageDto): Promise<void> {
-  if (message.flags.includes(SEEN)) return Promise.resolve();
-  const provider = store.state.providers.find((one) => one.id === providerIdOf(message.accountId));
-  if (!provider?.capabilities.markRead) return Promise.resolve();
+async function mayMarkRead(accountId: string): Promise<boolean> {
+  const { provider, known } = await providerFor(accountId);
+  if (provider) return provider.capabilities.markRead === true;
+  return !known;
+}
+
+/** Mark the opened message read, unless the provider is known not to be able to (`mayMarkRead`). */
+export async function markReadIfAllowed(message: MailMessageDto): Promise<void> {
+  if (message.flags.includes(SEEN)) return;
+  if (!await mayMarkRead(message.accountId)) return;
+  // Re-read the row AFTER the await, not the captured copy: while a provider answer was in flight
+  // the row may already have been marked read (two opens of the same message, a live event), and
+  // applying the badge arithmetic twice would leave the count short.
+  if (heldSeen(message)) return;
 
   applySeen(message, true);
   return markMailMessageRead(message.accountId, message.messageId, true)
@@ -46,21 +60,20 @@ export function markReadIfAllowed(message: MailMessageDto): Promise<void> {
  * The reader's own read-flag control: mark the open message read, or unread again.
  *
  * The same four numbers as the automatic path, moved the same way and put back the same way, which
- * is why it shares `applySeen` rather than repeating it. Gated on the PROVIDER's declared
- * capability, because a provider that cannot move the flag answers 409 and the mailbox would drift
- * from what every other mail client shows.
+ * is why it shares `applySeen` rather than repeating it. Gated the same way too (`mayMarkRead`).
  *
  * Marking unread does NOT stop the automatic mark: reopening the message reads it again, which is
  * what every mail client does. Unread here means "leave it on my list", and the list is what it
  * changes.
  */
-export function setOpenMessageRead(read: boolean): Promise<void> {
-  const open = store.state.open;
-  const message = open?.message;
-  if (!message) return Promise.resolve();
-  const provider = store.state.providers.find((one) => one.id === providerIdOf(message.accountId));
-  if (!provider?.capabilities.markRead) return Promise.resolve();
-  if (message.flags.includes(SEEN) === read) return Promise.resolve();
+export async function setOpenMessageRead(read: boolean): Promise<void> {
+  const opened = store.state.open?.message;
+  if (!opened) return;
+  if (!await mayMarkRead(opened.accountId)) return;
+  // Re-read AFTER the await for the same reason the automatic path does: a second press, or the
+  // automatic mark landing in between, would otherwise move the badge twice off a stale copy.
+  const message = store.state.open?.messageId === opened.messageId ? store.state.open?.message : undefined;
+  if (!message || message.flags.includes(SEEN) === read) return;
 
   applySeen(message, read);
   return markMailMessageRead(message.accountId, message.messageId, read)
@@ -75,6 +88,16 @@ export function setOpenMessageRead(read: boolean): Promise<void> {
         error: failure.message,
       });
     });
+}
+
+/** Is the row this console is holding for that message already read? */
+function heldSeen(message: MailMessageDto): boolean {
+  const state = store.state;
+  const held = state.messages.find((one) => one.messageId === message.messageId)
+    ?? state.search.messages.find((one) => one.messageId === message.messageId)
+    ?? (state.open?.messageId === message.messageId ? state.open.message : undefined)
+    ?? message;
+  return held.flags.includes(SEEN);
 }
 
 function withSeen(message: MailMessageDto, seen: boolean): MailMessageDto {
