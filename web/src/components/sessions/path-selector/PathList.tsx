@@ -8,8 +8,10 @@
  * section label.
  */
 import { forwardRef, useRef } from 'react';
+import type { DirListingPending } from '@/api/sessions';
 import type { Section, RankedItem } from './ranking';
 import type { HostLiveState } from './useLiveDirs';
+import { HostConnectSteps } from './HostConnectSteps';
 
 interface PathParts {
   parent: string;
@@ -63,7 +65,7 @@ interface Props {
 
 type LiveNote =
   | { key: string; kind: 'missing' | 'empty'; label: string }
-  | { key: string; kind: 'connecting'; label: string; detail: string }
+  | { key: string; kind: 'connecting'; label: string; pending: DirListingPending }
   | { key: string; kind: 'down'; label: string; message: string; hint?: string };
 
 export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
@@ -88,7 +90,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
           hint: state.hostError?.hint,
         });
       } else if (state.status === 'loading' && state.pending) {
-        liveNotes.push({ key: hostKey, kind: 'connecting', label, detail: state.pending.label });
+        liveNotes.push({ key: hostKey, kind: 'connecting', label, pending: state.pending });
       } else if (state.status === 'done' && !state.exists) liveNotes.push({ key: hostKey, kind: 'missing', label });
       else if (state.status === 'done' && state.exists && state.dirs.length === 0) liveNotes.push({ key: hostKey, kind: 'empty', label });
     }
@@ -179,11 +181,10 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
       {/* Explicit live empty states — never let history matches impersonate live results */}
       {liveNotes.map(note => {
         if (note.kind === 'connecting') {
+          // Step chain, not a bare spinner: a first connect installs a runtime and
+          // uploads the daemon, so the wait needs to show progress to read as alive.
           return (
-            <div key={note.key} className="sps-host-connecting" role="status" data-host={note.key}>
-              <span className="sps-host-spinner" aria-hidden="true" />
-              <span>{note.detail}…</span>
-            </div>
+            <HostConnectSteps key={note.key} hostKey={note.key} label={note.label} pending={note.pending} />
           );
         }
         if (note.kind === 'down') {

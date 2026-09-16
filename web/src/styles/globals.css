@@ -17771,6 +17771,144 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
 }
 
+/* ── Live per-host connect status (pushed over `host:status`) ────────────────
+   Two surfaces: a dot on each remote host tab, and the connect STEP CHAIN that
+   replaces the old single-spinner "connecting" row. Full-opacity colors on
+   purpose: the previous faint treatment of an unreachable host was reported as
+   "no error is shown at all". */
+
+/* The tab row is crowded (see the tooltip note in SessionPathSelector), so the
+   dot is smaller than the ✎ marker it sits next to. */
+.sps-host-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.sps-host-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.sps-host-dot-connected { background: var(--success); }
+.sps-host-dot-failed { background: var(--error); }
+.sps-host-dot-unknown { background: var(--fg-muted); }
+.sps-host-dot-connecting {
+  background: var(--accent);
+  animation: status-pulse 1s infinite;
+}
+/* On the active (accent-filled) tab, an accent dot would vanish into it. */
+.sps-host-tab.active .sps-host-dot-connecting,
+.sps-host-tab.active .sps-host-dot-unknown { background: #fff; }
+
+.sps-host-connecting.sps-host-steps {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.sps-host-step-phase {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+  font-weight: 600;
+}
+.sps-host-step-phase-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sps-host-step-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sps-host-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.sps-host-step-done { color: var(--success); }
+.sps-host-step-active {
+  color: var(--fg);
+  font-weight: 600;
+}
+.sps-host-step-mark {
+  flex: none;
+  width: 12px;
+  text-align: center;
+}
+.sps-host-step .sps-host-spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 2px;
+}
+.sps-host-step-elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+.sps-host-step-note {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-secondary, var(--fg-muted));
+}
+.sps-host-step-total {
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Settings › Remote hosts: status + an explicit connect, on the host's summary row. */
+.rh-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+}
+.rh-status .status-text {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rh-status-elapsed {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.rh-status-error {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--error);
+}
+.rh-connect-btn {
+  flex: none;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.rh-connect-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.rh-connect-btn:disabled {
+  color: var(--fg-muted);
+  border-color: var(--border);
+  cursor: default;
+}
+
 /* "Create <path> & start session" row for nonexistent leaf dirs */
 .sps-create-row {
   display: flex;

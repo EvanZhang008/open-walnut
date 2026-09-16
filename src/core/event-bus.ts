@@ -151,6 +151,9 @@ export const EventNames = {
   // System health events
   SYSTEM_HEALTH: 'system:health',
 
+  // One remote host's daemon connect moved (a step, a success, a failure)
+  HOST_STATUS: 'host:status',
+
   // Mobile client incidents (a freeze/crash line arrived in an uploaded iOS log)
   CLIENT_INCIDENT: 'client:incident',
 

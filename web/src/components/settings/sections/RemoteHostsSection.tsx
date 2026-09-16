@@ -4,6 +4,8 @@ import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
 import { KeyValueEditor } from '../inputs/KeyValueEditor';
 import { useAutoSave } from '@/hooks/useAutoSave';
+import { hydrateHostStatus } from '@/hooks/useHostStatus';
+import { RemoteHostStatus } from './RemoteHostStatus';
 
 interface HostEntry {
   _key: number; // stable React key
@@ -34,6 +36,9 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   // Per-host concurrency caps (config.session_limits). Keyed by the same aliases
   // as the hosts above (plus "local"), so they belong on this card.
   const [sessionLimits, setSessionLimits] = useState<Record<string, string | number>>(config.session_limits ?? {});
+
+  // Cold-read the connect status once; every change after this is a WS push.
+  useEffect(() => { void hydrateHostStatus(); }, []);
 
   useEffect(() => {
     const entries = Object.entries(config.hosts ?? {}).map(([alias, h]) => ({
@@ -166,6 +171,9 @@ export function RemoteHostsSection({ config, onSave }: Props) {
               )}
               {host.discovered && <span className="text-xs text-muted" style={{ marginLeft: 8 }}>🔍 auto-discovered</span>}
             </span>
+            {/* Live connect status + an explicit connect. Only for a saved row: an
+                alias-less draft has no host to ask about. */}
+            {host.alias && <RemoteHostStatus alias={host.alias} />}
           </summary>
           <div className="settings-collapsible-body">
             <div className="form-row">

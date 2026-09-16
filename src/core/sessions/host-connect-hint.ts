@@ -37,6 +37,73 @@ export function describeConnectPhase(phase: DaemonConnectPhase, hostLabel: strin
   }
 }
 
+/**
+ * The ordered, user-visible steps of a first connect. `idle`, `connected`,
+ * `reconnecting` and `failed` are states, not steps, so they are deliberately
+ * absent: a progress list needs exactly the things that happen in sequence.
+ */
+export const DAEMON_CONNECT_STEPS: readonly DaemonConnectPhase[] = [
+  'ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake',
+]
+
+/**
+ * A connect is IN FLIGHT: the steps above plus a reconnect. Unlike
+ * IN_PROGRESS_PHASES this excludes `idle` — "nothing has tried" is not work in
+ * flight, and a warmup that treated it as such would never dial anything.
+ */
+export const CONNECT_IN_FLIGHT_PHASES: ReadonlySet<DaemonConnectPhase> = new Set<DaemonConnectPhase>([
+  ...DAEMON_CONNECT_STEPS, 'reconnecting',
+])
+
+/** Short button-width labels for the steps above (the sentence form is describeConnectPhase). */
+const STEP_LABELS: Record<string, string> = {
+  'ssh': 'SSH',
+  'probe': 'Probe',
+  'install-runtime': 'Install runtime',
+  'upload': 'Upload daemon',
+  'start': 'Start daemon',
+  'tunnel': 'Tunnel',
+  'handshake': 'Handshake',
+}
+
+export interface ConnectStep {
+  phase: DaemonConnectPhase
+  label: string
+  status: 'done' | 'active' | 'todo'
+}
+
+/**
+ * The step list as a progress indicator: everything before the current phase is
+ * `done`, the current phase is `active`, the rest are `todo`.
+ *
+ * `connected` marks every step done. `idle`, `reconnecting` and `failed` return
+ * the list with NOTHING active — they are not a position in the sequence, and
+ * guessing one (e.g. painting 'ssh' active while a host sits idle) is how a
+ * progress bar starts lying. The caller decides how to render that.
+ */
+export function describeConnectSteps(phase: DaemonConnectPhase): ConnectStep[] {
+  const activeIndex = DAEMON_CONNECT_STEPS.indexOf(phase)
+  const allDone = phase === 'connected'
+  return DAEMON_CONNECT_STEPS.map((step, i) => ({
+    phase: step,
+    label: STEP_LABELS[step] ?? step,
+    status: allDone ? 'done'
+      : activeIndex < 0 ? 'todo'
+      : i < activeIndex ? 'done'
+      : i === activeIndex ? 'active'
+      : 'todo',
+  }))
+}
+
+/**
+ * Extra reassurance for the two steps that can take minutes on a fresh host.
+ * Returned only for those: a note on every phase becomes wallpaper.
+ */
+export function connectPhaseNote(phase: DaemonConnectPhase, hostLabel: string): string | undefined {
+  if (phase !== 'install-runtime' && phase !== 'upload') return undefined
+  return `First connect installs the session daemon on ${hostLabel}; this can take a minute or two.`
+}
+
 export type HostConnectErrorKind =
   | 'auth'
   | 'dns'

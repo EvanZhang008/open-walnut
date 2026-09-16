@@ -12,12 +12,15 @@ import { lockScroll, unlockScroll } from '@/hooks/useModalOverlay';
 import { perf } from '@/utils/perf-logger';
 import { installTimeTracker } from '@/utils/time-tracking';
 import { useAppCatalog } from '@/apps/hooks';
+import { hydrateHostStatus } from '@/hooks/useHostStatus';
 
 interface AppShellProps {
   children: ReactNode;
 }
 
 const MOBILE_SIDEBAR_QUERY = '(max-width: 768px)';
+/** After the home page's own first-paint fetches, before a human reaches the picker. */
+const HOST_STATUS_HYDRATE_DELAY_MS = 1500;
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
@@ -87,6 +90,15 @@ function AppShellInner({ children }: AppShellProps) {
   // Print perf waterfall 3s after mount (all initial fetches should be settled)
   useEffect(() => {
     const timer = setTimeout(() => perf.summary(), 3000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Remote-host connect status is read once per app load, AFTER the first paint's
+  // own fetches (the home page's critical path must not queue behind it), so the
+  // folder picker, Settings and the System pane open with the answer already in
+  // hand instead of a "checking" state.
+  useEffect(() => {
+    const timer = setTimeout(() => { void hydrateHostStatus(); }, HOST_STATUS_HYDRATE_DELAY_MS);
     return () => clearTimeout(timer);
   }, []);
 

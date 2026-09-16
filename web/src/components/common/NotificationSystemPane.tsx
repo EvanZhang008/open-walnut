@@ -8,7 +8,9 @@
  * file stays near the repo's ~500 LOC guideline.
  */
 import { memo, useEffect, useState } from 'react';
-import { useSystemHealth } from '@/hooks/useSystemHealth';
+import { useSystemHealth, type DaemonHealth } from '@/hooks/useSystemHealth';
+import { useHostStatus } from '@/hooks/useHostStatus';
+import { hostStatusText, isHostConnecting } from '@/utils/host-connect';
 import { formatRelative } from '@/contexts/notifications';
 import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
@@ -66,6 +68,37 @@ export function searchIndexUnhealthy(status: SearchIndexStatus | null): boolean 
   return status?.status === 'error';
 }
 
+/**
+ * One host's row. A host that is mid-connect says which step it is on: a bare
+ * "Disconnected" during the 40-second first-connect install reads as a dead host,
+ * and this pane is where people look to decide whether to go fix something.
+ */
+function DaemonRow({ daemon }: { daemon: DaemonHealth }) {
+  const status = useHostStatus(daemon.host);
+  const connecting = !daemon.connected && isHostConnecting(status);
+  return (
+    <div className="notification-detail-row">
+      <span>{daemon.label ?? daemon.host}</span>
+      <span
+        className={`notification-detail-value ${daemon.connected ? 'ok' : connecting ? '' : 'muted'}`}
+        title={status ? hostStatusText(status) : undefined}
+      >
+        {/* 'Idle' used to render for connected:false, hiding real outages. */}
+        {daemon.connected ? 'Connected' : connecting ? hostStatusText(status) : 'Disconnected'}
+        {/* Cloud-bridge state (phone reachability) — only when a bridge is
+            configured AND the host itself is connected: bridge liveness rides
+            the daemon connection, so next to 'Disconnected' any ✓/✗ is stale
+            and contradictory. */}
+        {daemon.connected && daemon.bridgeConnected != null && (
+          <span className={`notification-detail-value ${daemon.bridgeConnected ? 'ok' : 'warn'}`}>
+            {daemon.bridgeConnected ? ' · bridge ✓' : ' · bridge ✗'}
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
 /** One kind's indexed-document row. */
 function StoreRow({ label, stats }: { label: string; stats: IndexStoreStats }) {
   return (
@@ -106,22 +139,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
 
           <div className="notification-card-details">
             {health.daemons.map((d) => (
-              <div key={d.host} className="notification-detail-row">
-                <span>{d.label ?? d.host}</span>
-                <span className={`notification-detail-value ${d.connected ? 'ok' : 'muted'}`}>
-                  {/* 'Idle' used to render for connected:false, hiding real outages. */}
-                  {d.connected ? 'Connected' : 'Disconnected'}
-                  {/* Cloud-bridge state (phone reachability) — only when a bridge is
-                      configured AND the host itself is connected: bridge liveness rides
-                      the daemon connection, so next to 'Disconnected' any ✓/✗ is stale
-                      and contradictory. */}
-                  {d.connected && d.bridgeConnected != null && (
-                    <span className={`notification-detail-value ${d.bridgeConnected ? 'ok' : 'warn'}`}>
-                      {d.bridgeConnected ? ' · bridge ✓' : ' · bridge ✗'}
-                    </span>
-                  )}
-                </span>
-              </div>
+              <DaemonRow key={d.host} daemon={d} />
             ))}
           </div>
         </div>

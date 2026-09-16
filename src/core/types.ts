@@ -969,11 +969,21 @@ export interface Config {
      *  Informational only — doesn't affect behavior. */
     discovered?: boolean;
   }>;
+  /** Startup warmup of every explicitly configured host's session daemon.
+   *  On by default: without it the FIRST folder-picker open on a host pays the
+   *  whole first-connect cost (runtime install + daemon upload, minutes).
+   *  Set `enabled: false` to keep connects strictly on demand. */
+  hosts_warmup?: {
+    enabled?: boolean;
+  };
   /** Per-host maximum concurrent CLI session limits.
    *  'local' key = sessions without a host.
    *  Other keys = host aliases from config.hosts (e.g. 'devbox', 'nas-server').
    *  Default: local=7, remote hosts=20. */
   session_limits?: Record<string, number>;
+  external_session_import?: {
+    excluded_cwds?: Record<string, string[]>;
+  };
   session?: {
     /** Cron scheduling policy for Walnut-managed CLI sessions.
      *  - 'unrestricted' (default): sessions may create any cron the CLI allows,

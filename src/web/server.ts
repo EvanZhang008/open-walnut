@@ -91,6 +91,7 @@ import { appsRouter, pluginAppStaticRouter } from './routes/apps.js'
 import { createPluginBodyParser, createPluginRouteDispatcher } from './plugin-route-dispatcher.js'
 import { setPluginApiBase } from '../core/plugins/server-api.js'
 import { systemRouter } from './routes/system.js'
+import { hostsRouter } from './routes/hosts.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
 import { searchIndexRouter } from './routes/search-index.js'
 import { notesRouter } from './routes/notes.js'
@@ -488,6 +489,10 @@ let cronServiceInstance: CronService | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
 let sessionReaper: SessionReaper | null = null
+/** Primary box only: warms every configured host's daemon at startup. */
+let hostWarmup: import('../core/hosts/host-warmup.js').HostWarmup | null = null
+/** Unhooks the daemon phase listener → host:status push (module-global set). */
+let unsubscribeHostPhase: (() => void) | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
 let recordingReaperHandle: { stop: () => void } | null = null
 let externalSessionImporter:
@@ -1495,6 +1500,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (!CLOUD_MODE) app.use('/plugin-apps', pluginAppStaticRouter)
 
   app.use('/api/system', systemRouter)
+  // Remote-host connect status (hydrate + deliberate retry); live updates ride
+  // the `host:status` WS event, so nothing polls this.
+  app.use('/api/hosts', hostsRouter)
   // One-click cloud-companion provisioning (Mac-side job engine).
   app.use('/api/cloud-setup', cloudSetupRouter)
   // /api/search-index (canonical) + /api/qmd (legacy alias, one release).
@@ -2807,6 +2815,81 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         broadcastEvent('system:health', systemHealth)
       } catch { /* config not ready yet */ }
     })
+  }
+
+  // -- Remote host connect status: live push + startup warmup (primary only) --
+  // Two halves of one behaviour. The PUSH turns every connect step into a
+  // `host:status` event, so a two-minute first connect reads as progress in the
+  // browser instead of an idle spinner (system:health above only carries the
+  // connected boolean, and only on transitions). The WARMUP means that connect
+  // has usually already happened by the time the user opens the folder picker.
+  // A replica has no ssh and no daemons of its own — the whole block is the
+  // primary's job.
+  if (!CLOUD_MODE) {
+    const { addOnDaemonPhaseChange, getDaemonConnectState, getDaemonConnection, isDaemonConnected } =
+      await import('../providers/daemon-connection.js')
+    const { getConfig } = await import('../core/config-manager.js')
+    const { buildHostStatus } = await import('../core/hosts/host-status.js')
+    const { CONNECT_IN_FLIGHT_PHASES } = await import('../core/sessions/host-connect-hint.js')
+    const { HostWarmup, hostWarmupGateReason } = await import('../core/hosts/host-warmup.js')
+    const { setHostWarmup } = await import('../core/hosts/host-warmup-registry.js')
+    type HostDefs = NonNullable<Awaited<ReturnType<typeof getConfig>>['hosts']>
+
+    // getConfig() re-reads config.json AND rescans the user's ~/.ssh/config on
+    // every call, while a single connect pushes ~7 phase changes per host — so
+    // the emit path reads this map and only config:changed refreshes it.
+    let hostDefs: HostDefs = {}
+    const refreshHostDefs = async (): Promise<void> => {
+      try { hostDefs = (await getConfig()).hosts ?? {} } catch { /* config not ready yet */ }
+    }
+    await refreshHostDefs()
+    bus.subscribe('host-status-defs', () => { void refreshHostDefs() },
+      { global: true, interest: [EventNames.CONFIG_CHANGED] })
+
+    const emitHostStatus = (host: string): void => {
+      if (!host || host === '__local__') return
+      // Unknown key: a `direct:<url>` pool entry or a host that just left the
+      // config. Nothing for the browser to render.
+      const def = hostDefs[host]
+      if (!def) return
+      try {
+        const status = buildHostStatus(host, def, getDaemonConnectState(host), hostWarmup?.stateOf(host))
+        // No sessionId/taskId in the payload — this is about a HOST, so it must
+        // also reach clients that filtered their interest down to one session.
+        bus.emit(EventNames.HOST_STATUS, status, ['web-ui'])
+      } catch { /* a status push must never break a connect */ }
+    }
+
+    unsubscribeHostPhase?.()
+    unsubscribeHostPhase = addOnDaemonPhaseChange((state) => emitHostStatus(state.host))
+
+    const warmupGate = hostWarmupGateReason({
+      cloudMode: CLOUD_MODE, ephemeral: isEphemeral, env: process.env, config: await getConfig(),
+    })
+    if (warmupGate) {
+      log.web.info('host warmup disabled', { reason: warmupGate })
+    } else {
+      hostWarmup = new HostWarmup({
+        // Every configured host, flags included: the warmup itself decides what
+        // to skip (and records WHY), which is what the status surface reports.
+        listHosts: async () => {
+          const hosts = (await getConfig()).hosts ?? {}
+          return Object.entries(hosts).map(([key, def]) => ({
+            key,
+            sshTarget: { hostname: def.hostname, user: def.user, port: def.port },
+            enabled: def.enabled,
+            discovered: def.discovered,
+          }))
+        },
+        connect: (key, sshTarget) => getDaemonConnection(key, sshTarget),
+        isConnected: (key) => isDaemonConnected(key),
+        // A host mid-connect (picker click, its own reconnect loop) is left alone.
+        isConnecting: (key) => CONNECT_IN_FLIGHT_PHASES.has(getDaemonConnectState(key).phase),
+        onChange: (host) => emitHostStatus(host),
+      })
+      setHostWarmup(hostWarmup)
+      hostWarmup.start()
+    }
   }
 
   // -- Dependency unblock: emit task:unblocked when a completed task frees dependents --
@@ -4887,6 +4970,17 @@ export async function stopServer(): Promise<void> {
     sessionReaper.stop()
     sessionReaper = null
   }
+  if (hostWarmup) {
+    hostWarmup.stop()
+    hostWarmup = null
+  }
+  try {
+    const { setHostWarmup } = await import('../core/hosts/host-warmup-registry.js')
+    setHostWarmup(null)
+  } catch { /* import failed (partial dist) — nothing published to clear */ }
+  unsubscribeHostPhase?.()
+  unsubscribeHostPhase = null
+  bus.unsubscribe('host-status-defs')
   if (cronServiceInstance) {
     cronServiceInstance.stop()
     setCronService(null)

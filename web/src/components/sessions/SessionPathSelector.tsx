@@ -22,6 +22,8 @@ import type { LaunchEngine, LaunchMemory } from '@/utils/engines';
 import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, type InputState } from './path-selector/input-model';
 import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
 import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
+import { HostStatusDot } from './path-selector/HostStatusDot';
+import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { GhostTextInput } from './path-selector/GhostTextInput';
 import { PathList } from './path-selector/PathList';
 import { MetaFooter } from './path-selector/MetaFooter';
@@ -198,6 +200,9 @@ export function SessionPathSelector({
     // (moved off the unconditional module-import side effect that used to fire
     // on every page load and contend with the home critical path).
     prewarmWorkingDirs();
+    // Cold-read the per-host connect status so the tab dots are right on the first
+    // paint; every change after this arrives as a `host:status` push.
+    void hydrateHostStatus();
     // fetchWorkingDirs returns from cache if already prefetched
     fetchWorkingDirs()
       .then(({ dirs: d, hosts: h }) => { setDirs(d); setConfiguredHosts(h); setLoading(false); })
@@ -798,6 +803,10 @@ export function SessionPathSelector({
               // and in a one-line banner shown only when this tab is active.
               title={tab.rawName ? 'Auto-discovered from ~/.ssh/config — give it a friendly name in Settings → Remote Hosts' : undefined}
             >
+              {/* Remote hosts only: 'all' is not a host and local never connects. */}
+              {tab.key !== 'all' && tab.key !== '__local__' && (
+                <HostStatusDot host={tab.key} label={tab.label} />
+              )}
               {tab.label}
               {tab.rawName && <span className="sps-host-tab-raw" aria-hidden>✎</span>}
             </button>

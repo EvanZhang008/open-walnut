@@ -264,6 +264,10 @@ sessionsRouter.post('/host-retry', async (req: Request, res: Response) => {
   }
   const { clearDaemonFailureCache } = await import('../../providers/daemon-connection.js')
   clearDaemonFailureCache(host)
+  // …and start the connect now rather than waiting for the next list-dirs: a
+  // human who hit Retry expects the host to come back on its own.
+  const { getHostWarmup } = await import('../../core/hosts/host-warmup-registry.js')
+  getHostWarmup()?.kick(host).catch(() => { /* kick never rejects */ })
   res.json({ ok: true })
 })
 

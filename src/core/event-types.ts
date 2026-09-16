@@ -873,6 +873,15 @@ export interface SystemHealthEvent {
   };
 }
 
+/**
+ * One remote host's connect state changed (a step, a success, a failure). The
+ * payload IS the HostStatus record `GET /api/hosts/status` returns, so the
+ * browser applies a push and a hydrate through the same code. Deliberately
+ * carries no sessionId/taskId: it is about a host, so it must reach every
+ * client (including lightweight ones that filtered to one session).
+ */
+export type HostStatusEvent = import('./hosts/host-status.js').HostStatus;
+
 // ── Cloud-companion setup events ──
 
 /**
@@ -1073,6 +1082,7 @@ export interface EventPayloadMap {
   'permission:granted': PermissionGrantedEvent;
 
   'system:health': SystemHealthEvent;
+  'host:status': HostStatusEvent;
 
   'client:incident': ClientIncidentEvent;
 

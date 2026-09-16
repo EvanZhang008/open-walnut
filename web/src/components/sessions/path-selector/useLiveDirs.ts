@@ -22,10 +22,21 @@
  *
  * Epoch guard: every debounce fire bumps an epoch; responses from stale
  * epochs are discarded so a slow SSH reply can't clobber newer input.
+ *
+ * Live status: the connect phase now also arrives as a `host:status` WS push
+ * (useHostStatus). The push is what the UI reacts to — a host that reaches
+ * `connected` gets ONE immediate re-list instead of waiting out a poll gap, and a
+ * host that fails shows the failure card the moment the server knows. The poll
+ * survives as the fallback for a dead socket, at a lazier cadence while the socket
+ * is healthy (see decidePollDelay).
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { listDirsCached, type ConfiguredHost, type DirListingHostError, type DirListingPending } from '@/api/sessions';
+import { wsClient } from '@/api/ws';
+import { getHostStatus, hasSeenHostStatusPush, subscribeHostStatus, useAllHostStatus } from '@/hooks/useHostStatus';
+import { isHostFailed } from '@/utils/host-connect';
+import { decidePollDelay, isRetriedFailure, mergeHostStateWithStatus, mergeHostStatesWithStore } from './host-status-merge';
 
 export interface HostLiveState {
   status: 'loading' | 'done' | 'error';
@@ -49,7 +60,8 @@ export interface LiveDirsResult {
 }
 
 const DEBOUNCE_MS = 150;
-/** Gap between polls while a host answers `pending`. */
+/** Gap between polls while a host answers `pending` and no WS push is available.
+ *  With a healthy socket the gap is decidePollDelay's longer one. */
 export const PENDING_POLL_MS = 1500;
 /** Server-side wait on a follow-up poll. The first request waits the server
  *  default (3s) so a warm host answers with dirs in one round trip; once the
@@ -80,7 +92,18 @@ export function useLiveDirs(
   const connectingRef = useRef<Map<string, ConnectTrack>>(new Map());
   // The current batch's fetcher, so retryHost can re-list one host without
   // re-running the whole effect (which would reseed every host to loading).
-  const batchRef = useRef<{ epoch: number; targets: (string | null)[]; fetchHost: (target: string | null) => void; markLoading: (key: string) => void } | null>(null);
+  const batchRef = useRef<{
+    epoch: number;
+    targets: (string | null)[];
+    fetchHost: (target: string | null) => void;
+    markLoading: (key: string) => void;
+    update: (key: string, state: HostLiveState) => void;
+  } | null>(null);
+  // Last phase acted on per host, so a repeated push for the same phase doesn't
+  // re-fire the immediate re-list (the server pushes on every field change).
+  const actedPhaseRef = useRef<Map<string, string>>(new Map());
+  // Per host: the `at` of the failure the user already answered with Retry.
+  const retrySuppressRef = useRef<Map<string, number>>(new Map());
 
   // Stable key for configuredHosts (avoid refiring on referentially-new but equal arrays)
   const hostsKey = configuredHosts.map(h => h.alias).join(',');
@@ -91,6 +114,12 @@ export function useLiveDirs(
     for (const t of pollTimersRef.current) clearTimeout(t);
     pollTimersRef.current.clear();
   };
+
+  // The store's view of a host, minus a failure the user already retried away.
+  const statusFor = useCallback((host: string) => {
+    const status = getHostStatus(host);
+    return isRetriedFailure(status, retrySuppressRef.current.get(host)) ? undefined : status;
+  }, []);
 
   useEffect(() => {
     // Invalidate any in-flight batch immediately — even before deciding to fetch.
@@ -171,8 +200,11 @@ export function useLiveDirs(
               const t = setTimeout(() => {
                 pollTimersRef.current.delete(t);
                 if (epoch !== epochRef.current) return;
+                // The push already resolved this host (connected → re-listed,
+                // failed → card shown) and dropped its track: no poll needed.
+                if (!connectingRef.current.has(key)) return;
                 fetchHost(target);
-              }, PENDING_POLL_MS);
+              }, decidePollDelay(wsClient.state === 'connected', hasSeenHostStatusPush() && !!statusFor(key)));
               pollTimersRef.current.add(t);
               return;
             }
@@ -189,7 +221,7 @@ export function useLiveDirs(
           });
       };
 
-      batchRef.current = { epoch, targets, fetchHost, markLoading: (key) => update(key, LOADING) };
+      batchRef.current = { epoch, targets, fetchHost, markLoading: (key) => update(key, LOADING), update };
       for (const target of targets) fetchHost(target);
     }, DEBOUNCE_MS);
 
@@ -200,20 +232,64 @@ export function useLiveDirs(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, hostFilter, hostsKey]);
 
+  // React to the pushed host status. Two transitions matter, and both are things
+  // the poll could only discover a gap later:
+  //   connected → list this host NOW (the felt "I watched it finish connecting and
+  //     then sat on a spinner for another 1.5s" — with the lazy WS cadence it would
+  //     be 5s);
+  //   failed → show the failure card immediately and stop polling a dead host.
+  useEffect(() => subscribeHostStatus(() => {
+    for (const key of Array.from(connectingRef.current.keys())) {
+      const status = statusFor(key);
+      if (!status) continue;
+      if (actedPhaseRef.current.get(key) === status.phase) continue;
+      actedPhaseRef.current.set(key, status.phase);
+      const batch = batchRef.current;
+      const target = key === '__local__' ? null : key;
+      if (status.connected) {
+        if (batch && batch.epoch === epochRef.current && batch.targets.includes(target)) {
+          batch.fetchHost(target);
+        }
+      } else if (isHostFailed(status)) {
+        connectingRef.current.delete(key);
+        if (batch && batch.epoch === epochRef.current && batch.targets.includes(target)) {
+          batch.update(key, mergeHostStateWithStatus(LOADING, status));
+        }
+      }
+    }
+  }), [statusFor]);
+
   const retryHost = useCallback((hostKey: string) => {
     const batch = batchRef.current;
     if (!batch || batch.epoch !== epochRef.current) return;
     const target = hostKey === '__local__' ? null : hostKey;
     if (!batch.targets.includes(target)) return;
-    // A retry is a fresh connect attempt: restart that host's give-up clock.
+    // A retry is a fresh connect attempt: restart that host's give-up clock, forget
+    // the phase we last acted on so the reconnect's transitions count again, and
+    // stop trusting the failure snapshot we currently hold (it describes the attempt
+    // the user just replaced).
     connectingRef.current.delete(hostKey);
+    actedPhaseRef.current.delete(hostKey);
+    const held = getHostStatus(hostKey);
+    if (held) retrySuppressRef.current.set(hostKey, held.at);
+    else retrySuppressRef.current.delete(hostKey);
     batch.markLoading(hostKey);
     batch.fetchHost(target);
   }, []);
 
+  // Re-render on any status push, then fold the store over the listing snapshot:
+  // the phase sentence of a waiting host comes from the push, and a host the store
+  // knows has failed shows its card even before its own request answers.
+  const allStatuses = useAllHostStatus();
+  const mergedByHost = useMemo(
+    () => mergeHostStatesWithStore(byHost, statusFor),
+    // allStatuses is the store's change token — the getter it feeds is imperative.
+    [byHost, allStatuses, statusFor],
+  );
+
   let anyLoading = !!activePath && snapshot.key !== requestKey;
-  for (const state of byHost.values()) {
+  for (const state of mergedByHost.values()) {
     if (state.status === 'loading') { anyLoading = true; break; }
   }
-  return { byHost, anyLoading, retryHost };
+  return { byHost: mergedByHost, anyLoading, retryHost };
 }

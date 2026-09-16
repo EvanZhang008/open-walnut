@@ -165,6 +165,10 @@ export class DaemonConnection {
   private _disconnectedSince: number | null = null
   private _phase: DaemonConnectPhase = 'idle'
   private _phaseSince = Date.now()
+  /** When the current connect() attempt began (null = no attempt yet). Phase
+   *  elapsed only tells you about the CURRENT step; a first connect that has
+   *  spent 90s across four steps needs the whole-attempt clock to read right. */
+  private _connectStartedAt: number | null = null
   private cmdCounter = 0
   private pendingCommands = new Map<number, PendingCommand>()
   private eventHandlers: EventHandler[] = []
@@ -376,12 +380,56 @@ export class DaemonConnection {
   get connectPhase(): DaemonConnectPhase { return this._phase }
   /** When the current phase began (ms epoch). */
   get connectPhaseSince(): number { return this._phaseSince }
+  /** When the current/last connect() attempt began (null = never attempted). */
+  get connectStartedAt(): number | null { return this._connectStartedAt }
 
   private setPhase(phase: DaemonConnectPhase): void {
     if (this._phase === phase) return
     this._phase = phase
     this._phaseSince = Date.now()
+    if (phase === 'failed') {
+      // connect()'s catch lands here BEFORE the pool's catch records the cause in
+      // the failure cache, so announcing now would push a failure with no error
+      // text, and that cause-less version is the one a UI pins (it arrives first
+      // and replaces the wait). The pool announces right after its cache write;
+      // this deferred notify only speaks for a failure nobody cached (the
+      // reconnect path), once the pool has had its turn.
+      const t = setImmediate(() => {
+        if (this._phase === 'failed' && !failureCache.has(this.hostKey)) notifyDaemonPhaseChange(this.hostKey)
+      })
+      t.unref?.()
+      return
+    }
+    notifyDaemonPhaseChange(this.hostKey)
   }
+
+  /**
+   * A human deliberately cleared this host's failure (Retry / Connect now): the
+   * terminal 'failed' must not outlive the cause it was explaining, or the very
+   * next status push reads "Could not connect" with no error, no retry clock and
+   * no sign that a new attempt is about to start. Back to 'idle' until connect()
+   * moves it again. Silent: the caller announces once, after the cache is gone.
+   */
+  resetFailedPhase(): void {
+    if (this._phase !== 'failed') return
+    this._phase = 'idle'
+    this._phaseSince = Date.now()
+  }
+
+  /** True when this pooled connection was built for the given ssh target. */
+  targetsSame(sshTarget: SshTarget | null): boolean {
+    const a = this.sshTarget
+    const b = sshTarget
+    if (!a || !b) return a === b
+    return a.hostname === b.hostname && (a.user ?? '') === (b.user ?? '') && (a.port ?? 22) === (b.port ?? 22)
+  }
+
+  /**
+   * Test seam ONLY (@internal): drive a phase transition without ssh. The real
+   * transitions all go through the private setPhase above; this exists so the
+   * pool-level phase-listener contract can be pinned without spawning ssh.
+   */
+  setPhaseForTest(phase: DaemonConnectPhase): void { this.setPhase(phase) }
 
   /**
    * Centralized setter for _connected — fires the pool-level callback
@@ -673,6 +721,9 @@ export class DaemonConnection {
   async connect(): Promise<void> {
     if (this._connected || this._connecting) return
     this._connecting = true
+    // A real attempt starts here (after the early return), so the whole-attempt
+    // clock never counts time spent waiting on somebody else's connect.
+    this._connectStartedAt = Date.now()
     // Reset destroyed flag — allows reconnection after a previous disconnect().
     // Without this, handleConnectionLost() and scheduleReconnect() silently abort
     // (they gate on _destroyed), so any future connection loss would be permanent.
@@ -3437,6 +3488,40 @@ export function addOnDaemonHostConnected(cb: (hostKey: string) => void): () => v
   return () => { hostConnectedListeners.delete(cb) }
 }
 
+/**
+ * ADDITIVE pool-level connect-PHASE listeners. `addOnDaemonHostConnected` only
+ * fires on the happy edge; this one fires on every step (ssh → probe → install
+ * → … → connected) and on the failure edge, which is what lets the browser show
+ * live progress for a two-minute first connect instead of an idle spinner.
+ *
+ * The payload is always built by getDaemonConnectState so there is exactly ONE
+ * shape (and one place where the failure cache is folded in). Returns an
+ * unsubscribe: the listener set is module-global, so an in-process server
+ * restart must not stack listeners across boots.
+ */
+const phaseListeners = new Set<(state: DaemonConnectState) => void>()
+export function addOnDaemonPhaseChange(cb: (state: DaemonConnectState) => void): () => void {
+  phaseListeners.add(cb)
+  return () => { phaseListeners.delete(cb) }
+}
+
+/** Internal: fan a phase/failure-cache change out to the pool listeners. */
+function notifyDaemonPhaseChange(hostKey: string): void {
+  if (phaseListeners.size === 0) return
+  let state: DaemonConnectState
+  try {
+    state = getDaemonConnectState(hostKey)
+  } catch { return }
+  for (const listener of phaseListeners) {
+    // Observers must never break a connect, including via a rejected promise:
+    // this fires during boot where an unhandled rejection is fatal.
+    try {
+      const result = listener(state) as unknown
+      if (result instanceof Promise) (result as Promise<unknown>).catch(() => {})
+    } catch { /* observers must never break connect */ }
+  }
+}
+
 /** Internal: invoked by DaemonConnection.setConnected(true) transitions. */
 function notifyHostConnected(hostKey: string): void {
   // The host is provably reachable — drop any stale failure-cache entry NOW.
@@ -3525,6 +3610,17 @@ export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget)
 
   // Create and connect
   let conn = connectionPool.get(hostKey)
+  if (conn && !conn.connected && !conn.targetsSame(sshTarget)) {
+    // The config now names a different machine for this alias (the user edited
+    // the hostname; the startup warmup may even have dialled a half-typed one).
+    // A pooled connection keeps its target for life, so without this every later
+    // connect for the alias would ssh the OLD name until the server restarted.
+    // Only while nothing is live: a connected pool entry stays until it drops.
+    log.session.info('DaemonConnection: ssh target changed, replacing the pooled connection', { host: hostKey })
+    conn.disconnect()
+    connectionPool.delete(hostKey)
+    conn = undefined
+  }
   if (!conn) {
     conn = new DaemonConnection(hostKey, sshTarget)
     connectionPool.set(hostKey, conn)
@@ -3540,6 +3636,9 @@ export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget)
     // string is re-thrown to (and logged by) every caller for the next 60s.
     const raw = err instanceof Error ? err.message : String(err)
     failureCache.set(hostKey, { time: Date.now(), error: summarizeConnectFailure(raw) })
+    // AFTER the cache write, so listeners read phase:'failed' with error/retryInMs
+    // already populated (getDaemonConnectState folds the cache in).
+    notifyDaemonPhaseChange(hostKey)
     // The full text, once, where it actually happened.
     log.session.warn('DaemonConnection: connect failed (full error logged once, summary cached)', {
       host: hostKey, error: raw,
@@ -3613,8 +3712,19 @@ export function isPooledConnection(conn: DaemonConnection): boolean {
  * reconnects, not to block a deliberate human retry.
  */
 export function clearDaemonFailureCache(hostKey?: string): void {
+  // Whose state just changed — captured before the delete, since after it the
+  // cache can no longer tell us which hosts were showing as failed.
+  const affected = hostKey ? [hostKey] : [...failureCache.keys()]
   if (hostKey) failureCache.delete(hostKey)
   else failureCache.clear()
+  // A cleared failure IS a status change (the UI must stop saying "failed,
+  // retry in 42s" the moment the human hit retry). The connection's own phase
+  // goes with it: 'failed' minus its cause would read as a fresh, unexplained
+  // failure on every surface.
+  for (const host of affected) {
+    connectionPool.get(host)?.resetFailedPhase()
+    notifyDaemonPhaseChange(host)
+  }
 }
 
 /**
@@ -3650,6 +3760,8 @@ export interface DaemonConnectState {
   phase: DaemonConnectPhase
   /** How long the current phase has been running (ms). */
   phaseElapsedMs: number
+  /** How long the whole connect attempt has been running (ms; 0 = unknown). */
+  connectElapsedMs: number
   /** One-line summary of the last connect failure, while it is still cached. */
   error?: string
   /** ms until the failure cache expires and an automatic retry is allowed. */
@@ -3664,12 +3776,18 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
     connected: conn?.connected ?? false,
     phase: conn?.connectPhase ?? 'idle',
     phaseElapsedMs: conn ? Math.max(0, now - conn.connectPhaseSince) : 0,
+    connectElapsedMs: conn?.connectStartedAt ? Math.max(0, now - conn.connectStartedAt) : 0,
   }
   const failure = failureCache.get(hostKey)
   if (failure && now - failure.time < FAILURE_CACHE_TTL_MS) {
     state.phase = 'failed'
     state.error = failure.error
     state.retryInMs = Math.max(0, FAILURE_CACHE_TTL_MS - (now - failure.time))
+  } else if (failure && state.phase === 'failed') {
+    // The throttle expired but nothing has tried since: the cause is still the
+    // only true thing to say about this host (no retry clock — a retry is
+    // allowed right now).
+    state.error = failure.error
   }
   return state
 }
