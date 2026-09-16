@@ -32364,19 +32364,49 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
      scroll container — never squeezed by the list flexing below it. */
   flex: 0 0 auto;
 }
+/* Wraps as GROUPS, never inside a word: the task panel is user-resizable, and at
+   its narrow end the labels used to be squeezed to min-content ("AI" / "search"
+   stacked, the ✦ toggle pinned against the border). With the trailing controls
+   kept whole and allowed to drop to their own right-aligned line, the card is one
+   line when there is room and two clean lines when there isn't. */
 .agent-search-header {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 .agent-search-badge { color: var(--accent); font-size: 11px; }
-.agent-search-label { font-weight: 600; color: var(--fg-muted); font-size: 11.5px; }
-.agent-search-elapsed { color: var(--fg-muted); font-size: 11px; opacity: 0.8; }
-.agent-search-model {
+.agent-search-label { font-weight: 600; color: var(--fg-muted); font-size: 11.5px; white-space: nowrap; }
+.agent-search-elapsed { color: var(--fg-muted); font-size: 11px; opacity: 0.8; white-space: nowrap; }
+/* "no matches" on a finished search. Looks like the loading ticker, but a class of
+   its own: the two never appear together, and a locator for one must not match
+   the other. */
+.agent-search-empty-note { color: var(--fg-muted); font-size: 11px; opacity: 0.8; white-space: nowrap; }
+/* Trailing controls (model tag · Open as session · ✦ toggle) ride the right
+   edge as ONE group, whatever the state renders before them. */
+/* Trailing controls stay together and drop as a group (see the header rule), but
+   they may wrap INTERNALLY at the panel's minimum width (10% of the viewport):
+   the group is ~176px of unshrinkable content, and `.main-page-todo` clips
+   overflow — without this the ✦ toggle, an existing control, was cut off. */
+.agent-search-actions {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 4px;
+  /* Bounded by the card even though the group itself does not shrink: what gives
+     is the chip's label (see below), never the card's edge. */
+  max-width: 100%;
+}
+.agent-search-model {
   color: var(--fg-muted);
   font-size: 10.5px;
   opacity: 0.7;
+  white-space: nowrap;
 }
 .agent-search-toggle {
   border: none;
@@ -32388,9 +32418,49 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   opacity: 0.6;
 }
 .agent-search-toggle:hover { opacity: 1; color: var(--accent); }
-.agent-search-header .agent-search-toggle { margin-left: 4px; }
-.agent-search-header .agent-search-model + .agent-search-toggle { margin-left: 4px; }
-.agent-search-panel.is-off { padding: 4px 10px; }
+/* The one-click hand-off to a full Ask Walnut session on the same question. A
+   small outlined chip, not a ghost glyph: it is an action, unlike the toggle. */
+.agent-search-open-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+.agent-search-open-session:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--accent);
+}
+.agent-search-open-session:disabled { opacity: 0.55; cursor: progress; }
+.agent-search-open-session-icon { display: inline-flex; flex: 0 0 auto; }
+.agent-search-open-session-icon svg { width: 12px; height: 12px; }
+/* At the task panel's 10%-of-viewport minimum the chip is WIDER than the card, and
+   `.main-page-todo` clips — so the label shrinks (ellipsized, the title still
+   spells it out) instead of the control disappearing. */
+.agent-search-open-session { min-width: 0; flex: 0 1 auto; }
+.agent-search-open-session-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-search-panel.is-off {
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Same reason as the header: "✦ Enable AI search" + the session chip are
+     ~230px of unshrinkable content, and the task panel clips what overflows. */
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
 .agent-search-enable { font-size: 11.5px; opacity: 0.75; }
 /* Loading shimmer — same three-bar pattern as the diff AI summary. */
 .agent-search-skeleton { display: flex; flex-direction: column; gap: 5px; padding: 8px 0 4px; }

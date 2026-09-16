@@ -8,12 +8,15 @@
  * no markdown, no dangerouslySetInnerHTML, no injection surface.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { peekAgentSearch } from '@/api/agentSearch';
+import { isAgentSearchEligible } from '@/hooks/agentSearchTrigger';
 import { useAgentTaskSearch } from '@/hooks/useAgentTaskSearch';
 import { useEvent } from '@/hooks/useWebSocket';
-import { binaryPhaseIcon } from '@/components/common/Icons';
+import { ICON_CHAT, binaryPhaseIcon } from '@/components/common/Icons';
 import { PHASE_LABELS } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
+import { buildSearchSessionMessage } from './agent-search-session';
 
 /** Elapsed-seconds ticker for the model wait (5-13s is normal). */
 function ElapsedHint() {
@@ -97,17 +100,85 @@ function shortModel(model: string): string {
   return model.length > 16 ? `${model.slice(0, 16)}…` : model;
 }
 
-export function AgentSearchPanel({ query, onOpenTask }: {
+/**
+ * "Open as session": the one-click hand-off from the one-shot AI lane to a full
+ * Ask Walnut session on the same question. Disabled while the launch's HTTP
+ * round-trip is in flight, so a double click cannot mint two sessions; the
+ * pending column the owner opens is the visible feedback, this label only
+ * covers the beat before it appears.
+ */
+function OpenSessionButton({ launching, onClick }: { launching: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="agent-search-open-session"
+      data-testid="agent-search-open-session"
+      disabled={launching}
+      aria-busy={launching || undefined}
+      title="Open a full Ask Walnut session on this search: it digs through tasks, transcripts, memory and notes, and you can ask follow-up questions"
+      onClick={onClick}
+    >
+      <span className="agent-search-open-session-icon" aria-hidden="true">{ICON_CHAT}</span>
+      {/* The label ellipsizes at the task panel's narrowest width; the icon and
+          the title never go away, so the control stays usable and explained. */}
+      <span className="agent-search-open-session-label">{launching ? 'Opening…' : 'Open as session'}</span>
+    </button>
+  );
+}
+
+export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
   query: string;
   onOpenTask: (taskId: string) => void;
+  /** Start an Ask Walnut session whose first message is `message` (the owner
+   *  opens the pending column and runs the quick-start). The returned promise
+   *  settles when the HTTP round-trip lands, either way; absent = no button. */
+  onOpenSession?: (message: string) => Promise<void> | void;
 }) {
   const { state, data, sid, enabled, toggle, retry } = useAgentTaskSearch(query);
   const progress = useAgentProgress(sid);
 
+  const [launching, setLaunching] = useState(false);
+  // The card unmounts when the search box empties; a launch still in flight
+  // then has no button left to re-enable (React ignores the set, but be explicit).
+  // Set in the effect BODY too: StrictMode runs mount → cleanup → mount, and a
+  // ref only cleared in the cleanup would stay false for the card's whole life.
+  // NOTE: `launching` guards the BUTTON only, and a remount resets it — the
+  // launch itself is latched by the owner (MainPage), which is the only thing a
+  // clear-and-retype cycle cannot reset.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  // Read at click time, not captured: the button's identity must not change on
+  // every progress tick (it sits in the header of a re-rendering card).
+  const latest = useRef({ query, state, onOpenSession });
+  latest.current = { query, state, onOpenSession };
+  const openSession = useCallback(() => {
+    const { query: q, state: s, onOpenSession: open } = latest.current;
+    if (!open) return;
+    // Only a FINISHED search's rows ride along, and they are read back from the
+    // memo BY QUERY (`peekAgentSearch`) rather than taken from `data`: that pairs
+    // the rows with the question being sent, instead of trusting that the panel's
+    // last snapshot still describes the text now in the box. A miss (evicted
+    // entry, unfinished search) just sends the briefing without candidates.
+    // Built BEFORE the button is disabled, so a throw in here cannot strand it
+    // in its "Opening…" state.
+    const message = buildSearchSessionMessage(q, s === 'done' ? peekAgentSearch(q) : undefined);
+    setLaunching(true);
+    Promise.resolve()
+      .then(() => open(message))
+      .catch(() => { /* the owner reports the failure in its pending column */ })
+      .finally(() => { if (mountedRef.current) setLaunching(false); });
+  }, []);
+  // Eligibility gates the button as well as the lane. Without it the OFF branch
+  // (which renders for any non-empty query, not just a searchable one) offered to
+  // spend a whole session on a one-character search box.
+  const openButton = onOpenSession && isAgentSearchEligible(query)
+    ? <OpenSessionButton launching={launching} onClick={openSession} />
+    : null;
+
   if (state === 'hidden' && enabled) return null;
-  // Done with zero results renders nothing — the AI adds no noise when it has
-  // nothing to add (the normal lane below still shows its own empty state).
-  if (state === 'done' && (data?.results.length ?? 0) === 0) return null;
 
   if (!enabled) {
     return (
@@ -115,9 +186,15 @@ export function AgentSearchPanel({ query, onOpenTask }: {
         <button type="button" className="agent-search-toggle agent-search-enable" onClick={toggle}>
           ✦ Enable AI search
         </button>
+        {openButton && <span className="agent-search-actions">{openButton}</span>}
       </section>
     );
   }
+
+  // Done with zero results used to render nothing (the AI adds no noise when it
+  // has nothing to add). It keeps the ONE header line now, because that is
+  // exactly when a full session is the way forward — the rows stay absent.
+  const noMatches = state === 'done' && (data?.results.length ?? 0) === 0;
 
   return (
     <section className={`agent-search-panel is-${state}`} data-testid="agent-search-panel">
@@ -125,18 +202,24 @@ export function AgentSearchPanel({ query, onOpenTask }: {
         <span className="agent-search-badge" aria-hidden="true">✦</span>
         <span className="agent-search-label">AI search</span>
         {state === 'loading' && <ElapsedHint />}
-        {state === 'done' && data && (
-          <span className="agent-search-model" title={`${data.model} · ${data.tookMs}ms${data.cached ? ' · cached' : ''}`}>
-            {shortModel(data.model)}
-          </span>
-        )}
-        <button
-          type="button"
-          className="agent-search-toggle"
-          aria-pressed={enabled}
-          title="Turn off AI search"
-          onClick={toggle}
-        >✦</button>
+        {/* Own class, not the loading ticker's: a locator for one must never
+            match the other. */}
+        {noMatches && <span className="agent-search-empty-note">no matches</span>}
+        <span className="agent-search-actions">
+          {state === 'done' && data && (
+            <span className="agent-search-model" title={`${data.model} · ${data.tookMs}ms${data.cached ? ' · cached' : ''}`}>
+              {shortModel(data.model)}
+            </span>
+          )}
+          {openButton}
+          <button
+            type="button"
+            className="agent-search-toggle"
+            aria-pressed={enabled}
+            title="Turn off AI search"
+            onClick={toggle}
+          >✦</button>
+        </span>
       </header>
       {state === 'loading' && progress.length > 0 && (
         <ul className="agent-search-progress" role="status" aria-busy="true" aria-label="AI search in progress">
@@ -158,7 +241,7 @@ export function AgentSearchPanel({ query, onOpenTask }: {
           <button type="button" className="agent-search-retry" onClick={retry}>Retry</button>
         </div>
       )}
-      {state === 'done' && data && (
+      {state === 'done' && data && !noMatches && (
         <>
           {data.summary && <p className="agent-search-summary">{data.summary}</p>}
           {/* One line per result, the same shape as a board row (circle, title

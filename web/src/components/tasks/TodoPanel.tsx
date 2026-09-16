@@ -227,6 +227,10 @@ interface TodoPanelProps {
   /** Pin-tier header "+": open a draft session column with `meta.pinTier` preset
    *  to this tier (built-in name or a `ct_*` custom tier id). */
   onOpenLauncherForTier?: (tier: string) => void;
+  /** ✦ AI search card's "Open as session": start an Ask Walnut session whose
+   *  first message is the search briefing (MainPage runs the quick-start and
+   *  opens the pending column). Settles when the HTTP round-trip lands. */
+  onOpenSearchSession?: (message: string) => Promise<void> | void;
   /** Virtual-group name registry: group_id → label. */
   taskGroups?: Record<string, string>;
   /** Group ids hidden from the Focus (pinned) area — their cards are skipped there. */
@@ -2541,7 +2545,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -7006,7 +7010,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           bar, OUTSIDE every scroll container — so it is always visible at the
           very top while searching, wherever the list is scrolled. */}
       {isSearchMode && (
-        <AgentSearchPanel query={searchQuery} onOpenTask={handleAgentResultClick} />
+        <AgentSearchPanel
+          query={searchQuery}
+          onOpenTask={handleAgentResultClick}
+          {...(onOpenSearchSession ? { onOpenSession: onOpenSearchSession } : {})}
+        />
       )}
 
       {/* Active conditions strip: one removable chip per value, above the tabs so

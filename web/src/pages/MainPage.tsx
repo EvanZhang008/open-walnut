@@ -2373,6 +2373,39 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
   }, [launchQuickStart, openDraftColumn, openSessionOrToast]);
 
+  /**
+   * ✦ AI search card → "Open as session": ONE click starts an Ask Walnut
+   * session on the search question, as a session column (pending column now,
+   * the real panel once the quick-start answers), filed under the Ask Walnut
+   * project. The same launch a walnut draft's Start performs (handleDraftStart),
+   * minus the composer: the card built the message, the user only clicked.
+   * Focus tier + no model, the walnut draft's own seeds (the server applies the
+   * Ask Walnut launch memory to a launch that names no model).
+   *
+   * The in-flight latch lives HERE, not in the button: the card unmounts as soon
+   * as the search box is cleared, so its disabled state is gone the moment the
+   * user retypes the query — while this ref survives, and a launch is exactly the
+   * kind of thing that must not happen twice (same shape as startingTaskIdsRef
+   * for ▶ Start).
+   */
+  const searchSessionLaunchingRef = useRef(false);
+  const handleOpenSearchSession = useCallback(async (message: string): Promise<void> => {
+    if (searchSessionLaunchingRef.current) return;
+    searchSessionLaunchingRef.current = true;
+    try {
+      await launchQuickStart(
+        { cwd: '', host: null },
+        { ...freshLauncherMeta(), pinTier: 'focus', model: undefined },
+        message,
+        undefined,
+        ASK_WALNUT_PROJECT,
+        { walnutAgent: true },
+      );
+    } finally {
+      searchSessionLaunchingRef.current = false;
+    }
+  }, [launchQuickStart]);
+
   return (
     <div
       className={`main-page${sessionColumns.length > 0 ? ' has-mobile-session' : ''}`}
@@ -2444,6 +2477,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOpenLauncher={handleToolbarOpenLauncher}
           onOpenLauncherForProject={handleOpenLauncherForProject}
           onOpenLauncherForTier={handleOpenLauncherForTier}
+          onOpenSearchSession={handleOpenSearchSession}
         />
         {/* The todo-anchored launcher popover (Session | Task tabs) is GONE — the
             toolbar "+" now grows a draft session column in the sessions strip

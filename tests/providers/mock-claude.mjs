@@ -1126,11 +1126,24 @@ if (outputFormat === 'stream-json') {
       process.stdout.write(JSON.stringify(toolResultEvent) + '\n');
     }
 
-    // 3. Assistant message with text content
+    // 3. Assistant message with text content.
+    //
+    // The id must be UNIQUE PER TURN, the way the real CLI's `msg_…` is unique per
+    // API response — several layers treat a message id as a global identity, and a
+    // constant here emits a shape production cannot produce. Concretely: the web
+    // client absorbs a streaming block as soon as its msgId appears ANYWHERE in
+    // history (web/src/cache/promote-blocks.ts), and session-history merges same-id
+    // lines into ONE message (src/core/session-history.ts). While this was the
+    // constant `msg_mock_002`, a SECOND turn on the same session (this path exits
+    // after `result`, so turn 2 is a fresh process that reused the constant) had
+    // its reply absorbed by turn 1's history row and folded into turn 1's message:
+    // the answer never rendered live, and a reload showed it glued onto the first
+    // reply. pid + ms is enough — one process runs one plain turn. The multi-turn
+    // snapshot modes already mint per-turn ids for the same reason.
     const assistantEvent = {
       type: 'assistant',
       message: {
-        id: 'msg_mock_002',
+        id: `msg_mock_002_${process.pid.toString(36)}${Date.now().toString(36)}`,
         type: 'message',
         role: 'assistant',
         model: 'mock-model',
