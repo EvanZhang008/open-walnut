@@ -73,6 +73,14 @@ grant covers the app as a whole, so it does not separate the UI from the session
   an unknown flag would ignore it and open a window. An older app is reported in
   the log with the command to rebuild it, and the daemon runs under the plain
   identity meanwhile.
+- **Rebuild with `desktop/build.sh`, not `desktop/build-release.sh`.** The release
+  script ad-hoc signs when the machine has no Developer ID Application certificate,
+  and an ad-hoc signature gives tccd a content-hash identity that changes on every
+  rebuild, so each rebuild would ask for the grant again. `build.sh` signs with the
+  Apple Development certificate, which keeps one stable identity
+  (`com.local.walnut-desktop` plus the team) across rebuilds. Check before
+  installing over an existing app: `codesign -dv --verbose=2 <app>` must report the
+  same `Identifier` and `Authority` as the app being replaced, or the grant is lost.
 - An npm or terminal-only install with no `Walnut.app` keeps the plain node
   identity. Nothing is installed and no bundle is built to change that.
 - Linux hosts (local or over SSH) keep the existing daemon and ordinary filesystem

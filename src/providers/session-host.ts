@@ -196,10 +196,16 @@ export async function resolveSessionHostLaunch(input: {
   }
   const executable = desktopAppExecutable(app);
   if (!(await appSupportsSessionHost(executable))) {
+    // `desktop/build.sh`, NOT build-release.sh: the release script ad-hoc signs
+    // when the box has no Developer ID Application certificate, and an ad-hoc
+    // signature gives tccd a CONTENT-HASH identity that changes on every rebuild.
+    // Installing one of those over a certificate-signed app would throw away the
+    // grant the user already gave Walnut, which is the exact failure this feature
+    // exists to end.
     return {
       available: false,
       reason: 'unsupported_app',
-      detail: `${app} does not know ${SESSION_HOST_FLAG}; rebuild it with desktop/build-release.sh`,
+      detail: `${app} does not know ${SESSION_HOST_FLAG}; rebuild with desktop/build.sh and copy it over ${app}`,
     };
   }
 
