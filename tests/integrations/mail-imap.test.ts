@@ -545,6 +545,35 @@ describe('mailbox roles', () => {
 });
 
 describe('account setup', () => {
+  it('stamps a known service that files its own Sent copy, and stamps nothing otherwise', async () => {
+    // Nobody should have to know this about their own mail host. Gmail saves anything sent through
+    // smtp.gmail.com, so without the stamp the human gets two of every message in Sent and has to
+    // find a plugin setting to explain it.
+    const gmail = buildProvider();
+    await gmail.provider.setup.submit({
+      address: ADDRESS,
+      password: PASSWORD,
+      imap_host: 'imap.gmail.com',
+      imap_tls: 'tls',
+      smtp_host: 'smtp.gmail.com',
+      smtp_tls: 'starttls',
+    });
+    expect(gmail.config().accounts?.[localIdFor(ADDRESS)]).toMatchObject({ server_saves_sent: true });
+
+    // A host nothing is known about is left ALONE rather than stamped false: that keeps the
+    // plugin-level default meaningful for a hand-configured server.
+    const other = buildProvider();
+    await other.provider.setup.submit({
+      address: ADDRESS,
+      password: PASSWORD,
+      imap_host: 'imap.example.invalid',
+      imap_tls: 'tls',
+      smtp_host: 'smtp.example.invalid',
+      smtp_tls: 'starttls',
+    });
+    expect(other.config().accounts?.[localIdFor(ADDRESS)]).not.toHaveProperty('server_saves_sent');
+  });
+
   it('proves the credential with a real command before storing anything', async () => {
     const { provider, config, secrets } = buildProvider();
 
@@ -1348,6 +1377,36 @@ describe('sending', () => {
     await sending.patch({ server_saves_sent: false, append_sent: false });
     await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-10:3' });
     expect(wire.appends).toEqual([]);
+    await sending.pool.disposeAll();
+  });
+
+  it('reads the Sent-copy fact from the ACCOUNT, so two accounts can disagree', async () => {
+    // The flag used to be plugin wide, which is necessarily wrong for a box holding both a Gmail
+    // account (files its own copy) and a self-hosted one (does not). The account's own value wins;
+    // the plugin-level flag is only the default for an account that says nothing.
+    const sending = await withAccount(undefined, true);
+    wire.listing = [...wire.listing, { path: 'Sent', specialUse: '\\Sent', status: { messages: 0, unseen: 0 } }];
+    const localId = localIdFor(ADDRESS);
+    const stored = sending.config().accounts as Record<string, Record<string, unknown>>;
+    await sending.patch({
+      server_saves_sent: false,
+      accounts: { ...stored, [localId]: { ...stored[localId], server_saves_sent: true } },
+    });
+
+    await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-10b:1' });
+    // Its OWN server files the copy, so this plugin adding one would be the second in Sent.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(wire.appends).toEqual([]);
+
+    // And the other way round: the box says "the server saves it", this account says it does not.
+    await sending.patch({
+      server_saves_sent: true,
+      accounts: { ...stored, [localId]: { ...stored[localId], server_saves_sent: false } },
+    });
+    await sending.provider.send(ACCOUNT_ID, OUTGOING, { idempotencyKey: 'dr-10b:2' });
+    await expect.poll(() => wire.appends, { timeout: 5_000 }).toEqual([
+      { mailbox: 'Sent', bytes: RAW_MIME, flags: ['\\Seen'], hasDate: true },
+    ]);
     await sending.pool.disposeAll();
   });
 

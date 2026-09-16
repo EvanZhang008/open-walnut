@@ -47,7 +47,7 @@ import {
   toEnvelope,
 } from './mime.js'
 import { createImapSender } from './provider-send.js'
-import { imapPortFor, SETUP_PRESETS, submissionPortFor } from './setup-presets.js'
+import { imapPortFor, SETUP_PRESETS, serverFilesSentCopy, submissionPortFor } from './setup-presets.js'
 import { verifySmtp, type SmtpSecurity } from './smtp.js'
 
 /** Headers the ENVELOPE does not carry, or carries in a lossy form. */
@@ -237,11 +237,16 @@ export function createImapProvider(deps: {
           })
         }
 
+        // A known service that files its own Sent copy is stamped on the ACCOUNT here, so nobody
+        // has to know that about their own mail host: Gmail through smtp.gmail.com would otherwise
+        // end up with two copies of every message in Sent.
+        const savesSent = serverFilesSentCopy(smtpHost)
         const entry = await store.save({
           address, host, port, tls,
           password,
           displayName: address,
           ...(smtpHost ? { smtpHost, smtpPort, smtpSecurity } : {}),
+          ...(typeof savesSent === 'boolean' ? { serverSavesSent: savesSent } : {}),
         })
         log.info('imap account configured', {
           accountId: entry.accountId, host, port, tls, canSend: !!smtpHost,

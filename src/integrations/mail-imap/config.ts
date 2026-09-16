@@ -42,6 +42,16 @@ export interface ImapStoredAccount extends Record<string, unknown> {
   display_name?: string
   /** Mailbox path to role, for a server whose folder names this code cannot guess. */
   roles?: Record<string, string>
+  /**
+   * THIS account's outgoing server files its own Sent copy, so this plugin must not add a second.
+   *
+   * Per account because it is a fact about one server, not about the box: Gmail files its own copy
+   * and a self-hosted server does not, and one flag for both is wrong for one of them. Absent means
+   * "whatever the plugin-level `server_saves_sent` says", which is what keeps an account added
+   * before this existed behaving exactly as it did. Setup stamps it from the known-service table
+   * (setup-presets.ts), so nobody has to know this about their own mail host.
+   */
+  server_saves_sent?: boolean
 }
 
 interface ImapPluginConfig extends Record<string, unknown> {
@@ -153,18 +163,20 @@ export class ImapAccountStore {
   }
 
   /**
-   * The Sent-folder policy. Plugin wide, not per account, and that is a deliberate limit.
+   * The Sent-folder policy for one account.
    *
-   * One flag for the box keeps the setup form to the three SMTP fields the human already has to
-   * find. The case it gets wrong is a box with both a Gmail account and a self-hosted one, where
-   * one server files its own copy and the other does not; a per-account override belongs with the
-   * console screen that could actually explain it.
+   * `append_sent` stays plugin wide: it is a preference about how the human wants their own Sent
+   * folder to look. `server_saves_sent` is a FACT about one outgoing server, so the account's own
+   * value wins and the plugin-level flag is only its default. One flag for the whole box was
+   * necessarily wrong for a box holding both a Gmail account (files its own copy) and a self-hosted
+   * one (does not), and the human had no way to tell which way to set it.
    */
-  async sentCopyPolicy(): Promise<SentCopyPolicy> {
+  async sentCopyPolicy(accountId?: string): Promise<SentCopyPolicy> {
     const config = await this.walnut.config.get<ImapPluginConfig>()
+    const own = accountId ? config.accounts?.[localIdOf(accountId)]?.server_saves_sent : undefined
     return {
       appendSent: config.append_sent !== false,
-      serverSavesSent: config.server_saves_sent === true,
+      serverSavesSent: typeof own === 'boolean' ? own : config.server_saves_sent === true,
     }
   }
 
@@ -186,6 +198,11 @@ export class ImapAccountStore {
     smtpHost?: string
     smtpPort?: number
     smtpSecurity?: SmtpSecurity
+    /**
+     * This server files its own Sent copy. Omitted means "leave whatever this account already said",
+     * so a re-save that does not know the answer cannot quietly take a stamped fact away.
+     */
+    serverSavesSent?: boolean
   }): Promise<ImapAccountEntry> {
     const localId = localIdFor(input.address)
     const accountId = `${PROVIDER_ID}:${localId}`
@@ -206,6 +223,11 @@ export class ImapAccountStore {
         : {}),
       ...(input.displayName ? { display_name: input.displayName } : {}),
       ...(config.accounts?.[localId]?.roles ? { roles: config.accounts[localId].roles! } : {}),
+      ...(typeof input.serverSavesSent === 'boolean'
+        ? { server_saves_sent: input.serverSavesSent }
+        : typeof config.accounts?.[localId]?.server_saves_sent === 'boolean'
+          ? { server_saves_sent: config.accounts[localId].server_saves_sent! }
+          : {}),
     }
     // Secret FIRST: an account row with no password is an account that fails every poll, while a
     // stored password with no row is inert and gets overwritten by the next attempt.

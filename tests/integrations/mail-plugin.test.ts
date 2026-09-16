@@ -247,9 +247,15 @@ describe('a provider plugin attaches through the service, with no kernel change'
     // be submitted in disagreement (993 with STARTTLS reaches a port speaking neither).
     expect(Object.keys(gmail!.values)).not.toContain('imap_port');
 
+    // The table itself is pinned: a refactor of HOW the presets are built (they are derived from one
+    // list of service facts) must not drop a service or reorder them, and the provider's private
+    // knowledge about a service must not ride a response every open tab polls.
+    expect(imap.setupPresets?.map((one) => one.id)).toEqual(['gmail', 'icloud', 'outlook', 'fastmail', 'yahoo']);
+
     const declared = new Set(imap.setupFields.map((one) => one.name));
     for (const preset of imap.setupPresets ?? []) {
       for (const name of Object.keys(preset.values)) expect(declared).toContain(name);
+      expect(Object.keys(preset)).not.toContain('savesSentItself');
       // A preset fills servers. A credential is the human's to type, and would be a secret in a
       // response every open tab polls.
       expect(Object.keys(preset.values)).not.toContain('password');

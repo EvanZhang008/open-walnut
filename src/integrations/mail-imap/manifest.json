@@ -20,21 +20,70 @@
         "additionalProperties": {
           "type": "object",
           "properties": {
-            "address": { "type": "string", "description": "The email address, which is also the IMAP username" },
-            "imap_host": { "type": "string", "description": "IMAP server hostname" },
-            "imap_port": { "type": "integer", "default": 993, "description": "IMAP port (993 for TLS, 143 for STARTTLS)" },
-            "imap_tls": { "type": "string", "enum": ["tls", "starttls"], "default": "tls", "description": "TLS from the first byte, or an upgrade after connecting" },
-            "smtp_host": { "type": "string", "description": "Outgoing server hostname. Absent means this account can read but not send" },
-            "smtp_port": { "type": "integer", "default": 587, "description": "Outgoing port (587 for STARTTLS, 465 for TLS)" },
-            "smtp_tls": { "type": "string", "enum": ["starttls", "tls", "none"], "default": "starttls", "description": "How the outgoing connection is encrypted" },
-            "display_name": { "type": "string", "description": "What the console shows for this account" },
+            "address": {
+              "type": "string",
+              "description": "The email address, which is also the IMAP username"
+            },
+            "imap_host": {
+              "type": "string",
+              "description": "IMAP server hostname"
+            },
+            "imap_port": {
+              "type": "integer",
+              "default": 993,
+              "description": "IMAP port (993 for TLS, 143 for STARTTLS)"
+            },
+            "imap_tls": {
+              "type": "string",
+              "enum": [
+                "tls",
+                "starttls"
+              ],
+              "default": "tls",
+              "description": "TLS from the first byte, or an upgrade after connecting"
+            },
+            "smtp_host": {
+              "type": "string",
+              "description": "Outgoing server hostname. Absent means this account can read but not send"
+            },
+            "smtp_port": {
+              "type": "integer",
+              "default": 587,
+              "description": "Outgoing port (587 for STARTTLS, 465 for TLS)"
+            },
+            "smtp_tls": {
+              "type": "string",
+              "enum": [
+                "starttls",
+                "tls",
+                "none"
+              ],
+              "default": "starttls",
+              "description": "How the outgoing connection is encrypted"
+            },
+            "display_name": {
+              "type": "string",
+              "description": "What the console shows for this account"
+            },
             "roles": {
               "type": "object",
               "description": "Mailbox path to role, for a server whose folder names Walnut cannot guess",
               "additionalProperties": {
                 "type": "string",
-                "enum": ["inbox", "sent", "drafts", "archive", "trash", "spam", "other"]
+                "enum": [
+                  "inbox",
+                  "sent",
+                  "drafts",
+                  "archive",
+                  "trash",
+                  "spam",
+                  "other"
+                ]
               }
+            },
+            "server_saves_sent": {
+              "type": "boolean",
+              "description": "This account's outgoing server files its own Sent copy, so Walnut must not add a second one. Stamped automatically for a known service that does (Gmail); absent means the plugin-level server_saves_sent applies"
             }
           }
         }
@@ -47,7 +96,7 @@
       "server_saves_sent": {
         "type": "boolean",
         "default": false,
-        "description": "The outgoing server files its own Sent copy, so Walnut must not add a second one. Gmail does this; most other servers do not"
+        "description": "Default for accounts that do not say otherwise: the outgoing server files its own Sent copy, so Walnut must not add a second one. Most SMTP servers do nothing of the kind, so this stays off; an account added for a known service that does (Gmail) sets its own flag at setup"
       }
     }
   },
@@ -62,7 +111,7 @@
     },
     "server_saves_sent": {
       "label": "My outgoing server saves sent mail itself",
-      "help": "Turn this on for Gmail: it already saves anything sent through its own SMTP, so Walnut adding a copy would give you two"
+      "help": "Only needed for a hand-configured server that files its own copy. An account added from the Mail app for a known service (Gmail) already knows this about itself"
     }
   }
 }

@@ -65,7 +65,7 @@ export function createImapSender(deps: {
    */
   const appendSentCopy = async (entry: ImapAccountEntry, raw: Buffer | undefined): Promise<void> => {
     if (!raw) return
-    const policy = await store.sentCopyPolicy()
+    const policy = await store.sentCopyPolicy(entry.accountId)
     if (!policy.appendSent || policy.serverSavesSent) return
     const connection = await pool.for(entry.accountId)
     const boxes = await connection.run('a mailbox list', (client) => client.list())

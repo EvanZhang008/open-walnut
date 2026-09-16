@@ -15,6 +15,10 @@
  * - `help` IS PER SERVICE. Four of these want an app password and Outlook.com no longer accepts
  *   one at all, so one shared sentence would be a confident wrong answer for the one service where
  *   following it cannot work.
+ * - A SERVICE THAT FILES ITS OWN SENT COPY says so here, and setup stamps that on the account
+ *   (`serverFilesSentCopy`). Gmail saves anything sent through its own SMTP, so a Walnut copy on
+ *   top gives the human two of every message in Sent, and asking them to know that about their own
+ *   mail host is asking the wrong person.
  */
 import type { AccountSetupPreset } from '../mail/api.js'
 import type { SmtpSecurity } from './smtp.js'
@@ -51,8 +55,7 @@ export function submissionPortFor(raw: string | undefined, security: SmtpSecurit
   return portFor(raw, 465, 587, security === 'tls')
 }
 
-/** One known service, from the vendor's own documented settings. */
-function service(one: {
+interface KnownService {
   id: string
   label: string
   domains: string[]
@@ -61,7 +64,12 @@ function service(one: {
   /** How that vendor words the credential, since its own words are what a human will look for. */
   help: string
   helpUrl?: string
-}): AccountSetupPreset {
+  /** This service's own SMTP files the Sent copy, so this plugin must not add a second one. */
+  savesSentItself?: boolean
+}
+
+/** One known service, from the vendor's own documented settings, as the form's data. */
+function presetOf(one: KnownService): AccountSetupPreset {
   return {
     id: one.id,
     label: one.label,
@@ -77,17 +85,20 @@ function service(one: {
   }
 }
 
-export const SETUP_PRESETS: AccountSetupPreset[] = [
-  service({
+const KNOWN: KnownService[] = [
+  {
     id: 'gmail',
     label: 'Gmail',
     domains: ['gmail.com', 'googlemail.com'],
     imapHost: 'imap.gmail.com',
     smtpHost: 'smtp.gmail.com',
+    // Verified behaviour, and the reason `server_saves_sent` exists: Gmail files a copy of anything
+    // sent through smtp.gmail.com, so an IMAP APPEND on top is the second one the human sees.
+    savesSentItself: true,
     help: 'Gmail refuses your normal account password here. Turn on two-step verification, then make an app password for Walnut.',
     helpUrl: 'https://myaccount.google.com/apppasswords',
-  }),
-  service({
+  },
+  {
     id: 'icloud',
     label: 'iCloud',
     domains: ['icloud.com', 'me.com', 'mac.com'],
@@ -95,8 +106,8 @@ export const SETUP_PRESETS: AccountSetupPreset[] = [
     smtpHost: 'smtp.mail.me.com',
     help: 'iCloud Mail needs an app specific password, not the password you sign in with. Your Apple Account needs two factor turned on to make one.',
     helpUrl: 'https://support.apple.com/en-us/102654',
-  }),
-  service({
+  },
+  {
     id: 'outlook',
     label: 'Outlook.com',
     domains: ['outlook.com', 'hotmail.com', 'live.com'],
@@ -110,8 +121,8 @@ export const SETUP_PRESETS: AccountSetupPreset[] = [
     // guaranteed sign-in failure into one sentence read before anybody types a password.
     help: 'Outlook.com no longer accepts a password or an app password for mail apps: Microsoft requires an OAuth sign-in, which this provider cannot do yet, so an account added here will be refused. IMAP also has to be switched on in Outlook.com settings first.',
     helpUrl: 'https://support.microsoft.com/en-us/outlook/pop-imap-and-smtp-settings-for-outlook-com',
-  }),
-  service({
+  },
+  {
     id: 'fastmail',
     label: 'Fastmail',
     domains: ['fastmail.com', 'fastmail.fm'],
@@ -119,8 +130,8 @@ export const SETUP_PRESETS: AccountSetupPreset[] = [
     smtpHost: 'smtp.fastmail.com',
     help: 'Fastmail needs an app password that includes mail access, never your login password.',
     helpUrl: 'https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords',
-  }),
-  service({
+  },
+  {
     id: 'yahoo',
     label: 'Yahoo',
     domains: ['yahoo.com'],
@@ -128,5 +139,22 @@ export const SETUP_PRESETS: AccountSetupPreset[] = [
     smtpHost: 'smtp.mail.yahoo.com',
     help: 'Yahoo Mail needs an app password for other mail apps, not your account password.',
     helpUrl: 'https://help.yahoo.com/kb/SLN15241.html',
-  }),
+  },
 ]
+
+export const SETUP_PRESETS: AccountSetupPreset[] = KNOWN.map(presetOf)
+
+/**
+ * Does this outgoing server file its own Sent copy?
+ *
+ * Answered from the table above by HOST, not by which preset chip was showing: the host is what the
+ * account is actually saved with, and a human who picked "Other" and typed smtp.gmail.com has the
+ * same server and the same duplicate-copy problem. `undefined` means "nothing known about this
+ * host", which leaves the account on the plugin-level default rather than stamping a guess.
+ */
+export function serverFilesSentCopy(smtpHost: string | undefined): boolean | undefined {
+  const host = smtpHost?.trim().toLowerCase()
+  if (!host) return undefined
+  const known = KNOWN.find((one) => one.smtpHost.toLowerCase() === host)
+  return known?.savesSentItself === true ? true : undefined
+}
