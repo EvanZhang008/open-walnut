@@ -76,6 +76,33 @@ import {
 } from './session-changes-core.js'
 import { probeTranscriptRewindHostLocal, type RewindProbeInput, type RewindProbeOutput } from './transcript-rewind-core.js'
 import { scanExternalSessions } from './external-session-scan-core.js'
+import {
+  ackFire,
+  applyCheckError,
+  applyCheckOutcome,
+  buildCheckStdin,
+  checkErrorOf,
+  clampTimeoutSeconds,
+  coerceHostState,
+  decideCheck,
+  emptyHostState,
+  newItemsOf,
+  parseCheckStdout,
+  runCheckProcess,
+  triggerStateFileName,
+  triggersSetHash,
+  validateTriggerDef,
+  CHECK_ERROR_BACKOFF_MS,
+  MAX_CONSECUTIVE_CHECK_ERRORS,
+  MIN_EVERY_MS,
+  PENDING_FIRE_REPLAY_MS,
+  TRIGGER_STATE_TTL_MS,
+  type PendingFire,
+  type TriggerCheckSpec,
+  type TriggerDef,
+  type TriggerHostState,
+  type TriggersTestResult,
+} from './trigger-check-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { grepReferencesHostLocal } from './search-grep-core.js'
 import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
@@ -1485,6 +1512,13 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // NOT in BRIDGE_ALLOWED_COMMANDS: rule content may only arrive over the
     // trusted SSH-tunneled walnut socket, never from the public cloud bridge.
     case 'hooks.configure': return cmdHooksConfigure(ws, id as number, cmd)
+    // walnut-trigger ('triggers-v1'). NOT in BRIDGE_ALLOWED_COMMANDS: a check is
+    // an arbitrary shell command on this host, and a fire carries host data — the
+    // whole family belongs to the trusted SSH-tunneled walnut socket only.
+    case 'triggers.configure': return cmdTriggersConfigure(ws, id as number, cmd)
+    case 'triggers.test': return cmdTriggersTest(ws, id as number, cmd)
+    case 'triggers.run': return cmdTriggersRun(ws, id as number, cmd)
+    case 'triggers.ack': return cmdTriggersAck(ws, id as number, cmd)
     case 'skills.sync': return cmdSkillsSync(ws, id as number, cmd)
     case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
@@ -2795,10 +2829,455 @@ function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
   return sendOk(ws, id, { applied: true, changed, hash: next.hash })
 }
 
-// ── skills.sync: distribute the walnut skill to this host's engine stores ──
+// ── walnut-trigger: the daemon owns the clock and runs the check ──
+// A trigger is a routine whose `check` is a shell command this host runs on a
+// cadence (docs/plan/walnut-trigger.md). Ownership: daemon = when and whether,
+// server = who and what. The set arrives via triggers.configure and is persisted
+// to triggers.json, so checks keep polling while the server is down or the
+// tunnel flaps; per-trigger dedup/cursor state lives in trigger-state/<id>.json.
+// Fires are at-least-once: each stays in the state's pendingFires until the
+// server sends triggers.ack, and every armed trigger's pending set is replayed
+// after a successful configure (the reconnect path) AND on a slow clock until it
+// is acked. Every fire carries (epoch, seq) — the epoch is minted with the state
+// file, so the server can tell a genuinely new numbering from a replay. Trigger
+// events NEVER go to a bridge client — a fire carries host data and only the
+// trusted SSH-tunneled walnut server may receive it. Keep in sync with
+// daemon-source.ts.
+const TRIGGERS_FILE = path.join(DAEMON_DIR, 'triggers.json')
+const TRIGGER_STATE_DIR = path.join(DAEMON_DIR, 'trigger-state')
+const TRIGGER_TICK_MS = 5_000
+// A newly armed trigger waits before its first run: configure arrives in a burst
+// at connect, and a boot-time stampede would run every check against a host that
+// is still reconciling sessions.
+const TRIGGER_FIRST_RUN_DELAY_MS = 5_000
+const TRIGGER_BOOT_RUN_DELAY_MS = 15_000
+const TRIGGER_STDOUT_TAIL = 2_000
+/**
+ * A test runs arbitrary shell on this host with no state to serialize it, so the
+ * only thing standing between an impatient form (or a loop in a script) and a
+ * fork bomb is this ceiling.
+ */
+const TRIGGER_TEST_MAX_CONCURRENT = 4
+
+interface ArmedTrigger {
+  def: TriggerDef
+  state: TriggerHostState
+  nextRunAtMs: number
+  running: boolean
+  /**
+   * When each pending fire was last put on the wire, by seq. In-memory only: a
+   * restarted daemon has no marks and re-sends every pending fire once, which is
+   * exactly what at-least-once wants.
+   */
+  fireSentAt: Map<number, number>
+}
+
+const armedTriggers = new Map<string, ArmedTrigger>()
+let armedTriggersHash: string | null = null
+let triggerTickTimer: ReturnType<typeof setInterval> | null = null
+let triggerTestsRunning = 0
+// Configure calls are serialized: a connect-time push racing a routine
+// mutation's push must not interleave their state-file writes.
+let triggersConfigureChain: Promise<unknown> = Promise.resolve()
+
+/** Replay cadence for unacked fires; the env override exists for tests. */
+function triggerReplayMs(): number {
+  const raw = Math.floor(Number(process.env.WALNUT_TRIGGER_REPLAY_MS))
+  return Number.isFinite(raw) && raw > 0 ? Math.max(1_000, raw) : PENDING_FIRE_REPLAY_MS
+}
+
+/**
+ * Which trigger a command is about. The trigger id rides `triggerId`, never
+ * `id`: the frame's `id` is the RPC correlation slot, and a client that puts a
+ * string there loses the reply (the caller keys its pending map by number), so
+ * a trigger id sent as `id` cannot reach this daemon at all.
+ */
+function triggerIdOf(cmd: Record<string, unknown>): string {
+  return typeof cmd.triggerId === 'string' ? cmd.triggerId : ''
+}
+
+function triggerStatePath(id: string): string {
+  return path.join(TRIGGER_STATE_DIR, triggerStateFileName(id))
+}
+
+function readTriggerState(id: string, nowMs: number): TriggerHostState {
+  try {
+    return coerceHostState(JSON.parse(fs.readFileSync(triggerStatePath(id), 'utf-8')), nowMs)
+  } catch {
+    return emptyHostState(nowMs)
+  }
+}
+
+function persistTriggerState(id: string, state: TriggerHostState): void {
+  const file = triggerStatePath(id)
+  const tmp = file + '.tmp'
+  try {
+    fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 })
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    // In-memory state stays authoritative for this daemon's life; a persist
+    // failure only costs the dedup set across a restart, so it must be visible
+    // rather than fatal.
+    logMsg('warn', 'trigger state persist failed', { id, error: (err as Error).message })
+    try { fs.unlinkSync(tmp) } catch {}
+  }
+}
+
+/**
+ * Reclaim state files nobody owns. Disarming a trigger deliberately does NOT
+ * delete its state: a disable-then-enable (or a foreign push that momentarily
+ * carries an empty set) would otherwise destroy the dedup set, the script's
+ * cursor and every unacked fire, and the recreated file would restart `seq` at 0.
+ * Age is what reclaims the directory instead — a file untouched for the seen TTL
+ * belongs to a trigger nobody re-armed, and its dedup set has expired anyway.
+ */
+function pruneTriggerStateFiles(nowMs: number): void {
+  let names: string[]
+  try { names = fs.readdirSync(TRIGGER_STATE_DIR) } catch { return }
+  const armedFiles = new Set([...armedTriggers.keys()].map((tid) => triggerStateFileName(tid)))
+  for (const name of names) {
+    if (!name.endsWith('.json') || armedFiles.has(name)) continue
+    const file = path.join(TRIGGER_STATE_DIR, name)
+    try {
+      if (nowMs - fs.statSync(file).mtimeMs <= TRIGGER_STATE_TTL_MS) continue
+      fs.unlinkSync(file)
+      logMsg('info', 'trigger state pruned: unarmed and stale', { file: name })
+    } catch { /* raced a write, or already gone */ }
+  }
+}
+
+function persistTriggersFile(defs: TriggerDef[]): void {
+  const tmp = TRIGGERS_FILE + '.tmp'
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, triggers: defs }), { mode: 0o600 })
+    fs.renameSync(tmp, TRIGGERS_FILE)
+  } catch (err) {
+    logMsg('warn', 'triggers persist failed (in-memory only)', { error: (err as Error).message })
+    try { fs.unlinkSync(tmp) } catch {}
+  }
+}
+
+function loadTriggersAtBoot(): void {
+  let raw: unknown
+  try { raw = JSON.parse(fs.readFileSync(TRIGGERS_FILE, 'utf-8')) } catch { return }
+  const file = raw as { version?: unknown; triggers?: unknown }
+  if (!file || file.version !== 1 || !Array.isArray(file.triggers)) {
+    logMsg('warn', 'triggers file ignored: unexpected shape', { file: TRIGGERS_FILE })
+    return
+  }
+  const now = Date.now()
+  const defs: TriggerDef[] = []
+  for (const entry of file.triggers) {
+    const parsed = validateTriggerDef(entry)
+    if (!parsed.ok) {
+      logMsg('warn', 'trigger dropped at boot', { error: parsed.error })
+      continue
+    }
+    defs.push(parsed.def)
+  }
+  for (const def of defs) {
+    armedTriggers.set(def.id, {
+      def, state: readTriggerState(def.id, now), nextRunAtMs: now + TRIGGER_BOOT_RUN_DELAY_MS, running: false,
+      fireSentAt: new Map(),
+    })
+  }
+  armedTriggersHash = triggersSetHash(defs)
+  try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }) } catch {}
+  pruneTriggerStateFiles(now)
+  logMsg('info', 'triggers loaded from disk', { count: defs.length, hash: armedTriggersHash })
+}
+
+/**
+ * Trigger events go to EVERY trusted client; the bridge never sees one. Fanning
+ * out rather than picking the first is what makes a second window (or a server
+ * that reconnected while the old socket was still draining) see a fire at all;
+ * the server dedups on (id, epoch, seq). Returns whether anyone received it.
+ */
+function sendTriggerEvent(ev: 'trigger.fired' | 'trigger.checked', fields: Record<string, unknown>): boolean {
+  let delivered = false
+  for (const client of wsClients) {
+    if (client.data?.origin !== 'bridge') {
+      sendEvent(client, ev, fields)
+      delivered = true
+    }
+  }
+  return delivered
+}
+
+/**
+ * One fire on the wire. Every send path (fire-time, the configure replay, the
+ * periodic replay) goes through here, so (epoch, seq) always travel together and
+ * the replay clock is marked in exactly one place. An undelivered fire is left
+ * unmarked on purpose: it must go out as soon as a trusted client appears.
+ */
+function sendTriggerFire(entry: ArmedTrigger, fire: PendingFire, replay: boolean): boolean {
+  const delivered = sendTriggerEvent('trigger.fired', {
+    id: entry.def.id, epoch: entry.state.epoch, seq: fire.seq, atMs: fire.atMs, items: fire.items,
+    ...(fire.input !== undefined ? { input: fire.input } : {}),
+    ...(fire.itemsTruncated ? { itemsTruncated: true } : {}),
+    durationMs: fire.durationMs, nextRunAtMs: entry.nextRunAtMs,
+    ...(replay ? { replay: true } : {}),
+  })
+  if (delivered) entry.fireSentAt.set(fire.seq, Date.now())
+  return delivered
+}
+
+/** Errors keep the trigger armed (the server disables it) but slow it down. */
+function triggerCadenceMs(entry: ArmedTrigger): number {
+  if (entry.state.consecutiveErrors >= MAX_CONSECUTIVE_CHECK_ERRORS) {
+    return Math.max(entry.def.everyMs, CHECK_ERROR_BACKOFF_MS)
+  }
+  return entry.def.everyMs
+}
+
+async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'quiet' | 'error'; reason?: string; error?: string }> {
+  entry.running = true
+  const startedAt = Date.now()
+  // A configure that lands mid-run may have disarmed this trigger. The run is
+  // discarded then: the server no longer knows this id, so the fire would name a
+  // stranger, and the persisted state would be a stale write racing whatever a
+  // re-arm has already read from that file.
+  const stillArmed = () => armedTriggers.get(entry.def.id) === entry
+  try {
+    const proc = await runCheckProcess(entry.def.check, buildCheckStdin(entry.state, startedAt), {
+      env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name },
+    })
+    const parsed = parseCheckStdout(proc.stdout)
+    const error = checkErrorOf(proc, parsed)
+    const now = Date.now()
+    if (!stillArmed()) {
+      logMsg('info', 'trigger run discarded: disarmed mid-run', { id: entry.def.id })
+      return { outcome: error ? 'error' : 'quiet', ...(error ? { error } : {}) }
+    }
+    if (error) {
+      applyCheckError(entry.state, now)
+      entry.nextRunAtMs = now + triggerCadenceMs(entry)
+      persistTriggerState(entry.def.id, entry.state)
+      logMsg('warn', 'trigger run', {
+        id: entry.def.id, outcome: 'error', error, durationMs: proc.durationMs,
+        consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs,
+      })
+      sendTriggerEvent('trigger.checked', {
+        id: entry.def.id, atMs: now, outcome: 'error', error, durationMs: proc.durationMs,
+        nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
+      })
+      return { outcome: 'error', error }
+    }
+    // checkErrorOf already reported every failed parse above; this is the narrow.
+    if (!parsed.ok) return { outcome: 'error', error: parsed.error }
+    const output = parsed.output
+    const decision = decideCheck(entry.def, output, entry.state, now)
+    const fire = applyCheckOutcome(entry.state, output, decision, now, proc.durationMs, {
+      itemsTruncated: parsed.itemsTruncated,
+    })
+    entry.nextRunAtMs = now + triggerCadenceMs(entry)
+    persistTriggerState(entry.def.id, entry.state)
+    logMsg('info', 'trigger run', {
+      id: entry.def.id, outcome: fire ? 'fired' : 'quiet',
+      ...(fire ? { seq: fire.seq, items: fire.items.length } : { reason: decision.kind === 'quiet' ? decision.reason : undefined }),
+      durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs,
+    })
+    if (fire) {
+      sendTriggerFire(entry, fire, false)
+      return { outcome: 'fired' }
+    }
+    const reason = decision.kind === 'quiet' ? decision.reason : undefined
+    sendTriggerEvent('trigger.checked', {
+      id: entry.def.id, atMs: now, outcome: 'quiet', ...(reason ? { reason } : {}),
+      durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
+    })
+    return { outcome: 'quiet', ...(reason ? { reason } : {}) }
+  } finally {
+    entry.running = false
+  }
+}
+
+/**
+ * Re-send fires the server never acked. The configure replay only covers a
+ * reconnect; this covers the server that stayed connected but lost the event
+ * (a restart mid-frame, a dropped job write), which otherwise waited for the
+ * next configure that may never come. Bails out on the first undelivered send:
+ * with no trusted client there is nowhere to replay to this tick.
+ */
+function replayPendingFires(now: number): void {
+  const interval = triggerReplayMs()
+  for (const entry of armedTriggers.values()) {
+    // Marks for acked (or trimmed) fires would otherwise pile up for the
+    // daemon's life; pendingFires is the authority on what is still owed.
+    if (entry.fireSentAt.size > entry.state.pendingFires.length) {
+      const live = new Set(entry.state.pendingFires.map((f) => f.seq))
+      for (const seq of [...entry.fireSentAt.keys()]) if (!live.has(seq)) entry.fireSentAt.delete(seq)
+    }
+    for (const fire of entry.state.pendingFires) {
+      const sentAt = entry.fireSentAt.get(fire.seq)
+      if (sentAt !== undefined && now - sentAt < interval) continue
+      if (!sendTriggerFire(entry, fire, true)) return
+    }
+  }
+}
+
+/** Overlap is SKIPPED, never queued: a slow check must not build a backlog. */
+function tickTriggers(): void {
+  const now = Date.now()
+  for (const entry of armedTriggers.values()) {
+    if (entry.running || entry.nextRunAtMs > now) continue
+    void runTrigger(entry).catch((err) => {
+      logMsg('error', 'trigger run threw', { id: entry.def.id, error: (err as Error).message })
+    })
+  }
+  replayPendingFires(now)
+}
+
+function cmdTriggersConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const run = triggersConfigureChain.then(() => configureTriggers(ws, id, cmd))
+  triggersConfigureChain = run.catch(() => undefined)
+  return run
+}
+
+async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const payload = cmd.config as { version?: unknown; triggers?: unknown } | undefined
+  if (!payload || typeof payload !== 'object' || payload.version !== 1 || !Array.isArray(payload.triggers)) {
+    return sendError(ws, id, 'triggers.configure: invalid config: version must be 1 with a triggers array')
+  }
+  const defs: TriggerDef[] = []
+  const seenIds = new Set<string>()
+  for (const raw of payload.triggers) {
+    const parsed = validateTriggerDef(raw)
+    if (!parsed.ok) return sendError(ws, id, 'triggers.configure: invalid config: ' + parsed.error)
+    if (seenIds.has(parsed.def.id)) {
+      return sendError(ws, id, 'triggers.configure: invalid config: duplicate trigger id ' + parsed.def.id)
+    }
+    seenIds.add(parsed.def.id)
+    defs.push(parsed.def)
+  }
+
+  const now = Date.now()
+  const hash = triggersSetHash(defs)
+  const changed = hash !== armedTriggersHash
+  // Disarming forgets the trigger but KEEPS its state file: a disable-then-enable
+  // (or a push that briefly carries an empty set) must not destroy the dedup set,
+  // the script's cursor or an unacked fire. Stale files age out instead.
+  for (const [tid] of armedTriggers) {
+    if (seenIds.has(tid)) continue
+    armedTriggers.delete(tid)
+  }
+  for (const def of defs) {
+    const existing = armedTriggers.get(def.id)
+    // A trigger that stays keeps its state file, its cursor and its schedule;
+    // only the definition is refreshed.
+    if (existing) { existing.def = def; continue }
+    armedTriggers.set(def.id, {
+      def, state: readTriggerState(def.id, now), nextRunAtMs: now + TRIGGER_FIRST_RUN_DELAY_MS, running: false,
+      fireSentAt: new Map(),
+    })
+  }
+  if (changed) persistTriggersFile(defs)
+  armedTriggersHash = hash
+  pruneTriggerStateFiles(now)
+  logMsg('info', 'triggers configured', { hash, count: defs.length, changed })
+  sendOk(ws, id, { applied: true, changed, count: defs.length })
+
+  // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
+  // down) is redelivered now that a trusted client is provably here. The server
+  // dedups on (id, epoch, seq).
+  for (const entry of armedTriggers.values()) {
+    for (const fire of entry.state.pendingFires) sendTriggerFire(entry, fire, true)
+  }
+}
+
+/** Run once and answer; NEVER touch stored state (the form's Test button). */
+async function cmdTriggersTest(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const raw = cmd.check as Record<string, unknown> | undefined
+  if (!raw || typeof raw !== 'object' || typeof raw.run !== 'string' || !raw.run.trim()) {
+    return sendError(ws, id, 'triggers.test: check.run is required')
+  }
+  const spec: TriggerCheckSpec = {
+    run: raw.run,
+    ...(typeof raw.cwd === 'string' && raw.cwd ? { cwd: raw.cwd } : {}),
+    timeoutSeconds: clampTimeoutSeconds(raw.timeoutSeconds),
+  }
+  if (triggerTestsRunning >= TRIGGER_TEST_MAX_CONCURRENT) {
+    return sendError(ws, id, `triggers.test: too many concurrent tests (max ${TRIGGER_TEST_MAX_CONCURRENT})`)
+  }
+  triggerTestsRunning += 1
+  try {
+    const now = Date.now()
+    const targetId = triggerIdOf(cmd) || undefined
+    const entry = targetId ? armedTriggers.get(targetId) : undefined
+    const state = entry ? entry.state : emptyHostState(now)
+    const proc = await runCheckProcess(spec, buildCheckStdin(state, now), {
+      env: {
+        WALNUT_TRIGGER_ID: entry ? entry.def.id : (targetId ?? 'trigger-test'),
+        WALNUT_TRIGGER_NAME: entry ? entry.def.name : 'trigger test',
+      },
+    })
+    const parsed = parseCheckStdout(proc.stdout)
+    const error = checkErrorOf(proc, parsed)
+    const output = parsed.ok ? parsed.output : null
+    // Synthetic def for the decision: a test never consults the real cadence, and
+    // an unarmed check has no limits of its own yet.
+    const def: TriggerDef = entry ? entry.def : { id: targetId ?? 'trigger-test', name: 'trigger test', everyMs: MIN_EVERY_MS, check: spec }
+    const result: TriggersTestResult = {
+      ok: !error,
+      exitCode: proc.exitCode,
+      durationMs: proc.durationMs,
+      stdoutTail: proc.stdout.slice(-TRIGGER_STDOUT_TAIL),
+      stderrTail: proc.stderrTail,
+      parsed: output,
+      error,
+      wouldFire: !!output && decideCheck(def, output, state, now).kind === 'fire',
+      newItemCount: output ? newItemsOf(output.items, state).length : 0,
+    }
+    // A test is a human pressing a button on host data, so it is worth one line:
+    // "the check the form showed me was fine" is otherwise unverifiable later.
+    logMsg('info', 'trigger test', {
+      run: spec.run.slice(0, 200), cwd: spec.cwd, exitCode: proc.exitCode,
+      durationMs: proc.durationMs, ok: result.ok,
+    })
+    sendOk(ws, id, { result: result as unknown as Record<string, unknown> })
+  } finally {
+    triggerTestsRunning -= 1
+  }
+}
+
+/**
+ * Start the run and answer NOW. Awaiting it made a long check fail its own RPC:
+ * a 90s check under the caller's 60s deadline reported an error to the user while
+ * the fire landed anyway. The outcome travels as trigger.fired / trigger.checked,
+ * exactly as it does for a clock-driven run.
+ */
+function cmdTriggersRun(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const tid = triggerIdOf(cmd)
+  const entry = tid ? armedTriggers.get(tid) : undefined
+  if (!entry) return sendError(ws, id, 'triggers.run: unknown trigger: ' + tid)
+  if (entry.running) return sendOk(ws, id, { ran: false, reason: 'running' })
+  void runTrigger(entry).catch((err) => {
+    logMsg('error', 'trigger run threw', { id: entry.def.id, error: (err as Error).message })
+  })
+  return sendOk(ws, id, { ran: true, started: true })
+}
+
+function cmdTriggersAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const tid = triggerIdOf(cmd)
+  const seq = typeof cmd.seq === 'number' ? cmd.seq : NaN
+  const entry = tid ? armedTriggers.get(tid) : undefined
+  if (!entry || !Number.isFinite(seq)) return sendOk(ws, id, { acked: false })
+  const acked = ackFire(entry.state, seq)
+  if (acked) {
+    entry.fireSentAt.delete(seq)
+    persistTriggerState(tid, entry.state)
+  }
+  return sendOk(ws, id, { acked })
+}
+
+// ── skills.sync: distribute walnut's skills to this host's engine stores ──
 // The hub pushes the current content on every (re)connect (hash-skipped
-// hub-side). ONE real copy lives in the daemon's own namespace
-// (~/.open-walnut/distributed-skills/walnut/SKILL.md — deliberately NOT the
+// hub-side), as `skills: [{name, skill}]` — one entry per skill the engines
+// must discover natively (`walnut`, `walnut-trigger`, …). A bare `skill`
+// string is the older hub's shape and means the `walnut` skill alone.
+// ONE real copy per skill lives in the daemon's own namespace
+// (~/.open-walnut/distributed-skills/<name>/SKILL.md — deliberately NOT the
 // user's skill store ~/.open-walnut/skills/, where a flat SKILL.md shadows
 // category sub-skills); the engines' native skill folders (~/.claude/skills,
 // ~/.agents/skills — codex's documented user-level dir; both engines follow
@@ -2808,20 +3287,40 @@ function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
 // dir is linked only when that engine's home exists: ~/.agents for codex or
 // goose, ~/.gemini/skills for gemini. Also migrates earlier layouts: the v1
 // real file in ~/.claude/skills, the v1 fenced ~/.codex/AGENTS.md section,
-// and the short-lived v2.0 canonical inside ~/.open-walnut/skills/. Keep in
+// and the short-lived v2.0 canonical inside ~/.open-walnut/skills/ (all three
+// only ever held `walnut`, so they run once, not per entry). Keep in
 // sync with daemon-source.ts cmdSkillsSync.
 const SKILL_SYNC_MARKER = 'walnut-managed v1'
 
 function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const skill = typeof cmd.skill === 'string' ? cmd.skill : ''
-  if (!skill.includes(SKILL_SYNC_MARKER)) {
-    return sendError(ws, id, 'skills.sync: payload missing the managed marker')
+  // A name becomes a directory and a symlink under the user's HOME, so it is
+  // validated before any path is built from it.
+  const namePattern = /^[a-z0-9][a-z0-9-]{0,63}$/
+  const requested = Array.isArray(cmd.skills)
+    ? (cmd.skills as unknown[])
+    : [{ name: 'walnut', skill: cmd.skill }]
+  const entries: Array<{ name: string; body: string }> = []
+  for (const raw of requested) {
+    const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    const name = typeof item.name === 'string' ? item.name : ''
+    const body = typeof item.skill === 'string' ? item.skill : ''
+    if (!namePattern.test(name)) {
+      return sendError(ws, id, 'skills.sync: invalid skill name: ' + name)
+    }
+    if (!body.includes(SKILL_SYNC_MARKER)) {
+      return sendError(ws, id, 'skills.sync: payload missing the managed marker')
+    }
+    entries.push({ name, body })
   }
   if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) {
     return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' })
   }
   const wrote: string[] = []
-  const canonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut')
+
+  // One skill's real copy plus its per-engine links. Every guard reads the
+  // entry's own name, so two skills in one payload never touch each other.
+  function syncSkill(name: string, skill: string) {
+  const canonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', name)
   // 1. the one real copy (marker-guarded: never clobber a foreign file)
   try {
     const target = path.join(canonicalDir, 'SKILL.md')
@@ -2846,7 +3345,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   // to the v1 file); we refresh just our SKILL.md inside it. Anything
   // unowned is the user's and stays untouched.
   function ensureLink(skillsDir: string) {
-    const link = path.join(skillsDir, 'walnut')
+    const link = path.join(skillsDir, name)
     try {
       let st: ReturnType<typeof fs.lstatSync> | null = null
       try { st = fs.lstatSync(link) } catch {}
@@ -2884,10 +3383,13 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   if (fs.existsSync(path.join(HOME_DIR, '.config', 'goose')) || fs.existsSync(path.join(HOME_DIR, '.local', 'share', 'goose'))) {
     ensureLink(path.join(HOME_DIR, '.agents', 'skills'))
   }
+  if (fs.existsSync(process.env.PI_CODING_AGENT_DIR || path.join(HOME_DIR, '.pi', 'agent'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'))
   // gemini is the only engine with its own dir: it discovers ONLY
   // ~/.gemini/skills and <project>/.gemini/skills, never ~/.agents or ~/.claude.
   if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))
-  if (fs.existsSync(process.env.PI_CODING_AGENT_DIR || path.join(HOME_DIR, '.pi', 'agent'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'))
+  }
+  for (const entry of entries) syncSkill(entry.name, entry.body)
+  const walnutCanonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut')
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
   // the user's skill store (it shadowed the category sub-skills there); the
   // dir itself and every other entry stay. Drop the dir only when we owned
@@ -2929,7 +3431,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   } catch (err) {
     logMsg('warn', 'skills.sync: AGENTS.md fence removal failed', { error: (err as Error).message })
   }
-  if (wrote.length > 0) logMsg('info', 'walnut skill distributed', { wrote })
+  if (wrote.length > 0) logMsg('info', 'walnut skills distributed', { skills: entries.map((e) => e.name), wrote })
   return sendOk(ws, id, { applied: true, changed: wrote.length > 0, wrote })
 }
 
@@ -5793,6 +6295,11 @@ function cleanupOrphanedProcessGroups() {
 
 // ── Cleanup ──
 function cleanup() {
+  // Stop the trigger clock first: no new check may start while we are dying.
+  if (triggerTickTimer) {
+    try { clearInterval(triggerTickTimer) } catch {}
+    triggerTickTimer = null
+  }
   // Close the cloud bridge first — a half-dead daemon must not keep looking
   // reachable from the phone. bridge.json survives for the successor.
   try { stopBridge() } catch {}
@@ -6229,6 +6736,11 @@ if (action === '--start') {
 
   ensureOwnerOnlyStorage()
 
+  // Armed triggers survive a daemon restart on their own: the next
+  // triggers.configure replaces the set, but until it arrives the checks keep
+  // polling (the server may be the thing that is down).
+  loadTriggersAtBoot()
+
   // Move dead-session stream files from the legacy /tmp location into the
   // reboot-surviving HOME dir. MUST run before reconcileRegistry: adopted
   // sessions resolve their files by the registry's absolute paths, and the
@@ -6336,6 +6848,11 @@ if (action === '--start') {
   // Start session idle scanner (every 60s)
   setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS)
 
+
+  // walnut-trigger clock. Tracked (unlike the timers above) because cleanup()
+  // must stop it: a tick that starts a check while the daemon is exiting would
+  // outlive the process as an orphaned process group.
+  triggerTickTimer = setInterval(tickTriggers, TRIGGER_TICK_MS)
   // Dead-stream retention: hourly sweep of >7d-idle files for sids with no
   // live session/process. First pass shortly after startup (not immediately —
   // let reconcile finish adopting before judging liveness by the map).

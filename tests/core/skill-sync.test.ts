@@ -17,6 +17,7 @@
  * twin and RUN against a temp HOME.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -98,6 +99,7 @@ const legacyCanonicalDir = () => path.join(tmp, '.open-walnut', 'skills', 'walnu
 const canonical = () => path.join(canonicalDir(), 'SKILL.md')
 const claudeLink = () => path.join(tmp, '.claude', 'skills', 'walnut')
 const agentsLink = () => path.join(tmp, '.agents', 'skills', 'walnut')
+const geminiLink = () => path.join(tmp, '.gemini', 'skills', 'walnut')
 const codexAgentsMd = () => path.join(tmp, '.codex', 'AGENTS.md')
 const run = (cmd: Record<string, unknown> = PAYLOAD) => cmdSkillsSync(tmp, '/tmp/open-walnut', '/tmp/open-walnut', cmd)
 
@@ -128,6 +130,54 @@ describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () =>
     run()
     expect(fs.lstatSync(agentsLink()).isSymbolicLink()).toBe(true)
     expect(fs.readFileSync(path.join(agentsLink(), 'SKILL.md'), 'utf-8')).toBe(SKILL)
+  })
+
+  // goose reads ~/.agents/skills like codex does, but its presence marker is a
+  // config dir, and either of the two documented ones must be enough.
+  for (const gooseDir of [['.config', 'goose'], ['.local', 'share', 'goose']]) {
+    it(`with ~/${gooseDir.join('/')} present, links ~/.agents/skills/walnut`, () => {
+      fs.mkdirSync(path.join(tmp, ...gooseDir), { recursive: true })
+      const r = run()
+      expect(r.ok).toBe(true)
+      expect(fs.lstatSync(agentsLink()).isSymbolicLink()).toBe(true)
+      expect(fs.readFileSync(path.join(agentsLink(), 'SKILL.md'), 'utf-8')).toBe(SKILL)
+      // goose alone must not conjure a codex/gemini dir.
+      expect(fs.existsSync(path.join(tmp, '.gemini'))).toBe(false)
+      expect(fs.existsSync(path.join(tmp, '.codex'))).toBe(false)
+    })
+  }
+
+  it('with ~/.gemini present, links ~/.gemini/skills/walnut (gemini shares no dir)', () => {
+    fs.mkdirSync(path.join(tmp, '.gemini'), { recursive: true })
+    const r = run()
+    expect(r.ok).toBe(true)
+    expect(fs.lstatSync(geminiLink()).isSymbolicLink()).toBe(true)
+    expect(fs.readFileSync(path.join(geminiLink(), 'SKILL.md'), 'utf-8')).toBe(SKILL)
+    // gemini discovers ONLY its own dir, so it must not pull in ~/.agents.
+    expect(fs.existsSync(path.join(tmp, '.agents'))).toBe(false)
+  })
+
+  it('a host running codex + goose + gemini gets ONE ~/.agents link plus the gemini one', () => {
+    fs.mkdirSync(path.join(tmp, '.codex'), { recursive: true })
+    fs.mkdirSync(path.join(tmp, '.config', 'goose'), { recursive: true })
+    fs.mkdirSync(path.join(tmp, '.gemini'), { recursive: true })
+    const r = run()
+    expect(r.ok).toBe(true)
+    for (const link of [claudeLink(), agentsLink(), geminiLink()]) {
+      expect(fs.realpathSync(link)).toBe(fs.realpathSync(canonicalDir()))
+    }
+    // The codex and goose guards both target ~/.agents/skills; the second call
+    // must be an idempotent no-op, not a second write.
+    expect((r.wrote ?? []).filter((w) => w === agentsLink()).length).toBe(1)
+  })
+
+  it('no engine dirs at all: only the claude link, nothing invented', () => {
+    const r = run()
+    expect(r.ok).toBe(true)
+    expect(fs.lstatSync(claudeLink()).isSymbolicLink()).toBe(true)
+    for (const d of ['.agents', '.gemini', '.codex']) {
+      expect(fs.existsSync(path.join(tmp, d))).toBe(false)
+    }
   })
 
   it('~/.agents/skills already a symlink to ~/.claude/skills (shared layout): no duplicate work, no error', () => {
@@ -250,6 +300,103 @@ describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () =>
   })
 })
 
+// The engines discover a slash command by SKILL DIRECTORY name, so every skill
+// walnut wants reachable from a hand-started session needs its own canonical
+// copy and its own per-engine link — one payload, N entries.
+describe('node twin cmdSkillsSync (multiple skills in one payload)', () => {
+  const TRIGGER_SKILL = `---\nname: walnut-trigger\n---\n<!-- ${DISTRIBUTED_MARKER} — READ-ONLY -->\n# Trigger manual\n`
+  const dirFor = (name: string) => path.join(tmp, '.open-walnut', 'distributed-skills', name)
+  const linkFor = (name: string) => path.join(tmp, '.claude', 'skills', name)
+
+  it('writes one canonical copy and one claude link per entry', () => {
+    const r = run({ hash: 'h2', skills: [{ name: 'walnut', skill: SKILL }, { name: 'walnut-trigger', skill: TRIGGER_SKILL }] })
+    expect(r.ok).toBe(true)
+    expect(r.changed).toBe(true)
+    expect(fs.readFileSync(path.join(dirFor('walnut'), 'SKILL.md'), 'utf-8')).toBe(SKILL)
+    expect(fs.readFileSync(path.join(dirFor('walnut-trigger'), 'SKILL.md'), 'utf-8')).toBe(TRIGGER_SKILL)
+    for (const name of ['walnut', 'walnut-trigger']) {
+      expect(fs.lstatSync(linkFor(name)).isSymbolicLink()).toBe(true)
+      expect(fs.realpathSync(linkFor(name))).toBe(fs.realpathSync(dirFor(name)))
+    }
+    // Each link resolves to its OWN skill, not to the first entry's copy.
+    expect(fs.readFileSync(path.join(linkFor('walnut-trigger'), 'SKILL.md'), 'utf-8')).toBe(TRIGGER_SKILL)
+  })
+
+  it('re-push of the same two entries is a no-op (changed:false)', () => {
+    const payload = { hash: 'h2', skills: [{ name: 'walnut', skill: SKILL }, { name: 'walnut-trigger', skill: TRIGGER_SKILL }] }
+    expect(run(payload).changed).toBe(true)
+    expect(run(payload).changed).toBe(false)
+  })
+
+  it('an updated second skill rewrites only its own canonical file', () => {
+    run({ skills: [{ name: 'walnut', skill: SKILL }, { name: 'walnut-trigger', skill: TRIGGER_SKILL }] })
+    const next = TRIGGER_SKILL + '# more\n'
+    const r = run({ skills: [{ name: 'walnut', skill: SKILL }, { name: 'walnut-trigger', skill: next }] })
+    expect(r.wrote).toEqual([path.join(dirFor('walnut-trigger'), 'SKILL.md')])
+    expect(fs.readFileSync(path.join(dirFor('walnut'), 'SKILL.md'), 'utf-8')).toBe(SKILL)
+  })
+
+  it('the legacy bare skill payload still means the walnut skill alone', () => {
+    const r = run({ hash: 'h1', skill: SKILL })
+    expect(r.ok).toBe(true)
+    expect(fs.existsSync(path.join(dirFor('walnut'), 'SKILL.md'))).toBe(true)
+    expect(fs.existsSync(dirFor('walnut-trigger'))).toBe(false)
+  })
+
+  // A name becomes a directory and a symlink under the user's HOME: one bad
+  // entry rejects the WHOLE payload, before any path is built.
+  it.each(['../escape', 'Walnut', 'walnut/trigger', '', '-lead'])('refuses the whole payload for an invalid name: %j', (name) => {
+    const r = run({ skills: [{ name: 'walnut', skill: SKILL }, { name, skill: SKILL }] })
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('invalid skill name')
+    expect(fs.existsSync(dirFor('walnut'))).toBe(false)
+  })
+
+  it('one entry missing the managed marker rejects the whole payload', () => {
+    const r = run({ skills: [{ name: 'walnut', skill: SKILL }, { name: 'walnut-trigger', skill: '# no marker\n' }] })
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('managed marker')
+    expect(fs.existsSync(dirFor('walnut'))).toBe(false)
+  })
+})
+
+// The hub side of the same payload: WHICH skills every host gets, and a hash
+// that changes when the set changes (not just when a body is edited).
+describe('buildSkillSyncPayload', () => {
+  it('ships walnut AND walnut-trigger, bannered, sorted, with the legacy field intact', async () => {
+    const { buildSkillSyncPayload, DISTRIBUTED_SKILL_NAMES } = await import('../../src/core/skill-sync.js')
+    const payload = await buildSkillSyncPayload()
+    expect(payload).not.toBeNull()
+    expect(payload!.skills.map((s) => s.name)).toEqual([...DISTRIBUTED_SKILL_NAMES].sort())
+    for (const entry of payload!.skills) {
+      expect(entry.skill, `${entry.name} carries the managed marker`).toContain(DISTRIBUTED_MARKER)
+      expect(entry.skill.startsWith('---\n'), `${entry.name} keeps valid frontmatter`).toBe(true)
+    }
+    // A daemon too old for `skills` reads `skill` alone and must still get walnut.
+    expect(payload!.skill).toBe(payload!.skills.find((s) => s.name === 'walnut')!.skill)
+    // walnut-trigger is the reason this exists: an engine lists a slash command
+    // by skill DIRECTORY name, so the trigger skill needs its own entry.
+    expect(payload!.skills.some((s) => s.name === 'walnut-trigger')).toBe(true)
+    expect(payload!.hash).toHaveLength(16)
+  })
+
+  it('the hash covers the NAMES too, so adding or renaming a skill reaches the host', async () => {
+    const { buildSkillSyncPayload } = await import('../../src/core/skill-sync.js')
+    const payload = await buildSkillSyncPayload()
+    const again = await buildSkillSyncPayload()
+    expect(again!.hash).toBe(payload!.hash)
+
+    // Same bodies, different name → a different hash (a hash over contents
+    // alone would skip the push that renames a slash command).
+    const hashOf = (entries: Array<{ name: string; skill: string }>) => crypto
+      .createHash('sha256').update(JSON.stringify(entries.map((e) => [e.name, e.skill])))
+      .digest('hex').slice(0, 16)
+    const renamed = payload!.skills.map((s) => (s.name === 'walnut-trigger' ? { ...s, name: 'walnut-watch' } : s))
+    expect(hashOf(renamed)).not.toBe(payload!.hash)
+    expect(hashOf(payload!.skills)).toBe(payload!.hash)
+  })
+})
+
 describe('twin parity', () => {
   it('the bun twin carries the same handler, layout and guards', () => {
     const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
@@ -259,6 +406,10 @@ describe('twin parity', () => {
     expect(standalone).toContain("path.join(HOME_DIR, '.open-walnut', 'skills', 'walnut')")
     expect(standalone).toContain("ensureLink(path.join(HOME_DIR, '.claude', 'skills'))")
     expect(standalone).toContain("if (fs.existsSync(path.join(HOME_DIR, '.codex'))) ensureLink(path.join(HOME_DIR, '.agents', 'skills'))")
+    // goose: either documented config dir marks it, and it shares codex's dir.
+    expect(standalone).toContain("fs.existsSync(path.join(HOME_DIR, '.config', 'goose')) || fs.existsSync(path.join(HOME_DIR, '.local', 'share', 'goose'))")
+    // gemini: the one engine with a private skills dir.
+    expect(standalone).toContain("if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))")
     expect(standalone).toContain('fs.symlinkSync(canonicalDir, link)')
     expect(standalone).toMatch(/skills\.sync[\s\S]{0,2600}PROD_DAEMON_DIR\)\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })

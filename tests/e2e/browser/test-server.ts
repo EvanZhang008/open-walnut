@@ -1486,6 +1486,7 @@ await fs.writeFile(
     const {
       buildReplyDeliveryText, buildReplyTrailer, buildRequestNotification,
     } = await import('../../../src/core/session-requests.js')
+    const { buildTriggerMessage } = await import('../../../src/core/routines/trigger-envelope.js')
     const peerSender = {
       title: ENVELOPE_PEER_TITLE,
       shortId: 'pw-envel',
@@ -1537,6 +1538,13 @@ await fs.writeFile(
       }),
       // ⑤ history: the pre-v2 prose shape, fence and all
       legacyPeerNote,
+      // ⑥ a walnut-trigger fire: from a ROUTINE, not a session (no chip to
+      // resolve); the daemon's note is the status line, the delivery the body.
+      buildTriggerMessage(
+        { name: 'PR comments' },
+        { atMs: sessionFixtureNow - 100_000, items: [{ id: 'c1', author: 'reviewer' }, { id: 'c2' }], input: 'two threads' },
+        'Read each new comment and answer it. ENVELOPE_TRIGGER_BODY',
+      ),
     ]
     // Claude Code's OWN cross-session delivery (CLI 2.1.258 SendMessage), captured
     // verbatim: the CLI writes it as an injected user line (`isMeta`, `userType:

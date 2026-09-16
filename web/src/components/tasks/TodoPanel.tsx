@@ -42,6 +42,7 @@ import {
   type TierSeparator,
 } from './tier-separators';
 import { TaskStartButton } from './TaskStartButton';
+import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -1087,6 +1088,7 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
           >
             {task.title}
           </span>
+          <TriggerPill taskId={task.id} />
           {/* Info pills + kebab — same line as title, no second row */}
           {startDateLabel && (
             <span className="todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>

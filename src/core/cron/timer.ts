@@ -463,12 +463,16 @@ export async function executeJob(
 
 // ── Timer tick ──
 
-function findDueJobs(state: CronServiceState): CronJob[] {
+export function findDueJobs(state: CronServiceState): CronJob[] {
   if (!state.store) return [];
   const now = state.deps.nowMs();
   return state.store.jobs.filter((j) => {
     if (!j.state) j.state = {};
     if (!j.enabled) return false;
+    // A trigger is the daemon's job to run: nextRunAtMs here is only its last
+    // report, and running the executor from the server would deliver a fire
+    // nothing decided (no check output, no dedup, no seen set).
+    if (j.check) return false;
     if (typeof j.state.runningAtMs === 'number') return false;
     const next = j.state.nextRunAtMs;
     if (!(typeof next === 'number' && now >= next)) return false;
@@ -619,6 +623,9 @@ export function findMissedJobs(state: CronServiceState): CronJob[] {
   return state.store.jobs.filter((j) => {
     if (!j.state) j.state = {};
     if (!j.enabled) return false;
+    // Same rule as findDueJobs: a trigger missed nothing while the server was
+    // down (its daemon kept polling), so there is nothing to catch up here.
+    if (j.check) return false;
     if (typeof j.state.runningAtMs === 'number') return false;
     if (j.schedule.kind === 'at' && j.state.lastStatus === 'ok') return false;
     const next = j.state.nextRunAtMs;

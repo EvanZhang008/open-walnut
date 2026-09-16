@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, Component, type Reac
 import { useLocation, useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
+import { TriggerPill } from '@/components/routines/TriggerPill';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
 import { OutputModePill } from './OutputModePill';
 import { useSessionPins } from '@/hooks/useSessionPins';
@@ -1902,6 +1903,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   {ICON_ROBOT} Embedded
                 </span>
               )}
+              {!loading && <TriggerPill taskId={session?.taskId} />}
               {!loading && ps && (
                 <ProcessStatusBadge
                   processStatus={ps}

@@ -50,6 +50,9 @@ export async function runExecutor(
   try {
     return await def.run(job, { type: executor.type, config: validated.config }, message);
   } catch (err) {
-    return { status: 'error', error: err instanceof Error ? err.message : String(err) };
+    // A throw is something breaking, not the executor declining: mark it so a
+    // trigger fire is replayed rather than consumed (a refusal returns an error
+    // RESULT and stays terminal).
+    return { status: 'error', error: err instanceof Error ? err.message : String(err), retryable: true };
   }
 }

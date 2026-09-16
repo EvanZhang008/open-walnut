@@ -2408,3 +2408,270 @@ describe('session.message relay daemon-standalone vs daemon-source parity', () =
     expect(capsSrc.slice(advStart, advEnd)).toMatch(/'session\.message'/)
   })
 })
+
+// walnut-trigger (docs/plan/walnut-trigger.md): the daemon owns the clock and
+// runs a routine's check script. Both twins must carry the whole family — boot
+// reload, the four commands, the invalid-config reason, the scheduler and its
+// cleanup — and NONE of it may be reachable from the public cloud bridge (a
+// check is an arbitrary shell command on the host).
+describe('walnut-trigger daemon parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both reload the armed set at boot and dispatch the four triggers.* commands', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      // Boot reload: the checks must keep polling when the SERVER is what died.
+      expect(src).toMatch(/function loadTriggersAtBoot\(/)
+      expect(src).toMatch(/loadTriggersAtBoot\(\)/)
+      // The three writers may sit behind the command drain (`daemonCommands.run(`)
+      // or be called directly; both twins must agree, and the handler must be
+      // the one named here.
+      const drained = (fn: string) => new RegExp(`case 'triggers\\.[a-z]+': return (?:daemonCommands\\.run\\([^\\n]*)?${fn}\\(ws, id`)
+      expect(src).toMatch(drained('cmdTriggersConfigure'))
+      expect(src).toMatch(drained('cmdTriggersRun'))
+      expect(src).toMatch(drained('cmdTriggersAck'))
+      // triggers.test writes nothing, so it never rides the drain.
+      expect(src).toMatch(/case 'triggers\.test': return cmdTriggersTest\(ws, id/)
+      expect(src).toMatch(/triggers\.configure: invalid config: /)
+      // Persistence layout: the set plus one state file per trigger.
+      expect(src).toMatch(/TRIGGERS_FILE = path\.join\(/)
+      expect(src).toMatch(/'triggers\.json'/)
+      expect(src).toMatch(/'trigger-state'/)
+    }
+  })
+
+  // The frame's own `id` is the RPC correlation slot, so a trigger id sent as
+  // `id` overwrites it: the caller's pending map (keyed by number) never
+  // resolves and the command dies on its timeout with no error anywhere. Every
+  // twin must therefore read the trigger id from `triggerId` ONLY.
+  it('both read the trigger id from triggerId, never from the frame id', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('function triggerIdOf(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body).toMatch(/cmd\.triggerId/)
+      expect(body, 'a string cmd.id can never arrive: do not pretend it can').not.toMatch(/cmd\.id/)
+      for (const fn of ['cmdTriggersTest', 'cmdTriggersRun', 'cmdTriggersAck']) {
+        const at = src.indexOf(`function ${fn}(`)
+        expect(at, `${fn} missing`).toBeGreaterThan(-1)
+        const fnBody = src.slice(at, src.indexOf('\n}', at))
+        expect(fnBody, `${fn} must resolve its target through triggerIdOf`).toMatch(/triggerIdOf\(cmd\)/)
+      }
+    }
+  })
+
+  it('neither twin exposes any triggers.* command over the cloud bridge', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const bridgeSetStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(')
+      const bridgeSetEnd = src.indexOf('])', bridgeSetStart)
+      expect(bridgeSetStart).toBeGreaterThan(-1)
+      expect(src.slice(bridgeSetStart, bridgeSetEnd)).not.toContain('triggers.')
+    }
+  })
+
+  it('both run one 5s clock, skip an overlapping run, and stop the clock in cleanup', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/TRIGGER_TICK_MS = 5[_]?000/)
+      expect(src).toMatch(/triggerTickTimer = setInterval\(tickTriggers, TRIGGER_TICK_MS\)/)
+      const tickStart = src.indexOf('function tickTriggers(')
+      expect(tickStart).toBeGreaterThan(-1)
+      const tickBody = src.slice(tickStart, src.indexOf('\n}', tickStart))
+      // Overlap is SKIPPED, never queued — a slow check must not build a backlog.
+      expect(tickBody).toMatch(/entry\.running \|\| entry\.nextRunAtMs > now/)
+      const cleanupStart = src.indexOf('function cleanup(')
+      const cleanupBody = src.slice(cleanupStart, src.indexOf('\n}', cleanupStart))
+      expect(cleanupBody).toMatch(/clearInterval\(triggerTickTimer\)/)
+      // A configure landing mid-run must not have its state file resurrected by
+      // the run it raced, nor a fire sent for an id the server just dropped.
+      const runStart = src.indexOf('async function runTrigger(')
+      expect(runStart).toBeGreaterThan(-1)
+      expect(src.slice(runStart, src.indexOf('\n}', runStart))).toMatch(/stillArmed\(\)/)
+    }
+  })
+
+  it('both back a repeatedly failing check off instead of spinning at full cadence', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('function triggerCadenceMs(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body).toMatch(/MAX_CONSECUTIVE_CHECK_ERRORS/)
+      expect(body).toMatch(/CHECK_ERROR_BACKOFF_MS/)
+    }
+  })
+
+  // A fire used to go to the FIRST trusted client only, so a second window (or a
+  // server whose fresh socket arrived while the old one was still draining) never
+  // saw it. The fan-out is safe because the server dedups on (id, epoch, seq).
+  it('both fan trigger events out to every trusted client, never to the bridge', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('function sendTriggerEvent(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body).toMatch(/origin !== 'bridge'/)
+      expect(body).toMatch(/sendEvent\(client, ev, fields\)/)
+      expect(body).toMatch(/delivered = true/)
+      expect(body).toMatch(/return delivered/)
+      expect(body, 'returning inside the client loop stops the fan-out').not.toMatch(/\n\s+return true/)
+    }
+  })
+
+  // (epoch, seq) is the server's dedup key, and `seq` restarts at 0 whenever a
+  // state file is recreated — so a fire without its epoch would be swallowed by
+  // the old high-water mark. ONE send path exists so that cannot happen.
+  it('both stamp every fire with the state epoch and mark the replay clock there', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('function sendTriggerFire(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body).toMatch(/epoch: entry\.state\.epoch/)
+      expect(body).toMatch(/itemsTruncated/)
+      expect(body).toMatch(/replay/)
+      expect(body, 'the replay clock is marked where the fire goes out').toMatch(/fireSentAt\.set\(fire\.seq/)
+      expect(
+        src.split("sendTriggerEvent('trigger.fired'").length - 1,
+        'only sendTriggerFire may put a fire on the wire',
+      ).toBe(1)
+      const runStart = src.indexOf('async function runTrigger(')
+      const runBody = src.slice(runStart, src.indexOf('\n}', runStart))
+      expect(runBody, 'a truncated item list must reach the fire it produced')
+        .toMatch(/itemsTruncated: parsed\.itemsTruncated/)
+    }
+  })
+
+  // Disabling a trigger used to unlink its state file, so a disable-then-enable
+  // (or a push that momentarily carried an empty set) destroyed the dedup set, the
+  // script's cursor and every unacked fire — and the recreated file restarted
+  // `seq` at 0. State now outlives disarming and is reclaimed by AGE.
+  it('neither twin deletes a state file when a trigger is disarmed', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src, 'disarming must not unlink the state file').not.toMatch(/removeTriggerState/)
+      const cfgStart = src.indexOf('async function configureTriggers(')
+      expect(cfgStart).toBeGreaterThan(-1)
+      const cfgBody = src.slice(cfgStart, src.indexOf('\n}', cfgStart))
+      expect(cfgBody).toMatch(/armedTriggers\.delete\(tid\)/)
+      expect(cfgBody, 'a disarmed trigger keeps its state file').not.toMatch(/unlink/)
+      expect(cfgBody).toMatch(/pruneTriggerStateFiles\(now\)/)
+      const bootStart = src.indexOf('function loadTriggersAtBoot(')
+      expect(src.slice(bootStart, src.indexOf('\n}', bootStart))).toMatch(/pruneTriggerStateFiles\(now\)/)
+      const pruneStart = src.indexOf('function pruneTriggerStateFiles(')
+      expect(pruneStart).toBeGreaterThan(-1)
+      const pruneBody = src.slice(pruneStart, src.indexOf('\n}', pruneStart))
+      expect(pruneBody).toMatch(/TRIGGER_STATE_TTL_MS/)
+      expect(pruneBody, 'an armed id is never pruned, whatever its mtime').toMatch(/triggerStateFileName/)
+      expect(pruneBody, 'age, not identity, is what reclaims a file').toMatch(/mtimeMs/)
+      expect(pruneBody).toMatch(/unlinkSync/)
+    }
+  })
+
+  // The configure replay only covers a reconnect. A server that stayed connected
+  // but lost the event (restart mid-frame, a dropped job write) waited for a
+  // configure that may never come, so the clock replays too.
+  it('both replay an unacked fire on a clock, with a test-only interval override', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const tickStart = src.indexOf('function tickTriggers(')
+      expect(src.slice(tickStart, src.indexOf('\n}', tickStart))).toMatch(/replayPendingFires\(now\)/)
+      const start = src.indexOf('function replayPendingFires(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body).toMatch(/pendingFires/)
+      expect(body).toMatch(/fireSentAt\.get\(fire\.seq\)/)
+      expect(body).toMatch(/sendTriggerFire\(entry, fire, true\)/)
+      // No trusted client: nothing to replay to, so the tick stops trying.
+      expect(body).toMatch(/if \(!sendTriggerFire\(entry, fire, true\)\) return/)
+      const msStart = src.indexOf('function triggerReplayMs(')
+      expect(msStart).toBeGreaterThan(-1)
+      const msBody = src.slice(msStart, src.indexOf('\n}', msStart))
+      expect(msBody).toMatch(/WALNUT_TRIGGER_REPLAY_MS/)
+      expect(msBody).toMatch(/PENDING_FIRE_REPLAY_MS/)
+      expect(msBody, 'a floor keeps a typo from turning the clock into a spin').toMatch(/Math\.max\(1_?000/)
+      const ackStart = src.indexOf('function cmdTriggersAck(')
+      expect(src.slice(ackStart, src.indexOf('\n}', ackStart))).toMatch(/fireSentAt\.delete\(seq\)/)
+    }
+  })
+
+  // A 90s check under the caller's 60s RPC deadline used to report an error to the
+  // user while the fire landed anyway; the run's outcome travels as
+  // trigger.fired / trigger.checked, exactly as a clock-driven run's does.
+  it('both answer triggers.run immediately instead of awaiting the check', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('function cmdTriggersRun(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body, 'awaiting the run makes a long check fail its own reply').not.toMatch(/await runTrigger/)
+      expect(body).toMatch(/runTrigger\(entry\)/)
+      expect(body).toMatch(/ran: true, started: true/)
+      expect(body, 'a second run while one is in flight is still refused').toMatch(/reason: 'running'/)
+    }
+  })
+
+  it('both cap concurrent triggers.test runs and log one line per test', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/TRIGGER_TEST_MAX_CONCURRENT = 4/)
+      const start = src.indexOf('function cmdTriggersTest(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body).toMatch(/triggerTestsRunning >= TRIGGER_TEST_MAX_CONCURRENT/)
+      expect(body).toMatch(/triggers\.test: too many concurrent tests \(max /)
+      expect(body).toMatch(/triggerTestsRunning \+= 1/)
+      expect(body, 'a thrown check must not leak a slot').toMatch(/finally \{/)
+      expect(body).toMatch(/triggerTestsRunning -= 1/)
+      expect(body).toMatch(/'trigger test'/)
+      expect(body).toMatch(/run: spec\.run\.slice\(0, 200\)/)
+    }
+  })
+
+  it("'triggers-v1' is advertised but NOT required, and is sidecar-gated in the source twin", () => {
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    const reqEnd = capsSrc.indexOf('] as const', reqStart)
+    expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'triggers-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    const advEnd = capsSrc.indexOf('] as const', advStart)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/'triggers-v1'/)
+    // Source twin: stripped from the static literal, added back only when the
+    // sidecar loads, and every command refuses without it.
+    expect(templateSrc).toMatch(/SIDECAR_GATED_CAPABILITIES = new Set\(\[[^\]]*'triggers-v1'/)
+    expect(templateSrc).toMatch(/if \(triggerCheckCore\) caps\.push\('triggers-v1'\)/)
+    expect(templateSrc).toMatch(/require\(path\.join\(__dirname, 'trigger-check-core\.cjs'\)\)/)
+    expect(
+      templateSrc.split('triggers unsupported: trigger-check-core sidecar not loaded').length - 1,
+      'each triggers.* command must refuse when the sidecar is missing',
+    ).toBe(4)
+  })
+
+  it('the sidecar source is hashed into the daemon version, in the same slot as the build script', () => {
+    const build = readFile(path.join(ROOT, 'scripts/build-daemon.sh'))
+    const check = readFile(path.join(ROOT, 'src/providers/daemon-version-check.ts'))
+    expect(build).toContain('src/providers/trigger-check-core.ts')
+    expect(check).toContain("'src/providers/trigger-check-core.ts'")
+    // Shipped as a sidecar too, or a source-deployed daemon can never advertise.
+    expect(build).toContain('trigger-check-core.cjs')
+    expect(readFile(path.join(ROOT, 'src/providers/local-daemon.ts'))).toContain("'trigger-check-core.cjs'")
+  })
+})
+
+// skills.sync distributes MORE THAN ONE skill (walnut, walnut-trigger, …) so the
+// engines discover each natively. Both twins take `skills: [{name, skill}]` and
+// still accept the older bare `skill` string; every path is built from a
+// validated name.
+describe('skills.sync multi-skill daemon parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both accept a skills array, fall back to the legacy single skill, and validate the name', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('function cmdSkillsSync(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body).toMatch(/Array\.isArray\(cmd\.skills\)/)
+      expect(body).toMatch(/\{ name: 'walnut', skill: cmd\.skill \}/)
+      expect(body).toMatch(/\^\[a-z0-9\]\[a-z0-9-\]\{0,63\}\$/)
+      expect(body).toMatch(/skills\.sync: invalid skill name: /)
+      expect(body).toMatch(/skills\.sync: payload missing the managed marker/)
+      // Per-entry paths, so two skills in one payload never touch each other.
+      expect(body).toMatch(/function syncSkill\(name(: string)?, skill(: string)?\)/)
+      expect(body).toMatch(/'distributed-skills', name\)/)
+      expect(body).toMatch(/path\.join\(skillsDir, name\)/)
+    }
+  })
+})

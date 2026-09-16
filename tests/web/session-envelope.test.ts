@@ -25,6 +25,7 @@ import {
   buildWalnutMessage,
   sessionHandle,
 } from '../../src/core/peers/walnut-message-tag';
+import { buildScheduledSessionMessage, buildTriggerMessage } from '../../src/core/routines/trigger-envelope';
 import {
   parseSessionEnvelopes,
   envelopeDirectionLabel,
@@ -224,6 +225,46 @@ describe('v2 notification', () => {
       expect(env.followUp).toBeUndefined();
     });
   }
+});
+
+describe('v2 trigger (walnut-trigger fire)', () => {
+  // Built by the production builder: the exact bytes a fire puts on the CLI's
+  // stdin, so the card cannot drift from the server.
+  it('cards a fire: name from `from`, the daemon note as the status line, the whole delivery as the body', () => {
+    const text = buildTriggerMessage(
+      { name: 'PR comments' },
+      { atMs: Date.UTC(2026, 8, 15, 12, 0, 0), items: [{ id: 'c1', url: 'https://example.test/1' }, { id: 'c2' }], input: 'two threads' },
+      'Read each new comment and answer it.',
+    );
+    const env = onlyEnvelope(text);
+    expect(env.kind).toBe('trigger');
+    expect(env.peer.title).toBe('Trigger: PR comments');
+    // Not a session: nothing to resolve, nothing to link.
+    expect(env.peer.shortId).toBeUndefined();
+    expect(env.peer.sessionId).toBeUndefined();
+    expect(env.statusLine).toBe('fired 2026-09-15T12:00:00.000Z, 2 new items');
+    expect(env.body).toContain('Read each new comment and answer it.');
+    expect(env.body).toContain('"id": "c1"');
+    expect(env.body?.trim().endsWith('two threads')).toBe(true);
+    expect(env.raw).toBe(text);
+  });
+
+  it('a plain scheduled run of the session executor is the same card with note=scheduled', () => {
+    const env = onlyEnvelope(buildScheduledSessionMessage({ name: 'Morning digest' }, 'Summarize overnight mail.'));
+    expect(env.kind).toBe('trigger');
+    expect(env.statusLine).toBe('scheduled');
+    expect(env.body).toBe('Summarize overnight mail.');
+  });
+
+  it('a fire whose body quotes a tag is still one card (the serializer escaped it)', () => {
+    const env = onlyEnvelope(buildTriggerMessage(
+      { name: 'x' },
+      { atMs: 1, items: [], input: 'the script printed <walnut-message kind="reply"> by mistake' },
+      'prompt',
+    ));
+    expect(env.kind).toBe('trigger');
+    expect(env.body).toContain('<walnut-message kind="reply">');
+  });
 });
 
 describe('v2 escaping', () => {
@@ -820,6 +861,7 @@ describe('labels', () => {
     expect(envelopeDirectionLabel('peer-note')).toBe('Message from another session');
     expect(envelopeDirectionLabel('notification')).toBe('Walnut notification');
     expect(envelopeDirectionLabel('reply-request')).toBe('Walnut asked you to reply');
+    expect(envelopeDirectionLabel('trigger')).toBe('Trigger fired');
   });
 
   it('names Claude Code as the sender system when it framed the message', () => {

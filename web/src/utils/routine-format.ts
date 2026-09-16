@@ -4,7 +4,7 @@
  * Lives in the frontend so phrasing uses the viewer's locale/clock.
  */
 
-import type { RoutineSchedule, RoutineState } from '@/api/routines';
+import type { RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState } from '@/api/routines';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -45,6 +45,9 @@ export function describeSchedule(schedule: RoutineSchedule): string {
     return `Once at ${d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
   }
   if (schedule.kind === 'every') {
+    // A check may poll faster than a minute (floor 10s); rounding 30s up to
+    // "1 min" misstated the cadence the user asked for.
+    if (schedule.everyMs < 60_000) return `Every ${Math.round(schedule.everyMs / 1000)}s`;
     const mins = Math.round(schedule.everyMs / 60_000);
     if (mins < 60) return `Every ${mins} min`;
     const hours = mins / 60;
@@ -81,6 +84,42 @@ export function describeRoutineTiming(schedule: RoutineSchedule, state?: Routine
   const next = describeNextRun(state);
   if (next) parts.push(next);
   return parts.join(' · ');
+}
+
+/** "3m ago" / "just now" / "2h ago" for the card's last-check line. */
+export function describeAgo(atMs: number, nowMs = Date.now()): string {
+  if (!Number.isFinite(atMs)) return 'at an unknown time';
+  const diff = Math.max(0, nowMs - atMs);
+  if (diff < 45_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.max(1, Math.round(diff / 60_000))}m ago`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  return `${Math.round(diff / 86_400_000)}d ago`;
+}
+
+/** "fired, 2 items, 3m ago" / "quiet, 3m ago" / "error: exit 1: ..., 3m ago" / "not checked yet". */
+export function describeLastCheck(last: RoutineLastCheck | undefined, nowMs = Date.now()): string {
+  if (!last) return 'not checked yet';
+  const ago = describeAgo(last.atMs, nowMs);
+  if (last.outcome === 'fired') {
+    const n = last.items ?? 0;
+    const what = n > 0 ? `fired, ${n} item${n === 1 ? '' : 's'}` : 'fired';
+    // The delivery failed transiently and the daemon will replay the fire.
+    if (last.retryPending) return `${what}, delivery retrying, ${ago}`;
+    return `${what}, ${ago}`;
+  }
+  if (last.outcome === 'error') {
+    const msg = (last.error ?? 'check failed').replace(/\s+/g, ' ').trim();
+    return `error: ${msg.length > 80 ? `${msg.slice(0, 80)}…` : msg}, ${ago}`;
+  }
+  return last.reason === 'rate-limited' ? `quiet (daily fire limit), ${ago}` : `quiet, ${ago}`;
+}
+
+/** The check command as a one-line label: "$ gh pr view … @ clouddev". */
+export function describeCheck(check: RoutineCheck): string {
+  const run = check.run.replace(/\s+/g, ' ').trim();
+  const short = run.length > 60 ? `${run.slice(0, 60)}…` : run;
+  const host = check.host && check.host !== '__local__' ? check.host : 'local';
+  return `$ ${short} @ ${host}`;
 }
 
 /** Badge text: "Claude Code @ clouddev" / "Main Agent" / "Walnut Agent". */

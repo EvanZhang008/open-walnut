@@ -190,6 +190,20 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * Optional: without it the route answers 503 "daemon needs upgrade for
  * reference search" until the next auto-deploy.
  *
+ * 'triggers-v1' — walnut-trigger: the daemon owns the clock and runs a routine's
+ * `check` shell command on a cadence (triggers.configure / triggers.test /
+ * triggers.run / triggers.ack, plus the trigger.fired / trigger.checked events).
+ * A check reads that host's files and runs that host's tools, and it must keep
+ * polling while the server restarts or the tunnel flaps, so neither the clock nor
+ * the run may live on the server; only the fire (a few hundred bytes of JSON)
+ * crosses the tunnel. Optional: without it the server answers 400 "upgrade the
+ * daemon on <host> (it auto-deploys on the next send)" on trigger_create for that
+ * host, and every other routine kind keeps working on the server's own timer.
+ * Sidecar-gated in the source twin (trigger-check-core.cjs): the parse, dedup and
+ * process runner can't be inlined into that template, so a source deploy without
+ * the sidecar answers the four commands with "triggers unsupported" and never
+ * advertises this.
+ *
  * 'git-file-history-v1' — host-local git history for ONE file (git.fileLog /
  * git.fileShow), backing the History panel of the Files viewer. Same rule as
  * git.diff: git and the file must live on the same host, so the daemon runs the
@@ -222,6 +236,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // button still works.
   'vscode-v1',
   'grep-v1',
+  'triggers-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs.readBounded',

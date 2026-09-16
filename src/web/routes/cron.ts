@@ -102,6 +102,31 @@ export function createCronRouter(cronServiceArg: CronService): Router {
     }
   })
 
+  // POST /api/routines/check-test — run a trigger's check once on its host (the
+  // form's Test button). Same core as the /api/v1 twin; the v1 router also
+  // carries the cloud relay, which this Mac-only canonical route never needs.
+  router.post('/check-test', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { testRoutineCheck } = await import('../../core/routines/trigger-api.js')
+      res.json(await testRoutineCheck(req.body))
+    } catch (err) {
+      handleCoreError(res, next, err)
+    }
+  })
+
+  // POST /api/routines/trigger — one-call trigger create; `session: "this"`
+  // resolves from the caller header the ops executor stamps.
+  router.post('/trigger', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const raw = req.headers['x-walnut-caller-sid']
+      const sid = (Array.isArray(raw) ? raw[0] : raw ?? '').trim() || undefined
+      const { createTriggerRoutine } = await import('../../core/routines/trigger-api.js')
+      res.status(201).json(await createTriggerRoutine(req.body, sid))
+    } catch (err) {
+      handleCoreError(res, next, err)
+    }
+  })
+
   // GET /api/cron/:id — single job
   router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {

@@ -16,6 +16,37 @@ export type CronSchedule =
 
 export type CronSessionTarget = 'main' | 'isolated';
 
+// ── Check (walnut-trigger) ──
+
+/**
+ * A trigger: the routine's `check` script, run by the DAEMON on `host` on the
+ * schedule's interval. The daemon owns the clock, the run and the dedup state;
+ * the server only stores this, pushes it, and delivers the fires it reports.
+ * See docs/plan/walnut-trigger.md.
+ */
+export type TriggerCheck = {
+  /** Shell command. Reads `{state,lastFireAt,now}` on stdin, prints one JSON line. */
+  run: string;
+  cwd?: string;
+  /** Which daemon runs it. '__local__' = this machine. Never optional in a
+   *  stored job: a check with no host has nowhere to run. */
+  host: string;
+  timeoutSeconds?: number;
+  maxFiresPerDay?: number;
+};
+
+/** The daemon's last report about a check, for the card and the error counter. */
+export type TriggerLastCheck = {
+  atMs: number;
+  outcome: 'fired' | 'quiet' | 'error';
+  reason?: 'fire-false' | 'all-seen' | 'rate-limited';
+  items?: number;
+  error?: string;
+  durationMs?: number;
+  /** A fired check whose delivery failed transiently; the daemon will replay it. */
+  retryPending?: boolean;
+};
+
 // ── Executor (routines layer) ──
 //
 // Base shapes live here (not in ../routines/) so the cron engine can reference
@@ -32,6 +63,13 @@ export type ExecutorRunResult = {
   status: 'ok' | 'error';
   summary?: string;
   error?: string;
+  /**
+   * The failure was transient (a throw, a timeout, an unreachable host) and the
+   * same message may be delivered again later. A deliberate refusal (the target
+   * task is complete, the config is invalid) leaves this unset: retrying it
+   * would only repeat the refusal.
+   */
+  retryable?: boolean;
 };
 
 /** Injected by the server: dispatches a due job to its executor implementation. */
@@ -87,6 +125,24 @@ export type CronJobState = {
   lastError?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  /** Check jobs only: what the daemon reported about the most recent run. */
+  lastCheck?: TriggerLastCheck;
+  /**
+   * Check jobs only: the highest fire already processed, as (epoch, seq). The
+   * daemon's seq restarts at 0 whenever its state file is recreated (a reboot
+   * that cleared its dir, a very old daemon re-arming); the epoch it mints with
+   * that file tells the server to start its mark over instead of swallowing the
+   * next N fires as replays. `lastFireEpoch` is absent for a pre-epoch daemon.
+   */
+  lastFireSeq?: number;
+  lastFireEpoch?: string;
+  /**
+   * Check jobs only: a fire whose delivery failed for a transient reason (the
+   * target host unreachable, the send timing out) is NOT acked, so the daemon
+   * replays it; this counts the attempts so a permanently failing delivery is
+   * given up on (recorded, acked, notified) instead of retried forever.
+   */
+  fireRetry?: { epoch?: string; seq: number; attempts: number };
 };
 
 // ── The job itself ──
@@ -111,6 +167,12 @@ export type CronJob = {
    * working. Canonical source of the instructions text when present.
    */
   executor?: RoutineExecutorRef;
+  /**
+   * Present = this routine is a TRIGGER: the daemon on `check.host` decides
+   * whether it fires, so the server's timer never ticks it and its
+   * `state.nextRunAtMs` is whatever that daemon last reported.
+   */
+  check?: TriggerCheck;
   state: CronJobState;
 };
 
@@ -137,12 +199,14 @@ export type CronJobCreate = Omit<CronJob, 'id' | 'createdAtMs' | 'updatedAtMs' |
   payload?: CronPayload;
 };
 
-export type CronJobPatch = Partial<Omit<CronJob, 'id' | 'createdAtMs' | 'state' | 'payload' | 'initProcessor'>> & {
+export type CronJobPatch = Partial<Omit<CronJob, 'id' | 'createdAtMs' | 'state' | 'payload' | 'initProcessor' | 'check'>> & {
   initProcessor?: InitProcessorPatch;
   payload?: CronPayloadPatch;
   delivery?: Partial<CronDelivery>;
   state?: Partial<CronJobState>;
   executor?: RoutineExecutorRef;
+  /** `null` turns a trigger back into a plain time-only routine. */
+  check?: TriggerCheck | null;
 };
 
 // ── Events ──

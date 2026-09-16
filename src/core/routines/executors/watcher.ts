@@ -33,6 +33,7 @@ import {
 } from '../watcher-contract.js';
 import { createWatcherTools, WATCHER_TOOL_NAMES, type WatcherToolDeps } from '../watcher-tools.js';
 import { loadTriggerState, updateTriggerState } from '../trigger-state.js';
+import { pickDeliverySession } from '../session-target.js';
 
 const DEFAULT_MAX_OUTCOMES = 3;
 const DEFAULT_MAX_SESSIONS_PER_DAY = 3;
@@ -136,7 +137,8 @@ function defaultToolDeps(): WatcherToolDeps {
       if (input.taskId) {
         const { getSessionsForTask } = await import('../../session-tracker.js');
         const sessions = await getSessionsForTask(input.taskId).catch(() => []);
-        const live = sessions.find((s) => !s.archived && (s.process_status === 'running' || s.process_status === 'idle'));
+        // Live OR stopped: a stopped session cold-resumes and keeps its transcript.
+        const live = pickDeliverySession(sessions);
         if (live) {
           const { sendMessageToSession } = await import('../../session-message-queue.js');
           await sendMessageToSession(live.claudeSessionId, input.message, {

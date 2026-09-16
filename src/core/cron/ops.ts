@@ -5,7 +5,7 @@
  * persists, re-arms the timer, and emits events as needed.
  */
 
-import type { CronJobCreate, CronJobPatch, CronServiceState, CronStatusSummary } from './types.js';
+import type { CronJob, CronJobCreate, CronJobPatch, CronServiceState, CronStatusSummary } from './types.js';
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -227,12 +227,43 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
+/**
+ * "Run now" for a TRIGGER: relay `triggers.run` to the host's daemon and answer
+ * with its reply. The server deliberately cannot do this itself — the run needs
+ * the per-trigger `state` cursor, the `seen` set and the daily counter, all of
+ * which live next to the script on that host. The fire (if any) comes back
+ * through the normal `trigger.fired` event, so this reply only says the daemon
+ * accepted the request.
+ */
+async function relayCheckRun(job: CronJob) {
+  const host = job.check?.host || '__local__';
+  const { triggerDaemonOrReason } = await import('../routines/trigger-daemon.js');
+  const resolved = await triggerDaemonOrReason(host);
+  if ('reason' in resolved) return { status: 'skipped' as const, error: resolved.reason };
+  try {
+    // 60s: a check may take up to its 300s cap, but the daemon answers
+    // triggers.run as soon as it has STARTED the run ({ran, started}); the
+    // outcome arrives later as a trigger.checked / trigger.fired event.
+    // `triggerId`, never `id`: send() builds the frame as {id, cmd, ...params},
+    // so a param named `id` overwrites the numeric RPC correlation id and the
+    // reply is dropped as unmatched (a silent 30s timeout with no log line).
+    const reply = await resolved.conn.send('triggers.run', { triggerId: job.id }, 60_000);
+    if (reply.ok !== true) {
+      return { status: 'error' as const, error: typeof reply.error === 'string' ? reply.error : `daemon on ${host} refused triggers.run` };
+    }
+    return { status: 'ok' as const, host, ran: true as const, ...(typeof reply.outcome === 'string' ? { outcome: reply.outcome } : {}) };
+  } catch (err) {
+    return { status: 'error' as const, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function run(state: CronServiceState, id: string, mode?: 'due' | 'force') {
   // Phase 1: validate and mark running under lock
   const phase1 = await locked(state, async () => {
     warnIfDisabled(state, 'run');
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     const job = findJobOrThrow(state, id);
+    if (job.check) return { relay: job };
     if (typeof job.state.runningAtMs === 'number') {
       return { ok: true, ran: false, reason: 'already-running' as const };
     }
@@ -255,6 +286,11 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
     await persist(state);
     return { job };
   });
+
+  const relayTarget = (phase1 as { relay?: CronJob }).relay;
+  if (relayTarget) {
+    return await relayCheckRun(relayTarget);
+  }
 
   if (!('job' in phase1)) {
     return phase1;

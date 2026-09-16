@@ -202,6 +202,11 @@ only the (small) result crosses the tunnel — never the raw bytes, and never "N
 Ship data to the server on demand, at the granularity the UI actually consumes (a list, ONE
 file's diff), not wholesale.
 
+**The same split applies to RUNNING things, not just reading them: the server is the API, storage,
+delivery and UI plane; a clock, a poll loop, a check script, anything that executes on a host, runs
+in that host's daemon (precedent: walnut-trigger, `docs/plan/walnut-trigger.md`). Offload to the
+daemon whenever the work can live there.**
+
 Why (each learned the hard way): raw-bytes-over-tunnel hits the WS frame kills and the 32MB
 read ceiling (whale JSONLs); per-file RPC fan-out floods the daemon socket and starves its
 command timeout; and parse work on the server burns the ONE event loop every route shares.

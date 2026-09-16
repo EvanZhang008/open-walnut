@@ -789,6 +789,8 @@ export type SessionControlAction =
   // Wave 3: NL routine draft — an LLM call, so it runs where the model
   // credentials live (the answering box); a REPLICA relays to the primary.
   | 'server.routines.draft'
+  // walnut-trigger: a check runs on a DAEMON, and only the primary has daemons.
+  | 'server.routines.check-test' | 'server.routines.trigger'
   | 'server.list-dirs' | 'server.slash-commands'
   // Human inbox (letters). Box-level: the letters live on the primary and
   // answering one has to reach the origin session's daemon, which only the
@@ -1167,6 +1169,8 @@ export async function handleSessionControlRelay(
       case 'server.routines.delete':
       case 'server.routines.toggle':
       case 'server.routines.run':
+      case 'server.routines.check-test':
+      case 'server.routines.trigger':
       case 'server.routines.draft': {
         const { handleRoutinesRelayAction } = await import('../routines/routines-core.js');
         result = await handleRoutinesRelayAction(action.slice('server.routines'.length).replace(/^\./, '') || 'list', p);

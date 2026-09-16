@@ -54,10 +54,36 @@ const READ_ONLY_BANNER = [
 export const CODEX_BEGIN = `<!-- BEGIN ${DISTRIBUTED_MARKER} -->`
 export const CODEX_END = `<!-- END ${DISTRIBUTED_MARKER} -->`
 
+/**
+ * Which shipped skills every host gets a native copy of.
+ *
+ * An engine discovers a SLASH COMMAND by skill DIRECTORY name, so a skill that
+ * only exists in Walnut's own prompt index is invisible to `/` in a hand-started
+ * or CLI-driven session. `walnut-trigger` has to be there: the whole point is
+ * that a session can arm a check for itself.
+ *
+ * Deliberately a short explicit list, not "every shipped skill": each entry
+ * becomes a directory plus one symlink per engine in the user's HOME.
+ */
+export const DISTRIBUTED_SKILL_NAMES = ['walnut', 'walnut-trigger'] as const
+
+export interface SkillSyncEntry {
+  /** Skill directory name; becomes the canonical dir and the slash-command name. */
+  name: string
+  /** Full SKILL.md content, banner injected. */
+  skill: string
+}
+
 export interface SkillSyncPayload {
   hash: string
-  /** Full SKILL.md content (banner injected) for the canonical copy. */
+  /**
+   * Legacy field: the WALNUT skill alone. Kept because a daemon older than the
+   * multi-skill protocol reads only this one, and dropping it would silently
+   * stop distributing the skill that matters most to that host.
+   */
   skill: string
+  /** Every skill this host should hold, sorted by name. */
+  skills: SkillSyncEntry[]
 }
 
 /**
@@ -73,28 +99,46 @@ export function withReadOnlyBanner(skillMd: string): string {
 }
 
 /**
- * Build the payload from the shipped walnut skill. Reads the builtin file
- * directly — NOT via first-wins skill discovery, which could resolve to a
- * distributed copy on the hub host itself (a feedback loop). Falls back to
- * discovery only if the direct read fails, where the idempotent banner keeps
- * the loop harmless. Returns null when the skill cannot be read (never block
- * a daemon connect over distribution).
+ * Read one shipped skill. The builtin file is read DIRECTLY — NOT via first-wins
+ * skill discovery, which could resolve to a distributed copy on the hub host
+ * itself (a feedback loop). Discovery is the fallback only, where the idempotent
+ * banner keeps that loop harmless.
  */
-export async function buildSkillSyncPayload(): Promise<SkillSyncPayload | null> {
-  let content: string | undefined
+async function readShippedSkill(name: string): Promise<string | null> {
   try {
-    content = await fsp.readFile(path.join(BUILTIN_SKILLS_DIR, 'walnut', 'SKILL.md'), 'utf-8')
+    return await fsp.readFile(path.join(BUILTIN_SKILLS_DIR, name, 'SKILL.md'), 'utf-8')
   } catch {
     try {
       const { getSkill } = await import('./skill-store.js')
-      const skill = await getSkill('walnut')
-      content = (skill as { content?: string } | null)?.content
+      const skill = await getSkill(name)
+      return (skill as { content?: string } | null)?.content ?? null
     } catch {
       return null
     }
   }
-  if (!content) return null
-  const skill = withReadOnlyBanner(content)
-  const hash = crypto.createHash('sha256').update(skill).digest('hex').slice(0, 16)
-  return { hash, skill }
+}
+
+/**
+ * Build the payload from the shipped skills. Returns null only when the WALNUT
+ * skill itself cannot be read (never block a daemon connect over distribution);
+ * any other unreadable skill is simply left out of this push.
+ *
+ * The hash covers every entry's NAME and content, so adding a skill, removing
+ * one, or editing any of them all reach the host — a hash over the contents
+ * alone would skip the push that renames a slash command.
+ */
+export async function buildSkillSyncPayload(): Promise<SkillSyncPayload | null> {
+  const entries: SkillSyncEntry[] = []
+  for (const name of DISTRIBUTED_SKILL_NAMES) {
+    const content = await readShippedSkill(name)
+    if (!content) continue
+    entries.push({ name, skill: withReadOnlyBanner(content) })
+  }
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  const walnut = entries.find((e) => e.name === 'walnut')
+  if (!walnut) return null
+  const hash = crypto.createHash('sha256')
+    .update(JSON.stringify(entries.map((e) => [e.name, e.skill])))
+    .digest('hex').slice(0, 16)
+  return { hash, skill: walnut.skill, skills: entries }
 }

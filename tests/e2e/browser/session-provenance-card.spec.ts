@@ -116,9 +116,9 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   const title = await peerTitle(page)
   expect(title.length).toBeGreaterThan(80) // the whole point of the fixture
 
-  // Six envelopes → six cards: four peer notes (v2 named, v2 anonymous, one
-  // legacy prose, one Claude Code native), one reply, one notification. None
-  // rendered as a raw bubble.
+  // Seven envelopes → seven cards: four peer notes (v2 named, v2 anonymous, one
+  // legacy prose, one Claude Code native), one reply, one notification, one
+  // trigger fire. None rendered as a raw bubble.
   await expect(card(panel, 'peer-note')).toHaveCount(4)
   await expect(card(panel, 'reply')).toHaveCount(1)
   await expect(card(panel, 'notification')).toHaveCount(1)
@@ -147,8 +147,24 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   await expect(notice.locator('.provenance-label')).toHaveText('Walnut notification')
   await expect(notice.locator('.provenance-status')).not.toHaveText('')
 
+  // A walnut-trigger fire comes from a routine, not a session: the card names the
+  // routine, shows the daemon's "fired …, N new items" line, keeps the delivery
+  // (prompt + items JSON + input) as the body, and offers no session chip.
+  const fire = card(panel, 'trigger')
+  await expect(fire).toHaveCount(1)
+  await expect(fire.locator('.provenance-label')).toHaveText('Trigger fired')
+  await expect(fire.locator('.provenance-title')).toHaveText('PR comments')
+  await expect(fire.locator('.provenance-status')).toContainText(/^fired 20\d\d-.*, 2 new items$/)
+  await expect(fire.locator('.provenance-body')).toContainText('ENVELOPE_TRIGGER_BODY')
+  await expect(fire.locator('.provenance-body')).toContainText('"id": "c1"')
+  await expect(fire.locator('.provenance-body')).toContainText('two threads')
+  await expect(fire.locator('a.provenance-chip-session')).toHaveCount(0)
+  const fireText = await fire.innerText()
+  expect(fireText).not.toContain('<walnut-message')
+
   await page.setViewportSize({ width: 1280, height: 900 })
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/cards-all-shapes.png` })
+  await shotCard(page, panel, fire, `${SCREENSHOT_DIR}/card-trigger-fire.png`)
 })
 
 test('the short id resolves to a chip that opens that session; the task is a pill', async ({ page }) => {

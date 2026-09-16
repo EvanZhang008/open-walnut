@@ -14,6 +14,13 @@ import type {
   CronStatusSummary,
 } from './types.js';
 import * as ops from './ops.js';
+import {
+  applyTriggerChecked,
+  applyTriggerFired,
+  type TriggerCheckedApplied,
+  type TriggerFiredApplied,
+} from './trigger-apply.js';
+import type { TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
 
 function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   return {
@@ -68,6 +75,23 @@ export class CronService {
 
   async run(id: string, mode?: 'due' | 'force') {
     return await ops.run(this.state, id, mode);
+  }
+
+  /**
+   * walnut-trigger: fold a daemon's `trigger.checked` / `trigger.fired` event
+   * into this store. Only the store bookkeeping lives here; the routines layer
+   * (core/routines/trigger-events.ts) owns the envelope, the executor call, the
+   * notification and the ack.
+   */
+  async applyTriggerChecked(event: TriggerCheckedEvent): Promise<TriggerCheckedApplied> {
+    return await applyTriggerChecked(this.state, event);
+  }
+
+  async applyTriggerFired(
+    event: TriggerFiredEvent,
+    deliver: (job: CronJob) => Promise<{ status: 'ok' | 'error'; summary?: string; error?: string }>,
+  ): Promise<TriggerFiredApplied> {
+    return await applyTriggerFired(this.state, event, deliver);
   }
 
   /**

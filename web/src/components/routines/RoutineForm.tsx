@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import type {
-  Routine, CreateRoutineInput, RoutineSchedule, RoutineExecutorRef,
-  ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
+  Routine, CreateRoutineInput, RoutineSchedule, RoutineExecutorRef, RoutineCheck,
+  RoutineCheckTestResult, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
 } from '@/api/routines';
+import { testRoutineCheck } from '@/api/routines';
 import { describeSchedule } from '@/utils/routine-format';
 
 interface RoutineFormProps {
@@ -112,6 +113,42 @@ function triggerToSchedule(t: TriggerState): RoutineSchedule | null {
   return { kind: 'cron', expr: `${m} ${h} * * ${dow}`, tz };
 }
 
+// ── Check script (walnut-trigger) ────────────────────────────────────────────
+
+interface CheckDraft {
+  run: string;
+  host: string;
+  cwd: string;
+  timeoutSeconds: string;
+  /** Not editable here; carried through so a form edit does not reset an agent-set cap. */
+  maxFiresPerDay?: number;
+}
+
+function checkToDraft(c: RoutineCheck | undefined): CheckDraft {
+  return {
+    run: c?.run ?? '',
+    host: c?.host && c.host !== '__local__' ? c.host : '',
+    cwd: c?.cwd ?? '',
+    timeoutSeconds: typeof c?.timeoutSeconds === 'number' ? String(c.timeoutSeconds) : '',
+    ...(typeof c?.maxFiresPerDay === 'number' ? { maxFiresPerDay: c.maxFiresPerDay } : {}),
+  };
+}
+
+function draftToCheck(d: CheckDraft): RoutineCheck | null {
+  const run = d.run.trim();
+  if (!run) return null;
+  const timeout = Number(d.timeoutSeconds);
+  return {
+    run,
+    host: d.host || '__local__',
+    ...(d.cwd.trim() ? { cwd: d.cwd.trim() } : {}),
+    ...(d.timeoutSeconds && Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {}),
+    // The server replaces `check` wholesale on save, so an omitted cap would
+    // silently become the default.
+    ...(typeof d.maxFiresPerDay === 'number' ? { maxFiresPerDay: d.maxFiresPerDay } : {}),
+  };
+}
+
 /** Short tz name for the header line, e.g. "PDT". */
 function tzAbbrev(tz: string): string {
   try {
@@ -126,13 +163,19 @@ function tzAbbrev(tz: string): string {
 
 export function RoutineForm({ draft, routine, executors, options, onSave, onCancel }: RoutineFormProps) {
   const source: CreateRoutineInput | undefined = routine
-    ? { name: routine.name, description: routine.description, schedule: routine.schedule, executor: routine.executor ?? { type: 'claude-code', config: {} } }
+    ? {
+        name: routine.name, description: routine.description, schedule: routine.schedule,
+        executor: routine.executor ?? { type: 'claude-code', config: {} }, check: routine.check ?? undefined,
+      }
     : draft;
 
   const [name, setName] = useState(source?.name ?? '');
   const [trigger, setTrigger] = useState<TriggerState>(() => scheduleToTrigger(source?.schedule));
   const [executorType, setExecutorType] = useState(source?.executor?.type ?? 'claude-code');
   const [config, setConfig] = useState<Record<string, unknown>>(source?.executor?.config ?? {});
+  const [check, setCheck] = useState<CheckDraft>(() => checkToDraft(source?.check ?? undefined));
+  const [checkOpen, setCheckOpen] = useState(!!source?.check);
+  const [checkTest, setCheckTest] = useState<{ busy: boolean; result?: RoutineCheckTestResult; error?: string }>({ busy: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -143,6 +186,9 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     setTrigger(scheduleToTrigger(draft.schedule));
     setExecutorType(draft.executor?.type ?? 'claude-code');
     setConfig(draft.executor?.config ?? {});
+    setCheck(checkToDraft(draft.check ?? undefined));
+    setCheckOpen(!!draft.check);
+    setCheckTest({ busy: false });
     setError(null);
   }, [draft]);
 
@@ -167,14 +213,42 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
    * must never silently move a schedule they picked, and a drafted routine
    * already arrives with its own schedule.
    */
+  function defaultUntouchedTriggerToInterval(everyMin: number) {
+    setTrigger((prev) => (
+      JSON.stringify(prev) === JSON.stringify(defaultTrigger())
+        ? { ...prev, preset: 'custom', customKind: 'every', everyMin }
+        : prev
+    ));
+  }
+
   function pickExecutor(next: string) {
     setExecutorType(next);
     if (next !== 'watcher') return;
-    setTrigger((prev) => (
-      JSON.stringify(prev) === JSON.stringify(defaultTrigger())
-        ? { ...prev, preset: 'custom', customKind: 'every', everyMin: 10 }
-        : prev
-    ));
+    defaultUntouchedTriggerToInterval(10);
+  }
+
+  /** A check is a poll too: opening the section moves an untouched trigger to every 5 min. */
+  function openCheck() {
+    setCheckOpen(true);
+    defaultUntouchedTriggerToInterval(5);
+  }
+
+  function removeCheck() {
+    setCheckOpen(false);
+    setCheck(checkToDraft(undefined));
+    setCheckTest({ busy: false });
+  }
+
+  async function runCheckTest() {
+    const spec = draftToCheck(check);
+    if (!spec) { setCheckTest({ busy: false, error: 'Enter a command to test' }); return; }
+    setCheckTest({ busy: true });
+    try {
+      const result = await testRoutineCheck(spec, routine?.id);
+      setCheckTest({ busy: false, result });
+    } catch (err) {
+      setCheckTest({ busy: false, error: err instanceof Error ? err.message : 'Test failed' });
+    }
   }
 
   const schedule = useMemo(() => triggerToSchedule(trigger), [trigger]);
@@ -202,10 +276,20 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       }
     }
     const executor: RoutineExecutorRef = { type: executorType, config: config as RoutineExecutorRef['config'] };
+    const checkSpec = checkOpen ? draftToCheck(check) : null;
+    if (checkOpen && !checkSpec) { setError('Check command is required, or remove the check'); return; }
+    if (checkSpec && schedule.kind !== 'every') {
+      setError('A check trigger polls on an interval: pick Custom, then Interval');
+      return;
+    }
+    // Only send `check` when it changes something: null clears an existing one.
+    const checkField: Pick<CreateRoutineInput, 'check'> = checkSpec
+      ? { check: checkSpec }
+      : routine?.check ? { check: null } : {};
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), schedule, executor });
+      await onSave({ name: name.trim(), schedule, executor, ...checkField });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -419,6 +503,94 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="form-group routine-check">
+            <label>Check script</label>
+            {!checkOpen ? (
+              <button type="button" className="btn btn-sm routine-check-add" onClick={openCheck}>
+                Add a check script (fire only when it says so)
+              </button>
+            ) : (
+              <div className="routine-check-box">
+                <p className="text-xs text-muted routine-check-help">
+                  Runs on the host every tick. Its last stdout line must be{' '}
+                  <code>{'{"fire": true|false, "items"?: [{"id": ...}], "input"?: "...", "state"?: ...}'}</code>.
+                  Item ids are deduped, so the same thing never wakes the routine twice.
+                </p>
+                <div className="form-group">
+                  <label htmlFor="routine-check-run">Command *</label>
+                  <input
+                    id="routine-check-run"
+                    type="text"
+                    className="font-mono"
+                    value={check.run}
+                    onChange={(e) => setCheck({ ...check, run: e.target.value })}
+                    placeholder="bash ~/.open-walnut/triggers/pr-comments/check.sh"
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="routine-check-host">Host</label>
+                    <select
+                      id="routine-check-host"
+                      value={check.host}
+                      onChange={(e) => setCheck({ ...check, host: e.target.value })}
+                    >
+                      <option value="">Local</option>
+                      {options.hosts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="routine-check-timeout">Timeout (seconds)</label>
+                    <input
+                      id="routine-check-timeout"
+                      type="number"
+                      min="1"
+                      max="300"
+                      value={check.timeoutSeconds}
+                      onChange={(e) => setCheck({ ...check, timeoutSeconds: e.target.value })}
+                      placeholder="30"
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="routine-check-cwd">Working directory</label>
+                  <input
+                    id="routine-check-cwd"
+                    type="text"
+                    className="font-mono"
+                    value={check.cwd}
+                    onChange={(e) => setCheck({ ...check, cwd: e.target.value })}
+                    placeholder="Empty = the daemon's home"
+                  />
+                </div>
+                <div className="routine-check-actions">
+                  <button type="button" className="btn btn-sm" onClick={runCheckTest} disabled={checkTest.busy}>
+                    {checkTest.busy ? 'Testing…' : 'Test check'}
+                  </button>
+                  <button type="button" className="btn btn-sm routine-check-remove" onClick={removeCheck}>
+                    Remove check
+                  </button>
+                </div>
+                {checkTest.error && <div className="cron-form-error routine-check-test">{checkTest.error}</div>}
+                {checkTest.result && (
+                  <div className={`routine-check-test ${checkTest.result.error ? 'error' : checkTest.result.wouldFire ? 'fired' : 'quiet'}`}>
+                    <div className="routine-check-test-verdict">
+                      {checkTest.result.error
+                        ? `Check error: ${checkTest.result.error}`
+                        : checkTest.result.wouldFire
+                          ? `Would fire now (${checkTest.result.newItemCount} new item${checkTest.result.newItemCount === 1 ? '' : 's'})`
+                          : 'Would stay quiet now'}
+                      {` · ${checkTest.result.durationMs} ms`}
+                    </div>
+                    {checkTest.result.stdoutTail && (
+                      <pre className="routine-check-test-output">{checkTest.result.stdoutTail}</pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="form-group">

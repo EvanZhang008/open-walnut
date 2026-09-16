@@ -235,6 +235,27 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
     );
   }
 
+  // A trigger comes from a routine, not a session: no peer to resolve, no chips.
+  // The head says what happened (fired vs. a plain scheduled run), the title is
+  // the routine's name, the status line is the daemon's "fired <when>, N new
+  // items", and the body is the delivery the model was given.
+  if (kind === 'trigger') {
+    const name = (peer.title ?? '').replace(/^Trigger:\s*/, '') || 'Routine';
+    const scheduled = envelope.statusLine === 'scheduled';
+    return (
+      <div className="provenance-card" data-envelope-kind={kind}>
+        <div className="provenance-head">
+          <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
+          <span className="provenance-label">{scheduled ? 'Routine ran on schedule' : envelopeDirectionLabel(kind, source)}</span>
+        </div>
+        <div className="provenance-title" title={name}>{name}</div>
+        {envelope.statusLine && !scheduled && <div className="provenance-status">{envelope.statusLine}</div>}
+        {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
+        <EnvelopeDetails envelope={envelope} />
+      </div>
+    );
+  }
+
   const headline = peer.anonymous
     ? 'Unidentified process (no tracked session)'
     : resolved.title || (peer.shortId ? `Session ${peer.shortId}` : 'Unknown session');

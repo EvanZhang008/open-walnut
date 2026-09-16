@@ -21,7 +21,7 @@ const ATTR_ORDER = [
 
 export type WalnutMessageAttrName = typeof ATTR_ORDER[number];
 export type WalnutMessageAttrs = Partial<Record<WalnutMessageAttrName, string | undefined>>;
-export type WalnutMessageKind = 'peer-note' | 'reply' | 'notification';
+export type WalnutMessageKind = 'peer-note' | 'reply' | 'notification' | 'trigger';
 
 const TAG = 'walnut-message';
 /** Sender titles are attacker-controlled (any session can task_update one). */

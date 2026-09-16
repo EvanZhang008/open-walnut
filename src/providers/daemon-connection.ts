@@ -217,6 +217,10 @@ export class DaemonConnection {
   private hooksPushInFlight = false
   private hooksPushRerun = false
   private lastHooksPushHash: string | null = null
+  /** triggers.configure serialization — same three fields, same reasons (see pushTriggers). */
+  private triggersPushInFlight = false
+  private triggersPushRerun = false
+  private lastTriggersPushHash: string | null = null
 
   /**
    * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
@@ -476,6 +480,11 @@ export class DaemonConnection {
     // the rules, so "same hash as last push" must not skip it.
     if (changed) this.lastHooksPushHash = null
     if (changed && value) this.pushDaemonHooks()
+    // Same choke point for the armed trigger set: a reconnect may be a FRESH
+    // daemon process, and one that came back from a reboot with a stale
+    // triggers.json must be corrected by the server's own view.
+    if (changed) this.lastTriggersPushHash = null
+    if (changed && value) this.pushTriggers()
     // Distribute the walnut skill to this host's engine-native discovery
     // surfaces (claude skill store / codex AGENTS.md) on every (re)connect —
     // same freshness mechanism as the shims, hash-skipped daemon-side.
@@ -628,6 +637,7 @@ export class DaemonConnection {
         const reply = await this.send('skills.sync', {
           hash: payload.hash,
           skill: payload.skill,
+          skills: payload.skills,
         })
         if (reply.ok !== true) {
           log.session.warn('DaemonConnection: skill sync rejected', {
@@ -636,8 +646,8 @@ export class DaemonConnection {
           return
         }
         this.lastSkillSyncHash = payload.hash
-        log.session.info('DaemonConnection: walnut skill synced', {
-          host: this.hostKey, hash: payload.hash,
+        log.session.info('DaemonConnection: walnut skills synced', {
+          host: this.hostKey, hash: payload.hash, skills: payload.skills.map((s) => s.name),
           changed: (reply as Record<string, unknown>).changed === true,
           wrote: (reply as Record<string, unknown>).wrote,
         })
@@ -647,6 +657,72 @@ export class DaemonConnection {
         })
       } finally {
         this.skillSyncInFlight = false
+      }
+    })()
+  }
+
+  /**
+   * Push the armed trigger set for this host (`triggers.configure`, see
+   * docs/plan/walnut-trigger.md). Same shape and the same reasons as
+   * pushDaemonHooks: read-only sandboxes never rewire a shared daemon,
+   * pre-triggers-v1 daemons are skipped (they simply have no triggers), pushes
+   * are serialized per connection so a mutation racing a connect cannot leave a
+   * stale set behind, and an unchanged hash skips the RPC entirely (every
+   * routine mutation on ANY host would otherwise cost one RPC per host).
+   *
+   * The set itself is compiled by a REGISTERED PROVIDER, never imported: the
+   * routines layer already reaches into this pool, so a static import back into
+   * cron/routines would close the cycle (see core/routines/trigger-bridge.ts).
+   * No provider (server still booting) means NO push — an empty set would
+   * disarm every trigger this daemon is already polling.
+   */
+  /**
+   * True once a `triggers.configure` for this connection was accepted, i.e. the
+   * daemon's armed set is this server's. The routines layer asks before acking a
+   * fire for a job it does not know: our push makes the unknown id an orphan of
+   * a deleted routine; no push yet means the fire may be another server's, and
+   * acking it would eat it (a stale test server adopting the production daemon
+   * is a recorded incident).
+   */
+  get triggersPushed(): boolean {
+    return this.lastTriggersPushHash !== null
+  }
+
+  pushTriggers(): void {
+    if (this.isReadOnlyRemote) return
+    if (this._capabilities && !this.hasCapability('triggers-v1')) return
+    if (this.triggersPushInFlight) { this.triggersPushRerun = true; return }
+    this.triggersPushInFlight = true
+    void (async () => {
+      try {
+        do {
+          this.triggersPushRerun = false
+          const { getTriggerPayloadProvider } = await import('../core/routines/trigger-bridge.js')
+          const provider = getTriggerPayloadProvider()
+          if (!provider) return
+          const compiled = await provider(this.hostKey)
+          if (!compiled) return
+          if (compiled.hash === this.lastTriggersPushHash) continue
+          const reply = await this.send('triggers.configure', {
+            config: compiled.payload as unknown as Record<string, unknown>,
+          })
+          if (reply.ok !== true) {
+            log.session.warn('DaemonConnection: triggers push rejected', {
+              host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
+            })
+            continue
+          }
+          this.lastTriggersPushHash = compiled.hash
+          log.session.info('DaemonConnection: triggers pushed', {
+            host: this.hostKey, hash: compiled.hash, triggers: compiled.payload.triggers.length,
+          })
+        } while (this.triggersPushRerun)
+      } catch (err) {
+        log.session.warn('DaemonConnection: triggers push failed', {
+          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        })
+      } finally {
+        this.triggersPushInFlight = false
       }
     })()
   }
@@ -2191,7 +2267,7 @@ export class DaemonConnection {
       // Best-effort per file — a missing sidecar (npm-package install without
       // dist/daemon-binaries) just means that host keeps the server-side
       // fallback (changes) or reports no external sessions (external-scan).
-      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs']) {
+      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
           const scArgs = [...this.baseSshArgs, this.sshHostString, `cat > /tmp/open-walnut/${sidecarFile}`]
@@ -2556,6 +2632,30 @@ export class DaemonConnection {
     return true
   }
 
+  /**
+   * Hand one trigger event to the registered sink. The daemon frames events with
+   * `ev`; the shared contract discriminates on `type`, so the frame's own name is
+   * copied across here rather than duplicated on the wire. Never throws: a bad
+   * event must not take the socket down.
+   */
+  private dispatchTriggerEvent(event: DaemonEvent): void {
+    void (async () => {
+      const { getTriggerEventSink } = await import('../core/routines/trigger-bridge.js')
+      const sink = getTriggerEventSink()
+      if (!sink) {
+        log.session.warn('DaemonConnection: trigger event with no sink registered', {
+          host: this.hostKey, ev: event.ev, id: (event as { id?: string }).id,
+        })
+        return
+      }
+      sink(this.hostKey, { ...(event as unknown as Record<string, unknown>), type: event.ev } as never)
+    })().catch((err) => {
+      log.session.warn('DaemonConnection: trigger event dispatch failed', {
+        host: this.hostKey, ev: event.ev, error: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
+
   private handleMessage(raw: string): void {
     let msg: Record<string, unknown>
     try { msg = JSON.parse(raw) } catch { return }
@@ -2597,6 +2697,13 @@ export class DaemonConnection {
       // handling — session-level eventHandlers never see it.
       if (event.ev === 'gateway-request') {
         void this.handleGatewayRequest(event)
+        return
+      }
+      // walnut-trigger: the daemon's check reports. Routed to the registered
+      // sink (never to session eventHandlers — a trigger belongs to a ROUTINE,
+      // not to a session) before the generic fan-out.
+      if (event.ev === 'trigger.checked' || event.ev === 'trigger.fired') {
+        this.dispatchTriggerEvent(event)
         return
       }
       // DUP-DEBUG: if handlerCount > 1, every event below fans out N times.
@@ -2679,6 +2786,14 @@ export class DaemonConnection {
       // would silently time out every walnut CLI call until the next reconnect.
       if ('ev' in msg && (msg as { ev?: string }).ev === 'gateway-request') {
         void this.handleGatewayRequest(msg as unknown as DaemonEvent)
+      }
+      // Trigger reports are host-authoritative and unrepeatable (a fire waits in
+      // pendingFires until acked, but a checked event is gone). After a main-WS
+      // reconnect this socket can be the daemon's first trusted client, so
+      // dropping them here would stall every trigger on the host.
+      const ev = (msg as { ev?: string }).ev
+      if ('ev' in msg && (ev === 'trigger.checked' || ev === 'trigger.fired')) {
+        this.dispatchTriggerEvent(msg as unknown as DaemonEvent)
       }
     })
 
@@ -3581,6 +3696,23 @@ export function summarizeConnectFailure(raw: string, maxLen = 160): string {
 export function pushDaemonHooksToAllHosts(): void {
   for (const conn of connectionPool.values()) {
     if (conn.connected) conn.pushDaemonHooks()
+  }
+}
+
+/**
+ * Re-arm ONE host's trigger set. Called after every routine mutation that
+ * touches a check job (and after an auto-disable). Fire-and-forget and
+ * hash-skipped; a cold host simply keeps polling its persisted set until it
+ * reconnects, which is the behaviour the daemon's own persistence exists for.
+ */
+export function pushTriggersToHost(hostKey: string): void {
+  getConnectedDaemonConnection(hostKey)?.pushTriggers()
+}
+
+/** Re-arm every connected host — the connect-time and boot-time sweep. */
+export function pushTriggersToAllHosts(): void {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected) conn.pushTriggers()
   }
 }
 

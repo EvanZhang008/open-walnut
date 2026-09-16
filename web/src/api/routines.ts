@@ -26,6 +26,29 @@ export type RoutineExecutorRef = {
   };
 };
 
+/**
+ * walnut-trigger: a shell command the daemon on `host` runs every tick. Its
+ * last stdout line decides whether the routine fires (docs/plan/walnut-trigger.md).
+ */
+export type RoutineCheck = {
+  run: string;
+  cwd?: string;
+  host: string;
+  timeoutSeconds?: number;
+  maxFiresPerDay?: number;
+};
+
+export type RoutineLastCheck = {
+  atMs: number;
+  outcome: 'fired' | 'quiet' | 'error';
+  reason?: 'fire-false' | 'all-seen' | 'rate-limited';
+  items?: number;
+  error?: string;
+  durationMs?: number;
+  /** A fire whose delivery failed transiently; the daemon will replay it. */
+  retryPending?: boolean;
+};
+
 export type RoutineState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
@@ -34,6 +57,7 @@ export type RoutineState = {
   lastError?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  lastCheck?: RoutineLastCheck;
 };
 
 export interface Routine {
@@ -47,7 +71,20 @@ export interface Routine {
   schedule: RoutineSchedule;
   wakeMode: 'now' | 'next-cycle';
   executor?: RoutineExecutorRef;
+  check?: RoutineCheck;
   state: RoutineState;
+}
+
+export interface RoutineCheckTestResult {
+  ok: boolean;
+  exitCode: number | null;
+  durationMs: number;
+  stdoutTail: string;
+  stderrTail: string;
+  parsed: { fire: boolean; items?: Array<{ id: string }>; input?: string } | null;
+  error: string | null;
+  wouldFire: boolean;
+  newItemCount: number;
 }
 
 export interface ExecutorFieldSpec {
@@ -78,6 +115,8 @@ export type CreateRoutineInput = {
   description?: string;
   schedule: RoutineSchedule;
   executor: RoutineExecutorRef;
+  /** `null` on update clears an existing check. */
+  check?: RoutineCheck | null;
   wakeMode?: 'now' | 'next-cycle';
   enabled?: boolean;
 };
@@ -111,6 +150,15 @@ export async function toggleRoutine(id: string): Promise<Routine> {
 
 export async function runRoutine(id: string): Promise<unknown> {
   const res = await apiPost<{ result: unknown }>(`/api/routines/${id}/run`);
+  return res.result;
+}
+
+/** Run a check once on its host, writing no state. Throws with the server's reason (cold or old daemon). */
+export async function testRoutineCheck(
+  check: Pick<RoutineCheck, 'run'> & Partial<RoutineCheck>,
+  id?: string,
+): Promise<RoutineCheckTestResult> {
+  const res = await apiPost<{ result: RoutineCheckTestResult }>('/api/routines/check-test', { check, ...(id ? { id } : {}) });
   return res.result;
 }
 

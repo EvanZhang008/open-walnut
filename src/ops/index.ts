@@ -11,6 +11,7 @@ import './tasks.js'
 import './core.js'
 import './work.js'
 import './human-inbox.js'
+import './triggers.js'
 
 export {
   defineOp,

@@ -14,7 +14,10 @@
 
 import { SessionControlError } from '../sessions/session-controls.js';
 import { log } from '../../logging/index.js';
+import { MIN_EVERY_MS } from '../../providers/trigger-check-core.js';
 import type { CronService } from '../cron/index.js';
+import type { CronJob, TriggerCheck } from '../cron/types.js';
+import { requireTriggerDaemon } from './trigger-daemon.js';
 
 /** Resolve the live cron service or throw a 503 (server still booting). */
 async function requireCronService(): Promise<CronService> {
@@ -76,6 +79,92 @@ async function validateExecutorForSave(input: { executor?: unknown }): Promise<v
   input.executor = { type: ref.type, config: validated.config };
 }
 
+// ── walnut-trigger: save-time validation + the push that arms the daemon ──
+
+function rawRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function assertIntervalSchedule(schedule: { kind?: string; everyMs?: number } | undefined): void {
+  if (!schedule || schedule.kind !== 'every') {
+    throw new SessionControlError('a check trigger polls on an interval; use every, not cron', 400);
+  }
+  const everyMs = typeof schedule.everyMs === 'number' ? schedule.everyMs : 0;
+  if (!Number.isFinite(everyMs) || everyMs < MIN_EVERY_MS) {
+    throw new SessionControlError(`a check may not poll faster than every ${MIN_EVERY_MS / 1000}s`, 400);
+  }
+}
+
+/**
+ * Validate a `check` at SAVE time, for the same reason validateExecutorForSave
+ * exists: a trigger that only fails on its first tick fails in a history line
+ * nobody is watching. Three things are checked, and each one is a different
+ * conversation with the caller:
+ *
+ *  - a cron EXPRESSION on a check job is refused outright. A poll is an interval;
+ *    cron parsing lives on the server engine, and the daemon has no parser.
+ *  - `check.run` must survive normalization. An empty command would arm a timer
+ *    that can only ever error.
+ *  - the host must have a CONNECTED daemon that speaks triggers-v1, because the
+ *    daemon is the thing that will run this. 400 when it is merely old (the user
+ *    can fix that by waiting for the auto-deploy), 503 when it is cold.
+ *
+ * Returns the host to push to, or null when the input carries no check.
+ */
+async function validateCheckForSave(
+  input: { schedule?: unknown; check?: unknown },
+  raw: unknown,
+  existing?: CronJob,
+): Promise<string | null> {
+  const rawCheck = rawRecord(raw)?.check ?? rawRecord(rawRecord(raw)?.job)?.check;
+  if (input.check === null) return null;
+  const schedule = (input.schedule ?? existing?.schedule) as { kind?: string; everyMs?: number } | undefined;
+  if (!input.check) {
+    // normalize() drops a check whose `run` is empty — say so instead of quietly
+    // storing a plain time-only routine the caller did not ask for.
+    if (rawRecord(rawCheck)) {
+      throw new SessionControlError('check.run is required: a trigger needs a command to run', 400);
+    }
+    // A schedule-only patch on a stored trigger must keep it an interval.
+    if (existing?.check && input.schedule) assertIntervalSchedule(schedule);
+    return null;
+  }
+  const check = input.check as TriggerCheck;
+  assertIntervalSchedule(schedule);
+  if (!check.run || !check.run.trim()) {
+    throw new SessionControlError('check.run is required: a trigger needs a command to run', 400);
+  }
+  const host = check.host || '__local__';
+  await requireTriggerDaemon(host);
+  return host;
+}
+
+/**
+ * Arm (or disarm) the daemons whose set may have changed. Fire-and-forget: the
+ * push is hash-skipped per host, and a failed push self-heals on the next
+ * connect — a routine that saved must not fail because a host blipped.
+ */
+function pushTriggersFor(hosts: Array<string | undefined | null>): void {
+  const unique = [...new Set(hosts.filter((h): h is string => !!h))];
+  if (unique.length === 0) return;
+  void (async () => {
+    try {
+      const { pushTriggersToHost } = await import('../../providers/daemon-connection.js');
+      for (const host of unique) pushTriggersToHost(host);
+    } catch (err) {
+      log.web.warn('trigger push after routine mutation failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+}
+
+/** The stored job, or null. Used to learn a trigger's OLD host before a mutation. */
+async function findJob(service: CronService, id: string): Promise<CronJob | null> {
+  const jobs = await service.list({ includeDisabled: true });
+  return jobs.find((j) => j.id === id) ?? null;
+}
+
 export async function listRoutines(includeDisabled: boolean): Promise<{ jobs: unknown[] }> {
   const service = await requireCronService();
   return { jobs: await service.list({ includeDisabled }) };
@@ -99,9 +188,11 @@ export async function createRoutine(body: unknown): Promise<{ job: unknown }> {
     throw new SessionControlError('Invalid input. Provide at least schedule and payload.', 400);
   }
   await validateExecutorForSave(input);
+  const checkHost = await validateCheckForSave(input, body);
   try {
     const job = await service.add(input);
-    log.web.info('routine created via shared core', { jobId: job.id, name: job.name });
+    log.web.info('routine created via shared core', { jobId: job.id, name: job.name, ...(checkHost ? { checkHost } : {}) });
+    pushTriggersFor([checkHost]);
     return { job };
   } catch (err) {
     mapCronError(err);
@@ -114,9 +205,14 @@ export async function patchRoutine(id: string, body: unknown): Promise<{ job: un
   const patch = normalizeCronJobPatch(body);
   if (!patch) throw new SessionControlError('Invalid patch input.', 400);
   await validateExecutorForSave(patch);
+  // Read BEFORE the write: a patch that moves a trigger to another host must
+  // also push the host it is leaving, or that daemon keeps polling forever.
+  const before = await findJob(service, id);
+  await validateCheckForSave(patch, body, before ?? undefined);
   try {
     const job = await service.update(id, patch);
     log.web.info('routine updated via shared core', { jobId: id });
+    pushTriggersFor([before?.check?.host, job.check?.host]);
     return { job };
   } catch (err) {
     mapCronError(err);
@@ -125,6 +221,7 @@ export async function patchRoutine(id: string, body: unknown): Promise<{ job: un
 
 export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed: boolean }> {
   const service = await requireCronService();
+  const before = await findJob(service, id);
   const result = await service.remove(id);
   if (!result.removed) throw new SessionControlError(`Cron job not found: ${id}`, 404);
   // A watcher's memory outlives nothing: leaving it behind would make a
@@ -132,13 +229,21 @@ export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed:
   const { deleteTriggerState } = await import('./trigger-state.js');
   await deleteTriggerState(id);
   log.web.info('routine deleted via shared core', { jobId: id });
+  // A set that no longer names the id is what tells the daemon to stop the
+  // timer. Its state file stays (a disable must survive a re-enable) and is
+  // pruned by age once nothing re-arms it.
+  pushTriggersFor([before?.check?.host]);
   return result;
 }
 
 export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
   const service = await requireCronService();
   try {
-    return { job: await service.toggle(id) };
+    const job = await service.toggle(id);
+    // The enable toggle IS the kill switch for a trigger: a disabled job is
+    // absent from the compiled set, so this push is what stops the polling.
+    pushTriggersFor([job.check?.host]);
+    return { job };
   } catch (err) {
     mapCronError(err);
   }
@@ -233,6 +338,17 @@ export async function handleRoutinesRelayAction(
 ): Promise<Record<string, unknown>> {
   const id = typeof p.id === 'string' ? p.id : '';
   switch (sub) {
+    // Triggers relay for the same reason every other routine write does: the
+    // primary owns cron-jobs.json AND the daemons, so a replica must never
+    // create one locally.
+    case 'check-test': {
+      const { testRoutineCheck } = await import('./trigger-api.js');
+      return await testRoutineCheck(p.body) as unknown as Record<string, unknown>;
+    }
+    case 'trigger': {
+      const { createTriggerRoutine } = await import('./trigger-api.js');
+      return await createTriggerRoutine(p.body, typeof p.callerSid === 'string' ? p.callerSid : undefined) as unknown as Record<string, unknown>;
+    }
     case 'list': return await listRoutines(p.includeDisabled === true) as unknown as Record<string, unknown>;
     case 'actions': return await listRoutineActions() as unknown as Record<string, unknown>;
     case 'status': return await getRoutinesStatus();

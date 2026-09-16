@@ -62,7 +62,7 @@
  * resolves against the real session list.
  */
 
-export type SessionEnvelopeKind = 'reply' | 'peer-note' | 'notification' | 'reply-request';
+export type SessionEnvelopeKind = 'reply' | 'peer-note' | 'notification' | 'reply-request' | 'trigger';
 
 /** Who framed the message: Walnut's own envelope, or Claude Code's native one. */
 export type SessionEnvelopeSource = 'walnut' | 'claude-code';
@@ -96,9 +96,11 @@ export interface SessionEnvelope {
   peer: SessionEnvelopePeer;
   /** One-line clip of what the asker originally asked (reply + notification). */
   askedPreview?: string;
-  /** The outcome sentence, verbatim (notification only) — this IS its content. */
+  /** The outcome sentence, verbatim (notification only) — this IS its content.
+   *  For a trigger: the `note` attribute ("fired <ISO>, N new items" / "scheduled"). */
   statusLine?: string;
-  /** The payload: the other session's own words (reply + peer-note). */
+  /** The payload: the other session's own words (reply + peer-note), or the
+   *  trigger's delivery (prompt, new items as JSON, the script's `input`). */
   body?: string;
   /** LEGACY only: the fence marker that delimited `body`. Diagnostics + tests. */
   marker?: string;
@@ -376,7 +378,7 @@ const TAG_HEAD = /^<walnut-message\s/;
 /** `name="value"`. A value cannot hold a `"` — the serializer escapes it. */
 const ATTR = /([a-z][a-z0-9-]*)="([^"]*)"/g;
 /** The kinds the tag carries. Anything else degrades to raw text on purpose. */
-const TAG_KINDS = new Set(['peer-note', 'reply', 'notification']);
+const TAG_KINDS = new Set(['peer-note', 'reply', 'notification', 'trigger']);
 /** `Title [8hex]` as `sessionHandle()` prints it (4+ so a short id still reads). */
 const HANDLE = /\[([0-9a-f]{4,})\]\s*$/i;
 /** The one line a peer-note with a `request` may be followed by. */
@@ -469,8 +471,12 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
     }
   }
 
-  // A notification is ABOUT a session; the other two come FROM one.
+  // A notification is ABOUT a session; the other two come FROM one. A trigger
+  // comes from a ROUTINE, not a session: `from` is "Trigger: <name>" (no handle
+  // to resolve) and `note` is its one-line status, so it takes the notification's
+  // statusLine slot while keeping the whole body as the delivery.
   const notify = kind === 'notification';
+  const trigger = kind === 'trigger';
   const handle = notify ? attrs.about : attrs.from;
   const sessionId = notify ? attrs['about-session'] : attrs['from-session'];
   const taskId = notify ? attrs['about-task'] : attrs['from-task'];
@@ -489,7 +495,7 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
   // is machine instruction: it stays in `raw` (the disclosure) plus `followUp`,
   // exactly where the pre-v2 notice put it, and never in the visible body.
   const nl = body.indexOf('\n');
-  const statusLine = nl < 0 ? body : body.slice(0, nl);
+  const statusLine = trigger ? (attrs.note ?? '') : nl < 0 ? body : body.slice(0, nl);
   const followUp = notify ? findCommand(nl < 0 ? '' : body.slice(nl + 1)) : undefined;
 
   return {
@@ -500,7 +506,7 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
       ...(attrs.request ? { requestId: attrs.request } : {}),
       peer,
       ...(attrs.asked ? { askedPreview: attrs.asked } : {}),
-      ...(notify ? { statusLine } : { body }),
+      ...(notify ? { statusLine } : trigger ? { statusLine, body } : { body }),
       ...(replyRequest ? { replyRequest } : {}),
       ...(followUp ? { followUp } : {}),
       raw: text.slice(at, end),
@@ -688,6 +694,7 @@ export function envelopeDirectionLabel(
     case 'peer-note': return 'Message from another session';
     case 'notification': return 'Walnut notification';
     case 'reply-request': return 'Walnut asked you to reply';
+    case 'trigger': return 'Trigger fired';
   }
 }
 
@@ -698,5 +705,6 @@ export function envelopeDirectionGlyph(kind: SessionEnvelopeKind): string {
     case 'peer-note': return '→';      // → arrived from elsewhere
     case 'notification': return '◎';   // ◎ Walnut itself speaking
     case 'reply-request': return '↻';  // ↻ your turn to answer
+    case 'trigger': return '⚡';        // ⚡ a check script said so
   }
 }

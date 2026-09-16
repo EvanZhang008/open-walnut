@@ -7,6 +7,7 @@
  * Coerces messy agent/API input into well-typed CronJobCreate or CronJobPatch.
  */
 
+import { clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
 import type { CronJobCreate, CronJobPatch } from './types.js';
 
 type UnknownRecord = Record<string, unknown>;
@@ -196,6 +197,37 @@ function coerceExecutor(raw: UnknownRecord): UnknownRecord | null {
   return { type, config };
 }
 
+// ── Check coercion (walnut-trigger) ──
+
+/**
+ * Coerce a `check` block. Returns null when there is no runnable command —
+ * a check with an empty `run` is not a trigger, and storing one would arm a
+ * daemon timer that can only ever error.
+ *
+ * `host` defaults to '__local__' rather than staying undefined: the daemon that
+ * runs a check is part of the job's identity (it decides which push set the
+ * trigger lands in), so a stored trigger always names one.
+ */
+function coerceCheck(raw: UnknownRecord): UnknownRecord | null {
+  const run = typeof raw.run === 'string' ? raw.run.trim() : '';
+  if (!run) return null;
+  const next: UnknownRecord = { run };
+  const cwd = raw.cwd;
+  if (typeof cwd === 'string' && cwd.trim()) next.cwd = cwd.trim();
+  const host = typeof raw.host === 'string' && raw.host.trim() ? raw.host.trim() : '__local__';
+  next.host = host;
+  const timeout = raw.timeoutSeconds ?? raw.timeout_seconds;
+  if (timeout !== undefined && timeout !== null && timeout !== '') {
+    next.timeoutSeconds = clampTimeoutSeconds(typeof timeout === 'number' ? timeout : Number(timeout));
+  }
+  const cap = raw.maxFiresPerDay ?? raw.max_fires_per_day;
+  if (cap !== undefined && cap !== null && cap !== '') {
+    const n = typeof cap === 'number' ? cap : Number(cap);
+    if (Number.isFinite(n)) next.maxFiresPerDay = Math.max(0, Math.floor(n));
+  }
+  return next;
+}
+
 // ── Unwrap ──
 
 function unwrapJob(raw: UnknownRecord): UnknownRecord {
@@ -353,6 +385,20 @@ function normalizeCronJobInput(
     } else {
       delete next.executor;
     }
+  }
+
+  // Coerce check (walnut-trigger). An explicit null CLEARS it on a patch; on a
+  // create it is simply absent (there is nothing to clear yet).
+  const rawCheck = base.check;
+  if (isRecord(rawCheck)) {
+    const coerced = coerceCheck(rawCheck as UnknownRecord);
+    if (coerced) next.check = coerced;
+    else delete next.check;
+  } else if (rawCheck === null) {
+    if (applyDefaults) delete next.check;
+    else next.check = null;
+  } else if ('check' in next) {
+    delete next.check;
   }
 
   // Copy top-level timeoutSeconds into payload if applicable

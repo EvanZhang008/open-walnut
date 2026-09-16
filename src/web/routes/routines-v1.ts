@@ -15,6 +15,8 @@
  *   POST   /routines/:id/toggle          → { job }
  *   POST   /routines/:id/run             → { result }
  *   POST   /routines/draft { text }      → { draft } (Wave 3 — one LLM call)
+ *   POST   /routines/check-test { check } → { result } (walnut-trigger: run once)
+ *   POST   /routines/trigger { run, every, prompt, … } → 201 { job, host, nextCheckAt }
  *
  * Cloud companion (REPLICA): Class B — the PRIMARY's cron engine is the
  * single writer of cron-jobs.json (a replica-local write would recreate the
@@ -151,6 +153,49 @@ routinesV1Router.post('/routines/draft', async (req: Request, res: Response, nex
     }
     const { draftRoutineFromText } = await import('../../core/routines/routines-core.js')
     await runLocal(res, next, 200, () => draftRoutineFromText(text))
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** The caller's session id, as stamped by the ops executor from WALNUT_SESSION_ID. */
+function callerSid(req: Request): string | undefined {
+  const raw = req.headers['x-walnut-caller-sid']
+  const sid = (Array.isArray(raw) ? raw[0] : raw ?? '').trim()
+  return sid || undefined
+}
+
+// POST /api/v1/routines/check-test { check: {run, cwd?, host?, timeoutSeconds?}, id? }
+// Run a check ONCE on its host, reading and writing no state — this is what
+// `trigger_test` and the form's Test button call. The daemon RPC carries a
+// mandatory deadline: a route waiting on a host must always answer.
+routinesV1Router.post('/routines/check-test', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (CLOUD_MODE) {
+      await relayControlAction(res, 'server.routines.check-test', SERVER_RELAY_SID, { body: req.body ?? {} }, 200)
+      return
+    }
+    const { testRoutineCheck } = await import('../../core/routines/trigger-api.js')
+    await runLocal(res, next, 200, () => testRoutineCheck(req.body))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/routines/trigger — the one-call trigger create (`trigger_create`).
+// `session` defaults to 'this', resolved from the calling session's task so the
+// routine stores a task id a fork or rewind cannot lose.
+routinesV1Router.post('/routines/trigger', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sid = callerSid(req)
+    if (CLOUD_MODE) {
+      await relayControlAction(res, 'server.routines.trigger', SERVER_RELAY_SID, {
+        body: req.body ?? {}, ...(sid ? { callerSid: sid } : {}),
+      }, 201)
+      return
+    }
+    const { createTriggerRoutine } = await import('../../core/routines/trigger-api.js')
+    await runLocal(res, next, 201, () => createTriggerRoutine(req.body, sid))
   } catch (err) {
     next(err)
   }

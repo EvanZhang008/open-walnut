@@ -47,11 +47,13 @@ afterAll(async () => {
 });
 
 describe('routines API', () => {
-  it('GET /api/routines/executors returns the four built-ins + options', async () => {
+  it('GET /api/routines/executors returns the five built-ins + options', async () => {
     const { status, json } = await get('/api/routines/executors');
     expect(status).toBe(200);
     const types = json.executors.map((e: any) => e.type).sort();
-    expect(types).toEqual(['claude-code', 'main-agent', 'walnut-agent', 'watcher']);
+    // 'session' is walnut-trigger's outcome executor (deliver into the live
+    // session on a task); it is a normal executor, usable without a check.
+    expect(types).toEqual(['claude-code', 'main-agent', 'session', 'walnut-agent', 'watcher']);
     // configSchema drives the dynamic form
     const cc = json.executors.find((e: any) => e.type === 'claude-code');
     expect(cc.configSchema.some((f: any) => f.name === 'cwd' && f.required)).toBe(true);

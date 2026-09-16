@@ -2941,6 +2941,15 @@ select {
   border-left-color: var(--warning);
 }
 
+/* A trigger fire: a script on a host said so, not a session or Walnut itself. */
+.provenance-card[data-envelope-kind="trigger"] {
+  border-left-color: var(--accent);
+}
+
+.provenance-card[data-envelope-kind="trigger"] .provenance-glyph {
+  color: var(--accent);
+}
+
 /* An unidentified sender is not "a session" — don't paint it in session indigo. */
 .provenance-card[data-anonymous="true"] {
   border-left-color: var(--fg-muted);
@@ -28717,6 +28726,196 @@ a.file-link:hover {
 .routines-view-compact .routine-trigger-presets {
   flex-wrap: wrap;
 }
+
+/* ── walnut-trigger: check script (card line + form section) ── */
+.routine-trigger-badge {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-weight: 600;
+}
+
+.routine-check-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin-top: 6px;
+  color: var(--fg-secondary);
+}
+
+.routine-check-run {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.routine-check-status.fired { color: var(--accent); }
+.routine-check-status.error { color: var(--error); }
+
+.routine-check-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-secondary);
+}
+
+.routine-check-box .form-group { margin-bottom: 0; }
+
+.routine-check-help code {
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.routine-check-add { align-self: flex-start; }
+
+.routine-check-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.routine-check-remove { color: var(--fg-secondary); }
+
+.routine-check-test {
+  border-left: 3px solid var(--border);
+  padding: 6px 10px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.routine-check-test.fired { border-left-color: var(--accent); }
+.routine-check-test.error { border-left-color: var(--error); color: var(--error); }
+
+.routine-check-test-output {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-secondary);
+}
+
+/* The TRIGGER pill on a task row / Focus card / session header: same footprint
+   as the CRON pill so the two sit on one line, in the accent tone the Routines
+   card uses for a trigger so it reads as a trigger at a glance. */
+.task-trigger-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.task-trigger-pill:hover,
+.task-trigger-pill[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* The flyout the pill opens: the trigger itself, with its actions. */
+.trigger-jobs-flyout {
+  position: fixed;
+  z-index: 9500;
+  width: min(380px, calc(100vw - 16px));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  font-size: 12px;
+  overflow: auto;
+}
+.trigger-jobs-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.trigger-jobs-link {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.trigger-jobs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.trigger-jobs-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.trigger-jobs-row:first-child { padding-top: 0; border-top: 0; }
+.trigger-jobs-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.trigger-jobs-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trigger-jobs-cadence { flex: 0 0 auto; color: var(--fg-secondary); font-size: 11px; }
+.trigger-jobs-run {
+  display: block;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trigger-jobs-last { font-size: 11px; color: var(--fg-secondary); }
+.trigger-jobs-last[data-outcome="fired"] { color: var(--accent); }
+.trigger-jobs-last[data-outcome="error"] { color: var(--error); }
+.trigger-jobs-error { font-size: 11px; color: var(--error); }
+.trigger-jobs-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.trigger-jobs-actions button {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  cursor: pointer;
+}
+.trigger-jobs-actions button:hover:not(:disabled) { border-color: var(--accent); }
+.trigger-jobs-actions button:disabled { opacity: 0.55; cursor: default; }
+.trigger-jobs-actions button.trigger-jobs-danger { border-color: var(--error); color: var(--error); }
+.trigger-jobs-foot { margin-top: 8px; font-size: 11px; color: var(--fg-secondary); }
 
 /* ── Devices section (Settings → Devices, QR pairing) ── */
 .devices-section { display: flex; flex-direction: column; gap: 14px; }

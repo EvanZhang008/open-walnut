@@ -1313,6 +1313,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // The watcher owns its own engine (an in-process micro-agent turn) and its
     // own outcome wiring, so it needs no cron dep closures.
     registerExecutor(createWatcherExecutor())
+    // walnut-trigger's outcome executor: deliver into the session on a task (the
+    // live one, else the stopped one cold-resumed, else a new one on that task).
+    // Also needs no cron deps.
+    const { createSessionExecutor } = await import('../core/routines/executors/session.js')
+    registerExecutor(createSessionExecutor())
+  }
+
+  // ── walnut-trigger seams (both directions, registered once) ──
+  // daemon-connection must not import cron/routines statically (the routines
+  // layer already reaches into the daemon pool), so it calls these instead:
+  // one compiles the armed set for a host, the other handles the reports.
+  {
+    const { setTriggerPayloadProvider, setTriggerEventSink } = await import('../core/routines/trigger-bridge.js')
+    const { compileTriggersForHost } = await import('../core/routines/trigger-push.js')
+    const { handleTriggerEvent } = await import('../core/routines/trigger-events.js')
+    setTriggerPayloadProvider(compileTriggersForHost)
+    setTriggerEventSink(handleTriggerEvent)
+    // A daemon already connected before this point (an adopted local daemon)
+    // never got a push, and pushTriggers with no provider is a deliberate no-op.
+    const { pushTriggersToAllHosts } = await import('../providers/daemon-connection.js')
+    pushTriggersToAllHosts()
   }
 
   // -- Discover file-based cron actions --

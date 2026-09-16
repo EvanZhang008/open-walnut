@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Routine } from '@/api/routines';
-import { describeRoutineTiming, describeExecutorBadge } from '@/utils/routine-format';
+import { describeRoutineTiming, describeExecutorBadge, describeCheck, describeLastCheck } from '@/utils/routine-format';
 
 interface RoutineCardProps {
   routine: Routine;
@@ -14,14 +14,14 @@ interface RoutineCardProps {
 function getStatusClass(r: Routine): string {
   if (!r.enabled) return 'disabled';
   if (r.state.runningAtMs) return 'running';
-  if (r.state.lastStatus === 'error') return 'error';
+  if (r.state.lastStatus === 'error' || r.state.lastCheck?.outcome === 'error') return 'error';
   return 'ok';
 }
 
 function getStatusLabel(r: Routine): string {
   if (!r.enabled) return 'Disabled';
   if (r.state.runningAtMs) return 'Running';
-  if (r.state.lastStatus === 'error') return 'Error';
+  if (r.state.lastStatus === 'error' || r.state.lastCheck?.outcome === 'error') return 'Error';
   if (r.state.lastStatus === 'ok') return 'OK';
   return 'Idle';
 }
@@ -42,6 +42,11 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
             {describeRoutineTiming(routine.schedule, routine.state)}
           </span>
         </div>
+        {routine.check && (
+          <span className="routine-executor-badge routine-trigger-badge" title="A check script decides when this routine fires">
+            Trigger
+          </span>
+        )}
         <span className="routine-executor-badge" title={routine.executor?.type ?? 'claude-code'}>
           {describeExecutorBadge(routine.executor, executorLabels)}
         </span>
@@ -90,6 +95,14 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
           </div>
         </div>
       </div>
+      {routine.check && (
+        <div className="routine-check-line text-xs" title={routine.check.run}>
+          <code className="routine-check-run">{describeCheck(routine.check)}</code>
+          <span className={`routine-check-status ${routine.state.lastCheck?.outcome ?? 'pending'}`}>
+            last check: {describeLastCheck(routine.state.lastCheck)}
+          </span>
+        </div>
+      )}
       {routine.state.lastError && (
         <div className="cron-job-error text-xs">{routine.state.lastError}</div>
       )}

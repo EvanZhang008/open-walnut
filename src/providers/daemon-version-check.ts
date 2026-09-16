@@ -97,6 +97,11 @@ const DAEMON_SOURCE_FILES = [
   // edit to either changes what the probe answers, and an unchanged version
   // means no host self-upgrades.
   'src/providers/transcript-rewind-core.ts',
+  // walnut-trigger check contract (triggers.configure / .test / .run / .ack) —
+  // bundled into the binary AND shipped as the trigger-check-core.cjs sidecar.
+  // Same lockstep rule as the two above: a rule edit here that leaves the version
+  // unchanged means no host self-upgrades and the old dedup rules keep running.
+  'src/providers/trigger-check-core.ts',
   'src/core/transcript-chain.ts',
   'src/core/bash-file-ops.ts',
 ] as const

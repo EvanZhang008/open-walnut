@@ -14,6 +14,7 @@ import { groupSortableId } from './tier-group-sentinels';
 import { useFolderContextMenu } from './FolderContextMenu';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
+import { TriggerPill } from '@/components/routines/TriggerPill';
 import * as ICONS from '../common/Icons';
 
 
@@ -470,6 +471,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       >
         {task.title}
       </span>
+      <TriggerPill taskId={task.id} />
       {/* ▶ — hover-revealed, immediately before the kebab, exactly as on the list
           rows. Hidden in select mode: a press there means "toggle selection", so a
           launch button would be a mis-click trap. */}

@@ -69,6 +69,11 @@ export function findJobOrThrow(state: CronServiceState, id: string): CronJob {
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!job.enabled) return undefined;
 
+  // A trigger's clock lives on its host's daemon. Whatever that daemon last
+  // reported IS the next check time, so the server keeps it verbatim instead of
+  // computing a second (always wrong) answer next to it.
+  if (job.check) return job.state.nextRunAtMs;
+
   if (job.schedule.kind === 'every') {
     const anchorMs = resolveEveryAnchorMs(job.schedule, job.createdAtMs);
     return computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs);
@@ -132,8 +137,11 @@ export function nextWakeAtMs(state: CronServiceState): number | undefined {
   // Cloud-skipped jobs must not drive the timer: a pending one-shot 'at' job
   // keeps its past-due nextRunAtMs until it actually runs (on the primary box),
   // so including it here would re-arm the timer with delay 0 in a tight loop.
+  // Check jobs are excluded for the same reason cloud-skipped ones are: their
+  // nextRunAtMs is a daemon REPORT, routinely already in the past, and the timer
+  // would then re-arm with delay 0 forever over a job it must never run.
   const enabled = jobs.filter((j) =>
-    j.enabled && typeof j.state.nextRunAtMs === 'number' && !cloudModeSkipsJob(j));
+    j.enabled && typeof j.state.nextRunAtMs === 'number' && !j.check && !cloudModeSkipsJob(j));
   if (enabled.length === 0) return undefined;
   return enabled.reduce(
     (min, j) => Math.min(min, j.state.nextRunAtMs as number),
@@ -179,6 +187,9 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     payload: legacyPayload,
     delivery: input.delivery,
     executor: input.executor,
+    // Normalized input may carry an explicit null (a patch's "clear"); a create
+    // has nothing to clear, so anything but a real object means no trigger.
+    check: input.check && typeof input.check === 'object' ? input.check : undefined,
     state: { ...input.state },
   };
 
@@ -232,6 +243,11 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch): void {
   }
   if (patch.state) {
     job.state = { ...job.state, ...patch.state };
+  }
+  if ('check' in patch) {
+    // null turns a trigger back into a plain time-only routine; the caller is
+    // responsible for pushing the (now shorter) set to the old host.
+    job.check = patch.check === null || patch.check === undefined ? undefined : patch.check;
   }
   // Executor ↔ legacy consistency:
   // - patch.executor present → executor is canonical, legacy fields re-derived.
