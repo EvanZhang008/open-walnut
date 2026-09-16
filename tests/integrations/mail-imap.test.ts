@@ -545,6 +545,32 @@ describe('mailbox roles', () => {
 });
 
 describe('account setup', () => {
+  it('joins up an app password pasted in groups of four, and leaves every other password alone', async () => {
+    // Google shows a 16-character app password as four groups of four and says to enter it without
+    // the spaces. A paste straight off that screen used to fail the login, which reads as "wrong
+    // password" for a credential the human copied correctly.
+    const pasted = buildProvider();
+    await pasted.provider.setup.submit({
+      address: ADDRESS,
+      password: 'abcd efgh ijkl mnop',
+      imap_host: 'imap.gmail.com',
+      imap_tls: 'tls',
+    });
+    expect(pasted.secrets.get(`password.${localIdFor(ADDRESS)}`)).toBe('abcdefghijklmnop');
+
+    // A password that merely CONTAINS spaces is somebody's real password, and a client that strips
+    // them locks them out of their own mailbox. Byte for byte, including the spaces.
+    const spaced = buildProvider();
+    const real = 'two words and more';
+    await spaced.provider.setup.submit({
+      address: ADDRESS,
+      password: real,
+      imap_host: 'imap.example.invalid',
+      imap_tls: 'tls',
+    });
+    expect(spaced.secrets.get(`password.${localIdFor(ADDRESS)}`)).toBe(real);
+  });
+
   it('stamps a known service that files its own Sent copy, and stamps nothing otherwise', async () => {
     // Nobody should have to know this about their own mail host. Gmail saves anything sent through
     // smtp.gmail.com, so without the stamp the human gets two of every message in Sent and has to

@@ -47,7 +47,7 @@ import {
   toEnvelope,
 } from './mime.js'
 import { createImapSender } from './provider-send.js'
-import { imapPortFor, SETUP_PRESETS, serverFilesSentCopy, submissionPortFor } from './setup-presets.js'
+import { imapPortFor, pastedPassword, SETUP_PRESETS, serverFilesSentCopy, submissionPortFor } from './setup-presets.js'
 import { verifySmtp, type SmtpSecurity } from './smtp.js'
 
 /** Headers the ENVELOPE does not carry, or carries in a lossy form. */
@@ -197,7 +197,9 @@ export function createImapProvider(deps: {
        */
       async submit(values: Record<string, string>): Promise<MailAccount> {
         const address = (values.address ?? '').trim()
-        const password = values.password ?? ''
+        // An app password pasted off a vendor's screen arrives in groups of four. See pastedPassword:
+        // only that exact shape is joined up, because a space can be part of a real password.
+        const password = pastedPassword(values.password)
         const host = (values.imap_host ?? '').trim()
         const tls = values.imap_tls === 'starttls' ? 'starttls' : 'tls'
         // Blank, or the canonical port of the OTHER encryption, both mean "what this encryption

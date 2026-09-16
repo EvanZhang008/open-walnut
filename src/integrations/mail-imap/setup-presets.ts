@@ -158,3 +158,20 @@ export function serverFilesSentCopy(smtpHost: string | undefined): boolean | und
   const known = KNOWN.find((one) => one.smtpHost.toLowerCase() === host)
   return known?.savesSentItself === true ? true : undefined
 }
+
+/**
+ * The app password a vendor's screen actually issued, from what was pasted.
+ *
+ * Google shows a 16-character app password as four groups of four and says to enter it without the
+ * spaces; a paste straight off that screen otherwise fails the login, which reads as "wrong
+ * password" for a credential the human copied correctly. ONLY that exact shape is joined up. Every
+ * other password is passed through byte for byte, spaces included, because a space can be part of a
+ * real one and a client that "helpfully" strips it locks somebody out of their own mailbox.
+ */
+const APP_PASSWORD_IN_GROUPS = /^[A-Za-z]{4}(?: [A-Za-z]{4}){3}$/
+
+export function pastedPassword(raw: string | undefined): string {
+  const value = raw ?? ''
+  const trimmed = value.trim()
+  return APP_PASSWORD_IN_GROUPS.test(trimmed) ? trimmed.replace(/ /g, '') : value
+}
