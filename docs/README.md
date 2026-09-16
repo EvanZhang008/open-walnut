@@ -58,6 +58,9 @@ must live under one of these top-level categories instead of directly under
 - [Cloud sync](reference/cloud-sync.md) - one-click cloud-companion setup, the
   git-over-HTTPS data plane, and the live-session bridge.
 - [Claude model configuration](reference/claude-model-configuration.md)
+- [macOS session identity](reference/macos-session-identity.md) - why sessions run
+  under `Walnut Sessions.app` instead of under `node`, what to grant, and what the
+  separation does not cover
 - [Notification lifecycle](reference/notification-lifecycle.md) - the condition
   system: every error/permission notification declares how it ends (recover,
   expire, one-shot), enforced by a ratchet test

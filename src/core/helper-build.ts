@@ -432,26 +432,68 @@ async function buildHelper(spec: HelperSpec, sourceFile: string): Promise<BuildO
  * defects: shipped binaries carried `Identifier=walnut-activity-v3.tmp-6899`.
  */
 async function signHelper(binPath: string, spec: HelperSpec): Promise<void> {
+  await signNativeTarget({
+    path: binPath,
+    identifier: spec.identifier,
+    label: spec.name,
+    entitlements: spec.entitlements,
+  });
+}
+
+/**
+ * Something codesign can sign: a bare Mach-O helper, or an .app bundle.
+ *
+ * Shared so the session host (src/providers/session-host.ts) gets the same
+ * hard-won behaviour as the helpers — deterministic identity order, revocation
+ * assessment, explicit ad-hoc restore — instead of a second copy that drifts.
+ */
+export interface NativeSignTarget {
+  /** Path handed to codesign. A directory is fine (bundles sign as a unit). */
+  path: string;
+  /** Version-free `-i` identifier; the string a TCC grant is remembered against. */
+  identifier: string;
+  /** Name for log lines. */
+  label: string;
+  entitlements?: readonly string[];
+  /**
+   * Executable used for the last-resort "did the kernel let it run" probe.
+   * Required for a bundle, whose own path cannot be executed.
+   */
+  execProbe?: string;
+}
+
+/** What the target ended up signed with. */
+export type NativeSignOutcome = 'certificate' | 'adhoc' | 'unsigned';
+
+/**
+ * Sign with a real identity when one exists, else leave (or restore) an ad-hoc
+ * signature.
+ *
+ * NEVER a hard failure: an ad-hoc target works perfectly, it just has a
+ * content-hash TCC identity instead of a stable one (see the file header). A
+ * contributor with no certificate must still get a working build.
+ */
+export async function signNativeTarget(target: NativeSignTarget): Promise<NativeSignOutcome> {
   const candidates = await signingCandidates();
   if (candidates.length === 0) {
-    log.web.info('helper left ad-hoc signed (no codesigning identity on this box)', {
-      helper: spec.name,
-      note: 'TCC grants are keyed to the binary hash and reset whenever the helper is rebuilt',
+    log.web.info('native target left ad-hoc signed (no codesigning identity on this box)', {
+      target: target.label,
+      note: 'TCC grants are keyed to the content hash and reset whenever it is rebuilt',
     });
-    return;
+    return 'unsigned';
   }
-  const entitlementsFile = await writeEntitlements(binPath, spec);
+  const entitlementsFile = await writeEntitlements(target.path, target.entitlements);
   try {
-    await signWithCandidates(binPath, spec, candidates, entitlementsFile);
+    return await signWithCandidates(target, candidates, entitlementsFile);
   } finally {
     if (entitlementsFile) await fsp.rm(entitlementsFile, { force: true }).catch(() => {});
   }
 }
 
-/** The entitlements plist for this helper, or null when it needs none. */
-async function writeEntitlements(binPath: string, spec: HelperSpec): Promise<string | null> {
-  if (!spec.entitlements || spec.entitlements.length === 0) return null;
-  const body = spec.entitlements.map((key) => `\t<key>${key}</key>\n\t<true/>`).join('\n');
+/** The entitlements plist for this target, or null when it needs none. */
+async function writeEntitlements(binPath: string, entitlements?: readonly string[]): Promise<string | null> {
+  if (!entitlements || entitlements.length === 0) return null;
+  const body = entitlements.map((key) => `\t<key>${key}</key>\n\t<true/>`).join('\n');
   const plist = '<?xml version="1.0" encoding="UTF-8"?>\n'
     + '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
     + '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
@@ -464,45 +506,45 @@ async function writeEntitlements(binPath: string, spec: HelperSpec): Promise<str
 }
 
 async function signWithCandidates(
-  binPath: string,
-  spec: HelperSpec,
+  target: NativeSignTarget,
   candidates: readonly { hash: string; name: string }[],
   entitlementsFile: string | null,
-): Promise<void> {
+): Promise<NativeSignOutcome> {
   for (const candidate of candidates) {
     // --timestamp: without a secure timestamp a signature can stop validating once
     // the certificate expires, and Apple Development certs expire yearly.
     const signed = await run('codesign', [
-      '--force', '--sign', candidate.hash, '-i', spec.identifier,
+      '--force', '--sign', candidate.hash, '-i', target.identifier,
       ...(entitlementsFile ? ['--entitlements', entitlementsFile] : []),
-      '--timestamp', '--options', 'runtime', binPath,
+      '--timestamp', '--options', 'runtime', target.path,
     ]);
     if (!signed.ok) {
       // Usually the keychain refusing access to the private key without a UI
       // prompt. Try the next identity rather than losing the feature.
-      log.web.warn('helper signing failed with this identity, trying the next', {
-        helper: spec.name, identity: candidate.name, error: signed.stderr.slice(0, 200),
+      log.web.warn('native signing failed with this identity, trying the next', {
+        target: target.label, identity: candidate.name, error: signed.stderr.slice(0, 200),
       });
       continue;
     }
-    if (await signatureIsUsable(binPath)) {
-      log.web.info('helper signed', {
-        helper: spec.name, identifier: spec.identifier, identity: candidate.name,
+    if (await signatureIsUsable(target)) {
+      log.web.info('native target signed', {
+        target: target.label, identifier: target.identifier, identity: candidate.name,
       });
-      return;
+      return 'certificate';
     }
-    log.web.warn('helper signature assessed as unusable, trying the next identity', {
-      helper: spec.name, identity: candidate.name,
+    log.web.warn('native signature assessed as unusable, trying the next identity', {
+      target: target.label, identity: candidate.name,
     });
   }
   // Every identity failed. Leaving the last (bad) signature in place would be
   // WORSE than not signing: a binary signed by a revoked certificate is killed
   // with SIGKILL the moment it launches, so the feature would be dead rather than
   // merely losing grant stability. Restore an ad-hoc signature explicitly.
-  const adhoc = await run('codesign', ['--force', '--sign', '-', '-i', spec.identifier, binPath]);
-  log.web.warn('helper fell back to an ad-hoc signature', {
-    helper: spec.name, restored: adhoc.ok,
+  const adhoc = await run('codesign', ['--force', '--sign', '-', '-i', target.identifier, target.path]);
+  log.web.warn('native target fell back to an ad-hoc signature', {
+    target: target.label, restored: adhoc.ok,
   });
+  return adhoc.ok ? 'adhoc' : 'unsigned';
 }
 
 /**
@@ -532,15 +574,16 @@ async function signWithCandidates(
  * revoked signature is the former; wrong arguments are the latter. Any exit code at
  * all means the code got to run, which is all this function needs to know.
  */
-async function signatureIsUsable(binPath: string): Promise<boolean> {
-  const assessed = await run('spctl', ['-a', '-t', 'exec', binPath]);
+async function signatureIsUsable(target: NativeSignTarget): Promise<boolean> {
+  const assessed = await run('spctl', ['-a', '-t', 'exec', target.path]);
   if (assessed.ok) return true;
   // A rejection is only believed when it names a certificate problem.
   if (/REVOKED|EXPIRED|CERT/i.test(assessed.stderr + assessed.stdout)) return false;
   // No arguments, so no helper needs to understand anything. A helper that streams
   // when run bare (walnut-activity) is stopped by our own timeout, and a timeout is
-  // NOT a verdict against it: it proves the code was running.
-  const ran = await run(binPath, [], { timeoutMs: 3_000 });
+  // NOT a verdict against it: it proves the code was running. A bundle cannot be
+  // executed by its own path, so it names the Mach-O inside it instead.
+  const ran = await run(target.execProbe ?? target.path, [], { timeoutMs: 3_000 });
   return !ran.killedByKernel;
 }
 
