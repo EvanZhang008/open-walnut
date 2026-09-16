@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, memo } from 'react';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
+import type { StreamingBlock } from '@/stream/stream-reducer';
 import {
   renderMarkdownWithRefs, extractMarkdownFields, injectJsonIdLinks,
   extractContentBlockImages, findImagePaths, isImageFilePath, resolveImagePath,
@@ -376,7 +377,8 @@ export function toolRunPhrase(names: string[]): string {
 export function ToolRunShell({ phrase, failCount, running, children }: {
   phrase: string;
   failCount: number;
-  /** True while a member tool is still executing (streaming) — pulse dot. */
+  /** True while a member is still receiving tokens (the reasoning streaming
+   *  inside the run) — pulse dot, the same one a lone "Thinking ›" row shows. */
   running?: boolean;
   children: React.ReactNode;
 }) {
@@ -533,6 +535,25 @@ export function isThinkingOnlyMessage(m: SessionHistoryMessage): boolean {
     && !!(m.thinking ?? '').trim();
 }
 
+/** One thinking-only message standing for a stretch of them: the first row's
+ *  identity, every row's reasoning joined — what a run with no tool in it
+ *  renders as (one "Thinking ›" row). */
+export function mergeThinkingOnly(messages: readonly SessionHistoryMessage[]): SessionHistoryMessage {
+  if (messages.length === 1) return messages[0];
+  return { ...messages[0], thinking: messages.map(m => m.thinking ?? '').filter(s => s.trim()).join('\n\n') };
+}
+
+/** Where a history run ends when a visible non-run message follows it: past its
+ *  last tool-carrying member. Thinking-only rows after that led to the message
+ *  that follows (the parser has simply not merged them into it yet) and render
+ *  as its "Thinking ›" row, not inside the run — the history twin of
+ *  trailingThinkingStart (group-blocks.ts). */
+export function trailingThinkingOnlyStart(run: readonly SessionHistoryMessage[]): number {
+  let end = run.length;
+  while (end > 0 && isThinkingOnlyMessage(run[end - 1])) end--;
+  return end;
+}
+
 /** Assistant message carrying BOTH prose and (all-generic) tools. The CLI's
  *  content order is text first, tool_use after — so the prose renders as its
  *  own message while the tools dissolve forward into the adjacent run instead
@@ -544,15 +565,82 @@ export function isTextPlusMergeableTools(m: SessionHistoryMessage): boolean {
     && m.tools.every(isMergeableHistoryTool);
 }
 
+/** A streaming run member: a finished generic tool, or the reasoning that led
+ *  to it. The stream hands the two over as separate blocks; the run keeps them
+ *  side by side the way the persisted message will (thinking, then its tools). */
+export type StreamRunMember = StreamingBlock & { type: 'tool_call' | 'thinking' };
+
+/** The collapsed line and failure count of a run's streaming members. Reasoning
+ *  is deliberately not a verb in the phrase: the row says what the turn DID, and
+ *  it must read exactly as the persisted run it turns into once history absorbs
+ *  it, or the line changes wording under the reader at turn end. */
+export function streamRunSummary(members: readonly StreamRunMember[]): { phrase: string; failCount: number } {
+  const tools = members.filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
+  return {
+    phrase: toolRunPhrase(tools.map(b => b.name ?? 'unknown')),
+    failCount: tools.filter(b => b.status === 'error').length,
+  };
+}
+
+/** A run row's React key: the identity of its first member (a tool's id, a
+ *  thinking block's message id), never its position — rows ahead of it fold and
+ *  shift positions while the reader has it open. A thinking-only stretch and
+ *  the run it becomes once a tool joins share the key on purpose. */
+export function runRowKey(blocks: readonly StreamRunMember[], fallback: number): string {
+  const first = blocks[0];
+  if (first?.type === 'tool_call') return `run-${first.toolUseId}`;
+  return `run-${first?.msgId ?? `at${fallback}`}`;
+}
+
+/** A merged run's streaming members, in arrival order: each thinking block its
+ *  own "Thinking ›" row, each finished tool its card — the same body a persisted
+ *  run shows (MergedHistoryToolRun), so the row does not change shape when
+ *  history absorbs it. `live` marks the last member as still receiving tokens. */
+export function StreamRunMembers({ members, live, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
+  members: readonly StreamRunMember[];
+  live?: boolean;
+  sessionId?: string;
+  sessionCwd?: string;
+  sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
+  onSessionClick?: (sessionId: string) => void;
+  onFileOpen?: (path: string, line?: number) => void;
+}) {
+  return (
+    <>
+      {members.map((b, i) => b.type === 'thinking' ? (
+        <SessionThinking key={b.msgId ? `think-${b.msgId}-${i}` : `think-${i}`} text={b.content} live={live && i === members.length - 1} />
+      ) : (
+        <GenericToolCall
+          key={b.toolUseId ?? i}
+          tool={{ name: b.name ?? 'unknown', input: b.input ?? {} }}
+          status={b.status === 'error' ? 'error' : 'done'}
+          result={b.result}
+          sessionCwd={sessionCwd}
+          sessionHost={sessionHost}
+          sessionId={sessionId}
+          onTaskClick={onTaskClick}
+          onSessionClick={onSessionClick}
+          onFileOpen={onFileOpen}
+        />
+      ))}
+    </>
+  );
+}
+
 /** Cross-MESSAGE merged tool run (the iOS look): consecutive tool-only
  *  assistant messages collapse into ONE muted line. Expanding shows each
  *  message's thinking + tool cards.
+ *  `trailingBlocks` are the live turn's first stream blocks when they continue
+ *  this run across the history/stream boundary (tools and the reasoning between
+ *  them); `trailingLive` says the last of them is still streaming.
  *  memo: the parent re-renders every 150ms streaming flush; with a stable
  *  `messages` array (built once in the memoized history-parts pass) this
  *  entire subtree skips — the fix for whale-session scroll/typing lag. */
-export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ messages, trailingTools = [], assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
+export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ messages, trailingBlocks = [], trailingLive, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   messages: SessionHistoryMessage[];
-  trailingTools?: { name: string; input?: Record<string, unknown>; status: 'calling' | 'done' | 'error'; result?: string; toolUseId: string }[];
+  trailingBlocks?: readonly StreamRunMember[];
+  trailingLive?: boolean;
   assistantLabel?: string;
   sessionId?: string;
   sessionCwd?: string;
@@ -562,14 +650,15 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
   onFileOpen?: (path: string, line?: number) => void;
 }) {
   const allTools = messages.flatMap(m => m.tools ?? []);
+  const trailingTools = trailingBlocks.filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
   const phrase = toolRunPhrase([
     ...allTools.map(t => t.name),
-    ...trailingTools.map(tool => tool.name),
+    ...trailingTools.map(b => b.name ?? 'unknown'),
   ]);
   const failCount = allTools.filter(t => t.isError).length
-    + trailingTools.filter(tool => tool.status === 'error').length;
+    + trailingTools.filter(b => b.status === 'error').length;
   return (
-    <ToolRunShell phrase={phrase} failCount={failCount}>
+    <ToolRunShell phrase={phrase} failCount={failCount} running={trailingLive}>
       {messages.map((m, mi) => (
         <div key={m.msgId ?? mi}>
           {m.thinking && <SessionThinking text={m.thinking} />}
@@ -578,19 +667,16 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
           ))}
         </div>
       ))}
-      {trailingTools.map((tool, bi) => (
-        <GenericToolCall
-          key={tool.toolUseId ?? bi}
-          tool={{ name: tool.name, input: tool.input ?? {} }}
-          status={tool.status === 'error' ? 'error' : 'done'}
-          result={tool.result}
-          sessionCwd={sessionCwd}
-          sessionHost={sessionHost}
-          onTaskClick={onTaskClick}
-          onSessionClick={onSessionClick}
-          onFileOpen={onFileOpen}
-        />
-      ))}
+      <StreamRunMembers
+        members={trailingBlocks}
+        live={trailingLive}
+        sessionId={sessionId}
+        sessionCwd={sessionCwd}
+        sessionHost={sessionHost}
+        onTaskClick={onTaskClick}
+        onSessionClick={onSessionClick}
+        onFileOpen={onFileOpen}
+      />
     </ToolRunShell>
   );
 });

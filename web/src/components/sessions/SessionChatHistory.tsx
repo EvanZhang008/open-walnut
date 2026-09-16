@@ -8,7 +8,7 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { BackgroundTasksChip, BackgroundTasksPanelHost, type KnownAgent } from './BackgroundTasksPanel';
 import { setLiveLanes, setToolSource } from '@/stores/background-panel-store';
 import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
-import { SessionMessage, SessionThinking, GenericToolCall, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
+import { SessionMessage, ToolRunShell, StreamRunMembers, streamRunSummary, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
@@ -18,7 +18,7 @@ import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-un
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
-import { groupStreamingBlocks, collectLanes, isLaneChild, isMergeableToolBlock, type GroupedStreamItem } from '@/stream/group-blocks';
+import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trailingThinkingStart, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
 import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
@@ -207,18 +207,19 @@ interface SessionChatHistoryProps {
 // asymmetry) live in the pure module so the chat lab can replay production
 // traces through the exact projection the timeline renders.
 
-/** True when a streaming block merges into a muted "Ran N commands ›" run.
- *  Only COMPLETED generic tool_calls merge — a still-calling tool stays a
- *  full card so the user watches it live; it collapses into the run when done.
- *  Special blocks (Task/Agent anchors, plan cards, plan writes, ghosts) never merge. */
+/** True when a streaming block merges into a muted "Ran N commands ›" run:
+ *  a COMPLETED generic tool_call, or the main-lane thinking between two of them
+ *  (isRunMemberBlock). A still-calling tool stays a full card so the user
+ *  watches it live; it collapses into the run when done. Special blocks
+ *  (Task/Agent anchors, plan cards, plan writes, ghosts) never merge. */
 function isMergeableStreamItem(
   item: TimelineItem,
   consumed: Set<number>,
   groupedByIndex: Map<number, GroupedStreamItem>,
-): item is TimelineItem & { kind: 'block'; block: StreamingBlock & { type: 'tool_call' } } {
+): item is TimelineItem & { kind: 'block'; block: StreamRunMember } {
   if (item.kind !== 'block') return false;
   if (groupedByIndex.has(item.index) || consumed.has(item.index)) return false;
-  return isMergeableToolBlock(item.block);
+  return isRunMemberBlock(item.block);
 }
 
 /** Inline edit component for queued messages */
@@ -2250,11 +2251,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     let historyRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
     let historyRunSeeded = false;
     let systemRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
-    const flushHistoryRun = () => {
-      if (historyRun.length > 0) {
-        parts.push({ kind: 'run', members: historyRun, memberMsgs: historyRun.map(({ m }) => m), seeded: historyRunSeeded });
-        historyRun = [];
+    const pushHistoryStretch = (members: typeof historyRun, seeded: boolean) => {
+      if (members.some(({ m }) => (m.tools?.length ?? 0) > 0)) {
+        parts.push({ kind: 'run', members, memberMsgs: members.map(({ m }) => m), seeded });
+      } else if (members.length > 0) {
+        // Reasoning with no tool around it is one "Thinking ›" row, not a run
+        // with an empty phrase.
+        parts.push({ kind: 'msg', m: mergeThinkingOnly(members.map(({ m }) => m)), globalIndex: members[0].globalIndex });
       }
+    };
+    /** `ended` = a visible non-run message follows: trailing thinking-only rows
+     *  led to THAT message (the parser has not merged them into it yet) and split
+     *  off as its "Thinking ›" row; at history's tail they stay with the run,
+     *  which the live stream continues. */
+    const flushHistoryRun = (ended: boolean) => {
+      const split = ended ? trailingThinkingOnlyStart(historyRun.map(({ m }) => m)) : historyRun.length;
+      pushHistoryStretch(historyRun.slice(0, split), historyRunSeeded);
+      pushHistoryStretch(historyRun.slice(split), false);
+      historyRun = [];
       historyRunSeeded = false;
     };
     const flushSystemRun = () => {
@@ -2269,34 +2283,35 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const m = visibleMessages[i];
       const globalIndex = visibleStart + i;
       if (forkBoundaryIndex != null && globalIndex === forkBoundaryIndex) {
-        flushHistoryRun();
+        flushHistoryRun(true);
         flushSystemRun();
       }
       if (m.role === 'system') {
-        flushHistoryRun();
+        flushHistoryRun(true);
         systemRun.push({ m, globalIndex });
         continue;
       }
       flushSystemRun();
-      if (isToolOnlyMessage(m)) {
+      // A thinking-only message rides the run like a tool-only one: the parser
+      // merges reasoning into the message of the block it led to, so a row that
+      // is ONLY thinking is a half-written message read mid-turn — inside the run
+      // it sits where the stream showed it, instead of splitting "Ran 3 commands"
+      // into three rows (flushHistoryRun hands trailing ones to what follows).
+      if (isToolOnlyMessage(m) || isThinkingOnlyMessage(m)) {
         historyRun.push({ m, globalIndex });
         continue;
       }
-      flushHistoryRun();
-      // Adjacent thinking collapses into ONE "Thinking ›" row: a thinking-only
-      // message concatenates into a preceding thinking-only part, and a message
-      // whose own thinking follows a thinking-only part absorbs it. Never merge
-      // across the fork divider (it renders inside the second part).
+      flushHistoryRun(true);
+      // A message whose own thinking follows a thinking-only part (a run that
+      // never reached a tool) absorbs it, so the reasoning before an answer is
+      // one "Thinking ›" row above the prose. Never merge across the fork
+      // divider (it renders inside the second part).
       const prevPart = parts[parts.length - 1];
       const prevIsThinkingOnly = prevPart?.kind === 'msg' && isThinkingOnlyMessage(prevPart.m);
       const atForkDivider = forkBoundaryIndex != null && globalIndex === forkBoundaryIndex;
       let msg = m;
       if (prevIsThinkingOnly && !atForkDivider
         && m.role === 'assistant' && (m.thinking ?? '').trim()) {
-        if (isThinkingOnlyMessage(m)) {
-          prevPart.m = { ...prevPart.m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
-          continue;
-        }
         msg = { ...m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
         parts.pop();
       }
@@ -2311,7 +2326,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
       parts.push({ kind: 'msg', m: msg, globalIndex });
     }
-    flushHistoryRun();
+    flushHistoryRun(false);
     flushSystemRun();
     return { historyParts: parts, hiddenCount: visibleStart };
   }, [messages, truncationOffset, forkBoundaryIndex]);
@@ -2453,17 +2468,39 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }
 
+  /** What ends a run, for trailingThinkingStart: the block itself, 'other' for a
+   *  visible row that is not a block (an optimistic user bubble, an Agent chip),
+   *  undefined when nothing visible follows (the live tail). */
+  const runEnder = (item: TimelineItem | undefined): StreamingBlock | 'other' | undefined => {
+    if (!item || item.kind === 'indicator') return undefined;
+    if (item.kind !== 'block') return 'other';
+    return groupedByIndex.get(item.index)?.kind === 'task-group' ? 'other' : item.block;
+  };
+  /** A DOM-null item: it neither renders nor ends a run. A consumed lane block
+   *  renders nowhere (its Agent card owns it); a group anchor is a visible row. */
+  const isSilentStreamItem = (item: TimelineItem): boolean =>
+    isTransparentStreamItem(item)
+    || (item.kind === 'block' && consumedBlockIndices.has(item.index) && !groupedByIndex.has(item.index));
+
+  // The live turn's first blocks continue history's last run across the
+  // history/stream boundary. Trailing reasoning that led to whatever ended the
+  // scan stays in the stream (it becomes its own row there, the way the
+  // persisted message will render it).
   const leadingStreamRunIndices: number[] = [];
-  for (let i = 0; i < timeline.length; i++) {
-    const item = timeline[i];
-    // Empty live-tail text/thinking blocks become visible when tokens arrive;
-    // until then they are transparent and neither render nor split a tool run.
-    if (isTransparentStreamItem(item)) continue;
-    if (isMergeableStreamItem(item, consumedBlockIndices, groupedByIndex)) {
-      leadingStreamRunIndices.push(i);
-      continue;
+  {
+    let ender: TimelineItem | undefined;
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (isSilentStreamItem(item)) continue;
+      if (isMergeableStreamItem(item, consumedBlockIndices, groupedByIndex)) {
+        leadingStreamRunIndices.push(i);
+        continue;
+      }
+      ender = item;
+      break;
     }
-    break;
+    const members = leadingStreamRunIndices.map((i) => (timeline[i] as TimelineItem & { kind: 'block' }).block);
+    leadingStreamRunIndices.length = trailingThinkingStart(members, runEnder(ender));
   }
   const lastHistoryPart = historyParts[historyParts.length - 1];
   const boundaryHistoryRun = lastHistoryPart?.kind === 'run' ? lastHistoryPart : null;
@@ -2485,27 +2522,49 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }
 
+  // One pass folds finished tools AND the thinking that led to them into runs
+  // (the CLI emits reasoning and the call it leads to as separate blocks; a turn
+  // that thinks before every call must not read "Thinking › / Ran a command ›"
+  // per step). A stretch that reached a tool is a tool run (runStart); one that
+  // is only reasoning is a "Thinking ›" row (thinkingRunStart). Reasoning at the
+  // end of a run that led to prose, an Agent or a plan card splits off into its
+  // own row (trailingThinkingStart); at the live tail it stays and pulses.
+  // DOM-null items between members don't split either; any visible non-member does.
   const runStart = new Map<number, number[]>();
   const runMember = new Set<number>();
+  const thinkingRunStart = new Map<number, number[]>();
+  const thinkingRunMember = new Set<number>();
   {
     let cur: number[] = [];
-    const flushRun = () => {
-      if (cur.length >= 1) {
-        runStart.set(cur[0], [...cur]);
-        for (let k = 1; k < cur.length; k++) runMember.add(cur[k]);
-      }
+    const pushStretch = (indices: number[]) => {
+      if (indices.length === 0) return;
+      const hasTool = indices.some((k) => {
+        const t = timeline[k];
+        return t.kind === 'block' && t.block.type === 'tool_call';
+      });
+      const start = hasTool ? runStart : thinkingRunStart;
+      const member = hasTool ? runMember : thinkingRunMember;
+      start.set(indices[0], indices);
+      for (let k = 1; k < indices.length; k++) member.add(indices[k]);
+    };
+    const flushRun = (ender: TimelineItem | undefined) => {
+      const members = cur.map((i) => (timeline[i] as TimelineItem & { kind: 'block' }).block);
+      const split = trailingThinkingStart(members, runEnder(ender));
+      pushStretch(cur.slice(0, split));
+      pushStretch(cur.slice(split));
       cur = [];
     };
     for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
       if (boundaryStreamIndices.has(i)) continue;
-      if (isTransparentStreamItem(timeline[i])) continue;
-      if (isMergeableStreamItem(timeline[i], consumedBlockIndices, groupedByIndex)) {
+      if (isSilentStreamItem(item)) continue;
+      if (isMergeableStreamItem(item, consumedBlockIndices, groupedByIndex)) {
         cur.push(i);
       } else {
-        flushRun();
+        flushRun(item);
       }
     }
-    flushRun();
+    flushRun(undefined);
   }
 
   // System notices have their own grouping pass: skip DOM-null blocks without
@@ -2537,54 +2596,39 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     flushRun();
   }
 
-  // Adjacent streaming thinking blocks (the CLI emits one per message) merge
-  // into a single "Thinking ›" row. DOM-null items between them don't split
-  // the run; any visible non-thinking item does.
-  const thinkingRunStart = new Map<number, number[]>();
-  const thinkingRunMember = new Set<number>();
-  {
-    let cur: number[] = [];
-    const flushRun = () => {
-      if (cur.length >= 2) {
-        thinkingRunStart.set(cur[0], [...cur]);
-        for (let k = 1; k < cur.length; k++) thinkingRunMember.add(cur[k]);
-      }
-      cur = [];
-    };
-    for (let i = 0; i < timeline.length; i++) {
-      const item = timeline[i];
-      if (boundaryStreamIndices.has(i)
-        || isTransparentStreamItem(item)
-        || (item.kind === 'block' && consumedBlockIndices.has(item.index) && !groupedByIndex.has(item.index))) {
-        continue;
-      }
-      if (item.kind === 'block' && item.block.type === 'thinking'
-        && !item.block.parentToolUseId && !groupedByIndex.has(item.index)) {
-        cur.push(i);
-      } else {
-        flushRun();
-      }
-    }
-    flushRun();
-  }
-
-  // Last VISIBLE timeline index — the item still receiving tokens when
-  // streaming. Skips DOM-null items (boundary-merged, transparent, blocks
-  // of a subagent lane, which never render flat) so a trailing
-  // signature-only artifact can't steal "liveness" from the real tail block.
+  // Stream tail — the item still receiving tokens when streaming. Skips DOM-null
+  // items (transparent, blocks of a subagent lane, which never render flat) so a
+  // trailing signature-only artifact can't steal "liveness" from the real tail
+  // block. The working indicator rides the tail of every live turn and must not
+  // steal it either. `streamTailIdx` counts boundary-merged members (the run
+  // that continues history needs to know when ITS tail is the live one);
+  // `lastVisibleTimelineIdx` is the tail among the items the stream panel
+  // renders itself.
+  let streamTailIdx = -1;
   let lastVisibleTimelineIdx = -1;
   for (let i = timeline.length - 1; i >= 0; i--) {
     const item = timeline[i];
-    // The working indicator rides the tail of every live turn — it must not
-    // steal "liveness" from the actual last content block.
-    if (item.kind === 'indicator') continue;
-    if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) continue;
-    if (item.kind === 'block'
-      && consumedBlockIndices.has(item.index)
-      && !groupedByIndex.has(item.index)) continue;
+    if (item.kind === 'indicator' || isSilentStreamItem(item)) continue;
+    if (streamTailIdx < 0) streamTailIdx = i;
+    if (boundaryStreamIndices.has(i)) continue;
     lastVisibleTimelineIdx = i;
     break;
   }
+  // Is a run's tail (`tailIdx`, its own last member) the reasoning still
+  // streaming? Only then does the run's row pulse: a finished tool at the tail
+  // is settled, and the working indicator already says the turn is live.
+  const isThinkingTail = (tailIdx: number): boolean => {
+    if (!isStreaming || tailIdx < 0 || tailIdx !== streamTailIdx) return false;
+    const tail = timeline[tailIdx];
+    return tail.kind === 'block' && tail.block.type === 'thinking';
+  };
+  /** The blocks of a run's timeline indices (every index a run pass collected
+   *  passed isMergeableStreamItem, so this only narrows the type). */
+  const runMembersOf = (indices: readonly number[]): StreamRunMember[] =>
+    indices.flatMap((k): StreamRunMember[] => {
+      const t = timeline[k];
+      return t.kind === 'block' && isRunMemberBlock(t.block) ? [t.block] : [];
+    });
 
   const hasContent = messages.length > 0 || timeline.length > 0 || isStreaming
     || deduped.length > 0;
@@ -2978,10 +3022,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             )}
             <MergedHistoryToolRun
               messages={boundaryHistoryRun.memberMsgs}
-              trailingTools={leadingStreamRunIndices.flatMap((index) => {
-                const item = timeline[index];
-                return item.kind === 'block' && item.block.type === 'tool_call' ? [item.block] : [];
-              })}
+              trailingBlocks={runMembersOf(leadingStreamRunIndices)}
+              trailingLive={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1])}
               assistantLabel={assistantLabel}
               sessionId={sessionId}
               sessionCwd={sessionCwd}
@@ -3039,40 +3081,38 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   })
                   .filter(s => s.trim())
                   .join('\n\n');
-                const runIsLiveTail = isStreaming
-                  && thinkingIdx.includes(lastVisibleTimelineIdx);
+                // The same shell and key the stretch will have once a tool joins
+                // it, so a reader who opened the reasoning keeps it open through
+                // the fold.
                 return (
-                  <div key={`think-run-${item.index}`} className="session-msg-bare">
-                    <SessionThinking text={content} live={runIsLiveTail} />
+                  <div key={`run-${item.index}`} className="session-msg-bare">
+                    <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])}>
+                      <div className="chat-thinking-content">{content}</div>
+                    </ToolRunShell>
                   </div>
                 );
               }
               if (runMember.has(i)) return null;
               const runIdx = runStart.get(i);
               if (runIdx && item.kind === 'block') {
-                const members = runIdx
-                  .map(k => timeline[k])
-                  .filter((t): t is TimelineItem & { kind: 'block' } => t.kind === 'block');
-                const blocks_ = members.map(m => m.block).filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
-                const phrase = toolRunPhrase(blocks_.map(b => b.name ?? 'unknown'));
-                const failCount = blocks_.filter(b => b.status === 'error').length;
+                // Tools and the reasoning between them, in arrival order — the
+                // body a persisted run shows, so absorption changes nothing.
+                const members = runMembersOf(runIdx);
+                const { phrase, failCount } = streamRunSummary(members);
+                const thinkingLive = isThinkingTail(runIdx[runIdx.length - 1]);
                 return (
                   <div key={`run-${item.index}`} className="session-msg-bare">
-                    <ToolRunShell phrase={phrase} failCount={failCount}>
-                      {blocks_.map((b, bi) => (
-                        <GenericToolCall
-                          key={b.toolUseId ?? bi}
-                          tool={{ name: b.name ?? 'unknown', input: b.input ?? {} }}
-                          status={b.status === 'error' ? 'error' : 'done'}
-                          result={b.result}
-                          sessionCwd={sessionCwd}
-                          sessionHost={sessionHost}
-                          sessionId={sessionId}
-                          onTaskClick={onTaskClick}
-                          onSessionClick={onSessionClick}
-                          onFileOpen={onFileOpen}
-                        />
-                      ))}
+                    <ToolRunShell phrase={phrase} failCount={failCount} running={thinkingLive}>
+                      <StreamRunMembers
+                        members={members}
+                        live={thinkingLive}
+                        sessionId={sessionId}
+                        sessionCwd={sessionCwd}
+                        sessionHost={sessionHost}
+                        onTaskClick={onTaskClick}
+                        onSessionClick={onSessionClick}
+                        onFileOpen={onFileOpen}
+                      />
                     </ToolRunShell>
                   </div>
                 );

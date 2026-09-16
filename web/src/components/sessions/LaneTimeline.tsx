@@ -6,11 +6,12 @@
  * stamped with its toolUseId); once it has finished, its transcript is the persisted
  * messages the parser embedded under the Agent tool or the subagent endpoint returns
  * (`LaneHistoryTimeline`). Both apply the merges the main conversation applies:
- * consecutive finished tools fold into one "Ran 3 commands, read a file ›" row,
- * adjacent thinking into one "Thinking ›" row, system notices into one
- * "N system messages ›" row, while a tool still executing stays a full in-flight
- * card with its running dot. A running lane ends in the same "… is working…"
- * indicator the main chat pins to a live turn, clocked from the agent's start.
+ * consecutive finished tools and the thinking between them fold into one
+ * "Ran 3 commands, read a file ›" row, thinking with no tool around it into one
+ * "Thinking ›" row, system notices into one "N system messages ›" row, while a
+ * tool still executing stays a full in-flight card with its running dot. A running
+ * lane ends in the same "… is working…" indicator the main chat pins to a live
+ * turn, clocked from the agent's start.
  *
  * Rendered inside the Background tasks panel (never in the chat), and by the
  * workflow transcript modal.
@@ -24,9 +25,9 @@ import { groupLaneChildren } from '@/stream/group-blocks';
 import { laneRows, type ToolBlock } from '@/stream/lane-rows';
 import { useLiveAgentsForSession } from '@/stores/background-agents-store';
 import {
-  SessionMessage, SessionThinking, GenericToolCall, TaskGroupPrompt, ToolRunShell, toolRunPhrase, agentModelLabel,
-  isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun,
-  systemGroupMemberFromHistory, type SystemGroupMember,
+  SessionMessage, TaskGroupPrompt, ToolRunShell, StreamRunMembers, streamRunSummary, runRowKey, agentModelLabel,
+  isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart,
+  MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember,
 } from './SessionMessage';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 
@@ -76,29 +77,28 @@ export function StreamingLane(props: StreamingLaneProps) {
           );
         }
         if (row.kind === 'run') {
-          const phrase = toolRunPhrase(row.blocks.map(b => b.name ?? 'unknown'));
-          const failCount = row.blocks.filter(b => b.status === 'error').length;
+          const { phrase, failCount } = streamRunSummary(row.blocks);
+          // The row pulses only while reasoning streams into it: a finished tool
+          // at the tail is settled, and the working indicator below already says
+          // the agent is still going.
+          const thinkingLive = isTail && row.blocks[row.blocks.length - 1].type === 'thinking';
           return (
-            <div key={`run-${row.blocks[0].toolUseId}`} className="session-msg-bare">
-              <ToolRunShell phrase={phrase} failCount={failCount}>
-                {row.blocks.map((b, bi) => (
-                  <GenericToolCall
-                    key={b.toolUseId ?? bi}
-                    tool={{ name: b.name ?? 'unknown', input: b.input ?? {} }}
-                    status={b.status === 'error' ? 'error' : 'done'}
-                    result={b.result}
-                    {...handlers}
-                  />
-                ))}
+            <div key={runRowKey(row.blocks, i)} className="session-msg-bare">
+              <ToolRunShell phrase={phrase} failCount={failCount} running={thinkingLive}>
+                <StreamRunMembers members={row.blocks} live={thinkingLive} {...handlers} />
               </ToolRunShell>
             </div>
           );
         }
         if (row.kind === 'thinking') {
           const text = row.blocks.map(b => b.content).filter(s => s.trim()).join('\n\n');
+          // The same shell and key the stretch will have once a tool joins it, so
+          // a reader who opened the reasoning keeps it open through the fold.
           return (
-            <div key={`think-${i}`} className="session-msg-bare">
-              <SessionThinking text={text} live={isTail} />
+            <div key={runRowKey(row.blocks, i)} className="session-msg-bare">
+              <ToolRunShell phrase="Thinking" failCount={0} running={isTail}>
+                <div className="chat-thinking-content">{text}</div>
+              </ToolRunShell>
             </div>
           );
         }
@@ -201,31 +201,42 @@ type HistoryPart =
   | { kind: 'system-run'; systemMembers: SystemGroupMember[] };
 
 /** The main chat's history merge pass (SessionChatHistory's history-parts walk)
- *  without its render window and fork divider: tool-only messages fold into one
- *  run, adjacent thinking into one row, a prose+tools message renders its prose
- *  and dissolves its tools forward into the next run, system rows group. */
+ *  without its render window and fork divider: tool-only messages and the
+ *  thinking-only messages that led to them fold into one run, thinking that led
+ *  to anything else is one row (absorbed by a following message's own thinking),
+ *  a prose+tools message renders its prose and dissolves its tools forward into
+ *  the next run, system rows group. */
 export function laneHistoryParts(messages: readonly SessionHistoryMessage[]): HistoryPart[] {
   const parts: HistoryPart[] = [];
   let run: SessionHistoryMessage[] = [];
   let systemRun: SessionHistoryMessage[] = [];
-  const flushRun = () => { if (run.length) parts.push({ kind: 'run', memberMsgs: run }); run = []; };
+  const pushStretch = (msgs: SessionHistoryMessage[]) => {
+    if (msgs.some(m => (m.tools?.length ?? 0) > 0)) parts.push({ kind: 'run', memberMsgs: msgs });
+    else if (msgs.length) parts.push({ kind: 'msg', m: mergeThinkingOnly(msgs) });
+  };
+  /** `ended` = a visible non-member follows: trailing thinking-only rows are the
+   *  reasoning for THAT row and split off; at the tail they stay with the run. */
+  const flushRun = (ended: boolean) => {
+    const split = ended ? trailingThinkingOnlyStart(run) : run.length;
+    pushStretch(run.slice(0, split));
+    pushStretch(run.slice(split));
+    run = [];
+  };
   const flushSystem = () => {
     if (systemRun.length === 1) parts.push({ kind: 'msg', m: systemRun[0] });
     else if (systemRun.length > 1) parts.push({ kind: 'system-run', systemMembers: systemRun.map(systemGroupMemberFromHistory) });
     systemRun = [];
   };
   for (const m of messages) {
-    if (m.role === 'system') { flushRun(); systemRun.push(m); continue; }
+    if (m.role === 'system') { flushRun(true); systemRun.push(m); continue; }
     flushSystem();
-    if (isToolOnlyMessage(m)) { run.push(m); continue; }
-    flushRun();
+    if (isToolOnlyMessage(m) || isThinkingOnlyMessage(m)) { run.push(m); continue; }
+    flushRun(true);
+    // A message whose own thinking follows a thinking-only part absorbs it, so
+    // the reasoning before an answer is one "Thinking ›" row above the prose.
     const prev = parts[parts.length - 1];
     let msg = m;
     if (prev?.kind === 'msg' && isThinkingOnlyMessage(prev.m) && m.role === 'assistant' && (m.thinking ?? '').trim()) {
-      if (isThinkingOnlyMessage(m)) {
-        prev.m = { ...prev.m, thinking: `${prev.m.thinking}\n\n${m.thinking}` };
-        continue;
-      }
       msg = { ...m, thinking: `${prev.m.thinking}\n\n${m.thinking}` };
       parts.pop();
     }
@@ -236,7 +247,7 @@ export function laneHistoryParts(messages: readonly SessionHistoryMessage[]): Hi
     }
     parts.push({ kind: 'msg', m: msg });
   }
-  flushRun();
+  flushRun(false);
   flushSystem();
   return parts;
 }

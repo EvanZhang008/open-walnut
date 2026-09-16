@@ -88,6 +88,45 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const [isStreaming, setIsStreaming] = useState(false);
   const sessionStatus = useSessionStatus(sessionId);
   const streamBuffer = useRef('');
+  // pendingThinking holds only deltas not yet flushed to setBlocks; it is the
+  // raf-coalescing buffer, NOT the source of truth for any thinking block. The
+  // committed text lives inside the last thinking block in setBlocks. Cleared
+  // every flush, so a later thinking segment (after text/tool interrupts) can
+  // never carry forward text from an earlier segment.
+  const pendingThinking = useRef('');
+  const thinkingDeltaRaf = useRef<number | null>(null);
+  // msgId of the thinking segment currently accumulating (see currentTextMsgId).
+  const currentThinkingMsgId = useRef<string | undefined>(undefined);
+  /** Forget reasoning still waiting for its frame — a session switch must not
+   *  land the old session's tail in the new session's blocks. */
+  const dropPendingThinking = useCallback(() => {
+    if (thinkingDeltaRaf.current !== null) {
+      cancelAnimationFrame(thinkingDeltaRaf.current);
+      thinkingDeltaRaf.current = null;
+    }
+    pendingThinking.current = '';
+    currentThinkingMsgId.current = undefined;
+  }, []);
+  /** Apply buffered thinking synchronously and cancel the frame. Called at every
+   *  boundary that appends a block after the reasoning (a main-lane tool call,
+   *  prose, a card) and at turn end — always AFTER the pending text flush, since
+   *  text still buffered is older than reasoning still buffered (the thinking
+   *  handler lands pending prose before it buffers). Without it the tool_call
+   *  the reasoning led to landed FIRST whenever the CLI emitted both within one
+   *  frame (it writes them as one assistant line), and the reasoning's tail
+   *  became a fragment block AFTER its own call — or, at turn end, after the
+   *  completed-turn boundary, where it read as the next turn's thinking. */
+  const flushPendingThinking = useCallback(() => {
+    if (thinkingDeltaRaf.current !== null) {
+      cancelAnimationFrame(thinkingDeltaRaf.current);
+      thinkingDeltaRaf.current = null;
+    }
+    const incoming = pendingThinking.current;
+    if (!incoming) return;
+    pendingThinking.current = '';
+    const msgId = currentThinkingMsgId.current;
+    setBlocks((prev) => appendMainThinking(prev, incoming, msgId, completedLen.current));
+  }, []);
   const activeSessionId = useRef<string | null>(null);
   const resubscribePending = useRef(false);
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -118,6 +157,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Subscribe to backend stream buffer when sessionId changes OR WS reconnects
   useEffect(() => {
+    // A session switch forgets the old session's unflushed reasoning; a
+    // reconnect on the same session lands it (it is still this session's).
+    if (activeSessionId.current !== sessionId) dropPendingThinking();
+    else flushPendingThinking();
     activeSessionId.current = sessionId;
 
     if (!sessionId || !wsConnected) {
@@ -416,6 +459,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
     if (processStatus !== 'running') {
       flushPendingTextRaf();
+      flushPendingThinking();
       setIsStreaming((previous) => {
         if (previous) {
           log.info('stream', `status-store ps=${processStatus} → isStreaming true→false`, {
@@ -447,15 +491,16 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     }, 3000);
   }, [sessionId, sessionStatus?.process_status, doResubscribe, flushPendingTextRaf]);
 
-  // Cancel pending flush on unmount to avoid setState on unmounted component
+  // Cancel pending flushes on unmount to avoid setState on unmounted component
   useEffect(() => {
     return () => {
       if (textDeltaRaf.current !== null) {
         clearTimeout(textDeltaRaf.current);
         textDeltaRaf.current = null;
       }
+      dropPendingThinking();
     };
-  }, []);
+  }, [dropPendingThinking]);
 
   useEvent('session:text-delta', (data) => {
     const { sessionId: sid, delta, msgId, parentToolUseId, subagentType, taskDescription } = data as {
@@ -487,6 +532,8 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       return;
     }
 
+    // Prose follows the reasoning that produced it: land the reasoning first.
+    flushPendingThinking();
     // Message boundary: a different msgId means the previous message finished —
     // flush its pending rAF content, then restart the accumulator for the new one.
     if (msgId && currentTextMsgId.current && msgId !== currentTextMsgId.current) {
@@ -529,10 +576,12 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
     setIsStreaming(true);
     // A MAIN-lane tool call interrupts the main text flow — flush and reset the
-    // accumulator. A subagent tool call (parentToolUseId set) lives in its own
-    // lane and must NOT cut the main turn's text mid-token.
+    // accumulator, and land the reasoning that led to this call before the call
+    // itself. A subagent tool call (parentToolUseId set) lives in its own lane
+    // and must NOT cut the main turn's text mid-token.
     if (!parentToolUseId) {
       interruptPendingText();
+      flushPendingThinking();
     }
 
     setBlocks((prev) => {
@@ -562,16 +611,6 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     setBlocks((prev) => backfillToolResult(prev, toolUseId, result, isToolResultError(result)));
   });
 
-  // pendingThinking holds only deltas not yet flushed to setBlocks; it is the
-  // raf-coalescing buffer, NOT the source of truth for any thinking block. The
-  // committed text lives inside the last thinking block in setBlocks. Cleared
-  // every flush, so a later thinking segment (after text/tool interrupts) can
-  // never carry forward text from an earlier segment.
-  const pendingThinking = useRef('');
-  const thinkingDeltaRaf = useRef<number | null>(null);
-  // msgId of the thinking segment currently accumulating (see currentTextMsgId).
-  const currentThinkingMsgId = useRef<string | undefined>(undefined);
-
   useEvent('session:thinking-delta', (data) => {
     const { sessionId: sid, delta, msgId, parentToolUseId } = data as {
       sessionId: string; delta: string; msgId?: string; parentToolUseId?: string;
@@ -587,6 +626,17 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       return;
     }
 
+    // Reasoning interrupts prose the way a card does: prose still buffered is
+    // an earlier message's, so land it now — otherwise its next flush finds a
+    // thinking tail, cannot merge, and pushes the whole text again as a
+    // duplicate block. Only an unfinished tag rides across.
+    interruptPendingText();
+    // Message boundary (same rule as text): a different msgId means the previous
+    // message's reasoning is complete — land it under ITS id before buffering
+    // the new message's first delta.
+    if (msgId && currentThinkingMsgId.current && msgId !== currentThinkingMsgId.current) {
+      flushPendingThinking();
+    }
     if (msgId) currentThinkingMsgId.current = msgId;
     pendingThinking.current += delta;
 
@@ -610,6 +660,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     };
     if (!sessionId || sid !== sessionId) return;
 
+    // A card: same boundary rule as session:system-event below.
+    interruptPendingText();
+    flushPendingThinking();
     setBlocks((prev) => appendSystemBlock(prev, {
       variant: 'info', message: `Unknown Claude event: ${scope}:${eventType}`, detail: snippet,
     }));
@@ -625,6 +678,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // Don't set isStreaming — system events are notifications, not active text streaming.
     // The card breaks text accumulation, but an unfinished tag rides across it.
     interruptPendingText();
+    flushPendingThinking();
 
     setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail }));
   });
@@ -649,6 +703,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // the extra flush on a duplicate re-emit is harmless (it's a no-op between
     // text deltas of a blocked turn).
     interruptPendingText();
+    flushPendingThinking();
     setBlocks(prev => appendPermissionBlock(prev, {
       requestId, toolName, input, reason, acpOptions,
     }));
@@ -671,8 +726,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     const { sessionId: sid } = data as { sessionId: string };
     if (!sessionId || sid !== sessionId) return;
 
-    // Flush any pending text before clearing — prevents last-frame data loss
+    // Flush any pending text and reasoning before clearing — prevents last-frame
+    // data loss, and keeps a reasoning tail on THIS side of the merge boundary.
     flushPendingTextRaf();
+    flushPendingThinking();
     setIsStreaming((prev) => {
       log.info('stream', `session:result → isStreaming ${prev}→false`, { sessionId: sid });
       return false;
@@ -698,6 +755,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     if (!sessionId || sid !== sessionId) return;
 
     flushPendingTextRaf();
+    flushPendingThinking();
     setIsStreaming(false);
     streamBuffer.current = '';
     // TTFT markers are per-turn — error ends the turn.

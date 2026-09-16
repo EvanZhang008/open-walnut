@@ -79,6 +79,50 @@ export function isMergeableToolBlock(b: StreamingBlock): b is StreamingBlock & {
   return true;
 }
 
+/** A thinking block with words in it folds into the run around it, exactly as a
+ *  finished tool does. The CLI emits the reasoning and the call it leads to as
+ *  SEPARATE blocks, so a turn that thinks before every call read as one zebra
+ *  row per step: "Thinking › / Fetched a page › / Thinking › / Fetched a page ›"
+ *  (2026-09-15 report) — while the persisted twin of the same turn, merged by
+ *  message id, was already ONE "Fetched 2 pages ›" row. Inside a run the
+ *  reasoning sits next to the call it produced, behind the one chevron; a run
+ *  with no tool at all still renders as a "Thinking ›" row.
+ *
+ *  Reasoning belongs to the run only when a TOOL follows it (see
+ *  trailingThinkingStart): the parser attaches thinking to the message of the
+ *  block it led to, and thinking that led to prose renders as its own row above
+ *  the answer, outside any run. */
+export function isRunThinkingBlock(b: StreamingBlock): b is StreamingBlock & { type: 'thinking' } {
+  return b.type === 'thinking' && !!b.content.trim();
+}
+
+/** Anything that folds into a merged run: a finished generic tool or reasoning. */
+export function isRunMemberBlock(b: StreamingBlock): b is StreamingBlock & { type: 'tool_call' | 'thinking' } {
+  return isMergeableToolBlock(b) || isRunThinkingBlock(b);
+}
+
+/** A generic tool still executing: not a member yet (it stays a full card while
+ *  it runs) but it WILL fold into the run the moment it finishes, so reasoning
+ *  that led to it keeps its place in the run meanwhile. */
+export function isPendingRunMember(b: StreamingBlock): boolean {
+  return b.type === 'tool_call' && b.status === 'calling' && isMergeableToolBlock({ ...b, status: 'done' });
+}
+
+/** Where a run ends when `next` (the first visible non-member after it) is
+ *  not a tool that will join: the index of the run's last tool + 1. Members past
+ *  it are trailing reasoning that led to `next` — prose, an Agent, a plan card, a
+ *  user message ('other' stands for any visible row that is not a block) — and
+ *  render as their own "Thinking ›" row, the way the persisted message will.
+ *  With no `next` (the live tail, or a lane that ended mid-thought) the whole
+ *  run stays together and the trailing reasoning is what is pulsing. */
+export function trailingThinkingStart(members: readonly StreamingBlock[], next: StreamingBlock | 'other' | undefined): number {
+  if (next === undefined) return members.length;
+  if (next !== 'other' && isPendingRunMember(next)) return members.length;
+  let end = members.length;
+  while (end > 0 && members[end - 1].type === 'thinking') end--;
+  return end;
+}
+
 export function groupStreamingBlocks(blocks: StreamingBlock[], hidden?: Set<number>): GroupedStreamItem[] {
   // Find groupable tool_call blocks (Task, Agent). Only MAIN-LANE ones are
   // group anchors — a groupable tool_call that itself carries parentToolUseId
