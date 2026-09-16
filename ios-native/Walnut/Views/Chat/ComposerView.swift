@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import AVFoundation
 
 /// Reusable chat input bar — rounded field + photo/mic/send button. The draft
 /// text and image selection live in `ComposerDrafts` (app-scoped, keyed by
@@ -29,9 +30,15 @@ import PhotosUI
 /// of parking it in the draft. Only the chat composer opts in; a session
 /// composer must never swallow the shortcut.
 ///
-/// Image input: photo button opens the native PhotosPicker (iOS 16+, sandboxed
-/// — no photo-library permission prompt). Picked images are downscaled + JPEG
-/// encoded on-device and shown as a removable thumbnail strip above the field.
+/// Image input: the `+` menu offers two sources, and they converge immediately.
+/// Photos opens the native PhotosPicker (iOS 16+, sandboxed — no photo-library
+/// permission prompt); Take Photo opens the system camera (`CameraPicker`) and is
+/// omitted where no camera exists. Both hand their image to
+/// `SelectedImage.make` and then to the SAME merge (`attach`), so one set of
+/// rules covers both: 1568px longest edge, JPEG 0.8 falling back to 0.5, five
+/// images, the aggregate base64 budget, and one notice naming whatever was
+/// skipped. Results show as a removable thumbnail strip above the field, and the
+/// server cannot tell a capture from a pick.
 ///
 /// Layout (two rows, matching the reference composer the user asked us to copy):
 /// the FIELD owns a full-width row of its own, and every control sits on a BOTTOM
@@ -117,9 +124,18 @@ struct ComposerBar: View {
     /// re-asserts the measurement (see the three publishers on the body).
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Only the notice rows read this: their `lineLimit(2)` is a truncation machine at
+    /// accessibility text sizes (see `noticeRow`).
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     /// Last height this composer measured, so returning to a retained tab or coming
     /// back from the background can re-publish it (see the publishers on the body).
     @State private var measuredHeight: CGFloat = 0
+
+    /// Last width this composer measured. The composer spans the window, so this IS the
+    /// width available to anything it presents, and the `+` popover derives its
+    /// accessibility-size width from it (see `attachmentMenuWidth`).
+    @State private var measuredWidth: CGFloat = 0
 
     @State private var voice = VoiceRecorder()
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -141,10 +157,39 @@ struct ComposerBar: View {
     /// the parent's body passes; `attach` is idempotent per source.
     @State private var controls = ComposerControlsModel()
     /// Photo picker presentation is now explicit: the `+` is a MENU (photos +
-    /// host provenance), so the picker is presented rather than being the button.
+    /// camera + host provenance), so the picker is presented rather than being the
+    /// button.
+    ///
+    /// TWO independent flags, and they must NEVER both be true. A `.photosPicker`
+    /// and a `.fullScreenCover` raised from the same view in the same frame is a
+    /// UIKit presentation conflict: one of them silently loses and which one is an
+    /// ordering detail. The attachment popover reports exactly one tap, so the only
+    /// route to both is a flag left set by a presentation that already ended, hence
+    /// each opener lowers its sibling first (`openPhotoPicker` / `openCamera`), and
+    /// neither dismissal ever raises the other.
     @State private var showPhotoPicker = false
+    @State private var showCamera = false
+    /// The `+` popover. A popover rather than a `Menu` because a context menu over the
+    /// keyboard dropped the tapped row's action outright (see `plusButton`).
+    @State private var showAttachmentMenu = false
+    /// Camera access is already DENIED, so the tap gets a sentence instead of a
+    /// black viewfinder. Its own notice (not `imageNotice`) so an unrelated
+    /// "images were skipped" line cannot clobber the one row that tells the user
+    /// how to fix it.
+    @State private var cameraNotice: String?
 
-    private static let maxImages = 5
+    /// Not private: `attach` is the shared rule and its tests assert against the
+    /// real ceiling rather than re-declaring a 5.
+    static let maxImages = 5
+
+    /// The `+` menu's identifiers. Constants because both the view and the menu
+    /// model below spell them, and `chat.photo` in particular is a contract with
+    /// existing automation: it must keep meaning "open the photo picker".
+    static let photoItemID = "chat.photo"
+    static let cameraItemID = "chat.camera"
+    /// `ComposerHostRow`'s own id, spelled here only so the menu model below can
+    /// state the full order. The row itself still owns it.
+    static let hostRowItemID = "composer.hostRow"
 
     /// Bindings onto the app-scoped draft store — the TextField edits that
     /// directly, so nothing depends on this view's identity surviving.
@@ -180,16 +225,32 @@ struct ComposerBar: View {
     var body: some View {
         VStack(spacing: 0) {
             if disabled, let notice = disabledNotice {
-                noticeRow(notice, icon: "exclamationmark.circle")
+                noticeRow(notice, icon: Symbol.offlineNotice)
             }
             if let voiceError = voice.errorMessage {
-                noticeRow(voiceError, icon: "mic.slash") {
+                noticeRow(voiceError, icon: Symbol.voiceErrorNotice) {
                     voice.errorMessage = nil
                 }
             }
             if let imageNotice {
-                noticeRow(imageNotice, icon: "photo.badge.exclamationmark") {
+                noticeRow(imageNotice, icon: Symbol.imageNotice) {
                     self.imageNotice = nil
+                }
+            }
+            // Camera access denied. The same row the image and voice notices use —
+            // the mic's "enable it in Settings" line is the precedent, and a
+            // permission dead end deserves the same non-modal, dismissible shape
+            // rather than an alert that interrupts a half-typed message.
+            //
+            // `lock.slash`, NOT the `camera.slash` this was first written with: there is
+            // no such symbol (only `camera.macro.slash`), so the row rendered an
+            // EMPTY 0pt glyph and the sentence sat against the margin. A wrong
+            // symbol name fails silently, which is why `ComposerCameraTests` now
+            // resolves every icon this file names. The padlock is also the honest
+            // subject: the camera works, the permission is off.
+            if let cameraNotice {
+                noticeRow(cameraNotice, icon: Symbol.cameraDeniedNotice) {
+                    self.cameraNotice = nil
                 }
             }
             // Preserved voice takes (failed upload / interruption / crash /
@@ -288,6 +349,15 @@ struct ComposerBar: View {
             if height > 0 { measuredHeight = height }
             dock?.reportComposer(key: draftKey, surface: surface, height: height)
         }
+        // Width, in its OWN observer rather than folded into a `CGSize` above. The height
+        // feeds the dock through a level-triggered publisher with its own re-assert
+        // rules; a combined observer would make every width change re-report a height
+        // the dock already holds. This one only ever feeds the `+` popover's width rule.
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            if width > 0 { measuredWidth = width }
+        }
         // The level-triggered half: coming back on screen re-asserts whatever was
         // last measured. The store drops an unchanged value, so this is free when
         // the composer never left.
@@ -336,6 +406,20 @@ struct ComposerBar: View {
             matching: .images,
             photoLibrary: .shared()
         )
+        // The camera, full screen (a viewfinder in a sheet is a viewfinder with a
+        // gesture that dismisses it mid-shot). Both exits lower the flag and
+        // NOTHING else touches the draft: a cancel returns to exactly the text and
+        // attachments the user left, which is this composer's standing rule.
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker(
+                onCapture: { image in
+                    showCamera = false
+                    Task { await attachCaptured(image) }
+                },
+                onCancel: { showCamera = false }
+            )
+            .ignoresSafeArea()
+        }
         .onAppear {
             onScreen = true
             if let modelSource {
@@ -508,6 +592,163 @@ struct ComposerBar: View {
         Self.showsModelPill(modelSource: modelSource, pillLabel: controls.pillLabel)
     }
 
+    // MARK: - The `+` menu's model
+
+    /// No room for another attachment. Both sources are disabled at the ceiling
+    /// rather than accepting an image the merge would then drop.
+    private var atImageCeiling: Bool { selectedImages.count >= Self.maxImages }
+
+    /// The `+` menu's items, as their accessibility identifiers, in order.
+    ///
+    /// The SPEC for the menu's shape, as a pure function, because the two things
+    /// worth pinning cannot be asserted any other way: that Take Photo sits
+    /// directly after Photos (the two image sources read as a pair, with the
+    /// read-only host row last), and that it is ABSENT rather than disabled when
+    /// there is no camera. Availability is a PARAMETER rather than a call into
+    /// UIKit so that both branches are reachable from a test: no machine here
+    /// reports both answers (the iPhone 16 Pro simulator on iOS 26 answers TRUE and
+    /// presents a working picker, contrary to the old "simulators have no camera"
+    /// assumption), so a rule that asked UIKit for itself could only ever be
+    /// exercised one way.
+    static func plusMenuItems(cameraAvailable: Bool, hasHostProvenance: Bool) -> [String] {
+        var items = [photoItemID]
+        if cameraAvailable { items.append(cameraItemID) }
+        if hasHostProvenance { items.append(hostRowItemID) }
+        return items
+    }
+
+    /// What a source row is called, given how many images are already attached.
+    ///
+    /// BOTH sources get the count, and that is the point: at the ceiling both rows
+    /// are disabled, and a greyed row with no number is a control that refuses
+    /// without saying why. Take Photo shipped greyed and silent while Photos read
+    /// "Photos (5/5)" right above it.
+    static func attachmentSourceLabel(_ base: String, attached: Int) -> String {
+        attached == 0 ? base : "\(base) (\(attached)/\(maxImages))"
+    }
+
+    /// The `+` popover's width at ordinary text sizes: menu-shaped, and the geometry
+    /// every screenshot of this menu has been taken at.
+    static let defaultAttachmentMenuWidth: CGFloat = 260
+    /// Room the popover leaves on each side of the window, so it cannot be clipped by
+    /// the edge and its arrow keeps a place to point from.
+    static let attachmentMenuSideMargin: CGFloat = 16
+    /// Floor, for a window narrower than any shipping phone. Better a menu with some
+    /// wrapping than one 40pt wide.
+    static let minAttachmentMenuWidth: CGFloat = 200
+
+    /// How wide the `+` popover may be, given the text size and the width it has to
+    /// live inside.
+    ///
+    /// 260pt at ordinary sizes, unchanged. At accessibility sizes 260pt is a truncation
+    /// machine: at accessibility-XXXL "Photos" alone rendered "Phot…" and
+    /// "Take Photo (5/5)" lost its count. Nothing in an accessibility audit can see
+    /// that, which is why it survived one: the accessibility LABEL stays complete, and
+    /// only the pixels truncate. So this returns a real number rather than a guess.
+    ///
+    /// Derived from the MEASURED width, never a constant. A width that fits the 402pt
+    /// phone this was verified on would be clipped on a narrower one: the rule yields
+    /// 370 at 402pt, 343 at 375pt, and 288 at 320pt, the narrowest screen still in
+    /// support. An unmeasured width (0 before the first layout, and during the
+    /// zero-height snapshot pass a backgrounding triggers) falls back to the shipped
+    /// 260 rather than collapsing to the floor.
+    ///
+    /// Width is only half the fix. No width fits "Take Photo (5/5)" on one line at the
+    /// largest accessibility size, so the row's visible text also wraps without a line
+    /// limit (see `attachmentSourceRow`).
+    static func attachmentMenuWidth(
+        isAccessibilitySize: Bool, availableWidth: CGFloat
+    ) -> CGFloat {
+        guard availableWidth > 0 else { return defaultAttachmentMenuWidth }
+        let widestThatFits = max(
+            minAttachmentMenuWidth, availableWidth - 2 * attachmentMenuSideMargin
+        )
+        guard isAccessibilitySize else { return min(defaultAttachmentMenuWidth, widestThatFits) }
+        return widestThatFits
+    }
+
+    /// What a Take Photo tap does.
+    enum CameraTapOutcome: Equatable {
+        /// Open the picker. Includes the UNDECIDED case: presenting the picker is
+        /// what raises the system permission prompt, so the first tap asks.
+        case present
+        /// Say why, in the composer's notice row, instead of opening a camera the
+        /// user cannot see through.
+        case notice(String)
+    }
+
+    /// Denied (or restricted) camera access. Names Settings, because that is the
+    /// only place the user can undo it — the system prompt is asked once and never
+    /// again, so a bare "camera unavailable" would be a dead end. Two sentences
+    /// rather than one long line: the row caps at two lines at ordinary text sizes
+    /// (and wraps freely at accessibility sizes, see `noticeRow`).
+    static let cameraDeniedNotice =
+        "Camera access is off. Enable it in Settings to take a photo."
+    /// Unreachable through the UI (the item is hidden with no camera), kept as the
+    /// honest answer if it ever is reached — never a misleading permission story.
+    static let cameraUnavailableNotice = "This device has no camera to take a photo with."
+
+    /// EVERY SF Symbol this composer draws, named once and drawn from here.
+    ///
+    /// A misspelled symbol does not throw, warn, or draw a placeholder: it draws a
+    /// 0pt blank. The camera notice's first draft used `camera.slash`, which does not
+    /// exist, and the blank icon was only caught by looking at a screenshot.
+    ///
+    /// The list has to be the SAME strings the views use, or the test that resolves
+    /// it proves nothing about what is on screen — a review finding against the
+    /// first cut, where `symbolNames` was a parallel copy no view read. So every
+    /// `Image(systemName:)` and `Label(_:systemImage:)` below spells a case of this
+    /// enum, and `all` is what `ComposerCameraTests` resolves.
+    enum Symbol {
+        static let plus = "plus"
+        static let photo = "photo"
+        static let camera = "camera"
+        static let mic = "mic.fill"
+        static let send = "arrow.up"
+        static let stop = "stop.fill"
+        /// Stop a recording that lands in the draft (vs `send`, which auto-sends).
+        static let confirm = "checkmark"
+        static let cancel = "xmark"
+        static let removeImage = "xmark.circle.fill"
+        static let offlineNotice = "exclamationmark.circle"
+        static let voiceErrorNotice = "mic.slash"
+        static let imageNotice = "photo.badge.exclamationmark"
+        /// The padlock, NOT a slashed camera: `camera.slash` is not in the catalog
+        /// (only `camera.macro.slash`), and the padlock is the honest subject
+        /// anyway — the camera works, the permission is off.
+        static let cameraDeniedNotice = "lock.slash"
+        static let voicePending = "waveform.badge.exclamationmark"
+        static let voiceFailed = "waveform.slash"
+        static let discard = "trash"
+
+        static let all = [
+            plus, photo, camera, mic, send, stop, confirm, cancel, removeImage,
+            offlineNotice, voiceErrorNotice, imageNotice, cameraDeniedNotice,
+            voicePending, voiceFailed, discard,
+        ]
+    }
+
+    /// A static pure function so the one rule that decides between a viewfinder and
+    /// a sentence is assertable without a camera, a device, or a hosted view.
+    ///
+    /// `.notDetermined` DELIBERATELY presents: the picker itself raises the system
+    /// prompt, and pre-asking with `requestAccess` would put our own timing between
+    /// the tap and the alert for no gain. Only an already-denied state is
+    /// intercepted, because a picker presented then shows a black frame with no
+    /// explanation of what went wrong.
+    static func cameraTapOutcome(
+        available: Bool, authorization: AVAuthorizationStatus
+    ) -> CameraTapOutcome {
+        guard available else { return .notice(cameraUnavailableNotice) }
+        switch authorization {
+        case .denied, .restricted: return .notice(cameraDeniedNotice)
+        case .authorized, .notDetermined: return .present
+        // A status this build has never heard of is not a reason to refuse the
+        // user's tap: let the picker decide, since it owns the prompt anyway.
+        @unknown default: return .present
+        }
+    }
+
     /// The text field, alone on a full-width row.
     ///
     /// Nothing shares this row, which is the whole point of the two-row shape: the
@@ -602,7 +843,7 @@ struct ComposerBar: View {
                                 selectedImages.filter { $0.id != image.id }, key: draftKey
                             )
                         } label: {
-                            Image(systemName: "xmark.circle.fill")
+                            Image(systemName: Symbol.removeImage)
                                 .font(.system(size: 18))
                                 .symbolRenderingMode(.palette)
                                 .foregroundStyle(.white, .black.opacity(0.55))
@@ -628,7 +869,7 @@ struct ComposerBar: View {
     /// Retry is the manual version of the same thing.
     private var pendingVoiceRow: some View {
         HStack(spacing: 6) {
-            Image(systemName: "waveform.badge.exclamationmark")
+            Image(systemName: Symbol.voicePending)
                 .font(.caption2)
             Text(voice.pendingCount == 1
                  ? "1 recording saved — transcription pending"
@@ -653,7 +894,7 @@ struct ComposerBar: View {
             Button {
                 voice.discardPending()
             } label: {
-                Image(systemName: "trash")
+                Image(systemName: Symbol.discard)
                     .font(.caption2)
             }
             .accessibilityLabel("Discard saved recordings")
@@ -678,7 +919,7 @@ struct ComposerBar: View {
     /// thing this store must never do.
     private var failedVoiceRow: some View {
         HStack(spacing: 6) {
-            Image(systemName: "waveform.slash")
+            Image(systemName: Symbol.voiceFailed)
                 .font(.caption2)
             Text(voice.failedCount == 1
                  ? "1 recording couldn't be transcribed"
@@ -727,7 +968,7 @@ struct ComposerBar: View {
                 voice.cancel()
                 quickAction.clear(reason: "cancelled")
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: Symbol.cancel)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 32, height: 32)
@@ -763,7 +1004,7 @@ struct ComposerBar: View {
                     }
                 }
             } label: {
-                Image(systemName: quickAction.autoSendArmed ? "arrow.up" : "checkmark")
+                Image(systemName: quickAction.autoSendArmed ? Symbol.send : Symbol.confirm)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.onTint)
                     .frame(width: 32, height: 32)
@@ -777,44 +1018,45 @@ struct ComposerBar: View {
 
     // MARK: - Buttons
 
-    /// The `+`: attachments, plus READ-ONLY host provenance ("where is this
-    /// served from"). Two items, so it is not a junk drawer: everything that
-    /// changes the NEXT message stays on the row (model pill) or in the row's
-    /// own buttons (mic, send), and everything that is a fact about the session
-    /// stays in the session menu. If a third item ever wants in here, it has to
-    /// argue that it is an INPUT to the message the user is composing.
+    /// A POPOVER, not a `Menu`, and that is the F1 fix. MEASURED on the iPhone 16 Pro
+    /// simulator (iOS 26) on 2026-09-14: a SwiftUI `Menu` is a UIKit context-menu
+    /// interaction, which REPARENTS this button into a `_UIReparentingView` under the
+    /// hosting controller's view for as long as the menu is open. With the keyboard
+    /// UP, a tap on an item made the interaction resign the first responder (the
+    /// keyboard hides, so this composer's `safeAreaInset` relayouts underneath the
+    /// open menu) and, in 7 of 21 trials, THE ITEM'S ACTION WAS NEVER INVOKED at all:
+    /// no action log, the items still in the accessibility tree, the menu's snapshot
+    /// stranded where the composer used to be, and the `+` missing from the control
+    /// row because it was still inside the reparenting view. Keyboard DOWN was 6/6
+    /// fine, which is why the report read as "over the keyboard it does nothing".
     ///
-    /// The host row is what the user asked for in the `+` specifically ("可能在那个
-    /// 加号里显示这是哪个 host"), and it stays READ-ONLY: `ComposerHostProvenance`
-    /// is the single source of truth for how this app names an exec host, and it
-    /// answers two different questions (a session's chosen host vs which server is
-    /// answering the main agent) without letting either pretend to be a picker.
-    /// Host is only choosable at session CREATION, so a chooser here would be a
-    /// control that cannot change anything.
+    /// The mechanism matters because it rules out the two obvious suspects, both of
+    /// which were tried and measured at 0 for 1: raising the presentation flag on a
+    /// later run-loop turn, and lowering focus before raising it. Neither can help
+    /// when the action never runs. Making the menu's content constant did not help
+    /// either (5/6, same as the baseline). A popover is a REAL presentation whose rows
+    /// are ordinary Buttons in a view this file owns, so nothing reparents this button
+    /// and the action is a plain closure call: 12/12 with the keyboard up and down.
     ///
-    /// Keeps `chat.photo` as the photo item's identifier: existing automation taps
-    /// it, and the id must keep meaning "open the photo picker". The menu itself
-    /// gets `chat.plus` (a collapsed Menu renders as one accessibility element, so
-    /// the container needs its own id — the same lesson TasksView's
-    /// `sessions.new`/`sessions.create` pair encodes).
+    /// Everything else about the `+` is unchanged, deliberately: the same
+    /// `chat.plus` / `chat.photo` / `chat.camera` identifiers automation already taps,
+    /// the same order (the two image sources as a pair, read-only provenance last),
+    /// and the same READ-ONLY `ComposerHostRow`: `ComposerHostProvenance` is the
+    /// single source of truth for how this app names an exec host, and host is only
+    /// choosable at session CREATION, so a chooser here would be a control that
+    /// cannot change anything.
+    ///
+    /// Still not a junk drawer: everything that changes the NEXT message stays on the
+    /// row (model pill) or in the row's own buttons (mic, send), and everything that
+    /// is a fact about the session stays in the session menu. Anything that wants in
+    /// here has to argue that it is an INPUT to the message being composed, which is
+    /// exactly what Take Photo is: the user's report was "I can only pick a photo, I
+    /// can't take one", and a camera shot is the same attachment from the other source.
     private var plusButton: some View {
-        Menu {
-            Button {
-                showPhotoPicker = true
-            } label: {
-                Label(
-                    selectedImages.isEmpty ? "Photos" : "Photos (\(selectedImages.count)/\(Self.maxImages))",
-                    systemImage: "photo"
-                )
-            }
-            .disabled(selectedImages.count >= Self.maxImages)
-            .accessibilityIdentifier("chat.photo")
-
-            if let hostProvenance {
-                ComposerHostRow(provenance: hostProvenance)
-            }
+        Button {
+            showAttachmentMenu = true
         } label: {
-            Image(systemName: "plus")
+            Image(systemName: Symbol.plus)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 32, height: 32)
@@ -825,6 +1067,101 @@ struct ComposerBar: View {
         // lines beside them. On a dedicated control row there is nothing to align
         // against, so the nudge would just be an asymmetric row.
         .accessibilityIdentifier("chat.plus")
+        // `.presentationCompactAdaptation(.popover)` is what keeps this a popover on
+        // a phone; without it iOS adapts it to a sheet, which is a whole modal page
+        // for two rows.
+        .popover(isPresented: $showAttachmentMenu, arrowEdge: .bottom) {
+            attachmentMenu.presentationCompactAdaptation(.popover)
+        }
+    }
+
+    /// The `+` popover's rows, IN THE ORDER `plusMenuItems` states. The order is
+    /// derived rather than re-spelled here so the rule that test file asserts is the
+    /// rule this view draws.
+    private var attachmentMenu: some View {
+        let items = Self.plusMenuItems(
+            cameraAvailable: CameraPicker.isAvailable,
+            hasHostProvenance: hostProvenance != nil
+        )
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                if index > 0 { Divider() }
+                attachmentMenuRow(item)
+            }
+        }
+        .frame(width: Self.attachmentMenuWidth(
+            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            availableWidth: measuredWidth
+        ))
+    }
+
+    @ViewBuilder
+    private func attachmentMenuRow(_ item: String) -> some View {
+        switch item {
+        case Self.photoItemID:
+            attachmentSourceRow(
+                title: Self.attachmentSourceLabel("Photos", attached: selectedImages.count),
+                icon: Symbol.photo, identifier: item, action: openPhotoPicker
+            )
+        case Self.cameraItemID:
+            // Disabled at the five-image ceiling for the same reason the library item
+            // is, and NAMED the same way: a greyed row with no number is a control
+            // that refuses without saying why.
+            attachmentSourceRow(
+                title: Self.attachmentSourceLabel("Take Photo", attached: selectedImages.count),
+                icon: Symbol.camera, identifier: item, action: openCamera
+            )
+        case Self.hostRowItemID:
+            if let hostProvenance {
+                ComposerHostRow(provenance: hostProvenance)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    /// One tappable source row, sized and spaced like the system menu row it replaces
+    /// (a 44pt target: caption-height label plus 12pt above and below).
+    private func attachmentSourceRow(
+        title: String, icon: String, identifier: String, action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            // Lower the popover, then act. Dismiss-then-present in one transaction is
+            // measured good here (12/12): unlike the context menu this replaces, a
+            // popover's dismissal does not have to survive a first-responder change
+            // to deliver this closure: the closure has already run.
+            showAttachmentMenu = false
+            action()
+        } label: {
+            Label {
+                // Unlimited lines on the VISIBLE text, spelled out here rather than left
+                // to the default. This is the half of the accessibility-size fix that a
+                // wider popover cannot do on its own: at accessibility-XXXL no width
+                // this menu could take fits "Take Photo (5/5)" on one line, so the row
+                // has to grow downward instead of trailing off in an ellipsis.
+                //
+                // On the `Text`, not the accessibility label, because the two are
+                // different strings and only one of them was broken: VoiceOver always
+                // read "Take Photo (5/5)" in full while the eye saw "Take Photo (5…".
+                // An assertion on the accessibility label is blind to this defect.
+                Text(title)
+                    .lineLimit(nil)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: icon)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(atImageCeiling ? Color.secondary : Color.primary)
+        .disabled(atImageCeiling)
+        .accessibilityIdentifier(identifier)
     }
 
     private var micButton: some View {
@@ -836,7 +1173,7 @@ struct ComposerBar: View {
                     .controlSize(.small)
                     .frame(width: 32, height: 32)
             } else {
-                Image(systemName: "mic.fill")
+                Image(systemName: Symbol.mic)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 32, height: 32)
@@ -862,7 +1199,7 @@ struct ComposerBar: View {
         Button {
             Task { await onStop?() }
         } label: {
-            Image(systemName: "stop.fill")
+            Image(systemName: Symbol.stop)
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
@@ -874,7 +1211,7 @@ struct ComposerBar: View {
 
     private var sendButton: some View {
         Button(action: send) {
-            Image(systemName: "arrow.up")
+            Image(systemName: Symbol.send)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
                 .frame(width: 32, height: 32)
@@ -901,45 +1238,182 @@ struct ComposerBar: View {
         Task { _ = await onSend(text, images) }
     }
 
+    /// Raise the library picker. Lowers the camera cover first — see the two
+    /// flags' comment: they must never both be true.
+    private func openPhotoPicker() {
+        showCamera = false
+        showPhotoPicker = true
+    }
+
+    /// Raise the camera, or explain why not. The permission question is asked
+    /// HERE, once, from the pure rule; the picker owns the system prompt.
+    private func openCamera() {
+        switch Self.cameraTapOutcome(
+            available: CameraPicker.isAvailable,
+            authorization: AVCaptureDevice.authorizationStatus(for: .video)
+        ) {
+        case .present:
+            cameraNotice = nil
+            showPhotoPicker = false
+            showCamera = true
+        case .notice(let text):
+            cameraNotice = text
+        }
+    }
+
     /// Decode + downscale + JPEG-encode picked items off the main actor, then
-    /// merge into the selection (respecting the 5-image ceiling AND the total
-    /// payload budget). Surfaces a dismissible notice for images that are too
-    /// large, over budget, or failed to decode.
+    /// merge into the selection. Surfaces a dismissible notice for images that are
+    /// too large, over budget, or failed to decode.
     private func loadPicked(_ items: [PhotosPickerItem]) async {
-        var current = selectedImages
+        let outcome = await Self.loadUntilFull(items, onto: selectedImages) { item in
+            await SelectedImage.load(from: item)
+        }
+        merge(outcome.loaded, notLoaded: outcome.notLoaded)
+        pickerItems = []
+    }
+
+    /// Load picked items IN SELECTION ORDER, stopping once the selection is actually
+    /// FULL, and report how many were never loaded.
+    ///
+    /// The bound is on the RESULT, not on the input, and that is the whole point. The
+    /// first cut trimmed the input to the room available (`items.prefix(room)`) before
+    /// it knew anything about the items, which threw away valid picks standing behind
+    /// earlier failures: three attached plus [failed, failed, valid, valid] loaded only
+    /// the two failures, kept three images, and told the user the two GOOD photos were
+    /// "over the 5-image limit". An item that fails to decode, is too large, or does
+    /// not fit the aggregate budget never took a slot, so the only honest stopping
+    /// condition is "the selection is full", asked after each load.
+    ///
+    /// Fullness is asked of `attach` rather than re-derived here, for the reason
+    /// `attach` exists at all: the ceiling and the budget have ONE implementation. It
+    /// is a pure fold over at most five results, so asking it per item is free.
+    ///
+    /// Dropping the trim does not unbound the decode work, on either count a decode
+    /// costs. The picker hands over at most `maxImages` items
+    /// (`maxSelectionCount: Self.maxImages`), so this can never run more than five
+    /// loads; it stops the moment the selection fills, so it never decodes a pick
+    /// nothing could use; and it awaits each load in turn, so at most one ~12MP raster
+    /// is alive at a time.
+    ///
+    /// Generic over the item, with the loader passed in, so the loop is assertable in
+    /// the cheap tier: a `PhotosPickerItem` cannot be built in a unit test, and "never
+    /// load what cannot be used" is a claim about this loop, not about the library.
+    static func loadUntilFull<Item>(
+        _ items: [Item],
+        onto current: [SelectedImage],
+        load: (Item) async -> SelectedImage.LoadResult
+    ) async -> (loaded: [SelectedImage.LoadResult], notLoaded: Int) {
+        var loaded: [SelectedImage.LoadResult] = []
+        for (index, item) in items.enumerated() {
+            if attach(loaded, to: current).images.count >= maxImages {
+                return (loaded, items.count - index)
+            }
+            loaded.append(await load(item))
+        }
+        return (loaded, 0)
+    }
+
+    /// A camera shot, through the SAME preparation and the SAME merge a library
+    /// pick gets: `SelectedImage.make(from: UIImage)` caps the raster at 1568px and
+    /// encodes at 0.8 → 0.5, exactly as the Data path does, so a capture and a pick
+    /// of the same photo produce the same attachment.
+    ///
+    /// Off the main actor for the encode (the note editor's capture path does the
+    /// same): a full-resolution phone photo is a ~12MP raster and a JPEG encode of
+    /// it on the main thread is a visible hitch right after the shutter.
+    private func attachCaptured(_ image: UIImage) async {
+        merge([await Self.prepareCapture(image)])
+    }
+
+    /// Encode a captured raster off the MainActor.
+    static func prepareCapture(_ image: UIImage) async -> SelectedImage.LoadResult {
+        await Task.detached(priority: .userInitiated) {
+            SelectedImage.make(from: image)
+        }.value
+    }
+
+    /// Fold freshly-loaded images into the draft's selection and show the notice.
+    ///
+    /// `notLoaded` is what the caller never decoded BECAUSE THE SELECTION WAS ALREADY
+    /// FULL (`loadUntilFull` stops there); `attach` counts the ones it has to refuse
+    /// itself, and the notice names the sum. Both are the ceiling refusing a pick, so
+    /// both belong in the same sentence.
+    private func merge(_ loaded: [SelectedImage.LoadResult], notLoaded: Int = 0) {
+        let outcome = Self.attach(loaded, to: selectedImages, notLoaded: notLoaded)
+        drafts.setImages(outcome.images, key: draftKey)
+        // Only ever SET: an empty result must not silently wipe a notice the user
+        // has not read yet (they dismiss it themselves).
+        if let notice = outcome.notice { imageNotice = notice }
+    }
+
+    /// THE attachment rule, for every source: merge into `current` under the
+    /// 5-image ceiling AND the aggregate base64 budget, and report what was
+    /// skipped.
+    ///
+    /// A static pure function because it is the point where the library and the
+    /// camera converge, and "the camera behaves exactly like a pick" is only true
+    /// if there is literally one implementation of the limits. The aggregate budget
+    /// is the one that is easy to lose: each image is individually capped at 10MB
+    /// base64, so five of them can build ~50MB of concurrent base64 in the send
+    /// path — enough to get the app jetsammed on a warm device. It is enforced at
+    /// PICK/CAPTURE time so the user learns immediately instead of after composing
+    /// a message that can never be sent.
+    static func attach(
+        _ loaded: [SelectedImage.LoadResult], to current: [SelectedImage],
+        notLoaded: Int = 0
+    ) -> (images: [SelectedImage], notice: String?) {
+        var images = current
         var tooLarge = 0
         var failed = 0
         var overBudget = 0
-        // Each image is individually capped at 10MB base64, so five of them can
-        // build ~50MB of concurrent base64 in the send path — enough to get the
-        // app jetsammed on a warm device. Enforce the AGGREGATE too, and do it
-        // here (at pick time) so the user learns immediately instead of after
-        // composing a message that can never be sent.
+        // Everything the CEILING refused: the picks the caller never decoded because
+        // the selection was already full, plus whatever is left when the fifth slot
+        // fills here. Both used to be silent, which made an over-cap pick
+        // indistinguishable from a pick that never registered.
+        //
+        // Note what this loop deliberately does NOT do: a `.failed`, `.tooLarge`, or
+        // over-budget result increments its own counter and takes NO slot, so a bad
+        // pick can never cost a good one behind it its place. That is the rule
+        // `loadUntilFull` leans on to decide when to stop loading.
+        var noRoom = notLoaded
         var budgetUsed = current.reduce(0) { $0 + SelectedImage.base64Length($1.jpegData) }
-        let room = Self.maxImages - current.count
-        for item in items.prefix(max(0, room)) {
-            switch await SelectedImage.load(from: item) {
+        for (index, result) in loaded.enumerated() {
+            guard images.count < maxImages else {
+                noRoom += loaded.count - index
+                break
+            }
+            switch result {
             case .ok(let image):
                 let cost = SelectedImage.base64Length(image.jpegData)
                 if budgetUsed + cost > SelectedImage.maxTotalBase64Length {
                     overBudget += 1
                 } else {
                     budgetUsed += cost
-                    current.append(image)
+                    images.append(image)
                 }
             case .tooLarge: tooLarge += 1
             case .failed: failed += 1
             }
         }
-        drafts.setImages(current, key: draftKey)
-        pickerItems = []
-        if tooLarge > 0 || failed > 0 || overBudget > 0 {
-            var parts: [String] = []
-            if tooLarge > 0 { parts.append("\(tooLarge) too large to send") }
-            if overBudget > 0 { parts.append("\(overBudget) over the total attachment size limit") }
-            if failed > 0 { parts.append("\(failed) couldn't be read") }
-            imageNotice = "Some images were skipped: \(parts.joined(separator: ", "))."
-        }
+        return (
+            images,
+            skippedNotice(
+                tooLarge: tooLarge, overBudget: overBudget, failed: failed, noRoom: noRoom
+            )
+        )
+    }
+
+    /// The one "some images were skipped" sentence, or nil when nothing was.
+    static func skippedNotice(
+        tooLarge: Int, overBudget: Int, failed: Int, noRoom: Int = 0
+    ) -> String? {
+        var parts: [String] = []
+        if noRoom > 0 { parts.append("\(noRoom) over the \(maxImages)-image limit") }
+        if tooLarge > 0 { parts.append("\(tooLarge) too large to send") }
+        if overBudget > 0 { parts.append("\(overBudget) over the total attachment size limit") }
+        if failed > 0 { parts.append("\(failed) couldn't be read") }
+        guard !parts.isEmpty else { return nil }
+        return "Some images were skipped: \(parts.joined(separator: ", "))."
     }
 
     // MARK: - Voice Quick Action
@@ -1121,17 +1595,33 @@ struct ComposerBar: View {
         if useLongDraftEditor { longDraftFocused = true } else { focused = true }
     }
 
+    /// The shared one-line explanation row (offline, voice error, skipped images,
+    /// camera denied).
+    ///
+    /// TWO LINES ONLY AT ORDINARY SIZES. `lineLimit(2)` is the right cap while a
+    /// caption line fits ~40 characters, and it is a truncation machine once the user
+    /// asks for accessibility text: at `accessibility-large` and up the 60-character
+    /// camera sentence lost its ending and read "Camera access is off....", and the fix
+    /// it names, "Settings", was the part that fell off, with ~44pt of the row still
+    /// blank to the right of it. So the cap is lifted for accessibility sizes (the
+    /// row grows downward, which the composer already handles: it measures itself and
+    /// publishes the height), and the text gets `layoutPriority` over the spacer so
+    /// the trailing dismiss button can never take width the sentence needs.
+    /// `fixedSize(vertical:)` is what lets the wrapped lines claim their own height
+    /// instead of being squeezed to one line's worth.
     private func noticeRow(_ text: String, icon: String, onDismiss: (() -> Void)? = nil) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
                 .font(.caption2)
             Text(text)
                 .font(.caption)
-                .lineLimit(2)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
             if let onDismiss {
                 Spacer(minLength: 0)
                 Button(action: onDismiss) {
-                    Image(systemName: "xmark")
+                    Image(systemName: Symbol.cancel)
                         .font(.caption2)
                 }
             }
