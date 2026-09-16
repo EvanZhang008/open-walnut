@@ -50,6 +50,20 @@ Path if picked up: bump marked 15 → 18, adopt `marked-cjk-friendly`, delete `c
 - **A bare whole-reply wrapper is dropped before anything else is asked** (`stripTransparentWrapper`, called once in `RichBlocks.tsx` so the precheck and the split see the same text). Asked for rich output, a model often wraps its whole answer in one attribute-free `<div>`. Measured cost of that single tag pair: the entire reply became ONE html chunk (nothing freezes, every delta re-renders all of it), the heading on the line after `<div>` was swallowed into the raw-HTML block and rendered as literal `## …`, and the chunk was a 4,092px `contain: layout style paint` block holding 26 scrollable `<pre>` children, which is what the user saw painting stale. The decision reads the FIRST LINE ONLY so it can never flip mid-stream; an attribute, content on the same line, or a wrapper that is not first are all left alone.
 - Unfinished markup at an interrupt belongs to the text that will finish it: `splitPendingMarkup` (`src/core/stream/pending-markup.ts`, zero imports, aliased) holds the fragment so a bookkeeping card cannot cut an element in half. Four mirrors share that one rule (browser reducer, `useSessionStream`, `session-cache`, and the server twin `session-stream-buffer`); fixing only the client makes the artifact reappear after a refresh.
 
+## Local-path links: the pre-pass fences, the renderer decides
+
+`filePathsToHtml` runs BEFORE marked and injects `a.file-link` anchors around bare paths. That order is why `[eventprocessor.go:58-75](/repo/pkg/eventprocessor.go#L58)` once rendered as literal `[eventprocessor.go:58-75](` + a bare path link + `#L58))` in both markdown and rich mode (2026-09-15): the pass rewrote the destination inside the parentheses, so marked never saw a link. Even a parsed link would have been a plain `<a href="/repo/…">`, and the click handler (`useEntityClickHandler`) only knows `a.file-link`, so clicking one is a real page navigation.
+
+The fix keeps marked owning its grammar. Do not move either half:
+
+- **The pre-pass only fences.** `markdownLinkSpans` finds the spans marked will read as a link, image, reference definition, or a link still streaming in (no closing parenthesis yet), and no path pass injects inside them. It is a shape test that errs toward fencing too much: the worst case is a path left un-linkified, never a link broken. A half-arrived destination is fenced too, so a click mid-stream cannot open a prefix of the path.
+- **The `link` renderer override converts.** `fileLinkAttrsForDestination` decides what a PARSED destination is (absolute file or directory, `~/`, relative with a cwd) and emits the same `a.file-link` a bare path becomes, with the label as text and `:42` / `#L42` / `#L10-L20` as `data-file-line`. Nested-bracket labels, angle-bracket destinations with spaces, titles and reference-style links all arrive already parsed. The position grammar is `parsePathDestination` in `src/providers/path-ref-parse.ts`, shared with the server's resolver; the prose-only forms (`(42)`, `, line 42`) are deliberately excluded there because in a destination `Report (2024)` is a directory.
+- **The render context is set only by `renderMarkdownWithRefs`** (`fileLinkRenderCtx`, around the synchronous `marked.parse`). Copy-as-rich-text, tool results and note previews go through the same singleton with the context null, so in-app anchors never leave the app.
+- **Declined on purpose:** URLs, `#anchors`, queries, traversals, in-app routes (`/tasks/<id>`, `/apps/<app>~main/inbox`), single-segment relative names (`README.md`: the host resolver would answer with any same-named file), a relative destination with no cwd, and a path inside the LABEL of an external link (nesting anchors makes the HTML parser split them into two links).
+- `linkifyPathsInCode` skips a code span that sits inside a complete `<a>…</a>` pair (`anchorPairRanges`), so `` [`src/x.ts`](…) `` stays one anchor. A running open/close counter was rejected: one self-closing `<a/>` or a stray `</a>` in model-written HTML would latch it and switch off path links for the rest of the message.
+
+Acceptance gate: `tests/web/markdown/link-to-local-path.test.ts` (the report verbatim, every declined shape, ReDoS tripwires for the fence) and `tests/e2e/browser/link-to-local-path.spec.ts` (the seeded `pw-vscode-session` turn, clicked in Chromium and WebKit, opens the file at the line with no page load).
+
 ## DOMPurify policy per surface
 
 - Sanitize with `FORCE_BODY: true` on the rich path. Default `false` parses a leading `<style>` into `head` and drops it, and models naturally write style first.
@@ -62,6 +76,7 @@ Path if picked up: bump marked 15 → 18, adopt `marked-cjk-friendly`, delete `c
 | What | Where |
 |---|---|
 | Renderer behavior, CJK shapes, sanitize | `tests/web/markdown/*.test.ts` (`npm run test:focus tests/web/markdown`) |
+| Local-path links, fence and renderer halves | `tests/web/markdown/link-to-local-path.test.ts`, `tests/e2e/browser/link-to-local-path.spec.ts` |
 | Chunker invariants, blank-line collapsing | `tests/web/rich-blocks.test.ts` |
 | Interrupt carry, both sides | `tests/web/session-stream-buffer-pending-markup.test.ts`, `tests/core/stream/*` |
 | Real pipeline, real browser | `tests/e2e/browser/rich-html-streaming.spec.ts` |
