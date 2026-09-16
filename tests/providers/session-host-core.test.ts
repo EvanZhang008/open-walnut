@@ -1,82 +1,68 @@
 /**
- * Walnut Sessions host — the rules that must hold without a Mac.
+ * Session host — the rules that must hold without a Mac.
  *
- * The host exists so macOS attributes the daemon's file access to one stable
- * signed bundle instead of to whichever `node` started Walnut. Everything here
- * is a rule that, if it broke, would either put a permission dialog on a
- * developer's screen during a test run, invalidate the user's grant, or report a
- * separation that does not exist.
+ * The host exists so macOS attributes the daemon's file access to Walnut.app
+ * instead of to whichever `node` started the server. Everything here is a rule
+ * that, if it broke, would either put a permission dialog on a developer's
+ * screen during a test run, invalidate the user's grant, or report a separation
+ * that does not exist.
  */
 import { describe, it, expect } from 'vitest';
 import {
   buildSessionHostManifest,
   classifySessionHostStart,
+  desktopAppCandidates,
+  desktopAppExecutable,
   parseSessionHostIdentity,
-  renderSessionHostInfoPlist,
   sessionHostArgv,
-  sessionHostPaths,
+  sessionHostManifestPath,
   sessionHostUnavailableReason,
-  SESSION_HOST_BUNDLE_ID,
+  SESSION_HOST_FLAG,
   SESSION_HOST_REFUSAL_STATUS,
 } from '../../src/providers/session-host-core.js';
 
 const HOME = '/Users/example';
-const HOST = '/Users/example/Library/Application Support/Open Walnut/Walnut Sessions.app/Contents/MacOS/WalnutSessionsHost';
+const HOST = '/Applications/Walnut.app/Contents/MacOS/Walnut';
 const SHA = 'a'.repeat(64);
 
-describe('sessionHostPaths', () => {
-  it('puts the bundle and its manifest in one fixed, version-free place', () => {
-    const paths = sessionHostPaths(HOME);
-    expect(paths.root).toBe('/Users/example/Library/Application Support/Open Walnut');
-    expect(paths.app).toBe(`${paths.root}/Walnut Sessions.app`);
-    expect(paths.executable).toBe(HOST);
-    expect(paths.manifest).toBe(`${paths.root}/session-host-launch.json`);
-    // Full Disk Access is administered as a row the user adds by PATH. A version
-    // in any of these would make every upgrade look like a new program and ask
-    // for the grant again — the exact problem the host exists to end.
-    for (const value of Object.values(paths)) {
-      expect(value).not.toMatch(/\bv\d+\b/);
-    }
+describe('sessionHostManifestPath', () => {
+  it('is one fixed, version-free place under the real home', () => {
+    const manifest = sessionHostManifestPath(HOME);
+    expect(manifest).toBe('/Users/example/Library/Application Support/Open Walnut/session-host-launch.json');
+    // Keep this in step with desktop/SessionHost.swift's sessionHostManifestPath(),
+    // which derives the same path from the passwd entry. If the two drift, the app
+    // refuses every launch because it reads a file Walnut never writes.
+    expect(manifest).not.toMatch(/\bv\d+\b/);
   });
 
   it('refuses a relative home rather than inventing a location', () => {
-    expect(() => sessionHostPaths('relative/home')).toThrow(/absolute/);
+    expect(() => sessionHostManifestPath('relative/home')).toThrow(/absolute/);
   });
 
-  it('keeps the manifest beside the bundle, never inside it', () => {
-    const paths = sessionHostPaths(HOME);
-    // The host resolves the manifest from its own bundle path. Inside the bundle
-    // it would be part of the signed contents, so every approval would break the
-    // signature and with it the identity the grant is attached to.
-    expect(paths.manifest.startsWith(`${paths.app}/`)).toBe(false);
-    expect(paths.manifest.startsWith(`${paths.root}/`)).toBe(true);
+  it('is never inside an app bundle', () => {
+    // Inside a bundle the manifest would be part of the signed contents, so every
+    // approval would break the signature and with it the identity the grant is
+    // attached to. Walnut.app also lives in /Applications, which is root-owned.
+    expect(sessionHostManifestPath(HOME)).not.toMatch(/\.app\//);
   });
 });
 
-describe('renderSessionHostInfoPlist', () => {
-  const plist = renderSessionHostInfoPlist();
-
-  it('names the stable bundle identity the grant is remembered against', () => {
-    expect(plist).toContain(`<string>${SESSION_HOST_BUNDLE_ID}</string>`);
-    expect(plist).toContain('<string>Walnut Sessions</string>');
-    expect(plist).toContain('<string>WalnutSessionsHost</string>');
+describe('desktop app discovery', () => {
+  it('prefers the installed app over a repo checkout', () => {
+    const candidates = desktopAppCandidates(HOME);
+    expect(candidates[0]).toBe('/Applications/Walnut.app');
+    expect(candidates[1]).toBe('/Users/example/Applications/Walnut.app');
+    // A contributor who also has the app installed must get the INSTALLED one:
+    // that is the bundle their permission grants belong to.
+    expect(candidates[candidates.length - 1]).toMatch(/desktop\/Walnut\.app$/);
   });
 
-  it('is a background process, so it never takes a Dock tile', () => {
-    expect(plist).toContain('<key>LSUIElement</key>');
+  it('points at the executable, which is what TCC attributes to', () => {
+    expect(desktopAppExecutable('/Applications/Walnut.app')).toBe(HOST);
   });
 
-  it('declares NO usage description', () => {
-    // A *UsageDescription key is the caption for a promptable service, and under
-    // the hardened runtime tccd refuses to prompt at all unless the matching
-    // entitlement is declared too — silently, forever (see
-    // tests/core/helper-entitlements-ratchet.test.ts). The host asks for nothing
-    // promptable, so a usage string here would only be able to mislead.
-    expect(plist).not.toMatch(/UsageDescription/);
-  });
-
-  it('is byte-stable, because its bytes are part of the build fingerprint', () => {
-    expect(renderSessionHostInfoPlist()).toBe(plist);
+  it('refuses a relative home', () => {
+    expect(() => desktopAppCandidates('relative/home')).toThrow(/absolute/);
   });
 });
 
@@ -132,9 +118,12 @@ describe('buildSessionHostManifest', () => {
 });
 
 describe('sessionHostArgv', () => {
-  it('separates the host options from the payload with --', () => {
+  it('leads with the flag, then separates host options from the payload with --', () => {
+    // The flag must be argv[1]: desktop/main.swift dispatches on it before
+    // NSApplication exists, so a supervised launch never becomes a visible app.
     expect(sessionHostArgv(HOST, '/opt/walnut/daemon', ['--start']))
-      .toEqual([HOST, '--', '/opt/walnut/daemon', '--start']);
+      .toEqual([HOST, SESSION_HOST_FLAG, '--', '/opt/walnut/daemon', '--start']);
+    expect(SESSION_HOST_FLAG).toBe('--session-host');
   });
 
   it('refuses relative paths on either side', () => {
@@ -197,7 +186,7 @@ describe('parseSessionHostIdentity', () => {
     responsiblePid: 4242,
     selfResponsible: true,
     bundlePath: '/Users/example/Library/Application Support/Open Walnut/Walnut Sessions.app',
-    bundleIdentifier: SESSION_HOST_BUNDLE_ID,
+    bundleIdentifier: 'com.local.walnut-desktop',
     executablePath: HOST,
     disclaimed: true,
     manifestPath: '/Users/example/Library/Application Support/Open Walnut/session-host-launch.json',
@@ -205,7 +194,7 @@ describe('parseSessionHostIdentity', () => {
 
   it('reads a real answer', () => {
     const parsed = parseSessionHostIdentity(`${JSON.stringify(identity)}\n`);
-    expect(parsed?.bundleIdentifier).toBe(SESSION_HOST_BUNDLE_ID);
+    expect(parsed?.bundleIdentifier).toBe('com.local.walnut-desktop');
     expect(parsed?.selfResponsible).toBe(true);
     expect(parsed?.disclaimed).toBe(true);
   });

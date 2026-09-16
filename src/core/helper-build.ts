@@ -443,11 +443,13 @@ async function signHelper(binPath: string, spec: HelperSpec): Promise<void> {
 /**
  * Something codesign can sign: a bare Mach-O helper, or an .app bundle.
  *
- * Shared so the session host (src/providers/session-host.ts) gets the same
- * hard-won behaviour as the helpers — deterministic identity order, revocation
- * assessment, explicit ad-hoc restore — instead of a second copy that drifts.
+ * Split out from signHelper so the signing behaviour that took incidents to get
+ * right (deterministic identity order, revocation assessment, explicit ad-hoc
+ * restore) lives in one place and a second caller cannot grow a copy that drifts.
+ * Module-private: the session host now reuses the app the user already installed,
+ * so nothing outside this file signs anything.
  */
-export interface NativeSignTarget {
+interface NativeSignTarget {
   /** Path handed to codesign. A directory is fine (bundles sign as a unit). */
   path: string;
   /** Version-free `-i` identifier; the string a TCC grant is remembered against. */
@@ -463,7 +465,7 @@ export interface NativeSignTarget {
 }
 
 /** What the target ended up signed with. */
-export type NativeSignOutcome = 'certificate' | 'adhoc' | 'unsigned';
+type NativeSignOutcome = 'certificate' | 'adhoc' | 'unsigned';
 
 /**
  * Sign with a real identity when one exists, else leave (or restore) an ad-hoc
@@ -473,7 +475,7 @@ export type NativeSignOutcome = 'certificate' | 'adhoc' | 'unsigned';
  * content-hash TCC identity instead of a stable one (see the file header). A
  * contributor with no certificate must still get a working build.
  */
-export async function signNativeTarget(target: NativeSignTarget): Promise<NativeSignOutcome> {
+async function signNativeTarget(target: NativeSignTarget): Promise<NativeSignOutcome> {
   const candidates = await signingCandidates();
   if (candidates.length === 0) {
     log.web.info('native target left ad-hoc signed (no codesigning identity on this box)', {

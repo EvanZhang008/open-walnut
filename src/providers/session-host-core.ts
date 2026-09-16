@@ -13,22 +13,13 @@
 import path from 'node:path';
 
 /**
- * Version-free signing identifier and bundle id. A certificate-signed TCC grant
- * is remembered against this string, so it must NEVER gain a version suffix:
- * moving it would throw away the grant on every upgrade, which is the exact
- * problem the host exists to fix (same rule as the helper identifiers in
- * src/core/helper-build.ts).
+ * The flag that turns Walnut.app into a supervisor (desktop/SessionHost.swift).
+ * Must be argv[1], so a normal launch can never reach supervisor code.
  */
-export const SESSION_HOST_BUNDLE_ID = 'dev.openwalnut.sessions';
+export const SESSION_HOST_FLAG = '--session-host';
 
-/** What the user sees in the macOS permission dialog and in System Settings. */
-export const SESSION_HOST_DISPLAY_NAME = 'Walnut Sessions';
-
-/** Bundle directory name; also the name shown by Finder. */
-export const SESSION_HOST_APP_NAME = 'Walnut Sessions.app';
-
-/** Mach-O name inside the bundle. Shows up in `ps`, so it says what it is. */
-export const SESSION_HOST_EXECUTABLE_NAME = 'WalnutSessionsHost';
+/** What the user sees in the macOS dialog and in System Settings: one app. */
+export const SESSION_HOST_DISPLAY_NAME = 'Walnut';
 
 /**
  * Status the host exits with when IT refuses (unknown command, unreadable
@@ -38,85 +29,38 @@ export const SESSION_HOST_EXECUTABLE_NAME = 'WalnutSessionsHost';
  */
 export const SESSION_HOST_REFUSAL_STATUS = 125;
 
-export interface SessionHostPaths {
-  /** Directory holding the bundle and the manifest. */
-  root: string;
-  app: string;
-  executable: string;
-  infoPlist: string;
-  /** Read by the host itself, resolved from ITS OWN bundle path, never from env. */
-  manifest: string;
-  /** Records what the installed bundle was built from, so a rebuild needs proof. */
-  fingerprint: string;
-}
-
 /**
- * Where the host lives, given the real user's home.
+ * Where the manifest lives, given the REAL user's home.
  *
- * `~/Library/Application Support/Open Walnut/` rather than `~/Applications`:
- * this is Walnut's execution helper, not something to double-click, and an app
- * icon that does nothing when opened is a support question waiting to happen.
- * System Settings takes a pasted path either way.
- *
- * The location is FIXED and version-free. tccd keys a bundle's grant to its
- * identity, but Full Disk Access is administered as a row the user adds by path,
- * so a versioned directory would make every upgrade look like a new program.
+ * The Swift side derives the same path from the passwd entry (never `$HOME`,
+ * never an argument), so what this identity may run cannot be redirected by
+ * whoever starts it. Keep the two in step: desktop/SessionHost.swift's
+ * `sessionHostManifestPath()`.
  */
-export function sessionHostPaths(home: string): SessionHostPaths {
+export function sessionHostManifestPath(home: string): string {
   if (!path.isAbsolute(home)) throw new Error(`session host: home must be absolute, got ${JSON.stringify(home)}`);
-  const root = path.join(home, 'Library', 'Application Support', 'Open Walnut');
-  const app = path.join(root, SESSION_HOST_APP_NAME);
-  return {
-    root,
-    app,
-    executable: path.join(app, 'Contents', 'MacOS', SESSION_HOST_EXECUTABLE_NAME),
-    infoPlist: path.join(app, 'Contents', 'Info.plist'),
-    manifest: path.join(root, 'session-host-launch.json'),
-    fingerprint: path.join(root, 'session-host.srchash'),
-  };
+  return path.join(home, 'Library', 'Application Support', 'Open Walnut', 'session-host-launch.json');
 }
 
 /**
- * The bundle's Info.plist.
+ * Where Walnut.app may be, most likely first.
  *
- * `LSUIElement` so the process never takes a Dock tile or a menu bar; it is a
- * supervisor, not an app the user interacts with. No usage-description keys: the
- * host requests nothing promptable itself, and Full Disk Access has no prompt to
- * describe. A key claiming otherwise would put a sentence in a dialog that does
- * not match what is being asked for.
+ * A repo checkout's `desktop/Walnut.app` comes last on purpose: a contributor who
+ * also has the app installed should get the installed one, because that is the
+ * bundle their permission grants belong to.
  */
-export function renderSessionHostInfoPlist(): string {
+export function desktopAppCandidates(home: string): string[] {
+  if (!path.isAbsolute(home)) throw new Error(`session host: home must be absolute, got ${JSON.stringify(home)}`);
   return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-    '<plist version="1.0">',
-    '<dict>',
-    '\t<key>CFBundleExecutable</key>',
-    `\t<string>${SESSION_HOST_EXECUTABLE_NAME}</string>`,
-    '\t<key>CFBundleIdentifier</key>',
-    `\t<string>${SESSION_HOST_BUNDLE_ID}</string>`,
-    '\t<key>CFBundleName</key>',
-    `\t<string>${SESSION_HOST_DISPLAY_NAME}</string>`,
-    '\t<key>CFBundleDisplayName</key>',
-    `\t<string>${SESSION_HOST_DISPLAY_NAME}</string>`,
-    '\t<key>CFBundlePackageType</key>',
-    '\t<string>APPL</string>',
-    '\t<key>CFBundleInfoDictionaryVersion</key>',
-    '\t<string>6.0</string>',
-    // Deliberately fixed: the bundle version is not part of the TCC identity, and
-    // a value that moved on every build would suggest it is.
-    '\t<key>CFBundleShortVersionString</key>',
-    '\t<string>1.0</string>',
-    '\t<key>CFBundleVersion</key>',
-    '\t<string>1</string>',
-    '\t<key>LSUIElement</key>',
-    '\t<true/>',
-    '\t<key>LSMinimumSystemVersion</key>',
-    '\t<string>13.0</string>',
-    '</dict>',
-    '</plist>',
-    '',
-  ].join('\n');
+    '/Applications/Walnut.app',
+    path.join(home, 'Applications', 'Walnut.app'),
+    path.join(home, 'workplace', 'myCode', 'walnut', 'desktop', 'Walnut.app'),
+  ];
+}
+
+/** The executable inside an app bundle, which is the process TCC attributes to. */
+export function desktopAppExecutable(app: string): string {
+  return path.join(app, 'Contents', 'MacOS', 'Walnut');
 }
 
 export interface SessionHostFile {
@@ -175,7 +119,7 @@ export function buildSessionHostManifest(commands: readonly SessionHostCommand[]
   return `${JSON.stringify({ version: 1, commands: body }, null, 2)}\n`;
 }
 
-/** The argv that runs `program args…` under the host. */
+/** The argv that runs `program args…` under Walnut's identity. */
 export function sessionHostArgv(
   executable: string,
   program: string,
@@ -183,7 +127,7 @@ export function sessionHostArgv(
 ): string[] {
   checkAbsolute(executable, 'host executable');
   checkAbsolute(program, 'program');
-  return [executable, '--', program, ...args];
+  return [executable, SESSION_HOST_FLAG, '--', program, ...args];
 }
 
 /**
@@ -204,8 +148,10 @@ export type SessionHostUnavailable =
   | 'ephemeral'
   | 'isolated_daemon'
   | 'disabled'
+  /** No Walnut.app on this machine (an npm/terminal-only install). */
   | 'not_installed'
-  | 'build_failed';
+  /** Walnut.app is there but too old to know the flag, or unreadable. */
+  | 'unsupported_app';
 
 export interface SessionHostApplicability {
   platform: string;

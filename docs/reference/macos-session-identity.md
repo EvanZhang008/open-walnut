@@ -1,15 +1,19 @@
-# macOS session identity (Walnut Sessions)
+# macOS session identity
 
-On macOS, agent sessions run under a small signed bundle called **Walnut Sessions**
-instead of under the `node` binary that started Walnut. This page explains what
+On macOS, agent sessions are attributed to **Walnut**, the app you already have,
+rather than to the `node` binary that started the server. This page explains what
 that changes, what to grant, and what it does not do.
 
 ## The problem it solves
 
 macOS attributes a file access to the *responsible process*, which is inherited at
-spawn time from the top of the launcher chain. Walnut's server is
-`node dist/cli.js web`, so the session daemon, the `claude` CLI under it, and every
-tool the CLI runs all inherited that `node` binary. Three results:
+spawn time from the top of the launcher chain.
+
+When `Walnut.app` starts the server, that chain already ends at Walnut: the
+server, the session daemon, the `claude` CLI and every tool the CLI runs are all
+attributed to Walnut, and nothing here is needed. The gap is a server started from
+a **terminal** (`npm run dev:prod`), which makes the `node` binary responsible for
+the whole subtree. Three results:
 
 - The permission dialog said `"node" would like to access data from other apps`,
   naming a shared runtime rather than what was actually asking.
@@ -21,73 +25,83 @@ tool the CLI runs all inherited that `node` binary. Three results:
 
 ## What happens now
 
-The daemon is started by `Walnut Sessions.app`, which makes itself the responsible
-process first. Everything below it (daemon, shell, `claude`, tools) is attributed
-to that one bundle, which lives as long as the daemon does.
+Walnut launches the daemon through itself: `Walnut --session-host -- <daemon> …`.
+The app makes itself the responsible process, then starts the daemon, so
+everything below it (daemon, shell, `claude`, tools) is attributed to Walnut no
+matter who started the server.
 
 | | Before | Now |
 |---|---|---|
-| Dialog names | the `node` binary | Walnut Sessions |
+| Dialog names | the `node` binary | Walnut |
 | Grant survives a node upgrade | no | yes |
 | Shared with other node programs | yes | no |
-| Grant lasts | while each short-lived process ran | while the daemon runs |
+| Rows in Privacy & Security | one per launcher | one, for Walnut |
 
-Installed at, and this is the path to add in System Settings:
+Deliberately **not** a second bundle: a separate "sessions" identity would mean
+another row in System Settings for something you think of as one app.
+
+The path to add in System Settings is the app itself:
 
 ```
-~/Library/Application Support/Open Walnut/Walnut Sessions.app
+/Applications/Walnut.app
 ```
 
-To stop seeing the app-data dialog at all, add that bundle to **System Settings →
+To stop seeing the app-data dialog at all, add Walnut to **System Settings →
 Privacy & Security → Full Disk Access**. That is a deliberate choice, not a
 requirement: ordinary work in your own project directories needs no grant, and
-sessions keep working if you skip it, deny it, or revoke it later.
+sessions keep working if you skip it, deny it, or revoke it later. Note that this
+grant covers the app as a whole, so it does not separate the UI from the sessions.
 
 ## Scope, precisely
 
-- **Full Disk Access granted to this bundle covers the daemon and everything it
-  starts**, not one particular tool call. It separates *which identity* holds the
+- **Full Disk Access granted to Walnut covers the daemon and everything it
+  starts**, not one particular tool call. It settles *which identity* holds the
   permission; it is not a sandbox and does not narrow what a session can read.
 - Sessions already running keep the attribution they were started with. The new
   identity applies to processes started after the daemon next restarts; Walnut does
   not kill live sessions to migrate them.
-- `Walnut.app` (the desktop wrapper) and the terminal + browser setup share the
-  same daemon and therefore the same session identity. Nothing depends on opening
-  the desktop app.
+- The terminal + browser setup and the Mac app share one daemon, so they share one
+  session identity. Nothing depends on keeping the desktop app open: it is used as
+  a signed executable, not as a running UI, and a supervised launch has no window
+  and no Dock icon.
 
-## Other platforms
+## Requirements and other platforms
 
-Linux hosts (local or over SSH) keep the existing daemon and ordinary filesystem
-permissions: no bundle, no Apple signing, no TCC. Which mechanism applies is
-decided by the machine the session *runs on*, not by the client you use. Driving a
-Linux session from a Mac browser still uses Linux permissions. Running `claude`
-yourself in a terminal, without Walnut, is unaffected.
+- Needs a `Walnut.app` that knows the flag, looked for at `/Applications`, then
+  `~/Applications`, then a repo checkout's `desktop/Walnut.app`. Support is
+  detected by reading the binary, never by running it, because an older app handed
+  an unknown flag would ignore it and open a window. An older app is reported in
+  the log with the command to rebuild it, and the daemon runs under the plain
+  identity meanwhile.
+- An npm or terminal-only install with no `Walnut.app` keeps the plain node
+  identity. Nothing is installed and no bundle is built to change that.
+- Linux hosts (local or over SSH) keep the existing daemon and ordinary filesystem
+  permissions: no bundle, no Apple signing, no TCC. Which mechanism applies is
+  decided by the machine the session *runs on*, not by the client you use. Driving
+  a Linux session from a Mac browser still uses Linux permissions. Running
+  `claude` yourself in a terminal, without Walnut, is unaffected.
 
 ## Operational notes
 
-- Built and signed on demand on first daemon start, then reused. It is **never**
-  rebuilt while its source is unchanged: the code identity is what the grant is
-  remembered against, so a pointless rebuild would silently discard it.
-- Needs the Xcode Command Line Tools for that one-time compile, same as the
-  calendar and Screen Time helpers. Without them the daemon runs under the plain
-  identity and says so in the log.
-- Anything wrong with the host (no compiler, a refused launch) falls back to
+- Anything wrong (no app, an app too old to know the flag, not macOS) falls back to
   starting the daemon directly and logs an error. An identity improvement must
   never be able to take local sessions down.
-- One case deliberately does not fall back: the host is still running but no
-  daemon has published its port. Walnut then fails with a message naming the host
-  instead of starting a second daemon, because the first one may be seconds from
-  coming up and two daemons against one runtime dir is the worse outcome. The
-  message points at `daemon-stderr.log` and at the switch below.
+- One case deliberately does not fall back: the app is still running as a
+  supervisor but no daemon has published its port. Walnut then fails with a message
+  naming it instead of starting a second daemon, because the first one may be
+  seconds from coming up and two daemons against one runtime dir is the worse
+  outcome. The message points at `daemon-stderr.log` and at the switch below.
 - Turn it off with `WALNUT_SESSION_HOST=0`.
 - Test and sandbox daemons deliberately do not use it, so a test run can never
-  install a granted identity or put a permission dialog on screen.
-- The host runs only the command recorded in
+  borrow a granted identity or put a permission dialog on screen.
+- Walnut runs only the command recorded in
   `~/Library/Application Support/Open Walnut/session-host-launch.json`, and
   re-checks the payload's hash before starting it. That file is owned by you and
-  mode 0600, which stops other software from reusing the host. Code running as
-  your own user could rewrite it, so it is not a defence against same-user malware.
+  mode 0600, which stops other software from reusing the app as a launcher. Code
+  running as your own user could rewrite it, so it is not a defence against
+  same-user malware.
 
-Implementation: `src/data/walnut-sessions.swift` (the supervisor),
-`src/providers/session-host.ts` (build, sign, install, approve),
-`src/providers/session-host-core.ts` (paths, manifest, launch decision).
+Implementation: `desktop/SessionHost.swift` (the supervisor, called by
+`desktop/main.swift` before any UI exists), `src/providers/session-host.ts` (find
+the app, approve the command), `src/providers/session-host-core.ts` (paths,
+manifest, launch decision).

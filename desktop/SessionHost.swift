@@ -1,49 +1,51 @@
-// walnut-sessions — the macOS execution identity for Walnut's agent sessions.
+// Session host — Walnut.app supervising the session daemon, so macOS attributes
+// agent sessions to Walnut instead of to whichever `node` started the server.
 //
-// WHY THIS EXISTS
+// WHY THIS LIVES IN THE APP
 //
-// macOS attributes a file access to the RESPONSIBLE process, which is inherited
-// at spawn time from the top of the launcher chain. Walnut's server is
-// `node dist/cli.js web`, so the daemon it spawns, the `claude` CLI under that,
-// and every tool the CLI runs all inherited `…/bin/node` as their responsible
-// process. Three consequences the user actually saw:
+// macOS attributes a file access to the RESPONSIBLE process, inherited at spawn
+// time from the top of the launcher chain. When Walnut.app starts the server, the
+// server, the daemon, the `claude` CLI and every tool the CLI runs are already
+// attributed to Walnut, and none of this code is needed. The gap is a server
+// started from a TERMINAL (`npm run dev:prod`), which makes `…/bin/node` the
+// responsible process for the whole subtree. What the user then saw:
 //
 //   - the dialog says `"node" would like to access data from other apps`, naming
 //     a shared runtime instead of the thing that is asking;
 //   - the grant belongs to that node build, so a Homebrew node upgrade throws it
 //     away, and every other node program on the machine shares it;
 //   - the automatic app-container permission lasts only while the granted app is
-//     running (WWDC23 session 10053), so the chain's short-lived processes kept
-//     re-asking.
+//     running (WWDC23 session 10053), so short-lived processes kept re-asking.
 //
-// This binary is a stable, signed bundle that sits ABOVE the daemon: it makes
-// itself the responsible process, then launches the daemon. Everything the
-// daemon starts is then attributed to `Walnut Sessions` — one long-lived identity
-// the user can grant to once, independent of which node is installed and of
-// whether Walnut was started from a terminal or from Walnut.app.
+// So the daemon is launched THROUGH this app: `Walnut --session-host -- <daemon>
+// …`. The process macOS holds responsible is then Walnut.app's own executable,
+// which is what the user already recognises and already grants to. Deliberately
+// NOT a second bundle: a separate identity would mean a second row in Privacy &
+// Security for something the user thinks of as one app.
 //
 // WHAT IT MUST NOT DO
 //
 // Be visible in any other way. It is a transparent supervisor: same argv, same
 // environment, same file descriptors, exit status mirrored bit for bit, signals
-// forwarded. The daemon's exit status is load-bearing — it exits non-zero on
-// purpose so launchd restarts it to finish a service update — so swallowing or
-// normalising it would silently break daemon updates. It also must not call
-// setsid() or change the process group: the LaunchAgent sets AbandonProcessGroup,
-// and the daemon reaps sessions through the process groups it makes itself.
+// forwarded. The daemon's exit status is load-bearing (it exits non-zero on
+// purpose so launchd restarts it to finish a service update), so swallowing or
+// normalising it would silently break daemon updates. It must not call setsid()
+// or change the process group: the LaunchAgent sets AbandonProcessGroup, and the
+// daemon reaps sessions through the process groups it makes itself. And it must
+// never touch AppKit — main.swift calls it before any UI exists, so a supervised
+// launch has no window, no Dock icon, no second app instance.
 //
 // WHAT THE MANIFEST IS AND IS NOT
 //
-// A tool that runs anything handed to it under a granted identity would be a
+// An app that runs anything handed to it under a granted identity would be a
 // permission bypass for every other program on the machine, so this one runs only
-// a command listed in a user-private manifest beside the bundle, and re-verifies
-// the payload's hash before exec. Be precise about the limit: the manifest is
-// owned by the same user, so code running AS THAT USER can rewrite it. This
-// guards against other software casually reusing the host, and against a payload
-// swapped after it was approved. It is NOT a sandbox and NOT a defence against
-// same-user malware — macOS offers no user-level mechanism that would be.
+// a command listed in a user-private manifest, and re-verifies the payload's hash
+// before exec. Be precise about the limit: the manifest is owned by the same
+// user, so code running AS THAT USER can rewrite it. This guards against other
+// software casually reusing the app, and against a payload swapped after it was
+// approved. It is NOT a sandbox and NOT a defence against same-user malware.
 //
-// Built, signed and installed on demand by src/providers/session-host.ts.
+// The manifest is written by src/providers/session-host.ts.
 
 import CryptoKit
 import Darwin
@@ -67,12 +69,16 @@ private func responsiblePid(for pid: pid_t) -> pid_t {
 
 // MARK: - Exit paths
 
+/// The flag that turns this app into a supervisor. Must be argv[1]: a normal
+/// launch never reaches any of the code below.
+let sessionHostFlag = "--session-host"
+
 /// Reserved for the host's OWN refusals, so a Walnut-side caller can tell "the
 /// host would not run this" from any status the payload chose for itself.
 private let refusalStatus: Int32 = 125
 
 private func refuse(_ message: String) -> Never {
-    FileHandle.standardError.write(Data(("walnut-sessions: " + message + "\n").utf8))
+    FileHandle.standardError.write(Data(("walnut session host: " + message + "\n").utf8))
     exit(refusalStatus)
 }
 
@@ -99,10 +105,10 @@ private func checkPrivate(_ path: String, expectDirectory: Bool) {
 
 /// A payload file (the daemon binary, the interpreter, the script).
 ///
-/// Deliberately NOT the check above. These live wherever the machine put them —
-/// `/usr/bin`, a root-owned Homebrew prefix, a symlink farm — and demanding that
-/// we own the directory would refuse to run on ordinary installs while adding
-/// nothing: root-owned is MORE trustworthy, not less. The hash is the integrity
+/// Deliberately NOT the check above. These live wherever the machine put them:
+/// `/usr/bin`, a root-owned Homebrew prefix, a symlink farm. Demanding that we own
+/// the directory would refuse to run on ordinary installs while adding nothing,
+/// since root-owned is MORE trustworthy, not less. The hash is the integrity
 /// statement here; the only thing worth refusing is a payload that anyone on the
 /// machine could rewrite between approval and exec.
 private func checkPayload(_ path: String) {
@@ -134,15 +140,21 @@ private struct LaunchEntry {
     let files: [(path: String, sha256: String)]
 }
 
-/// Beside the bundle, resolved from OUR OWN bundle path — never from an argument
-/// or an environment variable, so what this identity may run cannot be redirected
-/// by whoever starts it.
-private func manifestPath() -> String {
-    (Bundle.main.bundleURL.path as NSString).deletingLastPathComponent + "/session-host-launch.json"
+/// Under the REAL user's home, from the passwd entry.
+///
+/// Not from an argument, not from an environment variable, and deliberately not
+/// `$HOME`: what this identity may run must not be redirectable by whoever starts
+/// it, and Walnut itself runs with a fake HOME in its sandbox modes. Not beside
+/// the bundle either, the way a self-installed helper could afford to: this app
+/// lives in /Applications, where a manifest would be root-owned and shared.
+func sessionHostManifestPath() -> String {
+    guard let entry = getpwuid(getuid()), let home = entry.pointee.pw_dir else {
+        refuse("no passwd home directory for uid \(getuid())")
+    }
+    return String(cString: home) + "/Library/Application Support/Open Walnut/session-host-launch.json"
 }
 
-private func loadEntries() -> [LaunchEntry] {
-    let manifest = manifestPath()
+private func loadEntries(_ manifest: String) -> [LaunchEntry] {
     checkPrivate((manifest as NSString).deletingLastPathComponent, expectDirectory: true)
     checkPrivate(manifest, expectDirectory: false)
     guard let data = FileManager.default.contents(atPath: manifest),
@@ -168,9 +180,9 @@ private func loadEntries() -> [LaunchEntry] {
     }
 }
 
-private func authorize(_ requested: [String]) -> [String] {
-    guard let match = loadEntries().first(where: { $0.argv == requested }) else {
-        refuse("this command is not approved in \(manifestPath())")
+private func authorize(_ requested: [String], manifest: String) -> [String] {
+    guard let match = loadEntries(manifest).first(where: { $0.argv == requested }) else {
+        refuse("this command is not approved in \(manifest)")
     }
     for file in match.files {
         checkPayload(file.path)
@@ -184,7 +196,7 @@ private func authorize(_ requested: [String]) -> [String] {
 
 // MARK: - Spawning and supervision
 
-private func spawn(_ argv: [String], environment: [String: String], disclaimed: Bool) -> pid_t {
+private func spawnSupervised(_ argv: [String], environment: [String: String], disclaimed: Bool) -> pid_t {
     var attributes: posix_spawnattr_t?
     guard posix_spawnattr_init(&attributes) == 0 else { refuse("posix_spawnattr_init failed") }
     defer { posix_spawnattr_destroy(&attributes) }
@@ -249,50 +261,71 @@ private func supervise(_ child: pid_t) -> Never {
 /// payload's environment so it can never be mistaken for a Walnut setting.
 private let disclaimedMarker = "WALNUT_SESSION_HOST_DISCLAIMED"
 
-let arguments = Array(CommandLine.arguments.dropFirst())
+/// `manifestPath` is a DEFAULT-ARGUMENT seam, not configuration: production calls
+/// this with no second argument and gets the passwd-derived path, so no argument
+/// and no environment variable reaching this process can redirect what it may
+/// run. A test binary compiled from this same file supplies its own path, which
+/// is the only way to exercise the refusals without writing to the real user's
+/// manifest.
+///
+/// Run as a session-host supervisor when asked, otherwise return and let the app
+/// start normally. Called as main.swift's first statement, so nothing about the
+/// GUI has happened yet and a supervised launch never becomes a visible app.
+///
+/// Never returns in supervisor mode: it either execs into supervision or refuses.
+func runSessionHostIfRequested(
+    _ commandLine: [String] = CommandLine.arguments,
+    manifestPath: String = sessionHostManifestPath()
+) {
+    let arguments = Array(commandLine.dropFirst())
+    guard arguments.first == sessionHostFlag else { return }
+    let rest = Array(arguments.dropFirst())
 
-// `--identity`: what this process is, for Walnut's reporting and for tests. The
-// only mode that produces stdout — proof of the responsible process has to come
-// from the running program, not from an assumption about it.
-if arguments.first == "--identity" {
-    let mine = getpid()
-    let payload: [String: Any] = [
-        "pid": mine,
-        "parentPid": getppid(),
-        "responsiblePid": responsiblePid(for: mine),
-        "selfResponsible": responsiblePid(for: mine) == mine,
-        "bundlePath": Bundle.main.bundleURL.path,
-        "bundleIdentifier": Bundle.main.bundleIdentifier ?? "",
-        "executablePath": Bundle.main.executablePath ?? "",
-        "disclaimed": ProcessInfo.processInfo.environment[disclaimedMarker] == "1",
-        "manifestPath": manifestPath(),
-    ]
-    if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
-        FileHandle.standardOutput.write(data)
-        FileHandle.standardOutput.write(Data([0x0a]))
+    // `--identity`: what this process is, for Walnut's reporting and for tests.
+    // The only mode that produces stdout, because proof of the responsible
+    // process has to come from the running program rather than from an
+    // assumption about it. Checked before the argv guard so a bare invocation
+    // still refuses without starting anything.
+    if rest.first == "--identity" {
+        let mine = getpid()
+        let payload: [String: Any] = [
+            "pid": mine,
+            "parentPid": getppid(),
+            "responsiblePid": responsiblePid(for: mine),
+            "selfResponsible": responsiblePid(for: mine) == mine,
+            "bundlePath": Bundle.main.bundleURL.path,
+            "bundleIdentifier": Bundle.main.bundleIdentifier ?? "",
+            "executablePath": Bundle.main.executablePath ?? "",
+            "disclaimed": ProcessInfo.processInfo.environment[disclaimedMarker] == "1",
+            "manifestPath": manifestPath,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
+            FileHandle.standardOutput.write(data)
+            FileHandle.standardOutput.write(Data([0x0a]))
+        }
+        exit(0)
     }
-    exit(0)
-}
 
-guard arguments.count >= 2, arguments[0] == "--" else {
-    refuse("usage: WalnutSessionsHost -- /absolute/program [args...]")
-}
-let requested = Array(arguments.dropFirst())
+    guard rest.count >= 2, rest[0] == "--" else {
+        refuse("usage: Walnut \(sessionHostFlag) -- /absolute/program [args...]")
+    }
+    let requested = Array(rest.dropFirst())
 
-var environment = ProcessInfo.processInfo.environment
-if environment[disclaimedMarker] != "1" {
-    // First generation. Nothing is validated yet on purpose: re-exec as our own
-    // TCC subject first, so the process that reads the manifest and runs the
-    // payload is the one macOS holds responsible.
-    guard let executable = Bundle.main.executablePath else { refuse("no executable path") }
-    environment[disclaimedMarker] = "1"
+    var environment = ProcessInfo.processInfo.environment
+    if environment[disclaimedMarker] != "1" {
+        // First generation. Nothing is validated yet on purpose: re-exec as our
+        // own TCC subject first, so the process that reads the manifest and runs
+        // the payload is the one macOS holds responsible.
+        guard let executable = Bundle.main.executablePath else { refuse("no executable path") }
+        environment[disclaimedMarker] = "1"
+        forwardSignals()
+        supervise(spawnSupervised([executable, sessionHostFlag] + rest, environment: environment, disclaimed: true))
+    }
+
+    // Second generation: this process is the identity macOS attributes the
+    // daemon's file access to. Authorise, then get out of the way.
+    let approved = authorize(requested, manifest: manifestPath)
+    environment.removeValue(forKey: disclaimedMarker)
     forwardSignals()
-    supervise(spawn([executable] + arguments, environment: environment, disclaimed: true))
+    supervise(spawnSupervised(approved, environment: environment, disclaimed: false))
 }
-
-// Second generation: this process is the identity macOS attributes the daemon's
-// file access to. Authorise, then get out of the way.
-let approved = authorize(requested)
-environment.removeValue(forKey: disclaimedMarker)
-forwardSignals()
-supervise(spawn(approved, environment: environment, disclaimed: false))

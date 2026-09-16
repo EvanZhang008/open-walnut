@@ -1,24 +1,24 @@
 /**
- * Walnut Sessions host — build, install, approve, launch.
+ * Session host — find Walnut.app, approve one command, launch the daemon under it.
  *
- * The macOS side effects for src/providers/session-host-core.ts. What this buys
- * and what it deliberately does not is documented at the top of
- * src/data/walnut-sessions.swift; the short version is that the daemon (and
- * therefore every `claude` CLI and tool under it) becomes attributed to one
- * stable signed bundle instead of to whichever `node` started Walnut.
+ * What this buys and what it deliberately does not is documented at the top of
+ * desktop/SessionHost.swift; the short version is that the daemon (and therefore
+ * every `claude` CLI and tool under it) becomes attributed to Walnut instead of to
+ * whichever `node` started the server.
  *
  * Three rules this file encodes:
  *
- *  - An unchanged source is NEVER rebuilt. The installed bundle's code identity
- *    is what a TCC grant is remembered against, so a pointless rebuild would hand
- *    the user an identical-looking host that lost the permission they granted
- *    (the same trap src/core/helper-build.ts documents for the helpers).
- *  - A broken host degrades to the plain spawn. Local sessions are the product;
- *    an identity improvement must never be able to take them down. It is logged at
- *    error level and reported as "not isolated" rather than quietly pretended.
- *  - It installs under the REAL user's home (the passwd entry, not `$HOME`), so a
- *    sandbox or test process with a fake HOME can never install a granted identity
- *    into a throwaway directory — nor find one there and think it is missing.
+ *  - It uses the app the user ALREADY has. Nothing is compiled, signed or
+ *    installed here: a second bundle would mean a second row in Privacy &
+ *    Security for something the user thinks of as one app, which is exactly the
+ *    over-engineering this replaced.
+ *  - It never runs an app that does not know the flag. An older Walnut.app handed
+ *    `--session-host` would ignore it and boot the GUI, putting a window on
+ *    screen; support is checked by looking for the flag IN the binary, without
+ *    executing it.
+ *  - A missing or unsupported app degrades to the plain spawn. Local sessions are
+ *    the product; an identity improvement must never be able to take them down.
+ *    It is logged and reported as "not isolated" rather than quietly pretended.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -27,41 +27,20 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CLOUD_MODE, IS_EPHEMERAL } from '../constants.js';
-import { helperSourcePath, signNativeTarget } from '../core/helper-build.js';
 import { log } from '../logging/index.js';
 import {
   buildSessionHostManifest,
+  desktopAppCandidates,
+  desktopAppExecutable,
   parseSessionHostIdentity,
-  renderSessionHostInfoPlist,
   sessionHostArgv,
-  sessionHostPaths,
+  sessionHostManifestPath,
   sessionHostUnavailableReason,
-  SESSION_HOST_BUNDLE_ID,
-  SESSION_HOST_EXECUTABLE_NAME,
+  SESSION_HOST_FLAG,
   type SessionHostFile,
   type SessionHostIdentity,
-  type SessionHostPaths,
   type SessionHostUnavailable,
 } from './session-host-core.js';
-
-const SWIFT_SOURCE = 'walnut-sessions.swift';
-
-/** Inputs that decide the installed bytes. Not a version number: there is none. */
-function sourceFingerprint(sourcePath: string): string | null {
-  let source: Buffer;
-  try {
-    source = fs.readFileSync(sourcePath);
-  } catch {
-    return null;
-  }
-  return createHash('sha256')
-    .update(source)
-    .update('\n--\n')
-    .update(SESSION_HOST_BUNDLE_ID)
-    .update('\n--\n')
-    .update(renderSessionHostInfoPlist())
-    .digest('hex');
-}
 
 async function hashFile(target: string): Promise<string> {
   const hash = createHash('sha256');
@@ -79,113 +58,37 @@ async function hashFile(target: string): Promise<string> {
   return hash.digest('hex');
 }
 
-interface CommandResult { ok: boolean; code: number | null; stdout: string; stderr: string }
-
-function run(cmd: string, args: string[], timeoutMs = 120_000): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const done = (result: CommandResult): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      done({ ok: false, code: null, stdout, stderr: `${stderr} (timed out)` });
-    }, timeoutMs);
-    child.stdout?.on('data', (d) => { stdout += String(d); });
-    child.stderr?.on('data', (d) => { stderr += String(d); });
-    child.on('error', (err) => done({ ok: false, code: null, stdout, stderr: err.message }));
-    child.on('close', (code) => done({ ok: code === 0, code, stdout, stderr }));
-  });
-}
-
-export interface SessionHostBuildResult {
-  ok: boolean;
-  reason?: SessionHostUnavailable;
-  detail?: string;
-  /** True when the bundle already matched its fingerprint and was left alone. */
-  reused?: boolean;
-}
-
 /**
- * Put a signed bundle at `paths.app`, or explain why not.
+ * Does this Walnut.app know `--session-host`?
  *
- * `sign` exists for tests: signing reaches the login keychain, which a test must
- * not do. Production always signs — an ad-hoc bundle still works, it just has a
- * content-hash identity that resets on every rebuild.
+ * Answered by searching the Mach-O for the flag, NEVER by running it: an app that
+ * does not know the flag would ignore it and start the GUI. Chunked with an
+ * overlap so a match spanning two reads is still found.
  */
-export async function buildSessionHostBundle(
-  paths: SessionHostPaths,
-  options: { sign?: boolean } = {},
-): Promise<SessionHostBuildResult> {
-  const source = helperSourcePath(SWIFT_SOURCE);
-  const fingerprint = sourceFingerprint(source);
-  if (fingerprint === null) {
-    return { ok: false, reason: 'build_failed', detail: `native source missing at ${source}` };
-  }
-
-  // Reuse before anything else. Rewriting an unchanged bundle is the one silently
-  // destructive thing this function could do.
-  let installed: string | null = null;
-  try { installed = (await fsp.readFile(paths.fingerprint, 'utf8')).trim() || null; } catch { installed = null; }
-  if (installed === fingerprint && fs.existsSync(paths.executable)) {
-    return { ok: true, reused: true };
-  }
-
-  await fsp.mkdir(paths.root, { recursive: true, mode: 0o700 });
-  // Staging beside the target: same filesystem, so the swap below cannot EXDEV,
-  // and a compile killed halfway can never leave a half-built bundle installed.
-  const staging = path.join(paths.root, `.session-host-staging-${process.pid}`);
-  await fsp.rm(staging, { recursive: true, force: true });
-  const stagedApp = path.join(staging, path.basename(paths.app));
-  const stagedMacOS = path.join(stagedApp, 'Contents', 'MacOS');
+async function appSupportsSessionHost(executable: string): Promise<boolean> {
+  const needle = Buffer.from(SESSION_HOST_FLAG, 'utf8');
+  let handle: fsp.FileHandle;
   try {
-    await fsp.mkdir(stagedMacOS, { recursive: true });
-    await fsp.writeFile(path.join(stagedApp, 'Contents', 'Info.plist'), renderSessionHostInfoPlist());
-    const stagedExecutable = path.join(stagedMacOS, SESSION_HOST_EXECUTABLE_NAME);
-    const compiled = await run('nice', ['-n', '10', 'xcrun', 'swiftc', '-O', '-o', stagedExecutable, source]);
-    if (!compiled.ok) {
-      // "No compiler on this box" is an install step for the user; "our source
-      // will not build" is our bug. They must not collapse into one message.
-      const missing = compiled.code === null || compiled.code === 127
-        || /xcrun: error|unable to find utility|command not found|no developer tools/i.test(compiled.stderr);
-      return {
-        ok: false,
-        reason: missing ? 'not_installed' : 'build_failed',
-        detail: compiled.stderr.slice(0, 400),
-      };
+    handle = await fsp.open(executable, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const chunk = 1 << 20;
+    const overlap = needle.length - 1;
+    const buffer = Buffer.allocUnsafe(chunk + overlap);
+    let carried = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, carried, chunk, null);
+      if (bytesRead === 0) return false;
+      const filled = buffer.subarray(0, carried + bytesRead);
+      if (filled.includes(needle)) return true;
+      // Keep the tail so the next window can complete a straddling match.
+      filled.subarray(filled.length - overlap).copy(buffer, 0);
+      carried = Math.min(overlap, filled.length);
     }
-    await fsp.chmod(stagedExecutable, 0o755);
-    if (options.sign !== false) {
-      // The BUNDLE is signed as a unit (that is what gives the user a named row in
-      // System Settings), but the exec probe has to name the Mach-O inside it.
-      await signNativeTarget({
-        path: stagedApp,
-        execProbe: stagedExecutable,
-        identifier: SESSION_HOST_BUNDLE_ID,
-        label: 'walnut-sessions',
-      });
-    }
-
-    // Swap. A directory cannot be renamed over a non-empty one, so the old bundle
-    // goes first. Deleting it is safe for a RUNNING host: macOS keeps the mapped
-    // image alive, so a live daemon under the previous bundle is unaffected.
-    await fsp.rm(paths.fingerprint, { force: true });
-    await fsp.rm(paths.app, { recursive: true, force: true });
-    await fsp.rename(stagedApp, paths.app);
-    // Written only after the bundle is in place: a fingerprint without its bundle
-    // would make the next boot skip a build it still has to do.
-    await fsp.writeFile(paths.fingerprint, `${fingerprint}\n`);
-    return { ok: true, reused: false };
-  } catch (err) {
-    return { ok: false, reason: 'build_failed', detail: err instanceof Error ? err.message : String(err) };
   } finally {
-    await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
+    await handle.close();
   }
 }
 
@@ -196,7 +99,7 @@ export async function buildSessionHostBundle(
  * accumulate. 0600 because the file names what this identity will execute.
  */
 export async function approveSessionHostCommand(
-  paths: SessionHostPaths,
+  manifest: string,
   argv: readonly string[],
 ): Promise<void> {
   const files: SessionHostFile[] = [];
@@ -210,37 +113,40 @@ export async function approveSessionHostCommand(
     if (!stat.isFile()) continue;
     files.push({ path: word, sha256: await hashFile(word) });
   }
-  const manifest = buildSessionHostManifest([{ argv, files }]);
-  const temp = `${paths.manifest}.tmp-${process.pid}`;
-  await fsp.writeFile(temp, manifest, { mode: 0o600 });
+  const body = buildSessionHostManifest([{ argv, files }]);
+  await fsp.mkdir(path.dirname(manifest), { recursive: true, mode: 0o700 });
+  const temp = `${manifest}.tmp-${process.pid}`;
+  await fsp.writeFile(temp, body, { mode: 0o600 });
   await fsp.chmod(temp, 0o600);
-  await fsp.rename(temp, paths.manifest);
+  await fsp.rename(temp, manifest);
 }
 
 /** What the host says it is. Null when it could not be asked or did not answer. */
 export async function readSessionHostIdentity(executable: string): Promise<SessionHostIdentity | null> {
-  const result = await run(executable, ['--identity'], 10_000);
-  if (!result.ok) return null;
-  return parseSessionHostIdentity(result.stdout);
-}
-
-let buildOnce: Promise<SessionHostBuildResult> | null = null;
-let cachedPaths: SessionHostPaths | null = null;
-
-/** Reset the memoized build (tests). */
-export function resetSessionHostForTest(): void {
-  buildOnce = null;
-  cachedPaths = null;
+  return new Promise((resolve) => {
+    const child = spawn(executable, [SESSION_HOST_FLAG, '--identity'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let stdout = '';
+    let settled = false;
+    const done = (value: SessionHostIdentity | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => { child.kill('SIGKILL'); done(null); }, 10_000);
+    child.stdout?.on('data', (d) => { stdout += String(d); });
+    child.on('error', () => done(null));
+    child.on('close', (code) => done(code === 0 ? parseSessionHostIdentity(stdout) : null));
+  });
 }
 
 /**
  * The REAL user's home, from the passwd entry rather than `$HOME`.
  *
  * Never os.homedir(): it IS `$HOME`, and Walnut deliberately runs with a fake
- * HOME in sandbox/onboarding modes. Installing a granted identity into a
- * throwaway home would be worse than not installing one, because the next real
- * run would find nothing there and build a SECOND identity the user has to grant
- * all over again.
+ * HOME in sandbox/onboarding modes. Looking for Walnut.app under a throwaway home
+ * would report "not installed" on a machine that has it, and would write the
+ * manifest somewhere the app will never read.
  */
 function realHome(): string | null {
   try {
@@ -252,12 +158,11 @@ function realHome(): string | null {
 }
 
 export type SessionHostResolution =
-  | { available: true; argv: string[]; executable: string; paths: SessionHostPaths }
+  | { available: true; argv: string[]; executable: string; app: string; manifest: string }
   | { available: false; reason: SessionHostUnavailable; detail?: string };
 
 /**
- * Resolve the argv that runs `program args…` under the Walnut Sessions identity,
- * building and approving as needed.
+ * Resolve the argv that runs `program args…` under Walnut's identity.
  *
  * Callers treat `available: false` as "spawn it directly" — see the degradation
  * rule in this file's header.
@@ -280,43 +185,35 @@ export async function resolveSessionHostLaunch(input: {
 
   const home = realHome();
   if (!home) return { available: false, reason: 'not_installed', detail: 'no passwd home for this user' };
-  const resolved = sessionHostPaths(home);
-  if (!cachedPaths || cachedPaths.root !== resolved.root) {
-    // A different location is a different bundle; a memoized build for the old one
-    // says nothing about this one.
-    cachedPaths = resolved;
-    buildOnce = null;
-  }
-  const paths = cachedPaths;
 
-  if (!buildOnce) buildOnce = buildSessionHostBundle(paths);
-  const built = await buildOnce;
-  if (!built.ok) {
-    // A failed build is retried on the next daemon spawn: the usual cause is a
-    // missing compiler, which the user can install without restarting Walnut.
-    buildOnce = null;
-    return { available: false, reason: built.reason ?? 'build_failed', detail: built.detail };
+  const app = desktopAppCandidates(home).find((candidate) => fs.existsSync(desktopAppExecutable(candidate)));
+  if (!app) {
+    return {
+      available: false,
+      reason: 'not_installed',
+      detail: 'no Walnut.app found; sessions run under the plain node identity',
+    };
+  }
+  const executable = desktopAppExecutable(app);
+  if (!(await appSupportsSessionHost(executable))) {
+    return {
+      available: false,
+      reason: 'unsupported_app',
+      detail: `${app} does not know ${SESSION_HOST_FLAG}; rebuild it with desktop/build-release.sh`,
+    };
   }
 
   const argv = [input.program, ...input.args];
+  const manifest = sessionHostManifestPath(home);
   try {
-    await approveSessionHostCommand(paths, argv);
+    await approveSessionHostCommand(manifest, argv);
   } catch (err) {
     return {
       available: false,
-      reason: 'build_failed',
+      reason: 'unsupported_app',
       detail: `could not approve the launch: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  log.session.info('daemon will run under the Walnut Sessions identity', {
-    host: paths.app,
-    program: input.program,
-    reused: built.reused === true,
-  });
-  return {
-    available: true,
-    argv: sessionHostArgv(paths.executable, input.program, input.args),
-    executable: paths.executable,
-    paths,
-  };
+  log.session.info('daemon will run under the Walnut app identity', { app, program: input.program });
+  return { available: true, argv: sessionHostArgv(executable, input.program, input.args), executable, app, manifest };
 }

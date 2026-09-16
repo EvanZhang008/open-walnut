@@ -1883,6 +1883,14 @@ extension AppDelegate: WKNavigationDelegate {
 
 // MARK: - Entry Point
 
+// `Walnut --session-host -- <program> …` supervises that program instead of
+// starting the app, so macOS attributes the session daemon (and every CLI and
+// tool under it) to Walnut rather than to whichever `node` started the server.
+// FIRST, before NSApplication exists: a supervised launch must never become a
+// visible app instance. Returns immediately on a normal launch. See
+// desktop/SessionHost.swift.
+runSessionHostIfRequested()
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
