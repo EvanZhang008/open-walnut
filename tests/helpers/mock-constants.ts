@@ -6,6 +6,7 @@
  *   import { createMockConstants } from '../helpers/mock-constants.js';
  *   vi.mock('../../src/constants.js', () => createMockConstants());
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,11 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     os.tmpdir(),
     `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
+  // Create the home HERE, in the worker, so tests/setup/tmp-reaper.ts sees the
+  // creation and removes it after the file. Left to the code under test, the
+  // first mkdir often happens in a spawned daemon or CLI, which the reaper cannot
+  // observe — those homes were the leak that outlived the reaper (2026-09-16).
+  fs.mkdirSync(tmpBase, { recursive: true });
   const tasksDir = path.join(tmpBase, 'tasks');
   const validateAgentId = (agentId: string) => {
     const ordinary = /^[a-z0-9_-]{1,64}$/i.test(agentId);
