@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildSessionHostManifest,
+  classifySessionHostStart,
   parseSessionHostIdentity,
   renderSessionHostInfoPlist,
   sessionHostArgv,
@@ -221,6 +222,52 @@ describe('parseSessionHostIdentity', () => {
     for (const bad of ['', 'not json', '[]', 'null', '{"pid":1}', JSON.stringify({ ...identity, pid: '1' })]) {
       expect(parseSessionHostIdentity(bad)).toBeNull();
     }
+  });
+});
+
+describe('classifySessionHostStart', () => {
+  it('accepts the start as soon as the daemon published its port', () => {
+    for (const hostAlive of [true, false]) {
+      const start = classifySessionHostStart({ portFileSeen: true, hostUsed: true, hostAlive });
+      expect(start).toEqual({ verdict: 'started', reason: 'port_file_written' });
+    }
+  });
+
+  it('retries directly when the host exited without bringing a daemon up', () => {
+    // The degradation rule: an identity upgrade must never be able to leave the
+    // machine with no local sessions.
+    expect(classifySessionHostStart({ portFileSeen: false, hostUsed: true, hostAlive: false }))
+      .toEqual({ verdict: 'retry_directly', reason: 'host_exited_without_daemon' });
+  });
+
+  it('refuses to retry while the host is still running', () => {
+    // The one case that could produce TWO daemons against one runtime dir. A
+    // live host may have a daemon seconds away from writing its port file, so
+    // this must fail loudly instead of starting a competitor. The retry is only
+    // safe in the case above, and only because the host outlives its daemon.
+    expect(classifySessionHostStart({ portFileSeen: false, hostUsed: true, hostAlive: true }))
+      .toEqual({ verdict: 'give_up', reason: 'host_still_running' });
+  });
+
+  it('keeps the plain spawn failure exactly as it was', () => {
+    // No host involved: this is the pre-existing "port file not created" error,
+    // and adding the identity layer must not turn it into a second spawn.
+    for (const hostAlive of [true, false]) {
+      expect(classifySessionHostStart({ portFileSeen: false, hostUsed: false, hostAlive }))
+        .toEqual({ verdict: 'give_up', reason: 'plain_spawn_failed' });
+    }
+  });
+
+  it('never answers retry_directly for a spawn the host did not make', () => {
+    // Generated rather than hand-listed: a retry is authorized by exactly one
+    // combination, and every other one of the eight must not get it.
+    const combos = [true, false].flatMap((portFileSeen) =>
+      [true, false].flatMap((hostUsed) =>
+        [true, false].map((hostAlive) => ({ portFileSeen, hostUsed, hostAlive })),
+      ),
+    );
+    const retries = combos.filter((c) => classifySessionHostStart(c).verdict === 'retry_directly');
+    expect(retries).toEqual([{ portFileSeen: false, hostUsed: true, hostAlive: false }]);
   });
 });
 

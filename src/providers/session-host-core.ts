@@ -5,7 +5,7 @@
  * Mac, a compiler, or a real daemon. The macOS side effects (compile, sign,
  * install, spawn) live in ./session-host.ts.
  *
- * Background in desktop/session-host/main.swift: the host is a signed bundle
+ * Background in src/data/walnut-sessions.swift: the host is a signed bundle
  * that becomes the responsible process for the daemon, so macOS attributes the
  * daemon's file access to `Walnut Sessions` instead of to whichever `node`
  * happens to have started Walnut.
@@ -228,6 +228,51 @@ export function sessionHostUnavailableReason(
   if (input.ephemeral) return 'ephemeral';
   if (path.resolve(input.daemonDir) !== path.resolve(input.prodDaemonDir)) return 'isolated_daemon';
   return null;
+}
+
+export type SessionHostStartVerdict = 'started' | 'retry_directly' | 'give_up';
+
+export interface SessionHostStart {
+  verdict: SessionHostStartVerdict;
+  /** Why, for the log line the operator will read. */
+  reason:
+    | 'port_file_written'
+    | 'host_exited_without_daemon'
+    | 'host_still_running'
+    | 'plain_spawn_failed';
+}
+
+export interface SessionHostStartFacts {
+  /** The daemon published its port file within the wait budget. */
+  portFileSeen: boolean;
+  /** The daemon was started THROUGH the host (false = it was a plain spawn). */
+  hostUsed: boolean;
+  /** The host process is still alive. Meaningless when `hostUsed` is false. */
+  hostAlive: boolean;
+}
+
+/**
+ * What to do when a daemon spawn produced no port file.
+ *
+ * Pure because it is the one decision in this feature that can lose a user's
+ * local sessions, and the code path it guards is deliberately unreachable from a
+ * test: the host never engages for an isolated daemon dir
+ * (`sessionHostUnavailableReason` → `isolated_daemon`), so a fixture could only
+ * exercise it by pointing at the REAL production dir and fighting the live
+ * daemon. The decision lives here instead, where a fixture can pin every case.
+ *
+ * The invariant worth stating plainly: a retry is safe ONLY because the host
+ * outlives its daemon. A dead host with no port file therefore proves no daemon
+ * is running, so the retry cannot end up with two daemons against one runtime
+ * dir. A host that is STILL RUNNING proves nothing of the kind (its daemon may
+ * be seconds from writing the port file), so that case must fail loudly rather
+ * than start a competitor.
+ */
+export function classifySessionHostStart(facts: SessionHostStartFacts): SessionHostStart {
+  if (facts.portFileSeen) return { verdict: 'started', reason: 'port_file_written' };
+  if (!facts.hostUsed) return { verdict: 'give_up', reason: 'plain_spawn_failed' };
+  if (facts.hostAlive) return { verdict: 'give_up', reason: 'host_still_running' };
+  return { verdict: 'retry_directly', reason: 'host_exited_without_daemon' };
 }
 
 export interface SessionHostIdentity {

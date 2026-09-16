@@ -59,7 +59,7 @@ sessions keep working if you skip it, deny it, or revoke it later.
 
 Linux hosts (local or over SSH) keep the existing daemon and ordinary filesystem
 permissions: no bundle, no Apple signing, no TCC. Which mechanism applies is
-decided by the machine the session *runs on*, not by the client you use — driving a
+decided by the machine the session *runs on*, not by the client you use. Driving a
 Linux session from a Mac browser still uses Linux permissions. Running `claude`
 yourself in a terminal, without Walnut, is unaffected.
 
@@ -74,13 +74,18 @@ yourself in a terminal, without Walnut, is unaffected.
 - Anything wrong with the host (no compiler, a refused launch) falls back to
   starting the daemon directly and logs an error. An identity improvement must
   never be able to take local sessions down.
+- One case deliberately does not fall back: the host is still running but no
+  daemon has published its port. Walnut then fails with a message naming the host
+  instead of starting a second daemon, because the first one may be seconds from
+  coming up and two daemons against one runtime dir is the worse outcome. The
+  message points at `daemon-stderr.log` and at the switch below.
 - Turn it off with `WALNUT_SESSION_HOST=0`.
 - Test and sandbox daemons deliberately do not use it, so a test run can never
   install a granted identity or put a permission dialog on screen.
 - The host runs only the command recorded in
   `~/Library/Application Support/Open Walnut/session-host-launch.json`, and
   re-checks the payload's hash before starting it. That file is owned by you and
-  mode 0600 — it stops other software from reusing the host, but code running as
+  mode 0600, which stops other software from reusing the host. Code running as
   your own user could rewrite it, so it is not a defence against same-user malware.
 
 Implementation: `src/data/walnut-sessions.swift` (the supervisor),
