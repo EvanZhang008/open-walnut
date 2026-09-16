@@ -5491,9 +5491,23 @@ select {
 
 .markdown-body pre {
   background: var(--bg-tertiary);
-  padding: 12px;
+  /* `scroll`, not `auto`: with `auto` the track appears only once the column gets
+     narrow, and WebKit lays that late track out inside the <pre> alone — the
+     block grew 6px, its ancestors kept the old height, and the next paragraph
+     was painted UNDER the block's bottom edge (2026-09-15, Mac app, narrow
+     session column). A box that never changes late cannot leave its ancestors
+     sized for the old one.
+     The bottom padding then subtracts whatever the track actually costs, so the
+     bottom edge reads 12px like the other three sides. That cost is not a
+     constant: 6px in the Mac app and Safari (::-webkit-scrollbar is styled at
+     the top of this file, which makes macOS scrollbars classic), 0px in Chrome on
+     macOS and on iOS (overlay), ~15px on Windows/Linux — hence the measured
+     var (web/src/utils/scrollbar-metrics.ts), and `max()` so a track wider than
+     the design padding never becomes a negative one.
+     Pinned by tests/e2e/browser/code-block-hscroll-overlap{,.webkit}.spec.ts. */
+  padding: 12px 12px max(0px, calc(12px - var(--wn-scrollbar-h, 0px)));
   border-radius: var(--radius-sm);
-  overflow-x: auto;
+  overflow-x: scroll;
   margin: 8px 0;
 }
 
@@ -6195,7 +6209,13 @@ select {
 .chat-tool-block-result.markdown-body h6 { margin-top: 6px; margin-bottom: 1px; font-size: 13px; font-weight: 600; }
 .chat-tool-block-result.markdown-body p { margin: 2px 0; }
 .chat-tool-block-result.markdown-body code { font-size: 11px; }
-.chat-tool-block-result.markdown-body pre { margin: 4px 0; padding: 6px 8px; white-space: pre-wrap; }
+/* These two surfaces WRAP, so they need no reserved track and no bottom
+   compensation (both come from the base rule above). `overflow-wrap: anywhere` is
+   what makes "it wraps" true rather than nearly true: `pre-wrap` alone breaks at
+   spaces, so one unbreakable token (a base64 blob, a hash, a long path — ordinary
+   tool output) still overflowed sideways and brought the late-scrollbar overlap
+   back into these narrow panels. */
+.chat-tool-block-result.markdown-body pre { margin: 4px 0; padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto; }
 .chat-tool-block-result.markdown-body ul,
 .chat-tool-block-result.markdown-body ol { padding-left: 16px; margin: 2px 0; }
 .chat-tool-block-result.markdown-body li { margin: 1px 0; }
@@ -6307,7 +6327,7 @@ select {
 .claude-stream-text.markdown-body > *:last-child { margin-bottom: 0; }
 .claude-stream-text.markdown-body p { margin: 2px 0; }
 .claude-stream-text.markdown-body code { font-size: 11px; }
-.claude-stream-text.markdown-body pre { margin: 4px 0; padding: 6px 8px; white-space: pre-wrap; }
+.claude-stream-text.markdown-body pre { margin: 4px 0; padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto; }
 .claude-stream-text.markdown-body ul,
 .claude-stream-text.markdown-body ol { padding-left: 16px; margin: 2px 0; }
 .claude-stream-system {
@@ -12332,9 +12352,11 @@ body.walnut-dragging {
 .todo-detail-note.markdown-body pre {
   font-size: 11px;
   background: var(--bg-tertiary);
-  padding: 6px 8px;
+  /* Same reserved-track arithmetic as the base rule, at this panel's 6px scale.
+     Re-declaring `overflow-x: auto` here would put the late-scrollbar overlap
+     back on this (narrow) panel. */
+  padding: 6px 8px max(0px, calc(6px - var(--wn-scrollbar-h, 0px)));
   border-radius: 4px;
-  overflow-x: auto;
   margin: 6px 0;
 }
 
@@ -15286,7 +15308,11 @@ a.task-kebab-info:hover {
 .context-markdown pre {
   font-size: 12px;
   max-height: 200px;
-  overflow: auto;
+  /* Per-axis, NOT `overflow: auto`: the shorthand also reset overflow-x, which put
+     the late-horizontal-track overlap back on this panel while inheriting the base
+     rule's already-compensated bottom padding (thumb over the last line of code). */
+  overflow-x: scroll;
+  overflow-y: auto;
 }
 
 .context-markdown table {
@@ -27612,9 +27638,9 @@ a.file-link:hover {
 }
 .session-diff-rendered .markdown-body pre {
   background: var(--bg-tertiary);
-  padding: 14px 16px;
+  /* The reserved track (base rule) is part of this 14px bottom edge. */
+  padding: 14px 16px max(0px, calc(14px - var(--wn-scrollbar-h, 0px)));
   border-radius: 8px;
-  overflow-x: auto;
   margin: 0 0 16px;
   line-height: 1.5;
 }

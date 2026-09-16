@@ -14,6 +14,7 @@ import { initBrowserLogger } from './utils/browser-logger';
 import { initLongTaskMonitor } from './utils/longtask-monitor';
 import { initInputLatencyMonitor } from './utils/input-latency-monitor';
 import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
+import { publishScrollbarMetrics } from './utils/scrollbar-metrics';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import { pressKeepsSelection, selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
@@ -43,6 +44,11 @@ initMainThreadTracer();
 initInputLatencyMonitor();
 // Cache server version/mode for crash reports (survives to server-down crashes).
 initAppInfo();
+// Publish how much room a scrollbar takes (`--wn-scrollbar-h`). Code blocks
+// reserve their horizontal track up front and subtract this from their bottom
+// padding, so the reserved strip cannot double as dead space. Before mount: the
+// first painted code block should already have the right padding.
+publishScrollbarMetrics();
 // A deploy replaces the build this tab runs. The server keeps the old build's
 // chunks servable so nothing breaks under a click; this pair moves the tab onto
 // the new build at a quiet moment (hidden tab after the reconnect a deploy
