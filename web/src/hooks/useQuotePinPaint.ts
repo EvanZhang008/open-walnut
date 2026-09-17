@@ -14,7 +14,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { clearPanelPinRanges, setPanelPinRanges } from '@/utils/pin-highlights';
-import { buildTextIndex, locateQuote, rangeFromOffsets } from '@/utils/text-quote-anchor';
+import { buildTextIndex, locateQuote, rangeFromOffsets, rangeIsLive } from '@/utils/text-quote-anchor';
+import { bodyForMsgId } from '@/utils/selection-quote';
 import { pinKeyOf } from '@/hooks/useSessionPins';
 import type { SessionPinnedMessage, SessionPinnedQuote } from '@/types/session';
 import { log } from '@/utils/log';
@@ -29,38 +30,20 @@ const RELOCATE_DEBOUNCE_MS = 150;
 const REPAIR_MIN_GAP_MS = 250;
 
 /**
- * Does this Range still address the passage?
- *
  * ⚠️ THE ONE THING TO KNOW ABOUT THIS FILE. When React re-renders a message body
- * it REPLACES the text node the pin's Range was built over. A Range is live, so it
- * does not break — the DOM spec says its boundary points move up to the removed
- * node's parent at the child index, which for a passage inside one text node means
- * start === end. The result is a COLLAPSED range whose containers are elements:
- *
- *   · `startContainer.isConnected` is still **true** (the parent is in the document)
- *   · `getClientRects()` is **empty**, so `::highlight()` paints nothing
- *   · `isPointInRange` can never match a caret
- *
+ * it REPLACES the text node the pin's Range was built over, and the Range comes
+ * back COLLAPSED on an element with `isConnected` still true and no client rects:
  * `CSS.highlights` keeps holding it and `size` still reports 1, so every "is it
- * painted" signal says yes while the reader sees no yellow and a click on the
- * passage does nothing. Measured exactly that: a live-looking registry, `rects:
- * []`, `startConnected: true`, no hit. Judge staleness by the boundary SHAPE
- * (collapsed / no longer text nodes), never by connectivity.
+ * painted" signal says yes while the reader sees no yellow. `rangeIsLive`
+ * (text-quote-anchor.ts) carries the full account and the rule — judge staleness by
+ * the boundary SHAPE, never by connectivity — and is shared with the quote pill's
+ * held passage, so both surfaces repair from the same test.
  */
-function isLive(range: Range): boolean {
-  return !range.collapsed
-    && range.startContainer.isConnected
-    && range.endContainer.isConnected
-    // rangeFromOffsets always anchors on text nodes; an element container means the
-    // range has been re-pointed by a DOM removal.
-    && range.startContainer.nodeType === Node.TEXT_NODE
-    && range.endContainer.nodeType === Node.TEXT_NODE;
-}
 
 /** Is it actually drawing? Costs a layout read, so this is only used on the click
  *  path (once per click), never in the mutation loop. */
 function isPainting(range: Range): boolean {
-  if (!isLive(range)) return false;
+  if (!rangeIsLive(range)) return false;
   try {
     return range.getClientRects().length > 0;
   } catch {
@@ -79,15 +62,6 @@ export interface QuotePinPaint {
   /** Currently painted passages, for hit-testing a click (`::highlight` receives
    *  no events, so the popover has to ask the geometry itself). */
   paintedRanges: () => Array<{ pinKey: string; range: Range }>;
-}
-
-/** The message body a quote pin points into, or null when the row is not rendered
- *  (the render window is a tail slice). */
-function bodyForMsgId(container: HTMLElement, msgId: string): Element | null {
-  const row = container.querySelector(`[data-message-id="${CSS.escape(msgId)}"]`);
-  // One row wraps one SessionMessage, which owns exactly one `.session-msg-content`
-  // — the first match IS the message body.
-  return row?.querySelector('.session-msg-content') ?? null;
 }
 
 export function useQuotePinPaint(
@@ -152,7 +126,7 @@ export function useQuotePinPaint(
   useEffect(() => { relocateRef.current = relocate; }, [relocate]);
 
   const hasStaleRange = useCallback(() => {
-    for (const range of rangesRef.current.values()) if (!isLive(range)) return true;
+    for (const range of rangesRef.current.values()) if (!rangeIsLive(range)) return true;
     return false;
   }, []);
 

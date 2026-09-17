@@ -14,7 +14,7 @@ import {
   threadKeyOf, type ComposerThreadAnchor, type ThreadTree,
 } from '@/utils/thread-tree';
 import { pinLabelFor } from '@/hooks/useSessionPins';
-import { canAnchorQuote, captureSelectionQuote, selectionVisibleIn } from '@/utils/selection-quote';
+import { releaseSelectionHold, requestSelectionHold } from '@/utils/selection-hold';
 import { ThreadAnchorChip } from './ThreadAnchorChip';
 import { SessionViewToggle } from './SessionThreadNav';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
@@ -730,71 +730,31 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   effectiveAnchorRef.current = effectiveAnchor;
 
   /**
-   * Dictation is about to write into the composer — keep the passage the user
-   * selected.
+   * Dictated text is about to take focus in the composer, which collapses the page's
+   * selection. If the timeline's quote pill is up on a passage, ask it to HOLD: the
+   * passage stays painted and Copy / Pin / Ask keep working after the selection is
+   * gone (QuotePinSelectionBar, "HOLDING").
    *
    * Reported 2026-09-10: "I select text, use voice to text, and the selection gets
-   * deselected." Two things took it, both ours: the instant-clear guard on the mic
-   * press (fixed at the press, `data-keep-selection`), and then the focus this write
-   * moves into the composer, which the browser answers by collapsing the document
-   * selection. Nothing can keep a selection through that — so the passage is carried
-   * over into the durable form the app already has for it: the composer's thread
-   * anchor, the same state the pill's Ask produces, visible as the chip and cleared
-   * with its `×`.
+   * deselected." The first answer went further than the report and turned the
+   * selection into the composer's thread anchor. Reported 2026-09-16, with a
+   * screenshot of a chip nobody asked for: the reader had dragged over one word while
+   * reading, dictated a question about something else, and got "asking about" that
+   * word; sent as-is, the turn would have been filed under that reply with the word
+   * quoted above the question. A selection is not a request; the pill's Ask is. So
+   * nothing is inferred here any more: the passage stays reachable, and the chip
+   * appears only when the user presses Ask.
    *
-   * Deliberately NOT at the mic press, and not at a live draft either: the press
-   * and the drafts leave the selection alone now (a recording the user abandons
-   * must not leave a chip they never asked for), so this runs once, when the FINAL
-   * text is about to take focus — the one write that really does collapse the
-   * selection, and therefore the last moment it can be read. Capturing then also
-   * means a passage re-selected mid-recording is the one that gets carried.
-   *
-   * This INFERS what the user meant, so the cost of being wrong is worth stating: a
-   * `selection` anchor makes the send quote the passage above the message
-   * (`composeAnchoredText`) and files the turn under that reply. The chip says so
-   * before anything is sent and its `×` undoes it, which is what makes the guess
-   * acceptable; the four bails below are what keep it narrow.
+   * Runs once, when the FINAL text is about to take focus (not at the mic press, not
+   * at a live draft): that is the one write that collapses the selection, and so the
+   * last moment the pill can still read it. Sent from the panel root: the pill
+   * answers for the timeline this panel contains.
    */
-  const anchorDictationToSelection = useCallback(() => {
-    // An anchor the user AIMED wins ('selection' from the pill's Ask, 'manual' from
-    // the thread on screen). A `sticky` one does not: linear mode promotes the anchor
-    // to sticky on send and never clears it, so bailing on any anchor at all would
-    // mean the first thread of a session silently swallows every later dictation
-    // (select passage B, dictate, and the chip still names passage A).
-    const held = effectiveAnchorRef.current;
-    if (held && held.source !== 'sticky') return;
-    if (!sessionId || engineUi.isAcp) return; // no anchor is meaningful here (canAsk)
-    // TREE MODE STANDS DOWN. There the composer's target is DERIVED from the thread on
-    // screen (see `effectiveAnchor`), which the user picked; inferring a different one
-    // from a highlight is exactly the "second, independently mutable answer to where
-    // the next message goes" that view exists to remove. Opening a branch also needs
-    // the timeline's own `navigateThread` (it marks the navigation, resets the expanded
-    // turns and chases the scroll), which only the pill's Ask can reach — so the pill
-    // stays the explicit way to branch off a passage here.
-    if (viewMode === 'tree') return;
-    const container = panelRef.current?.querySelector<HTMLElement>('.session-panel-body .session-history');
-    const selection = typeof window !== 'undefined' ? window.getSelection() : null;
-    if (!container || !selection || selection.isCollapsed) return;
-    // A selection carries no timestamp, so ON SCREEN is the freshness test: a passage
-    // selected and scrolled away from ten minutes ago must not become the anchor for
-    // whatever the user says next. Same helper the pill dismisses itself with.
-    // (Ordered after the collapsed check on purpose: this reads two client rects, i.e.
-    // two synchronous layouts, and every draft write during a recording comes through
-    // here — with a sticky anchor held and nothing selected, that is pure waste.)
-    if (!selectionVisibleIn(container, selection)) return;
-    const captured = captureSelectionQuote(container, selection);
-    if (!canAnchorQuote(captured)) return;
-    const anchor: ComposerThreadAnchor = {
-      parent: captured.msgId,
-      quote: captured.quote,
-      source: 'selection',
-      label: pinLabelFor(captured.quote.exact, 'this passage'),
-    };
-    setComposerAnchor(anchor);
-    log.info('session', 'dictation kept the selected passage as the composer anchor', {
-      sessionId, msgId: captured.msgId, chars: captured.quote.exact.length,
-    });
-  }, [sessionId, engineUi.isAcp, viewMode, setComposerAnchor]);
+  const holdDictationSelection = useCallback(() => {
+    if (requestSelectionHold(panelRef.current)) {
+      log.info('session', 'dictation landed with a passage selected; the quote pill holds it', { sessionId });
+    }
+  }, [sessionId]);
 
   /** `×` on the chip. In tree mode "no anchor" and "top level" are the same state,
    *  so clearing navigates there; the stored selection Ask is dropped either way. */
@@ -1410,6 +1370,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const sendAnchored = useCallback(async (
     message: string, images: ImageAttachment[] | undefined, interrupt: boolean,
   ): Promise<boolean> => {
+    // A passage the quote pill held through dictation has served its purpose once
+    // the user sends: with Ask it is the chip below; without, they chose not to.
+    releaseSelectionHold(panelRef.current);
     const anchor = effectiveAnchorRef.current;
     const dispatch = interrupt ? interruptSend : send;
     if (!anchor) return dispatch(sessionId, message, images);
@@ -1673,7 +1636,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           )}
           <ChatInput
             // Same rule in the plan popup's composer: dictation keeps the passage.
-            onDictationInsert={anchorDictationToSelection}
+            onDictationInsert={holdDictationSelection}
             controlsSlot={session ? (() => {
               // Mode toggle uses session.mode only (not planCompleted) — planCompleted
               // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
@@ -2255,8 +2218,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           <ChatInput
             focusNonce={composerFocusNonce}
             // Dictating into this box takes focus and so collapses the page's
-            // selection: keep the passage first (see anchorDictationToSelection).
-            onDictationInsert={anchorDictationToSelection}
+            // selection: let the quote pill hold the passage first (holdDictationSelection).
+            onDictationInsert={holdDictationSelection}
             controlsSlot={session ? (() => {
               // Mode toggle uses session.mode only (not planCompleted) — planCompleted
               // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.

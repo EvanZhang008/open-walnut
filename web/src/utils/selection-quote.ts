@@ -36,6 +36,33 @@ function roleOf(value: string | null | undefined): 'user' | 'assistant' | 'syste
   return value === 'user' || value === 'system' ? value : 'assistant';
 }
 
+function elementOf(node: Node | null): Element | null {
+  if (!node) return null;
+  return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+}
+
+/** The message body a captured passage belongs to, if that row is rendered. One row
+ *  wraps one SessionMessage, which owns exactly one `.session-msg-content` — the
+ *  first match IS the message body. Shared by the pin paint and the pill's held
+ *  passage, which re-locate a passage from its captured quote the same way. */
+export function bodyForMsgId(container: HTMLElement, msgId: string): Element | null {
+  return container.querySelector(`[data-message-id="${CSS.escape(msgId)}"] .session-msg-content`);
+}
+
+/** Does this event target sit inside a text control? A press there is the user
+ *  WRITING, which a pill holding a passage must not read as moving on. */
+export function targetInEditable(target: EventTarget | null): boolean {
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return false;
+  return !!elementOf(target)?.closest(EDITABLE);
+}
+
+/** Is either end of the selection inside a text control? Chromium reports a run
+ *  selected inside a textarea as a non-collapsed document selection anchored on
+ *  the control, so "a real selection appeared" has to exclude this case. */
+export function selectionInEditable(selection: Selection): boolean {
+  return targetInEditable(selection.anchorNode) || targetInEditable(selection.focusNode);
+}
+
 /** The message body a selection lives in, or null when the selection is not one
  *  message's prose: both ends must sit in the SAME `.session-msg-content` inside
  *  this container, in the top document, outside any editable control.
@@ -103,8 +130,13 @@ export function captureSelectionQuote(container: HTMLElement, selection: Selecti
  */
 export function selectionVisibleIn(container: HTMLElement, selection: Selection): boolean {
   if (selection.rangeCount === 0) return false;
+  return rangeVisibleIn(container, selection.getRangeAt(selection.rangeCount - 1));
+}
+
+/** The same test for a Range the pill is HOLDING after the selection collapsed. */
+export function rangeVisibleIn(container: HTMLElement, range: Range): boolean {
   const box = container.getBoundingClientRect();
-  const r = selection.getRangeAt(selection.rangeCount - 1).getBoundingClientRect();
+  const r = range.getBoundingClientRect();
   if (!r.width && !r.height) return false;
   // Both axes: a wide code block scrolls sideways inside a message.
   return r.bottom > box.top && r.top < box.bottom && r.right > box.left && r.left < box.right;

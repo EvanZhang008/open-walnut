@@ -301,16 +301,16 @@ await fs.writeFile(
         // WRITES a thread anchor to the session record (dictation carries the selected
         // passage into the composer), so it gets its own record — an anchor left on a
         // shared session makes a rail exist where another spec expects none.
-        id: 'pw-task-voicesel',
+        id: 'pw-task-voicesel1',
         title: 'Voice selection fixture task',
         status: 'in_progress',
         phase: 'IN_PROGRESS',
         priority: 'none',
         project: 'Walnut',
         source: 'local',
-        session_ids: ['pw-voicesel-session'],
+        session_ids: ['pw-voicesel1-session'],
         active_session_ids: [],
-        session_id: 'pw-voicesel-session',
+        session_id: 'pw-voicesel1-session',
         session_status: { process_status: 'stopped', mode: 'bypass' },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -378,6 +378,28 @@ await fs.writeFile(
         session_ids: ['pw-voicesel4-session'],
         active_session_ids: [],
         session_id: 'pw-voicesel4-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Fifth voice-input session: the stray-word test (a word dragged over while
+        // reading, then a dictated question SENT with Enter) proves the send went to
+        // the top level — a send, so its own session, same reason as the three above.
+        id: 'pw-task-voicesel5',
+        title: 'Voice selection fixture task 5',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-voicesel5-session'],
+        active_session_ids: [],
+        session_id: 'pw-voicesel5-session',
         session_status: { process_status: 'stopped', mode: 'bypass' },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -1327,9 +1349,9 @@ await fs.writeFile(
   // `pw-threads-session` (0199bb…) for session-threads.spec.ts and
   // `pw-stream-select-session` (0199dd…), `pw-streamsel2-session` (0199de…) and
   // `pw-streamsel3-session` (0199df…) for session-stream-selection.spec.ts, and
-  // `pw-voicesel-session` (0199e0…), `pw-voicesel2-session` (0199e1…),
-  // `pw-voicesel3-session` (0199e2…) and `pw-voicesel4-session` (0199e3…) for
-  // session-voice-selection.spec.ts. Pins and thread
+  // `pw-voicesel1-session` (0199e0…), `pw-voicesel2-session` (0199e1…),
+  // `pw-voicesel3-session` (0199e2…), `pw-voicesel4-session` (0199e3…) and
+  // `pw-voicesel5-session` (0199e4…) for session-voice-selection.spec.ts. Pins and thread
   // anchors are SERVER state on the session record, so two spec files sharing one
   // session rewrite each other's state under parallel workers (seen 2026-09-04:
   // the outline spec counted the quote spec's pin as a third tick, and the threads
@@ -1425,10 +1447,11 @@ await fs.writeFile(
   await fs.writeFile(path.join(jsonlDir, 'pw-stream-select-session.jsonl'), pinsTranscript('pw-stream-select-session', '0199dd'))
   await fs.writeFile(path.join(jsonlDir, 'pw-streamsel2-session.jsonl'), pinsTranscript('pw-streamsel2-session', '0199de'))
   await fs.writeFile(path.join(jsonlDir, 'pw-streamsel3-session.jsonl'), pinsTranscript('pw-streamsel3-session', '0199df'))
-  await fs.writeFile(path.join(jsonlDir, 'pw-voicesel-session.jsonl'), pinsTranscript('pw-voicesel-session', '0199e0'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-voicesel1-session.jsonl'), pinsTranscript('pw-voicesel1-session', '0199e0'))
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel2-session.jsonl'), pinsTranscript('pw-voicesel2-session', '0199e1'))
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel3-session.jsonl'), pinsTranscript('pw-voicesel3-session', '0199e2'))
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel4-session.jsonl'), pinsTranscript('pw-voicesel4-session', '0199e3'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-voicesel5-session.jsonl'), pinsTranscript('pw-voicesel5-session', '0199e4'))
   // Changed-tab code-intel fixture (changed-code-intel.spec.ts): a session whose
   // JSONL records a Write of sync-controller.go — the Changed tab reconstructs
   // the diff from exactly these tool_use blocks, and the on-disk twin (written
@@ -1829,8 +1852,8 @@ await fs.writeFile(
         title: 'Streaming selection fixture session 3',
       },
       {
-        claudeSessionId: 'pw-voicesel-session',
-        taskId: 'pw-task-voicesel',
+        claudeSessionId: 'pw-voicesel1-session',
+        taskId: 'pw-task-voicesel1',
         project: 'Walnut',
         process_status: 'stopped',
         mode: 'bypass',
@@ -1879,6 +1902,19 @@ await fs.writeFile(
         messageCount: 53,
         cwd: vscodeFixtureRoot,
         title: 'Voice selection fixture session 4',
+      },
+      {
+        claudeSessionId: 'pw-voicesel5-session',
+        taskId: 'pw-task-voicesel5',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Voice selection fixture session 5',
       },
       {
         claudeSessionId: 'pw-changed-session',

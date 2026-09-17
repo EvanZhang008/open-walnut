@@ -10,8 +10,9 @@
  */
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import {
-  KEEP_SELECTION_ATTR, pointerSelectingWithin, pressKeepsSelection, selectionIntersects,
+  KEEP_SELECTION_ATTR, heldPassageIntersects, pointerSelectingWithin, pressKeepsSelection, selectionIntersects,
 } from '../../web/src/utils/selection-guard';
+import { setHeldQuoteRange } from '../../web/src/utils/pin-highlights';
 
 describe('selection-guard (no DOM)', () => {
   it('imports without touching document/window', () => {
@@ -88,5 +89,47 @@ describe('pressKeepsSelection', () => {
       expect(pressKeepsSelection(child(new FakeElement(false)) as unknown as EventTarget)).toBe(false);
       expect(pressKeepsSelection(child(null) as unknown as EventTarget)).toBe(false);
     });
+  });
+});
+
+/**
+ * A passage the quote pill HOLDS after the document selection collapsed (dictated
+ * text took the composer's focus) counts as a selection for the scroll guards: the
+ * reader is still pointing at those words, so follow-bottom must not carry them
+ * away and growth above them is compensated. Pinned here because the guard reads
+ * the pill's slot through `heldQuoteRange`, and a node-env consumer must still get
+ * a plain false.
+ */
+describe('heldPassageIntersects', () => {
+  const node = {} as Node;
+  const rangeOver = (hit: boolean, collapsed = false) => ({
+    collapsed,
+    intersectsNode: () => hit,
+  } as unknown as Range);
+
+  afterAll(() => { setHeldQuoteRange(null); });
+
+  it('is false with nothing held, and for no node', () => {
+    setHeldQuoteRange(null);
+    expect(heldPassageIntersects(node)).toBe(false);
+    setHeldQuoteRange(rangeOver(true));
+    expect(heldPassageIntersects(null)).toBe(false);
+  });
+
+  it('follows the held range while it is live', () => {
+    setHeldQuoteRange(rangeOver(true));
+    expect(heldPassageIntersects(node)).toBe(true);
+    setHeldQuoteRange(rangeOver(false));
+    expect(heldPassageIntersects(node)).toBe(false);
+  });
+
+  it('a collapsed held range (its text node re-rendered away) counts as nothing', () => {
+    setHeldQuoteRange(rangeOver(true, true));
+    expect(heldPassageIntersects(node)).toBe(false);
+  });
+
+  it('a range that throws on intersectsNode (detached) fails closed', () => {
+    setHeldQuoteRange({ collapsed: false, intersectsNode: () => { throw new Error('detached'); } } as unknown as Range);
+    expect(heldPassageIntersects(node)).toBe(false);
   });
 });

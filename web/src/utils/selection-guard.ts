@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, type RefObject } from 'react';
+import { heldQuoteRange } from './pin-highlights';
 
 /**
  * Selection guard — shared primitives that keep text selection usable in
@@ -98,14 +99,31 @@ export function selectionIntersects(node: Node | null): boolean {
 }
 
 /**
+ * True when the quote pill is HOLDING a passage inside `node` (useHeldPassage):
+ * the document selection collapsed because the composer took focus for dictated
+ * text, but the reader is still pointing at those words. For the scroll guards
+ * below that is a selection in every way that matters — NOT for the streaming
+ * freeze, which reads the live selection only, so a reply catches up while the
+ * question is being written and the pill re-locates itself over the new DOM.
+ */
+export function heldPassageIntersects(node: Node | null): boolean {
+  if (!node) return false;
+  const range = heldQuoteRange();
+  if (!range || range.collapsed) return false;
+  try {
+    return range.intersectsNode(node);
+  } catch { return false; }
+}
+
+/**
  * Returns a predicate: "should auto-scroll pause right now?" — true while the
- * user is drag-selecting inside the container OR an active selection
- * intersects it. Selection = user intent to read/copy, same as scrolling up.
+ * user is drag-selecting inside the container OR an active selection (or a held
+ * passage) intersects it. Selection = user intent to read/copy, same as scrolling up.
  */
 export function useSelectionScrollGuard(ref: RefObject<HTMLElement | null>): () => boolean {
   ensurePointerTracking();
   return useCallback(
-    () => pointerSelectingWithin(ref.current) || selectionIntersects(ref.current),
+    () => pointerSelectingWithin(ref.current) || selectionIntersects(ref.current) || heldPassageIntersects(ref.current),
     [ref],
   );
 }
@@ -137,12 +155,19 @@ export function useSelectionAnchoredScroll(ref: RefObject<HTMLElement | null>): 
     /** Viewport y the selection is being held at, or null when there is none. */
     let anchoredTop: number | null = null;
 
-    const topOfSelection = (): number | null => {
+    /** The live selection's range inside `el`, else the pill's held passage there. */
+    const passageRange = (): Range | null => {
       if (typeof window === 'undefined') return null;
       const sel = window.getSelection();
-      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-      if (!selectionIntersects(el)) return null;
-      const r = sel.getRangeAt(sel.rangeCount - 1).getBoundingClientRect();
+      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+        return selectionIntersects(el) ? sel.getRangeAt(sel.rangeCount - 1) : null;
+      }
+      return heldPassageIntersects(el) ? heldQuoteRange() : null;
+    };
+    const topOfSelection = (): number | null => {
+      const range = passageRange();
+      if (!range) return null;
+      const r = range.getBoundingClientRect();
       if (!r.width && !r.height) return null;
       return r.top;
     };

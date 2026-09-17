@@ -1,20 +1,24 @@
 /**
- * The ONE answer to "what passage is selected in a timeline?" — shared by the quote
- * pill and by the dictation path that keeps a passage when voice input takes the
- * composer's focus (`web/src/utils/selection-quote.ts`).
+ * The ONE answer to "what passage is selected in a timeline?" — the quote pill's
+ * helpers (`web/src/utils/selection-quote.ts`), including the predicates the pill
+ * uses while HOLDING a passage after voice input took the composer's focus.
  *
  * Reported 2026-09-10: "I select text, use voice to text, and the selection gets
  * deselected." The press was fixed where it happened (main.tsx opts the mic out of
  * its instant clear), but no fix can hold a selection through a focus move — so the
- * passage is captured and carried into the composer's thread anchor instead.
+ * pill keeps the passage it captured and paints it from the side. (Between 09-10 and
+ * 09-16 the passage was carried into the composer's thread anchor instead; a word
+ * dragged over while reading became an "asking about" chip nobody asked for, so
+ * nothing is inferred from a selection any more.)
  *
  * SCOPE, so nobody reads more into a green run than it means: this file pins the
- * shared HELPER, not the fix. Both surfaces must agree about which passages can be
- * carried (`canAnchorQuote`) and about when a selection has scrolled out of reach
- * (`selectionVisibleIn`), so a passage can never be offered by one and dropped by the
- * other. Revert the press opt-out or the carry-over call and this file still passes;
- * what fails then is tests/e2e/browser/session-voice-selection.spec.ts, which drives
- * a real browser and is where the fix itself is red-checked.
+ * HELPERS, not the fix. Which passages can be asked about (`canAnchorQuote`), when a
+ * selection or a held Range has scrolled out of reach (`selectionVisibleIn`,
+ * `rangeVisibleIn`), and what counts as the user WRITING rather than moving on
+ * (`targetInEditable`, `selectionInEditable`). Revert the press opt-out or the hold
+ * request and this file still passes; what fails then is
+ * tests/e2e/browser/session-voice-selection.spec.ts, which drives a real browser and
+ * is where the fix itself is red-checked.
  *
  * DOM note: the node tiers have no jsdom, so the tree comes from linkedom (already
  * in the repo, same choice as tests/web/notes-roundtrip/dom-setup.ts). Two gaps in
@@ -30,7 +34,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import { parseHTML } from 'linkedom';
-import { canAnchorQuote, captureSelectionQuote, selectionBody, selectionVisibleIn } from '../../web/src/utils/selection-quote';
+import {
+  canAnchorQuote, captureSelectionQuote, rangeVisibleIn, selectionBody, selectionInEditable,
+  selectionVisibleIn, targetInEditable,
+} from '../../web/src/utils/selection-quote';
 
 const { window, document } = parseHTML('<!DOCTYPE html><html><body></body></html>');
 // The production code reads these off globals. linkedom exposes no `NodeFilter`, so
@@ -240,6 +247,54 @@ describe('selectionVisibleIn', () => {
 
   it('drops an empty selection without asking for a range', () => {
     expect(selectionVisibleIn(...boxes(null))).toBe(false);
+  });
+
+  it('is the same rule for a held Range (the pill after the selection collapsed)', () => {
+    const [container, selection] = boxes({ top: 200, bottom: 220, left: 40, right: 300 });
+    expect(rangeVisibleIn(container, selection.getRangeAt(0))).toBe(true);
+    const [, gone] = boxes({ top: 20, bottom: 60, left: 40, right: 300 });
+    expect(rangeVisibleIn(container, gone.getRangeAt(0))).toBe(false);
+    const [, noBox] = boxes({ top: 200, bottom: 200, left: 40, right: 40 });
+    expect(rangeVisibleIn(container, noBox.getRangeAt(0))).toBe(false);
+  });
+});
+
+/**
+ * While the pill HOLDS a passage, the document selection is expected to be collapsed
+ * and the caret lives in the composer. These two predicates are how the pill tells
+ * "the user is writing their question" (keep holding) from "the user moved on" (let
+ * go): a press or a selection inside a text control is writing.
+ */
+describe('targetInEditable', () => {
+  it('sees the composer textarea, and a node inside a contenteditable', () => {
+    const container = timeline(`
+      <textarea class="chat-input-textarea"></textarea>
+      <div contenteditable="true"><p>draft <b>words</b></p></div>
+      <div class="session-msg-content"><p>prose</p></div>`);
+    const root = container as unknown as Element;
+    expect(targetInEditable(root.querySelector('textarea'))).toBe(true);
+    expect(targetInEditable(root.querySelector('b')!.firstChild)).toBe(true);
+    expect(targetInEditable(root.querySelector('.session-msg-content p')!.firstChild)).toBe(false);
+  });
+
+  it('fails closed on nothing, and on a target that is not a node', () => {
+    expect(targetInEditable(null)).toBe(false);
+    expect(targetInEditable({} as EventTarget)).toBe(false);
+  });
+});
+
+describe('selectionInEditable', () => {
+  it('a run selected inside the composer counts, whichever end sits in it', () => {
+    const container = timeline(`<textarea class="chat-input-textarea">typed words</textarea>${REPLY}`);
+    const box = textIn(container, 'textarea');
+    const prose = textIn(container, '.session-msg-content p');
+    expect(selectionInEditable(selectionOver(box, 0, 5))).toBe(true);
+    expect(selectionInEditable(selectionAcross(box, 0, prose, 3))).toBe(true);
+    expect(selectionInEditable(selectionOver(prose, 0, 10))).toBe(false);
+  });
+
+  it('a selection with no nodes is not in a text control', () => {
+    expect(selectionInEditable({ anchorNode: null, focusNode: null } as unknown as Selection)).toBe(false);
   });
 });
 

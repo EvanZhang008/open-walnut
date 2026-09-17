@@ -25,16 +25,34 @@
  * The remaining event detail is `onPointerDown` → `stopPropagation()` on the
  * portal root, or the press reaches a sortable row's drag sensors through the
  * React tree (portals escape clipping, not bubbling).
+ *
+ * HOLDING. Dictated text landing in the composer takes focus, which collapses the
+ * document selection — and used to take the pill with it. The composer now asks the
+ * pill to HOLD first (`requestSelectionHold`, selection-hold.ts): the captured
+ * passage stays, `useHeldPassage` keeps painting the words the selection covered
+ * and keeps the pill on them through re-renders and scrolls, and Pin / Ask / Copy
+ * keep working from the capture. The hold ends when the user acts on the pill,
+ * sends a message (the panel releases it), presses Escape, presses anywhere that is
+ * not this panel's composer or mic, or makes a new selection. Nothing about a held
+ * passage is INFERRED: from 2026-09-10 to 09-16 the landing turned the selection
+ * into the composer's thread anchor instead, and a word dragged over while reading
+ * became an "asking about" chip nobody asked for. The chip is Ask's to create.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import {
-  canAnchorQuote, captureSelectionQuote, selectionBody, selectionVisibleIn, type SelectionQuote,
+  canAnchorQuote, captureSelectionQuote, selectionBody, selectionInEditable, selectionVisibleIn,
+  targetInEditable, type SelectionQuote,
 } from '@/utils/selection-quote';
 import { type TextQuote } from '@/utils/text-quote-anchor';
+import { pressKeepsSelection } from '@/utils/selection-guard';
+import {
+  SELECTION_HOLD_EVENT, SELECTION_RELEASE_EVENT, type SelectionHoldDetail,
+} from '@/utils/selection-hold';
 import { copyTextRobust } from '@/utils/clipboard';
 import { ICON_PIN } from './MessageActionIcons';
+import { rangePoint, sameBoundaries, useHeldPassage, type HeldPoint } from './useHeldPassage';
 import { log } from '@/utils/log';
 
 export interface QuotePinTarget {
@@ -62,7 +80,7 @@ interface QuotePinSelectionBarProps {
 interface PillState extends SelectionQuote {
   /** Viewport point the pill hangs above: the selection's FOCUS caret, i.e. where
    *  the gesture ended, so the pill is under the hand that just let go. */
-  anchor: { x: number; y: number };
+  anchor: HeldPoint;
 }
 
 function sameQuote(a: TextQuote, b: TextQuote): boolean {
@@ -89,7 +107,7 @@ function selectionIsBackward(selection: Selection): boolean {
  * resort: the selection's end rect on the focus side, which is still the right
  * line even if not the right column.
  */
-function focusPoint(selection: Selection, range: Range): { x: number; y: number } | null {
+function focusPoint(selection: Selection, range: Range): HeldPoint | null {
   const backward = selectionIsBackward(selection);
   const { focusNode, focusOffset } = selection;
   if (focusNode) {
@@ -111,14 +129,32 @@ function focusPoint(selection: Selection, range: Range): { x: number; y: number 
       if (rect && rect.height) return { x: Math.round(rect.left), y: Math.round(rect.top) };
     } catch { /* offsets can lag a re-render by a frame; fall through */ }
   }
-  const rects = range.getClientRects();
-  if (!rects.length) {
-    const r = range.getBoundingClientRect();
-    if (!r || (!r.width && !r.height)) return null;
-    return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top) };
-  }
-  const r = rects[backward ? 0 : rects.length - 1]!;
-  return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top) };
+  return rangePoint(range, backward);
+}
+
+/** Everything the pill reads off a live selection, in one pass — the ONE list of
+ *  bails, shared by the gesture path and the hold. Cheap checks first, THEN the
+ *  capture: `captureSelectionQuote` indexes the message body (~19ms on a long
+ *  answer), and a selection with no focus rect has nowhere to hang a pill anyway. */
+function readLiveSelection(
+  container: HTMLElement,
+  selection: Selection,
+): { captured: SelectionQuote; anchor: HeldPoint; range: Range; backward: boolean } | null {
+  if (!selectionBody(container, selection)) return null;
+  // Out of sight, no pill — and it has to hold here too because a selection the
+  // reader scrolled clear of is STILL a selection: the next mouseup anywhere (a
+  // press on the mic, say) re-runs this, and a pill hung on an off-screen focus
+  // point gets clamped into the viewport by useMenuPlacement, right over whatever
+  // control sits at the timeline's bottom edge. Measured: the composer's mic, so
+  // the click that was meant to stop the recording hit the pill instead, for as
+  // long as the user kept trying.
+  if (!selectionVisibleIn(container, selection)) return null;
+  const range = selection.getRangeAt(selection.rangeCount - 1);
+  const anchor = focusPoint(selection, range);
+  if (!anchor) return null;
+  const captured = captureSelectionQuote(container, selection);
+  if (!captured) return null;
+  return { captured, anchor, range, backward: selectionIsBackward(selection) };
 }
 
 export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: QuotePinSelectionBarProps) {
@@ -133,11 +169,12 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
    * did nothing at all (measured). Self-clearing: any press elsewhere sets it back.
    */
   const pressedPill = useRef(false);
-  /** Is a pill on screen? Read by the scroll handler, which must re-anchor an
-   *  existing pill without ever conjuring one, and kept in a ref so the one
-   *  listener set never has to be torn down and rebuilt per state change. */
-  const showing = useRef(false);
-  showing.current = !!state;
+  /** The capture behind the pill, for the listeners: the scroll handler must
+   *  re-anchor an existing pill without ever conjuring one, and a held passage is
+   *  re-located from this. A ref so the one listener set never has to be torn
+   *  down and rebuilt per state change. */
+  const stateRef = useRef<PillState | null>(null);
+  stateRef.current = state;
   // Referentially stable anchor: useMenuPlacement takes it as a dependency.
   const placement = useMenuPlacement(!!state, noTrigger, pillRef, {
     anchorPoint: state?.anchor ?? null,
@@ -147,40 +184,70 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     minHeight: 28,
   });
 
+  const reanchor = useCallback((point: HeldPoint) => {
+    setState((prev) => (prev && (prev.anchor.x !== point.x || prev.anchor.y !== point.y)
+      ? { ...prev, anchor: point }
+      : prev));
+  }, []);
+  const pillDown = useCallback(() => setState(null), []);
+  const held = useHeldPassage({ containerRef, captureRef: stateRef, reanchor, onLost: pillDown });
+
+  /** Pill down, and with it any held passage and its paint. The ONE exit. */
+  const dismiss = useCallback(() => {
+    held.clearHold();
+    setState(null);
+  }, [held]);
+
+  /**
+   * Keep the pill's passage past the selection collapse that is about to happen.
+   * Read once more rather than trusting the last evaluate: that ran a frame or more
+   * ago, and what the pill holds must be what is selected NOW.
+   */
+  const hold = useCallback((): boolean => {
+    if (held.heldRef.current) return true; // idempotent: a stop can deliver twice (provisional, then refined)
+    const container = containerRef.current;
+    const selection = typeof window !== 'undefined' ? window.getSelection() : null;
+    const live = container && selection ? readLiveSelection(container, selection) : null;
+    if (!live) return false;
+    held.hold(live.range, live.backward);
+    setState((prev) => (prev && prev.msgId === live.captured.msgId && sameQuote(prev.quote, live.captured.quote)
+      ? prev
+      : { ...live.captured, anchor: live.anchor }));
+    return true;
+  }, [containerRef, held]);
+
   const evaluate = useCallback(() => {
     if (pressedPill.current) return; // pressing the pill is not a selection change
     const container = containerRef.current;
     const selection = typeof window !== 'undefined' ? window.getSelection() : null;
-    if (!container || !selection) { setState(null); return; }
-    // Cheap bails first, THEN the capture: `captureSelectionQuote` indexes the message
-    // body (~19ms on a long answer, which is why the scroll path below refuses to call
-    // it), and a selection with no focus rect has nowhere to hang a pill anyway.
-    if (!selectionBody(container, selection)) { setState(null); return; }
-    // Out of sight, no pill — the same rule the scroll path applies below, and it
-    // has to hold here too because a selection the reader scrolled clear of is
-    // STILL a selection: the next mouseup anywhere (a press on the mic, say)
-    // re-runs this, and a pill hung on an off-screen focus point gets clamped
-    // into the viewport by useMenuPlacement, right over whatever control sits at
-    // the timeline's bottom edge. Measured: the composer's mic, so the click that
-    // was meant to stop the recording hit the pill instead, for as long as the
-    // user kept trying.
-    if (!selectionVisibleIn(container, selection)) { setState(null); return; }
-    const range = selection.getRangeAt(selection.rangeCount - 1);
-    const anchor = focusPoint(selection, range);
-    if (!anchor) { setState(null); return; }
-    const captured = captureSelectionQuote(container, selection);
-    if (!captured) { setState(null); return; }
+    if (!container || !selection) { dismiss(); return; }
+    const holding = held.heldRef.current;
+    if (holding) {
+      // Held: a collapsed document selection is the expected state (that is what the
+      // hold is for); a caret or a run inside a text control is the user writing
+      // their question in the composer; and the very selection the hold was taken
+      // from is still alive for the frame before focus moves. Only a DIFFERENT real
+      // selection ends the hold — and if it is a new passage in this timeline, the
+      // pill simply follows it below.
+      const stillHeld = selection.isCollapsed || selection.rangeCount === 0
+        || selectionInEditable(selection)
+        || sameBoundaries(selection.getRangeAt(selection.rangeCount - 1), holding.range);
+      if (stillHeld) { held.repair(); return; }
+      held.clearHold();
+    }
+    const live = readLiveSelection(container, selection);
+    if (!live) { setState(null); return; }
     setState((prev) => {
-      const sameAnchor = !!prev && prev.anchor.x === anchor.x && prev.anchor.y === anchor.y;
-      if (prev && sameAnchor && prev.msgId === captured.msgId && sameQuote(prev.quote, captured.quote)) return prev;
+      const sameAnchor = !!prev && prev.anchor.x === live.anchor.x && prev.anchor.y === live.anchor.y;
+      if (prev && sameAnchor && prev.msgId === live.captured.msgId && sameQuote(prev.quote, live.captured.quote)) return prev;
       return {
-        ...captured,
+        ...live.captured,
         // Keep the previous anchor OBJECT when the point is unchanged: it is a
         // dependency of useMenuPlacement, which re-places on identity.
-        anchor: sameAnchor ? prev!.anchor : anchor,
+        anchor: sameAnchor ? prev!.anchor : live.anchor,
       };
     });
-  }, [containerRef]);
+  }, [containerRef, dismiss, held]);
 
   useEffect(() => {
     let raf = 0;
@@ -189,7 +256,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
       raf = requestAnimationFrame(evaluate);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setState(null); return; }
+      if (e.key === 'Escape') { dismiss(); return; }
       schedule();
     };
     // A scroll used to DISMISS the pill outright, which made it unusable for the
@@ -205,8 +272,14 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     // timeline (and a vanished selection has no box, so that covers it too) — the
     // original intent, narrowed to the case it was actually protecting. Only while
     // a pill is up, so a scroll can never REVIVE one that Escape dismissed.
-    const onScroll = () => {
-      if (!showing.current) return;
+    const onScroll = (e: Event) => {
+      if (!stateRef.current) return;
+      // Only scrollers the passage can move WITH: the timeline, anything inside it,
+      // or an ancestor (the document). A sibling scroller — another column, the task
+      // list — cannot move these words, and the layout reads below are not free.
+      const container = containerRef.current;
+      const t = e.target;
+      if (container && t instanceof Node && t !== document && !t.contains(container) && !container.contains(t)) return;
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         // Same reason `evaluate` bails on a pill press: a press clears the
@@ -219,7 +292,8 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
         // press observed here actually raced it; this is a one-line floor for the
         // slower machine (or the longer press) where it would.
         if (pressedPill.current) return;
-        const container = containerRef.current;
+        // A held passage has no selection to read: its own Range says where it is.
+        if (held.heldRef.current) { held.repair(); return; }
         const selection = typeof window !== 'undefined' ? window.getSelection() : null;
         if (container && selection && !selectionVisibleIn(container, selection)) {
           setState(null);
@@ -231,21 +305,46 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
         // body costs ~19ms on a long answer (useQuotePinPaint rate-limits itself
         // for that reason) and this fires on every frame of a flung scroll.
         const point = focusPoint(selection, selection.getRangeAt(selection.rangeCount - 1));
-        if (!point) return;
-        setState((prev) => (prev && (prev.anchor.x !== point.x || prev.anchor.y !== point.y)
-          ? { ...prev, anchor: point }
-          : prev));
+        if (point) reanchor(point);
       });
     };
     // Capture phase: this only RECORDS where the press landed, and it has to do so
     // before anything can move the DOM out from under the target.
     const onPointerDown = (e: PointerEvent) => {
       pressedPill.current = !!pillRef.current?.contains(e.target as Node);
+      if (!held.heldRef.current || pressedPill.current) return;
+      // A held pill has no selection left for the guard in main.tsx to clear, so it
+      // decides for itself, by that guard's rules: a right/middle press is the
+      // context menu, not a dismissal; a press into a text control (writing the
+      // question) or onto a `data-keep-selection` control (the mic: acting on the
+      // passage) keeps the hold — but only inside THIS panel. Another column's
+      // composer or mic is the user moving on, and a pill left behind there would be
+      // pointing at a passage from a conversation they have left.
+      if (e.button !== 0) return;
+      const panel = containerRef.current?.closest('.session-panel');
+      const inPanel = !!panel && e.target instanceof Node && panel.contains(e.target);
+      if (inPanel && (targetInEditable(e.target) || pressKeepsSelection(e.target))) return;
+      dismiss();
+    };
+    // The composer's requests, sent from its panel root and addressed to the pill
+    // whose timeline that panel contains (a second panel's pill sees a target that
+    // does not contain its timeline and stays out of it).
+    const addressedHere = (e: Event) =>
+      e.target instanceof Node && !!containerRef.current && e.target.contains(containerRef.current);
+    const onHold = (e: Event) => {
+      if (!addressedHere(e)) return;
+      (e as CustomEvent<SelectionHoldDetail>).detail.held = hold();
+    };
+    const onRelease = (e: Event) => {
+      if (!addressedHere(e) || !held.heldRef.current) return;
+      dismiss();
     };
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('selectionchange', schedule);
     document.addEventListener('mouseup', schedule);
     document.addEventListener('keyup', onKey);
+    document.addEventListener(SELECTION_HOLD_EVENT, onHold);
+    document.addEventListener(SELECTION_RELEASE_EVENT, onRelease);
     window.addEventListener('scroll', onScroll, true);
     return () => {
       cancelAnimationFrame(raf);
@@ -253,9 +352,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
       document.removeEventListener('selectionchange', schedule);
       document.removeEventListener('mouseup', schedule);
       document.removeEventListener('keyup', onKey);
+      document.removeEventListener(SELECTION_HOLD_EVENT, onHold);
+      document.removeEventListener(SELECTION_RELEASE_EVENT, onRelease);
       window.removeEventListener('scroll', onScroll, true);
     };
-  }, [evaluate]);
+  }, [evaluate, hold, dismiss, held, reanchor, containerRef]);
 
   const pin = useCallback(() => {
     if (!state?.msgId) return;
@@ -272,8 +373,8 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     // right for the keyboard path, and it is what makes the paint the only mark
     // left on the passage.
     window.getSelection()?.removeAllRanges();
-    setState(null);
-  }, [onPin, sessionId, state]);
+    dismiss();
+  }, [onPin, sessionId, state, dismiss]);
 
   const ask = useCallback(() => {
     if (!state?.msgId || !onAsk) return;
@@ -289,13 +390,13 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     // Same gesture-time capture as Pin (the quote is already in `state`); the
     // selection goes so the only mark left is the composer chip.
     window.getSelection()?.removeAllRanges();
-    setState(null);
-  }, [onAsk, sessionId, state]);
+    dismiss();
+  }, [onAsk, sessionId, state, dismiss]);
 
   const copy = useCallback(() => {
     if (state?.text.trim()) void copyTextRobust(state.text);
-    setState(null);
-  }, [state]);
+    dismiss();
+  }, [state, dismiss]);
 
   if (!state) return null;
 

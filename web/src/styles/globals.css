@@ -25465,6 +25465,12 @@ a.file-link:hover {
    of colour and swallows the text, so it goes lighter. */
 [data-theme="dark"] ::highlight(walnut-pin) { background-color: rgba(250, 204, 21, 0.26); }
 [data-theme="dark"] ::highlight(walnut-pin-flash) { background-color: rgba(250, 204, 21, 0.7); }
+/* The quote pill's HELD passage (QuotePinSelectionBar): the document selection
+   collapsed because the composer took focus for dictated text, and the pill keeps
+   pointing at these words. Selection-blue on purpose: the reader sees the passage
+   they selected, unchanged. */
+::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.30); }
+[data-theme="dark"] ::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.38); }
 .cm-selectionMatch { background-color: rgba(80, 160, 255, 0.30); }
 /* "You landed HERE" flash on the jumped-to keyword (reference jumps). */
 .cm-jump-flash {

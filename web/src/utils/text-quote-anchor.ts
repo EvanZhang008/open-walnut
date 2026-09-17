@@ -263,6 +263,27 @@ export function rangeFromOffsets(index: QuoteTextIndex, start: number, end: numb
   }
 }
 
+/**
+ * Does this Range still address its passage?
+ *
+ * When React re-renders a message body it REPLACES the text node a Range was built
+ * over. A Range is live, so it does not break — the DOM spec moves its boundary
+ * points up to the removed node's parent at the child index, which for a passage
+ * inside one text node means start === end. The result is a COLLAPSED range whose
+ * containers are elements: `startContainer.isConnected` is still true, but
+ * `getClientRects()` is empty, so a highlight paints nothing and a hit test never
+ * matches. Judge staleness by the boundary SHAPE, never by connectivity.
+ * `rangeFromOffsets` always anchors on text nodes, so an element container means
+ * the range has been re-pointed by a DOM removal.
+ */
+export function rangeIsLive(range: Range): boolean {
+  return !range.collapsed
+    && range.startContainer.isConnected
+    && range.endContainer.isConnected
+    && range.startContainer.nodeType === Node.TEXT_NODE
+    && range.endContainer.nodeType === Node.TEXT_NODE;
+}
+
 /** Locate a quote inside a message body in one call (index → locate → Range). */
 export function rangeForQuote(body: Element, quote: TextQuote): Range | null {
   const index = buildTextIndex(body);

@@ -20,6 +20,10 @@ import { log } from './log';
 export const HL_PIN = 'walnut-pin';
 /** Short, brighter paint used by an outline jump to say "here". */
 export const HL_PIN_FLASH = 'walnut-pin-flash';
+/** The passage the quote pill is HOLDING after the document selection collapsed
+ *  (the composer took focus for dictated text). Selection-coloured, so to the
+ *  reader nothing changed. */
+export const HL_HELD_QUOTE = 'walnut-held-quote';
 
 export const PIN_FLASH_MS = 1500;
 
@@ -91,6 +95,23 @@ export function flashRange(range: Range): void {
     flashRanges.delete(range);
     repaint(HL_PIN_FLASH, [...flashRanges]);
   }, PIN_FLASH_MS);
+}
+
+let heldRange: Range | null = null;
+
+/** Paint (or, with null, clear) the one passage a quote pill is holding. A single
+ *  document-wide slot on purpose: a hold needs a live selection to start from, and
+ *  a document has one selection, so two panels can never hold at once. */
+export function setHeldQuoteRange(range: Range | null): void {
+  heldRange = range;
+  repaint(HL_HELD_QUOTE, range ? [range] : []);
+}
+
+/** The passage a quote pill is holding right now, for the timeline's scroll guards:
+ *  a held passage is read like a live selection (follow-bottom pauses, growth above
+ *  it is compensated), because the reader is still pointing at it. */
+export function heldQuoteRange(): Range | null {
+  return heldRange;
 }
 
 /** Test-only / diagnostics: how many passages are painted right now. */
