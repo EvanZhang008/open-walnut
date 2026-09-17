@@ -77,14 +77,25 @@ final class ChatRichnessRowTests: XCTestCase {
     private func toolPayload(
         _ row: TimelineRow?, _ file: StaticString = #filePath, _ line: UInt = #line
     ) throws -> (name: String, detail: String?, input: String?,
-                 result: String?, agent: String?, running: Bool, stacked: Bool) {
+                 result: String?, agent: String?, phase: TimelineToolPhase,
+                 stacked: Bool) {
         guard case .toolChip(let name, let detail, let input, let result, let agent,
-                             let running, _, let stacked)
+                             let phase, _, let stacked)
                 = try XCTUnwrap(row, "no tool row", file: file, line: line).content else {
             XCTFail("expected the .toolChip case", file: file, line: line)
             throw XCTSkip("not a tool row")
         }
-        return (name, detail, input, result, agent, running, stacked)
+        return (name, detail, input, result, agent, phase, stacked)
+    }
+
+    /// The payload the CELL hands the drawer for a row, through the same call the
+    /// tap closure makes.
+    private func drawerPayload(
+        _ row: TimelineRow?, _ file: StaticString = #filePath, _ line: UInt = #line
+    ) throws -> TimelineActivityDetail {
+        let row = try XCTUnwrap(row, "no tool row", file: file, line: line)
+        return try XCTUnwrap(TimelineActivityDetail.tool(row: row),
+                             "not a tool row", file: file, line: line)
     }
 
     /// A reasoning message as the wire delivers one: a short collapsed line plus
@@ -97,8 +108,21 @@ final class ChatRichnessRowTests: XCTestCase {
 
     /// One live tool call as the stream delivers it.
     private func call(_ id: String, _ name: String, _ detail: String? = nil,
-                      finished: Bool = false) -> LiveToolCall {
-        LiveToolCall(id: id, name: name, detail: detail, finished: finished)
+                      finished: Bool = false, inputPreview: String? = nil,
+                      resultPreview: String? = nil) -> LiveToolCall {
+        LiveToolCall(id: id, name: name, detail: detail, finished: finished,
+                     inputPreview: inputPreview, resultPreview: resultPreview)
+    }
+
+    /// Live frames through the REAL shared handler, so a test pins the decode the
+    /// stores run rather than a Swift literal. Hand-built `LiveToolCall`s cannot
+    /// prove that an absent wire key decodes to nil.
+    private func applied(_ frames: [(String, String)]) -> LiveAgentActivity {
+        var live = LiveAgentActivity()
+        for (event, json) in frames {
+            _ = LiveStreamEvents.apply(event: event, data: Data(json.utf8), to: &live)
+        }
+        return live
     }
 
     private func tool(_ id: String, name: String, detail: String? = nil,
@@ -332,25 +356,39 @@ final class ChatRichnessRowTests: XCTestCase {
         XCTAssertEqual(payload.result, "306 files, 51s")
     }
 
-    /// The drawer payload the cell hands the sheet: both sections, and the
-    /// running/finished distinction the Result note depends on.
+    /// The drawer payload the cell hands the sheet: both sections, and the phase
+    /// the Result note depends on.
     func testToolDrawerPayloadKeepsBothSectionsAndRunningState() {
         let running = TimelineActivityDetail.tool(
             id: "m0#0", name: "Bash", detail: "npm test", input: "npm test",
-            result: nil, agent: nil, running: true)
+            result: nil, agent: nil, phase: .running)
         XCTAssertEqual(running.title, "Bash")
         XCTAssertEqual(running.input, "npm test")
         XCTAssertNil(running.body)
-        XCTAssertEqual(TimelineExpandSection.resultNote(hasInput: running.running), "Running…")
+        XCTAssertEqual(TimelineExpandSection.resultNote(phase: running.phase), "Running…")
 
         let finished = TimelineActivityDetail.tool(
             id: "m0#0", name: "Bash", detail: "npm test", input: "npm test",
-            result: "3 passed", agent: "reviewer", running: false)
+            result: "3 passed", agent: "reviewer", phase: .transcript)
         XCTAssertEqual(finished.body, "3 passed")
         XCTAssertEqual(finished.agent, "reviewer")
-        // A tool that produced nothing has to SAY so — "No output", never a blank
-        // sheet, which is the "tapping does nothing" report in another costume.
-        XCTAssertEqual(TimelineExpandSection.resultNote(hasInput: false), "No output")
+    }
+
+    /// THREE notes, not two. An empty Result means something different in each
+    /// phase, and collapsing the middle one into "No output" is the 2026-09-16
+    /// report: a finished live `Bash` row claimed no output while the tool had
+    /// produced plenty, because the output had simply not been relayed yet.
+    ///
+    /// RED PROOF: making `.liveFinished` return "No output" fails the middle case.
+    func testTheResultNoteSaysWhichOfTheThreeEmptyStatesThisIs() {
+        XCTAssertEqual(TimelineExpandSection.resultNote(phase: .running), "Running…")
+        XCTAssertEqual(TimelineExpandSection.resultNote(phase: .liveFinished),
+                       "Finished. The output arrives when the turn ends.")
+        // A transcript row's empty Result IS proof the tool printed nothing: the
+        // whole turn is on disk by then.
+        XCTAssertEqual(TimelineExpandSection.resultNote(phase: .transcript), "No output")
+        XCTAssertNotEqual(TimelineExpandSection.resultNote(phase: .liveFinished),
+                          TimelineExpandSection.resultNote(phase: .transcript))
     }
 
     // MARK: - 5. The tool used mid-turn is a REAL tool row
@@ -376,7 +414,8 @@ final class ChatRichnessRowTests: XCTestCase {
         XCTAssertEqual(payload.input, "npm run test:quick",
                        "`detail` is all the input the live wire carries, so it IS the input")
         XCTAssertNil(payload.result, "a running tool has no result yet")
-        XCTAssertTrue(payload.running, "and the chip has to be able to say it is running")
+        XCTAssertEqual(payload.phase, .running,
+                       "and the chip has to be able to say it is running")
     }
 
     /// THE 2026-09-12 GATE'S FIRST FINDING: sampled once a second on a real turn,
@@ -396,7 +435,8 @@ final class ChatRichnessRowTests: XCTestCase {
                                     + "\(finished.map(\.content.reuseKind))")
         let payload = try toolPayload(row)
         XCTAssertEqual(payload.name, "Bash")
-        XCTAssertFalse(payload.running, "it has returned, so nothing may claim it is running")
+        XCTAssertEqual(payload.phase, .liveFinished,
+                       "it has returned, so nothing may claim it is running")
 
         // Every call the turn made, in call order, running and finished together.
         let many = await rows([], streaming: true, liveTools: [
@@ -407,7 +447,7 @@ final class ChatRichnessRowTests: XCTestCase {
         let chips = try many.filter { $0.content.reuseKind == "toolChip" }
             .map { try toolPayload($0) }
         XCTAssertEqual(chips.map(\.name), ["Read", "Bash", "WebFetch"])
-        XCTAssertEqual(chips.map(\.running), [false, false, true])
+        XCTAssertEqual(chips.map(\.phase), [.liveFinished, .liveFinished, .running])
         // Distinct row ids, or the diff collapses three chips into one.
         let chipIDs = many.filter { $0.content.reuseKind == "toolChip" }.map(\.id)
         XCTAssertEqual(Set(chipIDs).count, 3, "each call needs its own row identity")
@@ -460,6 +500,192 @@ final class ChatRichnessRowTests: XCTestCase {
     func testTheLiveToolRowGoesWhenNoToolIsRunning() async {
         let built = await rows([], streaming: true, liveTools: [])
         XCTAssertFalse(built.map(\.content.reuseKind).contains("toolChip"))
+    }
+
+    // MARK: - 5b. A live tool row carries its own input and output
+
+    /// THE 2026-09-16 REPORT: mid-turn, tapping a finished live `Bash` row showed
+    /// the DESCRIPTION under "Input" and "No output" under "Result", although the
+    /// command had run and printed plenty. The live wire carried neither the input
+    /// nor the output, so the row had nothing else to offer.
+    ///
+    /// `tool { inputPreview }` is the same masked render a transcript row carries,
+    /// and it is what "what did it run?" deserves as an answer.
+    ///
+    /// RED PROOF: dropping `inputPreview` from `ToolPayload` (or from the row) puts
+    /// the description back in the Input section.
+    func testAToolFramesInputPreviewBecomesTheDrawersInput() async throws {
+        let live = applied([("tool", #"""
+        {"name":"Bash","toolUseId":"t1","detail":"Search recent news on rockets",
+         "inputPreview":"command: curl -s https://example.com/news\ndescription: Search recent news on rockets"}
+        """#)])
+        let built = await rows([], streaming: true, liveTools: live.tools)
+        let payload = try drawerPayload(toolRow(built))
+        XCTAssertEqual(payload.input,
+                       "command: curl -s https://example.com/news"
+                           + "\ndescription: Search recent news on rockets",
+                       "the Input section must be the command, not the description")
+        XCTAssertEqual(payload.subtitle, "Search recent news on rockets",
+                       "the description stays, as the capsule's one-line detail")
+        XCTAssertNotEqual(payload.input, payload.subtitle)
+
+        // Without the key (an older server) the detail is the only input there is,
+        // so it is still what the section shows.
+        let old = applied([("tool", #"{"name":"Bash","toolUseId":"t1","detail":"ls docs/"}"#)])
+        let oldRows = await rows([], streaming: true, liveTools: old.tools)
+        XCTAssertNil(old.tools.first?.inputPreview, "an absent key decodes to nil")
+        XCTAssertEqual(try drawerPayload(toolRow(oldRows)).input, "ls docs/")
+    }
+
+    /// The other half of the same report: `tool-result { resultPreview }` is the
+    /// output excerpt, and a live row shows it exactly where a history row does.
+    ///
+    /// RED PROOF: dropping `resultPreview` from `ToolResultPayload` leaves the
+    /// drawer with no body and the row falling back to a note.
+    func testAToolResultsPreviewReachesTheDrawersResultSection() async throws {
+        let live = applied([
+            ("tool", #"{"name":"Bash","toolUseId":"t1","detail":"list the docs"}"#),
+            ("tool-result", #"{"toolUseId":"t1","resultPreview":"README.md\nreference/"}"#),
+        ])
+        XCTAssertEqual(live.tools.first?.finished, true)
+        let built = await rows([], streaming: true, liveTools: live.tools)
+        let row = try XCTUnwrap(toolRow(built))
+        XCTAssertEqual(try toolPayload(row).phase, .liveFinished)
+        let payload = try drawerPayload(row)
+        XCTAssertEqual(payload.body, "README.md\nreference/")
+        XCTAssertNotEqual(payload.phase, .running,
+                          "the call returned; nothing may claim it is running")
+    }
+
+    /// A result frame with NO preview (a replica that has not been redeployed, or a
+    /// frame that lost the key) leaves the output genuinely unknown. The drawer has
+    /// to say that, and must NOT claim the tool printed nothing.
+    ///
+    /// RED PROOF: reporting `.transcript` for a live finished call, or restoring the
+    /// two-state note, prints "No output" here.
+    func testAFinishedLiveCallWithNoRelayedOutputSaysSoInsteadOfNoOutput() async throws {
+        let live = applied([
+            ("tool", #"{"name":"Bash","toolUseId":"t1","detail":"npm test"}"#),
+            ("tool-result", #"{"toolUseId":"t1"}"#),
+        ])
+        XCTAssertEqual(live.tools.first?.finished, true)
+        XCTAssertNil(live.tools.first?.resultPreview,
+                     "a frame without the key must leave the field nil, not empty")
+        let built = await rows([], streaming: true, liveTools: live.tools)
+        let payload = try drawerPayload(toolRow(built))
+        XCTAssertNil(payload.body, "there is no output on the phone to show")
+        let note = TimelineExpandSection.resultNote(phase: payload.phase)
+        XCTAssertEqual(note, "Finished. The output arrives when the turn ends.")
+        XCTAssertNotEqual(note, "No output",
+                          "the output exists; it just has not been relayed yet")
+
+        // A LATER frame that does carry the preview still fills it: the first
+        // frame's silence is not a decision.
+        var filled = live
+        filled.toolFinished(id: "t1", resultPreview: "3 passed")
+        XCTAssertEqual(filled.tools.first?.resultPreview, "3 passed")
+    }
+
+    /// The transcript side of the same question, unchanged: a history row with no
+    /// result really did produce nothing, because the whole turn is on disk.
+    func testATranscriptToolRowWithNoResultStillSaysNoOutput() async throws {
+        let built = await rows([tool("m0", name: "Bash", detail: "touch a.txt",
+                                    input: "command: touch a.txt")])
+        let payload = try drawerPayload(toolRow(built))
+        XCTAssertNil(payload.body)
+        XCTAssertEqual(payload.phase, .transcript)
+        XCTAssertEqual(TimelineExpandSection.resultNote(phase: payload.phase), "No output")
+    }
+
+    /// A server sending neither new key: every frame decodes, and the row is the
+    /// one the phone built before the fields existed (bar the honest note above).
+    func testOldServerToolFramesDecodeExactlyAsBefore() async throws {
+        let live = applied([("tool", "{\"name\":\"Bash\"}"), ("tool-result", "{}")])
+        XCTAssertEqual(live.tools.count, 1, "a frame with no ids must still be tracked")
+        let call = try XCTUnwrap(live.tools.first)
+        XCTAssertEqual(call.name, "Bash")
+        XCTAssertNil(call.detail)
+        XCTAssertNil(call.inputPreview)
+        XCTAssertNil(call.resultPreview)
+        XCTAssertTrue(call.finished, "an id-less result still ends the newest open call")
+
+        let built = await rows([], streaming: true, liveTools: live.tools)
+        let payload = try drawerPayload(toolRow(built))
+        XCTAssertEqual(payload.title, "Bash")
+        XCTAssertNil(payload.input, "no detail and no preview is no Input section")
+        XCTAssertNil(payload.body)
+    }
+
+    /// The row id is ORDINAL, so a payload change under a stable id is invisible to
+    /// the diff unless the revision moves. Landing the output has to move it, or
+    /// the drawer keeps serving what it held before the result arrived.
+    ///
+    /// RED PROOF: reverting the revision to `detail.hashValue &+ finished` makes the
+    /// last two builds equal.
+    func testTheLiveToolRowsRevisionMovesWhenTheResultLands() async throws {
+        func revision(_ frames: [(String, String)]) async throws -> Int {
+            let built = await rows([], streaming: true, liveTools: applied(frames).tools)
+            return try XCTUnwrap(toolRow(built)).revision
+        }
+        let start: [(String, String)] =
+            [("tool", #"{"name":"Bash","toolUseId":"t1","detail":"npm test"}"#)]
+        let running = try await revision(start)
+        let finishedBare = try await revision(
+            start + [("tool-result", #"{"toolUseId":"t1"}"#)])
+        let finishedWithOutput = try await revision(
+            start + [("tool-result", #"{"toolUseId":"t1","resultPreview":"3 passed"}"#)])
+        XCTAssertNotEqual(running, finishedBare, "the chip stops breathing")
+        XCTAssertNotEqual(finishedBare, finishedWithOutput,
+                          "the output landing must reload the cell too")
+    }
+
+    /// A re-relayed `tool` frame describes the CALL, so it may refresh the name,
+    /// detail and input, and may not forget an output that already landed.
+    ///
+    /// RED PROOF: rebuilding the entry with `resultPreview: nil` (or `finished:
+    /// false`) drops the result here.
+    func testARepeatToolFrameKeepsTheOutputThatAlreadyLanded() async throws {
+        let live = applied([
+            ("tool", #"{"name":"Bash","toolUseId":"t1","detail":"npm test","inputPreview":"command: npm test"}"#),
+            ("tool-result", #"{"toolUseId":"t1","resultPreview":"3 passed"}"#),
+            ("tool", #"{"name":"Bash","toolUseId":"t1","detail":"npm test --silent","inputPreview":"command: npm test --silent"}"#),
+        ])
+        XCTAssertEqual(live.tools.count, 1, "one id is one chip, however often it is relayed")
+        let call = try XCTUnwrap(live.tools.first)
+        XCTAssertEqual(call.detail, "npm test --silent", "the newer frame wins on detail")
+        XCTAssertEqual(call.inputPreview, "command: npm test --silent")
+        XCTAssertTrue(call.finished, "a re-relay cannot un-finish a returned call")
+        XCTAssertEqual(call.resultPreview, "3 passed")
+
+        let built = await rows([], streaming: true, liveTools: live.tools)
+        let payload = try drawerPayload(toolRow(built))
+        XCTAssertEqual(payload.input, "command: npm test --silent")
+        XCTAssertEqual(payload.body, "3 passed")
+    }
+
+    /// The other direction of the same re-relay: a repeat frame that carries NO
+    /// `inputPreview` must keep the command already stored, not fall back to the
+    /// description. A mid-turn frame from an older relay would otherwise undo the
+    /// fix while the reader watched.
+    ///
+    /// RED PROOF: assigning the repeat frame's `inputPreview` unconditionally puts
+    /// the detail back in the Input section here.
+    func testARepeatToolFrameWithoutAnInputPreviewKeepsTheStoredCommand() async throws {
+        let live = applied([
+            ("tool", #"{"name":"Bash","toolUseId":"t1","detail":"list the docs","inputPreview":"command: ls docs/"}"#),
+            ("tool", #"{"name":"Bash","toolUseId":"t1","detail":"list the docs"}"#),
+        ])
+        XCTAssertEqual(live.tools.count, 1)
+        XCTAssertEqual(live.tools.first?.inputPreview, "command: ls docs/",
+                       "a frame without the key may not clear a known command")
+        let built = await rows([], streaming: true, liveTools: live.tools)
+        XCTAssertEqual(try drawerPayload(toolRow(built)).input, "command: ls docs/")
+
+        // An EMPTY string is the same silence, not a new answer.
+        var emptied = live
+        emptied.toolStarted(id: "t1", name: "Bash", detail: "list the docs",
+                            inputPreview: "")
+        XCTAssertEqual(emptied.tools.first?.inputPreview, "command: ls docs/")
     }
 
     // MARK: - 6. Old-server guard

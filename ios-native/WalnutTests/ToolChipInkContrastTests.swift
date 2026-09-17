@@ -157,7 +157,7 @@ final class ToolChipInkContrastTests: XCTestCase {
         let row = TimelineRow(
             id: "tool#0", revision: 0,
             content: .toolChip(name: "Bash", detail: detail, inputPreview: nil,
-                               resultPreview: nil, agent: nil, running: false,
+                               resultPreview: nil, agent: nil, phase: .transcript,
                                detailRef: nil, stacked: false),
             height: 28)
         // `ImageRenderer` rather than a hosting controller in a window: SwiftUI

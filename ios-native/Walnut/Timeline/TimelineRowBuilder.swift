@@ -761,13 +761,14 @@ final class TimelineRowBuilder {
         let stacked = Self.stacksDetail(message.detail)
         return TimelineRow(
             id: "\(namespace)#0", revision: 0,
-            // `running: false` unconditionally: a transcript row is a call that
-            // ALREADY RETURNED. A history row with no `resultPreview` produced no
-            // output; only the live region knows about a call still in flight.
+            // `.transcript` unconditionally: a history row is a call that ALREADY
+            // RETURNED, and one with no `resultPreview` there produced no output.
+            // Only the live region knows a call still in flight, or one whose
+            // output has not been relayed yet.
             content: .toolChip(name: message.text, detail: message.detail,
                                inputPreview: message.inputPreview,
                                resultPreview: message.resultPreview,
-                               agent: message.agent, running: false,
+                               agent: message.agent, phase: .transcript,
                                detailRef: message.activityDetailRef, stacked: stacked),
             height: Self.capsuleRowHeight(badged: message.agent?.isEmpty == false,
                                           stacked: stacked)
@@ -796,8 +797,16 @@ final class TimelineRowBuilder {
     /// the ONLY form the tool ever took, which is why it vanished at turn end.
     ///
     /// The rows are deliberately built from the same case the transcript uses, so
-    /// the poorer payload shows up as an empty Result ("Running…") rather than as
-    /// a different-looking row: `detail` is all the input the wire gives us.
+    /// a poorer payload shows up as an empty Result rather than as a
+    /// different-looking row.
+    ///
+    /// The wire now carries the SAME two previews the transcript rows do
+    /// (`tool { inputPreview }`, `tool-result { resultPreview }`), so a live row
+    /// answers "what did it run?" with the command and "what came back?" with the
+    /// output. On a server that sends neither, `detail` is still all the input
+    /// there is, and the missing result is reported as pending rather than as "No
+    /// output" (that pair is exactly the 2026-09-16 report: a finished Bash row
+    /// whose drawer showed its DESCRIPTION as the input and claimed no output).
     ///
     /// EVERY call the turn made gets a row, finished ones included. A finished call
     /// used to be dropped by its own `tool-result`, so the chip appeared and then
@@ -815,14 +824,27 @@ final class TimelineRowBuilder {
         tools.enumerated().compactMap { index, call in
             guard !call.name.isEmpty else { return nil }
             let stacked = Self.stacksDetail(call.detail)
+            // The relayed input if there is one, `detail` otherwise: on an older
+            // server the one-line detail is the only input that exists, and an
+            // empty Input section would be worse than a description.
+            let input = call.inputPreview ?? call.detail
+            // Content-derived, over EVERY field that can move under this stable id:
+            // the call finishing, its output landing, its input being re-relayed.
+            // The row id is ordinal, so a revision that missed the result meant the
+            // drawer kept serving the payload from before it arrived.
+            var hasher = Hasher()
+            hasher.combine(call.detail)
+            hasher.combine(input)
+            hasher.combine(call.resultPreview)
+            hasher.combine(call.finished)
             return TimelineRow(
                 id: TimelineScope.namespace(scope, "live-tool-\(index)"),
-                // Content-derived: the same id has to be reloaded when the call
-                // finishes (the icon stops breathing) or its detail is re-relayed.
-                revision: (call.detail ?? "").hashValue &+ (call.finished ? 1 : 0),
+                revision: hasher.finalize(),
                 content: .toolChip(name: call.name, detail: call.detail,
-                                   inputPreview: call.detail, resultPreview: nil,
-                                   agent: nil, running: !call.finished,
+                                   inputPreview: input,
+                                   resultPreview: call.resultPreview,
+                                   agent: nil,
+                                   phase: call.finished ? .liveFinished : .running,
                                    detailRef: nil, stacked: stacked),
                 height: Self.capsuleRowHeight(badged: false, stacked: stacked)
             )

@@ -88,23 +88,16 @@ enum TimelineHostedCell {
     private static func rowContent(for row: TimelineRow,
                                    delegate: TimelineCellActionDelegate?) -> some View {
         switch row.content {
-        case .toolChip(let name, let detail, let inputPreview, let resultPreview,
-                       let agent, let running, let detailRef, let stacked):
+        case .toolChip(let name, let detail, _, _, let agent, let phase, _, let stacked):
             TimelineToolChipView(
-                name: name, detail: detail, agent: agent, running: running,
+                name: name, detail: detail, agent: agent, running: phase == .running,
                 stacked: stacked,
                 onOpen: {
-                    delegate?.timelineCell(didRequest: .openActivity(.tool(
-                        id: row.id, name: name, detail: detail,
-                        input: inputPreview?.isEmpty == false ? inputPreview : nil,
-                        result: resultPreview?.isEmpty == false ? resultPreview : nil,
-                        agent: agent,
-                        // The row itself knows whether its call has returned: a
-                        // LIVE chip is running until its `tool-result` lands, a
-                        // transcript chip never is. Inferring it from "no result
-                        // but an input" made a finished tool that printed nothing
-                        // say "Running…" forever.
-                        running: running, detailRef: detailRef)))
+                    // The ROW carries everything the drawer shows, phase included
+                    // (see `TimelineActivityDetail.tool(row:)`): the sheet never
+                    // infers a call's state from an empty Result section.
+                    guard let payload = TimelineActivityDetail.tool(row: row) else { return }
+                    delegate?.timelineCell(didRequest: .openActivity(payload))
                 }
             )
         case .thinking(let line, let preview, let fullText, let maxLines, let detailRef,
@@ -462,12 +455,20 @@ struct TimelineExpandSection: View {
     /// A plain caption note ("Running…", "No output") instead of a code body.
     let isNote: Bool
 
-    /// Stand-in for a Result section with no output. The distinction matters to
-    /// the reader: a tool with an input and no result yet is still RUNNING, while
-    /// one with neither genuinely produced nothing. A pure function so a test can
-    /// pin both words without rendering SwiftUI.
-    static func resultNote(hasInput: Bool) -> String {
-        hasInput ? "Running…" : "No output"
+    /// Stand-in for a Result section with nothing in it. THREE states, because
+    /// two of them are not "no output" at all: a call still in flight has not
+    /// answered yet, and a live call that returned may simply not have had its
+    /// output relayed to the phone (an older server sends no `resultPreview`, and
+    /// the transcript carries it at turn end). Only a transcript row's empty
+    /// Result is proof the tool printed nothing.
+    ///
+    /// Pure and static so the tests pin all three words without rendering SwiftUI.
+    static func resultNote(phase: TimelineToolPhase) -> String {
+        switch phase {
+        case .running: return "Running…"
+        case .liveFinished: return "Finished. The output arrives when the turn ends."
+        case .transcript: return "No output"
+        }
     }
 
     init(label: String, body: String, maxHeight: CGFloat? = nil, isNote: Bool = false) {
@@ -492,10 +493,14 @@ struct TimelineExpandSection: View {
                 .foregroundStyle(ReadableText.secondary)
                 .textCase(.uppercase)
             if isNote {
+                // WRAPS. A note is a whole sentence now ("Finished. The output
+                // arrives when the turn ends."), and a one-line limit truncated
+                // it at accessibility sizes, and a clipped explanation of missing
+                // text is the bug it exists to explain.
                 Text(body_)
                     .font(.caption)
                     .foregroundStyle(ReadableText.secondary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier(bodyIdentifier)
             } else {
                 // IT WRAPS. It used to be a horizontal `ScrollView`, which is fine for
@@ -1138,13 +1143,12 @@ struct TimelineActivitySheet: View {
         if !result.isEmpty {
             TimelineExpandSection(label: "Result", body: result.visible)
         } else {
-            // "Running…" vs "No output" turns on whether the CALL is still in
-            // flight, which is what the row's own `running` says — asked of the
-            // row, not inferred from an empty result, so a finished tool that
-            // printed nothing cannot be reported as still working.
+            // Which of the three notes this earns turns on where the CALL stands,
+            // which only the row knows (see `TimelineToolPhase`), never on the
+            // emptiness of the section itself.
             TimelineExpandSection(
                 label: "Result",
-                body: TimelineExpandSection.resultNote(hasInput: detail.running),
+                body: TimelineExpandSection.resultNote(phase: detail.phase),
                 isNote: true)
         }
     }

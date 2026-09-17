@@ -38,6 +38,18 @@ struct LiveToolCall: Equatable, Sendable, Identifiable {
     /// breathing icon while true, so a running call and a finished one are
     /// distinguishable in a column of them.
     var finished: Bool
+    /// The masked `key: value` render of the call's arguments, when the server
+    /// sends `tool { inputPreview }`. nil on a server that does not (a stale
+    /// replica), where `detail` is the only input there is. That gap is why the
+    /// drawer showed a Bash row's DESCRIPTION under "Input" instead of its
+    /// command (2026-09-16 report).
+    var inputPreview: String? = nil
+    /// The masked excerpt of the call's output, when the server sends
+    /// `tool-result { resultPreview }`. nil means the output has NOT reached the
+    /// phone yet; it is never proof the call printed nothing, which is the
+    /// distinction the drawer's Result note has to keep (the same report read
+    /// "No output" under a tool that had produced plenty).
+    var resultPreview: String? = nil
 }
 
 struct LiveAgentActivity {
@@ -100,15 +112,31 @@ struct LiveAgentActivity {
     /// A tool call started. `id` is the wire's `toolUseId`; an empty one (older
     /// server) always appends, which is the honest reading — with no id there is
     /// nothing to recognise a repeat by.
-    mutating func toolStarted(id: String = "", name: String, detail: String?) {
+    mutating func toolStarted(id: String = "", name: String, detail: String?,
+                              inputPreview: String? = nil) {
         if !id.isEmpty, let existing = tools.firstIndex(where: { $0.id == id }) {
             // A repeated `tool` frame for one id (a replay, a re-relay) UPDATES
-            // that call rather than stacking a second chip for it.
+            // that call rather than stacking a second chip for it. The frame
+            // describes the CALL, so it cannot un-finish it or forget the output
+            // that already landed: a re-relay arriving after `tool-result` used to
+            // be able to reset both.
+            //
+            // Same fill-never-clear rule for the input as for the output: a frame
+            // that CARRIES a non-empty `inputPreview` replaces the stored one, and
+            // a frame without the key (an older relay in the middle of a turn)
+            // keeps it. Overwriting with nil would drop a known command back to
+            // the one-line description, which is the very swap this field exists
+            // to undo.
+            let keptInput = (inputPreview?.isEmpty == false)
+                ? inputPreview : tools[existing].inputPreview
             tools[existing] = LiveToolCall(id: id, name: name, detail: detail,
-                                           finished: tools[existing].finished)
+                                           finished: tools[existing].finished,
+                                           inputPreview: keptInput,
+                                           resultPreview: tools[existing].resultPreview)
             return
         }
-        tools.append(LiveToolCall(id: id, name: name, detail: detail, finished: false))
+        tools.append(LiveToolCall(id: id, name: name, detail: detail, finished: false,
+                                  inputPreview: inputPreview))
         if tools.count > Self.maxLiveTools {
             tools.removeFirst(tools.count - Self.maxLiveTools)
         }
@@ -127,7 +155,7 @@ struct LiveAgentActivity {
     ///     relays only announce results for calls they announced, so such an id
     ///     describes somebody else's call (a subagent's, a replay), and guessing
     ///     "the newest one must be it" would retire a chip still running.
-    mutating func toolFinished(id: String = "") {
+    mutating func toolFinished(id: String = "", resultPreview: String? = nil) {
         let index: Int?
         if !id.isEmpty, let exact = tools.firstIndex(where: { $0.id == id }) {
             index = exact
@@ -138,6 +166,13 @@ struct LiveAgentActivity {
         }
         guard let index else { return }
         tools[index].finished = true
+        // Only ever FILL the field, never clear it: a frame without a preview (an
+        // older server) leaves "not here yet" standing, and a second result frame
+        // that does carry one can still complete the row. Empty counts as absent,
+        // because an empty Result section would read as an answer.
+        if let resultPreview, !resultPreview.isEmpty {
+            tools[index].resultPreview = resultPreview
+        }
     }
 
     /// Fold the buffered deltas into `thinkingText`, trimming the head FIRST so
@@ -172,12 +207,19 @@ enum LiveStreamEvents {
     /// `toolUseId` is optional for the same reason `delta` is: both relays send it
     /// today (api-v1 `tool`/`tool-result`, session-stream-v1 likewise), an older
     /// one does not, and a missing id must still mean "a tool started/ended".
+    /// `inputPreview` (the masked `key: value` render the transcript rows carry)
+    /// is optional for the same reason: only a current server sends it.
     private struct ToolPayload: Decodable {
         let name: String
         let detail: String?
         let toolUseId: String?
+        let inputPreview: String?
     }
-    private struct ToolResultPayload: Decodable { let toolUseId: String? }
+    /// `resultPreview` is the masked output excerpt, absent on an older server.
+    private struct ToolResultPayload: Decodable {
+        let toolUseId: String?
+        let resultPreview: String?
+    }
 
     /// What the caller still has to do with its own (observable, gated) state.
     struct Handled {
@@ -206,12 +248,13 @@ enum LiveStreamEvents {
                 return Handled(impliesStreaming: true, toolName: nil, needsFlush: false)
             }
             live.toolStarted(id: payload.toolUseId ?? "", name: payload.name,
-                             detail: payload.detail)
+                             detail: payload.detail, inputPreview: payload.inputPreview)
             return Handled(impliesStreaming: true, toolName: payload.name,
                            needsFlush: false)
         case "tool-result":
-            let id = (try? JSONDecoder().decode(ToolResultPayload.self, from: data))?.toolUseId
-            live.toolFinished(id: id ?? "")
+            let payload = try? JSONDecoder().decode(ToolResultPayload.self, from: data)
+            live.toolFinished(id: payload?.toolUseId ?? "",
+                              resultPreview: payload?.resultPreview)
             return Handled(impliesStreaming: false, toolName: nil, needsFlush: false)
         default:
             return nil

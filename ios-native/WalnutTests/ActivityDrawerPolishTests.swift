@@ -20,7 +20,7 @@ final class ActivityDrawerPolishTests: XCTestCase {
     private func chipRow(height: CGFloat = 27) -> TimelineRow {
         TimelineRow(id: "m0#0", revision: 0,
                     content: .toolChip(name: "Bash", detail: "npm test", inputPreview: nil,
-                                       resultPreview: nil, agent: nil, running: false,
+                                       resultPreview: nil, agent: nil, phase: .transcript,
                                        detailRef: nil, stacked: false),
                     height: height)
     }
@@ -268,7 +268,7 @@ final class ActivityDrawerPolishTests: XCTestCase {
             let detail = TimelineActivityDetail(
                 id: "m0#0", kind: .thinking, title: "Thinking", subtitle: nil, input: nil,
                 body: String(repeating: "reasoning-", count: withheldChars / 10),
-                agent: nil, running: false, detailRef: nil)
+                agent: nil, phase: .transcript, detailRef: nil)
             let host = UIHostingController(rootView: TimelineActivitySheet(detail: detail))
             let size = CGSize(width: 402, height: 874)
             let window = UIWindow(frame: CGRect(origin: .zero, size: size))

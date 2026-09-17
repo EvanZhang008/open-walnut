@@ -101,6 +101,27 @@ struct TimelineRow {
     }
 }
 
+/// Where a tool row's call is in its life. It is what the activity drawer needs
+/// to be HONEST about an empty Result section, and it replaces a lone `running`
+/// flag because that flag could only say two of the three things (2026-09-16
+/// report: a finished live Bash row said "No output" while the tool had produced
+/// plenty, because the output simply had not been relayed yet).
+///
+/// One enum rather than a `running` + `live` pair: of the pair's four
+/// combinations one is nonsense (a transcript row is a call that ALREADY
+/// RETURNED, so it can never be running), and the impossible state should not be
+/// constructible.
+enum TimelineToolPhase: Hashable, Sendable {
+    /// A live call whose own `tool-result` has not landed. The chip breathes.
+    case running
+    /// A live call that returned. Its output is on the phone only if the server
+    /// sent `resultPreview`, so an empty Result here means "not relayed yet".
+    case liveFinished
+    /// A transcript row: always returned, and an empty Result there really is no
+    /// output, because the whole turn is on disk by then.
+    case transcript
+}
+
 enum TimelineRowContent {
     /// Assistant / notification prose: pre-styled attributed text, rendered
     /// by a TextKit cell. `selectable` keeps UITextView selection on.
@@ -146,7 +167,7 @@ enum TimelineRowContent {
     /// that formula reserved — a cell reading the environment could stack a row
     /// measured for one line during the frames after a text-size change.
     case toolChip(name: String, detail: String?, inputPreview: String?,
-                  resultPreview: String?, agent: String?, running: Bool,
+                  resultPreview: String?, agent: String?, phase: TimelineToolPhase,
                   detailRef: String?, stacked: Bool)
     /// Thinking row: a grey capsule reading the fixed word "Thinking" FOLLOWED BY
     /// the server's collapsed reasoning line, with the FULL reasoning behind a tap
@@ -259,16 +280,17 @@ extension TimelineRowContent {
             hasher.combine(header)
             hasher.combine(rows)
         case .toolChip(let name, let detail, let inputPreview, let resultPreview,
-                       let agent, let running, let detailRef, let stacked):
+                       let agent, let phase, let detailRef, let stacked):
             hasher.combine(name)
             hasher.combine(detail)
             hasher.combine(inputPreview)
             hasher.combine(resultPreview)
             hasher.combine(agent)
-            // `running` is DRAWN (the icon breathes) — a chip whose call just
-            // finished must be handed to its cell, and everything else about the
-            // row is byte-identical at that moment.
-            hasher.combine(running)
+            // The phase is DRAWN (a running chip breathes) and it decides the
+            // drawer's Result note, so a chip whose call just finished must be
+            // handed to its cell even though everything else about the row is
+            // byte-identical at that moment.
+            hasher.combine(phase)
             hasher.combine(detailRef)
             // Drawn AND measured: a text-size change that only flips this must still
             // reload the cell.
@@ -433,9 +455,11 @@ struct TimelineActivityDetail: Identifiable, Equatable {
     let body: String?
     /// Tool rows only — the subagent this call belongs to.
     let agent: String?
-    /// True while the row's turn is still running, so the drawer can say
-    /// "Running…" instead of "No output" for a tool that has not returned.
-    let running: Bool
+    /// Tool rows only: where this call is in its life, which is the ONLY thing
+    /// that makes an empty Result section honest (see `TimelineToolPhase` and
+    /// `TimelineExpandSection.resultNote`). `.transcript` for a thinking row,
+    /// where it is never read.
+    let phase: TimelineToolPhase
     /// Opaque server token for "read this row's WHOLE text", or nil when the
     /// excerpt IS the whole thing (and on any box that does not send the field
     /// yet). nil is the NORMAL case, not a failure: the drawer shows everything
@@ -444,15 +468,34 @@ struct TimelineActivityDetail: Identifiable, Equatable {
 
     static func thinking(id: String, text: String, detailRef: String? = nil) -> Self {
         Self(id: id, kind: .thinking, title: TimelineActivityVocabulary.thinking,
-             subtitle: nil, input: nil, body: text, agent: nil, running: false,
+             subtitle: nil, input: nil, body: text, agent: nil, phase: .transcript,
              detailRef: detailRef)
     }
 
     static func tool(id: String, name: String, detail: String?, input: String?,
-                     result: String?, agent: String?, running: Bool,
+                     result: String?, agent: String?, phase: TimelineToolPhase,
                      detailRef: String? = nil) -> Self {
         Self(id: id, kind: .tool, title: name, subtitle: detail, input: input,
-             body: result, agent: agent, running: running, detailRef: detailRef)
+             body: result, agent: agent, phase: phase, detailRef: detailRef)
+    }
+
+    /// The payload a `.toolChip` row opens with, and nil for any other row.
+    ///
+    /// WHY IT TAKES THE ROW: this mapping (an empty preview is NO section, the
+    /// phase rides through untouched) used to live inside the cell's tap closure,
+    /// where only a real device could reach it, so a drawer showing a Bash row's
+    /// description as its Input, and "No output" under a tool that had produced
+    /// output, was findable by hand and by nothing else. Now the row a test builds
+    /// and the payload the sheet receives are one call apart.
+    static func tool(row: TimelineRow) -> Self? {
+        guard case .toolChip(let name, let detail, let inputPreview, let resultPreview,
+                             let agent, let phase, let detailRef, _) = row.content else {
+            return nil
+        }
+        return tool(id: row.id, name: name, detail: detail,
+                    input: inputPreview?.isEmpty == false ? inputPreview : nil,
+                    result: resultPreview?.isEmpty == false ? resultPreview : nil,
+                    agent: agent, phase: phase, detailRef: detailRef)
     }
 }
 
