@@ -9,11 +9,15 @@
  */
 
 /** Stable ids — new checks register in darwin.ts and reuse this union. */
-/** One id per GRANT, never per feature. Full Disk Access is a single row for
- *  every feature that reads through the shared helper: two rows for the same
- *  macOS permission read as Walnut asking twice, and the user only has to do it
- *  once. See probeFullDiskAccess in ./darwin.ts. */
-export type PermissionId = 'calendar' | 'full-disk-access';
+/** One id per GRANT, never per feature, where a grant is (macOS permission ×
+ *  the identity being granted TO). Every feature reading through the shared
+ *  reader helper is ONE Full Disk Access row: two rows for the same helper read
+ *  as Walnut asking twice when the user only has to act once (Screen Time used
+ *  to do this). Agent sessions are a separate row because they are a separate
+ *  identity — the daemon runs under Walnut.app while the reader deliberately
+ *  disclaims responsibility, so macOS keeps two entries and the user really does
+ *  add two paths. See probeFullDiskAccess and sessionIdentityRow in ./darwin.ts. */
+export type PermissionId = 'calendar' | 'full-disk-access' | 'session-full-disk-access';
 
 export type PermissionState =
   /** Grant confirmed by a real probe (not by assuming). */
@@ -88,6 +92,17 @@ export interface PermissionStatus {
    * panel less believable.
    */
   workingVia?: string;
+  /**
+   * Set when macOS offers no way to CHECK this grant, only to ask for it.
+   *
+   * Full Disk Access for the session identity is the case: proving it would mean
+   * reading a protected file (the TCC database, someone's Mail) as that identity,
+   * which is exactly the access the user is deciding about, so Walnut refuses to
+   * poll it. The state is then `unknown` forever, and a row that says "Unknown"
+   * with no explanation reads as a broken probe. The UI must say "can't be
+   * checked" and name the observable signal instead (the popups stop).
+   */
+  unverifiable?: boolean;
 }
 
 export interface LauncherInfo {

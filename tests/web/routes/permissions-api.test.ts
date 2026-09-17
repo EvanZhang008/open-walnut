@@ -57,16 +57,26 @@ describe('GET /api/permissions', () => {
       const ids = report.permissions.map((p: { id: string }) => p.id);
       expect(ids).toContain('calendar');
       expect(ids).toContain('full-disk-access');
-      // ONE row per macOS permission. Screen Time used to get its own row even
-      // though it is the same Full Disk Access grant, which read as Walnut
-      // asking for the same thing twice and sent people to grant a path that
-      // could not fix what they were looking at. A new feature that needs FDA
-      // joins FDA_CONSUMERS; it must not add a row.
+      // ONE row per GRANT, where a grant is (permission x identity granted TO).
+      // Screen Time used to get its own row even though it is the same helper's
+      // Full Disk Access, which read as Walnut asking for the same thing twice
+      // and sent people to grant a path that could not fix what they were looking
+      // at. A new feature that reads through the reader helper joins FDA_CONSUMERS
+      // and must NOT add a row. Agent sessions do get their own row, because the
+      // daemon runs under Walnut.app while the reader deliberately disclaims
+      // responsibility: macOS keeps two entries, so the user really does add two
+      // paths and one row could not explain both.
       expect(new Set(ids).size).toBe(ids.length);
       const fdaRows = report.permissions.filter(
         (p: { settingsUrl: string }) => /Privacy_AllFiles/.test(p.settingsUrl),
       );
-      expect(fdaRows.length).toBe(1);
+      const fdaTargets = fdaRows.map((p: { grantTarget: string }) => p.grantTarget);
+      expect(new Set(fdaTargets).size).toBe(fdaTargets.length);
+      // A row that cannot be probed must say so, or it shows "Unknown" forever
+      // and reads as a broken check.
+      for (const p of fdaRows as { state: string; unverifiable?: boolean }[]) {
+        if (p.state === 'unknown') expect(p.unverifiable).toBe(true);
+      }
       for (const p of report.permissions) {
         expect(['granted', 'denied', 'not-determined', 'not-applicable', 'unknown']).toContain(p.state);
         expect(['prompt', 'settings-only']).toContain(p.fixKind);

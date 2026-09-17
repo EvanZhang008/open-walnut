@@ -35,6 +35,8 @@ export interface PermissionStatus {
    *  (e.g. "an older copy of the helper (v4)"). Saying "not granted" beside a
    *  calendar full of events reads as a broken probe. */
   workingVia?: string;
+  /** macOS offers no way to read this grant back, only to ask for it. */
+  unverifiable?: boolean;
 }
 
 export interface PermissionsReport {

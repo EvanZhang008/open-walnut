@@ -129,7 +129,13 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
             <p className="permission-grant-target">
               {permission.launcherIndependent ? (
                 <>
-                  macOS checks this grant for Walnut's own helper: <code>{permission.grantTarget}</code>
+                  {/* The grant target is sometimes Walnut.app itself (agent sessions
+                      run under it) and sometimes a small helper binary. Calling the
+                      app "Walnut's own helper" reads as the wrong program, and this
+                      line exists precisely to be trusted and copied. */}
+                  macOS checks this grant for{' '}
+                  {/\.app(\/|$)/.test(permission.grantTarget) ? 'Walnut itself' : "Walnut's own helper"}:{' '}
+                  <code>{permission.grantTarget}</code>
                 </>
               ) : (
                 <>
@@ -145,7 +151,14 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
                 ))}
               </ol>
             )}
-            <p className="settings-muted">This window checks automatically and turns green once granted.</p>
+            {/* Promising a green that can never arrive is worse than saying
+                nothing: the user flips the switch, watches the row stay grey, and
+                concludes Walnut is broken. */}
+            <p className="settings-muted">
+              {permission.unverifiable
+                ? 'macOS gives no way to read this grant back, so this row keeps saying "Can\'t be checked" even after you grant it.'
+                : 'This window checks automatically and turns green once granted.'}
+            </p>
           </div>
         )}
 

@@ -102,11 +102,24 @@ export function PermissionsSection() {
               <span className="settings-muted permission-row-state">
                 {p.workingVia
                   ? 'Working (older copy)'
-                  : p.staleGrant ? 'Needs re-adding' : STATE_LABEL[p.state] ?? p.state}
+                  : p.staleGrant ? 'Needs re-adding'
+                  // "Unknown" beside a switch the user just flipped reads as a
+                  // broken probe. Say that it cannot be read back instead.
+                  : p.unverifiable ? "Can't be checked"
+                  : STATE_LABEL[p.state] ?? p.state}
               </span>
               {p.state !== 'granted' && (
-                <button className="btn btn-sm" onClick={() => setFixing(p)}>
-                  Fix…
+                // "Fix" implies something is broken. An optional grant that was
+                // never asked for is a setup step, not a fault.
+                <button
+                  className="btn btn-sm"
+                  // The button sits in a narrow trailing column, so a two-word
+                  // label wrapped to two lines and made the row taller than its
+                  // neighbours. It is an action, never a paragraph.
+                  style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+                  onClick={() => setFixing(p)}
+                >
+                  {p.unverifiable ? 'Set up…' : 'Fix…'}
                 </button>
               )}
             </div>

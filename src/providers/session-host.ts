@@ -157,6 +157,44 @@ function realHome(): string | null {
   }
 }
 
+export interface SessionHostInspection {
+  /** The app that would supervise the daemon, or null when there is none usable. */
+  app: string | null;
+  /** Why not, when `app` is null. */
+  reason?: SessionHostUnavailable;
+  detail?: string;
+}
+
+/**
+ * What the identity WOULD be, without changing anything.
+ *
+ * Separate from resolveSessionHostLaunch because that one approves a command,
+ * and the Settings panel polls: a read-only question must never rewrite the
+ * manifest out from under the running daemon's approval.
+ */
+export async function inspectSessionHost(input: {
+  daemonDir: string;
+  prodDaemonDir: string;
+}): Promise<SessionHostInspection> {
+  const blocked = sessionHostUnavailableReason({
+    platform: process.platform,
+    cloudMode: CLOUD_MODE,
+    ephemeral: IS_EPHEMERAL,
+    daemonDir: input.daemonDir,
+    prodDaemonDir: input.prodDaemonDir,
+    optedOut: process.env.WALNUT_SESSION_HOST === '0',
+  });
+  if (blocked) return { app: null, reason: blocked };
+  const home = realHome();
+  if (!home) return { app: null, reason: 'not_installed', detail: 'no passwd home for this user' };
+  const app = desktopAppCandidates(home).find((c) => fs.existsSync(desktopAppExecutable(c)));
+  if (!app) return { app: null, reason: 'not_installed', detail: 'no Walnut.app on this machine' };
+  if (!(await appSupportsSessionHost(desktopAppExecutable(app)))) {
+    return { app: null, reason: 'unsupported_app', detail: `${app} predates ${SESSION_HOST_FLAG}` };
+  }
+  return { app };
+}
+
 export type SessionHostResolution =
   | { available: true; argv: string[]; executable: string; app: string; manifest: string }
   | { available: false; reason: SessionHostUnavailable; detail?: string };

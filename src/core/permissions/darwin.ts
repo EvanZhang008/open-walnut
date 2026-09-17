@@ -203,6 +203,32 @@ async function probeFullDiskAccess(): Promise<{
   }
 }
 
+/**
+ * The identity agent sessions run under, if any.
+ *
+ * Read-only on purpose: the Settings panel polls this, and the launch path's
+ * resolver APPROVES a command as a side effect. Polling that would rewrite the
+ * manifest the running daemon was started against.
+ */
+async function probeSessionIdentity(): Promise<{ app: string | null; detail?: string }> {
+  try {
+    const [{ inspectSessionHost }, { PROD_DAEMON_DIR }] = await Promise.all([
+      import('../../providers/session-host.js'),
+      import('../../providers/daemon-ownership.js'),
+    ]);
+    const seen = await inspectSessionHost({
+      daemonDir: process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR,
+      prodDaemonDir: PROD_DAEMON_DIR,
+    });
+    return { app: seen.app, ...(seen.detail ? { detail: seen.detail } : {}) };
+  } catch (err) {
+    log.web.warn('session identity probe inconclusive', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { app: null };
+  }
+}
+
 // ── report assembly ──────────────────────────────────────────────────────────
 
 const NOT_APPLICABLE: PermissionsReport = {
@@ -227,10 +253,11 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
     return reportCache.report;
   }
 
-  const [launcher, calState, fda] = await Promise.all([
+  const [launcher, calState, fda, session] = await Promise.all([
     detectLauncher(),
     calendarAuthStatus(),
     probeFullDiskAccess(),
+    probeSessionIdentity(),
   ]);
 
   // calendarAuthStatus asks the CURRENT helper. A previous generation can still
@@ -318,6 +345,40 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
             // empty", and this list is the only place the user is looking.
             'For your iPhone: Settings → Screen Time → Share Across Devices, so its numbers reach this Mac.',
           ],
+    },
+    {
+      id: 'session-full-disk-access',
+      label: 'Session file access',
+      // Never 'granted' and never 'denied': see `unverifiable`. Proving it would
+      // mean reading a protected file as this identity, which is the very access
+      // the user is deciding about.
+      state: session.app ? 'unknown' : 'not-applicable',
+      unverifiable: true,
+      fixKind: 'settings-only',
+      why:
+        'Stops the repeated "wants to access data from other apps" popups while a session works. '
+        + 'Sessions run under Walnut itself, so this is one switch for the app you already know. '
+        + 'Optional: work in your own project folders needs no grant, and sessions keep working '
+        + 'if you skip it. It is a separate entry from the reader helper above because macOS '
+        + 'grants access per program, not per app you think of as one.',
+      grantTarget: session.app ?? 'Walnut.app',
+      // The app makes ITSELF the responsible process before starting the daemon,
+      // so this grant does not depend on whether a terminal or the Mac app
+      // started Walnut.
+      launcherIndependent: true,
+      settingsUrl: SETTINGS_URL.fullDisk,
+      steps: [
+        'Open System Settings → Privacy & Security → Full Disk Access.',
+        'Click + (authenticate if asked).',
+        `Press Cmd+Shift+G, then Cmd+V (the path is already copied): ${session.app ?? ''}`,
+        'Select it and make sure its toggle is ON.',
+        // The honest completion signal, because there is nothing to turn green.
+        // The dialog's own footer explains that the row cannot be read back, so
+        // this step must not say it a second time in different words.
+        'You will know it worked because the popups stop.',
+        'Sessions already running keep the identity they started with; the switch applies '
+          + 'the next time the session daemon restarts.',
+      ],
     },
   ];
 
