@@ -421,6 +421,13 @@ export interface PermissionRequestEvent {
   acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
 }
 
+/** An unanswered permission / AskUserQuestion card. Absent status counts as
+ *  pending: the REST fallback (`pendingPermissions`) and `appendPermissionBlock`
+ *  both add cards without one, and only a resolved event stamps a status. */
+export function isPendingPermissionBlock(b: StreamingBlock): b is StreamingPermissionBlock {
+  return b.type === 'permission' && (b.status === undefined || b.status === 'pending');
+}
+
 /** Add one permission card. Re-emits are expected while a request is pending. */
 export function appendPermissionBlock(
   blocks: readonly StreamingBlock[],

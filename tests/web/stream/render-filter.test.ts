@@ -182,3 +182,66 @@ describe('allBlocksAbsorbed — reset gate', () => {
     expect(allBlocksAbsorbed([], new Set(), false)).toBe(false); // nothing to reset
   });
 });
+
+describe('pending permission card is never absorbed (2026-09-16 AskUserQuestion hidden on open)', () => {
+  // The CLI persists the AskUserQuestion tool_use row BEFORE the control_request
+  // reaches walnut, so history always holds the twin of every block around the
+  // card. Opening the session >5 min later, the server's stale-running rule
+  // answered isStreaming=false, the live-tail guard fell away, and the fully
+  // matched window took the card down with it.
+  const askCall = (): StreamingBlock => ({
+    type: 'tool_call', toolUseId: 'tu-ask', name: 'AskUserQuestion', status: 'calling',
+    input: { questions: [{ question: 'Which one?', options: [] }] },
+  });
+  const pendingCard = (status?: 'pending'): StreamingBlock => ({
+    type: 'permission', requestId: 'req-ask', toolName: 'AskUserQuestion',
+    ...(status ? { status } : {}),
+  });
+  const history = [
+    msg({ text: 'Let me ask you.', msgId: 'msg-ask' }),
+    msg({ tools: [{ name: 'AskUserQuestion', toolUseId: 'tu-ask', input: {} }] }),
+  ];
+
+  it('stays visible when the turn around it is fully absorbed and no turn is live (the incident)', () => {
+    for (const status of [undefined, 'pending'] as const) {
+      const blocks = [text('Let me ask you.', 'msg-ask'), askCall(), pendingCard(status)];
+      const hidden = computeHiddenBlocks({ blocks, messages: history, watermark: 0, isStreaming: false });
+      expect(hidden.has(0)).toBe(true);
+      expect(hidden.has(1)).toBe(true);
+      expect(hidden.has(2)).toBe(false);
+      // …and the array is not reclaimed underneath the open question.
+      expect(allBlocksAbsorbed(blocks, hidden, false)).toBe(false);
+    }
+  });
+
+  it('stays visible while streaming too (the <5 min case — live tail)', () => {
+    const blocks = [text('Let me ask you.', 'msg-ask'), askCall(), pendingCard('pending')];
+    const hidden = computeHiddenBlocks({ blocks, messages: history, watermark: 0, isStreaming: true });
+    expect(hidden.has(2)).toBe(false);
+  });
+
+  it('a SETTLED card is still reclaimed with its fully matched window (memory GC unchanged)', () => {
+    for (const status of ['allowed', 'denied'] as const) {
+      const blocks: StreamingBlock[] = [
+        text('Let me ask you.', 'msg-ask'), askCall(),
+        { type: 'permission', requestId: 'req-ask', toolName: 'AskUserQuestion', status },
+      ];
+      const hidden = computeHiddenBlocks({ blocks, messages: history, watermark: 0, isStreaming: false });
+      expect(hidden.has(2)).toBe(true);
+      expect(allBlocksAbsorbed(blocks, hidden, false)).toBe(true);
+    }
+  });
+
+  it('a pending card does not shield a settled sibling or a system notice from GC', () => {
+    const blocks: StreamingBlock[] = [
+      text('Let me ask you.', 'msg-ask'), askCall(),
+      { type: 'system', variant: 'info', message: 'hook ran' },
+      { type: 'permission', requestId: 'req-old', toolName: 'Bash', status: 'allowed' },
+      pendingCard('pending'),
+    ];
+    const hidden = computeHiddenBlocks({ blocks, messages: history, watermark: 0, isStreaming: false });
+    expect(hidden.has(2)).toBe(true);
+    expect(hidden.has(3)).toBe(true);
+    expect(hidden.has(4)).toBe(false);
+  });
+});

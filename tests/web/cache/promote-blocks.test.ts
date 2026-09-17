@@ -21,8 +21,13 @@ const thinking = (content: string): StreamingBlock => ({ type: 'thinking', conte
 const tool = (toolUseId: string, name = 'Bash'): StreamingBlock => ({
   type: 'tool_call', toolUseId, name, status: 'done',
 });
-const perm = (requestId: string): StreamingBlock => ({
-  type: 'permission', requestId, toolName: 'Bash',
+/** A SETTLED card, the only kind pure-UI GC may reclaim. Absent status
+ *  means pending (see stream-reducer isPendingPermissionBlock). */
+const perm = (requestId: string, status: 'allowed' | 'denied' = 'allowed'): StreamingBlock => ({
+  type: 'permission', requestId, toolName: 'Bash', status,
+});
+const pendingPerm = (requestId: string, status?: 'pending'): StreamingBlock => ({
+  type: 'permission', requestId, toolName: 'AskUserQuestion', ...(status ? { status } : {}),
 });
 const sys = (message: string): StreamingBlock => ({
   type: 'system', variant: 'info', message,
@@ -145,6 +150,28 @@ describe('promoteCompletedBlocks — pure-UI blocks', () => {
     // text matched, tool unmatched → turn incomplete → perm survives, tool survives
     expect(r.kept).toEqual([perm('req_1'), tool('toolu_a')]);
     expect(r.removed).toBe(1);
+  });
+
+  it('NEVER GCs a PENDING permission card, even when its whole window matched', () => {
+    // The AskUserQuestion tool_use row persists before the ask reaches walnut,
+    // so the window around an open question is always fully matchable. Both
+    // spellings of "pending" (absent status from the REST fallback, explicit
+    // 'pending' from the server snapshot) must survive.
+    for (const status of [undefined, 'pending'] as const) {
+      const blocks = [text('which one?'), tool('toolu_ask', 'AskUserQuestion'), pendingPerm('req_ask', status)];
+      const delta = [asstText('which one?'), asstTool('toolu_ask', 'AskUserQuestion')];
+      const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+      expect(r.kept).toEqual([pendingPerm('req_ask', status)]);
+      expect(r.removed).toBe(2);
+      expect(r.unmatched).toHaveLength(0); // an open question is expected, not a divergence
+    }
+  });
+
+  it('GCs a denied card like an allowed one (both are settled)', () => {
+    const blocks = [text('run this?'), perm('req_1', 'denied'), tool('toolu_a')];
+    const delta = [asstText('run this?'), asstTool('toolu_a')];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.kept).toHaveLength(0);
   });
 
   it('does not GC a system block belonging to a live turn', () => {

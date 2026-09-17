@@ -196,6 +196,45 @@ describe('session:stream-subscribe RPC — read-only invariant', () => {
     }
   })
 
+  it('keeps isStreaming=true for a stale-running record that is blocked on a pending permission', async () => {
+    // 2026-09-16: a session had asked an AskUserQuestion ~2h earlier. Opening it
+    // hit the stale-running rule above → isStreaming=false → the client's
+    // render filter reclaimed the pending card as leftover UI, and the question
+    // was invisible until the 60s re-emit put it back. A turn waiting on the
+    // human is live for as long as the human takes.
+    const sid = 'sid-stale-running-pending-perm-1'
+    const taskId = 'task-stale-run-pending-1'
+    await seedTask(taskId)
+
+    await createSessionRecord(sid, taskId, 'StreamSubscribe', undefined, { mode: 'bypass' })
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+    await updateSessionRecord(sid, {
+      process_status: 'running',
+      last_status_change: twoHoursAgo,
+      pendingPermission: {
+        requestId: 'req-stale-ask',
+        subtype: 'can_use_tool',
+        toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Which one?', options: [] }] },
+        receivedAt: twoHoursAgo,
+      },
+    })
+
+    sessionStreamBuffer.markStreaming(sid)
+    sessionStreamBuffer.appendPermission(sid, 'req-stale-ask', 'AskUserQuestion', { questions: [] })
+
+    const ws = await openWs()
+    try {
+      const resp = await rpcCall(ws, 'session:stream-subscribe', { sessionId: sid })
+      const snapshot = resp as { blocks: Array<{ type: string }>; isStreaming: boolean }
+      expect(snapshot.isStreaming).toBe(true)
+      expect(snapshot.blocks.some((b) => b.type === 'permission')).toBe(true)
+      expect((sessionStreamBuffer as unknown as { streaming: Set<string> }).streaming.has(sid)).toBe(true)
+    } finally {
+      ws.close()
+    }
+  })
+
   it('returns isStreaming=true when DB record is running and fresh', async () => {
     const sid = 'sid-fresh-running-1'
     const taskId = 'task-fresh-run-1'

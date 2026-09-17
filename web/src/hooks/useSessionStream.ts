@@ -23,6 +23,7 @@ import {
   appendSystemBlock,
   appendPermissionBlock,
   resolvePermissionBlock,
+  isPendingPermissionBlock,
   lastMainLaneText,
   type StreamingBlock,
   type StreamingPermissionBlock,
@@ -289,7 +290,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           const serverIds = new Set(perms.map(p => p.requestId));
           const existingIds = new Set(prev.filter(b => b.type === 'permission').map(b => (b as StreamingPermissionBlock).requestId));
           const isZombie = (b: typeof prev[number]): b is StreamingPermissionBlock =>
-            b.type === 'permission' && (b.status === undefined || b.status === 'pending') && !serverIds.has(b.requestId);
+            isPendingPermissionBlock(b) && !serverIds.has(b.requestId);
           const hasZombie = settled && prev.some(isZombie);
           const next: typeof prev = hasZombie
             ? prev.map(b => (isZombie(b) ? { ...b, status: 'denied' as const } : b))

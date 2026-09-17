@@ -22,7 +22,9 @@
  * the exact evidence semantics that survived the incident chain: msgId /
  * toolUseId id-first, delta-scoped content multiset + '\n' join-runs,
  * childMessages recursion, thinking-redaction guard, bgTaskFinished lane
- * proof, pure-UI GC only when the whole window matched.
+ * proof, pure-UI GC only when the whole window matched, and never for a
+ * PENDING permission card whatever isStreaming says (2026-09-16: a question
+ * asked >5 min before the panel opened was hidden as leftover UI).
  */
 
 import type { StreamingBlock } from '@/stream/stream-reducer';

@@ -29,6 +29,8 @@
  * Pure-UI blocks that never appear in JSONL (permission cards, system notices)
  * have no possible twin — they are collected separately, and only for turns whose
  * matchable content fully matched (so we never GC a UI block of a live turn).
+ * A PENDING permission card is exempt altogether: it is an open request, not
+ * leftover UI, and nothing in history can ever stand in for it.
  *
  * TWO EVIDENCE SCOPES (inc-1783612454903: "last message is not the last one"):
  * the `delta` covers only the NEWEST history increment, so a block whose twin
@@ -55,7 +57,7 @@
  * nor allowed to block pure-UI GC).
  */
 
-import type { StreamingBlock } from '@/stream/stream-reducer';
+import { isPendingPermissionBlock, type StreamingBlock } from '@/stream/stream-reducer';
 import type { SessionHistoryMessage } from '@/types/session';
 
 /** Build the set of evidence keys present in a batch of persisted messages. */
@@ -319,8 +321,17 @@ export function computeAbsorbedIndices(
       // flag as a bug, but keep it rather than blind-delete.
       continue;
     }
-    // Pure-UI block (permission/system): no possible twin; GC below iff its
-    // whole window matched.
+    // An UNANSWERED permission / AskUserQuestion card is not stale UI: the CLI
+    // is blocked on the human, and history can never supersede it (the
+    // tool_use row it sits next to persisted BEFORE the ask). GC'ing it with
+    // the rest of a fully-matched window hid the question the moment a user
+    // opened a session that had been waiting >5 min: the server's stale-
+    // running rule reported isStreaming=false, the live-tail guard dropped
+    // away, and the card vanished until the 60s re-emit re-added it
+    // (2026-09-16). Only a settled card is a pure-UI GC candidate.
+    if (isPendingPermissionBlock(b)) continue;
+    // Pure-UI block (settled permission/system): no possible twin; GC below
+    // iff its whole window matched.
     pureUiIndices.push(i);
   }
 

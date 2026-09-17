@@ -167,6 +167,32 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // ask-user-question-stale-open.spec.ts: a question asked long ago (the
+        // record's running state is >5 min stale) with the turn's blocks still
+        // in the stream buffer: the card must show the moment the panel opens.
+        id: 'pw-task-question-stale',
+        title: 'Stale question fixture',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'immediate',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-question-stale-session'],
+        active_session_ids: ['pw-question-stale-session'],
+        session_id: 'pw-question-stale-session',
+        session_status: {
+          process_status: 'running',
+          mode: 'bypass',
+          pendingPermissionTool: 'AskUserQuestion',
+        },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-vscode',
         title: 'Editor fixture task',
         status: 'in_progress',
@@ -1013,6 +1039,31 @@ const ENVELOPE_PEER_TITLE =
   'Mac side: Fable 5.1 rollout (CLI >= 2.1.255, config pull, proxy restart) then confirm the daemon version on every host'
 const vscodeFixtureRoot = path.join(tmpBase, 'projects', 'editor-fixture')
 await fs.mkdir(vscodeFixtureRoot, { recursive: true })
+
+/** ask-user-question-stale-open.spec.ts: one AskUserQuestion, asked 10 minutes
+ *  ago, still unanswered. Three places must agree on it: the session record
+ *  (durable pendingPermission, stale last_status_change), the JSONL (the text
+ *  and tool_use rows history serves, which are the absorption twins of the
+ *  streamed blocks) and the stream buffer (seeded after startServer below). */
+const STALE_QUESTION = {
+  sessionId: 'pw-question-stale-session',
+  requestId: 'req-question-stale',
+  askedAt: new Date(sessionFixtureNow - 10 * 60_000).toISOString(),
+  msgId: 'msg_pw_stale_ask',
+  toolUseId: 'toolu_pw_stale_ask',
+  intro: 'Before I change the theme, one question.',
+  input: {
+    questions: [{
+      header: 'Colour',
+      question: 'Which accent colour?',
+      options: [
+        { label: 'Teal', description: 'Cooler, matches the sidebar' },
+        { label: 'Amber', description: 'Warmer, matches the logo' },
+      ],
+      multiSelect: false,
+    }],
+  },
+} as const
 // Files-panel Refresh fixture (file-explorer-refresh.spec.ts): a file whose
 // content the spec rewrites on disk, plus a dir it creates a new file inside —
 // Refresh must surface both without a page reload.
@@ -1452,6 +1503,38 @@ await fs.writeFile(
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel3-session.jsonl'), pinsTranscript('pw-voicesel3-session', '0199e2'))
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel4-session.jsonl'), pinsTranscript('pw-voicesel4-session', '0199e3'))
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel5-session.jsonl'), pinsTranscript('pw-voicesel5-session', '0199e4'))
+  // Stale-question transcript: exactly what the CLI has written by the time an
+  // AskUserQuestion control_request reaches walnut: the user turn, the model's
+  // text and its tool_use row, and NO tool_result (the answer is still owed).
+  await fs.writeFile(
+    path.join(jsonlDir, `${STALE_QUESTION.sessionId}.jsonl`),
+    [
+      JSON.stringify({
+        type: 'user',
+        sessionId: STALE_QUESTION.sessionId,
+        uuid: 'pw-stale-ask-u1',
+        parentUuid: null,
+        timestamp: new Date(sessionFixtureNow - 11 * 60_000).toISOString(),
+        message: { role: 'user', content: 'Please restyle the settings page.' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: STALE_QUESTION.sessionId,
+        uuid: 'pw-stale-ask-a1',
+        parentUuid: 'pw-stale-ask-u1',
+        timestamp: STALE_QUESTION.askedAt,
+        message: {
+          id: STALE_QUESTION.msgId,
+          role: 'assistant',
+          content: [
+            { type: 'text', text: STALE_QUESTION.intro },
+            { type: 'tool_use', id: STALE_QUESTION.toolUseId, name: 'AskUserQuestion', input: STALE_QUESTION.input },
+          ],
+        },
+      }),
+      '',
+    ].join('\n'),
+  )
   // Changed-tab code-intel fixture (changed-code-intel.spec.ts): a session whose
   // JSONL records a Write of sync-controller.go — the Changed tab reconstructs
   // the diff from exactly these tool_use blocks, and the on-disk twin (written
@@ -2005,6 +2088,36 @@ await fs.writeFile(
           },
           reason: 'Need a deployment target',
           receivedAt: new Date().toISOString(),
+        },
+      },
+      {
+        claudeSessionId: STALE_QUESTION.sessionId,
+        taskId: 'pw-task-question-stale',
+        project: 'Walnut',
+        process_status: 'running',
+        mode: 'bypass',
+        provider: 'sdk',
+        type: 'subagent',
+        // The health monitor's orphan dead-pool stops any local running record
+        // with pid==null once last_status_change is >2 min old, and this record
+        // is deliberately 10 min stale. A live pid keeps it out of that pool; the
+        // fixture server's own pid is the one process guaranteed alive for the
+        // run, and `provider: 'sdk'` exempts it from every kill path.
+        pid: process.pid,
+        // >5 min old: trips the subscribe RPC's stale-running rule, which is the
+        // condition under which the pending card used to be reclaimed.
+        last_status_change: STALE_QUESTION.askedAt,
+        startedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+        lastActiveAt: STALE_QUESTION.askedAt,
+        messageCount: 1,
+        cwd: vscodeFixtureRoot,
+        title: 'Stale pending question',
+        pendingPermission: {
+          requestId: STALE_QUESTION.requestId,
+          toolName: 'AskUserQuestion',
+          input: STALE_QUESTION.input,
+          reason: 'Need a colour',
+          receivedAt: STALE_QUESTION.askedAt,
         },
       },
       {
@@ -2784,6 +2897,21 @@ if (mockDaemon) {
 // and WebSocket traffic to that real Express server. No Playwright route mocks.
 const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
 const apiServer = await startServer({ port: 0, dev: true })
+
+// Stream buffer of the stale-question session, as the live server holds it two
+// hours into an unanswered AskUserQuestion: the turn is still marked streaming,
+// its text and tool_use blocks are the twins of the JSONL rows above, and the
+// pending card sits last. Seeded here because the fixture is processless (no CLI
+// behind it), so nothing else would ever populate it, and nothing re-emits the
+// request every 60s either, which makes the spec strict: a reclaimed card would
+// stay gone.
+{
+  const { sessionStreamBuffer } = await import('../../../src/web/session-stream-buffer.js')
+  sessionStreamBuffer.markStreaming(STALE_QUESTION.sessionId)
+  sessionStreamBuffer.appendTextDelta(STALE_QUESTION.sessionId, STALE_QUESTION.intro, STALE_QUESTION.msgId)
+  sessionStreamBuffer.appendToolUse(STALE_QUESTION.sessionId, STALE_QUESTION.toolUseId, 'AskUserQuestion', STALE_QUESTION.input)
+  sessionStreamBuffer.appendPermission(STALE_QUESTION.sessionId, STALE_QUESTION.requestId, 'AskUserQuestion', STALE_QUESTION.input, 'Need a colour')
+}
 const apiAddress = apiServer.address()
 if (!apiAddress || typeof apiAddress === 'string') {
   throw new Error('Playwright API server did not bind a TCP port')

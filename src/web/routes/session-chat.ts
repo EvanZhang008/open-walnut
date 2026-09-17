@@ -12,6 +12,7 @@ import { VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue } from '../../core/ty
 import type { SessionEffort, SessionMode } from '../../core/types.js'
 import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
+import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
@@ -460,11 +461,25 @@ export function registerSessionChatRpc(): void {
           ? Date.parse(record.last_status_change)
           : 0
         if (lastChangeMs > 0 && Date.now() - lastChangeMs > STALE_RUNNING_MS) {
-          log.web.warn('stale running on subscribe (read-only, no buffer mutation)', {
-            sessionId: sid,
-            staleMs: Date.now() - lastChangeMs,
-          })
-          correctedIsStreaming = false
+          // A turn blocked on a permission prompt / AskUserQuestion is live for
+          // as long as the human takes to answer: hours, not minutes. The
+          // stale rule exists for a record nothing will ever advance (server
+          // restart mid-turn); here the CLI is waiting on us, and reporting
+          // "no turn" made the client GC the pending card as leftover UI.
+          const pending = await getSessionPendingPermissions(record)
+          if (pending.length > 0) {
+            log.web.info('stale running on subscribe kept (pending permission)', {
+              sessionId: sid,
+              staleMs: Date.now() - lastChangeMs,
+              pendingCount: pending.length,
+            })
+          } else {
+            log.web.warn('stale running on subscribe (read-only, no buffer mutation)', {
+              sessionId: sid,
+              staleMs: Date.now() - lastChangeMs,
+            })
+            correctedIsStreaming = false
+          }
         }
       }
     } catch (err) {
