@@ -347,6 +347,18 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
   store instead of a CLI session (legacy conversations from before the lane
   engine) carry no ref, so a drawer must always be able to render the excerpt
   alone.
+- `inFlight` (additive, 2026-09): `true` on every row of the turn that is
+  **still running right now**, i.e. the rows after the last `role: "user"` row
+  (the user row itself never carries it). Absent otherwise, which is also what an
+  older server sends, so treat "absent" as "not in flight" and never as unknown.
+  Read it before concluding a turn has ended: a lane transcript includes the
+  model's INTERMEDIATE text, so "an assistant row exists after my message" is not
+  a finished turn, and a client that assumed it was unlocked its composer mid-turn
+  and rendered a tool that had not returned yet (no `resultPreview` on it, so the
+  card read "No output"). The flag is released before the terminal `message-end`
+  or `error` frame is sent, so a refetch triggered by that frame is already clean.
+  A cloud replica returns the primary's rows verbatim, so the field means the same
+  thing on either box.
 - `kind: "notification"` — a system-generated card (additive); `source` says
   which system produced it (`"session-error"`, `"agent-error"`, `"cron"`,
   `"compaction"`, …). Render as a distinct card, not a chat bubble. Noisy

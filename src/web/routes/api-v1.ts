@@ -311,6 +311,13 @@ interface ApiV1Message {
    *  no per-entry id to address, and the current engine writes every turn into a
    *  CLI session, so this only affects conversations that predate it. */
   detailRef?: string
+  /** Additive, and TRUE only while this row's turn is still running (see
+   *  {@link stampInFlight}). The phone's watchdog refetches this list when the
+   *  stream goes quiet and used to read "an assistant row after my message" as
+   *  "the turn is over", which a lane transcript makes false: the model's
+   *  intermediate text ("I will run the first command...") lands as a row mid-turn.
+   *  Absent means "not in flight", including on a server that predates the field. */
+  inFlight?: true
 }
 
 /**
@@ -491,12 +498,55 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
  * function — the iOS ChatStore derives `hasOlder` from `count >= pageSize` and
  * would double or skip a page if the two branches paged differently.
  */
+/**
+ * Mark the rows of the turn that is running RIGHT NOW on this conversation.
+ *
+ * The client half of the contract: the phone's turn watchdog refetches this list
+ * when the SSE channel has been quiet for 30s (an ordinary `sleep 45` does it) and
+ * decided the turn was over as soon as it saw an assistant text row after the
+ * user's message. On a lane conversation that verdict is wrong, because the
+ * transcript carries the model's INTERMEDIATE text: the phone cleared its live
+ * state, unlocked the composer, and re-rendered the still-running tool from this
+ * list, where a tool that has not returned yet has no `resultPreview`. So a
+ * finished-looking row said "No output".
+ *
+ * The boundary is the LAST user row: everything after it is this turn's own
+ * output, and the user row itself is not marked (it is the phone's own message,
+ * already delivered). A conversation with no user row at all stamps nothing:
+ * without the boundary there is no honest way to say which rows belong to the
+ * running turn, and the client's heuristic needs the same anchor.
+ *
+ * Runs BEFORE paging, on the whole list, so a page is stamped identically no
+ * matter which window of it the phone asked for.
+ */
+function stampInFlight(rows: ApiV1Message[], conversationId: string): ApiV1Message[] {
+  // `activeTurns` covers a turn that is running OR still queued behind another
+  // one, which is exactly the window in which "is it over?" must answer no.
+  if (!activeTurns.has(conversationId)) return rows
+  let lastUser = -1
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].role === 'user') { lastUser = i; break }
+  }
+  if (lastUser === -1 || lastUser === rows.length - 1) return rows
+  return rows.map((row, i) => (i > lastUser ? { ...row, inFlight: true as const } : row))
+}
+
+/**
+ * One page of a conversation's rows, stamped with the in-flight marker.
+ *
+ * `conversationId` is a required parameter rather than something the callers stamp
+ * themselves: this is the ONE function both read paths go through (the local GET
+ * handler and the primary's `server.chat.messages` relay answer), so a phone
+ * reading through a cloud replica gets byte-identical rows. Two call sites doing
+ * it by hand is how one of them silently stops.
+ */
 function pageApiV1Messages(
   all: ApiV1Message[],
   limit: number,
   before: string | undefined,
+  conversationId: string,
 ): ApiV1Message[] {
-  let windowed = all
+  let windowed = stampInFlight(all, conversationId)
   if (before) {
     const idx = Number(before.replace(/^m/, ''))
     if (Number.isFinite(idx)) windowed = windowed.slice(0, Math.max(0, idx))
@@ -1062,7 +1112,10 @@ export async function handlePrimaryChatMessagesRelay(
   }
   const laneMessages = await laneMessagesForConversation(agentId, conversationId)
   if (laneMessages) {
-    return { messages: pageApiV1Messages(laneMessages, limit, before), source: 'lane', known: true }
+    return {
+      messages: pageApiV1Messages(laneMessages, limit, before, conversationId),
+      source: 'lane', known: true,
+    }
   }
   const known = (await listConversations(agentId)).some((c) => c.id === conversationId)
   if (!known) return { messages: [], source: 'chat-history', known: false }
@@ -1070,7 +1123,7 @@ export async function handlePrimaryChatMessagesRelay(
     1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
   )
   return {
-    messages: pageApiV1Messages(normalizeEntries(entries), limit, before),
+    messages: pageApiV1Messages(normalizeEntries(entries), limit, before, conversationId),
     source: 'chat-history',
     known: true,
   }
@@ -1107,14 +1160,14 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
       // chat-history file is empty by design — read the lane, not [].
       const laneMessages = await laneMessagesForConversation(agentId, conversationId)
       if (laneMessages) {
-        res.json(pageApiV1Messages(laneMessages, limit, before))
+        res.json(pageApiV1Messages(laneMessages, limit, before, conversationId))
         return
       }
     }
     const { messages: entries } = await chatHistory.getDisplayEntries(
       1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
     )
-    const local = pageApiV1Messages(normalizeEntries(entries), limit, before)
+    const local = pageApiV1Messages(normalizeEntries(entries), limit, before, conversationId)
     // A replica whose relay failed and whose own copy is EMPTY for a conversation
     // the index says has messages must not answer 200-[]: the iOS client REPLACES
     // its rows with a 200 body (ChatStore.loadMessages), so a false empty wipes a
@@ -1141,7 +1194,18 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
 // conversation channel resets its replay window on 'message-start' (a new
 // turn); seq stays monotonic across turns.
 
+/** The two frames that END a turn: after either one the client treats it as over. */
+const TURN_TERMINAL_EVENTS = new Set(['message-end', 'error'])
+
 function emitSse(conversationId: string, event: string, data: unknown): void {
+  // Release the turn BEFORE its terminal frame goes out, never after. iOS reacts to
+  // `message-end` by refetching GET /messages, and the release used to happen in the
+  // POST handler's `.finally()`, i.e. after the frame: the refetch that the frame
+  // triggered still saw `inFlight` rows for a turn the client had just been told was
+  // finished. Exactly one terminal frame is emitted per turn, so an unconditional
+  // delete here cannot take a later turn's entry, and the `.finally()` release stays
+  // as the backstop for a turn that dies without emitting one.
+  if (TURN_TERMINAL_EVENTS.has(event)) activeTurns.delete(conversationId)
   emitChannelSse(conversationId, event, data, { reset: event === 'message-start' })
   // Primary box only, and only while a CLOUD-RELAYED turn is armed on this
   // conversation (one Map lookup otherwise): mirror the frame down the bridge
@@ -1414,7 +1478,18 @@ export async function runRelayedApiV1Turn(
     imageContentBlocks: unknown[] | null
   },
 ): Promise<void> {
-  await runApiV1Turn(agentId, conversationId, text, turnId, imageData)
+  // Register in `activeTurns` like the local POST path does. chat-turn-relay.ts
+  // keeps its OWN map (`primaryTurns`) for its duplicate/turn_active gates, and
+  // that map is invisible to the read side: without this line a replica-initiated
+  // turn ran on this box with nothing marking its rows in flight, which is the one
+  // topology where the phone reads its rows THROUGH this box. Released in the
+  // `finally` below, plus early by the terminal frame (see emitSse).
+  activeTurns.set(conversationId, turnId)
+  try {
+    await runApiV1Turn(agentId, conversationId, text, turnId, imageData)
+  } finally {
+    if (activeTurns.get(conversationId) === turnId) activeTurns.delete(conversationId)
+  }
 }
 
 /**
