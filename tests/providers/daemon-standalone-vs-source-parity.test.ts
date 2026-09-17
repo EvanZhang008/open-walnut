@@ -1138,22 +1138,10 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     expect(templateSrc).toMatch(re)
   })
 
-  it('both overlay the appendUserMarker line at the CURRENT v (no v advance, no offset math)', () => {
-    // Contract §4 "Feed": a post-append statSync races the concurrently-appending
-    // CLI, so an offset-derived lineEndV can jump foldState.v past a raced
-    // result/idle line the tailer then skips forever. The marker is a pure
-    // optimistic overlay; the tailer re-folds it at its true v later.
-    // standalone: dependency-injected into daemon-core (foldAppendedLineFn);
-    // template: inline in cmdAppendUserMarker.
-    expect(coreSrcC1()).toMatch(/foldAppendedLineFn\(session,\s*line\.slice\(0,\s*-1\)\)/)
-    expect(standaloneSrc).toMatch(/foldAppendedLineFn:\s*\(session,\s*rawLine\)\s*=>/)
-    const overlay = /foldLine\(session\.foldState,\s*rawLine,\s*session\.foldState\.v\)/
-    expect(standaloneSrc).toMatch(overlay)
-    expect(templateSrc).toMatch(overlay)
-    // No offset math and no gap catch-up on the marker path anywhere.
+  it('both leave marker folding and snapshot publication to the tailer', () => {
     for (const src of [standaloneSrc, templateSrc, coreSrcC1()]) {
-      expect(src, 'marker path must not compute a file offset').not.toMatch(/markerStart/)
-      expect(src, 'gap catch-up is gone with the v advance').not.toMatch(/foldJsonlRange/)
+      expect(src).not.toContain('foldAppendedLineFn')
+      expect(src).not.toMatch(/foldLine\(session\.foldState,\s*rawLine,\s*session\.foldState\.v\)/)
     }
   })
 

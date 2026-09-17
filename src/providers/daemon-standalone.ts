@@ -1314,17 +1314,6 @@ const core = createDaemonCore<SessionData>({
     session.subscribers.clear()
   },
   sessions,
-  // C1 snapshot hooks — appendUserMarker overlays its marker immediately; reap /
-  // pendingCtrl-clear paths push through the coalescer (death = immediate).
-  foldAppendedLineFn: (session, rawLine) => {
-    // Optimistic overlay at the CURRENT v — NO v advance (contract §4 "Feed").
-    // Any offset computed here would race the concurrently-appending CLI and
-    // could push foldState.v past a line the tailer hasn't read yet, which the
-    // `v > foldState.v` guard would then skip forever. The tailer re-folds this
-    // marker at its true v; re-anchoring is idempotent. Keep in sync with
-    // daemon-source.ts cmdAppendUserMarker.
-    session.foldState = foldLine(session.foldState, rawLine, session.foldState.v)
-  },
   pushSnapshotFn: (sid, immediate) => pushSnapshot(sid, immediate),
   // C18: synchronous pre-death fold drain (see drainSessionFold).
   drainFoldFn: (session) => drainSessionFold(session),
@@ -3839,10 +3828,7 @@ function ensureWatcher(sid: string) {
       for (const { line, v } of batch) {
         if (!line.trim()) continue
 
-        // ── C1: incremental snapshot fold — EVERY complete line, BEFORE any
-        // intercept `continue`s past fan-out. foldLine keeps its own v; the
-        // `v > foldState.v` guard dedupes bytes already folded out-of-band
-        // (appendUserMarker's optimistic overlay, watcher-heal overlap re-reads).
+        // watcher 恢复可能重读同一范围，按完整行的真实 v 去重。
         if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v)
 
         // ── Latency instrumentation: time from CLI spawn → first init line ──

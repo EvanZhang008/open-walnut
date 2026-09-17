@@ -188,8 +188,6 @@ describe('C1 snapshot wiring — real daemon, real tailer, real WS', () => {
       const rec = recordEvents(ws, sid)
       await startSleepSession(ws, sid)
 
-      // Turn start via the appendUserMarker fold hook — the daemon folds the
-      // marker immediately (before the tailer sees the bytes).
       const marker = await rpc(ws, { cmd: 'appendUserMarker', sid, message: 'queued turn', messageId: 'qm-test-1' })
       expect(marker.ok).toBe(true)
 
@@ -849,15 +847,7 @@ describe('C1 snapshot wiring — daemon restart (SIGKILL) rebuilds foldState on 
   }, 60_000)
 })
 
-// ── Scenario 11: appendUserMarker overlay must not race the CLI ──
-// Contract §4 "Feed": the marker is folded at the CURRENT foldState.v with NO v
-// advance. Using the post-append file size instead is a real race — the CLI
-// appends concurrently, so a line can land between appendFileSync and statSync,
-// making that size INFLATED past the raced line. foldState.v would jump over it
-// and the tailer's `v > foldState.v` guard would skip that result/idle FOREVER.
-// Driven through the real daemon-core handler with an fs whose appendFileSync
-// deterministically injects the racing CLI write.
-describe('C1 appendUserMarker overlay (real daemon-core, injected CLI race)', () => {
+describe('C1 appendUserMarker (real daemon-core, injected CLI race)', () => {
   it('a result line that lands during the marker append is still folded by the tailer', async () => {
     const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-marker-race-'))
     try {
@@ -905,19 +895,13 @@ describe('C1 appendUserMarker overlay (real daemon-core, injected CLI race)', ()
         broadcastExitToWatchersFn: () => {},
         sessions,
         createAdoptedSession: () => session,
-        // Same overlay the standalone injects (parity-locked).
-        foldAppendedLineFn: (s, rawLine) => {
-          s.foldState = foldLine(s.foldState, rawLine, s.foldState.v)
-        },
       })
 
+      const before = { ...session.foldState }
       const res = core.handleAppendUserMarker(sid, 'second send', 'qm-race-1')
       expect(res).toMatchObject({ ok: true })
-      expect(raced, 'the injected CLI race did not fire — test would be vacuous').toBe(true)
-      // The overlay anchored the turn WITHOUT advancing v past unread bytes.
-      expect(session.foldState.turnActive).toBe(true)
-      expect(session.foldState.v,
-        'marker overlay advanced v past bytes the tailer has not read yet').toBe(initEnd)
+      expect(raced, 'the injected CLI race did not fire').toBe(true)
+      expect(session.foldState).toEqual(before)
 
       // Now replay the tailer over everything after initEnd, guard included.
       const rest = fs.readFileSync(jsonlPath, 'utf-8').slice(initEnd)

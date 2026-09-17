@@ -5195,20 +5195,7 @@ function cmdAppendUserMarker(ws, id, cmd) {
     }) + '\\n';
     fs.appendFileSync(session.jsonlPath, line);
     const size = fs.statSync(session.jsonlPath).size;
-    // C1 (contract §4 "Feed"): fold the marker immediately as a pure OPTIMISTIC
-    // OVERLAY — at the CURRENT foldState.v, with NO v advance. The daemon knows
-    // the turn started before the CLI echoes anything, and the tailer re-folds
-    // the same marker later at its TRUE v (a double-fold is a safe re-anchor).
-    // Do NOT use the post-append size as the marker's lineEndV: the CLI appends concurrently,
-    // so a line can land between appendFileSync and statSync (executed repro) —
-    // an inflated v would make the tailer's v > foldState.v guard skip that
-    // raced result/idle forever. No gap catch-up either: with no v advance there
-    // is no gap. Keep in sync with daemon-core.ts handleAppendUserMarker.
-    try {
-      const rawLine = line.slice(0, -1);
-      session.foldState = foldLine(session.foldState, rawLine, session.foldState.v);
-      pushSnapshot(sid, false);
-    } catch {}
+    // 等 tailer 读到 marker 的真实 v 再推送，旧 v 的乐观快照会被拒绝并吞掉后续开轮信号。
     sendOk(ws, id, { ok: true, size });
   } catch (err) {
     sendError(ws, id, 'appendUserMarker failed: ' + err.message);

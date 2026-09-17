@@ -158,20 +158,10 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
    * C1 session-snapshot hooks (docs/plan/session-snapshot-source-of-truth.md §4).
    * Optional so unit-test fixtures and pre-C1 adapters keep working unchanged.
    *
-   * foldAppendedLineFn — fold a line the DAEMON just appended to the stream
-   * file (appendUserMarker) into the session's fold state as a pure OPTIMISTIC
-   * OVERLAY: folded at the CURRENT foldState.v with NO v advance, so the daemon
-   * knows the turn started before the CLI echoes anything, yet no unread byte
-   * range is ever skipped. Deliberately takes no offset — see
-   * handleAppendUserMarker for why a post-append stat is unusable.
-   */
-  foldAppendedLineFn?: (session: S, rawLine: string) => void
-  /**
    * pushSnapshotFn — assemble + push the session's snapshot to subscribers.
    * `immediate=true` skips the 50ms coalesce window (death paths). Core calls
-   * it on reapSession (immediate), after appendUserMarker's fold, and when
-   * handleSendRawCommand clears pendingCtrl; the adapter's tailer calls it
-   * after each batch.
+   * it on reapSession (immediate) and when handleSendRawCommand clears
+   * pendingCtrl; the adapter's tailer calls it after each batch.
    */
   pushSnapshotFn?: (sid: string, immediate: boolean) => void
   /**
@@ -273,7 +263,6 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     broadcastExitToWatchersFn,
     sessions,
     createAdoptedSession,
-    foldAppendedLineFn,
     pushSnapshotFn,
     drainFoldFn,
   } = deps
@@ -843,25 +832,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       }) + '\n'
       fs.appendFileSync(session.jsonlPath, line)
       const size = fs.statSync(session.jsonlPath).size
-      // C1 (contract §4 "Feed"): fold the marker immediately as a pure
-      // OPTIMISTIC OVERLAY — at the CURRENT foldState.v, with NO v advance.
-      // The daemon knows the turn started before the CLI echoes anything, and
-      // the tailer re-folds the same marker later at its TRUE v (a double-fold
-      // is a safe re-anchor: re-anchoring an anchored state is idempotent, and
-      // file order still ends with the marker, so every interleaving converges).
-      //
-      // Do NOT pass `size` as the marker's lineEndV: the CLI appends
-      // concurrently, so a line can land between appendFileSync and statSync
-      // (executed repro). `size` would then be INFLATED past the raced line, and
-      // the tailer's `v > foldState.v` guard would skip that raced result/idle
-      // forever → snapshot wedged at turnActive=true. No gap catch-up either:
-      // with no v advance there is no gap to catch up.
-      if (foldAppendedLineFn) {
-        try {
-          foldAppendedLineFn(session, line.slice(0, -1))
-          if (pushSnapshotFn) pushSnapshotFn(sid, false)
-        } catch {}
-      }
+      // 等 tailer 读到 marker 的真实 v 再推送，旧 v 的乐观快照会被拒绝并吞掉后续开轮信号。
       return { ok: true, size }
     } catch (err) {
       return { error: 'appendUserMarker failed: ' + (err as Error).message }

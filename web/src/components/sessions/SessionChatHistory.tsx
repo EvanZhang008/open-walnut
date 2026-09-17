@@ -2006,11 +2006,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     prevOptimisticLen.current = len;
   }, [optimisticMessages?.length]);
 
-  // Path A-0b: Follow-up scroll for optimistic message lifecycle changes.
-  // After sending, status badges (Queued → Delivered ✓) and indicators
-  // ("Resuming session...") render in subsequent frames, growing scrollHeight.
-  // Watch the full optimisticMessages array ref (changes on every status update)
-  // and phase (changes when session resumes → "Resuming session..." appears).
+  // 送达标记和等待提示会在后续帧增高内容，保持原本贴底的阅读位置。
   useEffect(() => {
     if (!isAtBottom.current || !(optimisticMessages?.length)) return;
     const el = containerRef.current;
@@ -3122,7 +3118,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   return (
                     <div key="ind-resuming" className="session-streaming-indicator">
                       <span className="session-streaming-dot" />
-                      Resuming session...
+                      Waiting for response...
                     </div>
                   );
                 }
