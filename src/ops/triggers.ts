@@ -79,10 +79,11 @@ defineOp({
   name: 'trigger_list',
   title: 'List Walnut triggers',
   description:
-    'Every armed and disabled trigger: id, name, interval, host, whether it is enabled, and the last '
-    + 'check the daemon reported (fired with an item count / quiet with a reason / the error text). Use '
-    + 'it to answer "what are you watching?" and to check whether a trigger you created is healthy — a '
-    + 'trigger disabled with an error is one whose script kept failing.',
+    'Every armed and disabled trigger: id, name, interval, host, whether it is enabled, how many times '
+    + 'it has fired, the last check the daemon reported (fired with an item count / quiet with a reason / '
+    + 'the error text) and the recent check history. Use it to answer "what are you watching?" and to '
+    + 'check whether a trigger you created is healthy — a trigger disabled with an error is one whose '
+    + 'script kept failing, and one that has never fired may be a script that never says fire.',
   input: {},
   bind: TRIGGER_LIST_BINDING,
   handler: async (_args, call) => {
@@ -95,7 +96,10 @@ defineOp({
         id?: string; name?: string; enabled?: boolean
         schedule?: { everyMs?: number }
         check?: { run?: string; host?: string; cwd?: string }
-        state?: { lastCheck?: unknown; nextRunAtMs?: number }
+        state?: {
+          lastCheck?: unknown; nextRunAtMs?: number; fireCount?: number
+          checkLog?: Array<Record<string, unknown>>
+        }
       })
       .filter((job) => job.check && typeof job.check.run === 'string')
       .map((job) => ({
@@ -106,9 +110,22 @@ defineOp({
         enabled: job.enabled === true,
         run: job.check?.run,
         ...(job.check?.cwd ? { cwd: job.check.cwd } : {}),
+        fires: job.state?.fireCount ?? 0,
         ...(job.state?.lastCheck ? { lastCheck: job.state.lastCheck } : {}),
         ...(typeof job.state?.nextRunAtMs === 'number'
           ? { nextCheckAt: new Date(job.state.nextRunAtMs).toISOString() } : {}),
+        // The audit trail, trimmed for a tool answer: the verdicts and where each
+        // fire went, without the injected-text previews (those are for the UI —
+        // a caller that wants the message reads the session).
+        ...(Array.isArray(job.state?.checkLog) && job.state.checkLog.length > 0
+          ? {
+            recentChecks: job.state.checkLog.slice(0, 6).map((entry) => {
+              const { injected: _injected, epoch: _epoch, ...rest } = entry as Record<string, unknown>
+              const atMs = typeof rest.atMs === 'number' ? rest.atMs : undefined
+              return { ...rest, ...(atMs ? { at: new Date(atMs).toISOString() } : {}), atMs: undefined }
+            }),
+          }
+          : {}),
       }))
     return {
       count: triggers.length,

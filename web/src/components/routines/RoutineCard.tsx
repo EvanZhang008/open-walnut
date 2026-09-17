@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Routine } from '@/api/routines';
-import { describeRoutineTiming, describeExecutorBadge, describeCheck, describeLastCheck } from '@/utils/routine-format';
+import { describeRoutineTiming, describeExecutorBadge, describeCheck, describeFireTally, describeLastCheck } from '@/utils/routine-format';
 
 interface RoutineCardProps {
   routine: Routine;
@@ -100,6 +100,11 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
           <code className="routine-check-run">{describeCheck(routine.check)}</code>
           <span className={`routine-check-status ${routine.state.lastCheck?.outcome ?? 'pending'}`}>
             last check: {describeLastCheck(routine.state.lastCheck)}
+          </span>
+          {/* Whether it has ever actually fired — a card showing only the newest
+              quiet check cannot be told apart from one that never ran. */}
+          <span className="routine-check-tally" data-fired={(routine.state.fireCount ?? 0) > 0 ? 'true' : 'false'}>
+            {describeFireTally(routine.state)}
           </span>
         </div>
       )}

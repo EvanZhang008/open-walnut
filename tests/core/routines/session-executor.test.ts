@@ -26,7 +26,7 @@ type Sessions = Awaited<ReturnType<SessionDelivery['sessionsForTask']>>;
 function fakeDelivery(over: Partial<SessionDelivery> = {}) {
   const calls = {
     sent: [] as Array<{ sessionId: string; message: string; taskId: string }>,
-    started: [] as Array<{ message: string; taskId: string; cwd: string; host?: string }>,
+    started: [] as Array<{ message: string; taskId: string; cwd: string; host?: string; title?: string }>,
     notified: [] as Array<{ title: string; body?: string; dedupKey: string; taskId?: string }>,
   };
   const delivery: SessionDelivery = {
@@ -123,7 +123,13 @@ describe('session executor: delivery', () => {
       getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
     });
     const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
-    expect(result).toEqual({ status: 'ok', summary: 'resumed session Watch the PR [sid-stop]' });
+    expect(result).toEqual({
+      status: 'ok',
+      summary: 'resumed session Watch the PR [sid-stop]',
+      // The audit trail's record of this fire: which session, and the exact
+      // text it received. Without both, the flyout can only say "delivered".
+      delivered: { sessionId: 'sid-stopped1', text: FIRE },
+    });
     expect(calls.sent).toEqual([{ sessionId: 'sid-stopped1', message: FIRE, taskId: 'task-1' }]);
     expect(calls.started).toEqual([]);
   });
@@ -156,8 +162,26 @@ describe('session executor: delivery', () => {
       getTask: async () => ({ id: 'task-1', cwd: '/repo/checkout', phase: 'TODO' }),
     });
     const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
-    expect(result).toEqual({ status: 'ok', summary: 'restarted session on task task-1' });
-    expect(calls.started).toEqual([{ message: FIRE, taskId: 'task-1', cwd: '/repo/checkout' }]);
+    expect(result).toEqual({
+      status: 'ok',
+      summary: 'restarted session on task task-1',
+      // No session id: this launch has not linked one yet, and the audit says so
+      // rather than guessing. The text is still recorded.
+      delivered: { text: FIRE },
+    });
+    expect(calls.started).toEqual([{
+      message: FIRE, taskId: 'task-1', cwd: '/repo/checkout', title: 'Trigger: PR comments',
+    }]);
+  });
+
+  // A session's title is derived from its launch message when the caller gives
+  // none, so a trigger's restart used to name it `<walnut-message kind="trigger"…`
+  // and nothing renamed it afterwards (observed on prod).
+  it('names a restarted session after the trigger, never after the envelope', async () => {
+    const { delivery, calls } = fakeDelivery({ getTask: async () => ({ id: 'task-1', phase: 'TODO' }) });
+    await createSessionExecutor({ delivery }).run(job({ name: 'Nightly deploy watch' }), REF, FIRE);
+    expect(calls.started[0].title).toBe('Trigger: Nightly deploy watch');
+    expect(calls.started[0].title).not.toContain('walnut-message');
   });
 
   it('falls back to the check cwd, then to the Walnut home', async () => {

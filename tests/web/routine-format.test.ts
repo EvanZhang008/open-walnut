@@ -5,7 +5,10 @@
  * here rather than discovered on a card.
  */
 import { describe, it, expect } from 'vitest';
-import { describeAgo, describeCheck, describeLastCheck, describeSchedule } from '../../web/src/utils/routine-format';
+import {
+  auditClock, auditHistory, auditTarget, describeAgo, describeAuditEntry, describeCheck, describeFireTally,
+  describeLastCheck, describeSchedule,
+} from '../../web/src/utils/routine-format';
 
 const NOW = Date.parse('2026-09-16T12:00:00Z');
 
@@ -61,5 +64,129 @@ describe('describeSchedule for an interval', () => {
     expect(describeSchedule({ kind: 'every', everyMs: 10_000 })).toBe('Every 10s');
     expect(describeSchedule({ kind: 'every', everyMs: 300_000 })).toBe('Every 5 min');
     expect(describeSchedule({ kind: 'every', everyMs: 3_600_000 })).toBe('Every 1 hour');
+  });
+});
+
+describe('the trigger audit trail as sentences', () => {
+  it('names each verdict, and never calls a retrying delivery "delivered"', () => {
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'all-seen' }))
+      .toBe('quiet — nothing new (all items already seen)');
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'fire-false' }))
+      .toBe('quiet — the script said no');
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'rate-limited' }))
+      .toBe('quiet — daily fire limit reached');
+    expect(describeAuditEntry({ atMs: NOW, outcome: 'error', error: 'exit 3:\n  boom' }))
+      .toBe('check error: exit 3: boom');
+    expect(describeAuditEntry({
+      atMs: NOW, outcome: 'fired', items: 2,
+      delivery: { status: 'ok', summary: 'resumed session "PR watch"' },
+    })).toBe('fired, 2 new items → resumed session "PR watch"');
+    expect(describeAuditEntry({
+      atMs: NOW, outcome: 'fired', items: 1, attempts: 2,
+      delivery: { status: 'retrying', error: 'host unreachable' },
+    })).toBe('fired, 1 new item → delivery retrying after 2 tries');
+    expect(describeAuditEntry({
+      atMs: NOW, outcome: 'fired', items: 0,
+      delivery: { status: 'error', error: 'target task is complete' },
+    })).toBe('fired → not delivered: target task is complete');
+  });
+
+  it('keeps "where it went" to one clause, even when a session is titled after the envelope', () => {
+    // Measured on prod: a session the trigger itself started is titled after its
+    // launch message, so its handle carried the raw envelope tag into the row.
+    expect(describeAuditEntry({
+      atMs: NOW, outcome: 'fired', items: 1,
+      delivery: { status: 'ok', summary: 'sent to session Audit probe — <walnut-message kind="trigger" from="Trigger: x"> [ea6cffef]' },
+    })).toBe('fired, 1 new item → sent to session Audit probe');
+    expect(auditTarget(undefined)).toBe('delivered');
+    expect(auditTarget(`sent to session ${'y'.repeat(80)}`)).toHaveLength(57);
+  });
+
+  // Measured on prod: the clamp cut "… [42eba805]" down to "… [42eb…", which
+  // names no session at all. The id is the part a clamp may never eat.
+  it('clamps the title of a session handle but never its id', () => {
+    const clamped = auditTarget('sent to session Trigger: Audit probe 1789675159651 [42eba805]');
+    expect(clamped).toBe('sent to session Trigger: Audit probe 1789675… [42eba805]');
+    expect(clamped.length).toBeLessThanOrEqual(56);
+    expect(clamped.endsWith(' [42eba805]')).toBe(true);
+    // The bracket run is bounded, so even the widest handle keeps words in front
+    // of it: there is no input for which the id gets dropped instead of clamped.
+    const wide = auditTarget(`resumed session ${'z'.repeat(60)} [0123456789ab]`);
+    expect(wide).toMatch(/^resumed session z+… \[0123456789ab\]$/);
+    expect(wide.length).toBeLessThanOrEqual(56);
+    // A clause with no handle at all still gets clamped.
+    expect(auditTarget(`restarted session on task ${'t'.repeat(60)}`)).toHaveLength(57);
+    // And a clamp landing INSIDE an emoji (its high surrogate sits on the last
+    // kept unit, verified: index 55 is 0xd83d) drops the whole character.
+    const astral = auditTarget(`sent to session ${'w'.repeat(39)}\u{1F680}${'w'.repeat(20)}`);
+    expect(/[\uD800-\uDBFF]/.test(astral)).toBe(false);
+    expect(astral).toBe(`sent to session ${'w'.repeat(39)}\u2026`);
+    // A short handle is left exactly as the server wrote it.
+    expect(auditTarget('resumed session Watch the PR [sid-stop]')).toBe('resumed session Watch the PR [sid-stop]');
+  });
+
+  // The server does not count a fire whose delivery is still being retried (the
+  // daemon still owns it), so the tally must not read it as the newest landed one.
+  it('never reports a still-retrying delivery as landed', () => {
+    const landedAt = NOW - 600_000;
+    const state = {
+      fireCount: 3,
+      fireLog: [
+        { atMs: NOW - 1000, outcome: 'fired' as const, seq: 4, delivery: { status: 'retrying' as const } },
+        { atMs: landedAt, outcome: 'fired' as const, seq: 3, delivery: { status: 'ok' as const } },
+      ],
+    };
+    expect(describeFireTally(state, NOW)).toBe('fired 3×, last 10m ago, one delivery retrying');
+    // A trigger whose FIRST fire is mid-retry has fired, and has landed nothing.
+    expect(describeFireTally({ fireLog: [state.fireLog[0]] }, NOW)).toBe('fired, delivery retrying');
+  });
+
+  it('says on the card when a fire never landed', () => {
+    expect(describeLastCheck({ atMs: NOW - 120_000, outcome: 'fired', items: 2, error: 'delivery failed 3 times, giving up: host unreachable' }, NOW))
+      .toBe('fired, 2 items but not delivered, 2m ago');
+    // A retry is still in flight, which is not the same thing.
+    expect(describeLastCheck({ atMs: NOW - 120_000, outcome: 'fired', items: 2, retryPending: true, error: 'host unreachable' }, NOW))
+      .toBe('fired, 2 items, delivery retrying, 2m ago');
+  });
+
+  it('counts the tries on a fire that was given up on', () => {
+    expect(describeAuditEntry({
+      atMs: NOW, outcome: 'fired', items: 1, attempts: 3,
+      delivery: { status: 'error', error: 'host unreachable' },
+    })).toBe('fired, 1 new item → not delivered after 3 tries: host unreachable');
+  });
+
+  // A replayed attempt can arrive after quiet checks pushed the fire's own row out
+  // of checkLog, which appends a SECOND fired row for one fire.
+  it('shows one row per fire even when checkLog holds two copies of it', () => {
+    const fire = (atMs: number, attempts?: number) => ({
+      atMs, outcome: 'fired' as const, seq: 7, epoch: 'e1',
+      ...(attempts ? { attempts } : {}),
+      delivery: { status: 'ok' as const, summary: 'sent to session x [abcd1234]' },
+    });
+    const rows = auditHistory({
+      checkLog: [fire(NOW), { atMs: NOW - 1000, outcome: 'quiet' }, fire(NOW - 120_000)],
+      fireLog: [fire(NOW, 3)],
+    });
+    expect(rows.map((r) => r.outcome)).toEqual(['fired', 'quiet']);
+    // And the surviving copy is the fire-only one, which carries the real count.
+    expect(rows[0].attempts).toBe(3);
+    // With no checkLog at all the fires are still the history.
+    expect(auditHistory({ fireLog: [fire(NOW)] })).toHaveLength(1);
+    expect(auditHistory(undefined)).toEqual([]);
+  });
+
+  it('says plainly when a trigger has never fired', () => {
+    expect(describeFireTally(undefined)).toBe('never fired yet');
+    expect(describeFireTally({ lastCheck: { atMs: NOW, outcome: 'quiet' } })).toBe('never fired yet');
+    expect(describeFireTally({ fireCount: 2, fireLog: [{ atMs: NOW - 180_000, outcome: 'fired' }] }, NOW))
+      .toBe('fired 2×, last 3m ago');
+    // A count with no log (the log scrolled past, or a pre-audit routine) still counts.
+    expect(describeFireTally({ fireCount: 7 }, NOW)).toBe('fired 7×');
+  });
+
+  it('prints an audit clock even for a broken timestamp', () => {
+    expect(auditClock(Number.NaN)).toBe('--:--');
+    expect(auditClock(NOW)).toMatch(/\d{2}:\d{2}/);
   });
 });

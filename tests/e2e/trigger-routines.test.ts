@@ -89,10 +89,26 @@ async function jobState(id: string) {
 }
 
 /** Envelopes the server has actually written toward a session's CLI. */
+/**
+ * Every envelope that reached a daemon, by EITHER route. A cold `--resume` can
+ * carry the message on the spawn itself (`start.message`) or defer it to a `send`
+ * once the CLI is up, and which one happens depends on timing, not on intent:
+ * scanning only `send` made this suite pass in one checkout and fail in another
+ * for the same product behaviour.
+ */
+function envelopeCarriersToDaemon(): Array<{ cmd: string; sid: string; text: string }> {
+  return [...daemon.getCommandHistoryFor('send'), ...daemon.getCommandHistoryFor('start')]
+    .filter((c) => c.payload.deferMessage !== true)
+    .map((c) => ({
+      cmd: c.cmd,
+      sid: String(c.payload.sid ?? ''),
+      text: String(c.payload.text ?? c.payload.message ?? ''),
+    }))
+    .filter((c) => c.text.includes('<walnut-message kind="trigger"'))
+}
+
 function envelopesSentToDaemon(): string[] {
-  return daemon.getCommandHistoryFor('send')
-    .map((c) => String(c.payload.text ?? c.payload.message ?? ''))
-    .filter((text) => text.includes('<walnut-message kind="trigger"'))
+  return envelopeCarriersToDaemon().map((c) => c.text)
 }
 
 /**
@@ -418,6 +434,39 @@ describe('trigger.fired from the daemon', () => {
     expect(ack.params.id).toBeUndefined()
   })
 
+  // The audit trail is what answers "did this ever fire, and what did it inject"
+  // hours later, when lastCheck has been overwritten by a quiet run.
+  it('records the fire in the audit trail with the delivery and the injected text', async () => {
+    const job = await jobState(firedJobId)
+    expect(job.state.fireCount).toBe(1)
+    const fires = job.state.fireLog as Array<Record<string, any>>
+    expect(fires).toHaveLength(1)
+    expect(fires[0]).toMatchObject({ outcome: 'fired', seq: 1, items: 1 })
+    expect(fires[0].delivery.status).toBe('ok')
+    expect(fires[0].delivery.summary).toMatch(/sent to session|resumed session/)
+    expect(fires[0].delivery.sessionId).toBeTruthy()
+    // The preview is the message the session actually received, not a paraphrase.
+    expect(fires[0].injected.preview).toContain('from="Trigger: fire watcher"')
+    expect(fires[0].injected.preview).toContain('Read each new comment.')
+    expect(fires[0].injected.chars).toBeGreaterThan(0)
+    // …and the same fire shows up in the recent-activity list.
+    const checks = job.state.checkLog as Array<Record<string, any>>
+    expect(checks[0]).toMatchObject({ outcome: 'fired', seq: 1 })
+  })
+
+  it('a quiet check lands in the audit trail without touching the fire count', async () => {
+    await handleTriggerChecked('__local__', {
+      type: 'trigger.checked', id: firedJobId, outcome: 'quiet', reason: 'all-seen',
+      atMs: Date.now(), durationMs: 4, nextRunAtMs: Date.now() + 300_000,
+    })
+    const job = await jobState(firedJobId)
+    expect(job.state.fireCount).toBe(1)
+    expect(job.state.fireLog).toHaveLength(1)
+    const checks = job.state.checkLog as Array<Record<string, any>>
+    expect(checks[0]).toMatchObject({ outcome: 'quiet', reason: 'all-seen' })
+    expect(checks.filter((c) => c.outcome === 'fired')).toHaveLength(1)
+  })
+
   it('a replayed seq is acked again but delivered only once', async () => {
     daemon.clearCommandHistory()
     sends.length = 0
@@ -576,13 +625,14 @@ describe('a fire for a task whose session has STOPPED', () => {
       if (!resumed) await new Promise((r) => setTimeout(r, 50))
     }
     expect(resumed, 'the stopped session must be resumed, not replaced').toBeTruthy()
-    // The envelope follows on the resumed session's stdin (the spawn carries no
-    // message; the queue writes it once the CLI is up).
+    // The envelope reaches the resumed session either on the spawn or on the
+    // stdin write that follows it (see envelopesSentToDaemon).
     const delivered = await waitForEnvelopes(1)
     expect(delivered).toHaveLength(1)
     expect(delivered[0]).toContain('PR-2#c1')
-    const sendFor = daemon.getCommandHistoryFor('send').find((c) => String(c.payload.text ?? c.payload.message ?? '').includes('PR-2#c1'))
-    expect(sendFor?.payload.sid).toBe(stoppedSid)
+    // Whichever command carried it, it went to THAT session, not a fresh one.
+    const carrier = envelopeCarriersToDaemon().find((c) => c.text.includes('PR-2#c1'))
+    expect(carrier?.sid).toBe(stoppedSid)
 
     const job = await jobState(jobId)
     expect(job.state.lastStatus).toBe('ok')
@@ -654,6 +704,14 @@ describe('a fire whose delivery fails', () => {
     expect(job.state.fireRetry).toBeUndefined()
     expect(job.state.lastCheck.retryPending).toBeUndefined()
     expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: flakyJobId, seq: 1 })
+
+    // ONE fire that took two tries, not two fires: three rows here would read as
+    // three separate things happening, which is what the trail exists to prevent.
+    const fires = job.state.fireLog as Array<Record<string, any>>
+    expect(fires.filter((f) => f.seq === 1)).toHaveLength(1)
+    expect(fires[0]).toMatchObject({ seq: 1, attempts: 2 })
+    expect(fires[0].delivery.status).toBe('ok')
+    expect(job.state.fireCount).toBe(1)
   })
 
   it(`gives up after ${FIRE_DELIVERY_MAX_ATTEMPTS} transient failures: recorded, acked, and the user is told`, async () => {
@@ -668,10 +726,23 @@ describe('a fire whose delivery fails', () => {
     expect(sends.filter((s) => s.cmd === 'triggers.ack')).toHaveLength(1)
     const { feed } = await listNotifications()
     expect(feed.find((n) => n.dedupKey === `trigger-delivery:${flakyJobId}:flaky-epoch:2`)?.title).toContain('could not deliver')
+    // The audit shows ONE fire that failed, with the attempt count, and the
+    // total counts it once even though three attempts were made.
+    const afterGiveUp = job.state.fireLog as Array<Record<string, any>>
+    expect(afterGiveUp.filter((f) => f.seq === 2)).toHaveLength(1)
+    expect(afterGiveUp[0]).toMatchObject({ seq: 2, attempts: FIRE_DELIVERY_MAX_ATTEMPTS })
+    expect(afterGiveUp[0].delivery.status).toBe('error')
+    expect(job.state.fireCount).toBe(2)
     // A later fire is a new attempt series, not a continuation.
     mode = 'ok'
     await fire(3)
-    expect((await jobState(flakyJobId)).state.lastStatus).toBe('ok')
+    const later = await jobState(flakyJobId)
+    expect(later.state.lastStatus).toBe('ok')
+    expect(later.state.fireCount).toBe(3)
+    const newest = (later.state.fireLog as Array<Record<string, any>>)[0]
+    expect(newest.seq).toBe(3)
+    // A first attempt carries no attempt count at all (nothing to explain).
+    expect(newest.attempts).toBeUndefined()
   })
 
   it('a refusal (error RESULT) is final: recorded and acked on the first attempt', async () => {

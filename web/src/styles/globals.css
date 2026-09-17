@@ -28876,7 +28876,9 @@ a.file-link:hover {
 .trigger-jobs-flyout {
   position: fixed;
   z-index: 9500;
-  width: min(380px, calc(100vw - 16px));
+  /* Wide enough for one audit line ("15:31 fired, 1 new item → resumed session
+     …") to read without wrapping into three rows. */
+  width: min(460px, calc(100vw - 16px));
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -28957,6 +28959,99 @@ a.file-link:hover {
 .trigger-jobs-actions button:disabled { opacity: 0.55; cursor: default; }
 .trigger-jobs-actions button.trigger-jobs-danger { border-color: var(--error); color: var(--error); }
 .trigger-jobs-foot { margin-top: 8px; font-size: 11px; color: var(--fg-secondary); }
+
+/* ── The audit trail inside the flyout ── */
+/* The "has it ever fired" line: accent once it has, muted while it never has —
+   the difference between "armed and working" and "armed, unproven". */
+.trigger-jobs-tally { font-size: 11px; color: var(--fg-secondary); }
+.routine-check-tally { color: var(--fg-muted); }
+.routine-check-tally[data-fired="true"] { color: var(--accent); font-weight: 600; }
+.trigger-jobs-tally[data-fired="true"] { color: var(--accent); font-weight: 600; }
+
+.trigger-jobs-fold { margin-top: 2px; }
+.trigger-jobs-fold-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.trigger-jobs-fold-toggle:hover:not(:disabled) { color: var(--fg); }
+.trigger-jobs-fold-toggle:disabled { cursor: default; opacity: 0.7; }
+
+.trigger-audit-chevron { transition: transform 0.12s ease; }
+.trigger-audit-chevron.open { transform: rotate(90deg); }
+
+.trigger-audit-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.trigger-audit-row { min-width: 0; }
+.trigger-audit-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+.trigger-audit-line:disabled { cursor: default; }
+.trigger-audit-line:hover:not(:disabled) { background: var(--bg-secondary); }
+.trigger-audit-clock { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
+.trigger-audit-what { flex: 1 1 auto; min-width: 0; }
+.trigger-audit-row[data-outcome="fired"] .trigger-audit-what { color: var(--accent); }
+.trigger-audit-row[data-outcome="error"] .trigger-audit-what { color: var(--error); }
+
+.trigger-audit-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 6px 4px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--border);
+  align-items: flex-start;
+}
+.trigger-audit-detail-label { font-size: 11px; color: var(--fg-muted); }
+.trigger-audit-injected {
+  margin: 0;
+  max-height: 200px;
+  /* Both axes explicit: this box wraps (pre-wrap + break-word), so it can never
+     need a horizontal bar, and on a Mac with always-on scrollbars an `auto`
+     horizontal axis would still reserve a styled track inside the 200px. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-secondary);
+}
 
 /* ── Devices section (Settings → Devices, QR pairing) ── */
 .devices-section { display: flex; flex-direction: column; gap: 14px; }

@@ -4,7 +4,7 @@
  * Lives in the frontend so phrasing uses the viewer's locale/clock.
  */
 
-import type { RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState } from '@/api/routines';
+import type { RoutineAuditEntry, RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState } from '@/api/routines';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -105,6 +105,9 @@ export function describeLastCheck(last: RoutineLastCheck | undefined, nowMs = Da
     const what = n > 0 ? `fired, ${n} item${n === 1 ? '' : 's'}` : 'fired';
     // The delivery failed transiently and the daemon will replay the fire.
     if (last.retryPending) return `${what}, delivery retrying, ${ago}`;
+    // A fire that fired but never landed said only "fired, 2 items" here while the
+    // audit row said "not delivered": the card was the one a user sees first.
+    if (last.error) return `${what} but not delivered, ${ago}`;
     return `${what}, ${ago}`;
   }
   if (last.outcome === 'error') {
@@ -134,4 +137,136 @@ export function describeExecutorBadge(
     return typeof host === 'string' && host ? `${label} @ ${host}` : `${label} @ local`;
   }
   return label;
+}
+
+// ── Trigger audit trail (state.checkLog / state.fireLog) ──
+
+/** Local clock time for an audit row: the "when" a human scans for. */
+export function auditClock(atMs: number): string {
+  if (!Number.isFinite(atMs)) return '--:--';
+  return new Date(atMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * One audit row as a sentence: what the check decided and, for a fire, where the
+ * message went. Never says "delivered" for a fire the daemon still owns — a
+ * retrying delivery has not landed, and reading it as landed is how a lost fire
+ * gets mistaken for a delivered one.
+ */
+export function describeAuditEntry(entry: RoutineAuditEntry): string {
+  if (entry.outcome === 'error') {
+    const msg = (entry.error ?? 'check failed').replace(/\s+/g, ' ').trim();
+    return `check error: ${msg.length > 90 ? `${clip(msg, 90)}…` : msg}`;
+  }
+  if (entry.outcome === 'quiet') {
+    if (entry.reason === 'rate-limited') return 'quiet — daily fire limit reached';
+    if (entry.reason === 'all-seen') return 'quiet — nothing new (all items already seen)';
+    return 'quiet — the script said no';
+  }
+  const n = entry.items ?? 0;
+  const what = n > 0 ? `fired, ${n} new item${n === 1 ? '' : 's'}` : 'fired';
+  const d = entry.delivery;
+  if (!d) return what;
+  const tries = (entry.attempts ?? 1) > 1 ? ` after ${entry.attempts} tries` : '';
+  if (d.status === 'retrying') return `${what} → delivery retrying${tries}`;
+  if (d.status === 'error') {
+    const why = (d.error ?? entry.error ?? 'unknown error').replace(/\s+/g, ' ').trim();
+    const short = why.length > 80 ? `${clip(why, 80)}…` : why;
+    return `${what} → not delivered${tries}: ${short}`;
+  }
+  return `${what} → ${auditTarget(d.summary)}${tries}`;
+}
+
+/** Longest "where it went" clause an audit row prints before clamping. */
+const AUDIT_TARGET_MAX = 56;
+
+/**
+ * The "where it went" half of an audit line, kept to one readable clause.
+ *
+ * The summary names a session by its handle, and a session title is whatever the
+ * user or the launch put there, so the clause needs a bound. The envelope cut is
+ * for the rows already on disk: a session a trigger started used to be named
+ * after its launch message, which for a trigger IS the `<walnut-message>`
+ * envelope, so those stored summaries bury the verdict behind markup (measured on
+ * prod: a 100-character row). New launches are titled after the trigger instead.
+ */
+export function auditTarget(summary: string | undefined): string {
+  const raw = (summary ?? 'delivered').replace(/\s+/g, ' ').trim();
+  const cut = raw.split('<walnut-message')[0].replace(/[—-]\s*$/, '').trim() || 'delivered';
+  if (cut.length <= AUDIT_TARGET_MAX) return cut;
+  // A session handle ends in the id that identifies it, so the id is the one
+  // part a clamp may not eat: cutting mid-id ("… [42eb…") names no session at
+  // all. Same rule sessionHandle applies on the server - cap the title, then
+  // append the id - and the reason a long title cannot push it off the line.
+  // The bracket run is bounded, so there is always room for words in front of it.
+  const handle = /\s(\[[^\s\]]{1,12}\])$/.exec(cut);
+  if (handle) {
+    const head = cut.slice(0, cut.length - handle[0].length);
+    return `${clip(head, AUDIT_TARGET_MAX - handle[1].length - 2)}… ${handle[1]}`;
+  }
+  return `${clip(cut, AUDIT_TARGET_MAX)}…`;
+}
+
+/** Slice that never leaves half an astral character behind (a session title can
+ *  hold an emoji, and a lone surrogate renders as a replacement glyph). */
+function clip(text: string, max: number): string {
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/**
+ * The pill/flyout headline: has this trigger ever actually fired, and when. This
+ * is the single line that answers "not sure if this works" — a trigger that has
+ * only ever been quiet says so plainly rather than looking untested.
+ */
+export function describeFireTally(state: RoutineState | undefined, nowMs = Date.now()): string {
+  // `lastFireSeq` is the fallback for a trigger that was already firing before the
+  // audit trail existed: the daemon's seq counts fires in the current epoch, so it
+  // is a floor on the total. It can also be a FLOOR ONLY - an epoch reset starts
+  // the daemon's counter over - so this line says "at least" nothing and simply
+  // prints the best number available.
+  const fires = state?.fireLog ?? [];
+  // The row-count fallback counts only fires the server RECORDED: a row still
+  // being retried is not one of them, so counting it would claim a delivery the
+  // daemon has not been acked for.
+  const count = state?.fireCount ?? state?.lastFireSeq
+    ?? fires.filter((f) => f.delivery?.status !== 'retrying').length;
+  // A fire whose delivery is still being retried is NOT counted by the server
+  // (the daemon still owns it), so it must not supply the "last" time either:
+  // reading an unlanded fire as the newest landed one is the exact mistake this
+  // line exists to prevent.
+  const retrying = fires.some((f) => f.delivery?.status === 'retrying');
+  if (!count) return retrying ? 'fired, delivery retrying' : 'never fired yet';
+  const landed = fires.find((f) => f.delivery?.status !== 'retrying')?.atMs;
+  const when = typeof landed === 'number' ? `, last ${describeAgo(landed, nowMs)}` : '';
+  return `fired ${count}×${when}${retrying ? ', one delivery retrying' : ''}`;
+}
+
+/**
+ * The rows the History fold shows, newest first: the recent checks, with each
+ * fire appearing ONCE.
+ *
+ * Why a merge and not just `checkLog`: checkLog is short (recent activity) and a
+ * fire's replayed attempt can arrive after the fire's own row has been pushed out
+ * by quiet checks, which appends a second `fired` row for one fire. fireLog holds
+ * only fires, so it keeps the surviving copy - preferring it makes one fire read
+ * as one fire, at whatever attempt count it has reached.
+ */
+export function auditHistory(state: RoutineState | undefined): RoutineAuditEntry[] {
+  const checks = state?.checkLog ?? [];
+  const fires = state?.fireLog ?? [];
+  const rows = checks.length ? checks : fires;
+  const seen = new Set<string>();
+  const out: RoutineAuditEntry[] = [];
+  for (const row of rows) {
+    if (row.outcome !== 'fired') { out.push(row); continue; }
+    const key = `${row.epoch ?? ''}#${row.seq ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // The fire-only list is never thinned by quiet checks, so its copy is the one
+    // that carries the newest attempt count and delivery verdict.
+    out.push(fires.find((f) => `${f.epoch ?? ''}#${f.seq ?? ''}` === key) ?? row);
+  }
+  return out;
 }

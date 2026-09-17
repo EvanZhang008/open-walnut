@@ -51,7 +51,8 @@ export interface SessionDelivery {
   }>>;
   sendToSession(sessionId: string, message: string, taskId: string): Promise<void>;
   getTask(taskId: string): Promise<{ id: string; cwd?: string; phase?: string } | null>;
-  startSession(params: { message: string; taskId: string; cwd: string; host?: string }): Promise<void>;
+  /** Returns the new session's id when the launch reported one (for the audit). */
+  startSession(params: { message: string; taskId: string; cwd: string; host?: string; title?: string }): Promise<{ sessionId?: string } | void>;
   notify(input: { title: string; body?: string; dedupKey: string; taskId?: string }): Promise<void>;
 }
 
@@ -76,7 +77,7 @@ function defaultDelivery(): SessionDelivery {
     },
     async startSession(params) {
       const { quickStartSession } = await import('../../sessions/quick-start.js');
-      await quickStartSession({
+      const task = await quickStartSession({
         message: params.message,
         existingTaskId: params.taskId,
         cwd: params.cwd,
@@ -84,8 +85,16 @@ function defaultDelivery(): SessionDelivery {
         // data dir — same rule the watcher's singleton restart follows.
         ...(params.cwd === WALNUT_HOME ? { walnutAgent: true } : {}),
         ...(params.host && params.host !== '__local__' ? { host: params.host } : {}),
+        // Name the session after the trigger, not after its launch message: the
+        // message is an envelope, and a session titled `<walnut-message kind=…`
+        // is what prod actually showed in the pill and the audit row.
+        ...(params.title ? { sessionTitle: params.title } : {}),
         source: 'routine-trigger',
       });
+      // The slot is filled by the launch when the session is already linked; a
+      // launch that has not linked one yet reports nothing rather than guessing.
+      const sessionId = task?.exec_session_id || task?.plan_session_id;
+      return sessionId ? { sessionId } : {};
     },
     async notify(input) {
       const { addNotification } = await import('../../notifications/store.js');
@@ -167,6 +176,9 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
         return {
           status: 'ok',
           summary: `${verb} session ${sessionHandle(target.title, target.claudeSessionId)}`,
+          // The audit trail's answer to "what got injected, and where":
+          // the exact envelope, and the session that received it.
+          delivered: { sessionId: target.claudeSessionId, text: envelope },
         };
       }
 
@@ -191,13 +203,21 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
         ? job.check.host
         : sessions.find((s) => s.host)?.host;
       const cwd = task?.cwd || job.check?.cwd || WALNUT_HOME;
-      await delivery.startSession({
+      const started = await delivery.startSession({
         message: envelope,
         taskId,
         cwd,
+        title: `Trigger: ${job.name}`,
         ...(host ? { host } : {}),
       });
-      return { status: 'ok', summary: `restarted session on task ${taskId}` };
+      return {
+        status: 'ok',
+        summary: `restarted session on task ${taskId}`,
+        delivered: {
+          ...(started && started.sessionId ? { sessionId: started.sessionId } : {}),
+          text: envelope,
+        },
+      };
     },
   };
 }

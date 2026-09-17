@@ -49,6 +49,33 @@ export type RoutineLastCheck = {
   retryPending?: boolean;
 };
 
+/** Where a fire ended up. `retrying` = the daemon still owns it, not a failure. */
+export type RoutineAuditDelivery = {
+  status: 'ok' | 'error' | 'retrying';
+  summary?: string;
+  sessionId?: string;
+  error?: string;
+};
+
+/**
+ * One line of a trigger's audit trail (server: src/core/cron/trigger-audit.ts).
+ * A quiet or failed check carries the verdict; a fire also carries where it went
+ * and a preview of the exact text the session received.
+ */
+export type RoutineAuditEntry = {
+  atMs: number;
+  outcome: 'fired' | 'quiet' | 'error';
+  reason?: 'fire-false' | 'all-seen' | 'rate-limited';
+  items?: number;
+  durationMs?: number;
+  error?: string;
+  seq?: number;
+  epoch?: string;
+  attempts?: number;
+  delivery?: RoutineAuditDelivery;
+  injected?: { chars: number; preview: string };
+};
+
 export type RoutineState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
@@ -58,6 +85,15 @@ export type RoutineState = {
   lastDurationMs?: number;
   consecutiveErrors?: number;
   lastCheck?: RoutineLastCheck;
+  /** Trigger audit trail, newest first: recent checks of any outcome. */
+  checkLog?: RoutineAuditEntry[];
+  /** Trigger audit trail, newest first: the fires with their delivery. */
+  fireLog?: RoutineAuditEntry[];
+  /** Total fires ever — the bounded fireLog cannot report it. */
+  fireCount?: number;
+  /** The daemon's highest processed fire seq: a floor on the count for a trigger
+   *  that was already firing before the audit trail existed. */
+  lastFireSeq?: number;
 };
 
 export interface Routine {

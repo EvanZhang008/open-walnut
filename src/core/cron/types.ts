@@ -35,6 +35,39 @@ export type TriggerCheck = {
   maxFiresPerDay?: number;
 };
 
+/** Where a fire ended up. `retrying` = still owned by the daemon, not a failure. */
+export type TriggerAuditDelivery = {
+  status: 'ok' | 'error' | 'retrying';
+  /** The executor's own sentence ("sent to session …", "resumed …"). */
+  summary?: string;
+  /** The session that received it, when one was picked (absent for a fresh start). */
+  sessionId?: string;
+  error?: string;
+};
+
+/**
+ * One line of a trigger's audit trail (src/core/cron/trigger-audit.ts). A quiet
+ * or failed check carries the verdict only; a fire also carries where it went and
+ * a preview of the exact text the session received.
+ */
+export type TriggerAuditEntry = {
+  atMs: number;
+  outcome: 'fired' | 'quiet' | 'error';
+  reason?: 'fire-false' | 'all-seen' | 'rate-limited';
+  items?: number;
+  durationMs?: number;
+  error?: string;
+  /** Fires only: the daemon's (epoch, seq) for this fire. */
+  seq?: number;
+  epoch?: string;
+  /** Fires only: how many delivery attempts this ONE fire took. */
+  attempts?: number;
+  /** Fires only. */
+  delivery?: TriggerAuditDelivery;
+  /** Fires only: the message the session actually received, clamped. */
+  injected?: { chars: number; preview: string };
+};
+
 /** The daemon's last report about a check, for the card and the error counter. */
 export type TriggerLastCheck = {
   atMs: number;
@@ -70,6 +103,12 @@ export type ExecutorRunResult = {
    * would only repeat the refusal.
    */
   retryable?: boolean;
+  /**
+   * What a trigger's delivery actually did, for the audit trail: which session
+   * received it and the exact text it was handed. The executor is the only layer
+   * that knows both (it picks the session and builds the envelope).
+   */
+  delivered?: { sessionId?: string; text?: string };
 };
 
 /** Injected by the server: dispatches a due job to its executor implementation. */
@@ -143,6 +182,23 @@ export type CronJobState = {
    * given up on (recorded, acked, notified) instead of retried forever.
    */
   fireRetry?: { epoch?: string; seq: number; attempts: number };
+  /**
+   * Check jobs only: recorded fire seqs ABOVE `lastFireSeq`, which is the highest
+   * CONTIGUOUS one. Fires are not processed in order (see isDuplicateFire), so a
+   * plain high-water mark would judge a slow retry of an earlier seq a duplicate
+   * and drop its items.
+   */
+  fireSeqsDone?: number[];
+  /**
+   * Check jobs only: the audit trail. `lastCheck` is one snapshot and cannot
+   * answer "did this ever fire, and what did it inject" — these can. Newest
+   * first, both bounded (trigger-audit.ts): checkLog is recent activity of any
+   * outcome, fireLog is the fires with their delivery and injected preview.
+   */
+  checkLog?: TriggerAuditEntry[];
+  fireLog?: TriggerAuditEntry[];
+  /** Check jobs only: total fires ever, which the bounded fireLog cannot report. */
+  fireCount?: number;
 };
 
 // ── The job itself ──

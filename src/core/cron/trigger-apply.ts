@@ -16,6 +16,10 @@ import type { TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/tri
 import type { CronJob, CronServiceState } from './types.js';
 import { ensureLoaded, persist } from './store.js';
 import { applyJobResult, emit, locked } from './timer.js';
+import {
+  appendAudit, auditDelivery, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
+  TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
+} from './trigger-audit.js';
 
 /** A fire's delivery must not hang the socket handler that started it. */
 const DELIVER_TIMEOUT_MS = 2 * 60_000;
@@ -57,17 +61,61 @@ export interface TriggerFiredApplied {
 }
 
 /**
- * (epoch, seq) dedup. A different epoch means the daemon's counter started over
- * (its state file was recreated), so the server's mark starts over too. Absent
- * epochs (a pre-epoch daemon) compare as equal, which is the old seq-only rule.
+ * How many recorded-but-out-of-order fire seqs the dedup window remembers above
+ * its contiguous watermark. The daemon holds at most PENDING_FIRES_MAX (50)
+ * unacked fires, so a window this size can never forget one that is still owed;
+ * if it ever overflowed, the OLDEST seq is forgotten, which risks delivering a
+ * fire twice rather than dropping one.
+ */
+export const FIRE_SEQ_WINDOW_MAX = 64;
+
+/**
+ * (epoch, seq) dedup over a WINDOW, not a high-water mark.
+ *
+ * A high-water mark is wrong here because fires are not processed in order: the
+ * daemon replays every unacked fire (daemon-standalone.ts sends all of
+ * pendingFires), the server's in-flight guard is keyed per seq, and a delivery
+ * runs with the store lock RELEASED. So seq 6 can be recorded while seq 5 is
+ * still being retried; a mark of 6 then judged 5's replay a duplicate, acked it,
+ * and threw its items away - silently breaking the at-least-once promise this
+ * module is built on. `lastFireSeq` is therefore the highest CONTIGUOUS seq
+ * recorded, and `fireSeqsDone` holds the recorded ones above it.
+ *
+ * A different epoch means the daemon's counter started over (its state file was
+ * recreated), so nothing is known about that epoch's seqs and none are dropped.
+ * Absent epochs (a pre-epoch daemon) compare as equal, the old seq-only rule.
  */
 export function isDuplicateFire(
-  state: { lastFireSeq?: number; lastFireEpoch?: string },
+  state: { lastFireSeq?: number; lastFireEpoch?: string; fireSeqsDone?: number[] },
   event: { epoch?: string; seq: number },
 ): boolean {
-  if (typeof state.lastFireSeq !== 'number') return false;
   if ((state.lastFireEpoch ?? '') !== (event.epoch ?? '')) return false;
-  return event.seq <= state.lastFireSeq;
+  if (typeof state.lastFireSeq === 'number' && event.seq <= state.lastFireSeq) return true;
+  return (state.fireSeqsDone ?? []).includes(event.seq);
+}
+
+/**
+ * Mark ONE fire as recorded and slide the window: the watermark absorbs every
+ * seq that is now contiguous with it, and only the gaps stay listed.
+ */
+export function recordFireSeq(
+  state: { lastFireSeq?: number; lastFireEpoch?: string; fireSeqsDone?: number[] },
+  event: { epoch?: string; seq: number },
+): void {
+  const sameEpoch = (state.lastFireEpoch ?? '') === (event.epoch ?? '');
+  const done = new Set<number>(sameEpoch ? state.fireSeqsDone ?? [] : []);
+  done.add(event.seq);
+  // A new epoch starts from nothing: seeing seq 3 first says nothing about 1 and
+  // 2, which may still be owed. Claiming them would drop them.
+  let mark = sameEpoch && typeof state.lastFireSeq === 'number' ? state.lastFireSeq : 0;
+  while (done.has(mark + 1)) {
+    done.delete(mark + 1);
+    mark += 1;
+  }
+  state.lastFireSeq = mark;
+  state.lastFireEpoch = event.epoch;
+  const gaps = [...done].sort((a, b) => a - b).slice(-FIRE_SEQ_WINDOW_MAX);
+  state.fireSeqsDone = gaps.length ? gaps : undefined;
 }
 
 /**
@@ -112,6 +160,14 @@ export async function applyTriggerChecked(
       ...(event.error ? { error: event.error } : {}),
       durationMs,
     };
+    // The audit line rides the write lastCheck already does, so recent activity
+    // costs no extra persist. Fires are appended in applyTriggerFired instead:
+    // the daemon reports a fire through that path, never through checked.
+    job.state.checkLog = appendAudit(
+      job.state.checkLog,
+      checkedAuditEntry({ atMs, outcome: event.outcome, reason: event.reason, durationMs, error: event.error }),
+      TRIGGER_CHECK_LOG_MAX,
+    );
     // AFTER applyJobResult: its error backoff computes a server-side next run,
     // which for a trigger is always a guess. The daemon's report wins.
     job.state.nextRunAtMs = Number.isFinite(event.nextRunAtMs) ? event.nextRunAtMs : undefined;
@@ -145,7 +201,14 @@ export async function applyTriggerChecked(
   });
 }
 
-type DeliverResult = { status: 'ok' | 'error'; summary?: string; error?: string; retryable?: boolean };
+type DeliverResult = {
+  status: 'ok' | 'error';
+  summary?: string;
+  error?: string;
+  retryable?: boolean;
+  /** For the audit trail: where it landed and the text that landed there. */
+  delivered?: { sessionId?: string; text?: string };
+};
 
 /**
  * A fire: dedup on (id, epoch, seq), deliver OUTSIDE the lock, then record.
@@ -233,14 +296,48 @@ export async function applyTriggerFired(
       ...(error ? { error } : {}),
       ...(retry ? { retryPending: true } : {}),
     };
+    // The audit line for this fire: what went where, and the text the session got.
+    // A replayed attempt of the SAME fire updates its row rather than adding one,
+    // so three attempts read as one fire that took three tries.
+    const auditEntry = firedAuditEntry({
+      atMs: startedAt,
+      seq: event.seq,
+      items: event.items?.length ?? 0,
+      // The authoritative count, not one re-derived from whatever row survived:
+      // checkLog is short enough that a slow retry can outlive its own row.
+      attempts,
+      ...(Number.isFinite(event.durationMs) ? { durationMs: event.durationMs } : {}),
+      ...(error ? { error } : {}),
+      delivery: auditDelivery({
+        status: result.status,
+        retry,
+        ...(result.summary ? { summary: result.summary } : {}),
+        ...(result.error ? { error: result.error } : {}),
+        ...(result.delivered?.sessionId ? { sessionId: result.delivered.sessionId } : {}),
+      }),
+      ...(result.delivered?.text ? { injected: injectedPreview(result.delivered.text) } : {}),
+    });
+    const stamped = { ...auditEntry, ...(event.epoch ? { epoch: event.epoch } : {}) };
+    target.state.fireLog = mergeFireAttempt(target.state.fireLog, stamped, TRIGGER_FIRE_LOG_MAX);
+    // Both lists carry the fire: checkLog is "what has this trigger been doing",
+    // and a fire absent from it would read as a gap in the clock. Merged there
+    // too, so a replayed attempt updates its row instead of adding one.
+    target.state.checkLog = mergeFireAttempt(target.state.checkLog, stamped, TRIGGER_CHECK_LOG_MAX);
+    // Counted only when the fire is being recorded (an unacked retry is still the
+    // same fire), so the total never double-counts a replay. A trigger that was
+    // already firing before this trail existed seeds its total from the daemon's
+    // seq (fires in the current epoch) rather than claiming this is its first.
+    if (!retry) {
+      const seeded = target.state.fireCount ?? (typeof target.state.lastFireSeq === 'number' ? target.state.lastFireSeq : 0);
+      target.state.fireCount = seeded + 1;
+    }
     if (retry) {
       // Not recorded as processed: the replay must pass the dedup again.
       target.state.fireRetry = { ...(event.epoch ? { epoch: event.epoch } : {}), seq: event.seq, attempts };
     } else {
       // Recorded on success, on a refusal, and when the retries ran out: the
       // daemon is about to be acked in all three cases.
-      target.state.lastFireSeq = event.seq;
-      target.state.lastFireEpoch = event.epoch;
+      recordFireSeq(target.state, event);
       target.state.fireRetry = undefined;
     }
     target.state.nextRunAtMs = Number.isFinite(event.nextRunAtMs) ? event.nextRunAtMs : undefined;

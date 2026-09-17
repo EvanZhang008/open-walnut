@@ -53,6 +53,15 @@ export interface QuickStartParams {
   taskMeta?: QuickStartTaskMeta;
   /** Task title; defaults to "Session: <basename(cwd)>". */
   taskTitle?: string;
+  /**
+   * Title for the SESSION record. Without it the session is named after the
+   * first 80 characters of its launch message, which is right for a human's
+   * prompt and wrong for a machine one: a trigger launches with a
+   * `<walnut-message>` envelope, so the session wore the raw markup as its name
+   * (seen on prod) and nothing ever renamed it - the CLI titler below only runs
+   * for launches that preassign a session id.
+   */
+  sessionTitle?: string;
   /** Task project. Omitted/empty = Inbox; the auto-organize pass below then
    *  offers to file the task under an existing project. */
   project?: string;
@@ -435,6 +444,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   bus.emit(EventNames.SESSION_START, {
     taskId: updatedTask.id,
     message: sessionMessage,
+    ...(params.sessionTitle?.trim() ? { title: params.sessionTitle.trim() } : {}),
     cwd,
     project,
     mode,

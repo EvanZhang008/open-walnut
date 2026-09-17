@@ -45,14 +45,24 @@ describe('isTriggerForTask', () => {
 });
 
 describe('triggerPillTitle', () => {
-  it('names each trigger with its cadence, command, host and last check', () => {
+  it('names each trigger with its cadence, command, host, fire tally and last check', () => {
     const title = triggerPillTitle([
-      routine({ id: 'a', name: 'PR comments', state: { lastCheck: { atMs: NOW - 120_000, outcome: 'quiet', reason: 'all-seen' } } }),
+      routine({
+        id: 'a',
+        name: 'PR comments',
+        state: {
+          fireCount: 2,
+          fireLog: [{ atMs: NOW - 600_000, outcome: 'fired' }],
+          lastCheck: { atMs: NOW - 120_000, outcome: 'quiet', reason: 'all-seen' },
+        },
+      }),
       routine({ id: 'b', name: 'CI red', schedule: { kind: 'every', everyMs: 300_000 }, check: { run: 'gh run list', host: 'devbox' } }),
     ], NOW);
     expect(title.split('\n')).toEqual([
-      'PR comments: Every 30s, $ bash ~/.open-walnut/triggers/pr/check.sh @ local, last check quiet, 2m ago',
-      'CI red: Every 5 min, $ gh run list @ devbox, last check not checked yet',
+      'PR comments: Every 30s, $ bash ~/.open-walnut/triggers/pr/check.sh @ local, fired 2×, last 10m ago, last check quiet, 2m ago',
+      // Never fired says so on the hover text too: an armed trigger that has
+      // never produced anything is the case the user cannot otherwise tell apart.
+      'CI red: Every 5 min, $ gh run list @ devbox, never fired yet, last check not checked yet',
     ]);
   });
 });

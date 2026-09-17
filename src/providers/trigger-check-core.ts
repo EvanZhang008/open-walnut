@@ -346,7 +346,7 @@ export function parseCheckStdout(stdout: string): ParsedCheck {
     if (typeof r.input !== 'string') return { ok: false, error: '"input" must be a string' };
     input = r.input;
     if (input.length > CHECK_INPUT_CAP) {
-      input = `${input.slice(0, CHECK_INPUT_CAP)}\n[input truncated at ${CHECK_INPUT_CAP} chars]`;
+      input = `${headChars(input, CHECK_INPUT_CAP)}\n[input truncated at ${CHECK_INPUT_CAP} chars]`;
       inputTruncated = true;
     }
   }
@@ -476,7 +476,7 @@ export function checkErrorOf(proc: CheckProcessResult, parsed: ParsedCheck | nul
   if (proc.stdoutOverflow) return `stdout exceeded ${CHECK_STDOUT_CAP} bytes`;
   if (proc.exitCode !== 0) {
     const tail = redactSecrets(proc.stderrTail.trim().split('\n').slice(-3).join(' | '));
-    return `exit ${proc.exitCode ?? proc.signal ?? '?'}${tail ? `: ${tail.slice(0, 300)}` : ''}`;
+    return `exit ${proc.exitCode ?? proc.signal ?? '?'}${tail ? `: ${headChars(tail, 300)}` : ''}`;
   }
   if (parsed && !parsed.ok) return parsed.error;
   return null;
@@ -523,7 +523,7 @@ export function runCheckProcess(
         exitCode: null,
         signal: null,
         stdout,
-        stderrTail: stderr.slice(-CHECK_STDERR_TAIL),
+        stderrTail: tailChars(stderr, CHECK_STDERR_TAIL),
         timedOut,
         stdoutOverflow,
         durationMs: Math.max(0, now() - startedAt),
@@ -624,6 +624,30 @@ export function triggerStateFileName(id: string): string {
   return `${safe}-${createHash('sha256').update(id).digest('hex').slice(0, 8)}.json`;
 }
 
+/**
+ * Head/tail slices that never keep half an astral character.
+ *
+ * All three call sites below persist their result: the truncated `input` rides a
+ * PendingFire into the daemon's trigger-state JSON and across the wire, and the
+ * stderr tail lands in the job state, a notification body and the logs. A lone
+ * surrogate in a JSON file is what makes a strict reader reject the WHOLE file,
+ * which has cost this repo an incident before.
+ */
+export function headChars(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/** The tail, which can instead START on the low half of a pair. */
+export function tailChars(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(-max);
+  const first = cut.charCodeAt(0);
+  return first >= 0xdc00 && first <= 0xdfff ? cut.slice(1) : cut;
+}
+
 export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } | { ok: false; error: string } {
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'trigger must be an object' };
   const r = raw as Record<string, unknown>;
@@ -636,6 +660,12 @@ export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } 
     return { ok: false, error: `trigger ${r.id}: check.run is required` };
   }
   const limits = r.limits && typeof r.limits === 'object' ? (r.limits as Record<string, unknown>) : {};
+  // `cap > 0` is what decideCheck tests, so a 0 here would DISABLE the daily cap -
+  // the exact opposite of what someone writing 0 means. Refuse it and name the
+  // way to say "no limit" instead of silently removing a safety valve.
+  if (typeof limits.maxFiresPerDay === 'number' && Math.floor(limits.maxFiresPerDay) < 1) {
+    return { ok: false, error: `trigger ${r.id}: limits.maxFiresPerDay must be at least 1 (omit it for no limit)` };
+  }
   return {
     ok: true,
     def: {
@@ -648,7 +678,7 @@ export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } 
         timeoutSeconds: clampTimeoutSeconds(check.timeoutSeconds),
       },
       ...(typeof limits.maxFiresPerDay === 'number'
-        ? { limits: { maxFiresPerDay: Math.max(0, Math.floor(limits.maxFiresPerDay)) } }
+        ? { limits: { maxFiresPerDay: Math.floor(limits.maxFiresPerDay) } }
         : {}),
     },
   };

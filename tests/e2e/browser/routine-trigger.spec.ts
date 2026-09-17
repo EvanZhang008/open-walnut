@@ -40,14 +40,16 @@ async function openBlankForm(page: import('@playwright/test').Page) {
 test('the Test button reports would-fire, quiet, and error without saving anything', async ({ page }) => {
   await openRoutines(page)
   const form = await openBlankForm(page)
-  const before = (await (await fetch(`${API}/api/routines?includeDisabled=true`)).json()).jobs.length
 
   await form.getByRole('button', { name: /Add a check script/ }).click()
   // A check is a poll: opening the section moves the untouched trigger to an interval.
   await expect(form.locator('.routine-trigger-header')).toContainText('every 5 min')
 
+  // Every script this test types carries one nonce, so the "nothing was saved"
+  // check below can name its own scripts among a shared server's routines.
+  const mark = `nosave-${Date.now()}`
   const run = form.locator('#routine-check-run')
-  await run.fill(`echo '{"fire": true, "items": [{"id": "pw-1"}, {"id": "pw-2"}], "input": "two things"}'`)
+  await run.fill(`echo '{"fire": true, "items": [{"id": "pw-1"}, {"id": "pw-2"}], "input": "${mark}"}'`)
   // The server answer is the diagnosis when the verdict never renders (a cold
   // or old fixture daemon answers 503/400 with the reason).
   const answer = page.waitForResponse((r) => r.url().endsWith('/api/routines/check-test'), { timeout: 60_000 })
@@ -58,18 +60,20 @@ test('the Test button reports would-fire, quiet, and error without saving anythi
   await expect(verdict).toContainText('Would fire now (2 new items)', { timeout: 30_000 })
   await expect(form.locator('.routine-check-test-output')).toContainText('"fire": true')
 
-  await run.fill(`echo '{"fire": false, "state": {"cursor": 1}}'`)
+  await run.fill(`echo '{"fire": false, "state": {"cursor": "${mark}"}}'`)
   await form.getByRole('button', { name: 'Test check' }).click()
   await expect(verdict).toContainText('Would stay quiet now', { timeout: 30_000 })
 
-  await run.fill('echo nope >&2; exit 3')
+  await run.fill(`echo nope ${mark} >&2; exit 3`)
   await form.getByRole('button', { name: 'Test check' }).click()
   await expect(verdict).toContainText('Check error: exit 3', { timeout: 30_000 })
   await expect(verdict).toContainText('nope')
 
-  // Testing never creates a routine.
-  const after = (await (await fetch(`${API}/api/routines?includeDisabled=true`)).json()).jobs.length
-  expect(after).toBe(before)
+  // Testing never creates a routine. Counted by THIS test's own check scripts,
+  // not by the total: the fixture server is shared across workers, so a total
+  // that grew proves only that some other spec created its trigger meanwhile.
+  const jobs = (await (await fetch(`${API}/api/routines?includeDisabled=true`)).json()).jobs as Array<{ check?: { run?: string } }>
+  expect(jobs.filter((j) => (j.check?.run ?? '').includes(mark))).toEqual([])
   await form.getByRole('button', { name: 'Cancel' }).click()
 })
 
@@ -167,13 +171,13 @@ async function createTask(title: string): Promise<{ id: string; title: string }>
   return ((await res.json()) as { task: { id: string; title: string } }).task
 }
 
-async function createTriggerFor(taskId: string, name: string, run: string): Promise<{ id: string }> {
+async function createTriggerFor(taskId: string, name: string, run: string, everyMs = 300_000): Promise<{ id: string }> {
   const res = await fetch(`${API}/api/routines`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name,
-      schedule: { kind: 'every', everyMs: 300_000 },
+      schedule: { kind: 'every', everyMs },
       check: { run, host: '__local__' },
       executor: { type: 'session', config: { target: taskId, prompt: 'Read the new items.' } },
     }),
@@ -256,6 +260,77 @@ test('a task with an armed trigger shows the TRIGGER pill; the pill opens the tr
     await expect(row).toBeVisible()
   } finally {
     for (const id of routines) await deleteRoutine(id)
+    await fetch(`${API}/api/tasks/${task.id}`, { method: 'DELETE' }).catch(() => {})
+  }
+})
+
+test('the flyout audits the trigger: never-fired, then the checks, then what a fire injected', async ({ page }) => {
+  const { isolateUiPrefs, presetPanelView, showEverything } = await import('./todo-panel-helpers')
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
+  const task = await createTask('PW trigger audit task')
+  const name = `PW audit ${Date.now()}`
+  // A check that fires on every run, so the audit gets a real fire with a real
+  // delivery — the fixture's own daemon runs it on its 10s floor.
+  const created = await createTriggerFor(task.id, name, `echo '{"fire": true, "input": "AUDIT_INPUT_MARK"}'`, 10_000)
+  try {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await showEverything(page)
+    const row = page.locator('.todo-panel-item', { hasText: task.title })
+    const pill = row.getByTestId('task-trigger-pill')
+    await expect(pill).toBeVisible({ timeout: 15_000 })
+    await pill.click()
+    const flyout = page.getByTestId('trigger-jobs-flyout')
+    await expect(flyout).toBeVisible()
+
+    // Before any check has been reported there is nothing to audit, and the
+    // flyout says exactly that instead of looking broken.
+    const tally = flyout.locator('.trigger-jobs-tally')
+    const toggle = flyout.getByTestId('trigger-audit-toggle')
+    if ((await tally.innerText()).startsWith('never fired')) {
+      await expect(toggle).toContainText(/No checks recorded yet|History/)
+    }
+
+    // What it WILL inject is visible before anything happens.
+    await flyout.getByRole('button', { name: /What it injects/ }).click()
+    await expect(flyout.locator('.trigger-audit-injected').first()).toContainText('Read the new items.')
+
+    // The daemon fires within ~15s (5s first-run delay + a 10s cadence).
+    await expect(tally).toContainText('fired', { timeout: 60_000 })
+    await expect(toggle).toContainText(/History \(\d+ recorded check/, { timeout: 10_000 })
+    await toggle.click()
+    const list = flyout.getByTestId('trigger-audit-list')
+    await expect(list.locator('.trigger-audit-row')).not.toHaveCount(0)
+    const fired = list.locator('.trigger-audit-row[data-outcome="fired"]').first()
+    await expect(fired).toContainText('fired')
+    await expect(fired.locator('.trigger-audit-clock')).toHaveText(/\d{2}:\d{2}/)
+
+    // Opening the fire shows the exact text the session received — the answer to
+    // "what is the injected context".
+    await fired.locator('.trigger-audit-line').click()
+    const injected = fired.locator('.trigger-audit-injected')
+    await expect(injected).toContainText('<walnut-message kind="trigger"')
+    await expect(injected).toContainText('AUDIT_INPUT_MARK')
+    await expect(fired).toContainText(/Injected into the session \(\d+ chars\)/)
+    // Where it went is always named. "Open that session" is there only when the
+    // fire landed in an EXISTING session: this task had none, so the trigger
+    // started one, and a launch that has not linked its session yet reports no id
+    // rather than inventing one (the live-session path is pinned in
+    // tests/e2e/trigger-routines.test.ts, which asserts delivery.sessionId).
+    await expect(fired.locator('.trigger-audit-what')).toContainText(/session|task/)
+    const openBtn = fired.getByRole('button', { name: 'Open that session' })
+    if (await openBtn.count()) await expect(openBtn).toBeVisible()
+
+    // The audit survives a reload: it is server state, not a browser accumulation.
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await showEverything(page)
+    const pill2 = page.locator('.todo-panel-item', { hasText: task.title }).getByTestId('task-trigger-pill')
+    await pill2.click()
+    await expect(page.getByTestId('trigger-jobs-flyout').locator('.trigger-jobs-tally')).toContainText('fired')
+  } finally {
+    await deleteRoutine(created.id)
     await fetch(`${API}/api/tasks/${task.id}`, { method: 'DELETE' }).catch(() => {})
   }
 })

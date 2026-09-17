@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseCheckStdout, decideCheck, applyCheckOutcome, applyCheckError, ackFire, emptyHostState,
   coerceHostState, buildCheckStdin, runCheckProcess, checkErrorOf, validateTriggerDef, pruneSeen,
+  headChars, tailChars,
   CHECK_STDOUT_CAP, CHECK_STATE_CAP, CHECK_INPUT_CAP, CHECK_ITEMS_CAP, MAX_FIRES_PER_DAY_DEFAULT, SEEN_MAX,
   PENDING_FIRES_MAX, MIN_EVERY_MS,
   triggersSetHash, triggerStateFileName,
@@ -218,6 +219,47 @@ describe('validateTriggerDef', () => {
     expect(ok).toMatchObject({ ok: true, def: { name: 'j', check: { run: 'echo hi', timeoutSeconds: 300 } } });
     expect(validateTriggerDef({ id: 'j', everyMs: MIN_EVERY_MS - 1, check: { run: 'x' } })).toMatchObject({ ok: false });
     expect(validateTriggerDef({ id: 'j', everyMs: 60_000, check: { run: '  ' } })).toMatchObject({ ok: false, error: expect.stringContaining('check.run') });
+  });
+});
+
+describe('the daily fire cap', () => {
+  // `decideCheck` gates on `cap > 0`, so a stored 0 would DISABLE the cap - the
+  // opposite of what writing 0 means. It is refused at the door instead.
+  it('refuses a cap below 1 and names the way to say "no limit"', () => {
+    const zero = validateTriggerDef({ id: 'j', everyMs: 60_000, check: { run: 'x' }, limits: { maxFiresPerDay: 0 } });
+    expect(zero).toMatchObject({ ok: false, error: expect.stringContaining('at least 1') });
+    expect(validateTriggerDef({ id: 'j', everyMs: 60_000, check: { run: 'x' }, limits: { maxFiresPerDay: -3 } })).toMatchObject({ ok: false });
+    expect(validateTriggerDef({ id: 'j', everyMs: 60_000, check: { run: 'x' }, limits: { maxFiresPerDay: 1 } }))
+      .toMatchObject({ ok: true, def: { limits: { maxFiresPerDay: 1 } } });
+    // Omitting it is how a trigger asks for the default, and stores nothing.
+    const none = validateTriggerDef({ id: 'j', everyMs: 60_000, check: { run: 'x' } });
+    expect(none.ok && none.def.limits).toBeUndefined();
+  });
+});
+
+describe('surrogate-safe truncation', () => {
+  // Every one of these strings is persisted (the fire's input into the daemon's
+  // state JSON, the stderr tail into job state and notifications), and a lone
+  // surrogate makes a strict JSON reader reject the whole file.
+  it('never keeps half an astral character at either end', () => {
+    const rocket = '\u{1F680}';
+    expect(headChars(`${'a'.repeat(9)}${rocket}bb`, 10)).toBe('a'.repeat(9));
+    expect(headChars(`${'a'.repeat(8)}${rocket}bb`, 10)).toBe(`${'a'.repeat(8)}${rocket}`);
+    expect(tailChars(`bb${rocket}${'a'.repeat(9)}`, 10)).toBe('a'.repeat(9));
+    expect(tailChars(`bb${rocket}${'a'.repeat(8)}`, 10)).toBe(`${rocket}${'a'.repeat(8)}`);
+    // Shorter than the bound: returned whole, both ways.
+    expect(headChars(rocket, 10)).toBe(rocket);
+    expect(tailChars(rocket, 10)).toBe(rocket);
+  });
+
+  it('a truncated fire input survives a JSON round trip', () => {
+    const long = `${'x'.repeat(CHECK_INPUT_CAP - 1)}\u{1F680}${'y'.repeat(50)}`;
+    const parsed = parseCheckStdout(JSON.stringify({ fire: true, input: long }));
+    expect(parsed.ok).toBe(true);
+    const input = parsed.ok ? parsed.output.input! : '';
+    expect(input).toContain('[input truncated at');
+    expect(/[\uD800-\uDBFF]/.test(input)).toBe(false);
+    expect(JSON.parse(JSON.stringify({ input })).input).toBe(input);
   });
 });
 
