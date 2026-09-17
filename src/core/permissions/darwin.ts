@@ -380,16 +380,13 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
         + 'helper above because it grants access per program, not per app you think of as '
         + 'one. Sessions already running keep the identity they started with, so the switch '
         + 'applies after the session daemon next restarts.',
-      // Actions only, in order, each one a thing to do or to look at.
+      // Actions only, as few as the flow allows: the button below does the
+      // navigating, and the path is on the clipboard before step 2 is read.
       steps: [
-        'Open System Settings → Privacy & Security → Full Disk Access.',
-        'Click + (authenticate if asked).',
-        `Press Cmd+Shift+G, then Cmd+V (the path is already copied): ${session.app ?? ''}`,
-        'Select it and make sure its toggle is ON.',
+        'Press Open System Settings, then + in the Full Disk Access list.',
+        'Press ⌘⇧G, then ⌘V, then Enter — the path is already copied.',
         // The honest completion signal, because there is nothing to turn green.
-        // The dialog's own footer explains that the row cannot be read back, so
-        // this step must not say it a second time in different words.
-        'You will know it worked because the popups stop.',
+        'Turn its toggle on. The popups stop — that is how you know.',
       ],
     },
   ];

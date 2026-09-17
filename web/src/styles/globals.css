@@ -26982,6 +26982,36 @@ a.file-link:hover {
    before the numbered steps. Spacing is the only thing making it scannable. */
 .permission-fix-modal .app-modal-message > p + p,
 .permission-fix-modal .app-modal-message > ol + p { margin-top: 8px; }
+/* The path IS a button: one click copies it, so the steps never have to say
+   "copy this". Styled as text, because a button-looking path invites a click
+   that does something bigger. */
+.permission-copy {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.permission-copy-hint {
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.permission-copy:hover .permission-copy-hint,
+.permission-copy:focus-visible .permission-copy-hint { opacity: 1; }
+/* Guidance behind one click. Closed by default: the grant works without it. */
+.permission-why { margin-top: 10px; }
+.permission-why > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12px;
+  width: fit-content;
+}
+.permission-why[open] > summary { margin-bottom: 6px; }
+.permission-why-body { margin: 0; }
 .permission-grant-target code {
   /* The grant target is the load-bearing detail (grant to the WRONG identity
      and nothing works) — render it copy-friendly and visually distinct. */

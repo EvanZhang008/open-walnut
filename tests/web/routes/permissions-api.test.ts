@@ -108,9 +108,12 @@ describe('GET /api/permissions', () => {
     expect(row.context).toContain('Skipping it costs nothing');
     // And the numbered list stays ACTIONS. An explanation rendered as "step 1"
     // reads as something to perform, and the user hunts for the thing to click.
+    // Short enough to act on at a glance: the dialog's button does the
+    // navigating and puts the path on the clipboard, so nothing here restates it.
+    expect(row.steps.length).toBeLessThanOrEqual(3);
     for (const step of row.steps as string[]) {
       expect(step).not.toContain('Claude Code runs inside Walnut');
-      expect(step.length).toBeLessThan(120);
+      expect(step.length).toBeLessThan(80);
     }
   });
 

@@ -60,10 +60,9 @@ const REPORT = {
         + 'one. Sessions already running keep the identity they started with, so the switch '
         + 'applies after the session daemon next restarts.',
       steps: [
-        'Open System Settings → Privacy & Security → Full Disk Access.',
-        'Click + (authenticate if asked).',
-        'Press Cmd+Shift+G, then Cmd+V (the path is already copied): /Applications/Walnut.app',
-        'You will know it worked because the popups stop.',
+        'Press Open System Settings, then + in the Full Disk Access list.',
+        'Press ⌘⇧G, then ⌘V, then Enter — the path is already copied.',
+        'Turn its toggle on. The popups stop — that is how you know.',
       ],
     },
   ],
@@ -149,21 +148,32 @@ test('a user can set up session file access from Settings, without a terminal', 
   await expect(dialog.locator('.app-modal-title')).toHaveText('Set up session file access')
   await expect(dialog).toContainText('/Applications/Walnut.app')
   await expect(dialog).toContainText('Full Disk Access')
-  // The row is one line, so the guidance has to be here: what it buys, that
-  // skipping it costs nothing, and why System Settings will show two
-  // Walnut-ish entries for one permission.
-  await expect(dialog).toContainText('Claude Code runs inside Walnut')
-  await expect(dialog).toContainText('Skipping it costs nothing')
-  await expect(dialog).toContainText('separately from the reader helper')
-  // The numbered list is actions only — the explanation above is not step 1.
-  await expect(dialog.locator('.permission-steps li').first()).toHaveText(/^Open System Settings/)
+  // The numbered list is actions only, and short enough to act on at a glance.
+  await expect(dialog.locator('.permission-steps li')).toHaveCount(3)
+  // Names the LIST, not just the app: the pane name is the only way back if the
+  // button's deep link fails, or if this UI is a phone and the Mac is elsewhere.
+  await expect(dialog.locator('.permission-steps li').first()).toContainText('Full Disk Access list')
+  // The guidance is ONE CLICK away, not in the way: a user who already decided
+  // to grant it reads one line and presses the button.
+  await shot(dialog, 'setup-dialog')
+  const why = dialog.locator('.permission-why')
+  await expect(why).toContainText('Why this exists')
+  const whyBody = why.locator('.permission-why-body')
+  await expect(whyBody).toBeHidden()
+  await why.locator('summary').click()
+  await expect(whyBody).toBeVisible()
+  await expect(whyBody).toContainText('Claude Code runs inside Walnut')
+  await expect(whyBody).toContainText('Skipping it costs nothing')
+  await expect(whyBody).toContainText('separately from the reader helper')
+  await shot(dialog, 'setup-dialog-why-open')
+  // The path is the copy control, which is why no step says "copy this".
+  await expect(dialog.locator('.permission-copy code')).toHaveText('/Applications/Walnut.app')
   // The grant target IS the app here, so the dialog must not call it a helper.
   await expect(dialog).toContainText('macOS checks this grant for Walnut itself')
   await expect(dialog).not.toContainText("Walnut's own helper")
   // And it must not promise a green that can never arrive.
   await expect(dialog).not.toContainText('turns green once granted')
-  await expect(dialog).toContainText("keeps saying \"Can't be checked\"")
-  await shot(dialog, 'setup-dialog')
+  await expect(dialog).toContainText("macOS can't report this back")
 
   // The one action that replaces the terminal: it opens the pane and copies the
   // path on the MAC, so the user only drags or pastes.

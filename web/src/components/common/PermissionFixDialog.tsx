@@ -111,6 +111,17 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
   // access" does not. Only labels that are already sentence case get their first
   // letter lowered — a Title Case or acronym label ("Full Disk Access") would be
   // mangled into "full Disk Access", so it is left exactly as written.
+  // Click-to-copy on the path itself: on this machine it is the whole action,
+  // and the Open-Settings button copies it on the MAC anyway for the case where
+  // this UI is a phone.
+  const [copied, setCopied] = useState(false);
+  const copyTarget = () => {
+    navigator.clipboard?.writeText(permission.grantTarget).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 2_000); },
+      () => log.warn('permissions', 'clipboard copy refused'),
+    );
+  };
+
   const setupLabel = /^[A-Z][a-z]+ [a-z]/.test(permission.label)
     ? permission.label.charAt(0).toLowerCase() + permission.label.slice(1)
     : permission.label;
@@ -136,10 +147,6 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
         ) : (
           <div className="app-modal-message">
             <p>{permission.why}</p>
-            {/* The guidance a one-line row cannot carry. Above the grant target
-                because it answers "should I?", which comes before "what do I
-                paste?". */}
-            {permission.context && <p>{permission.context}</p>}
             {/* Naming the launcher is only true for grants that FOLLOW the
                 launcher. A self-responsible helper's grant is its own, and
                 mentioning the launcher there makes a correct instruction read
@@ -153,7 +160,11 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
                       line exists precisely to be trusted and copied. */}
                   macOS checks this grant for{' '}
                   {/\.app(\/|$)/.test(permission.grantTarget) ? 'Walnut itself' : "Walnut's own helper"}:{' '}
-                  <code>{permission.grantTarget}</code>
+                  <button type="button" className="permission-copy" onClick={copyTarget}
+                    title="Copy this path">
+                    <code>{permission.grantTarget}</code>
+                    <span className="permission-copy-hint">{copied ? ' copied' : ' copy'}</span>
+                  </button>
                 </>
               ) : (
                 <>
@@ -174,9 +185,18 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
                 concludes Walnut is broken. */}
             <p className="settings-muted">
               {permission.unverifiable
-                ? 'macOS gives no way to read this grant back, so this row keeps saying "Can\'t be checked" even after you grant it.'
+                ? 'macOS can\'t report this back, so the row stays grey either way.'
                 : 'This window checks automatically and turns green once granted.'}
             </p>
+            {/* One click, not six lines. Everything here is worth reading and
+                nothing here is worth reading FIRST: the whole point is that the
+                user can grant it without any of it. */}
+            {permission.context && (
+              <details className="permission-why">
+                <summary>Why this exists</summary>
+                <p className="permission-why-body">{permission.context}</p>
+              </details>
+            )}
           </div>
         )}
 
