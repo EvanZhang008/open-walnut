@@ -437,8 +437,8 @@ The additive `engine` field on the terminal frame reports which engine answered
 | `message-start` | `{ "turnId" }` | A turn began |
 | `queued` | `{ "turnId", "position" }` | Turn accepted but waiting behind another turn on the shared agent queue (additive, may precede `message-start` by minutes) |
 | `text-delta` | `{ "delta" }` | Streaming assistant text chunk |
-| `tool` | `{ "name", "toolUseId"?, "detail"? }` | The agent invoked a tool. `detail` (additive) is the same one-line input summary the message rows carry (≤160+`…`, masked), so the activity line can read `Bash · ls docs/`; `toolUseId` (additive) pairs this frame with its `tool-result` |
-| `tool-result` | `{ "toolUseId" }` | That tool finished (additive) — clears the activity line. Carries NO output: the result reaches the client as the message row's `resultPreview`. Only sent for a `toolUseId` whose `tool` frame this turn actually delivered, so an id you never saw open is never closed |
+| `tool` | `{ "name", "toolUseId"?, "detail"?, "inputPreview"? }` | The agent invoked a tool. `detail` (additive) is the same one-line input summary the message rows carry (≤160+`…`, masked), so the activity line can read `Bash · ls docs/`; `inputPreview` (additive) is the same ≤2000-char masked `key: value` render the message rows carry, so an expanded live row shows what the tool was actually called with (`detail` prefers a Bash `description`, which is why the command itself needs this field); `toolUseId` (additive) pairs this frame with its `tool-result` |
+| `tool-result` | `{ "toolUseId", "resultPreview"? }` | That tool finished (additive) — clears the activity line. `resultPreview` (additive) is the same ≤700+`…` masked excerpt the message row carries, so a finished live row can show its output before the transcript lands. Still no full output on this channel: the whole text is only reachable through the row's `detailRef` read. Only sent for a `toolUseId` whose `tool` frame this turn actually delivered, so an id you never saw open is never closed |
 | `thinking` | `{ "delta"? }` | The agent is reasoning. `delta` (additive, optional) is the reasoning text — coalesced into ~120 ms batches, so treat it as an append, not one whole block. Clients that ignore it and just show a spinner keep working |
 | `message-end` | `{ "turnId", "fullText", "engine"? }` | Turn finished; `fullText` = complete reply |
 | `error` | `{ "message", "engine"? }` | Turn failed |
@@ -971,8 +971,11 @@ primary box the same endpoints serve directly — no bridge involved.
     once on attach (primary box only; carries no id).
   - `turn-start {}` — a new turn began (resets the replay window).
   - `text-delta { delta }` / `thinking { delta }` — main-lane streaming text.
-  - `tool { name, toolUseId, detail? }` / `tool-result { toolUseId }` —
-    `detail` (additive) is the one-line input summary.
+  - `tool { name, toolUseId, detail?, inputPreview? }` /
+    `tool-result { toolUseId, resultPreview? }` — `detail` (additive) is the
+    one-line input summary; `inputPreview` (≤2000 chars) and `resultPreview`
+    (≤700 chars + `…`) are additive, masked excerpts, the same ones the
+    message rows carry. The full text stays off this channel.
   - `status { processStatus }` — running | idle | stopped | error.
   - `turn-end {}` — refetch the transcript here to reconcile.
   - `error { message }`

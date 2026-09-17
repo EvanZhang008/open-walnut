@@ -167,14 +167,33 @@ function ensureBusSubscriber(): void {
       }
       case 'session:tool-use': {
         if (d.parentToolUseId) return
-        const { toolDetail } = await import('../../core/tool-summary.js')
-        const detail = toolDetail(String(d.toolName ?? ''), d.input as Record<string, unknown> | undefined)
-        emitSse(key, 'tool', { name: d.toolName ?? '', toolUseId: d.toolUseId ?? '', ...(detail ? { detail } : {}) })
+        const { toolDetail, toolInputPreview } = await import('../../core/tool-summary.js')
+        const input = d.input as Record<string, unknown> | undefined
+        const detail = toolDetail(String(d.toolName ?? ''), input)
+        // Additive: `detail` is the collapsed one-liner (Bash prefers `description`,
+        // so the command itself never reached the phone), `inputPreview` is the same
+        // bounded, masked `key: value` render the history row carries.
+        const inputPreview = toolInputPreview(input)
+        emitSse(key, 'tool', {
+          name: d.toolName ?? '', toolUseId: d.toolUseId ?? '',
+          ...(detail ? { detail } : {}),
+          ...(inputPreview ? { inputPreview } : {}),
+        })
         return
       }
       case 'session:tool-result': {
         if (d.parentToolUseId) return
-        emitSse(key, 'tool-result', { toolUseId: d.toolUseId ?? '' })
+        // Additive: the same bounded, masked <=700-character excerpt the history row
+        // carries, so a finished live row can show its output before the transcript
+        // lands (the phone's drawer used to say "No output" for a tool that had
+        // output). The emitter already caps the bus event at 2000 characters; the
+        // FULL text still only travels via the row's `detailRef` read.
+        const { toolResultPreview } = await import('../../core/tool-summary.js')
+        const resultPreview = toolResultPreview(typeof d.result === 'string' ? d.result : undefined)
+        emitSse(key, 'tool-result', {
+          toolUseId: d.toolUseId ?? '',
+          ...(resultPreview ? { resultPreview } : {}),
+        })
         return
       }
       case 'session:status-changed': {

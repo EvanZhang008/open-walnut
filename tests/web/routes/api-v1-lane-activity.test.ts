@@ -8,8 +8,9 @@
  * blinking "Thinking…" that never named a single tool.
  *
  * What's asserted here is the wire, frame by frame:
- *   - a tool call on the lane → `tool { name, toolUseId, detail? }`
- *   - its result            → `tool-result { toolUseId }` (no output on this channel)
+ *   - a tool call on the lane → `tool { name, toolUseId, detail?, inputPreview? }`
+ *   - its result            → `tool-result { toolUseId, resultPreview? }` (a bounded,
+ *     masked excerpt only; the full output stays off this channel)
  *   - reasoning             → `thinking { delta }`, COALESCED (N deltas ⇒ fewer frames)
  *     with the tail flushed before the terminal frame, never after it
  *   - a FOREIGN session id, a `replayed` event, and a `parentToolUseId` (subagent)
@@ -300,13 +301,21 @@ describe('lane SSE: tool + tool-result frames', () => {
 
       const tools = events.filter((e) => e.event === 'tool')
       expect(tools).toHaveLength(1)
-      expect(tools[0].data).toEqual({ name: 'Bash', toolUseId: 'toolu_1', detail: 'List docs' })
+      // `detail` stays the collapsed one-liner (Bash prefers `description`), while
+      // `inputPreview` carries the command the drawer needs.
+      expect(tools[0].data).toEqual({
+        name: 'Bash',
+        toolUseId: 'toolu_1',
+        detail: 'List docs',
+        inputPreview: 'command: ls docs/\ndescription: List docs',
+      })
+      expect(tools[0].data.inputPreview as string).toContain('ls docs/')
 
       const results = events.filter((e) => e.event === 'tool-result')
       expect(results).toHaveLength(1)
-      // toolUseId ONLY — the output must not ride this channel.
-      expect(results[0].data).toEqual({ toolUseId: 'toolu_1' })
-      expect(JSON.stringify(results[0].data)).not.toContain('a.md')
+      // A short result rides verbatim: this is what a finished live row shows
+      // before the transcript lands (the drawer used to read "No output").
+      expect(results[0].data).toEqual({ toolUseId: 'toolu_1', resultPreview: 'a.md\nb.md' })
 
       // Causal order the client reads as a sequence.
       const order = events.map((e) => e.event)
@@ -326,7 +335,81 @@ describe('lane SSE: tool + tool-result frames', () => {
     try {
       const events = await runTurn(convId, sse)
       const tool = events.find((e) => e.event === 'tool')!
-      expect(tool.data).toEqual({ name: 'Mystery', toolUseId: 'toolu_x' })
+      // No `detail` (no human-readable key), but the render still has something.
+      expect(tool.data).toEqual({ name: 'Mystery', toolUseId: 'toolu_x', inputPreview: 'count: 3' })
+    } finally {
+      sse.close()
+    }
+  }, 20_000)
+
+  it('bounds a long result to the documented cap and marks the cut', async () => {
+    // Two caps stack: the emitter already clips the bus event to 2000 characters,
+    // and the frame clips again to the row's 700 + the ellipsis. So a `cat` of a
+    // big file cannot ride a channel with a 512-event replay ring.
+    script = [
+      { kind: 'tool', toolName: 'Bash', toolUseId: 'toolu_big', input: { command: 'cat big.log' } },
+      { kind: 'tool-result', toolUseId: 'toolu_big', result: 'x'.repeat(5_000) },
+    ]
+    await boot()
+    const convId = await createConv()
+    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
+    try {
+      const events = await runTurn(convId, sse)
+      const result = events.find((e) => e.event === 'tool-result')!
+      const preview = result.data.resultPreview as string
+      expect(typeof preview).toBe('string')
+      expect(preview.length).toBeLessThanOrEqual(701)
+      expect(preview.endsWith('…')).toBe(true)
+    } finally {
+      sse.close()
+    }
+  }, 20_000)
+
+  it('masks a credential in the relayed result', async () => {
+    // A tool's OUTPUT leaks as readily as its input (`cat .env`, a config echo), and
+    // this frame crosses a LAN to a phone. Same masker the history row uses.
+    const accessKeyId = 'AKIA' + 'ZZ4EXAMPLE7DEMO99' // split so the repo scanner never sees a key-shaped literal
+    const secretLine = 'password=hunter2abcdef'
+    script = [
+      { kind: 'tool', toolName: 'Bash', toolUseId: 'toolu_secret', input: { command: 'cat config.ini' } },
+      { kind: 'tool-result', toolUseId: 'toolu_secret', result: `key=${accessKeyId}\n${secretLine}\n` },
+    ]
+    await boot()
+    const convId = await createConv()
+    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
+    try {
+      const events = await runTurn(convId, sse)
+      const preview = events.find((e) => e.event === 'tool-result')!.data.resultPreview as string
+      expect(preview).toContain('[REDACTED]')
+      expect(preview).not.toContain(accessKeyId)
+      expect(preview).not.toContain('hunter2abcdef')
+      // Belt and braces: nothing on the whole wire carries either secret.
+      const blob = JSON.stringify(events)
+      expect(blob).not.toContain(accessKeyId)
+      expect(blob).not.toContain('hunter2abcdef')
+    } finally {
+      sse.close()
+    }
+  }, 20_000)
+
+  it('omits both preview keys when there is nothing to show', async () => {
+    // A present-but-empty key reads as "the tool produced an empty string", which is
+    // a different claim from "this frame has no excerpt", so neither key is emitted.
+    script = [
+      { kind: 'tool', toolName: 'BareTool', toolUseId: 'toolu_bare' },
+      { kind: 'tool-result', toolUseId: 'toolu_bare', result: '   \n\t ' },
+    ]
+    await boot()
+    const convId = await createConv()
+    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
+    try {
+      const events = await runTurn(convId, sse)
+      const tool = events.find((e) => e.event === 'tool')!
+      expect(tool.data).toEqual({ name: 'BareTool', toolUseId: 'toolu_bare' })
+      expect('inputPreview' in tool.data).toBe(false)
+      const result = events.find((e) => e.event === 'tool-result')!
+      expect(result.data).toEqual({ toolUseId: 'toolu_bare' })
+      expect('resultPreview' in result.data).toBe(false)
     } finally {
       sse.close()
     }
@@ -445,7 +528,7 @@ describe('lane SSE: what must NOT be relayed', () => {
     try {
       const events = await runTurn(convId, sse)
       const results = events.filter((e) => e.event === 'tool-result')
-      expect(results.map((e) => e.data)).toEqual([{ toolUseId: 'toolu_ok' }])
+      expect(results.map((e) => e.data)).toEqual([{ toolUseId: 'toolu_ok', resultPreview: 'ok' }])
       expect(JSON.stringify(events)).not.toContain('toolu_ghost')
     } finally {
       sse.close()

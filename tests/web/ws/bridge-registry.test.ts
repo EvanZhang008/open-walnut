@@ -8,7 +8,8 @@
  * status.bridgeHosts, POST send (this fake daemon predates session.message,
  * so the route falls back to the loss-safe direct sequence
  * status→send→appendUserMarker — marker strictly AFTER delivery),
- * daemon jsonl events reaching the phone SSE, 409 session_dead, disconnect →
+ * daemon jsonl events reaching the phone SSE (including the additive tool
+ * input/result previews), 409 session_dead, disconnect →
  * 503 + bridge-offline, and same-host replacement (code 4000).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
@@ -31,6 +32,8 @@ let machineToken: string
 let deviceToken: string
 
 const SID = 'bridge-test-session-01'
+/** Credential-shaped fixture for the masking assertion (not a real key). */
+const ACCESS_KEY_ID = 'AKIA' + 'ZZ4EXAMPLE7DEMO99' // split so the repo scanner never sees a key-shaped literal
 const HOST = 'testhost'
 
 function apiUrl(p: string): string {
@@ -271,14 +274,57 @@ describe('bridge lifecycle + proxied send + streaming', () => {
         // Daemon pushes jsonl → phone sees SSE events (main lane only).
         daemon.send({ ev: 'jsonl', sid: SID, v: 100, line: JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi ' } } }) })
         daemon.send({ ev: 'jsonl', sid: SID, v: 200, line: JSON.stringify({ type: 'assistant', parent_tool_use_id: 'tu-sub', message: { content: [{ type: 'tool_use', id: 'tu-x', name: 'SubagentTool' }] } }) })
-        daemon.send({ ev: 'jsonl', sid: SID, v: 300, line: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Bash' }] } }) })
+        daemon.send({ ev: 'jsonl', sid: SID, v: 300, line: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'ls docs/', description: 'List docs' } }] } }) })
+        // Its result, then three edge shapes for the additive previews: a tool with
+        // no input at all, a whitespace-only result, an over-long result, and a
+        // result carrying a credential.
+        daemon.send({ ev: 'jsonl', sid: SID, v: 310, line: JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: [{ type: 'text', text: 'a.md\nb.md' }] }] } }) })
+        daemon.send({ ev: 'jsonl', sid: SID, v: 320, line: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu-2', name: 'BareTool' }] } }) })
+        daemon.send({ ev: 'jsonl', sid: SID, v: 330, line: JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-2', content: '   \n\t ' }] } }) })
+        daemon.send({ ev: 'jsonl', sid: SID, v: 340, line: JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-3', content: 'x'.repeat(5_000) }] } }) })
+        daemon.send({ ev: 'jsonl', sid: SID, v: 350, line: JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-4', content: `key=${ACCESS_KEY_ID}\npassword=hunter2abcdef\n` }] } }) })
+        // A SUBAGENT's result must stay off the phone lane, same as its tool_use.
+        daemon.send({ ev: 'jsonl', sid: SID, v: 360, line: JSON.stringify({ type: 'user', parent_tool_use_id: 'tu-sub', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-x', content: 'SUBAGENT-OUTPUT-ONLY' }] } }) })
         daemon.send({ ev: 'jsonl', sid: SID, v: 400, line: JSON.stringify({ type: 'result', subtype: 'success', result: 'done' }) })
 
         await sse.waitFor((e) => e.event === 'text-delta' && e.data.delta === 'Hi ')
         const tool = await sse.waitFor((e) => e.event === 'tool')
         expect(tool.data.name).toBe('Bash') // subagent lane filtered
+        // `detail` is the collapsed one-liner (Bash prefers `description`), so the
+        // command itself only reaches the phone through `inputPreview`.
+        expect(tool.data.detail).toBe('List docs')
+        expect(tool.data.inputPreview).toBe('command: ls docs/\ndescription: List docs')
+
+        const res1 = await sse.waitFor((e) => e.event === 'tool-result' && e.data.toolUseId === 'tu-1')
+        expect(res1.data.resultPreview).toBe('a.md\nb.md')
+
+        // Nothing to show ⇒ no key at all (an empty key would claim the tool
+        // produced an empty string).
+        const bare = await sse.waitFor((e) => e.event === 'tool' && e.data.toolUseId === 'tu-2')
+        expect('inputPreview' in bare.data).toBe(false)
+        const res2 = await sse.waitFor((e) => e.event === 'tool-result' && e.data.toolUseId === 'tu-2')
+        expect(res2.data).toEqual({ toolUseId: 'tu-2' })
+
+        // Bounded to the documented 700 + the ellipsis.
+        const res3 = await sse.waitFor((e) => e.event === 'tool-result' && e.data.toolUseId === 'tu-3')
+        const long = res3.data.resultPreview as string
+        expect(long.length).toBeLessThanOrEqual(701)
+        expect(long.endsWith('…')).toBe(true)
+
+        // Masked by the same rule the history row uses (a tool's output leaks as
+        // readily as its input) before it crosses the wire to the phone.
+        const res4 = await sse.waitFor((e) => e.event === 'tool-result' && e.data.toolUseId === 'tu-4')
+        const secret = res4.data.resultPreview as string
+        expect(secret).toContain('[REDACTED]')
+        expect(secret).not.toContain(ACCESS_KEY_ID)
+        expect(secret).not.toContain('hunter2abcdef')
+
         await sse.waitFor((e) => e.event === 'turn-end')
         expect(sse.events.some((e) => e.event === 'tool' && e.data.name === 'SubagentTool')).toBe(false)
+        const blob = JSON.stringify(sse.events)
+        expect(blob).not.toContain('SUBAGENT-OUTPUT-ONLY')
+        expect(blob).not.toContain(ACCESS_KEY_ID)
+        expect(blob).not.toContain('hunter2abcdef')
 
         // fresh transcript rides the bridge (read-history)
         const tRes = await fetch(apiUrl(`/api/v1/sessions/${SID}/transcript?fresh=1`), {

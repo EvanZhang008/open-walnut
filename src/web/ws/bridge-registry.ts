@@ -25,7 +25,7 @@
 
 import type { WebSocket } from 'ws'
 import { emitSse, sseConnCount } from '../sse-channels.js'
-import { toolDetail } from '../../core/tool-summary.js'
+import { toolDetail, toolInputPreview, toolResultPreview, toolResultText } from '../../core/tool-summary.js'
 import { log } from '../../logging/index.js'
 
 interface PendingRequest {
@@ -120,7 +120,16 @@ function forwardJsonlLine(sessionId: string, line: string): void {
       const b = block as { type?: string; id?: string; name?: string; input?: Record<string, unknown> }
       if (b.type === 'tool_use') {
         const detail = toolDetail(b.name ?? '', b.input)
-        emitSse(key, 'tool', { name: b.name ?? 'unknown', toolUseId: b.id ?? '', ...(detail ? { detail } : {}) })
+        // Additive, and the same pair the primary box puts on this contract
+        // (routes/session-stream-v1.ts): `detail` is the collapsed one-liner, which
+        // for Bash prefers `description`, so the command itself only reaches the
+        // phone through `inputPreview` (bounded to 2000 chars and masked).
+        const inputPreview = toolInputPreview(b.input)
+        emitSse(key, 'tool', {
+          name: b.name ?? 'unknown', toolUseId: b.id ?? '',
+          ...(detail ? { detail } : {}),
+          ...(inputPreview ? { inputPreview } : {}),
+        })
       }
     }
     return
@@ -134,9 +143,19 @@ function forwardJsonlLine(sessionId: string, line: string): void {
     const content = (parsed.message as { content?: unknown[] } | undefined)?.content
     if (!Array.isArray(content)) return
     for (const block of content) {
-      const b = block as { type?: string; tool_use_id?: string }
+      const b = block as { type?: string; tool_use_id?: string; content?: unknown }
       if (b.type === 'tool_result') {
-        emitSse(key, 'tool-result', { toolUseId: b.tool_use_id ?? '' })
+        // Additive: the same bounded, masked excerpt (700 chars + an ellipsis) the
+        // history row carries, so a finished live row on a replica can show its
+        // output before the transcript is read back. Without it the phone's drawer
+        // said "No output" for a tool that had output. The `content` field is a
+        // string or a block array, hence toolResultText; the FULL text still only
+        // travels through the row's `detailRef` read.
+        const resultPreview = toolResultPreview(toolResultText(b.content))
+        emitSse(key, 'tool-result', {
+          toolUseId: b.tool_use_id ?? '',
+          ...(resultPreview ? { resultPreview } : {}),
+        })
       }
     }
     return

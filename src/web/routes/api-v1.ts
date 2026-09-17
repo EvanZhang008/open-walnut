@@ -1579,7 +1579,7 @@ async function runApiV1LaneTurn(
   bus.subscribe(subName, (event) => {
     const d = event.data as {
       sessionId?: string; delta?: string; parentToolUseId?: string; replayed?: boolean
-      toolName?: string; toolUseId?: string; input?: unknown
+      toolName?: string; toolUseId?: string; input?: unknown; result?: string
     }
     if (turnSettled) return
     // Own lane only, and never a `replayed` event (JSONL history being re-read,
@@ -1616,12 +1616,19 @@ async function runApiV1LaneTurn(
         // A tool starting ENDS the reasoning burst it followed: flush first so the
         // frames stay in causal order on a channel the client reads as a sequence.
         flushThinking()
-        const detail = toolDetail(d.toolName, d.input as Record<string, unknown> | undefined)
+        const input = d.input as Record<string, unknown> | undefined
+        const detail = toolDetail(d.toolName, input)
+        // `detail` is the collapsed one-liner (Bash prefers `description`, so the
+        // command itself never reached the phone). `inputPreview` is the same
+        // bounded, masked `key: value` render the history row carries, so an
+        // expanded live row shows what the tool was actually called with.
+        const inputPreview = toolInputPreview(input)
         if (d.toolUseId) relayedToolUseIds.add(d.toolUseId)
         emitSse(conversationId, 'tool', {
           name: d.toolName,
           ...(d.toolUseId ? { toolUseId: d.toolUseId } : {}),
           ...(detail ? { detail } : {}),
+          ...(inputPreview ? { inputPreview } : {}),
         })
         return
       }
@@ -1631,11 +1638,22 @@ async function runApiV1LaneTurn(
         // than `has`: it also makes a repeated result frame a no-op, and keeps the
         // set from outliving the tools it describes.
         if (!relayedToolUseIds.delete(d.toolUseId)) return
-        // toolUseId ONLY. The result text is already on the wire twice (the
-        // session stream, and `resultPreview` on the row GET /messages serves) and
-        // it is unbounded — this frame exists to clear the activity line, not to
-        // ship output down a channel with a 512-event replay ring.
-        emitSse(conversationId, 'tool-result', { toolUseId: d.toolUseId })
+        // The id clears the activity line; `resultPreview` is what a FINISHED live
+        // row can show before the transcript lands. Without it the phone's drawer
+        // said "No output" for a tool that had output, because a live frame carried
+        // no text at all and the row that does only exists once the JSONL is read.
+        //
+        // Bounded three times over, which is why shipping it here is cheap: the
+        // emitter already caps the bus event at 2000 characters
+        // (claude-code-session.ts), `toolResultPreview` clips to 700 plus an
+        // ellipsis, and it masks the excerpt with the same rule the history row
+        // uses. The FULL text still never rides this channel: it is only reachable
+        // through the row's `detailRef` read.
+        const resultPreview = toolResultPreview(d.result)
+        emitSse(conversationId, 'tool-result', {
+          toolUseId: d.toolUseId,
+          ...(resultPreview ? { resultPreview } : {}),
+        })
         return
       }
       default:
