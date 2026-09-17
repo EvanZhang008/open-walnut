@@ -74,6 +74,26 @@ export interface AccountSetupPreset {
   help?: string
   /** The provider's own public page for that credential. Opened in a new tab. */
   helpUrl?: string
+  /**
+   * What to DO, in order, to get the credential this form is asking for. Optional.
+   *
+   * A sentence saying "you need an app password" leaves the human to find the page themselves,
+   * which for Gmail means two settings screens in the right order (two-step verification has to
+   * be on before app passwords exist at all). Each step that names a page carries it, so the
+   * console can render a link the human clicks, and the whole job becomes click, copy, paste.
+   *
+   * DATA, like the rest of this spec: the console renders whatever a provider declares and knows
+   * no vendor's recipe. A provider whose credential needs no explaining declares none, and one
+   * whose service cannot work at all (Outlook.com without OAuth) says so in `help` and declares
+   * no steps rather than walking somebody through a dead end.
+   */
+  steps?: AccountSetupStep[]
+}
+
+/** One action in a preset's recipe. `url` is opened in a new tab; text alone is a plain step. */
+export interface AccountSetupStep {
+  text: string
+  url?: string
 }
 
 /**

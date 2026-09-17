@@ -174,14 +174,37 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
   await expect(presetHost).toHaveValue('mail.preset.invalid')
   await expect(presetPort).toHaveValue('1143')
 
-  // The credential sentence for THAT service, with the vendor's own page behind it, opening in a
-  // new tab like every other external link in the console.
+  // The credential sentence for THAT service, and under it the steps that get you one, so the
+  // whole job is click, copy, paste rather than "go and find out how".
   const presetHelp = page.getByTestId('mail-preset-help')
   await expect(presetHelp).toContainText('app password')
-  const presetLink = page.getByTestId('mail-preset-help-link')
-  await expect(presetLink).toHaveAttribute('href', 'https://example.invalid/app-passwords')
-  await expect(presetLink).toHaveAttribute('target', '_blank')
-  await expect(presetLink).toHaveAttribute('rel', /noopener/)
+  const steps = page.getByTestId('mail-preset-steps').locator('li')
+  await expect(steps).toHaveCount(3)
+  await expect(steps.nth(0)).toContainText('Open the security page')
+  await expect(steps.nth(2)).toContainText('Paste the 16 letters')
+
+  // A step that names a page IS the link, opening in a new tab like every external link here.
+  const stepLinks = page.getByTestId('mail-preset-step-link')
+  await expect(stepLinks).toHaveCount(1)
+  await expect(stepLinks.first()).toHaveAttribute('href', 'https://example.invalid/security')
+  await expect(stepLinks.first()).toHaveAttribute('target', '_blank')
+  await expect(stepLinks.first()).toHaveAttribute('rel', /noopener/)
+
+  // The fixture's second step carries a `javascript:` url: a plugin cannot get a click-to-execute
+  // href onto this screen, so that step renders as text and there is no anchor to click.
+  await expect(steps.nth(1)).toContainText('Create an app password named Walnut')
+  await expect(steps.nth(1).locator('a')).toHaveCount(0)
+
+  // With steps on screen the trailing "setup help" link stands down: the same page is step one now,
+  // and two links to the same place is the kind of duplication somebody has to read twice.
+  await expect(page.getByTestId('mail-preset-help-link')).toHaveCount(0)
+
+  // ONE instruction about the credential, not three. The field's own generic line ("use an app
+  // password, never your main password") is right for somebody on Other and noise directly above a
+  // service's own sentence plus its steps, so it stands down while a service is chosen. Read from
+  // the credential row itself, because other fields keep their help either way.
+  const tokenRow = dialog.locator('.mail-setup-row', { has: page.getByTestId('mail-setup-token') })
+  await expect(tokenRow.locator('.mail-setup-help')).toHaveCount(0)
   await dialog.screenshot({ path: `${SCREENSHOT_DIR}/mail-preset-autofill.png` })
 
   // A hand-typed port is a decision (some mail hosts really do need another one), so re-typing
@@ -214,6 +237,9 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
   await page.getByTestId('mail-preset-other').click()
   await expect(presetHelp).toHaveCount(0)
   await expect(authHint).toHaveCount(1)
+  // …and with no service chosen the field's own generic line is what explains the credential, so
+  // it comes back rather than leaving the field bare.
+  await expect(tokenRow.locator('.mail-setup-help')).toHaveCount(1)
   await expect(addError).toContainText('app password')
   // Other clears nothing, so the servers the preset filled are still there to look at.
   await expect(presetHost).toHaveValue('mail.preset.invalid')

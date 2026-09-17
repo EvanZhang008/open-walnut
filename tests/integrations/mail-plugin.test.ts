@@ -228,7 +228,10 @@ describe('a provider plugin attaches through the service, with no kernel change'
     interface Row {
       id: string;
       setupFields: Array<{ name: string }>;
-      setupPresets?: Array<{ id: string; match?: string[]; values: Record<string, string>; help?: string; helpUrl?: string }>;
+      setupPresets?: Array<{
+        id: string; match?: string[]; values: Record<string, string>; help?: string; helpUrl?: string;
+        steps?: Array<{ text: string; url?: string }>;
+      }>;
     }
     const providers = await getJson<{ providers: Row[] }>('/providers');
     expect(providers.status).toBe(200);
@@ -259,7 +262,40 @@ describe('a provider plugin attaches through the service, with no kernel change'
       // A preset fills servers. A credential is the human's to type, and would be a secret in a
       // response every open tab polls.
       expect(Object.keys(preset.values)).not.toContain('password');
+      // Every step a provider ships is either an action with a page behind it or a plain
+      // instruction, and any url on this row is one a browser may follow.
+      for (const step of preset.steps ?? []) {
+        expect(step.text.length).toBeGreaterThan(0);
+        if (step.url !== undefined) expect(step.url).toMatch(/^https:\/\//);
+      }
     }
+  });
+
+  it('ships Gmail a click-by-click recipe, in the order Google demands it', async () => {
+    interface PresetRow {
+      id: string;
+      help?: string;
+      steps?: Array<{ text: string; url?: string }>;
+    }
+    const providers = await getJson<{ providers: Array<{ id: string; setupPresets?: PresetRow[] }> }>('/providers');
+    const presets = providers.body.providers.find((one) => one.id === 'imap')!.setupPresets!;
+    const gmail = presets.find((one) => one.id === 'gmail')!;
+
+    // ORDER is the whole point: Google's app-password page does not exist until two-step
+    // verification is on, so a human who opens it first meets an error and concludes Walnut is
+    // broken. Pinning the sequence is pinning that reasoning.
+    expect(gmail.steps?.map((step) => step.url)).toEqual([
+      'https://myaccount.google.com/signinoptions/twosv',
+      'https://myaccount.google.com/apppasswords',
+      undefined,
+    ]);
+    expect(gmail.steps?.[2]!.text).toMatch(/paste/i);
+
+    // Outlook.com deliberately gets NO steps: this provider cannot do the OAuth sign-in Microsoft
+    // now requires, and walking somebody through a dead end is worse than one sentence saying so.
+    const outlook = presets.find((one) => one.id === 'outlook')!;
+    expect(outlook.steps).toBeUndefined();
+    expect(outlook.help).toMatch(/OAuth/);
   });
 
   it('drops the provider when the plugin that registered it is turned off', async () => {

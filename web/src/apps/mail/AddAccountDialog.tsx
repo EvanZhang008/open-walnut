@@ -201,6 +201,7 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
                 <SetupField
                   field={field}
                   value={values[field.name] ?? ''}
+                  supersededBy={field.name === helpAfter && !!chosenPreset?.help}
                   inputRef={index === 0 ? firstFieldRef : undefined}
                   onChange={(next) => setState((prev) => {
                     const typed = withTyped(prev, field.name, next);
@@ -301,35 +302,76 @@ function PresetChips({ presets, chosen, onChoose }: {
  * wrong thing for whichever service is the exception. What the page says is the provider's to word,
  * in `help`; this only names whose page it is.
  */
+/**
+ * The credential sentence, and the steps that get you one.
+ *
+ * ONE sentence, always: a second line saying the same thing another way is how somebody on
+ * Outlook.com was told "this must be an app password" directly under "an app password is refused".
+ * The steps are not a second sentence, they are the actions, and they only exist when the provider
+ * declared them. When they do, the trailing "setup help" link stands down: the same page is now
+ * step two, where it is next to the thing it is for.
+ */
 function PresetHelp({ preset }: { preset: AccountSetupPreset }) {
-  // Checked, not trusted: `helpUrl` comes from a provider plugin and lands in an href. A refused
-  // scheme renders the sentence with no link rather than an href a click would execute.
+  // Checked, not trusted: these urls come from a provider plugin and land in an href. A refused
+  // scheme renders the text with no link rather than an href a click would execute.
   const href = safeHelpUrl(preset.helpUrl);
+  const steps = (preset.steps ?? []).map((step) => ({ ...step, href: safeHelpUrl(step.url) }));
   return (
-    <p className="mail-setup-preset-help" data-testid="mail-preset-help">
-      {preset.help}
-      {href && (
-        <>
-          {' '}
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid="mail-preset-help-link"
-          >
-            {preset.label} setup help
-          </a>
-        </>
+    <div className="mail-setup-preset-help" data-testid="mail-preset-help">
+      <p className="mail-setup-preset-line">
+        {preset.help}
+        {href && steps.length === 0 && (
+          <>
+            {' '}
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="mail-preset-help-link"
+            >
+              {preset.label} setup help
+            </a>
+          </>
+        )}
+      </p>
+      {steps.length > 0 && (
+        <ol className="mail-setup-steps" data-testid="mail-preset-steps">
+          {steps.map((step, index) => (
+            <li key={`${index}-${step.text}`}>
+              {step.href
+                ? (
+                  <a
+                    href={step.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="mail-preset-step-link"
+                  >
+                    {step.text}
+                  </a>
+                )
+                : step.text}
+            </li>
+          ))}
+        </ol>
       )}
-    </p>
+    </div>
   );
 }
 
-function SetupField({ field, value, inputRef, onChange }: {
+function SetupField({ field, value, inputRef, onChange, supersededBy }: {
   field: AccountSetupField;
   value: string;
   inputRef?: RefObject<HTMLInputElement | null>;
   onChange: (next: string) => void;
+  /**
+   * A chosen service's own sentence sits right under this field, so its GENERIC help stands down.
+   *
+   * "Use an app password, never your main account password" is the right thing to say to somebody
+   * on Other, and noise directly above "Gmail refuses your normal account password here" followed
+   * by the three steps that get one: the same instruction three times, each slightly reworded, is
+   * read twice and trusted less. The generic line comes straight back when no service is chosen.
+   */
+  supersededBy?: boolean;
 }) {
   const id = `mail-setup-${field.name}`;
   return (
@@ -353,7 +395,7 @@ function SetupField({ field, value, inputRef, onChange }: {
           onChange={(event) => onChange(event.target.value)}
         />
       )}
-      {field.help && <span className="mail-setup-help">{field.help}</span>}
+      {field.help && !supersededBy && <span className="mail-setup-help">{field.help}</span>}
     </label>
   );
 }

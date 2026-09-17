@@ -20,7 +20,7 @@
  *   top gives the human two of every message in Sent, and asking them to know that about their own
  *   mail host is asking the wrong person.
  */
-import type { AccountSetupPreset } from '../mail/api.js'
+import type { AccountSetupPreset, AccountSetupStep } from '../mail/api.js'
 import type { SmtpSecurity } from './smtp.js'
 
 /**
@@ -64,6 +64,15 @@ interface KnownService {
   /** How that vendor words the credential, since its own words are what a human will look for. */
   help: string
   helpUrl?: string
+  /**
+   * The click-by-click recipe, in the order the vendor's own screens demand it.
+   *
+   * Ordered because the order is the part people get wrong: Google's app-password page does not
+   * exist until two-step verification is on, so a human who opens it first meets an error page and
+   * concludes the whole thing is broken. With the pages linked in sequence the job is click, copy,
+   * paste, which is the bar this has to clear.
+   */
+  steps?: AccountSetupStep[]
   /** This service's own SMTP files the Sent copy, so this plugin must not add a second one. */
   savesSentItself?: boolean
 }
@@ -82,6 +91,7 @@ function presetOf(one: KnownService): AccountSetupPreset {
     },
     help: one.help,
     ...(one.helpUrl ? { helpUrl: one.helpUrl } : {}),
+    ...(one.steps?.length ? { steps: one.steps } : {}),
   }
 }
 
@@ -95,8 +105,13 @@ const KNOWN: KnownService[] = [
     // Verified behaviour, and the reason `server_saves_sent` exists: Gmail files a copy of anything
     // sent through smtp.gmail.com, so an IMAP APPEND on top is the second one the human sees.
     savesSentItself: true,
-    help: 'Gmail refuses your normal account password here. Turn on two-step verification, then make an app password for Walnut.',
+    help: 'Gmail refuses your normal account password here: it takes a 16-letter app password.',
     helpUrl: 'https://myaccount.google.com/apppasswords',
+    steps: [
+      { text: 'Turn on 2-Step Verification (skip if it is already on)', url: 'https://myaccount.google.com/signinoptions/twosv' },
+      { text: 'Create an app password, named Walnut', url: 'https://myaccount.google.com/apppasswords' },
+      { text: 'Paste the 16 letters into the Password field. Spaces are fine.' },
+    ],
   },
   {
     id: 'icloud',
@@ -104,8 +119,13 @@ const KNOWN: KnownService[] = [
     domains: ['icloud.com', 'me.com', 'mac.com'],
     imapHost: 'imap.mail.me.com',
     smtpHost: 'smtp.mail.me.com',
-    help: 'iCloud Mail needs an app specific password, not the password you sign in with. Your Apple Account needs two factor turned on to make one.',
+    help: 'iCloud Mail needs an app specific password, not the password you sign in with.',
     helpUrl: 'https://support.apple.com/en-us/102654',
+    steps: [
+      { text: 'Your Apple Account needs two factor authentication turned on' },
+      { text: 'Create an app specific password, named Walnut', url: 'https://support.apple.com/en-us/102654' },
+      { text: 'Paste it into the Password field' },
+    ],
   },
   {
     id: 'outlook',
@@ -130,6 +150,10 @@ const KNOWN: KnownService[] = [
     smtpHost: 'smtp.fastmail.com',
     help: 'Fastmail needs an app password that includes mail access, never your login password.',
     helpUrl: 'https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords',
+    steps: [
+      { text: 'Create an app password with mail access, named Walnut', url: 'https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords' },
+      { text: 'Paste it into the Password field' },
+    ],
   },
   {
     id: 'yahoo',
@@ -139,6 +163,10 @@ const KNOWN: KnownService[] = [
     smtpHost: 'smtp.mail.yahoo.com',
     help: 'Yahoo Mail needs an app password for other mail apps, not your account password.',
     helpUrl: 'https://help.yahoo.com/kb/SLN15241.html',
+    steps: [
+      { text: 'Generate an app password, named Walnut', url: 'https://help.yahoo.com/kb/SLN15241.html' },
+      { text: 'Paste it into the Password field' },
+    ],
   },
 ]
 

@@ -691,6 +691,20 @@
 
 .mail-setup-preset-help a { color: var(--accent); }
 
+.mail-setup-preset-line { margin: 0; }
+
+/* The steps a provider declared. `padding-left` carries the numbers: a list-style outside the
+   padding hangs its markers over the rounded panel's edge. */
+.mail-setup-steps {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mail-setup-steps li { padding-left: 1px; }
+
 .mail-setup-option {
   padding: 5px 10px;
   border: 1px solid var(--border);

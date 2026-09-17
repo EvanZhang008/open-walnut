@@ -44,6 +44,7 @@ export type {
   AccountSetupFieldKind,
   AccountSetupPreset,
   AccountSetupSpec,
+  AccountSetupStep,
   Disposable,
   MailAccount,
   MailAccountState,

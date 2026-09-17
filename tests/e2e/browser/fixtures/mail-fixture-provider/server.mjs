@@ -285,6 +285,14 @@ const spec = {
         values: { host: 'mail.preset.invalid', port: '1143' },
         help: 'Fixture Host wants an app password, never your main account password.',
         helpUrl: 'https://example.invalid/app-passwords',
+        // The recipe, as a provider declares it. The middle step's scheme is REFUSED on purpose:
+        // these urls come from a plugin and land in an href, so a `javascript:` step has to render
+        // as plain text. A step with no url at all is the third shape the console must handle.
+        steps: [
+          { text: 'Open the security page', url: 'https://example.invalid/security' },
+          { text: 'Create an app password named Walnut', url: 'javascript:alert(1)' },
+          { text: 'Paste the 16 letters into App password' },
+        ],
       },
     ],
     async submit(values) {

@@ -68,6 +68,14 @@ export interface AccountSetupPreset {
   help?: string;
   /** The provider's own public page for the credential. Opened in a new tab. */
   helpUrl?: string;
+  /** What to do to get that credential, in order. A step's `url` is rendered as a link. */
+  steps?: AccountSetupStep[];
+}
+
+/** One action in a preset's recipe, declared by the provider. */
+export interface AccountSetupStep {
+  text: string;
+  url?: string;
 }
 
 export interface MailProviderSummary {
