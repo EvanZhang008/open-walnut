@@ -135,6 +135,34 @@ describe('sweepStaleTmpDirs — owner.pid file', () => {
   })
 })
 
+describe('sweepStaleTmpDirs — age only (mock homes re-created by child processes)', () => {
+  const rule = { prefix: '', name: /^[a-z][a-z0-9-]*-\d{13}-[a-z0-9]{6,}$/, pidFrom: 'age' as const, orphanAgeMs: 60 * 60_000 }
+
+  it('removes a matching name older than orphanAgeMs, keeps a young one and non-matching names', () => {
+    const old = mk('walnut-test-1789577827889-6wls13fkkx')
+    ageTo(old, 2 * 60 * 60_000)
+    const young = mk('walnut-inbox-local-first-1789577905704-970wwmxv1f')
+    const pw = mk('walnut-pw-1789579595210') // fixture home: no trailing token, owner-file rule owns it
+    ageTo(pw, 24 * 60 * 60_000)
+    const runtime = mk(`open-walnut-test-runtime-${process.pid}`)
+    ageTo(runtime, 24 * 60 * 60_000)
+    const other = mk('some-app-2026-09-17-cache')
+    ageTo(other, 24 * 60 * 60_000)
+
+    const removed = sweepStaleTmpDirs([rule], root)
+
+    expect(removed).toEqual([old])
+    for (const d of [young, pw, runtime, other]) expect(exists(d), d).toBe(true)
+  })
+
+  it('an age rule without a name pattern matches nothing (an empty prefix alone must never sweep)', () => {
+    const dir = mk('walnut-test-1789577827889-6wls13fkkx')
+    ageTo(dir, 24 * 60 * 60_000)
+    expect(sweepStaleTmpDirs([{ prefix: '', pidFrom: 'age', orphanAgeMs: 1 }], root)).toEqual([])
+    expect(exists(dir)).toBe(true)
+  })
+})
+
 describe('sweepStaleTmpDirs — scope', () => {
   it('only looks at immediate children of the given root', () => {
     const nested = mk(path.join('keep', `open-walnut-test-runtime-${deadPid()}`))

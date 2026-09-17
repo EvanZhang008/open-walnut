@@ -20,9 +20,13 @@
  * ran mkdir and has not written owner.pid is milliseconds old, a leaked one is
  * hours old.
  *
- * Scope is deliberately narrow: only immediate children of `tmpdir` whose
- * basename starts with the given prefix are ever removed, and the prefix must be
- * non-empty. Nothing here walks upward or follows a caller-supplied path.
+ * A third kind, `age`, has no owner to ask (mock homes a spawned child wrote
+ * into after the worker's reaper removed them) and is stale by age alone; it
+ * needs a full-name pattern and relies on vitest runs being serialized.
+ *
+ * Scope is deliberately narrow: only immediate children of `tmpdir` that match a
+ * rule's prefix and name pattern are ever removed; a rule with neither matches
+ * nothing. Nothing here walks upward or follows a caller-supplied path.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -40,9 +44,15 @@ export type StaleTmpRule = {
    * are fixture homes.
    */
   name?: RegExp
-  /** Where the owner pid lives. */
-  pidFrom: 'name' | 'owner-file'
-  /** `owner-file` only: a dir with no owner file is stale once older than this (default 2h). */
+  /**
+   * Where the owner pid lives. `age` means there is no owner to ask: the entry
+   * is stale purely by being older than `orphanAgeMs`. Only for names whose
+   * makers are known to be short-lived AND serialized machine-wide (vitest runs
+   * queue behind tests/setup/test-gate.ts), so at sweep time nothing live can
+   * own an old one. Requires `name`.
+   */
+  pidFrom: 'name' | 'owner-file' | 'age'
+  /** `owner-file` / `age`: a dir with no owner is stale once older than this (default 2h). */
   orphanAgeMs?: number
 }
 
@@ -63,6 +73,7 @@ export function writeOwnerPid(dir: string, pid = process.pid): void {
 }
 
 function ownerPidOf(dir: string, rule: StaleTmpRule, base: string): number | null {
+  if (rule.pidFrom === 'age') return null
   if (rule.pidFrom === 'name') {
     const m = new RegExp(`^${escapeRegExp(rule.prefix)}(\\d+)(?:-streams)?$`).exec(base)
     return m ? Number(m[1]) : null
@@ -92,6 +103,13 @@ function isStale(dir: string, rule: StaleTmpRule, base: string, now: number): bo
   return now - mtime > (rule.orphanAgeMs ?? 2 * 60 * 60_000)
 }
 
+/** A rule owns `base` when its prefix matches and, if it has one, its full-name pattern too. An `age` rule must have the pattern. */
+function matches(r: StaleTmpRule, base: string): boolean {
+  if (r.pidFrom === 'age' && !r.name) return false
+  if (r.prefix.length === 0 && !r.name) return false
+  return base.startsWith(r.prefix) && (!r.name || r.name.test(base))
+}
+
 /**
  * Remove every stale directory the rules describe. Returns the paths removed.
  * Never throws: a sweep is housekeeping and must not fail the run that asked.
@@ -107,7 +125,7 @@ export function sweepStaleTmpDirs(rules: StaleTmpRule[], tmpdir = os.tmpdir(), n
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     const base = entry.name
-    const rule = rules.find((r) => r.prefix.length > 0 && base.startsWith(r.prefix) && (!r.name || r.name.test(base)))
+    const rule = rules.find((r) => matches(r, base))
     if (!rule) continue
     const dir = path.join(tmpdir, base)
     if (!isStale(dir, rule, base, now)) continue

@@ -124,6 +124,7 @@ function isolateRuntimeDir(): void {
 
 /** Shared with tests/setup/runtime-dir-isolation.ts (workers) — one name, one sweep rule. */
 const RUNTIME_DIR_PREFIX = 'open-walnut-test-runtime-';
+const MOCK_HOME_NAME = /^[a-z][a-z0-9-]*-\d{13}-[a-z0-9]{6,}$/;
 
 /**
  * Reclaim runtime dirs whose worker or runner is gone.
@@ -135,7 +136,16 @@ const RUNTIME_DIR_PREFIX = 'open-walnut-test-runtime-';
  * owner is alive, so a concurrent run's dirs are never touched.
  */
 function sweepRuntimeDirs(): void {
-  const removed = sweepStaleTmpDirs([{ prefix: RUNTIME_DIR_PREFIX, pidFrom: 'name' }]);
+  const removed = sweepStaleTmpDirs([
+    { prefix: RUNTIME_DIR_PREFIX, pidFrom: 'name' },
+    // Mock homes from tests/helpers/mock-constants.ts (`<prefix>-<13-digit ms>-<base36>`).
+    // The worker's tmp-reaper removes them, but a spawned daemon or CLI can write
+    // into one AFTER that (notifications.json, logs/), re-creating it from a
+    // process the reaper cannot see — 17 such stubs a day on 2026-09-17. Vitest
+    // runs are serialized by the test gate, so at setup/teardown time nothing
+    // live owns a mock home older than an hour.
+    { prefix: '', name: MOCK_HOME_NAME, pidFrom: 'age', orphanAgeMs: 60 * 60_000 },
+  ]);
   if (removed.length > 0) {
     console.log(`[runtime-dir] reclaimed ${removed.length} runtime dir(s) left by dead test processes`);
   }
