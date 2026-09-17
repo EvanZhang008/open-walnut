@@ -41,6 +41,14 @@ Raw single-row and bulk updates must preserve an existing fine-grained phase whe
 
 Code boundary: [`prepareRawUpdate`](../../src/core/task-manager.ts), [`IntegrationSync` and `SyncPollContext`](../../src/core/integration-types.ts), the sync poll callback in [`server.ts`](../../src/web/server.ts), and the installed adapter's phase mapping and delta-pull tests. Core regression: [`tests/core/task-db.test.ts`](../../tests/core/task-db.test.ts). Keep provider-specific fixtures in that adapter's own repository.
 
+### ACP reconnect must distinguish worker liveness from turn completion
+
+A live ACP worker can have `turnActive: false`. Reusing the disconnected record's Running state ignores the worker's answer and can leave the task In Progress indefinitely. Use `turnActive` and pending permissions from the worker snapshot. A control-only self-report must not create a Running state that its completion never clears. Restore subscriptions even when a status write is unnecessary or superseded. An explicit `no_worker` is evidence of absence; an RPC error or missing snapshot is not.
+
+Condition the session write on its status revision, runtime identity, and accepted command ID. Recheck those after the asynchronous handback reaches the task write lock. Handback is edge-triggered: repeated idle probes must not undo a human's later phase choice. Preserve the durable identity needed for lazy session loading.
+
+Code: [`recoverDisconnectedSessions`](../../src/providers/daemon-connection.ts), [`opGetState`](../../src/providers/acp-worker/worker.ts), and [`handBackTaskOnSessionEnd`](../../src/core/phase.ts). Regression: [`tests/core/session-end-hands-task-back.test.ts`](../../tests/core/session-end-hands-task-back.test.ts), including a live worker with an ended turn and probes overtaken by new work.
+
 ### SQL commit must invalidate cache before yielding
 
 The failing order was SQL commit to `IN_PROGRESS`, then asynchronous lock cleanup, then cache invalidation. A result handler ran during cleanup, read cached `NEED_ACTION`, and skipped its phase write as already satisfied. The database stayed `IN_PROGRESS` while the session was Idle.

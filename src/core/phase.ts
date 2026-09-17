@@ -303,10 +303,8 @@ interface ApplySessionPhaseOpts {
   processAlive?: boolean
   /** For 'reconciler' trigger: caller computes the expected phase. */
   newPhase?: TaskPhase
-  /** For 'session:result': the emitting session's turn generation at EMIT time
-   *  (SessionResultEvent.turnGen). Compared against the live session instance's
-   *  current gen to detect a stale result — see the gate below. */
   turnGen?: number
+  shouldApply?: (current: Readonly<Task>) => boolean
 }
 
 /**
@@ -341,7 +339,7 @@ export async function applySessionPhase(
     case 'session:awaiting-human': newPhase = sessionAwaitingHumanPhase(task.phase); break
     case 'session:human-answered': newPhase = sessionHumanAnsweredPhase(task.phase); break
     // triage-sync: RETIRED 2026-08-17 (incident inc-1786983019552). It auto-
-    // upgraded AGENT_COMPLETE → WAIT a few minutes after every normal turn,
+    // upgraded NEED_ACTION → WAIT a few minutes after every normal turn,
     // which added zero information (both render red+unread) and diluted WAIT —
     // the state is reserved for genuine blockage (session:error, idle-timeout
     // kill, reconciler all-dead). The trigger value stays parseable so a replayed
@@ -354,29 +352,12 @@ export async function applySessionPhase(
   // turn — was deleted with the trigger's retirement above: triage-sync now
   // never produces a phase, so the gate had nothing left to guard.)
 
-  // Stale-result gate (incident ed347bde, 2026-08-05): SESSION_RESULT enrichment
-  // adds latency (~800ms measured) between the CLI's result line and this flip.
-  // In that window the CLI can already have STARTED the next turn — it picks up a
-  // queued mid-turn send without ever going idle, so its only turn-start signal is
-  // an `init` (no session_state_changed{running}). The runner's init-after-result
-  // edge bumps _turnGen and pulls the phase back to IN_PROGRESS; then this late
-  // result would flip it straight back to AGENT_COMPLETE and the task row reads
-  // completed/attention while the CLI visibly streams. Compare generations: an
-  // event stamped BEFORE the live instance's current gen belongs to a superseded
-  // turn. Fails OPEN (no gen, no live instance, any error → proceed) so the normal
-  // flow — where liveGen === eventGen — is untouched.
-  if (newPhase && trigger === 'session:result' && opts?.turnGen !== undefined && opts.sessionId) {
-    try {
-      const { sessionRunner } = await import('../providers/claude-code-session.js')
-      const live = sessionRunner.findSessionByClaudeId(opts.sessionId)
-      const liveGen = live?.turnGen
-      if (typeof liveGen === 'number' && liveGen > opts.turnGen) {
-        log.session.info('applySessionPhase: session:result skipped — stale result (a newer turn already started)', {
-          taskId, sessionId: opts.sessionId, eventGen: opts.turnGen, liveGen, source,
-        })
-        return { changed: false, oldPhase: task.phase }
-      }
-    } catch { /* runner not loaded / lookup failed — proceed (pre-gate behavior) */ }
+  const requiresRunning = trigger === 'session:turn-start' || trigger === 'session:human-answered'
+  let phaseRunner: typeof import('../providers/claude-code-session.js')['sessionRunner'] | undefined
+  if (newPhase && opts?.sessionId
+    && (trigger === 'session:human-answered'
+      || ((trigger === 'session:turn-start' || trigger === 'session:result') && opts.turnGen !== undefined))) {
+    phaseRunner = (await import('../providers/claude-code-session.js')).sessionRunner
   }
 
   if (!newPhase) {
@@ -386,7 +367,7 @@ export async function applySessionPhase(
     return { changed: false, oldPhase: task.phase }
   }
 
-  const oldPhase = task.phase
+  let oldPhase = task.phase
 
   // Push with retry (Layer 1 must be reliable on its own)
   const MAX_RETRIES = 2
@@ -400,15 +381,38 @@ export async function applySessionPhase(
       // SAFETY: updateTaskRaw skips updateTask's guardActiveChildren (which
       // blocks COMPLETE while children are active). That's fine ONLY because
       // every newPhase computed above is non-terminal (IN_PROGRESS /
-      // AGENT_COMPLETE / WAIT) — applySessionPhase never targets
+      // NEED_ACTION / WAIT) — applySessionPhase never targets
       // COMPLETE. If you ever add a COMPLETE transition here, route it through
       // updateTask or you'll bypass the active-children guard.
-      await updateTaskRaw(taskId, {
+      let skipReason: string | undefined
+      const updated = await updateTaskRaw(taskId, {
         phase: newPhase,
-        // Read/unread marker rides the SAME write as the phase — one atomic row
-        // update, so a surface can never observe AGENT_COMPLETE without its dot.
         ...readMarkerForPhase(newPhase),
-      }, { emitEvent: true, push: true, source })
+      }, {
+        emitEvent: true, push: true, source,
+        shouldUpdate: (current) => {
+          oldPhase = current.phase
+          if (TERMINAL_PHASES.has(current.phase) || current.phase === newPhase) return false
+          if (opts?.shouldApply && !opts.shouldApply(current)) {
+            skipReason = 'superseded-snapshot'
+            return false
+          }
+          const live = opts?.sessionId ? phaseRunner?.findSessionByClaudeId(opts.sessionId) : undefined
+          if (live) {
+            if (opts?.turnGen !== undefined && live.turnGen > opts.turnGen) skipReason = 'superseded-turn'
+            else if (requiresRunning && (live.processStatus !== 'running' || live.hasPendingPermission)) {
+              skipReason = 'turn-not-running'
+            }
+          }
+          return !skipReason
+        },
+      })
+      if (!updated.changed) {
+        if (skipReason) log.session.info('phase transition skipped', {
+          taskId, trigger, source, sessionId: opts?.sessionId, reason: skipReason, turnGen: opts?.turnGen,
+        })
+        return { changed: false, oldPhase }
+      }
 
       log.session.info('phase transition', {
         taskId, oldPhase, newPhase, trigger, source,
@@ -435,4 +439,56 @@ export async function applySessionPhase(
     }
   }
   return { changed: false, oldPhase } // unreachable but TS needs it
+}
+
+export async function handBackTaskOnSessionEnd(
+  taskId: string | null | undefined,
+  sessionId: string,
+  source: string,
+  opts?: { shouldApply?: () => boolean },
+): Promise<boolean> {
+  if (!taskId) return false
+  try {
+    const { getTask } = await import('./task-manager.js')
+    const task = await getTask(taskId)
+    if (!task) return false
+    const handback = sessionResultPhase(task.phase)
+    if (task.status === 'done' || !handback) return false
+
+    const { getSessionsForTask, getSessionsForTaskSync } = await import('./session-tracker.js')
+    const { sessionRunner } = await import('../providers/claude-code-session.js')
+    const { getSessionAutoRecover } = await import('./session-auto-recover.js')
+    await getSessionsForTask(taskId)
+    const res = await applySessionPhase(taskId, 'reconciler', source, {
+      sessionId,
+      newPhase: handback,
+      shouldApply: (current) => {
+        if (opts?.shouldApply && !opts.shouldApply()) return false
+        const sessions = getSessionsForTaskSync(taskId)
+        const ending = sessions.find((s) => s.claudeSessionId === sessionId)
+        if (!ending || ending.archived) return false
+        if (sessions.some((s) => !s.archived && (s.process_status === 'running'
+          || sessionRunner.findSessionByClaudeId(s.claudeSessionId)?.processStatus === 'running'))) return false
+        const recovery = getSessionAutoRecover()
+        if (current.phase === 'IN_PROGRESS' && recovery
+          && (ending.process_status === 'stopped' || ending.process_status === 'error')) {
+          const verdict = recovery.wouldAttempt(ending)
+          if (verdict.ok || verdict.reason === 'already-pending') return false
+        }
+        return true
+      },
+    })
+    if (res.changed) {
+      log.session.warn('task handed back after out-of-band session end', {
+        taskId, sessionId, source, oldPhase: res.oldPhase,
+      })
+    }
+    return res.changed
+  } catch (err) {
+    log.session.warn('hand-back after session end failed', {
+      taskId, sessionId, source,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  }
 }

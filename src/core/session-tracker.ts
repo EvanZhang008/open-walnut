@@ -933,6 +933,10 @@ export async function getSessionStatusSnapshots(
  */
 export async function getSessionsForTask(taskId: string): Promise<SessionRecord[]> {
   await ensureSessionInit();
+  return getSessionsForTaskSync(taskId);
+}
+
+export function getSessionsForTaskSync(taskId: string): SessionRecord[] {
   const db = getDb();
   if (!db) return [];
   const rows = db.prepare('SELECT * FROM sessions WHERE task_id = ?').all(taskId) as Record<string, any>[];

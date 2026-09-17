@@ -2877,9 +2877,21 @@ const mockDaemon = WIRE_MOCK_DAEMON
       acpStreamsDir: process.env.WALNUT_STREAMS_DIR,
     })
   : null
+const MOCK_CLI = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-claude.mjs')
+sessionRunner.setCliCommand(MOCK_CLI)
+if (!mockDaemon) {
+  const { DaemonConnection } = await import('../../../src/providers/daemon-connection.js')
+  const send = DaemonConnection.prototype.send
+  DaemonConnection.prototype.send = function (command, payload, ...rest) {
+    if (command === 'start') {
+      const args = payload.args as string[]
+      if (args?.[0] !== 'claude') throw new Error('Unexpected fixture executable')
+      payload = { ...payload, args: [process.execPath, MOCK_CLI, ...args.slice(1)] }
+    }
+    return send.call(this, command, payload, ...rest)
+  }
+}
 if (mockDaemon) {
-  const MOCK_CLI = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-claude.mjs')
-  sessionRunner.setCliCommand(MOCK_CLI)
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${mockDaemon.port}`)
   // Codex (ACP) sessions: real acp-worker bundle + the scripted mock ACP agent.
   // MockDaemon embeds the real createAcpDaemon module, so quick-start with

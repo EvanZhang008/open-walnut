@@ -185,7 +185,7 @@ describe('incident D (07fffbe5) — REAL event sequence: backgrounded grep must 
     expect(fold.workStatus).toBe('agent_complete')
   })
 
-  it('end-to-end: a record wedged running on the incident tail converges to idle', async () => {
+  it('keeps the incident session running until its detached task finishes', async () => {
     const sid = 'incident-d'
     const content = await fsp.readFile(
       path.join(FIXTURE_DIR, 'incident-d-backgrounded-grep.jsonl'), 'utf-8')
@@ -197,6 +197,15 @@ describe('incident D (07fffbe5) — REAL event sequence: backgrounded grep must 
     })
 
     const outcome = await reconcileProcessStatus(record, { isAlive: true })
-    expect(outcome).toEqual({ converged: true, from: 'running', to: 'idle' })
+    expect(outcome).toEqual({ converged: false, reason: 'detached-bg-running' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+
+    await fsp.appendFile(path.join(streamsDir, `${sid}.jsonl`), JSON.stringify({
+      type: 'system', subtype: 'task_notification', session_id: sid,
+      task_id: 'b60h9ag3m', status: 'completed',
+    }) + '\n')
+    expect(await reconcileProcessStatus(record, { isAlive: true }))
+      .toEqual({ converged: true, from: 'running', to: 'idle' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
   })
 })

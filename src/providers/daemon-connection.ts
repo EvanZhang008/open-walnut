@@ -3137,6 +3137,8 @@ export class DaemonConnection {
         emitSessionStatusChanged,
         listSessions,
         updateSessionRecord,
+        updateSessionRecordConditionally,
+        getSessionsForTaskSync,
       } = await import('../core/session-tracker.js')
       const sessions = await listSessions()
 
@@ -3236,21 +3238,57 @@ export class DaemonConnection {
           try {
             const result = await this.send('acpState', { sid: s.acpRuntimeId })
             if (result.ok) {
-              const recoveredStatus = s.process_status === 'idle' ? 'idle' : 'running'
-              const updated = await updateSessionRecord(s.claudeSessionId, {
+              try {
+                const { sessionRunner } = await import('./claude-code-session.js')
+                const session = sessionRunner.findAcpSession(s.claudeSessionId)
+                  ?? sessionRunner.findAcpSession(s.acpRuntimeId)
+                await session?.reattachWatcher()
+              } catch (err) {
+                log.session.warn('DaemonConnection: ACP re-subscribe failed (recovery continued)', {
+                  sessionId: s.claudeSessionId, host: this.hostKey,
+                  error: err instanceof Error ? err.message : String(err),
+                })
+              }
+              const state = result.result as import('./acp-worker/protocol.js').WorkerStateSnapshot | undefined
+              if (!state || typeof state.turnActive !== 'boolean' || typeof state.controlActive !== 'boolean'
+                || !Array.isArray(state.pendingPermissions)) {
+                log.session.warn('DaemonConnection: ACP recovery state incomplete', { sessionId: s.claudeSessionId, host: this.hostKey })
+                continue
+              }
+              if (state.controlActive && !state.turnActive) continue
+              const recoveredStatus = state.turnActive || state.pendingPermissions.length > 0 ? 'running' : 'idle'
+              const updated = await updateSessionRecordConditionally(s.claudeSessionId, {
                 process_status: recoveredStatus,
                 errorMessage: undefined,
-                activity: undefined,
+                activity: recoveredStatus === 'idle' ? undefined : s.activity,
+                ...(recoveredStatus === 'idle' ? { pendingPermission: undefined } : {}),
                 last_status_change: new Date().toISOString(),
                 status_reason: 'daemon_reconnected',
                 status_changed_by: 'daemon',
-              } as any)
+              }, (current) => !current.archived
+                && current.statusRevision === s.statusRevision
+                && current.acpRuntimeId === s.acpRuntimeId
+                && current.lastAcceptedAcpCommandId === s.lastAcceptedAcpCommandId
+                && (current.process_status !== recoveredStatus
+                  || (recoveredStatus === 'idle' && (!!current.activity || !!current.pendingPermission))))
+              if (!updated) continue
               emitSessionStatusChanged(
                 updated,
                 {},
                 ['*'],
                 { source: 'daemon-reconnect', urgency: 'urgent' },
               )
+              if (recoveredStatus === 'idle' && (s.process_status !== 'idle' || !!s.activity || !!s.pendingPermission)) {
+                const { handBackTaskOnSessionEnd } = await import('../core/phase.js')
+                await handBackTaskOnSessionEnd(updated.taskId, s.claudeSessionId, 'daemon-reconnect:acp-turn-ended', {
+                  shouldApply: () => {
+                    const current = getSessionsForTaskSync(updated.taskId).find((record) => record.claudeSessionId === s.claudeSessionId)
+                    return current?.statusRevision === updated.statusRevision
+                      && current?.acpRuntimeId === updated.acpRuntimeId
+                      && current?.lastAcceptedAcpCommandId === updated.lastAcceptedAcpCommandId
+                  },
+                })
+              }
               log.session.info('DaemonConnection: auto-recovered ACP session after reconnect', {
                 sessionId: s.claudeSessionId,
                 runtimeId: s.acpRuntimeId,
@@ -3259,47 +3297,45 @@ export class DaemonConnection {
                 recoveredStatus,
               })
 
-              try {
-                const { sessionRunner } = await import('./claude-code-session.js')
-                const session = sessionRunner.findAcpSession(s.claudeSessionId)
-                  ?? sessionRunner.findAcpSession(s.acpRuntimeId)
-                if (session) {
-                  await session.reattachWatcher()
-                } else {
-                  log.session.debug('DaemonConnection: no ACP session to re-subscribe', {
-                    sessionId: s.claudeSessionId,
-                    runtimeId: s.acpRuntimeId,
-                    host: this.hostKey,
-                  })
-                }
-              } catch (err) {
-                log.session.warn('DaemonConnection: ACP re-subscribe failed (recovery continued)', {
-                  sessionId: s.claudeSessionId,
-                  runtimeId: s.acpRuntimeId,
-                  host: this.hostKey,
-                  error: err instanceof Error ? err.message : String(err),
-                })
-              }
-            } else {
-              const updated = await updateSessionRecord(s.claudeSessionId, {
+            } else if (result.errorKind === 'no_worker') {
+              const updated = await updateSessionRecordConditionally(s.claudeSessionId, {
                 process_status: 'idle',
                 errorMessage: undefined,
                 activity: undefined,
+                pendingPermission: undefined,
                 last_status_change: new Date().toISOString(),
                 status_reason: 'daemon_reported_exit',
                 status_changed_by: 'daemon',
-              } as any)
+              }, (current) => !current.archived
+                && current.statusRevision === s.statusRevision
+                && current.acpRuntimeId === s.acpRuntimeId
+                && current.lastAcceptedAcpCommandId === s.lastAcceptedAcpCommandId
+                && (current.process_status !== 'idle' || !!current.pendingPermission || !!current.activity))
+              if (!updated) continue
               emitSessionStatusChanged(
                 updated,
                 {},
                 ['*'],
                 { source: 'daemon-reconnect', urgency: 'urgent' },
               )
+              const { handBackTaskOnSessionEnd } = await import('../core/phase.js')
+              await handBackTaskOnSessionEnd(updated.taskId, s.claudeSessionId, 'daemon-reconnect:acp-worker-gone', {
+                shouldApply: () => {
+                  const current = getSessionsForTaskSync(updated.taskId).find((record) => record.claudeSessionId === s.claudeSessionId)
+                  return current?.statusRevision === updated.statusRevision
+                    && current?.acpRuntimeId === updated.acpRuntimeId
+                    && current?.lastAcceptedAcpCommandId === updated.lastAcceptedAcpCommandId
+                },
+              })
               log.session.info('DaemonConnection: ACP worker gone after reconnect', {
                 sessionId: s.claudeSessionId,
                 runtimeId: s.acpRuntimeId,
                 host: this.hostKey,
                 priorStatus: s.process_status,
+              })
+            } else {
+              log.session.warn('DaemonConnection: ACP recovery probe inconclusive', {
+                sessionId: s.claudeSessionId, host: this.hostKey, errorKind: result.errorKind, error: result.error,
               })
             }
           } catch (err) {

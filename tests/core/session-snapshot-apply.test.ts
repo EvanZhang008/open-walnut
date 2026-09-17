@@ -343,15 +343,18 @@ describe('applySnapshot — exclusions (contract §5 step 4)', () => {
     expect((await applySnapshot('excl-missing', snap(), 'test')).outcome).toBe('no-record')
   })
 
-  it('codex engine is excluded', async () => {
-    setSnapshotModeForTests('enforce')
-    const sid = 'excl-codex'
-    await seedSession(sid, { process_status: 'running', engine: 'codex' })
-    const res = await applySnapshot(sid, snap({ v: 100, cliState: 'idle', turnActive: false }), 'test')
-    expect(res).toMatchObject({ outcome: 'excluded', reason: 'engine-codex' })
-    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
-    expect(isSnapshotCovered(sid)).toBe(false)
-  })
+  it.each(['codex', 'gemini', 'opencode', 'goose', 'custom'] as const)(
+    '%s engine is excluded (journal-projected, no snapshot to pull)',
+    async (engine) => {
+      setSnapshotModeForTests('enforce')
+      const sid = `excl-${engine}`
+      await seedSession(sid, { process_status: 'running', engine })
+      const res = await applySnapshot(sid, snap({ v: 100, cliState: 'idle', turnActive: false }), 'test')
+      expect(res).toMatchObject({ outcome: 'excluded', reason: 'engine-no-snapshot-pull' })
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+      expect(isSnapshotCovered(sid)).toBe(false)
+    },
+  )
 
   it('embedded provider is excluded', async () => {
     setSnapshotModeForTests('enforce')

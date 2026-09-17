@@ -6656,7 +6656,7 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
 export async function updateTaskRaw(
   id: string,
   updates: Partial<Task>,
-  opts?: { emitEvent?: boolean; push?: boolean; source?: string },
+  opts?: { emitEvent?: boolean; push?: boolean; source?: string; shouldUpdate?: (current: Readonly<Task>) => boolean },
 ): Promise<{ changed: boolean; task?: Task }> {
   await ensureInit();
   let rawOldPhase: TaskPhase | undefined;
@@ -6665,6 +6665,7 @@ export async function updateTaskRaw(
     const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, any> | undefined;
     if (!row) return undefined;
     const task = rowToTask(row);
+    if (opts?.shouldUpdate && !opts.shouldUpdate(task)) return undefined;
     rawOldPhase = task.phase;
 
     const prepared = prepareRawUpdate(task, updates);
