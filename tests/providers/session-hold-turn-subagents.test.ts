@@ -89,16 +89,34 @@ function makeSessionStateEvent(sessionId: string, state: 'running' | 'idle' | 'r
   return JSON.stringify({ type: 'system', subtype: 'session_state_changed', session_id: sessionId, state })
 }
 
-function makeTaskStartedEvent(sessionId: string, taskId: string, opts: { subagentType?: string; taskType?: string } = {}): string {
+function makeTaskStartedEvent(sessionId: string, taskId: string, opts: { subagentType?: string; taskType?: string; toolUseId?: string } = {}): string {
   return JSON.stringify({
     type: 'system', subtype: 'task_started', session_id: sessionId, task_id: taskId,
     subagent_type: opts.subagentType, task_type: opts.taskType ?? 'local_agent',
-    description: `task ${taskId}`,
+    description: `task ${taskId}`, tool_use_id: opts.toolUseId,
   })
 }
 
-function makeTaskNotificationEvent(sessionId: string, taskId: string, status = 'completed'): string {
-  return JSON.stringify({ type: 'system', subtype: 'task_notification', session_id: sessionId, task_id: taskId, status })
+function makeTaskNotificationEvent(sessionId: string, taskId: string, status = 'completed', opts: { toolUseId?: string } = {}): string {
+  return JSON.stringify({
+    type: 'system', subtype: 'task_notification', session_id: sessionId, task_id: taskId, status,
+    tool_use_id: opts.toolUseId,
+  })
+}
+
+function makeTaskProgressEvent(sessionId: string, taskId: string, opts: { toolUseId?: string; tokens?: number; lastTool?: string } = {}): string {
+  return JSON.stringify({
+    type: 'system', subtype: 'task_progress', session_id: sessionId, task_id: taskId,
+    last_tool_name: opts.lastTool, tool_use_id: opts.toolUseId,
+    usage: { total_tokens: opts.tokens, tool_uses: 3, duration_ms: 4000 },
+  })
+}
+
+function makeTaskUpdatedEvent(sessionId: string, taskId: string, patch: Record<string, unknown>, opts: { toolUseId?: string } = {}): string {
+  return JSON.stringify({
+    type: 'system', subtype: 'task_updated', session_id: sessionId, task_id: taskId,
+    patch, tool_use_id: opts.toolUseId,
+  })
 }
 
 /** Replace-semantics level snapshot — the CLI's own live background set. */
@@ -463,5 +481,141 @@ describe('#870: foldSessionTail level reconciliation (reconciler replay path)', 
     const fold = foldSessionTail(content)
     expect(fold.gatingBgCount).toBe(1)
     expect(fold.turnEnded).toBe(false)
+  })
+})
+
+function bgRow(session: ClaudeCodeSession, taskId: string): Record<string, unknown> | undefined {
+  return session.backgroundTasks.find(t => t.taskId === taskId) as Record<string, unknown> | undefined
+}
+
+describe('reused task_id under a new tool_use_id', () => {
+  it('the second call is a fresh running row: no carried status, ending, or usage', () => {
+    const sid = 'bg-recall-fresh-row'
+    const session = makeRunningRemoteSession('task-recall-1')
+    const nowSpy = vi.spyOn(Date, 'now')
+    try {
+      nowSpy.mockReturnValue(1_000)
+      feedLines(session, [
+        makeInitEvent(sid),
+        makeTaskStartedEvent(sid, 'sub-R', { subagentType: 'general-purpose', toolUseId: 'toolu_call_1' }),
+        makeTaskProgressEvent(sid, 'sub-R', { toolUseId: 'toolu_call_1', tokens: 1200, lastTool: 'Read' }),
+        makeTaskNotificationEvent(sid, 'sub-R', 'completed', { toolUseId: 'toolu_call_1' }),
+      ])
+      const runA = bgRow(session, 'sub-R')!
+      expect(runA.status).toBe('completed')
+      expect(runA.toolUseId).toBe('toolu_call_1')
+      expect(runA.endedAt).toBe(1_000)
+      expect(runA.tokens).toBe(1200)
+      expect(session.hasActiveBackgroundWork()).toBe(false)
+
+      // Same subagent continued: task_id reused, tool_use_id is new.
+      nowSpy.mockReturnValue(9_000)
+      feedLines(session, [
+        makeTaskStartedEvent(sid, 'sub-R', { subagentType: 'general-purpose', toolUseId: 'toolu_call_2' }),
+      ])
+      const runB = bgRow(session, 'sub-R')!
+      expect(runB.status).toBe('running')
+      expect(runB.toolUseId).toBe('toolu_call_2')
+      expect(runB.endedAt).toBeUndefined()      // the first call's ending must not display here
+      expect(runB.tokens).toBeUndefined()       // nor its usage
+      expect(runB.lastTool).toBeUndefined()
+      expect(runB.startedAt).toBe(9_000)        // re-timed from this call
+      expect(session.hasActiveBackgroundWork()).toBe(true)
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('the second call holds the turn, and the first call\'s late mail cannot end it', () => {
+    const sid = 'bg-recall-late-mail'
+    const session = makeRunningRemoteSession('task-recall-2')
+    const results = collectResults()
+
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'sub-S', { subagentType: 'general-purpose', toolUseId: 'toolu_call_1' }),
+      makeTaskNotificationEvent(sid, 'sub-S', 'completed', { toolUseId: 'toolu_call_1' }),
+      // Continued under a new tool_use_id, then the turn's result lands early.
+      makeTaskStartedEvent(sid, 'sub-S', { subagentType: 'general-purpose', toolUseId: 'toolu_call_2' }),
+      makeResultEvent(sid, { text: 'Continuing the agent' }),
+      makeSessionStateEvent(sid, 'idle'),
+    ])
+    expect(results.length).toBe(0)                 // withheld: call 2 is live
+    expect(session.processStatus).toBe('running')
+
+    // Late mail addressed to call 1 — must be ignored, not treated as call 2 ending.
+    feedLines(session, [
+      makeTaskUpdatedEvent(sid, 'sub-S', { status: 'completed' }, { toolUseId: 'toolu_call_1' }),
+      makeTaskNotificationEvent(sid, 'sub-S', 'completed', { toolUseId: 'toolu_call_1' }),
+      makeTaskProgressEvent(sid, 'sub-S', { toolUseId: 'toolu_call_1', tokens: 777, lastTool: 'Grep' }),
+      makeSessionStateEvent(sid, 'idle'),
+    ])
+    const held = bgRow(session, 'sub-S')!
+    expect(held.status).toBe('running')
+    expect(held.endedAt).toBeUndefined()
+    expect(held.tokens).toBeUndefined()            // stale progress ignored, not merged
+    expect(results.length).toBe(0)
+    expect(session.hasActiveBackgroundWork()).toBe(true)
+
+    // Call 2's own terminal + the trailing idle settle the turn.
+    feedLines(session, [
+      makeTaskProgressEvent(sid, 'sub-S', { toolUseId: 'toolu_call_2', tokens: 350 }),
+      makeTaskNotificationEvent(sid, 'sub-S', 'completed', { toolUseId: 'toolu_call_2' }),
+      makeSessionStateEvent(sid, 'idle'),
+    ])
+    const done = bgRow(session, 'sub-S')!
+    expect(done.status).toBe('completed')
+    expect(done.tokens).toBe(350)
+    expect(session.hasActiveBackgroundWork()).toBe(false)
+    expect(results.length).toBe(1)
+    expect(results[0].isError).toBe(false)
+    expect(session.processStatus).toBe('idle')
+  })
+
+  it('a replayed start / late progress under the SAME tool_use_id never revives a terminal call', () => {
+    const sid = 'bg-recall-same-id-replay'
+    const session = makeRunningRemoteSession('task-recall-3')
+
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'sub-T', { subagentType: 'general-purpose', toolUseId: 'toolu_call_1' }),
+      makeTaskNotificationEvent(sid, 'sub-T', 'completed', { toolUseId: 'toolu_call_1' }),
+      // Daemon replay after a restart: the SAME call's start + a trailing heartbeat.
+      makeTaskStartedEvent(sid, 'sub-T', { subagentType: 'general-purpose', toolUseId: 'toolu_call_1' }),
+      makeTaskProgressEvent(sid, 'sub-T', { toolUseId: 'toolu_call_1', tokens: 42 }),
+    ])
+    expect(bgRow(session, 'sub-T')!.status).toBe('completed')
+    expect(session.hasActiveBackgroundWork()).toBe(false)
+  })
+
+  it('does not adopt a terminal daemon state from the previous invocation', async () => {
+    const sid = 'bg-recall-daemon'
+    const session = makeRunningRemoteSession('task-recall-daemon')
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'sub-pull', { toolUseId: 'toolu_current' }),
+    ])
+    const transport = (session as unknown as { _transport: { getState?: () => Promise<unknown> } })._transport
+    transport.getState = async () => ({ tasks: { 'sub-pull': { status: 'completed', toolUseId: 'toolu_previous', v: 100, t: 1 } }, resourceVersion: 100, derivedRunning: 0, updatedAt: 1, recentTransitions: [] })
+    await session.reconcileFromDaemon()
+    expect(bgRow(session, 'sub-pull')!.status).toBe('running')
+    transport.getState = async () => ({ tasks: { 'sub-pull': { status: 'completed', toolUseId: 'toolu_current', v: 200, t: 2 } }, resourceVersion: 200, derivedRunning: 0, updatedAt: 2, recentTransitions: [] })
+    await session.reconcileFromDaemon()
+    expect(bgRow(session, 'sub-pull')!.status).toBe('completed')
+  })
+
+  it('an id-less event keeps the CLI ordering semantics on a row that has an id', () => {
+    const sid = 'bg-recall-idless'
+    const session = makeRunningRemoteSession('task-recall-4')
+
+    feedLines(session, [
+      makeInitEvent(sid),
+      makeTaskStartedEvent(sid, 'sub-U', { subagentType: 'general-purpose', toolUseId: 'toolu_call_1' }),
+      // No tool_use_id: unknown provenance is not stale — it still lands.
+      makeTaskNotificationEvent(sid, 'sub-U', 'completed'),
+    ])
+    expect(bgRow(session, 'sub-U')!.status).toBe('completed')
+    expect(bgRow(session, 'sub-U')!.toolUseId).toBe('toolu_call_1')
+    expect(session.hasActiveBackgroundWork()).toBe(false)
   })
 })

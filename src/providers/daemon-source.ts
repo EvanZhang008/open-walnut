@@ -1289,10 +1289,15 @@ function applyTaskEvent(ts, parsed, v, now) {
   const subtype = parsed.subtype;
   const taskId = parsed.task_id;
   if (!subtype || !taskId) return false;
-  const prev = ts.tasks[taskId];
+  const existing = ts.tasks[taskId];
+  const toolUseId = typeof parsed.tool_use_id === 'string' && parsed.tool_use_id.length > 0 ? parsed.tool_use_id : undefined;
+  const differentInvocation = !!(toolUseId && existing && existing.toolUseId && existing.toolUseId !== toolUseId);
+  if (differentInvocation && subtype !== 'task_started') return false;
+  const prev = differentInvocation ? undefined : existing;
   let nextStatus;
   let isBackgrounded = prev ? prev.isBackgrounded === true : false;
   if (subtype === 'task_started') {
+    if (parsed.is_backgrounded === true) isBackgrounded = true;
     nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running';
   } else if (subtype === 'task_progress') {
     nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running';
@@ -1308,7 +1313,7 @@ function applyTaskEvent(ts, parsed, v, now) {
   }
   const wasTerminal = prev ? BG_TERMINAL_STATUSES.has(prev.status) : false;
   const isTerminal = BG_TERMINAL_STATUSES.has(nextStatus);
-  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: parsed.description || (prev && prev.description), isBackgrounded: isBackgrounded || undefined };
+  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: parsed.description || (prev && prev.description), isBackgrounded: isBackgrounded || undefined, toolUseId: toolUseId || (prev && prev.toolUseId) };
   if (v > ts.resourceVersion) ts.resourceVersion = v;
   ts.updatedAt = now;
   ts.derivedRunning = runningTaskCount(ts);

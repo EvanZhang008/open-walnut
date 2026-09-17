@@ -151,9 +151,12 @@ if (inputFormat === 'stream-json') {
           let src = (msgLine ? msgLine[1] : q).trim();
           src = src.replace(/^(?:(?:slow|chunk-delay):\d+\s+)+/, '');
           const five = src.split(/\s+/).slice(0, 5).join(' ');
+          const response = q.includes('PHASE_SIGNAL:') && q.includes('EXEC_SUMMARY:')
+            ? 'EXEC_SUMMARY: The fixture turn finished.\nUSER_REQUEST: Validate the session flow.\nCONTEXT: An isolated test session.\nPROGRESS: The turn finished.\nREFERENCES: unchanged\nWORK_LOG: append: Finished the fixture turn.\nTITLE: unchanged\nRECAP: The fixture turn finished.\nPHASE_SIGNAL: conversational(user-asked-question)\nSTATUS: succeeded\nWHAT_I_DID: Answered the fixture prompt.\nNEXT_STEPS: Continue the conversation.\nBLOCKERS: none\nUSER_INTENT: question-pending\nVERIFIED: not-applicable'
+            : `Side title: ${five}`;
           process.stdout.write(JSON.stringify({
             type: 'control_response',
-            response: { subtype: 'success', request_id: parsed.request_id, response: { response: `Side title: ${five}` } },
+            response: { subtype: 'success', request_id: parsed.request_id, response: { response } },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'generate_session_title') {
           // The auto-title caller wraps the message in a context envelope
@@ -612,6 +615,36 @@ if (outputFormat === 'stream-json') {
         usage: { input_tokens: 12, output_tokens: 0 },
       };
       process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
+      return;
+    }
+
+    if (effectiveMessage === 'resumed-background-agent-test') {
+      const sid = outputSessionId;
+      const emit = line => process.stdout.write(JSON.stringify({ ...line, session_id: sid }) + '\n');
+      const task = (subtype, toolUseId, extra = {}) => emit({ type: 'system', subtype, task_id: 'resumed-agent', tool_use_id: toolUseId, ...extra });
+      const answer = (id, text) => emit({ type: 'assistant', message: { id, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } } });
+      emit({ type: 'system', subtype: 'session_state_changed', state: 'running' });
+      task('task_started', 'call-first', { task_type: 'local_agent', is_backgrounded: true, description: 'First verification pass' });
+      task('task_updated', undefined, { patch: { status: 'completed' } });
+      task('task_notification', 'call-first', { status: 'completed' });
+      task('task_started', 'call-second', { task_type: 'local_agent', is_backgrounded: true, description: 'Second verification pass' });
+      answer('msg_resumed_main', 'The same background agent is running its second verification pass.');
+      emit({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'Second pass continues.', total_cost_usd: 0 });
+      emit({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+      setTimeout(() => {
+        task('task_progress', 'call-second', { usage: { total_tokens: 100, tool_uses: 2 } });
+        task('task_notification', 'call-first', { status: 'completed' });
+        task('task_progress', 'call-first', { usage: { total_tokens: 80 } });
+      }, 2500);
+      setTimeout(() => {
+        task('task_updated', undefined, { patch: { status: 'completed' } });
+        task('task_notification', 'call-second', { status: 'completed' });
+        emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+        emit({ type: 'system', subtype: 'session_state_changed', state: 'running' });
+        answer('msg_resumed_done', 'The second verification pass is complete.');
+        emit({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'The second verification pass is complete.', origin: { kind: 'task-notification' }, total_cost_usd: 0 });
+        emit({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+      }, 12000);
       return;
     }
 

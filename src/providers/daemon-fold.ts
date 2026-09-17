@@ -78,13 +78,7 @@ export interface FoldState {
   lastResult: SessionSnapshot['lastResult']
   /** session_state_changed{idle} seen after lastResult with no running since. */
   trailingIdle: boolean
-  /** terminal-is-terminal for task_started/task_progress ONLY (a late/replayed
-   *  start can't revive); task_updated/task_notification take their status
-   *  VERBATIM, so a non-terminal status after a terminal one DOES revive the
-   *  task and re-gate the turn. isBackgrounded sticky; endedPerLevel = a
-   *  background_tasks_changed snapshot omitted this task after listing it
-   *  (lost terminal bookend — excluded from gating, reversible). */
-  bgTasks: Record<string, { terminal: boolean; isBackgrounded: boolean; endedPerLevel?: boolean }>
+  bgTasks: Record<string, { terminal: boolean; isBackgrounded: boolean; endedPerLevel?: boolean; toolUseId?: string }>
   /** Level universe for the #870 reconciliation: ids ever listed by a
    *  background_tasks_changed snapshot. Only these may be absent-marked
    *  (a live sync subagent is legitimately absent from every level payload). */
@@ -286,6 +280,10 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
   } else if (type === 'system') {
     const subtype = parsed.subtype as string | undefined
     const taskId = parsed.task_id as string | undefined
+    const toolUseId = typeof parsed.tool_use_id === 'string' && parsed.tool_use_id.length > 0 ? parsed.tool_use_id : undefined
+    const differentInvocation = !!(taskId && toolUseId && next.bgTasks[taskId]?.toolUseId
+      && next.bgTasks[taskId].toolUseId !== toolUseId)
+    if (differentInvocation && (subtype === 'task_progress' || subtype === 'task_updated' || subtype === 'task_notification')) return next
     if (subtype === 'init') {
       // Anchor-equivalent: a new turn (or auto-continuation) began after that
       // result — it cannot be the current turn's verdict (inc-1783644415695).
@@ -308,16 +306,17 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       // imperatively by the daemon tailer and joins in assembleSnapshot.
     } else if (taskId && (subtype === 'task_started' || subtype === 'task_progress')) {
       const prev = next.bgTasks[taskId]
-      // Terminal is terminal: a late/replayed start or progress can't revive.
+      const restarted = subtype === 'task_started' && differentInvocation
       next.bgTasks = { ...next.bgTasks }
       next.bgTasks[taskId] = {
-        terminal: prev ? prev.terminal : false,
+        terminal: restarted ? false : prev ? prev.terminal : false,
+        toolUseId: toolUseId ?? prev?.toolUseId,
         // A run_in_background Bash task carries is_backgrounded:true TOP-LEVEL
         // on its task_started (verified live, local_bash 2026-08-28) — reading
         // only task_updated patches misfiled it as GATING, which held
         // turnActive instead of counting it detached (same 'running'
         // projection, lying counters). Sticky, same as the patch path.
-        isBackgrounded: parsed.is_backgrounded === true || (prev ? prev.isBackgrounded : false),
+        isBackgrounded: parsed.is_backgrounded === true || (!restarted && (prev ? prev.isBackgrounded : false)),
       }
     } else if (taskId && subtype === 'task_updated') {
       const prev = next.bgTasks[taskId]
@@ -341,6 +340,7 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
           : prev ? prev.terminal : false,
         // Sticky: is_backgrounded=true detaches the task from gating forever.
         isBackgrounded: (patch ? patch.is_backgrounded === true : false) || (prev ? prev.isBackgrounded : false),
+        toolUseId: toolUseId ?? prev?.toolUseId,
       }
     } else if (taskId && subtype === 'task_notification') {
       const prev = next.bgTasks[taskId]
@@ -353,6 +353,7 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
         // adjudication as task_updated above.
         terminal: isTerminalStatus(status),
         isBackgrounded: prev ? prev.isBackgrounded : false,
+        toolUseId: toolUseId ?? prev?.toolUseId,
       }
     } else if (subtype === 'background_tasks_changed') {
       // #870 level reconciliation, replay flavor — same rules as the live
@@ -371,13 +372,13 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
           seen[id] = 1
           const prev = bg[id]
           if (!prev) bg[id] = { terminal: false, isBackgrounded: false }
-          else if (prev.endedPerLevel) bg[id] = { terminal: prev.terminal, isBackgrounded: prev.isBackgrounded }
+          else if (prev.endedPerLevel) bg[id] = { ...prev, endedPerLevel: undefined }
         }
         for (const id of Object.keys(bg)) {
           if (present[id] || !seen[id]) continue
           const t = bg[id]
           if (t.terminal) continue
-          bg[id] = { terminal: t.terminal, isBackgrounded: t.isBackgrounded, endedPerLevel: true }
+          bg[id] = { ...t, endedPerLevel: true }
         }
         next.bgTasks = bg
         next.seenInLevel = seen

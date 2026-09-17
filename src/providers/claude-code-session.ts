@@ -332,6 +332,11 @@ function readToolUseId(sys: Record<string, unknown>): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
+function isStaleCallEvent(sys: Record<string, unknown>, current: { toolUseId?: string } | undefined): boolean {
+  const id = readToolUseId(sys)
+  return !!id && !!current?.toolUseId && id !== current.toolUseId
+}
+
 function isMissingBypassCapabilityError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err)
   // The CLI names the bare flag in its rejection text even though we launch with
@@ -1179,6 +1184,7 @@ export class ClaudeCodeSession {
       if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(local.status)) continue // already terminal locally
       const remote = daemonState.tasks[taskId]
       if (!remote) continue
+      if (local.toolUseId && remote.toolUseId && local.toolUseId !== remote.toolUseId) continue
       if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(remote.status)) {
         // Daemon recorded a terminal status our live stream missed — adopt the source of truth.
         this._bgTasks.set(taskId, { ...local, status: remote.status })
@@ -2493,12 +2499,20 @@ export class ClaudeCodeSession {
       // Merge the fold's bg-task set on top of whatever canonical recovery seeded
       // (usually nothing). Terminal is terminal; isBackgrounded is sticky.
       for (const [taskId, t] of Object.entries(fold.bgTasks)) {
-        const prev = session._bgTasks.get(taskId)
+        const existing = session._bgTasks.get(taskId)
+        const foldToolUseId = t.toolUseId
+        const newCall = !!foldToolUseId && !!existing?.toolUseId && foldToolUseId !== existing.toolUseId
+        const prev = newCall ? undefined : existing
         const status = prev && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prev.status)
           ? prev.status : t.status
         session._bgTasks.set(taskId, {
           ...prev,
+          ...(newCall ? {
+            description: existing?.description, subagentType: existing?.subagentType,
+            taskType: existing?.taskType, spawnDepth: existing?.spawnDepth,
+          } : {}),
           status,
+          toolUseId: foldToolUseId ?? prev?.toolUseId,
           isBackgrounded: t.isBackgrounded || prev?.isBackgrounded,
           // #870: the fold's level verdict rides along so a wedged hold stays
           // un-wedged across an attach (gating skips endedPerLevel entries).
@@ -4203,7 +4217,18 @@ export class ClaudeCodeSession {
                 if (typeof sys.description === 'string') this._workflowDescription = sys.description
               }
               if (workflowName) this._workflowName = workflowName
-              const prevStarted = this._bgTasks.get(taskId)
+              const existingStarted = this._bgTasks.get(taskId)
+              const startedToolUseId = readToolUseId(sys)
+              const isNewInvocation = !!startedToolUseId && !!existingStarted?.toolUseId
+                && startedToolUseId !== existingStarted.toolUseId
+              if (isNewInvocation) {
+                log.session.info('background task started a new invocation', {
+                  sessionId: sid, taskId: this.taskId, bgTaskId: taskId,
+                  prevStatus: existingStarted?.status, prevToolUseId: existingStarted?.toolUseId,
+                  toolUseId: startedToolUseId,
+                })
+              }
+              const prevStarted = isNewInvocation ? undefined : existingStarted
               // Terminal is terminal: never let an out-of-order / replayed task_started
               // revive a task that already reached a terminal status.
               const startedStatus = prevStarted && ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prevStarted.status)
@@ -4219,10 +4244,10 @@ export class ClaudeCodeSession {
                 // read it here too in case a future CLI stamps it at start. Never
                 // un-background: keep a previously-recorded true.
                 isBackgrounded: sys.is_backgrounded === true || prevStarted?.isBackgrounded,
-                // Display-only. toolUseId: first non-empty wins (never clobber with
-                // undefined). startedAt is OUR clock at the first start we saw — a
+                // Display-only. toolUseId: within ONE call the first non-empty wins (never
+                // clobber with undefined). startedAt is OUR clock at the first start we saw — a
                 // replayed task_started must not restart the row's elapsed timer.
-                toolUseId: prevStarted?.toolUseId ?? readToolUseId(sys),
+                toolUseId: prevStarted?.toolUseId ?? startedToolUseId,
                 startedAt: prevStarted?.startedAt ?? Date.now(),
                 spawnDepth: typeof sys.spawn_depth === 'number' ? sys.spawn_depth : prevStarted?.spawnDepth,
               })
@@ -4241,8 +4266,9 @@ export class ClaudeCodeSession {
             const wp = sys.workflow_progress as unknown[] | undefined
             const ingestedWorkflow = Array.isArray(wp) && wp.length > 0
             if (ingestedWorkflow) this._ingestWorkflowProgress(wp as unknown[])
-            if (taskId) {
-              const prev = this._bgTasks.get(taskId) ?? { status: 'running' }
+            const progressPrev = taskId ? this._bgTasks.get(taskId) : undefined
+            if (taskId && !isStaleCallEvent(sys, progressPrev)) {
+              const prev = progressPrev ?? { status: 'running' }
               const usage = sys.usage as { total_tokens?: number; tool_uses?: number; duration_ms?: number } | undefined
               // Terminal is terminal: a late progress event must NOT revive a finished task.
               const progressStatus = ClaudeCodeSession._BG_TERMINAL_STATUSES.has(prev.status)
@@ -4277,8 +4303,9 @@ export class ClaudeCodeSession {
             // later notification. (Pre-fix this exact ordering wedged incident inc-…afr3cs.)
             const taskId = sys.task_id as string | undefined
             const patch = sys.patch as Record<string, unknown> | undefined
-            if (taskId && patch) {
-              const prev = this._bgTasks.get(taskId) ?? { status: 'running' }
+            const updatedPrev = taskId ? this._bgTasks.get(taskId) : undefined
+            if (taskId && patch && !isStaleCallEvent(sys, updatedPrev)) {
+              const prev = updatedPrev ?? { status: 'running' }
               const patchStatus = patch.status as string | undefined
               const nextStatus = patchStatus ?? prev.status
               // is_backgrounded (incident 07fffbe5): the CLI detaches this task from its
@@ -4317,8 +4344,14 @@ export class ClaudeCodeSession {
             // not an earlier task_updated already reported the same terminal status.
             const taskId = sys.task_id as string | undefined
             const status = (sys.status as string | undefined) ?? 'completed'
-            if (taskId) {
-              const prev = this._bgTasks.get(taskId)
+            const notifyPrev = taskId ? this._bgTasks.get(taskId) : undefined
+            if (taskId && isStaleCallEvent(sys, notifyPrev)) {
+              log.session.info('ignoring task_notification from a previous tool_use_id', {
+                sessionId: sid, taskId: this.taskId, bgTaskId: taskId, status,
+                eventToolUseId: readToolUseId(sys), currentToolUseId: notifyPrev?.toolUseId,
+              })
+            } else if (taskId) {
+              const prev = notifyPrev
               this._bgTasks.set(taskId, {
                 ...(prev ?? {}),
                 status,

@@ -97,7 +97,7 @@ export interface SessionTailFold {
    *  `endedPerLevel`: a `background_tasks_changed` replace-semantics snapshot omitted this
    *  task after having listed it — its terminal bookends were lost; excluded from gating
    *  (mirrors the live handler's #870 level reconciliation). */
-  bgTasks: Record<string, { status: string; isBackgrounded?: boolean; endedPerLevel?: boolean }>
+  bgTasks: Record<string, { status: string; isBackgrounded?: boolean; endedPerLevel?: boolean; toolUseId?: string }>
   /** In-flight bg tasks that GATE turn-over (non-terminal AND not backgrounded). */
   gatingBgCount: number
   /** In-flight bg tasks DETACHED from turn-over (non-terminal AND backgrounded).
@@ -318,6 +318,10 @@ export function foldSessionTail(
     if (type === 'system') {
       const subtype = parsed.subtype as string | undefined
       const taskId = parsed.task_id as string | undefined
+      const toolUseId = typeof parsed.tool_use_id === 'string' && parsed.tool_use_id.length > 0 ? parsed.tool_use_id : undefined
+      const differentInvocation = !!(taskId && toolUseId && fold.bgTasks[taskId]?.toolUseId
+        && fold.bgTasks[taskId].toolUseId !== toolUseId)
+      if (differentInvocation && (subtype === 'task_progress' || subtype === 'task_updated' || subtype === 'task_notification')) continue
       if (subtype === 'init') {
         // A new init after a result means a NEW turn (or auto-continuation)
         // began after that result — the result cannot be the current turn's
@@ -338,19 +342,21 @@ export function foldSessionTail(
         }
       } else if (taskId && (subtype === 'task_started' || subtype === 'task_progress')) {
         const prev = fold.bgTasks[taskId]
-        // Terminal is terminal: a late/replayed start or progress can't revive a task.
+        const restarted = subtype === 'task_started' && differentInvocation
         fold.bgTasks[taskId] = {
-          status: prev && BG_TERMINAL.has(prev.status) ? prev.status : 'running',
+          status: !restarted && prev && BG_TERMINAL.has(prev.status) ? prev.status : 'running',
+          toolUseId: toolUseId ?? prev?.toolUseId,
           // A run_in_background Bash task carries is_backgrounded:true TOP-LEVEL
           // on its task_started (verified live, local_bash 2026-08-28). Sticky,
           // same as the task_updated patch path. Keep in parity with daemon-fold.
-          isBackgrounded: parsed.is_backgrounded === true || prev?.isBackgrounded,
+          isBackgrounded: parsed.is_backgrounded === true || (!restarted && prev?.isBackgrounded),
         }
       } else if (taskId && subtype === 'task_updated') {
         const prev = fold.bgTasks[taskId]
         const patch = parsed.patch as Record<string, unknown> | undefined
         fold.bgTasks[taskId] = {
           status: (patch?.status as string | undefined) ?? prev?.status ?? 'running',
+          toolUseId: toolUseId ?? prev?.toolUseId,
           // Sticky: is_backgrounded=true detaches the task from gating forever.
           isBackgrounded: patch?.is_backgrounded === true || prev?.isBackgrounded,
         }
@@ -359,6 +365,7 @@ export function foldSessionTail(
         fold.bgTasks[taskId] = {
           status: (parsed.status as string | undefined) ?? 'completed',
           isBackgrounded: prev?.isBackgrounded,
+          toolUseId: toolUseId ?? prev?.toolUseId,
         }
       } else if (subtype === 'background_tasks_changed') {
         // #870 level reconciliation, replay flavor — same rules as the live handler:

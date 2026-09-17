@@ -56,7 +56,7 @@ export interface DaemonCommandResult {
  *  The daemon materializes this from the same task_* events Walnut sees, so Walnut can PULL it
  *  to reconcile a lost-terminal event without guessing liveness. `resourceVersion` = the byte
  *  offset of the latest applied event (monotonic, rebuilt from the jsonl after a daemon restart). */
-export interface DaemonTaskStateEntry { status: string; v: number; t: number; description?: string; isBackgrounded?: boolean }
+export interface DaemonTaskStateEntry { status: string; v: number; t: number; description?: string; isBackgrounded?: boolean; toolUseId?: string }
 export interface DaemonTaskState {
   tasks: Record<string, DaemonTaskStateEntry>
   resourceVersion: number

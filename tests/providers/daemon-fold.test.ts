@@ -282,6 +282,62 @@ describe('foldLine — result and state transitions', () => {
 
 // ── bg tasks ──
 
+describe('background invocation identity', () => {
+  const event = (subtype: string, toolUseId?: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+    type: 'system', subtype, session_id: SID, task_id: 'agent-repeat',
+    ...(toolUseId ? { tool_use_id: toolUseId } : {}), ...extra,
+  })
+  const firstRun = () => [
+    userEvent(),
+    event('task_started', 'call-first', { task_type: 'local_agent', is_backgrounded: true }),
+    event('task_updated', undefined, { patch: { status: 'completed' } }),
+    event('task_notification', 'call-first', { status: 'completed' }),
+  ]
+  const checkBoth = (lines: string[], count: number) => {
+    const state = fold(lines)
+    const snapshot = assembleSnapshot({ foldState: state, pendingCtrl: null, dead: false, pid: 4242, exitCode: null })
+    const tail = foldSessionTail(lines.join('\n') + '\n', 0)
+    expect(snapshot.detachedBgCount).toBe(count)
+    expect(tail.detachedBgCount).toBe(count)
+    return state
+  }
+
+  it('counts a resumed agent with a new tool call after its earlier run completed', () => {
+    checkBoth([...firstRun(), event('task_started', 'call-second', { task_type: 'local_agent', is_backgrounded: true }), resultEvent(), stateEvent('idle')], 1)
+  })
+
+  it.each(['task_progress', 'task_notification', 'task_updated'])('ignores a previous call\'s late %s while the new call is running', subtype => {
+    const lines = [...firstRun(), event('task_started', 'call-second', { is_backgrounded: true })]
+    const before = fold(lines)
+    const late = event(subtype, 'call-first', { status: 'completed', patch: { status: 'completed' } })
+    const after = checkBoth([...lines, late, resultEvent(), stateEvent('idle')], 1)
+    expect(after.bgTasks['agent-repeat']).toEqual(before.bgTasks['agent-repeat'])
+  })
+
+  it('ends the current call and does not revive it from duplicate starts or progress', () => {
+    checkBoth([...firstRun(), event('task_started', 'call-second', { is_backgrounded: true }),
+      event('task_notification', 'call-second', { status: 'completed' }),
+      event('task_started', 'call-second'), event('task_progress', 'call-second'), resultEvent(), stateEvent('idle')], 0)
+  })
+
+  it('keeps the invocation identity through level absence and reappearance', () => {
+    const lines = [...firstRun(), event('task_started', 'call-second', { is_backgrounded: true }),
+      bgTasksChanged(['agent-repeat']), bgTasksChanged([]), bgTasksChanged(['agent-repeat']),
+      event('task_notification', 'call-first', { status: 'completed' }), resultEvent(), stateEvent('idle')]
+    const state = checkBoth(lines, 1)
+    expect(state.bgTasks['agent-repeat'].toolUseId).toBe('call-second')
+  })
+
+  it('does not invent a new call when a legacy event lacks its tool identity', () => {
+    checkBoth([...firstRun(), event('task_started'), event('task_progress'), resultEvent(), stateEvent('idle')], 0)
+  })
+
+  it('applies identity-free patches to the current call in stream order', () => {
+    checkBoth([...firstRun(), event('task_started', 'call-second', { is_backgrounded: true }),
+      event('task_updated', undefined, { patch: { status: 'completed' } }), resultEvent(), stateEvent('idle')], 0)
+  })
+})
+
 describe('foldLine — background task gating (#870 semantics)', () => {
   it('running bg task gates settle; terminal notification un-gates', () => {
     const held = fold([userEvent(), taskStarted('bg-A'), resultEvent(), stateEvent('idle')])

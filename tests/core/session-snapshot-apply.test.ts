@@ -49,6 +49,7 @@ import {
   _resetSessionTrackerForTesting,
 } from '../../src/core/session-tracker.js'
 import { addTask, updateTaskRaw, getTask } from '../../src/core/task-manager.js'
+import * as sessionTracker from '../../src/core/session-tracker.js'
 import { closeDb } from '../../src/core/session-db.js'
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { log } from '../../src/logging/index.js'
@@ -205,6 +206,80 @@ describe('applySnapshot — v-gate', () => {
 })
 
 // ── shadow mode ──
+describe('applySnapshot reconnect activity', () => {
+  it.each([100, 101])('clears a disproven reconnect hint at snapshot v=%s without changing work state', async (v) => {
+    setSnapshotModeForTests('enforce')
+    const sid = `reconnect-${v}`
+    await seedSession(sid, {
+      host: 'remote-dev', process_status: 'running', consumedOffset: 100,
+      activity: 'Reconnecting to remote host...',
+    })
+    const before = (await getSessionByClaudeId(sid))!
+    const events: BusEvent[] = []
+    bus.subscribe('reconnect-activity-test', e => {
+      if (e.name === EventNames.SESSION_STATUS_CHANGED) events.push(e)
+    })
+    const value = snap({ v, cliState: 'idle', turnActive: false, detachedBgCount: 1 })
+    await applySnapshot(sid, value, 'pull-30s')
+    const after = (await getSessionByClaudeId(sid))!
+    expect(after.activity).toBeUndefined()
+    expect(after.process_status).toBe('running')
+    expect(after.pid).toBe(before.pid)
+    expect(after.statusRevision).toBeGreaterThan(before.statusRevision!)
+    expect(events.some(e => (e.data as { activity?: string | null }).activity === null)).toBe(true)
+    if (v === 100) {
+      expect(after.lastActiveAt).toBe(before.lastActiveAt)
+      expect(after.last_status_change).toBe(before.last_status_change)
+      expect(after.consumedOffset).toBe(before.consumedOffset)
+    }
+    const count = events.length
+    await applySnapshot(sid, value, 'pull-30s')
+    expect(events).toHaveLength(count)
+  })
+
+  it.each(['off', 'shadow'] as const)('does not clear reconnect activity in %s mode', async (mode) => {
+    setSnapshotModeForTests(mode)
+    const sid = `reconnect-${mode}`
+    await seedSession(sid, { process_status: 'running', activity: 'Reconnecting to remote host...', consumedOffset: 100 })
+    await applySnapshot(sid, snap(), 'pull-30s')
+    expect((await getSessionByClaudeId(sid))?.activity).toBe('Reconnecting to remote host...')
+  })
+
+  it('does not clear reconnect activity from a stale snapshot', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'reconnect-stale'
+    await seedSession(sid, { process_status: 'running', activity: 'Reconnecting to remote host...', consumedOffset: 200 })
+    expect(await applySnapshot(sid, snap(), 'pull-30s')).toMatchObject({ outcome: 'stale' })
+    expect((await getSessionByClaudeId(sid))?.activity).toBe('Reconnecting to remote host...')
+  })
+
+  it('preserves real tool activity and pending permission', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'reconnect-real-activity'
+    const permission = { requestId: 'req-reconnect', toolName: 'Bash', input: {}, receivedAt: new Date().toISOString() }
+    await seedSession(sid, { process_status: 'running', activity: 'Using Bash', pendingPermission: permission, consumedOffset: 100 })
+    await applySnapshot(sid, snap({ cliState: 'waiting', turnActive: false, pendingPermission: { requestId: permission.requestId, toolName: permission.toolName } }), 'pull-30s')
+    const after = (await getSessionByClaudeId(sid))!
+    expect(after.activity).toBe('Using Bash')
+    expect(after.pendingPermission).toEqual(permission)
+  })
+
+  it.each(['Using Bash', 'Reconnecting to remote host...'])('preserves a newer activity write: %s', async (activity) => {
+    setSnapshotModeForTests('enforce')
+    const sid = `reconnect-race-${activity}`
+    await seedSession(sid, { process_status: 'running', activity: 'Reconnecting to remote host...', consumedOffset: 100 })
+    const update = sessionTracker.updateSessionRecordConditionally
+    const spy = vi.spyOn(sessionTracker, 'updateSessionRecordConditionally').mockImplementationOnce(async (...args) => {
+      await updateSessionRecord(sid, { activity: 'New connection attempt' })
+      await updateSessionRecord(sid, { activity })
+      return update(...args)
+    })
+    await applySnapshot(sid, snap(), 'pull-30s')
+    expect(spy).toHaveBeenCalled()
+    expect((await getSessionByClaudeId(sid))?.activity).toBe(activity)
+  })
+})
+
 describe('applySnapshot — shadow mode', () => {
   it('logs divergence and does NOT write the record', async () => {
     setSnapshotModeForTests('shadow')

@@ -23,6 +23,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
+import { sessionResultPhase } from '../../../src/core/phase'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-hold-turn-subagents'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -134,6 +135,34 @@ async function processStatus(page: Page, sessionId: string): Promise<string> {
   const response = await page.request.get(`/api/sessions/${sessionId}`)
   return ((await response.json()) as { session: { process_status: string } }).session.process_status
 }
+
+test('a resumed background agent stays running until its new invocation ends', async ({ page }) => {
+  await openQuickStart(page)
+  const taskId = await sendQuickStart(page, 'resumed-background-agent-test')
+  const sessionId = await sessionIdForTask(page, taskId)
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
+  await expect(panel.getByText('The same background agent is running its second verification pass.', { exact: false }).first()).toBeVisible()
+  expect(await processStatus(page, sessionId)).toBe('running')
+  const taskResponse = await page.request.get(`/api/tasks/${taskId}`)
+  expect(taskResponse.ok()).toBe(true)
+  expect((await taskResponse.json()).task.phase).toBe('IN_PROGRESS')
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    expect(await processStatus(page, sessionId)).toBe('running')
+    await page.waitForTimeout(200)
+  }
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/resumed-agent-running.png` })
+  await expect(panel.getByText('The second verification pass is complete.', { exact: false }).first()).toBeVisible({ timeout: 20000 })
+  await expect.poll(() => processStatus(page, sessionId)).toBe('idle')
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/tasks/${taskId}`)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).task.phase
+  }).toBe(sessionResultPhase('IN_PROGRESS'))
+  await expect(page.locator(`[data-task-id="${taskId}"]`).first()).toHaveClass(/needs-action/)
+  await expect(page.getByText("A session's summary couldn't be parsed", { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/resumed-agent-finished.png` })
+})
 
 test('turn stays open across the early result+idle and completes with the followup summary', async ({ page }) => {
   test.setTimeout(90_000)

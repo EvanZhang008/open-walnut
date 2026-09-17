@@ -36,7 +36,7 @@ function extractFn(src: string, name: string): string {
 }
 
 interface TaskStateShape {
-  tasks: Record<string, { status: string; v: number }>
+  tasks: Record<string, { status: string; v: number; toolUseId?: string; isBackgrounded?: boolean }>
   resourceVersion: number
   derivedRunning: number
   recentTransitions: Array<{ taskId: string; status: string }>
@@ -132,6 +132,26 @@ function writeWhale(targetBytes: number): void {
 }
 
 describe('streamed rebuildTaskStateFromJsonl (template-extracted production code)', () => {
+  it('rebuilds a reused background task under its current invocation identity', () => {
+    const event = (subtype: string, toolUseId?: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+      type: 'system', subtype, task_id: 'reused-agent', tool_use_id: toolUseId, ...extra,
+    })
+    const lines = [
+      event('task_started', 'call-first', { is_backgrounded: true }),
+      event('task_updated', undefined, { patch: { status: 'completed' } }),
+      event('task_notification', 'call-first', { status: 'completed' }),
+      event('task_started', 'call-second', { is_backgrounded: true }),
+      event('task_progress', 'call-second'),
+      event('task_notification', 'call-first', { status: 'completed' }),
+    ]
+    fs.writeFileSync(jsonlPath, lines.join('\n') + '\n')
+    const rebuild = buildTemplateRebuild()
+    const running = rebuild(jsonlPath, 1000)
+    expect(running.tasks['reused-agent']).toMatchObject({ status: 'running', toolUseId: 'call-second', isBackgrounded: true })
+    fs.appendFileSync(jsonlPath, event('task_notification', 'call-second', { status: 'completed' }) + '\n')
+    expect(rebuild(jsonlPath, 2000).tasks['reused-agent']).toMatchObject({ status: 'completed', toolUseId: 'call-second' })
+  })
+
   it('produces the exact same TaskState as a whole-file replay', () => {
     writeWhale(4 * 1024 * 1024) // 4MB is plenty for correctness
     const src = getDaemonSource()

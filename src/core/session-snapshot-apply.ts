@@ -333,16 +333,13 @@ export async function applySnapshot(
   )
   if (snapshot.v < gate) return { outcome: 'stale' }
 
-  if (snapshot.v === gate && projected === actual) {
-    // Same coordinate, same result — pure duplicate.
-    markSnapshotCovered(sessionId, snapshot.v)
-    return { outcome: 'noop', projected }
-  }
+  const duplicate = snapshot.v === gate && projected === actual
 
   // From here the snapshot is live evidence for this session: it is covered.
   markSnapshotCovered(sessionId, snapshot.v)
 
   if (mode === 'shadow') {
+    if (duplicate) return { outcome: 'noop', projected }
     const diverged = projected !== actual
     if (diverged) {
       const { warn, count, suppressed } = shouldWarnDivergence(
@@ -367,6 +364,22 @@ export async function applySnapshot(
     }
     return { outcome: 'shadow', diverged, projected }
   }
+
+  let reconnectActivityCleared = false
+  if (record.activity === 'Reconnecting to remote host...') {
+    const cleared = await updateSessionRecordConditionally(sessionId, { activity: undefined }, (current) =>
+      !current.archived && current.statusRevision === record.statusRevision
+      && current.streamEpoch === record.streamEpoch
+      && current.activity === record.activity
+      && getAppliedV(sessionId) === snapshot.v,
+    { preserveLastActiveAt: true })
+    if (cleared) {
+      reconnectActivityCleared = true
+      emitSessionStatusChanged(cleared, {}, ['*'], { source: `snapshot:${source}`, urgency: 'urgent' })
+    }
+  }
+
+  if (duplicate) return { outcome: reconnectActivityCleared ? 'applied' : 'noop', projected }
 
   // ── Turn-start phase pullback on snapshot evidence (inc-1787512825254) ──
   // The CLI emits NO session_state_changed{running} for self-woken turns (a
@@ -527,7 +540,9 @@ export async function applySnapshot(
         || (typeof updates.streamEpoch === 'string' && current.streamEpoch !== updates.streamEpoch)
     },
   )
-  if (!updated) return { outcome: 'skipped', reason: 'predicate-false', projected }
+  if (!updated) return reconnectActivityCleared
+    ? { outcome: 'applied', projected }
+    : { outcome: 'skipped', reason: 'predicate-false', projected }
 
   emitSessionStatusChanged(updated, {}, ['*'], { source: `snapshot:${source}`, urgency: 'urgent' })
   log.session.info('snapshot projection applied', {

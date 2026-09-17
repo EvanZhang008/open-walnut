@@ -73,6 +73,18 @@ A new message after foreground settlement needs a fresh turn even when the sessi
 
 Code: [`ClaudeCodeSession._completeTurnOnIdle` and `writeMessage`](../../src/providers/claude-code-session.ts), [`RemoteSessionManager.writeMessage`](../../src/providers/remote-session-manager.ts), [`projectProcessStatus`](../../src/core/session-snapshot-apply.ts). Regressions: [`tests/providers/session-hold-turn-subagents.test.ts`](../../tests/providers/session-hold-turn-subagents.test.ts), [`tests/providers/mid-turn-inject-no-dedup-reset.test.ts`](../../tests/providers/mid-turn-inject-no-dedup-reset.test.ts), [`tests/e2e/detached-bg-phase.test.ts`](../../tests/e2e/detached-bg-phase.test.ts), and the browser spec above.
 
+### A continued background agent is a new invocation
+
+The CLI reuses a background agent's `task_id` when the agent is continued, but emits a new `tool_use_id`. A terminal flag keyed only by task ID hides the second invocation from both live and rebuilt state, producing Idle while the agent is still working. Scope terminal stickiness to the invocation: a new identified start resets it, while late progress or completion from the previous invocation cannot end the current one. Identity-free patches retain stream ordering. Preserve the identity through level reconciliation and daemon task-state recovery.
+
+Code: [`foldLine`](../../src/providers/daemon-fold.ts), [`foldSessionTail`](../../src/core/session-reconcile.ts), and the background handlers in [`ClaudeCodeSession`](../../src/providers/claude-code-session.ts). Regression: [`daemon-fold.test.ts`](../../tests/providers/daemon-fold.test.ts), [`session-hold-turn-subagents.test.ts`](../../tests/providers/session-hold-turn-subagents.test.ts), [`daemon-task-rebuild-memory.test.ts`](../../tests/providers/daemon-task-rebuild-memory.test.ts), and the resumed-agent browser scenario.
+
+### A valid snapshot disproves a stale reconnect activity
+
+A recovered host can return the same stream version and the same Running projection while a background process waits. An early duplicate return must not preserve an old reconnect activity forever. Clear only that activity under a revision and epoch guard, publish the committed status, and preserve the last-active timestamp. Do not erase real tool activity, pending permission, or a newer reconnect attempt.
+
+Code: [`applySnapshot`](../../src/core/session-snapshot-apply.ts). Regression: the reconnect activity cases in [`session-snapshot-apply.test.ts`](../../tests/core/session-snapshot-apply.test.ts), including equal versions, stale snapshots, and an activity that changes away and back during the conditional write.
+
 ### FIFO markers must precede consumption, not merely acknowledgment
 
 Appending the user marker after a successful send lets a fast CLI answer before the turn-start marker exists. Appending first and truncating on failure is also unsafe: concurrent CLI output may already follow the marker, so truncation would delete real history.

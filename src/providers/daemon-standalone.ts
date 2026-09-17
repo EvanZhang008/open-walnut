@@ -411,7 +411,7 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // ── Types ──
 // L2: per-session background-task state. `resourceVersion` = byte offset of the latest
 // applied event (monotonic, rebuildable from the jsonl). Served on `getState`.
-interface TaskStateEntry { status: string; v: number; t: number; description?: string; isBackgrounded?: boolean }
+interface TaskStateEntry { status: string; v: number; t: number; description?: string; isBackgrounded?: boolean; toolUseId?: string }
 interface TaskState {
   tasks: Record<string, TaskStateEntry>
   resourceVersion: number
@@ -961,10 +961,15 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
   const subtype = parsed.subtype as string | undefined
   const taskId = parsed.task_id as string | undefined
   if (!subtype || !taskId) return false
-  const prev = ts.tasks[taskId]
+  const existing = ts.tasks[taskId]
+  const toolUseId = typeof parsed.tool_use_id === 'string' && parsed.tool_use_id.length > 0 ? parsed.tool_use_id : undefined
+  const differentInvocation = !!(toolUseId && existing?.toolUseId && existing.toolUseId !== toolUseId)
+  if (differentInvocation && subtype !== 'task_started') return false
+  const prev = differentInvocation ? undefined : existing
   let nextStatus: string | undefined
   let isBackgrounded = prev ? prev.isBackgrounded === true : false
   if (subtype === 'task_started') {
+    if (parsed.is_backgrounded === true) isBackgrounded = true
     // Terminal is terminal: a late/duplicate start can't revive a finished task.
     nextStatus = prev && BG_TERMINAL_STATUSES.has(prev.status) ? prev.status : 'running'
   } else if (subtype === 'task_progress') {
@@ -983,7 +988,7 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
   }
   const wasTerminal = prev ? BG_TERMINAL_STATUSES.has(prev.status) : false
   const isTerminal = BG_TERMINAL_STATUSES.has(nextStatus)
-  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: (parsed.description as string | undefined) ?? prev?.description, isBackgrounded: isBackgrounded || undefined }
+  ts.tasks[taskId] = { status: nextStatus, v, t: now, description: (parsed.description as string | undefined) ?? prev?.description, isBackgrounded: isBackgrounded || undefined, toolUseId: toolUseId ?? prev?.toolUseId }
   if (v > ts.resourceVersion) ts.resourceVersion = v
   ts.updatedAt = now
   ts.derivedRunning = runningTaskCount(ts)

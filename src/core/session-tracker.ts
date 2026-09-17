@@ -1844,6 +1844,7 @@ export async function updateSessionRecordConditionally(
   claudeSessionId: string,
   updates: SessionRecordUpdates,
   shouldUpdate: (current: SessionRecord) => boolean,
+  options?: { preserveLastActiveAt?: boolean },
 ): Promise<SessionRecord | null> {
   await ensureSessionInit();
   return withWriteLock(async () => {
@@ -1860,10 +1861,12 @@ export async function updateSessionRecordConditionally(
       const session = rowToSession(row);
 
       if (!shouldUpdate(session)) return null;
+      const lastActiveAt = session.lastActiveAt;
 
       if (!applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition (conditional)')) {
         return session;
       }
+      if (options?.preserveLastActiveAt) session.lastActiveAt = lastActiveAt;
       writeSessionRowSqlite(handle, session);
       log.session.info('session record updated (conditional)', { sessionId: claudeSessionId, fields: Object.keys(updates) });
       return session;
