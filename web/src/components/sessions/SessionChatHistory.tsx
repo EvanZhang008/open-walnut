@@ -1720,8 +1720,28 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    let prevArrowState = false;
     let lastLoggedAtBot: boolean | null = null;
+    /** The ↓ arrow answers a GEOMETRY question ("is the newest row off screen?"),
+     *  never an intent question, so it is computed from the box alone and kept
+     *  out of every gate that exists to protect isAtBottom. Two states used to
+     *  leave it hidden while thousands of px sat below the reader, with no way
+     *  down but guessing (the 2026-09-16 report, "there is clearly more below
+     *  and somehow I cannot scroll to it"): content that GROWS while the reader
+     *  is stationary fires no scroll event at all, and a programmatic reposition
+     *  (the Show-earlier anchor restore, a load-window correction) lands inside
+     *  an ignoreScrollUntil window whose early return sits ABOVE the old arrow
+     *  update. Both are covered now — the scroll path computes it before that
+     *  gate, and the 2Hz sentinel poll re-checks it.
+     *
+     *  Deliberately NO local mirror of the state it sets. The old code kept one
+     *  and skipped the update when it matched, but four follow-bottom paths
+     *  outside this closure set the flag directly — so the mirror drifted, and a
+     *  drifted mirror swallows exactly the update that would have brought the
+     *  arrow back. React bails out on an unchanged value by itself. */
+    const syncArrow = () => {
+      setShowScrollArrow(el.scrollHeight > el.clientHeight
+        && el.scrollTop + el.clientHeight < el.scrollHeight - NEAR_BOTTOM_PX);
+    };
     // Jump tripwire state: previous geometry, to detect teleports between
     // consecutive scroll events. User scrolling (incl. momentum fling) moves
     // scrollTop ≤ a few hundred px per event; a single-event move of
@@ -1810,6 +1830,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
       prevTop = rawTop;
       prevSh = rawSh;
+      // Before the gate: whether the newest row is off screen does not depend on
+      // whose write moved us there.
+      syncArrow();
       // Skip scroll events triggered by ResizeObserver-induced geometry shifts
       if (Date.now() < ignoreScrollUntil.current) return;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
@@ -1833,11 +1856,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         const sh = Math.round(el.scrollHeight);
         console.log(`[scroll:${sid8}] handler ${prev}→${nearBottom} top=${top} ch=${ch} sh=${sh}`);
       }
-      const nextArrow = !nearBottom && el.scrollHeight > el.clientHeight;
-      if (nextArrow !== prevArrowState) {
-        prevArrowState = nextArrow;
-        setShowScrollArrow(nextArrow);
-      }
+      syncArrow();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     // Stationary flicker sentinel: content shifting while the reader is NOT
@@ -1852,6 +1871,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       pollSh = sh;
       prevSh = sh; // keep onScroll's baseline in sync so one shift isn't double-counted
       if (Math.abs(dSh) > 150 && !isAtBottom.current) noteFlicker(dSh, 'stationary');
+      // Growth under a stationary reader fires no scroll event, so this poll is
+      // the only thing that can notice the newest row leaving the screen. Cheap:
+      // the two reads above already forced the same layout.
+      //
+      // Deliberately NOT gated on isAtBottom. Opening a collapsed row while
+      // parked at the bottom grows the transcript with no messages change, no
+      // new blocks, no image load and no container resize — nothing any
+      // follow-bottom path watches, and no scroll event either. The reader is
+      // then above the newest row while intent still says "following", which is
+      // precisely when they need the way back.
+      syncArrow();
     }, 500);
     return () => {
       el.removeEventListener('scroll', onScroll);

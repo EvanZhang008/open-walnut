@@ -31,13 +31,29 @@ export function useHeightVar(
     if (!el || !host) return;
 
     const apply = () => {
+      // An element with NO BOX measures 0: a session column the mobile layout
+      // hides, a panel inside a display:none tab, anything mounted before its
+      // container is shown. Writing that 0 is worse than writing nothing — the
+      // scroller then pads by ~0 and the overlay covers the newest rows, with
+      // no scroll position that can bring them out. Drop the property instead,
+      // so the CSS fallback (a real composer's height) is what applies until
+      // the box is back, and re-measure then.
+      if (el.offsetHeight === 0 && el.getClientRects().length === 0) {
+        host.style.removeProperty(varName);
+        return;
+      }
+      const next = `${el.offsetHeight}px`;
+      // The pin below compensates for a PADDING CHANGE. The host is observed too
+      // (see below), so most callbacks now arrive with the same height — those
+      // must not move a reader who is quietly sitting near the bottom.
+      if (host.style.getPropertyValue(varName) === next) return;
       const sel = pinRef.current;
       const scroller = sel ? host.querySelector<HTMLElement>(sel) : null;
       // Capture "was at bottom" BEFORE the padding var changes layout.
       const nearBottom = scroller
         ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160
         : false;
-      host.style.setProperty(varName, `${el.offsetHeight}px`);
+      host.style.setProperty(varName, next);
       // Reading scrollHeight after the property write reflects the new padding.
       if (scroller && nearBottom) scroller.scrollTop = scroller.scrollHeight;
     };
@@ -45,6 +61,11 @@ export function useHeightVar(
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(el);
+    // The HOST as well, not only the measured overlay: a panel revealed by its
+    // container (mobile → desktop, a tab switch) is a resize of the host, and
+    // relying on the overlay's own resize to notice the reveal is how a panel
+    // ends up serving a measurement taken while it had no box.
+    if (host !== el) ro.observe(host);
     return () => {
       ro.disconnect();
       host.style.removeProperty(varName);
@@ -55,39 +76,7 @@ export function useHeightVar(
   return targetRef as RefObject<HTMLDivElement | null>;
 }
 
-/**
- * Same as useHeightVar but the host is the overlay's PARENT element — for
- * call sites that don't hold a ref to the container (e.g. the chat composer
- * overlay writing --chat-composer-h onto .chat-page).
- */
-export function useOverlayHeightVar(varName: string, pinScrollSelector?: string) {
-  const targetRef = useRef<HTMLDivElement | null>(null);
-  const pinRef = useRef(pinScrollSelector);
-  pinRef.current = pinScrollSelector;
-
-  useEffect(() => {
-    const el = targetRef.current;
-    const host = el?.parentElement;
-    if (!el || !host) return;
-
-    const apply = () => {
-      const sel = pinRef.current;
-      const scroller = sel ? host.querySelector<HTMLElement>(sel) : null;
-      const nearBottom = scroller
-        ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160
-        : false;
-      host.style.setProperty(varName, `${el.offsetHeight}px`);
-      if (scroller && nearBottom) scroller.scrollTop = scroller.scrollHeight;
-    };
-
-    apply();
-    const ro = new ResizeObserver(apply);
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      host.style.removeProperty(varName);
-    };
-  }, [varName]);
-
-  return targetRef;
-}
+/* A parent-hosted twin lived here for the home page's own `.chat-composer-overlay`,
+   which P1 of "remove the main agent" deleted. Removed with it rather than kept
+   unused: a second copy of this measurement is a second place to remember the
+   no-box guard. */
