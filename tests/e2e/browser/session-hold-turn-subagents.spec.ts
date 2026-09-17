@@ -349,3 +349,48 @@ test('a cold Home whose socket connects late still paints the hand-back red', as
   await expect(card.locator('.task-unread-dot')).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-open-red-after-late-connect.png` })
 })
+
+test('permission, question, and plan decisions stay red while waiting and settle after the real FIFO reply', async ({ page }) => {
+  test.setTimeout(120_000)
+  let spawnMode = 'default'
+  const settledSessions: string[] = []
+  await page.route('**/api/sessions/quick-start', (route) => route.continue({
+    postData: JSON.stringify({ ...route.request().postDataJSON(), mode: spawnMode }),
+  }))
+  for (const [toolName, mode, decision] of [
+    ['Bash', 'default', 'allow'], ['Bash', 'default', 'deny'],
+    ['AskUserQuestion', 'bypass', 'Staging'], ['ExitPlanMode', 'plan', 'allow'],
+  ]) {
+    spawnMode = mode
+    await openQuickStart(page)
+    const taskId = await sendQuickStart(page, `status-permission-test:${toolName}`)
+    const sessionId = await sessionIdForTask(page, taskId)
+    const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
+    const taskResponse = await page.request.get(`/api/tasks/${taskId}`)
+    expect(taskResponse.ok()).toBe(true)
+    const { task } = await taskResponse.json()
+    await selectSection(page, task.focus_tier === 'focus' ? 'Focus' : 'Satellite')
+    const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
+    const permission = panel.locator('.permission-request-card').filter({ has: page.getByRole('button', { name: toolName === 'AskUserQuestion' ? 'Submit' : 'Allow', exact: true }) })
+    await expect(permission).toBeVisible({ timeout: 20_000 })
+    for (const settledId of settledSessions) {
+      await expect(page.locator(`${REAL_PANEL}[data-session-id="${settledId}"] .permission-request-actions button`)).toHaveCount(0)
+    }
+    await expect.poll(() => processStatus(page, sessionId)).toBe('running')
+    await expect(panel.locator('.session-panel-badge[title^="Waiting"]')).toBeVisible()
+    await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/waiting-${toolName}-${decision}.png` })
+    if (toolName === 'AskUserQuestion') {
+      await permission.getByRole('button', { name: /Staging/ }).click()
+      await permission.getByRole('button', { name: 'Submit', exact: true }).click()
+    } else {
+      await permission.getByRole('button', { name: decision === 'allow' ? 'Allow' : 'Deny', exact: true }).click()
+    }
+    await expect(panel.getByText(`${toolName} decision received: ${decision}`, { exact: false }).first()).toBeVisible()
+    await expect.poll(() => processStatus(page, sessionId)).toBe('idle')
+    await expect(panel.locator('.permission-request-actions button')).toHaveCount(0)
+    settledSessions.push(sessionId)
+    await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  }
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/permission-decisions-settled.png` })
+})

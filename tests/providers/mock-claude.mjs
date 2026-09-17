@@ -75,6 +75,7 @@ let pendingUserResolve = null;
 // by the persistent stdin listener so a LATER FIFO user line re-enters the mode
 // dispatcher and drives the next turn on the SAME live process.
 let onUserLine = null;
+let onControlResponse = null;
 
 // When --input-format stream-json is used, read the message from stdin (FIFO pipe).
 // The real CLI reads JSON lines like: {"type":"user","message":{"role":"user","content":"..."}}
@@ -169,6 +170,8 @@ if (inputFormat === 'stream-json') {
             type: 'control_response',
             response: { subtype: 'success', request_id: parsed.request_id, response: { title: `Mock title: ${words}` } },
           }) + '\n');
+        } else if (parsed.type === 'control_response' && onControlResponse) {
+          onControlResponse(parsed.response);
         } else if (parsed.type === 'user' && parsed.message?.content !== undefined && pendingUserResolve) {
           const c = parsed.message.content;
           const resolve = pendingUserResolve;
@@ -314,6 +317,43 @@ if (outputFormat === 'stream-json') {
 
   // Emit remaining events (optionally delayed for "slow:N" messages)
   function emitRemainingEvents() {
+    if (effectiveMessage.startsWith('status-permission-test:')) {
+      const toolName = effectiveMessage.match(/^status-permission-test:(\w+)/)?.[1];
+      const requestId = `req-status-${outputSessionId}-${++snapshotTurnSeq}`;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const input = toolName === 'AskUserQuestion'
+        ? { questions: [{ question: 'Which validation target?', header: 'Target', multiSelect: false, options: [
+            { label: 'Staging', description: 'Validate the staging fixture' },
+            { label: 'Local', description: 'Validate the local fixture' },
+          ] }] }
+        : toolName === 'ExitPlanMode' ? { plan: 'Validate the isolated status fixture.' }
+        : { command: 'pwd', description: 'Inspect the fixture directory' };
+      onControlResponse = (response) => {
+        if (response.request_id !== requestId) return;
+        onControlResponse = null;
+        const decision = response.response;
+        const answer = decision?.updatedInput?.answers?.['Which validation target?'];
+        const text = `${toolName} decision received: ${answer || decision?.behavior || 'missing'}`;
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: outputSessionId, state: 'running' });
+        emit({ type: 'assistant', session_id: outputSessionId, message: {
+          id: `msg_${requestId}`, type: 'message', role: 'assistant', model: 'mock-model',
+          content: [{ type: 'text', text }], stop_reason: 'end_turn',
+          usage: { input_tokens: 20, output_tokens: 8 },
+        } });
+        emit({ type: 'result', subtype: 'success', is_error: false, session_id: outputSessionId,
+          result: text, num_turns: 1, total_cost_usd: nextSnapshotCost(0.001),
+          usage: { input_tokens: 20, output_tokens: 8 },
+        });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: outputSessionId, state: 'idle' });
+        armSnapshotNextTurn();
+      };
+      emit({ type: 'system', subtype: 'session_state_changed', session_id: outputSessionId, state: 'requires_action' });
+      emit({ type: 'control_request', request_id: requestId,
+        request: { subtype: 'can_use_tool', tool_name: toolName, input },
+      });
+      return;
+    }
+
     // 2a.-1. "snapshot-clean-turn[:<text>]" — ONE clean turn then STAY ALIVE
     //         (real FIFO-mode CLI behavior), so the daemon's fold sees the
     //         canonical settle sequence and the session converges to idle
