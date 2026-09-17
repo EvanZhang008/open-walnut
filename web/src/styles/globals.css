@@ -26977,6 +26977,11 @@ a.file-link:hover {
   background: var(--bg-primary, #fff);
 }
 .permission-fix-modal .app-modal-message { white-space: normal; }
+/* Prose paragraphs with no gap read as one wall of text, and this dialog has
+   two of them (the row's one line, then the guidance the row cannot carry)
+   before the numbered steps. Spacing is the only thing making it scannable. */
+.permission-fix-modal .app-modal-message > p + p,
+.permission-fix-modal .app-modal-message > ol + p { margin-top: 8px; }
 .permission-grant-target code {
   /* The grant target is the load-bearing detail (grant to the WRONG identity
      and nothing works) — render it copy-friendly and visually distinct. */

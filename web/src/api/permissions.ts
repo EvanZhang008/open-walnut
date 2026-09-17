@@ -7,7 +7,7 @@ import { apiGet, apiPost } from './client';
 
 /** One id per GRANT, never per feature: Full Disk Access is a single row
  *  covering every feature that reads through the shared helper. */
-export type PermissionId = 'calendar' | 'full-disk-access';
+export type PermissionId = 'calendar' | 'full-disk-access' | 'session-full-disk-access';
 
 export type PermissionState = 'granted' | 'denied' | 'not-determined' | 'not-applicable' | 'unknown';
 
@@ -37,6 +37,12 @@ export interface PermissionStatus {
   workingVia?: string;
   /** macOS offers no way to read this grant back, only to ask for it. */
   unverifiable?: boolean;
+  /** Guidance for the dialog only: why this exists and what skipping it costs.
+   *  Never rendered in the row — `why` is the one line the list shows. */
+  context?: string;
+  /** Nothing breaks without it: the UI offers "Set up" rather than "Fix", and
+   *  never says "needs permission". Not the same fact as `unverifiable`. */
+  optional?: boolean;
 }
 
 export interface PermissionsReport {

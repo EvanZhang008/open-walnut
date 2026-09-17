@@ -90,6 +90,30 @@ describe('GET /api/permissions', () => {
     }
   });
 
+  it('describes session file access as optional and names Claude Code', async () => {
+    const report = await (await fetch(apiUrl('/api/permissions'))).json();
+    if (!report.applicable) return; // no macOS rows to describe
+    const row = report.permissions.find((p: { id: string }) => p.id === 'session-full-disk-access');
+    expect(row).toBeTruthy();
+    // The three things the copy must do, pinned because they are the reason the
+    // row exists rather than incidental wording: a user scanning the list has to
+    // see that skipping it is fine, and has to recognise WHO is asking. "Session"
+    // is Walnut's own noun; Claude Code is what the popups are actually about.
+    expect(row.why).toMatch(/^Optional\./);
+    expect(row.why).toContain('Claude Code');
+    // And it stays one sentence, like the rows above it.
+    expect(row.why.split('. ').length).toBe(2);
+    // The reasoning belongs in `context`, which only the dialog shows.
+    expect(row.context).toContain('Claude Code runs inside Walnut');
+    expect(row.context).toContain('Skipping it costs nothing');
+    // And the numbered list stays ACTIONS. An explanation rendered as "step 1"
+    // reads as something to perform, and the user hunts for the thing to click.
+    for (const step of row.steps as string[]) {
+      expect(step).not.toContain('Claude Code runs inside Walnut');
+      expect(step.length).toBeLessThan(120);
+    }
+  });
+
   it('serves cached report on repeat, re-probes with ?force=1', async () => {
     const first = await (await fetch(apiUrl('/api/permissions'))).json();
     const second = await (await fetch(apiUrl('/api/permissions'))).json();

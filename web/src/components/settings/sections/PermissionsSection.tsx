@@ -119,7 +119,7 @@ export function PermissionsSection() {
                   style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
                   onClick={() => setFixing(p)}
                 >
-                  {p.unverifiable ? 'Set up…' : 'Fix…'}
+                  {p.optional ? 'Set up…' : 'Fix…'}
                 </button>
               )}
             </div>

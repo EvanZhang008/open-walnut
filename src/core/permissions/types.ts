@@ -103,6 +103,26 @@ export interface PermissionStatus {
    * checked" and name the observable signal instead (the popups stop).
    */
   unverifiable?: boolean;
+  /**
+   * Guidance shown in the fix dialog, above the steps: why this exists, what
+   * skipping it costs, what to expect afterwards.
+   *
+   * Separate from `why` because `why` is one line in a list the user SCANS, and
+   * separate from `steps` because a numbered list must be all actions — an
+   * explanation as "step 1" reads as something to perform and leaves the user
+   * looking for the thing to click.
+   */
+  context?: string;
+  /**
+   * Nothing breaks without this grant — it removes friction (repeated popups)
+   * rather than unblocking a feature.
+   *
+   * Deliberately NOT the same fact as `unverifiable`: the UI needs to know that
+   * skipping is fine (so it offers "Set up" instead of "Fix", and never titles a
+   * dialog "needs permission" over copy that says the opposite) separately from
+   * whether the grant can be read back afterwards.
+   */
+  optional?: boolean;
 }
 
 export interface LauncherInfo {

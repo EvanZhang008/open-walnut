@@ -354,19 +354,33 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
       // the user is deciding about.
       state: session.app ? 'unknown' : 'not-applicable',
       unverifiable: true,
+      // Sessions work without it; it removes popups. Everything the UI says
+      // about this row has to keep agreeing with that.
+      optional: true,
       fixKind: 'settings-only',
+      // One short sentence, like every other row: this is a list the user scans.
+      // It names Claude Code because that is what they see doing the reading, and
+      // it leads with "Optional" so a scan never reads it as something broken.
       why:
-        'Stops the repeated "wants to access data from other apps" popups while a session works. '
-        + 'Sessions run under Walnut itself, so this is one switch for the app you already know. '
-        + 'Optional: work in your own project folders needs no grant, and sessions keep working '
-        + 'if you skip it. It is a separate entry from the reader helper above because macOS '
-        + 'grants access per program, not per app you think of as one.',
+        'Optional. Stops the repeated "wants to access data from other apps" popups '
+        + 'while Claude Code reads files in a session.',
       grantTarget: session.app ?? 'Walnut.app',
       // The app makes ITSELF the responsible process before starting the daemon,
       // so this grant does not depend on whether a terminal or the Mac app
       // started Walnut.
       launcherIndependent: true,
       settingsUrl: SETTINGS_URL.fullDisk,
+      // Everything that is not an action: the user has opened the dialog, so
+      // this is where they will read. Ends with what to expect, because a grant
+      // that appears to do nothing is what makes people grant it twice.
+      context:
+        'Claude Code runs inside Walnut, so macOS asks Walnut for access, and granting it '
+        + 'once replaces a popup per file. Skipping it costs nothing: work in your own '
+        + 'project folders never needed it. macOS lists this separately from the reader '
+        + 'helper above because it grants access per program, not per app you think of as '
+        + 'one. Sessions already running keep the identity they started with, so the switch '
+        + 'applies after the session daemon next restarts.',
+      // Actions only, in order, each one a thing to do or to look at.
       steps: [
         'Open System Settings → Privacy & Security → Full Disk Access.',
         'Click + (authenticate if asked).',
@@ -376,8 +390,6 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
         // The dialog's own footer explains that the row cannot be read back, so
         // this step must not say it a second time in different words.
         'You will know it worked because the popups stop.',
-        'Sessions already running keep the identity they started with; the switch applies '
-          + 'the next time the session daemon restarts.',
       ],
     },
   ];

@@ -11,6 +11,17 @@
  */
 import { test, expect } from '@playwright/test'
 
+/**
+ * Evidence for a human reviewer, off by default: `PW_SHOTS=1` saves what the
+ * user actually reads. Gated because an ordinary or CI run must not write
+ * outside the test output dir, and because the copy in this panel is the whole
+ * feature — it has to be looked at, not just asserted on.
+ */
+async function shot(target: { screenshot: (o: { path: string }) => Promise<unknown> }, name: string): Promise<void> {
+  if (!process.env.PW_SHOTS) return
+  await target.screenshot({ path: `/tmp/walnut-session-identity/${name}.png` })
+}
+
 const REPORT = {
   platform: 'darwin',
   applicable: true,
@@ -33,11 +44,21 @@ const REPORT = {
       label: 'Session file access',
       state: 'unknown',
       unverifiable: true,
+      optional: true,
       fixKind: 'settings-only',
-      why: 'Stops the repeated "wants to access data from other apps" popups while a session works.',
+      why:
+        'Optional. Stops the repeated "wants to access data from other apps" popups '
+        + 'while Claude Code reads files in a session.',
       grantTarget: '/Applications/Walnut.app',
       launcherIndependent: true,
       settingsUrl: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+      context:
+        'Claude Code runs inside Walnut, so macOS asks Walnut for access, and granting it '
+        + 'once replaces a popup per file. Skipping it costs nothing: work in your own '
+        + 'project folders never needed it. macOS lists this separately from the reader '
+        + 'helper above because it grants access per program, not per app you think of as '
+        + 'one. Sessions already running keep the identity they started with, so the switch '
+        + 'applies after the session daemon next restarts.',
       steps: [
         'Open System Settings → Privacy & Security → Full Disk Access.',
         'Click + (authenticate if asked).',
@@ -98,6 +119,15 @@ test('a user can set up session file access from Settings, without a terminal', 
   // The path is the whole point: users kept granting to "node" and it never
   // worked, so the row has to name what to add.
   await expect(row).toContainText('popups')
+  // A user scanning this list must see that skipping it is fine, and must
+  // recognise who is asking. Both words are pinned server-side too
+  // (tests/web/routes/permissions-api.test.ts); here they are pinned as VISIBLE,
+  // because a row that truncates its own text tells the user neither.
+  await expect(row).toContainText('Optional.')
+  await expect(row).toContainText('Claude Code')
+  // The reasoning must NOT be here: it belongs to the dialog, and a paragraph in
+  // a scanned list is what made this row twice the height of its neighbour.
+  await expect(row).not.toContainText('Skipping it costs nothing')
 
   // "Unknown" beside a switch the user just flipped reads as a broken check.
   await expect(row.locator('.permission-row-state')).toHaveText("Can't be checked")
@@ -109,18 +139,31 @@ test('a user can set up session file access from Settings, without a terminal', 
   const readerRow = section.locator('.permission-row', { hasText: 'Full Disk Access' })
   await expect(readerRow.locator('.permission-row-state')).toHaveText('Not granted')
   await expect(readerRow.getByRole('button', { name: 'Fix…' })).toBeVisible()
+  await shot(section, 'permissions-section')
 
   await setUp.click()
   const dialog = page.locator('.app-modal-overlay[role="dialog"]')
   await expect(dialog).toBeVisible()
+  // The title is what people believe. "needs permission" above a body that
+  // opens with "Optional." is the dialog contradicting itself.
+  await expect(dialog.locator('.app-modal-title')).toHaveText('Set up session file access')
   await expect(dialog).toContainText('/Applications/Walnut.app')
   await expect(dialog).toContainText('Full Disk Access')
+  // The row is one line, so the guidance has to be here: what it buys, that
+  // skipping it costs nothing, and why System Settings will show two
+  // Walnut-ish entries for one permission.
+  await expect(dialog).toContainText('Claude Code runs inside Walnut')
+  await expect(dialog).toContainText('Skipping it costs nothing')
+  await expect(dialog).toContainText('separately from the reader helper')
+  // The numbered list is actions only — the explanation above is not step 1.
+  await expect(dialog.locator('.permission-steps li').first()).toHaveText(/^Open System Settings/)
   // The grant target IS the app here, so the dialog must not call it a helper.
   await expect(dialog).toContainText('macOS checks this grant for Walnut itself')
   await expect(dialog).not.toContainText("Walnut's own helper")
   // And it must not promise a green that can never arrive.
   await expect(dialog).not.toContainText('turns green once granted')
   await expect(dialog).toContainText("keeps saying \"Can't be checked\"")
+  await shot(dialog, 'setup-dialog')
 
   // The one action that replaces the terminal: it opens the pane and copies the
   // path on the MAC, so the user only drags or pastes.
@@ -132,6 +175,7 @@ test('a user can set up session file access from Settings, without a terminal', 
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
   await readerRow.getByRole('button', { name: 'Fix…' }).click()
+  await expect(dialog.locator('.app-modal-title')).toHaveText('Full Disk Access needs permission')
   await expect(dialog).toContainText("macOS checks this grant for Walnut's own helper")
   await expect(dialog).toContainText('turns green once granted')
 })

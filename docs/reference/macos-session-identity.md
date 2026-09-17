@@ -52,6 +52,13 @@ requirement: ordinary work in your own project directories needs no grant, and
 sessions keep working if you skip it, deny it, or revoke it later. Note that this
 grant covers the app as a whole, so it does not separate the UI from the sessions.
 
+You do not have to find that path yourself. Walnut's **Settings → macOS Access**
+has an optional *Session file access* row: **Set up…** explains what the grant
+buys, opens the right pane, and copies the path to your clipboard, so the whole
+setup is a paste. The row keeps saying "Can't be checked" afterwards, because
+macOS offers no way to read this grant back; the observable signal is that the
+popups stop.
+
 ## Scope, precisely
 
 - **Full Disk Access granted to Walnut covers the daemon and everything it

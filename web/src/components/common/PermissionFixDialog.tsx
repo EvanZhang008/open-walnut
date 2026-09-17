@@ -107,11 +107,25 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
 
   const showPromptButton = state === 'not-determined' && permission.fixKind === 'prompt';
 
+  // "Set up session file access" reads as a sentence; "Set up Session file
+  // access" does not. Only labels that are already sentence case get their first
+  // letter lowered — a Title Case or acronym label ("Full Disk Access") would be
+  // mangled into "full Disk Access", so it is left exactly as written.
+  const setupLabel = /^[A-Z][a-z]+ [a-z]/.test(permission.label)
+    ? permission.label.charAt(0).toLowerCase() + permission.label.slice(1)
+    : permission.label;
+
   return createPortal(
     <div className="app-modal-overlay" role="dialog" aria-modal="true" aria-label={`${permission.label} permission`} onMouseDown={onClose}>
       <div className="app-modal permission-fix-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="app-modal-title">
-          {state === 'granted' ? `${permission.label} access granted` : `${permission.label} needs permission`}
+          {state === 'granted'
+            ? `${permission.label} access granted`
+            // "needs permission" over a body that opens with "Optional." is the
+            // dialog arguing with itself, and the title is what people believe.
+            : permission.optional
+              ? `Set up ${setupLabel}`
+              : `${permission.label} needs permission`}
         </div>
 
         {state === 'granted' ? (
@@ -122,6 +136,10 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
         ) : (
           <div className="app-modal-message">
             <p>{permission.why}</p>
+            {/* The guidance a one-line row cannot carry. Above the grant target
+                because it answers "should I?", which comes before "what do I
+                paste?". */}
+            {permission.context && <p>{permission.context}</p>}
             {/* Naming the launcher is only true for grants that FOLLOW the
                 launcher. A self-responsible helper's grant is its own, and
                 mentioning the launcher there makes a correct instruction read
