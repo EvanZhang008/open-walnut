@@ -26,6 +26,9 @@ import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from './injected-banner';
 import { InjectedBannerRow } from './InjectedBannerRow';
+import { searchPromptBannerSplit } from './search-ask';
+import { SearchAnswerCard } from './SearchAnswerCard';
+import { parseSearchAnswerMessage } from '@open-walnut/search-transcript';
 import { log } from '@/utils/log';
 
 // ── Edit Diff View ──
@@ -1070,11 +1073,25 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   // and everything downstream (envelope parsing, markdown, copy/pin/rewind) then
   // works on the typed text alone. `null` for an ordinary message, so that
   // message takes exactly the path it took before.
+  // The ✦ AI search's prompt is machine text too — Walnut's own question plus a
+  // seed-row dump — and it arrives in this panel because the search's session is
+  // adoptable ("Open as session"). It is not bracket-fenced, so the banner scan
+  // cannot find it; recognizing it produces the same split, which leaves the
+  // QUERY as the bubble and folds the prompt into one disclosure row.
   const bannerSplit = useMemo(
-    () => (isUser && text ? splitLeadingBanners(text) : null),
+    () => (isUser && text ? (searchPromptBannerSplit(text) ?? splitLeadingBanners(text)) : null),
     [isUser, text],
   );
   const bodyText = bannerSplit ? bannerSplit.body : text;
+
+  // …and its ANSWER is a bare JSON object. Rendered with the same rows the search
+  // card uses, from the live task table. Strict parse: a reply with any prose in
+  // it is prose and keeps rendering as prose (the model narrates between its
+  // searches), so only the answer message itself becomes a card.
+  const searchAnswer = useMemo(
+    () => (!isUser && text ? parseSearchAnswerMessage(text) : null),
+    [isUser, text],
+  );
 
   // Detect image paths in assistant text and render inline previews
   const textImagePaths = useMemo(() => {
@@ -1166,6 +1183,8 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
         ))}
         {bodyText && envelopeSegments ? (
           <SessionEnvelopeSegments segments={envelopeSegments} sessionCwd={sessionCwd} />
+        ) : bodyText && searchAnswer ? (
+          <SearchAnswerCard answer={searchAnswer} onOpenTask={onTaskClick} />
         ) : bodyText && (useSegments ? (
           <SuggestSegments segments={segments} cwd={sessionCwd} scope={message.msgId} />
         ) : isUser ? (

@@ -531,6 +531,36 @@ describe('agents (additive)', () => {
   })
 })
 
+describe('message normalization: the ✦ search prompt', () => {
+  it('projects the QUESTION, not the seeded row dump', async () => {
+    const { normalizeEntries } = await import('../../../src/web/routes/api-v1.js')
+    const { buildSeedResultsBlock, buildUserPrompt } = await import('../../../src/core/task-search-agent-contract.js')
+    const rows = JSON.stringify([{ type: 'task', title: 'Board search', taskId: 'mu4qx48p-4828', phase: 'COMPLETE' }])
+    const entries = [
+      // Built with the server's own builders: a reworded prompt fails here rather
+      // than quietly putting a 2.5KB dump back on the phone's screen.
+      { tag: 'ai', role: 'user', content: [{ type: 'text', text: buildUserPrompt('unit test') + buildSeedResultsBlock(rows) }], timestamp: '2026-07-10T00:00:00Z' },
+      { tag: 'ai', role: 'assistant', content: [{ type: 'text', text: 'answered' }], timestamp: '2026-07-10T00:00:01Z' },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = normalizeEntries(entries as any)
+    expect(out).toHaveLength(2)
+    expect(out[0].text).toBe('unit test')
+    expect(JSON.stringify(out)).not.toContain('SEED RESULTS')
+    expect(JSON.stringify(out)).not.toContain('mu4qx48p-4828')
+  })
+
+  it('leaves an ordinary user turn exactly as it was', async () => {
+    const { normalizeEntries } = await import('../../../src/web/routes/api-v1.js')
+    const entries = [
+      { tag: 'ai', role: 'user', content: [{ type: 'text', text: 'find the pipeline task I have to update' }], timestamp: '2026-07-10T00:00:00Z' },
+    ]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = normalizeEntries(entries as any)
+    expect(out[0].text).toBe('find the pipeline task I have to update')
+  })
+})
+
 describe('message normalization: notifications + entity refs', () => {
   it('renders surviving ui entries as notification cards, hides dev noise, strips refs', async () => {
     const { normalizeEntries } = await import('../../../src/web/routes/api-v1.js')

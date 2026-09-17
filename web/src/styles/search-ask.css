@@ -1,0 +1,95 @@
+/**
+ * The ✦ AI search answer as a card inside a session transcript.
+ *
+ * Same card language as the search panel above the task list (`.agent-search-*`
+ * carries the header, summary and rows), with only what the transcript context
+ * changes: it is a block in a message column rather than a panel pinned under a
+ * toolbar, so it owns its own outer spacing and must not inherit the panel's
+ * `40vh` scroller — five rows in a chat bubble are five rows, never a nested
+ * scroll area a reader has to discover.
+ *
+ * Imported by SearchAnswerCard.tsx, which SessionMessage imports statically, so
+ * these rules are in the bundle for the PROMPT half too (a session that shows the
+ * folded prompt before its answer exists still gets them).
+ */
+
+.session-search-answer {
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  padding: 6px 8px;
+  font-size: 12.5px;
+  /* min-width:0 in a flex/grid message column: without it the rows' nowrap
+     titles would set the column's min-content width and the whole transcript
+     could scroll sideways at narrow widths. */
+  min-width: 0;
+  max-width: 100%;
+}
+
+.session-search-answer-count {
+  color: var(--fg-muted);
+  font-size: 11px;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+
+/* No scroller here (see the file note): the answer is capped at five rows. */
+.session-search-answer .session-search-answer-rows {
+  max-height: none;
+  overflow: visible;
+}
+
+.session-search-answer-more {
+  margin: 4px 0 0;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+
+/* A row whose task no longer exists: shown, not clickable, and visibly inert. */
+.session-search-answer .agent-search-row.is-missing,
+.agent-search-row.is-missing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+.agent-search-row.is-missing .agent-search-row-title {
+  font-variant-numeric: tabular-nums;
+  text-decoration: line-through;
+}
+
+/* …and it must not light up like a button on hover: the base row rule owns the
+   hover tint, and a dead row is not clickable. */
+.agent-search-row.is-missing:hover {
+  background: none;
+}
+
+/* The empty circle slot that keeps a dead row's title on the same left edge as
+   every other row's (the icon rows are 12px + the row's 6px gap). */
+.agent-search-row-circle-empty {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+/* The folded search prompt is a CODE BLOCK inside a user bubble, and the bubble
+   paints white-ish text on `--accent`: a code block that only sets its own light
+   background then renders grey-on-grey (measured on screen, 2026-09-16). The
+   disclosure exists to be read, so pin both halves here. */
+.session-msg-user .injected-banner-row .tool-run-body pre {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.session-msg-user .injected-banner-row .tool-run-body pre code,
+.session-msg-user .injected-banner-row .tool-run-body code {
+  color: var(--fg);
+  background: transparent;
+}

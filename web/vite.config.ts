@@ -19,6 +19,10 @@ export default defineConfig({
       // because the browser reducer and the server-side stream buffer are twins
       // and a rule only one of them applies reappears as an artifact on reload.
       '@open-walnut/pending-markup': path.resolve(__dirname, '../src/core/stream/pending-markup.ts'),
+      // Same reason once more: the ✦ search's prompt and answer are BUILT by the
+      // server and READ BACK by the transcript renderer, so the sentinels and
+      // their parser must have one owner or a card silently stops matching.
+      '@open-walnut/search-transcript': path.resolve(__dirname, '../src/core/task-search-transcript.ts'),
     },
   },
   server: {

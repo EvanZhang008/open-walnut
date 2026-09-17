@@ -212,6 +212,29 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // The ✦ AI search adopted as a session (search-ask-transcript.spec.ts):
+        // its transcript is the prompt Walnut sent + the bare JSON answer, the two
+        // messages the transcript renderer cards. Own task + own session so the
+        // spec never shares mutable state with the other transcript fixtures.
+        id: 'pw-task-search-ask',
+        title: 'unit test',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-search-ask-session'],
+        active_session_ids: [],
+        session_id: 'pw-search-ask-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Outline (pinned messages) + rewind fixture. Its own session so the
         // transcript can carry REAL uuids on the user lines: `--resume-session-at`
         // and rewind_files only accept transcript uuids, so the rewind button
@@ -1824,6 +1847,65 @@ await fs.writeFile(
     )
   }
 }
+
+// The ✦ AI search adopted as a session (search-ask-transcript.spec.ts). Its
+// transcript is what the SERVER really writes: the prompt built by the server's
+// own builders (so a reworded prompt fails the spec instead of quietly leaving a
+// 2.5KB JSON dump in a chat bubble), the model's mid-run narration, and the bare
+// JSON answer. The answer names two live fixture tasks — one IN_PROGRESS, one
+// COMPLETE with a different project — plus one id that resolves to nothing, so
+// the card is asserted on live titles AND on the deleted-row case.
+const searchAskFixtureRoot = path.join(tmpBase, 'projects', 'search-ask-fixture')
+await fs.mkdir(searchAskFixtureRoot, { recursive: true })
+{
+  const { buildSeedResultsBlock, buildUserPrompt } = await import('../../../src/core/task-search-agent-contract.js')
+  const seedRows = JSON.stringify([
+    { type: 'task', title: 'Editor fixture task', snippet: 'unit test board search', taskId: 'pw-task-vscode', phase: 'IN_PROGRESS', updated: '2026-09-16', score: 0.87 },
+    { type: 'session', title: 'Finished marmalade task', snippet: 'unit test coverage for the jam board', taskId: 'pw-task-done-marmalade', phase: 'COMPLETE', updated: '2026-09-02', score: 0.81 },
+  ])
+  const prompt = buildUserPrompt('unit test') + buildSeedResultsBlock(seedRows)
+  // Every row shape a real answer produces: a live task, a COMPLETE one in another
+  // project, an id that resolves to nothing, a unique 8-char-style PREFIX (the
+  // model does emit those), and a literal repeat (one task is one row).
+  const answer = JSON.stringify({
+    summary: 'Two board searches match',
+    results: [
+      { task_id: 'pw-task-vscode', evidence: 'unit test board search', confidence: 'high' },
+      { task_id: 'pw-task-done-marmalade', evidence: 'unit test coverage for the jam board', confidence: 'medium' },
+      { task_id: 'pw-task-vanished-0001', evidence: 'a task that has since been deleted', confidence: 'low' },
+      { task_id: 'pw-task-question-r', evidence: 'reached by an id prefix', confidence: 'low' },
+      { task_id: 'pw-task-vscode', evidence: 'listed twice by the model', confidence: 'low' },
+    ],
+  })
+  const jsonlDir = path.join(tmpBase, '.claude', 'projects', searchAskFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-'))
+  await fs.mkdir(jsonlDir, { recursive: true })
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-search-ask-session.jsonl'),
+    [
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'pw-search-ask-session',
+        timestamp: new Date(sessionFixtureNow - 40_000).toISOString(),
+        message: { role: 'user', content: prompt },
+      }),
+      // Narration: the search agent talks between its own searches, and that text
+      // must keep rendering as text — only the answer message becomes a card.
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-search-ask-session',
+        timestamp: new Date(sessionFixtureNow - 35_000).toISOString(),
+        message: { role: 'assistant', content: [{ type: 'text', text: 'SEARCH_ASK_NARRATION checking the board for that phrase.' }] },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-search-ask-session',
+        timestamp: new Date(sessionFixtureNow - 30_000).toISOString(),
+        message: { role: 'assistant', content: [{ type: 'text', text: answer }] },
+      }),
+      '',
+    ].join('\n'),
+  )
+}
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
   claudeSessionId: `pw-scale-session-${String(index).padStart(3, '0')}`,
@@ -1855,6 +1937,21 @@ await fs.writeFile(
         messageCount: 1,
         cwd: vscodeFixtureRoot,
         title: 'Editor fixture session',
+      },
+      {
+        // The adopted ✦ search (search-ask-transcript.spec.ts). cwd is its own
+        // fixture root, which is what encodes the transcript's project dir.
+        claudeSessionId: 'pw-search-ask-session',
+        taskId: 'pw-task-search-ask',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 40_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        messageCount: 2,
+        cwd: searchAskFixtureRoot,
+        title: 'unit test',
       },
       {
         claudeSessionId: 'pw-pins-session',

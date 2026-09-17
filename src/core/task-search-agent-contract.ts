@@ -10,13 +10,23 @@
  */
 
 import type { Task } from './types.js';
+import {
+  AGENT_SEARCH_MAX_RESULTS,
+  EVIDENCE_MAX_CHARS,
+  SEARCH_PROMPT_HEAD,
+  SEED_BLOCK_HEAD,
+  SUMMARY_MAX_CHARS,
+  cleanSearchText,
+  extractResultsObject,
+} from './task-search-transcript.js';
 
 /** Bump to invalidate cached agent answers when the prompt contract changes. */
 export const AGENT_SEARCH_PROMPT_V = 'v5';
 
-export const AGENT_SEARCH_MAX_RESULTS = 5;
-const EVIDENCE_MAX_CHARS = 200;
-const SUMMARY_MAX_CHARS = 300;
+// The row cap and the two message shapes live in task-search-transcript.ts: the
+// browser reads the same prompt and the same answer back out of the adopted
+// session's transcript, so building and parsing them must have ONE owner.
+export { AGENT_SEARCH_MAX_RESULTS };
 
 // v5 (2026-09-05): the answer is a RESULTS LIST, not one pick. A live query
 // ("side quesiton ask walnut") had two genuine matches in the seed; v4's
@@ -95,11 +105,11 @@ export const SYSTEM_PROMPT = buildCliSystemPrompt();
  *  server-side so the common case needs ONE model round instead of two (search
  *  round + answer round). */
 export function buildSeedResultsBlock(rowsJson: string): string {
-  return `\n\nSEED RESULTS — the raw query was already searched for you (search tool, same format):\n${rowsJson}\nIf these already show the plausible matches, answer now with ALL of them, without any tool calls.`;
+  return `\n\n${SEED_BLOCK_HEAD} (search tool, same format):\n${rowsJson}\nIf these already show the plausible matches, answer now with ALL of them, without any tool calls.`;
 }
 
 export function buildUserPrompt(query: string): string {
-  return `Find the Walnut task matching this search:\n"""${query}"""`;
+  return `${SEARCH_PROMPT_HEAD}\n"""${query}"""`;
 }
 
 export type AgentConfidence = 'high' | 'medium' | 'low';
@@ -121,40 +131,16 @@ export interface AgentSearchResult {
 }
 
 /**
- * Tolerant extraction: the child is told "JSON only" but models wrap answers
- * in fences or prose — and sometimes QUOTE tool-output rows (their own `{...}`
- * JSON) in the prose before the real answer, so the naive first-{ to last-}
- * slice is prose-contaminated garbage (shipped 502 unparseable, 2026-08-30).
- * Walk the `{` candidates left to right against the final `}` until one
- * parses AND carries a `results` array; a quoted row mid-prose fails the
- * parse (trailing prose) and is skipped.
+ * Tolerant extraction for the LIVE pipeline: a best-effort answer beats a 502,
+ * so this accepts an object wrapped in fences or prose. The walk itself lives in
+ * task-search-transcript.ts (extractResultsObject) because the browser reads the
+ * same answer back out of the adopted session's transcript; only the throwing
+ * contract is local — the route turns it into a 502.
  */
 export function parseAgentAnswer(answer: string): RawAgentAnswer {
-  const end = answer.lastIndexOf('}');
-  if (end === -1) throw new Error('no JSON object in agent answer');
-  const MAX_CANDIDATES = 50; // answers are ~2KB; this is a runaway bound
-  let start = answer.indexOf('{');
-  for (let i = 0; start !== -1 && start < end && i < MAX_CANDIDATES; i++, start = answer.indexOf('{', start + 1)) {
-    let parsed: unknown;
-    try { parsed = JSON.parse(answer.slice(start, end + 1)); } catch { continue; }
-    if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { results?: unknown }).results)) {
-      continue;
-    }
-    const obj = parsed as { summary?: unknown; results: unknown[] };
-    return {
-      summary: obj.summary,
-      results: obj.results.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null),
-    };
-  }
-  throw new Error('no parseable results object in agent answer');
-}
-
-function cleanText(value: unknown, maxChars: number): string {
-  if (typeof value !== 'string') return '';
-  // Strip control chars, collapse whitespace, cap by code point (an emoji
-  // split mid-surrogate breaks JSON consumers downstream).
-  const flat = value.replace(/\p{C}+/gu, ' ').replace(/\s+/g, ' ').trim();
-  return [...flat].slice(0, maxChars).join('');
+  const parsed = extractResultsObject(answer);
+  if (!parsed) throw new Error('no parseable results object in agent answer');
+  return parsed;
 }
 
 /**
@@ -190,12 +176,12 @@ export function validateAndEnrich(
       title: task.title,
       phase: task.phase,
       ...(task.project ? { project: task.project } : {}),
-      evidence: cleanText(row.evidence, EVIDENCE_MAX_CHARS),
+      evidence: cleanSearchText(row.evidence, EVIDENCE_MAX_CHARS),
       ...(confidence ? { confidence } : {}),
       ...(task.updated_at ? { updatedAt: task.updated_at } : {}),
     });
   }
-  const summary = cleanText(raw.summary, SUMMARY_MAX_CHARS);
+  const summary = cleanSearchText(raw.summary, SUMMARY_MAX_CHARS);
   return { ...(summary ? { summary } : {}), results, droppedIds };
 }
 

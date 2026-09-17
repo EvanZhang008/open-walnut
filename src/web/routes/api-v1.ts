@@ -26,6 +26,7 @@ import type { MessageParam } from '../../model/model.js'
 import type { ProjectedTranscriptMessage } from '../../core/session-projection.js'
 import { VALID_PRIORITIES, type ChatEntry, type TaskPhase, type TaskPriority } from '../../core/types.js'
 import { focusTierMatches } from '../../core/task-query.js'
+import { parseSearchPromptMessage } from '../../core/task-search-transcript.js'
 import { VALID_PHASES } from '../../core/phase.js'
 import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
@@ -352,6 +353,20 @@ function stripLeadingBanners(text: string): string {
 }
 
 /**
+ * A user turn as the phone should read it.
+ *
+ * The ✦ AI search's prompt is machine text too — Walnut's question plus a ~2.5KB
+ * seed-row dump — and it reaches a conversation because the search's session is
+ * adoptable ("Open as session"). The console folds it into a disclosure row; the
+ * phone has no room for one, so it shows the QUESTION. Same parser as the console
+ * (core/task-search-transcript), so the two surfaces cannot disagree about what
+ * that message is.
+ */
+function userTurnText(raw: string): string {
+  return parseSearchPromptMessage(raw)?.query ?? stripLeadingBanners(raw)
+}
+
+/**
  * Flatten chat entries into simple mobile messages. Assistant entries expand
  * in block order: thinking → kind:'thinking', tool_use → kind:'tool', and all
  * text blocks of one entry join into a single plain assistant message.
@@ -426,7 +441,7 @@ export function normalizeEntries(entries: ChatEntry[]): ApiV1Message[] {
         push({ role: 'user', text: 'Turn interrupted', createdAt, kind: 'notification', source: 'interrupt' })
         continue
       }
-      text = stripLeadingBanners(text)
+      text = userTurnText(text)
       if (text) push({ role: 'user', text: stripEntityRefs(text), createdAt })
       continue
     }
@@ -682,7 +697,7 @@ function laneTranscriptToApiV1(rows: ProjectedTranscriptMessage[]): Array<Omit<A
       })
       continue
     }
-    const text = stripEntityRefs(role === 'user' ? stripLeadingBanners(raw) : raw)
+    const text = stripEntityRefs(role === 'user' ? userTurnText(raw) : raw)
     if (!text) continue
     out.push({ role, text, ...(createdAt ? { createdAt } : {}) })
   }

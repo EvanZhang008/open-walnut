@@ -205,6 +205,38 @@ export async function fetchTasks(opts?: { slim?: boolean; minimal?: boolean }): 
   return seedTasks(res.tasks);
 }
 
+/** One projected row from /api/tasks/bulk. `error` replaces the fields. */
+export interface BulkTaskRow {
+  id: string;
+  error?: string;
+  title?: string;
+  phase?: string;
+  project?: string;
+}
+
+/**
+ * Many tasks, few fields, ONE call — the route resolves unique id PREFIXES the
+ * way task_get does and answers a per-item `error` for an id that resolves to
+ * nothing, so a stale id costs its own row and not the batch.
+ *
+ * Used by the transcript's ✦ search card: the answer in a transcript carries
+ * task ids only, and its titles must come from the live table (a title frozen
+ * into a transcript goes stale the moment the task is renamed).
+ */
+export async function fetchTasksBulk(
+  ids: readonly string[],
+  fields: readonly string[],
+  opts?: { timeoutMs?: number },
+): Promise<BulkTaskRow[]> {
+  if (ids.length === 0) return [];
+  const res = await apiGet<{ tasks: BulkTaskRow[] }>(
+    '/api/tasks/bulk',
+    { ids: ids.join(','), fields: fields.join(',') },
+    { timeoutMs: opts?.timeoutMs ?? 10_000 },
+  );
+  return Array.isArray(res?.tasks) ? res.tasks : [];
+}
+
 export async function fetchEnrichedTasks(): Promise<Task[]> {
   const res = await apiGet<{ tasks: Task[] }>('/api/tasks/enriched');
   return seedTasks(res.tasks);

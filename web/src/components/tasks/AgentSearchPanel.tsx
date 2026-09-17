@@ -13,9 +13,8 @@ import { peekAgentSearch, type AdoptSearchSessionOptions } from '@/api/agentSear
 import { isAgentSearchEligible } from '@/hooks/agentSearchTrigger';
 import { useAgentTaskSearch } from '@/hooks/useAgentTaskSearch';
 import { useEvent } from '@/hooks/useWebSocket';
-import { ICON_CHAT, binaryPhaseIcon } from '@/components/common/Icons';
-import { PHASE_LABELS } from '@/utils/session-status';
-import type { TaskPhase } from '@/types/session';
+import { ICON_CHAT } from '@/components/common/Icons';
+import { AgentSearchResultRows } from './AgentSearchResultRows';
 import { buildSearchSessionMessage } from './agent-search-session';
 
 /** Elapsed-seconds ticker for the model wait (5-13s is normal). */
@@ -81,15 +80,6 @@ function progressLabel(e: ProgressEntry): string {
   if (e.kind === 'search') return `searching “${e.q}”…`;
   const hits = typeof e.count === 'number' ? ` · ${e.count} ${e.count === 1 ? 'hit' : 'hits'}` : '';
   return `searched “${e.q}”${hits}`;
-}
-
-/** Same circle colours as the board rows (utils/session-status taskCircleClass),
- *  from the phase alone — an agent result is not a Task, and IN_PROGRESS /
- *  NEED_ACTION already imply a session exists. */
-function circleClassForPhase(phase: string | undefined): string {
-  if (phase === 'COMPLETE') return 'task-circle-done';
-  if (phase === 'IN_PROGRESS' || phase === 'NEED_ACTION') return 'task-circle-session';
-  return 'task-circle-todo';
 }
 
 function shortModel(model: string): string {
@@ -255,36 +245,9 @@ export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
       {state === 'done' && data && !noMatches && (
         <>
           {data.summary && <p className="agent-search-summary">{data.summary}</p>}
-          {/* One line per result, the same shape as a board row (circle, title
-              that ellipsizes, muted project on the right; COMPLETE struck
-              through, NEED_ACTION tinted). The model's evidence phrase lives in
-              the hover title — it was a second and third line before, and a
-              five-row list pushed the board below the fold (user, 2026-09-05). */}
-          <ul className="agent-search-results">
-            {data.results.map((row) => {
-              const isDone = row.phase === 'COMPLETE';
-              const phaseLabel = row.phase ? (PHASE_LABELS[row.phase as TaskPhase] ?? row.phase) : '';
-              const tooltip = [row.title, row.evidence ? `“${row.evidence}”` : '', [phaseLabel, row.project || 'Inbox'].filter(Boolean).join(' · ')]
-                .filter(Boolean).join('\n');
-              return (
-                <li key={row.taskId}>
-                  <button
-                    type="button"
-                    className={`agent-search-row${isDone ? ' is-done' : ''}${row.phase === 'NEED_ACTION' ? ' is-needs-action' : ''}`}
-                    data-task-id={row.taskId}
-                    title={tooltip}
-                    onClick={() => onOpenTask(row.taskId)}
-                  >
-                    <span className={`task-phase-icon-btn agent-search-row-circle ${circleClassForPhase(row.phase)}`} aria-hidden="true">
-                      {binaryPhaseIcon(isDone)}
-                    </span>
-                    <span className="agent-search-row-title">{row.title}</span>
-                    <span className="agent-search-row-project">{row.project || 'Inbox'}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          {/* Shared with the transcript card (AgentSearchResultRows): the same
+              answer renders identically wherever it is read back. */}
+          <AgentSearchResultRows rows={data.results} onOpenTask={onOpenTask} />
         </>
       )}
     </section>
