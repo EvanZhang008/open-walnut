@@ -75,7 +75,8 @@ interface FakeMessage {
 interface Wire {
   capabilities: string[];
   listing: ImapListEntry[];
-  boxes: Record<string, { uidValidity: string; messages: FakeMessage[] }>;
+  /** `uidNext: 0` models a server that reports none; leaving it out derives the honest value. */
+  boxes: Record<string, { uidValidity: string; messages: FakeMessage[]; uidNext?: number }>;
   source: Buffer | null;
   sourceSize?: number;
   /** What the server says the fetched message is made of. `null` = the server sent none. */
@@ -150,17 +151,49 @@ class FakeImap implements ImapClient {
     const box = wire.boxes[mailbox];
     if (!box) throw new Error(`no such mailbox: ${mailbox}`);
     this.open = mailbox;
-    return { path: mailbox, uidValidity: box.uidValidity, exists: box.messages.length };
+    // UIDNEXT the way a server reports it: one past the highest UID that has ever existed here,
+    // which is what lets a caught-up poll skip the FETCH entirely. `uidNext: 0` in a fixture means
+    // "this server does not report one", which is a case the planner has to survive.
+    const highest = box.messages.reduce((top, one) => (one.uid > top ? one.uid : top), 0);
+    const uidNext = box.uidNext === undefined ? highest + 1 : box.uidNext;
+    return {
+      path: mailbox,
+      uidValidity: box.uidValidity,
+      exists: box.messages.length,
+      ...(uidNext > 0 ? { uidNext } : {}),
+    };
   }
 
-  async *fetch(range: string): AsyncIterable<ImapFetchedMessage> {
-    await this.step(`fetch ${this.open} ${range}`);
+  /**
+   * FETCH with the three range shapes that matter, addressed the way the caller asked.
+   *
+   * `options.uid` decides whether the numbers are UIDs or SEQUENCE positions, and getting that
+   * wrong is a silent data bug rather than an error: sequence 1 is the OLDEST message in the box
+   * while UID 1 may not exist at all. The `n:*` quirk is kept because real servers have it, and
+   * the provider no longer sending an open-ended range is exactly what the tests below pin.
+   */
+  async *fetch(
+    range: string,
+    _query?: unknown,
+    options?: { uid?: boolean },
+  ): AsyncIterable<ImapFetchedMessage> {
+    await this.step(`fetch ${this.open} ${range}${options?.uid === false ? ' seq' : ''}`);
     const box = wire.boxes[this.open]!;
-    const from = Number(range.split(':')[0]) || 1;
-    // The quirk, reproduced exactly: `n:*` never answers empty, so a range past the end still
-    // hands back the newest message and the caller is the one that has to filter it out.
-    const above = box.messages.filter((message) => message.uid >= from);
-    const answer = above.length > 0 ? above : box.messages.slice(-1);
+    const [rawFrom, rawTo] = range.split(':');
+    const from = Number(rawFrom) || 1;
+    const openEnded = rawTo === '*' || rawTo === undefined;
+    const to = openEnded ? Number.POSITIVE_INFINITY : Number(rawTo);
+    let answer: FakeMessage[];
+    if (options?.uid === false) {
+      // Sequence numbers are 1-based positions in the mailbox, oldest first.
+      answer = box.messages.slice(Math.max(0, from - 1), openEnded ? undefined : to);
+    } else {
+      const within = box.messages.filter((message) => message.uid >= from && message.uid <= to);
+      // The quirk, reproduced exactly: `n:*` never answers empty, so a range past the end still
+      // hands back the newest message and the caller is the one that has to filter it out. A
+      // BOUNDED range has no such rule and answers with nothing when nothing is inside it.
+      answer = within.length > 0 || !openEnded ? within : box.messages.slice(-1);
+    }
     for (const message of answer) {
       yield {
         uid: message.uid,
@@ -488,15 +521,23 @@ beforeEach(async () => {
 
 describe('the cursor', () => {
   it('round-trips, and refuses anything it did not write', () => {
-    expect(encodeCursor('9001', 42)).toBe('9001:42');
-    expect(decodeCursor('9001:42')).toEqual({ uidValidity: '9001', lastUid: 42 });
-    expect(decodeCursor('9001:0')).toEqual({ uidValidity: '9001', lastUid: 0 });
+    expect(encodeCursor('9001', 42, 10)).toBe('9001:42:10');
+    expect(decodeCursor('9001:42:10')).toEqual({ uidValidity: '9001', lastUid: 42, floorUid: 10 });
+    expect(decodeCursor('9001:0:0')).toEqual({ uidValidity: '9001', lastUid: 0, floorUid: 0 });
 
     // A cursor that cannot be read has to mean "resync", never "start from 0 and hope": the
     // second reading would silently skip every message the provider had already handed over.
-    for (const junk of [undefined, '', 'abc', '9001', ':42', '9001:', '9001:x', '9001:-1', 'v2:9001:42']) {
+    for (const junk of [undefined, '', 'abc', '9001', ':42', '9001:', '9001:x', '9001:-1', 'v2:9001:42', '9001:42:10:7']) {
       expect(decodeCursor(junk), `cursor ${JSON.stringify(junk)}`).toBeUndefined();
     }
+  });
+
+  it('reads a cursor written before the floor existed as owing nothing older', () => {
+    // Those containers were filled UPWARD from UID 1, so everything under the ceiling is already
+    // cached. Reading a missing floor as anything but 0 would send an upgraded install back down
+    // through mail it already has.
+    expect(decodeCursor('9001:42')).toEqual({ uidValidity: '9001', lastUid: 42, floorUid: 0 });
+    expect(encodeCursor('9001', 42)).toBe('9001:42:0');
   });
 });
 
@@ -848,14 +889,16 @@ describe('setup presets', () => {
 });
 
 describe('a poll', () => {
-  it('asks from the cursor, filters the n:* quirk, and reports whether more is behind it', async () => {
+  it('covers a small container in one bounded page and reports nothing behind it', async () => {
     const first = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 });
 
     expect(first.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:1', 'INBOX:9001:2']);
-    expect(first.cursor).toBe('9001:2');
+    // Both ends named, and by SEQUENCE: the box holds two messages, so `1:2` is all of it and the
+    // floor lands at 0 because there is provably nothing older.
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 1:2 seq']);
+    expect(first.cursor).toBe('9001:2:0');
     expect(first.more).toBe(false);
     expect(first.reset).toBeUndefined();
-    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 1:*']);
     // Epoch milliseconds, and the header string only when the server sent one.
     expect(first.messages[1]).toMatchObject({
       rfcMessageId: '<m2@example.invalid>',
@@ -864,39 +907,169 @@ describe('a poll', () => {
       subject: 'Second thoughts',
       sentAt: Date.UTC(2026, 0, 12, 9, 0, 0),
     });
+  });
 
-    // Nothing new. The server still answers with its newest message because `n:*` cannot be
-    // empty, and an unfiltered provider would re-report it on every poll forever.
+  it('costs a caught-up container ZERO fetches', async () => {
+    const first = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 });
+
     wire.commands.length = 0;
     const quiet = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50, cursor: first.cursor });
-    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 3:*']);
+
+    // UIDNEXT already says nothing new can exist, so there is no page to ask for. The old poll
+    // sent `3:*` here, which on a real mailbox is a full-mailbox FETCH per tick per container,
+    // and then had to discard the newest message the `n:*` quirk answered with.
+    expect(wire.commands).toEqual(['open INBOX']);
     expect(quiet.messages).toEqual([]);
-    expect(quiet.cursor).toBe('9001:2');
+    expect(quiet.cursor).toBe('9001:2:0');
     expect(quiet.more).toBe(false);
   });
 
-  it('caps the page and says more when it filled', async () => {
-    wire.boxes.INBOX!.messages = [1, 2, 3, 4, 5].map((uid) => message(uid, `Note ${uid}`));
+  it('starts a big container at its NEWEST page, never at an open-ended range', async () => {
+    // The bug this pins: `1:*` asked the server to stream all 500 (in production, 37,832) and the
+    // 12s run budget could not survive it, so the account's whole tick died and 66 other
+    // mailboxes never synced. The first page was also the OLDEST mail in the box.
+    wire.boxes.INBOX!.messages = Array.from({ length: 500 }, (_, index) => message(index + 1, `Note ${index + 1}`));
 
-    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 2 });
+    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 });
 
-    expect(page.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:1', 'INBOX:9001:2']);
-    expect(page.cursor).toBe('9001:2');
-    // Saying `false` here would leave a backfill stuck at one page per tick.
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 451:500 seq']);
+    expect(wire.commands.some((one) => one.includes('*'))).toBe(false);
+    expect(page.messages).toHaveLength(50);
+    expect(page.messages[0]!.messageId).toBe('INBOX:9001:451');
+    expect(page.messages.at(-1)!.messageId).toBe('INBOX:9001:500');
+    // Ceiling at the top of the box, floor at the bottom of this page, and history still owed.
+    expect(page.cursor).toBe('9001:500:451');
     expect(page.more).toBe(true);
   });
 
-  it('answers reset when UIDVALIDITY changed, and starts again from the beginning', async () => {
-    const stale = encodeCursor('8000', 900);
+  it('fills history by walking the floor down one bounded page at a time', async () => {
+    wire.boxes.INBOX!.messages = [1, 2, 3, 4, 5].map((uid) => message(uid, `Note ${uid}`));
+
+    const newest = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 2 });
+    expect(newest.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:4', 'INBOX:9001:5']);
+    expect(newest.cursor).toBe('9001:5:4');
+    expect(newest.more).toBe(true);
+
+    wire.commands.length = 0;
+    const older = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 2, cursor: newest.cursor });
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 2:3']);
+    expect(older.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:2', 'INBOX:9001:3']);
+    expect(older.cursor).toBe('9001:5:2');
+    expect(older.more).toBe(true);
+
+    wire.commands.length = 0;
+    const oldest = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 2, cursor: older.cursor });
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 1:1']);
+    expect(oldest.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:1']);
+    // Floor reached the bottom, so the container is complete and the next tick asks for nothing.
+    expect(oldest.cursor).toBe('9001:5:0');
+    expect(oldest.more).toBe(false);
+  });
+
+  it('advances the floor through a gap, so deleted UIDs cannot loop forever', async () => {
+    // UIDs are sparse in any mailbox somebody has deleted from. A page that comes back EMPTY has
+    // still been checked; treating that as "no progress" is an infinite backfill.
+    wire.boxes.INBOX!.messages = [message(1, 'Ancient'), message(100, 'Recent'), message(101, 'Newest')];
+
+    const newest = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 2 });
+    expect(newest.cursor).toBe('9001:101:100');
+
+    wire.commands.length = 0;
+    const gap = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 2, cursor: newest.cursor });
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 98:99']);
+    expect(gap.messages).toEqual([]);
+    expect(gap.cursor).toBe('9001:101:98');
+    expect(gap.more).toBe(true);
+  });
+
+  it('stops filling history at the retention horizon', async () => {
+    // Mail the cache would drop on the next sweep is not worth a round trip. Without this the
+    // provider walks a decade of UIDs down to 1 so the retention sweep can delete every row.
+    wire.boxes.INBOX!.messages = [1, 2, 3, 4, 5].map((uid) => message(uid, `Note ${uid}`));
+    const since = Date.UTC(2026, 0, 20, 0, 0, 0); // every fixture message is older than this
+
+    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 2, since });
+
+    expect(page.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:4', 'INBOX:9001:5']);
+    expect(page.cursor).toBe('9001:5:0');
+    expect(page.more).toBe(false);
+  });
+
+  it('jumps to the newest page when the cursor is far below the mailbox top', async () => {
+    // Found in production: the real Gmail INBOX carried a ceiling of 2,717 under a UIDNEXT in the
+    // tens of thousands, so it CLIMBED, 1,000 UIDs a tick, ingesting 2012 mail that the retention
+    // sweep deleted again, while the human's recent mail stayed invisible. A ceiling that far back
+    // is not "catch up on new mail" whatever wrote it, and the newest page is the answer either way.
+    wire.boxes.INBOX!.messages = Array.from({ length: 500 }, (_, index) => message(index + 1, `Note ${index + 1}`));
+
+    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50, cursor: '9001:50:0' });
+
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 451:500 seq']);
+    expect(page.messages[0]!.messageId).toBe('INBOX:9001:451');
+    // The gap the jump left behind is not lost: the floor now owes it, walking down page by page.
+    expect(page.cursor).toBe('9001:500:451');
+    expect(page.more).toBe(true);
+  });
+
+  it('lifts a container written by an older build to the newest page', async () => {
+    // The upgrade path, which is the same shape: a two-part cursor with a low ceiling would
+    // otherwise crawl the whole mailbox upward before showing anything from this year.
+    wire.boxes.INBOX!.messages = Array.from({ length: 120 }, (_, index) => message(index + 1, `Note ${index + 1}`));
+
+    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 10, cursor: '9001:7' });
+
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 111:120 seq']);
+    expect(page.cursor).toBe('9001:120:111');
+  });
+
+  it('keeps climbing normally when it is only a page behind', async () => {
+    // The other side of the rule: an ordinary tick that missed a few messages must NOT re-open the
+    // newest window, or a busy mailbox would keep re-fetching the page it already has.
+    wire.boxes.INBOX!.messages = [1, 2, 3, 4, 5].map((uid) => message(uid, `Note ${uid}`));
+
+    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50, cursor: '9001:3:0' });
+
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 4:5']);
+    expect(page.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:4', 'INBOX:9001:5']);
+    expect(page.cursor).toBe('9001:5:0');
+    expect(page.more).toBe(false);
+  });
+
+  it('bounds new mail even when the server reports no UIDNEXT', async () => {
+    wire.boxes.INBOX!.messages = [1, 2, 3, 4, 5].map((uid) => message(uid, `Note ${uid}`));
+    wire.boxes.INBOX!.uidNext = 0;
+
+    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 2, cursor: '9001:2:0' });
+
+    // No UIDNEXT means the only way to learn about new mail is to ask, so it asks for exactly one
+    // page of UIDs rather than for everything above the cursor.
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 3:4']);
+    expect(page.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:3', 'INBOX:9001:4']);
+    expect(page.cursor).toBe('9001:4:0');
+    expect(page.more).toBe(true);
+  });
+
+  it('answers reset when UIDVALIDITY changed, and starts again from the newest page', async () => {
+    const stale = encodeCursor('8000', 900, 400);
 
     const result = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50, cursor: stale });
 
-    // Every UID behind that cursor is void, so the fetch starts at 1 rather than at 901: asking
-    // from 901 under a new generation would skip the whole mailbox.
-    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 1:*']);
+    // Every UID behind that cursor is void, so the container starts over. Asking from 901 under a
+    // new generation would skip the whole mailbox.
+    expect(wire.commands).toEqual(['open INBOX', 'fetch INBOX 1:2 seq']);
     expect(result.reset).toBe(true);
-    expect(result.cursor).toBe('9001:2');
+    expect(result.cursor).toBe('9001:2:0');
     expect(result.messages.map((one) => one.messageId)).toEqual(['INBOX:9001:1', 'INBOX:9001:2']);
+  });
+
+  it('asks for nothing at all in an empty container', async () => {
+    wire.boxes.INBOX!.messages = [];
+
+    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 });
+
+    expect(wire.commands).toEqual(['open INBOX']);
+    expect(page.messages).toEqual([]);
+    expect(page.more).toBe(false);
   });
 
   it('carries the References chain and the verbatim Date, which the envelope loses', async () => {
@@ -1160,7 +1333,7 @@ describe('one command at a time', () => {
     // A SELECT that lands between another caller's SELECT and FETCH makes the FETCH read the
     // WRONG mailbox, which is a data bug and not an error anybody would see.
     expect(wire.commands).toEqual([
-      'open INBOX', 'fetch INBOX 1:*',
+      'open INBOX', 'fetch INBOX 1:2 seq',
       'open Projects/2026', 'fetchOne Projects/2026 1',
     ]);
     setMimeParserForTesting(null);

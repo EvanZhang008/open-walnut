@@ -221,6 +221,15 @@ export interface MailPollRequest {
   mailbox: string
   cursor?: string
   limit: number
+  /**
+   * Nothing that arrived before this instant (ms) is worth fetching: the cache would drop it.
+   *
+   * The base owns retention, so the base is the only thing that can say where history stops being
+   * useful, and a provider filling in older mail asks for pages until it crosses this line. It is
+   * OPTIONAL and advisory: a provider that ignores it behaves exactly as it did, and a provider
+   * that reads it stops fetching mail the retention sweep would delete on the next tick.
+   */
+  since?: number
 }
 
 export interface MailPollResult {

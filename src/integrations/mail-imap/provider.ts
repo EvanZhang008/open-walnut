@@ -46,6 +46,7 @@ import {
   parseMime,
   toEnvelope,
 } from './mime.js'
+import { advanceCursor, hasMore, planPoll } from './poll-range.js'
 import { createImapSender } from './provider-send.js'
 import { imapPortFor, pastedPassword, SETUP_PRESETS, serverFilesSentCopy, submissionPortFor } from './setup-presets.js'
 import { verifySmtp, type SmtpSecurity } from './smtp.js'
@@ -306,6 +307,14 @@ export function createImapProvider(deps: {
       }))
     },
 
+    /**
+     * One page of a container, newest first, in a range whose size this provider chose.
+     *
+     * Every range is bounded at BOTH ends. The reason is the whole of poll-range.ts: an
+     * open-ended `1:*` asks the server to stream the entire mailbox, and breaking out of the loop
+     * after `limit` messages does not stop it, so a 37,832-message INBOX could never answer inside
+     * the run budget and the account's whole tick died with it.
+     */
     async poll(accountId: string, request: MailPollRequest): Promise<MailPollResult> {
       const connection = await pool.for(accountId)
       const limit = Math.max(1, Math.min(request.limit || 50, 200))
@@ -316,32 +325,67 @@ export function createImapProvider(deps: {
         // A changed UIDVALIDITY voids every UID we hold. Answering `reset` is the contract's way
         // of saying so without the base ever learning what a UID is.
         const reset = !!previous && previous.uidValidity !== uidValidity
-        const lastUid = reset || !previous ? 0 : previous.lastUid
+        const held = reset || !previous ? undefined : previous
+        const exists = Math.max(0, Math.floor(Number(box.exists) || 0))
+        // UIDNEXT is what makes a quiet mailbox free: it says whether anything new can exist, so
+        // a caught-up container costs a SELECT and no FETCH at all.
+        const uidNext = Math.max(0, Math.floor(Number(box.uidNext) || 0))
+        const plan = planPoll({ ...(held ? { held } : {}), limit, exists, uidNext })
 
         const messages: MailEnvelope[] = []
-        let highest = lastUid
-        for await (const message of client.fetch(
-          `${lastUid + 1}:*`,
-          {
-            uid: true, flags: true, envelope: true, bodyStructure: true, size: true,
-            internalDate: true, headers: WANTED_HEADERS,
-          },
-          { uid: true },
-        )) {
-          // `n:*` answers with the newest message even when nothing is at or above n. Without
-          // this line a quiet mailbox re-reports the same message on every poll, forever.
-          if (message.uid <= lastUid) continue
-          messages.push(toEnvelope(request.mailbox, uidValidity, message))
-          if (message.uid > highest) highest = message.uid
-          if (messages.length >= limit) break
+        let lowest = 0
+        let highest = 0
+        let oldestAt = 0
+        if (plan.mode !== 'idle') {
+          for await (const message of client.fetch(
+            plan.range,
+            {
+              uid: true, flags: true, envelope: true, bodyStructure: true, size: true,
+              internalDate: true, headers: WANTED_HEADERS,
+            },
+            { uid: plan.byUid },
+          )) {
+            // The bounds are in the request now, but a server is still free to answer with more
+            // than was asked for, and `n:*` (which nothing here sends any more) always answered
+            // with the newest message even when nothing was at or above n.
+            if (plan.mode === 'newer' && message.uid <= (held?.lastUid ?? 0)) continue
+            messages.push(toEnvelope(request.mailbox, uidValidity, message))
+            if (message.uid > highest) highest = message.uid
+            if (lowest === 0 || message.uid < lowest) lowest = message.uid
+            const at = message.internalDate ? new Date(message.internalDate).getTime() : 0
+            if (Number.isFinite(at) && at > 0 && (oldestAt === 0 || at < oldestAt)) oldestAt = at
+            if (messages.length >= limit) break
+          }
         }
 
+        const next = advanceCursor({
+          plan,
+          ...(held ? { held } : {}),
+          page: { lowest, highest, oldestAt },
+          since: Math.max(0, Math.floor(Number(request.since) || 0)),
+        })
+        // Numbers only, never a subject or an address. The FIRST page of a container is the one
+        // worth a line everybody can see: it is where the window comes from, it happens once per
+        // container per epoch, and reconstructing it afterwards from cached rows is guesswork
+        // (the guess was wrong once, which is why this line exists). Every other page stays at
+        // debug, where a per-page line for 67 mailboxes cannot drown the log.
+        const page = {
+          accountId,
+          mailbox: request.mailbox,
+          exists,
+          uidNext,
+          mode: plan.mode,
+          ...(plan.mode !== 'idle' ? { range: plan.range, byUid: plan.byUid } : {}),
+          got: messages.length,
+          heldCursor: request.cursor ?? null,
+          cursor: encodeCursor(uidValidity, next.lastUid, next.floorUid),
+        }
+        if (plan.mode === 'newest' || reset) log.info('imap opened a container', page)
+        else log.debug('imap polled a page', page)
         return {
           messages,
-          cursor: encodeCursor(uidValidity, highest),
-          // The page filled, so there may be more behind it. Saying `false` here would leave a
-          // backfill stuck at one page per tick.
-          more: messages.length >= limit,
+          cursor: encodeCursor(uidValidity, next.lastUid, next.floorUid),
+          more: plan.mode !== 'idle' && hasMore(next, uidNext, messages.length >= limit),
           ...(reset ? { reset: true } : {}),
         }
       })

@@ -6,10 +6,11 @@
  * "INBOX.Sent" and "Notes: 2026" are all legal, so nothing here may assume a mailbox contains
  * no colon and no slash.
  *
- * - The cursor is `<uidvalidity>:<lastUid>` and stays opaque to the base, which stores the
- *   string and never parses it. UIDVALIDITY is in it because that is exactly what makes a UID
+ * - The cursor is `<uidvalidity>:<lastUid>:<floorUid>` and stays opaque to the base, which stores
+ *   the string and never parses it. UIDVALIDITY is in it because that is exactly what makes a UID
  *   meaningful: when the server changes it, every UID we hold is void and the container has to
- *   be resynced, which is what `reset: true` says.
+ *   be resynced, which is what `reset: true` says. The floor is the newest-first window's other
+ *   end; a two-part cursor from before it existed still reads.
  * - The message handle is `<mailbox>:<uidvalidity>:<uid>`, parsed from the RIGHT. The two
  *   numeric tails are the coordinates and everything before them is the mailbox name, colons
  *   and all.
@@ -19,23 +20,37 @@ import type { MailboxRole } from '../mail/api.js'
 export interface Cursor {
   uidValidity: string
   lastUid: number
+  /**
+   * The lowest UID this container still WANTS below `lastUid`, or 0 for "nothing below".
+   *
+   * A ceiling alone can only describe a container that was filled from the oldest message upward,
+   * which is what the poll used to do, and what made a cold Gmail INBOX hand back mail from a
+   * decade ago as its first page. Newest-first paging needs the other end of the window too: see
+   * poll-range.ts for how the floor walks down and where it stops.
+   */
+  floorUid: number
 }
 
-export function encodeCursor(uidValidity: string, lastUid: number): string {
-  return `${uidValidity}:${lastUid}`
+export function encodeCursor(uidValidity: string, lastUid: number, floorUid = 0): string {
+  return `${uidValidity}:${lastUid}:${floorUid}`
 }
 
-/** `undefined` for anything that is not a cursor we wrote, which forces a full resync. */
+/**
+ * `undefined` for anything that is not a cursor we wrote, which forces a full resync.
+ *
+ * A TWO-part cursor is one this provider wrote before the floor existed, and it reads as floor 0
+ * on purpose: those containers were filled upward from UID 1, so everything below the ceiling is
+ * already in the cache and there is no history left to want.
+ */
 export function decodeCursor(cursor: string | undefined): Cursor | undefined {
   if (!cursor) return undefined
-  const at = cursor.lastIndexOf(':')
-  if (at <= 0) return undefined
-  const uidValidity = cursor.slice(0, at)
-  const uid = cursor.slice(at + 1)
-  // Both halves are matched as digits rather than run through Number: `Number('')` is 0, so a
+  const parts = cursor.split(':')
+  if (parts.length !== 2 && parts.length !== 3) return undefined
+  // Every part is matched as digits rather than run through Number: `Number('')` is 0, so a
   // truncated `9001:` would otherwise read as a perfectly good cursor at position zero.
-  if (!/^\d+$/.test(uidValidity) || !/^\d+$/.test(uid)) return undefined
-  return { uidValidity, lastUid: Number(uid) }
+  if (!parts.every((one) => /^\d+$/.test(one))) return undefined
+  const [uidValidity, lastUid, floorUid] = parts
+  return { uidValidity, lastUid: Number(lastUid), floorUid: floorUid === undefined ? 0 : Number(floorUid) }
 }
 
 export interface MessageCoord {

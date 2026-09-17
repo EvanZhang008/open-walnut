@@ -488,7 +488,14 @@ export class MailSync {
       if (Date.now() >= deadlineAt) break
       let result
       try {
-        const request = { mailbox: mailbox.mailbox_id, limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) }
+        // `since` is the retention horizon, passed so a provider filling in history knows where to
+        // stop: pages older than this would be fetched only for the retention sweep to delete them.
+        const request = {
+          mailbox: mailbox.mailbox_id,
+          limit: PAGE_LIMIT,
+          since: Date.now() - this.limits.retentionDays * 24 * 60 * 60 * 1_000,
+          ...(cursor ? { cursor } : {}),
+        }
         result = await callProvider(
           `a poll of ${mailbox.mailbox_id}`,
           () => spec.poll(accountId, request),
