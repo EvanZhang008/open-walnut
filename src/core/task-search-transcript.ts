@@ -56,6 +56,10 @@ export function cleanSearchText(value: unknown, maxChars: number): string {
 export interface SearchResultsObject {
   summary?: unknown;
   results: Record<string, unknown>[];
+  /** Where the object sat in the text — what lets a renderer keep the words
+   *  around it and card only the object (see splitSearchAnswerMessage). */
+  start: number;
+  end: number;
 }
 
 /**
@@ -82,6 +86,8 @@ export function extractResultsObject(answer: string): SearchResultsObject | null
     return {
       summary: obj.summary,
       results: obj.results.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null),
+      start,
+      end: end + 1,
     };
   }
   return null;
@@ -169,28 +175,62 @@ export interface SearchAnswerMessage {
 export const EVIDENCE_MAX_CHARS = 200;
 export const SUMMARY_MAX_CHARS = 300;
 
-/** One optional ``` fence around the whole reply — models add it unasked. */
-const FENCED = /^```[a-z]*\n([\s\S]*)\n```$/;
+/** A ``` fence line the model may have wrapped the object in. */
+const FENCE_OPEN = /```[a-z]*[ \t]*$/;
+const FENCE_CLOSE = /^[ \t]*```/;
+
+export interface SearchAnswerSplit {
+  /** The model's own words BEFORE the answer object (markdown, may be ''). */
+  before: string;
+  answer: SearchAnswerMessage;
+  /** Anything it wrote after the object (markdown, may be ''). */
+  after: string;
+}
 
 /**
- * Recognize a message that is NOTHING BUT the search answer object.
+ * Split a search reply into the model's WORDS and its answer OBJECT.
  *
- * Deliberately stricter than extractResultsObject: that one serves the live
- * pipeline, where a best-effort answer beats a 502. Here a message with prose
- * around the JSON is a message with words in it, and words must render as
- * words — so anything but the bare object (optionally fenced) returns null and
- * keeps today's rendering. A row without a usable `task_id` rejects the WHOLE
- * message for the same reason: dropping it would silently hide a result.
+ * The first version of this only recognized a message that was nothing but the
+ * object, on the theory that prose means "render as prose". A live reply proved
+ * that wrong the same day (user report, 2026-09-17): the model routinely writes
+ * its reasoning first — "Looking at the seed results, I can see strong matches
+ * for …" plus a numbered list — and appends the JSON, so the ✦ card showed rows
+ * while the transcript showed a wall of JSON right under them.
+ *
+ * Keeping the words was the right instinct; refusing the card was not. So the
+ * object's SPAN comes back from the extractor and the caller renders words,
+ * card, words. Nothing is hidden, and the rows look the same in both surfaces.
+ *
+ * Still refuses (null → render exactly as today): no answer object at all, a
+ * row with no usable `task_id` (dropping one would hide a result), and a
+ * results list far longer than an answer can be.
  */
-export function parseSearchAnswerMessage(text: string): SearchAnswerMessage | null {
+export function splitSearchAnswerMessage(text: string): SearchAnswerSplit | null {
   if (!text) return null;
+  // Cheap gate before the candidate walk. Every assistant message in every
+  // session goes through here, and a coding session's messages are full of
+  // braces — without this, a long reply with 50 `{` in it would cost 50
+  // JSON.parse attempts over slices of the whole message. An answer object
+  // always contains this key, so one substring scan settles the common case.
+  if (!text.includes('"results"')) return null;
   const trimmed = text.trim();
   if (!trimmed) return null;
-  const inner = (FENCED.exec(trimmed)?.[1] ?? trimmed).trim();
-  if (!inner.startsWith('{') || !inner.endsWith('}')) return null;
-  const parsed = extractResultsObject(inner);
+  const parsed = extractResultsObject(trimmed);
   if (!parsed) return null;
   if (parsed.results.length > MAX_PARSEABLE_ROWS) return null;
+
+  // Absorb a fence the object sits inside, so a bare ``` never survives as an
+  // empty code block above or below the card.
+  let sliceStart = parsed.start;
+  let sliceEnd = parsed.end;
+  const head = trimmed.slice(0, sliceStart);
+  if (FENCE_OPEN.test(head.trimEnd())) sliceStart = head.trimEnd().lastIndexOf('```');
+  const tail = trimmed.slice(sliceEnd);
+  if (FENCE_CLOSE.test(tail.trimStart())) {
+    sliceEnd += tail.indexOf('```') + 3;
+  }
+  const before = trimmed.slice(0, sliceStart).trim();
+  const after = trimmed.slice(sliceEnd).trim();
 
   const rows: SearchAnswerRow[] = [];
   const seen = new Set<string>();
@@ -216,8 +256,12 @@ export function parseSearchAnswerMessage(text: string): SearchAnswerMessage | nu
   }
   const summary = cleanSearchText(parsed.summary, SUMMARY_MAX_CHARS);
   return {
-    ...(summary ? { summary } : {}),
-    rows: rows.slice(0, AGENT_SEARCH_MAX_RESULTS),
-    extraRows: Math.max(0, rows.length - AGENT_SEARCH_MAX_RESULTS),
+    before,
+    after,
+    answer: {
+      ...(summary ? { summary } : {}),
+      rows: rows.slice(0, AGENT_SEARCH_MAX_RESULTS),
+      extraRows: Math.max(0, rows.length - AGENT_SEARCH_MAX_RESULTS),
+    },
   };
 }

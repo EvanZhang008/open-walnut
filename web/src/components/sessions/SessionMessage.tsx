@@ -28,7 +28,7 @@ import { splitLeadingBanners } from './injected-banner';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
-import { parseSearchAnswerMessage } from '@open-walnut/search-transcript';
+import { splitSearchAnswerMessage } from '@open-walnut/search-transcript';
 import { log } from '@/utils/log';
 
 // ── Edit Diff View ──
@@ -1084,12 +1084,14 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   );
   const bodyText = bannerSplit ? bannerSplit.body : text;
 
-  // …and its ANSWER is a bare JSON object. Rendered with the same rows the search
-  // card uses, from the live task table. Strict parse: a reply with any prose in
-  // it is prose and keeps rendering as prose (the model narrates between its
-  // searches), so only the answer message itself becomes a card.
+  // …and its ANSWER is a JSON object, usually with the model's own reasoning
+  // above it ("Looking at the seed results, I can see strong matches for …" plus
+  // a numbered list). Split, don't choose: the words render as words and the
+  // object renders as the same rows the ✦ card shows. A reply with no answer
+  // object in it (pure narration between searches) parses to null and is
+  // untouched.
   const searchAnswer = useMemo(
-    () => (!isUser && text ? parseSearchAnswerMessage(text) : null),
+    () => (!isUser && text ? splitSearchAnswerMessage(text) : null),
     [isUser, text],
   );
 
@@ -1184,7 +1186,11 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
         {bodyText && envelopeSegments ? (
           <SessionEnvelopeSegments segments={envelopeSegments} sessionCwd={sessionCwd} />
         ) : bodyText && searchAnswer ? (
-          <SearchAnswerCard answer={searchAnswer} onOpenTask={onTaskClick} />
+          <>
+            {searchAnswer.before && <RichMarkdown text={searchAnswer.before} cwd={sessionCwd} scope={message.msgId} />}
+            <SearchAnswerCard answer={searchAnswer.answer} onOpenTask={onTaskClick} />
+            {searchAnswer.after && <RichMarkdown text={searchAnswer.after} cwd={sessionCwd} scope={`${message.msgId ?? ''}:after`} />}
+          </>
         ) : bodyText && (useSegments ? (
           <SuggestSegments segments={segments} cwd={sessionCwd} scope={message.msgId} />
         ) : isUser ? (

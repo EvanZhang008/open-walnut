@@ -139,6 +139,35 @@ export async function expectNarrationStillProse(panel: Locator): Promise<void> {
   await expect(narration.locator(ANSWER_CARD)).toHaveCount(0);
 }
 
+/**
+ * The answer message's OWN WORDS survive above the card.
+ *
+ * The live shape (user report, 2026-09-17): reasoning + a numbered list, then the
+ * object, in one message. The first version refused to card anything with prose in
+ * it, which left that JSON on screen — so this pins both halves at once: the words
+ * render as markdown, the object renders as rows, in that order.
+ */
+export async function expectReasoningKeptAboveCard(panel: Locator): Promise<void> {
+  const message = panel.locator('.session-msg-assistant', { hasText: 'SEARCH_ASK_REASONING' }).first();
+  await expect(message).toBeVisible();
+  // Markdown, not raw text: the numbered list is a real list with bold titles.
+  await expect(message.locator('ol li strong').first()).toHaveText('Editor fixture task');
+  // The card lives in the SAME message, below the words.
+  const card = message.locator(ANSWER_CARD);
+  await expect(card).toBeVisible();
+  const order = await message.evaluate((el) => {
+    const prose = el.querySelector('ol');
+    const answer = el.querySelector('[data-testid="session-search-answer"]');
+    if (!prose || !answer) return 'missing';
+    return prose.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING ? 'card-after-prose' : 'card-before-prose';
+  });
+  expect(order).toBe('card-after-prose');
+  // …and the object itself is gone from the words.
+  const text = await message.innerText();
+  expect(text).not.toContain('task_id');
+  expect(text).not.toContain('"results"');
+}
+
 /** A row opens its task — and for a task with a session, that session's column. */
 export async function expectRowOpensTask(page: Page, panel: Locator): Promise<void> {
   await panel.locator(`${ANSWER_CARD} [data-task-id="${LIVE_TASK_ID}"]`).click();

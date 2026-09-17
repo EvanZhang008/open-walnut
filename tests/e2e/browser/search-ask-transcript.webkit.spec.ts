@@ -14,7 +14,7 @@ import { expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import {
   SCREENSHOT_DIR, expectAnswerCarded, expectNoSidewaysScroll, expectPromptFolded,
-  expectSeedDisclosed, openSearchAsk,
+  expectReasoningKeptAboveCard, expectSeedDisclosed, openSearchAsk,
 } from './search-ask-transcript-helpers';
 
 test.use({ browserName: 'webkit' });
@@ -29,6 +29,7 @@ test('both cards render, and the prompt still discloses', async ({ page }) => {
   const panel = await openSearchAsk(page);
   await expectPromptFolded(panel);
   await expectAnswerCarded(panel);
+  await expectReasoningKeptAboveCard(panel);
   mkdirSync(SCREENSHOT_DIR, { recursive: true });
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/4-webkit.png` });
   await expectSeedDisclosed(panel);

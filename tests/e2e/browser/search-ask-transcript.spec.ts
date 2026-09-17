@@ -11,13 +11,19 @@
  * existing "machine text Walnut added" disclosure (leaving the query as the
  * bubble), and the answer renders through the SAME rows the ✦ card uses, titled
  * from the live task table. The transcript itself is never rewritten.
+ *
+ * Follow-up (2026-09-17, "what isnt it the same"): a live answer usually writes
+ * its reasoning and a numbered list BEFORE the object, and the first version
+ * refused to card anything with prose in it — so the fixture's answer now has
+ * that exact shape, and the renderer keeps the words while carding the object.
  */
 import { expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import {
   ANSWER_CARD, DEAD_TASK_ID, SCREENSHOT_DIR,
   expectAnswerCarded, expectNarrationStillProse, expectNoSidewaysScroll,
-  expectPromptFolded, expectRowOpensTask, expectSeedDisclosed, openSearchAsk,
+  expectPromptFolded, expectReasoningKeptAboveCard, expectRowOpensTask,
+  expectSeedDisclosed, openSearchAsk,
 } from './search-ask-transcript-helpers';
 
 test.describe.configure({ mode: 'serial' });
@@ -44,6 +50,12 @@ test('the answer renders as task rows with live titles, and a dead id says so', 
 test('the model’s narration between searches still renders as prose', async ({ page }) => {
   const panel = await openSearchAsk(page);
   await expectNarrationStillProse(panel);
+});
+
+test('the answer’s own reasoning stays above the card (the live shape)', async ({ page }) => {
+  const panel = await openSearchAsk(page);
+  await expectReasoningKeptAboveCard(panel);
+  await panel.screenshot({ path: `${SCREENSHOT_DIR}/6-reasoning-plus-card.png` });
 });
 
 test('clicking a row opens that task', async ({ page }) => {

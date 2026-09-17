@@ -1896,11 +1896,22 @@ await fs.mkdir(searchAskFixtureRoot, { recursive: true })
         timestamp: new Date(sessionFixtureNow - 35_000).toISOString(),
         message: { role: 'assistant', content: [{ type: 'text', text: 'SEARCH_ASK_NARRATION checking the board for that phrase.' }] },
       }),
+      // The shape a LIVE answer has (user report, 2026-09-17): the model's
+      // reasoning and a numbered list FIRST, the object last, one message. The
+      // words must survive and the object must still become rows.
       JSON.stringify({
         type: 'assistant',
         sessionId: 'pw-search-ask-session',
         timestamp: new Date(sessionFixtureNow - 30_000).toISOString(),
-        message: { role: 'assistant', content: [{ type: 'text', text: answer }] },
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `${[
+            'SEARCH_ASK_REASONING looking at the seed results, I can see strong matches:',
+            '',
+            '1. **Editor fixture task** (session hit, updated today)',
+            '2. **Finished marmalade task** — an older one on the same topic',
+          ].join('\n')}\n\n${answer}` }],
+        },
       }),
       '',
     ].join('\n'),
