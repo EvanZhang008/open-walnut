@@ -6632,8 +6632,9 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
   // do a cheap Object.assign into a local copy to resolve the derivation.
   const merged: Task = { ...task, ...(safeUpdates as Partial<Task>) };
   if (safeUpdates.status && !safeUpdates.phase) {
-    merged.phase = phaseFromStatus(merged.status);
-    safeUpdates.phase = merged.phase;
+    if (merged.status !== deriveStatusFromPhase(task.phase)) {
+      safeUpdates.phase = phaseFromStatus(merged.status);
+    }
   } else if (safeUpdates.phase && !safeUpdates.status) {
     merged.status = deriveStatusFromPhase(merged.phase);
     safeUpdates.status = merged.status;

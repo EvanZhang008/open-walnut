@@ -684,6 +684,36 @@ describe('task-db: terminal-phase guard via updateTaskRaw', () => {
 // ── 7. Phase ↔ status derivation ───────────────────────────────────────────
 
 describe('task-db: phase/status derivation in updateTaskRaw', () => {
+  it.each(['raw', 'bulk'] as const)('preserves a handed-back phase on a coarse status echo with a changed title (%s)', async (writer) => {
+    const { sessionResultPhase } = await import('../../src/core/phase.js');
+    const handback = sessionResultPhase('IN_PROGRESS')!;
+    const { task } = await addTask({ title: 'Before echo', project: 'Local', source: 'local' });
+    await updateTaskRaw(task.id, { phase: handback, unread: false });
+    const patch = { title: 'After echo', status: 'in_progress' as const };
+    if (writer === 'raw') await updateTaskRaw(task.id, patch);
+    else await updateTasksBulk([{ id: task.id, patch }]);
+    expect(await getTask(task.id)).toMatchObject({ title: 'After echo', phase: handback, status: 'in_progress', unread: false });
+    expect(getDb()!.prepare('SELECT phase, status FROM tasks WHERE id = ?').get(task.id))
+      .toEqual({ phase: handback, status: 'in_progress' });
+    expect(patch).toEqual({ title: 'After echo', status: 'in_progress' });
+  });
+
+  it('still accepts explicit phase changes and genuine coarse status changes after handback', async () => {
+    const { sessionResultPhase } = await import('../../src/core/phase.js');
+    const handback = sessionResultPhase('IN_PROGRESS')!;
+    const { task } = await addTask({ title: 'Phase changes', project: 'Local', source: 'local' });
+    await updateTaskRaw(task.id, { phase: handback });
+    await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' });
+    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS');
+    await updateTaskRaw(task.id, { phase: handback });
+    await updateTaskRaw(task.id, { status: 'todo' });
+    expect((await getTask(task.id)).phase).toBe('TODO');
+    await updateTaskRaw(task.id, { status: 'in_progress' });
+    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS');
+    await updateTaskRaw(task.id, { status: 'done' });
+    expect((await getTask(task.id)).phase).toBe('COMPLETE');
+  });
+
   it('status=done alone drives phase=COMPLETE', async () => {
     const { task } = await addTask({ title: 'Derive 1', project: 'Local', source: 'local' });
     const res = await updateTaskRaw(task.id, { status: 'done' });

@@ -31,6 +31,16 @@ Reject a newer database before changing journal settings or schema. Map only kno
 
 Code: [`getDb`, `rowToTask`](../../src/core/task-db.ts), [`migratePhase`](../../src/core/phase.ts). Regression: [`tests/core/task-db.test.ts`](../../tests/core/task-db.test.ts), cases for newer-schema refusal and an unknown phase surviving another task's edit; [`tests/core/phase.test.ts`](../../tests/core/phase.test.ts).
 
+### A phase rename must survive the installed sync adapter
+
+A later recurrence had a different sequence: the result handler correctly wrote `NEED_ACTION`, then an external sync adapter mapped the remote implementation step back to `IN_PROGRESS`. Its preservation group still listed `AGENT_COMPLETE` but omitted the new name, and its push mapping omitted the new name too. Correct session settlement and a current server build did not prevent this reversal.
+
+Test both directions through the installed adapter: `NEED_ACTION` must map to the intended remote step, and an echo of that coarse step must preserve the finer local phase. Keep genuine remote closes and moves to a different workflow group effective. Exercise the delayed note/summary push and at least one subsequent pull, not just the instant the reply finishes. External adapters are built and loaded independently; a source edit is not proof the running adapter changed. Confirm a loader event and the actual round trip after reload.
+
+Raw single-row and bulk updates must preserve an existing fine-grained phase when an incoming coarse status agrees with its derived status. Both `IN_PROGRESS` and `NEED_ACTION` derive to `in_progress`; reversing that value loses the handback. Include a changed title or summary in the regression: an otherwise identical patch exits at the dirty check and never exercises the faulty derivation. Explicit phase changes and genuine coarse status changes remain effective.
+
+Code boundary: [`prepareRawUpdate`](../../src/core/task-manager.ts), [`IntegrationSync` and `SyncPollContext`](../../src/core/integration-types.ts), the sync poll callback in [`server.ts`](../../src/web/server.ts), and the installed adapter's phase mapping and delta-pull tests. Core regression: [`tests/core/task-db.test.ts`](../../tests/core/task-db.test.ts). Keep provider-specific fixtures in that adapter's own repository.
+
 ### SQL commit must invalidate cache before yielding
 
 The failing order was SQL commit to `IN_PROGRESS`, then asynchronous lock cleanup, then cache invalidation. A result handler ran during cleanup, read cached `NEED_ACTION`, and skipped its phase write as already satisfied. The database stayed `IN_PROGRESS` while the session was Idle.
