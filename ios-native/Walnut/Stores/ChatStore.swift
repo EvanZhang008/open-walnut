@@ -48,6 +48,16 @@ final class ChatStore {
     /// history (guards against a queued turn misreading the PREVIOUS turn's
     /// trailing assistant message as completion).
     private var watchedUserText: String?
+    /// Did the LAST applied messages fetch prove the watched turn is over? nil
+    /// until one lands (and reset before each fetch, so a failed or dropped read
+    /// never settles a turn on the previous read's evidence).
+    ///
+    /// It exists because the watchdog's question has to be asked of the FULL
+    /// fetched list, while `messages` deliberately holds only the settled prefix
+    /// mid-turn (see `settledRows`), and asking the truncated list would answer
+    /// "not over" forever and the composer would stay frozen after a genuinely
+    /// lost message-end, which is the freeze this watchdog exists to break.
+    private var lastFetchSettledTurn: Bool?
 
     var conversations: [ConversationSummary] = []
     var activeID: String?
@@ -412,6 +422,8 @@ final class ChatStore {
             loadingMessages = false
             firstPageInFlight = false
         }
+        // Cleared BEFORE the read: a verdict is only ever this read's own.
+        lastFetchSettledTurn = nil
         do {
             let agentID = activeAgentID
             let fetched = try await transport.messages(
@@ -442,11 +454,23 @@ final class ChatStore {
                 current: messages, fetched: fetched,
                 conversationID: id, owners: localRowConversation
             )
+            // The verdict is the FULL list's answer, banked for the watchdog
+            // before anything is dropped (see `lastFetchSettledTurn`).
+            let settled = Self.turnSettled(history: fetched, watched: watchedUserText)
+            lastFetchSettledTurn = settled
+            // Mid-turn, the rows of the turn in flight stay OUT of the timeline:
+            // the live region owns that turn and renders it with what the stream
+            // knows (see `settledRows`). Once the turn is over (message-end has
+            // already cleared `streaming`, or this very fetch proves it), the full
+            // list is installed exactly as before.
+            let installed = (streaming && !settled)
+                ? Self.settledRows(fetched, watched: watchedUserText)
+                : fetched
             let wasAtBottom = bottomPinned
-            let changed = fetched.count + localOnly.count != messages.count
-                || fetched.last?.id != messages.dropLast(localOnly.count).last?.id
-            MainWork.track("chat.loadMessages", count: fetched.count) {
-                messages = Self.reattachSentImages(to: fetched, from: sentImages) + localOnly
+            let changed = installed.count + localOnly.count != messages.count
+                || installed.last?.id != messages.dropLast(localOnly.count).last?.id
+            MainWork.track("chat.loadMessages", count: installed.count) {
+                messages = Self.reattachSentImages(to: installed, from: sentImages) + localOnly
                 // HANDOFF: the live reasoning region retires HERE, in the same
                 // synchronous block that installs the fetched `kind:"thinking"`
                 // rows — so the same reasoning is never rendered twice, and a
@@ -463,6 +487,9 @@ final class ChatStore {
             localRowConversation = localRowConversation.filter { survivingLocalIDs.contains($0.key) }
             // Freeze-report context: rows handed to SwiftUI for layout.
             FreezeContext.shared.setHistoryRows(messages.count)
+            // The PAGE decides whether there is more history, so this stays the
+            // full fetch: a truncated mid-turn install would claim there is no
+            // earlier page on a conversation shorter than one page plus a turn.
             hasOlder = fetched.count >= Self.pageSize
             // Replacing rows with canonical ids/heights displaces the viewport
             // once the bottom anchor's auto-pin has lapsed (any manual scroll)
@@ -470,7 +497,10 @@ final class ChatStore {
             // The FIRST load always pins: see initialPaintDone (blank-list fix).
             if isActive && (!initialPaintDone || (changed && wasAtBottom)) { scrollToBottomSignal += 1 }
             initialPaintDone = true
-            DiskCache.save(Array(fetched.suffix(Self.cacheTail)), key: "messages-\(id)")
+            // Cache what was INSTALLED. The cache is a picture of the timeline for
+            // the next launch, and there is no live region then to correct an
+            // in-flight tool row rendered as a finished one.
+            DiskCache.save(Array(installed.suffix(Self.cacheTail)), key: "messages-\(id)")
         } catch {
             reportIfNetwork(error)
             noteMessagesLoadFailure(error, conversationID: id)
@@ -989,6 +1019,13 @@ final class ChatStore {
         handle(event, conversationID: conversationID)
     }
 
+    /// Test seam: the state a real send leaves behind for the watchdog. Private
+    /// in production because only the send path may claim a turn; a test staging
+    /// a mid-turn refetch needs the same starting point.
+    func setWatchedUserTextForTesting(_ text: String?) {
+        watchedUserText = text
+    }
+
     private func handle(_ event: SSEEvent, conversationID: String) {
         // Same apply-time rule as every fetch: an event is dispatched onto the
         // MainActor from the SSE callback, so a switch can land in between.
@@ -1185,15 +1222,16 @@ final class ChatStore {
                 guard let self, self.isActive, !Task.isCancelled else { return }
                 guard self.streaming, self.activeID == conversationID else { return }
                 guard Date().timeIntervalSince(self.lastSSEEventAt) > 30 else { continue }
-                // Silent too long — reconcile against server history.
-                // Assistant messages persist only at turn end, so a plain
-                // assistant message AFTER our watched user message proves the
-                // turn is over. The after-check guards the queued case, where
-                // the previous turn's trailing reply would otherwise satisfy
-                // a naive "last is assistant" test.
+                // Silent too long: reconcile against server history. What counts
+                // as proof lives in `turnSettled` (the server's `inFlight` flag
+                // first, the older-server heuristic behind it) and is banked by
+                // the fetch below.
                 await self.loadMessages(conversationID)
                 guard self.streaming, self.activeID == conversationID else { return }
-                let turnOver = Self.turnSettled(history: self.messages, watched: self.watchedUserText)
+                // The verdict that fetch banked, NOT a re-read of `messages`: mid
+                // turn the timeline deliberately holds only the settled prefix, so
+                // asking it would answer "not over" forever.
+                let turnOver = self.lastFetchSettledTurn == true
                 if turnOver {
                     AppLog.error("chat", "turn watchdog reconciled a lost message-end", [
                         "conversationID": conversationID,
@@ -1213,16 +1251,68 @@ final class ChatStore {
     }
 
     /// Watchdog reconcile verdict: does fetched history PROVE the watched turn
-    /// is over? Assistant messages persist only at turn end, so a plain
-    /// assistant row AFTER our watched user message is proof. When the watched
-    /// user message is MISSING from the fetch, the copy is stale (a replica
-    /// lagging git-sync) or the tail window slid past it — never settle from
-    /// evidence that predates our own send: the PREVIOUS turn's trailing reply
-    /// would satisfy the naive last-is-assistant check and clear `streaming`
-    /// mid-turn (2026-08-23 dogfood round 10). The last-is-assistant fallback
-    /// is only for the 409 turn_active path, where there IS no watched text
-    /// (someone else's turn). Internal for WalnutTests.
+    /// is over?
+    ///
+    /// FIRST, THE SERVER'S OWN ANSWER (`inFlight`, additive 2026-09-17): a row
+    /// still marked in-flight is proof the turn is NOT over, whatever else the
+    /// list holds. It comes first because the rule under it is no longer true on
+    /// its own. "Assistant messages persist only at turn end, so a plain
+    /// assistant row AFTER our watched user message is proof" held while a
+    /// transcript gained its assistant text only at message-end; a lane
+    /// transcript now carries the model's INTERMEDIATE text mid-turn (a
+    /// "I will run the first command, then the second" row sits between two tool
+    /// rows), so that premise settled a turn 30 to 44s into a tool call three
+    /// times in one probe: `streaming` went false, the live region retired, the
+    /// composer unlocked, and the refetched rows re-rendered the still-running
+    /// tool with no output.
+    ///
+    /// The heuristic stays as the OLDER-SERVER fallback, unchanged, for a box
+    /// that sends the field nowhere. When the watched user message is MISSING
+    /// from the fetch, the copy is stale (a replica lagging git-sync) or the tail
+    /// window slid past it. Never settle from evidence that predates our own
+    /// send: the PREVIOUS turn's trailing reply would satisfy the naive
+    /// last-is-assistant check and clear `streaming` mid-turn (2026-08-23
+    /// dogfood round 10). The last-is-assistant fallback is only for the 409
+    /// turn_active path, where there IS no watched text (someone else's turn).
+    /// Internal for WalnutTests.
+    /// The rows of a fetch that the timeline may INSTALL while a turn is running:
+    /// everything up to and including the watched user row, and none of the rows
+    /// belonging to the turn still in flight.
+    ///
+    /// WHY A MID-TURN FETCH MUST BE TRUNCATED: the LIVE region owns the current
+    /// turn until message-end (or a true settle). Its tool rows know a call is
+    /// still running and carry the previews the stream relays; the same call's
+    /// MESSAGE row is built as a transcript row, where an absent `resultPreview`
+    /// legitimately means "printed nothing". So installing the in-flight rows
+    /// mid-turn replaced a correct live row with one that reported "No output"
+    /// for a command that was still running (2026-09-17 gate, probe gsrnmo).
+    ///
+    /// Two rules, most authoritative first, mirroring `turnSettled`.
+    nonisolated static func settledRows(_ fetched: [ChatMessage],
+                                        watched: String?) -> [ChatMessage] {
+        // The server says which rows are in flight. They are a contiguous tail by
+        // contract, so cutting at the FIRST of them also keeps a row the server
+        // forgot to flag from slipping in behind one it did.
+        if let first = fetched.firstIndex(where: { $0.inFlight == true }) {
+            return Array(fetched[..<first])
+        }
+        // Older server: the watched user row is the only boundary there is. With
+        // no watched text, or none matching, NOTHING is dropped: guessing a
+        // boundary is how a finished turn's rows would vanish from the timeline.
+        //
+        // Reached only while the verdict says the turn is still running, so this
+        // covers the shape a box with no flags CAN be read correctly in (tool rows
+        // after the user row, no prose yet). Once unflagged prose lands, that box
+        // is indistinguishable from a finished turn and the turn is installed
+        // whole, reply included: that ambiguity is what `inFlight` removes.
+        guard let watched,
+              let userIdx = fetched.lastIndex(where: { $0.role == "user" && $0.text == watched })
+        else { return fetched }
+        return Array(fetched[...userIdx])
+    }
+
     nonisolated static func turnSettled(history: [ChatMessage], watched: String?) -> Bool {
+        if history.contains(where: { $0.inFlight == true }) { return false }
         guard let watched else {
             return history.last?.role == "assistant" && history.last?.kind == nil
         }

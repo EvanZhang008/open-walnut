@@ -117,6 +117,18 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// history instead, which it projects with its own code. Either way nil is the
     /// NORMAL case and never an error: the drawer shows the excerpt it has.
     let detailRef: String?
+    /// True while this row belongs to the turn that is CURRENTLY IN FLIGHT
+    /// (additive 2026-09-17): the assistant, thinking and tool rows after the
+    /// last user row, never the user row itself. Absent once the turn is over,
+    /// and absent on an older server.
+    ///
+    /// WHY THE CLIENT NEEDS IT: a lane transcript now includes the model's
+    /// intermediate text MID-TURN, so "an assistant text row after my user
+    /// message" stopped proving the turn ended. Without this flag a mid-turn
+    /// refetch looked settled, the live region retired, and the still-running
+    /// tool row was rendered from the list with no `resultPreview` yet, which
+    /// the drawer reported as "No output".
+    let inFlight: Bool?
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -142,12 +154,13 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
-        case thinkingText, inputPreview, detailRef
+        case thinkingText, inputPreview, detailRef, inFlight
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
          detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
-         thinkingText: String? = nil, inputPreview: String? = nil, detailRef: String? = nil) {
+         thinkingText: String? = nil, inputPreview: String? = nil, detailRef: String? = nil,
+         inFlight: Bool? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -160,6 +173,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         self.thinkingText = thinkingText
         self.inputPreview = inputPreview
         self.detailRef = detailRef
+        self.inFlight = inFlight
     }
 
     var isUser: Bool { role == "user" }
