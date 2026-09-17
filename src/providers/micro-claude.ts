@@ -26,7 +26,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { runInlineSubagent } from './inline-subagent.js';
-import { runWarmMicroClaude } from './micro-claude-warm.js';
+import { runWarmMicroClaude, resolvedTmpdir } from './micro-claude-warm.js';
 import type { StreamingBlock } from './claude-stream-parser.js';
 
 export interface MicroClaudeOptions {
@@ -58,6 +58,15 @@ export interface MicroClaudeResult {
   response: string;
   costUsd?: number;
   durationMs: number;
+  /**
+   * The child's own claude session id and the cwd it ran in — a micro-Claude
+   * run is a REAL Claude Code session (transcript on disk, `--resume` works
+   * from that cwd), so a caller can adopt the finished conversation instead of
+   * starting a fresh agent on the same question. Absent when the child died
+   * before its init line.
+   */
+  sessionId?: string;
+  cwd?: string;
 }
 
 const DEFAULT_MODEL = 'sonnet';
@@ -75,7 +84,13 @@ export async function runMicroClaude(opts: MicroClaudeOptions): Promise<MicroCla
       toolUseId: opts.toolUseId ?? `micro-claude-${randomUUID()}`,
       ...(opts.onBlock ? { onBlock: opts.onBlock } : {}),
     });
-    return { response: run.response, costUsd: run.costUsd, durationMs: run.durationMs };
+    return {
+      response: run.response,
+      costUsd: run.costUsd,
+      durationMs: run.durationMs,
+      ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+      ...(run.cwd ? { cwd: run.cwd } : {}),
+    };
   }
   const run = await runInlineSubagent({
     prompt: opts.prompt,
@@ -89,5 +104,15 @@ export async function runMicroClaude(opts: MicroClaudeOptions): Promise<MicroCla
     ...(opts.onBlock ? { onBlock: opts.onBlock } : {}),
   });
   if (!run.success) throw new Error(run.error ?? 'claude -p exited with an error');
-  return { response: run.result, costUsd: run.costUsd, durationMs: run.durationMs };
+  return {
+    response: run.result,
+    costUsd: run.costUsd,
+    durationMs: run.durationMs,
+    ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+    // `slim: true` above is what puts the child in the neutral tmpdir
+    // (inline-subagent's own default), so that is the cwd its transcript is filed
+    // under — REALPATH'd, because the CLI resolves the path before encoding it
+    // and `/var/folders/…` names a directory it never writes to.
+    cwd: resolvedTmpdir(),
+  };
 }

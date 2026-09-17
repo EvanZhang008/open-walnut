@@ -227,10 +227,15 @@ interface TodoPanelProps {
   /** Pin-tier header "+": open a draft session column with `meta.pinTier` preset
    *  to this tier (built-in name or a `ct_*` custom tier id). */
   onOpenLauncherForTier?: (tier: string) => void;
-  /** ✦ AI search card's "Open as session": start an Ask Walnut session whose
-   *  first message is the search briefing (MainPage runs the quick-start and
-   *  opens the pending column). Settles when the HTTP round-trip lands. */
-  onOpenSearchSession?: (message: string) => Promise<void> | void;
+  /** ✦ AI search card's "Open as session": continue `query` as a conversation.
+   *  MainPage reopens the session the lane ran the search in, or (no such
+   *  session) starts an Ask Walnut session on `message`, the search briefing.
+   *  Settles when the round-trip lands. */
+  onOpenSearchSession?: (
+    message: string,
+    query: string,
+    opts: { search: boolean; progressId?: string },
+  ) => Promise<void> | void;
   /** Virtual-group name registry: group_id → label. */
   taskGroups?: Record<string, string>;
   /** Group ids hidden from the Focus (pinned) area — their cards are skipped there. */

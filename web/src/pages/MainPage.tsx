@@ -36,6 +36,7 @@ import {
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
+import { adoptAgentSearchSession } from '@/api/agentSearch';
 import { fetchTask, recordSuggestFeedback, type QuickTaskParse } from '@/api/tasks';
 import { isBuiltinTier } from '@/api/focus';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
@@ -2374,13 +2375,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [launchQuickStart, openDraftColumn, openSessionOrToast]);
 
   /**
-   * ✦ AI search card → "Open as session": ONE click starts an Ask Walnut
-   * session on the search question, as a session column (pending column now,
-   * the real panel once the quick-start answers), filed under the Ask Walnut
-   * project. The same launch a walnut draft's Start performs (handleDraftStart),
-   * minus the composer: the card built the message, the user only clicked.
-   * Focus tier + no model, the walnut draft's own seeds (the server applies the
-   * Ask Walnut launch memory to a launch that names no model).
+   * ✦ AI search card → "Open as session": ONE click continues the search as a
+   * conversation, in a session column.
+   *
+   * The card's lane is not a bespoke API call — it is a `claude -p` session
+   * whose transcript already holds the question, the searches and the answer
+   * (src/core/task-search-agent.ts → micro-claude). So this REOPENS that
+   * session; nothing is re-run and a follow-up resumes it. Only when there is
+   * none to reopen does it start a fresh Ask Walnut session on the briefing the
+   * card built — the same launch a walnut draft's Start performs
+   * (handleDraftStart), minus the composer: Focus tier + no model, so the server
+   * applies the Ask Walnut launch memory.
    *
    * The in-flight latch lives HERE, not in the button: the card unmounts as soon
    * as the search box is cleared, so its disabled state is gone the moment the
@@ -2389,10 +2394,35 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * for ▶ Start).
    */
   const searchSessionLaunchingRef = useRef(false);
-  const handleOpenSearchSession = useCallback(async (message: string): Promise<void> => {
-    if (searchSessionLaunchingRef.current) return;
+  const handleOpenSearchSession = useCallback(async (
+    message: string,
+    query: string,
+    opts: { search: boolean; progressId?: string },
+  ): Promise<void> => {
+    if (searchSessionLaunchingRef.current) {
+      // A press swallowed by the latch used to be a silent no-op — nothing on
+      // screen, while the earlier press was still resolving (its adopt request
+      // may legitimately take tens of seconds). Say so, or the button reads as
+      // broken.
+      showOperationError('Still opening the previous search — one moment.');
+      return;
+    }
     searchSessionLaunchingRef.current = true;
     try {
+      // FIRST CHOICE: reopen the session the ✦ lane already ran this search in.
+      // That lane is a real claude session — the question, the searches and the
+      // answer are in its transcript — so adopting it means the user lands in a
+      // conversation that is already done and types a follow-up, instead of
+      // watching a second agent redo the same work (the whole complaint).
+      // Adoption is idempotent server-side, so pressing this twice reopens the
+      // same session rather than forking the conversation.
+      const adopted = await adoptAgentSearchSession(query, opts);
+      if (adopted) {
+        openSessionOrToast(adopted.sessionId);
+        return;
+      }
+      // FALLBACK — no session to reopen (lane off, its run failed, or it aged
+      // out of the server's map): start one on the briefing the card built.
       await launchQuickStart(
         { cwd: '', host: null },
         { ...freshLauncherMeta(), pinTier: 'focus', model: undefined },
@@ -2404,7 +2434,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } finally {
       searchSessionLaunchingRef.current = false;
     }
-  }, [launchQuickStart]);
+  }, [launchQuickStart, openSessionOrToast, showOperationError]);
 
   return (
     <div

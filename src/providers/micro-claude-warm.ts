@@ -22,6 +22,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createInterface, type Interface } from 'node:readline';
 import { log } from '../logging/index.js';
@@ -57,6 +58,18 @@ export interface WarmRunResult {
   durationMs: number;
   /** True when the answer came from a pre-booted child (telemetry). */
   warm: boolean;
+  /**
+   * The child's OWN claude session id, and the cwd it ran in.
+   *
+   * A micro-Claude child is a real Claude Code session: it writes a transcript
+   * under ~/.claude/projects/<encoded cwd>/<sessionId>.jsonl and `--resume
+   * <sessionId>` from that same cwd continues it (verified 2026-09-16, same id
+   * back). That makes the run ADOPTABLE — a caller can hand the finished
+   * conversation to the user instead of asking a second agent to redo the work
+   * (first consumer: the ✦ AI search card's "Open as session").
+   */
+  sessionId?: string;
+  cwd?: string;
 }
 
 const POOL_IDLE_TTL_MS = 15 * 60_000;
@@ -67,6 +80,9 @@ interface PooledChild {
   rl: Interface;
   key: string;
   spawnedAt: number;
+  /** Captured from the child's own `system:init` line — see WarmRunResult. */
+  sessionId?: string;
+  cwd?: string;
 }
 
 let pooled: PooledChild | null = null;
@@ -80,6 +96,12 @@ function specKey(spec: WarmSpec): string {
 
 function warmDisabled(): boolean {
   return process.env.WALNUT_MICRO_CLAUDE_WARM === '0';
+}
+
+/** The spawn cwd as the CLI sees it. Only used when a child never announced its
+ *  own cwd — see the note on WarmRunResult.cwd. */
+export function resolvedTmpdir(): string {
+  try { return realpathSync(tmpdir()); } catch { return tmpdir(); }
 }
 
 function buildChildEnv(): NodeJS.ProcessEnv {
@@ -115,7 +137,23 @@ function spawnStreamChild(spec: WarmSpec): PooledChild | null {
     env: buildChildEnv(),
   });
   const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
-  return { proc, rl, key: specKey(spec), spawnedAt: Date.now() };
+  const child: PooledChild = { proc, rl, key: specKey(spec), spawnedAt: Date.now() };
+  // Capture the session id HERE, not in runWarmMicroClaude: a pooled child
+  // prints its `system:init` line while it boots, long before a call takes it
+  // out and attaches its own line listener — readline drops what nobody was
+  // listening for, so a run-time-only capture misses it on exactly the warm
+  // path that is the point of this pool. Parsing stops after the first init.
+  rl.on('line', (line) => {
+    if (child.sessionId) return;
+    if (!line.includes('"init"')) return;
+    parseClaudeJsonlLine(line, {
+      onInit: (init) => {
+        child.sessionId = init.sessionId;
+        if (init.cwd) child.cwd = init.cwd;
+      },
+    });
+  });
+  return child;
 }
 
 function disposePooled(): void {
@@ -164,20 +202,23 @@ process.once('exit', () => { disposePooled(); });
 export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunResult> {
   const spec: WarmSpec = { system: opts.system, model: opts.model, tools: opts.tools };
   const key = specKey(spec);
-  let child: PooledChild | null = null;
+  let taken: PooledChild | null = null;
   let warm = false;
   if (!warmDisabled() && pooled && pooled.key === key
       && pooled.proc.exitCode === null && !pooled.proc.killed) {
-    child = pooled;
+    taken = pooled;
     pooled = null;
     warm = true;
   } else {
-    child = spawnStreamChild(spec);
+    taken = spawnStreamChild(spec);
   }
-  if (!child) throw new Error('claude CLI not available');
+  if (!taken) throw new Error('claude CLI not available');
   // Replace the pool slot immediately so the NEXT call is warm too.
   prewarmMicroClaude(spec);
 
+  // `const` so the callbacks below keep the narrowing (a `let` loses it inside
+  // a closure) — they record the child's session id for adoptable runs.
+  const child = taken;
   const { proc, rl } = child;
   const startTime = Date.now();
   let result: ClaudeStreamResult | undefined;
@@ -200,6 +241,12 @@ export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunR
     rl.on('line', (line) => {
       const parsed = parseClaudeJsonlLine(line, {
         onResult: (r) => { result = r; settle('result'); },
+        // Cold-spawned children (pool miss) init after this listener exists;
+        // for a pooled child spawnStreamChild already recorded it.
+        onInit: (init) => {
+          child.sessionId ??= init.sessionId;
+          if (init.cwd) child.cwd ??= init.cwd;
+        },
       });
       if (!parsed) return;
       for (const block of Array.isArray(parsed) ? parsed : [parsed]) {
@@ -240,6 +287,19 @@ export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunR
     durationMs,
     toolCalls,
     costUsd: result.costUsd,
+    sessionId: child.sessionId,
   });
-  return { response: result.result, costUsd: result.costUsd, durationMs, warm };
+  return {
+    response: result.result,
+    costUsd: result.costUsd,
+    durationMs,
+    warm,
+    ...(child.sessionId ? { sessionId: child.sessionId } : {}),
+    // The child's OWN reported cwd beats what we asked for, and the fallback must
+    // be REALPATH'd: os.tmpdir() is `/var/folders/…` on macOS while the CLI
+    // resolves and encodes `/private/var/folders/…`, so the un-resolved string
+    // names a project directory that no transcript is ever written to (432 of the
+    // resolved dirs on this machine against 1 of the other kind).
+    cwd: child.cwd ?? resolvedTmpdir(),
+  };
 }

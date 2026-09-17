@@ -31,6 +31,15 @@ function routeDeadlineMs(): number {
   return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 90_000;
 }
 
+/** Adopt deadline — much tighter than the search's own, because this request is
+ *  a button press holding a browser connection slot, not a background lane.
+ *  30s covers a normal search (measured 7s, p90 ~20s) and still lets the client
+ *  fall back while the click feels like a click. */
+function adoptDeadlineMs(): number {
+  const fromEnv = Number(process.env.WALNUT_AGENT_SEARCH_ADOPT_DEADLINE_MS);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 30_000;
+}
+
 export const searchAgentRouter = Router();
 
 searchAgentRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -66,6 +75,80 @@ searchAgentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
       res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) });
       return;
     }
+    next(err);
+  } finally {
+    if (deadline) clearTimeout(deadline);
+  }
+});
+
+/**
+ * POST /api/search/agent/session — continue a search as a conversation.
+ *
+ * The lane's engine is a real claude session, so this hands back THAT session
+ * (adopted into a task under "Ask Walnut" on first ask) instead of starting a
+ * fresh agent that would redo the search. See core/sessions/adopt-search-session.
+ *
+ * Body: { q }. Keyed by QUERY on purpose — a client can never name the session
+ * id it wants adopted.
+ *
+ * 200 {sessionId, taskId, reused} — open this session
+ * 400 {code:'bad_query'} / 404 {code:'no_session'|'no_transcript'} — nothing to
+ *     reopen; the client falls back to starting a session normally
+ *
+ * May WAIT for a search that is still running (the button is meant to be
+ * pressable during the lane's spinner), so it is slow by design, never hanging:
+ * the wait is bounded by the engine's own timeout.
+ */
+searchAgentRouter.post('/session', async (req: Request, res: Response, next: NextFunction) => {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const body = (req.body ?? {}) as { q?: unknown; search?: unknown; progressId?: unknown };
+    const q = String(body.q ?? '').trim();
+    // Length gates BEFORE anything touches the string: the body limit is 15MB and
+    // normalizing a query is a synchronous full-string regex on the one event loop
+    // every route shares. Same 400-char ceiling the GET enforces.
+    if (!q) {
+      res.status(400).json({ error: 'q is required', code: 'bad_query' });
+      return;
+    }
+    if (q.length > 400) {
+      res.status(400).json({ error: 'q must be at most 400 characters', code: 'bad_query' });
+      return;
+    }
+    // The client tells us whether it may run a search: false when the human has
+    // the ✦ lane switched off (or it just failed), because spending a model run
+    // behind an off switch is not ours to decide. Default false — a caller that
+    // says nothing gets the cheap answer.
+    const maySearch = body.search === true;
+    const progressId = typeof body.progressId === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(body.progressId)
+      ? body.progressId : undefined;
+
+    const { adoptAgentSearchSession, AdoptSearchSessionError } =
+      await import('../../core/sessions/adopt-search-session.js');
+    // Bounded wait, because this response holds one of the browser's six
+    // connections: a search can legitimately take 80s, and pinning a slot that
+    // long is the shape that starves the whole app (CLAUDE.md's own rule). On
+    // expiry the client falls back to launching a session while the search keeps
+    // running for the card — and the NEXT press adopts it.
+    const timeout = new Promise<never>((_, reject) => {
+      deadline = setTimeout(
+        () => reject(new AdoptSearchSessionError('the AI search is still running', 404, 'search_pending')),
+        adoptDeadlineMs(),
+      );
+    });
+    try {
+      res.json(await Promise.race([
+        adoptAgentSearchSession(q, { startIfMissing: maySearch, ...(progressId ? { progressId } : {}) }),
+        timeout,
+      ]));
+    } catch (err) {
+      if (err instanceof AdoptSearchSessionError) {
+        res.status(err.statusCode).json({ error: err.message, code: err.code });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
     next(err);
   } finally {
     if (deadline) clearTimeout(deadline);

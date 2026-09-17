@@ -20,9 +20,11 @@ vi.mock('../../src/core/claude-cli-detect.js', () => ({
   resolveClaudeCliExecutable: () => '/usr/local/bin/claude',
 }));
 
+import { realpathSync } from 'node:fs';
 import {
   runWarmMicroClaude,
   prewarmMicroClaude,
+  resolvedTmpdir,
   _resetWarmPoolForTesting,
 } from '../../src/providers/micro-claude-warm.js';
 
@@ -50,6 +52,13 @@ const SPEC = { system: 'tiny contract', model: 'sonnet', tools: ['Bash'] };
 
 function feedResult(proc: FakeProc, result = '{"results":[]}'): void {
   proc.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', result, total_cost_usd: 0.01 }) + '\n');
+}
+
+/** The CLI's own `system:init` line — a pooled child prints it while booting. */
+function feedInit(proc: FakeProc, sessionId: string, cwd?: string): void {
+  proc.stdout.write(JSON.stringify({
+    type: 'system', subtype: 'init', session_id: sessionId, model: 'sonnet', ...(cwd ? { cwd } : {}),
+  }) + '\n');
 }
 
 function feedToolUse(proc: FakeProc, id: string): void {
@@ -150,5 +159,62 @@ describe('warm micro-claude pool', () => {
     procs[0].exitCode = 1;
     procs[0].emit('exit', 1);
     await expect(done).rejects.toThrow(/exited before answering/);
+  });
+
+  // The child is a real Claude Code session, and reporting WHICH one is what
+  // lets a caller hand the finished conversation to the user (the ✦ search
+  // card's "Open as session") instead of running the work twice.
+  describe('the run reports the child it ran on', () => {
+    it('captures the session id a POOLED child printed while it was booting', async () => {
+      const procs: FakeProc[] = [];
+      spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });
+      prewarmMicroClaude(SPEC);
+      // The init line lands BEFORE any call takes this child out — the whole
+      // point of the pool. A capture that only listened from runWarmMicroClaude
+      // would miss it (readline drops lines nobody is listening for), leaving
+      // the warm path — the common one — with no session to adopt.
+      feedInit(procs[0], 'sess-pooled-1', '/private/var/folders/xx/T');
+      await new Promise((r) => setTimeout(r, 10));
+
+      const done = runWarmMicroClaude({ ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w6' });
+      await new Promise((r) => setTimeout(r, 10));
+      feedResult(procs[0]);
+      const run = await done;
+      expect(run.warm).toBe(true);
+      expect(run.sessionId).toBe('sess-pooled-1');
+      // The CLI's OWN cwd, not what we asked for: its encoding is what names the
+      // transcript directory, and the CLI reports the realpath.
+      expect(run.cwd).toBe('/private/var/folders/xx/T');
+    });
+
+    it('captures it on a cold spawn too, and falls back to the spawn cwd', async () => {
+      const procs: FakeProc[] = [];
+      spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });
+      const done = runWarmMicroClaude({ ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w7' });
+      await new Promise((r) => setTimeout(r, 10));
+      feedInit(procs[0], 'sess-cold-1'); // no cwd in the init line
+      feedResult(procs[0]);
+      const run = await done;
+      expect(run.warm).toBe(false);
+      expect(run.sessionId).toBe('sess-cold-1');
+      // REALPATH'd, not the raw spawn cwd: on macOS os.tmpdir() is
+      // `/var/folders/…` while the CLI resolves and encodes
+      // `/private/var/folders/…`, so the raw string names a project directory no
+      // transcript is ever written to — an adopter checking it finds nothing and
+      // silently falls back to starting a new session.
+      expect(run.cwd).toBe(resolvedTmpdir());
+      if (realpathSync(tmpdir()) !== tmpdir()) expect(run.cwd).not.toBe(tmpdir());
+    });
+
+    it('reports no session id when the child never announced one', async () => {
+      const procs: FakeProc[] = [];
+      spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });
+      const done = runWarmMicroClaude({ ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w8' });
+      await new Promise((r) => setTimeout(r, 10));
+      feedResult(procs[0]);
+      // Undefined, never invented: an adopter must degrade to starting a fresh
+      // session rather than resume an id that no transcript belongs to.
+      expect((await done).sessionId).toBeUndefined();
+    });
   });
 });

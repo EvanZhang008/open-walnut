@@ -1,15 +1,24 @@
 /**
  * ✦ AI search card → "Open as session".
  *
- * The one-shot AI lane answers with a fixed tool budget; this button hands the
- * same question to a FULL Ask Walnut session in one click, no composer step:
- * a session column opens (pending, then the real panel), the task is filed under
- * the Ask Walnut project, and the user can keep asking in that column.
+ * One click continues the search as a conversation. Two paths, both here:
  *
- * The AI lane is stubbed at the network edge (its states are what the button
- * has to survive: still searching, done with rows, done empty, failed, off);
- * the quick-start itself is REAL against the fixture server + mock CLI, so the
- * column, the transcript and the task on the board are the product's own.
+ *  1. REOPEN — the AI lane runs its search inside a real claude session, so the
+ *     button hands the user THAT session (adopted under Ask Walnut). Nothing
+ *     re-runs; the answer is already in it.
+ *  2. FALLBACK — nothing to reopen (lane off/failed, or its run aged out): start
+ *     a fresh Ask Walnut session on the briefing the card built.
+ *
+ * The fixture server has NO AI lane (backgroundAiDisabled is on for every test
+ * server), so a real search session never exists here: the adopt call answers
+ * 404 and every test below except the "reopen" pair exercises the fallback —
+ * which is exactly the path a user with the lane switched off gets.
+ *
+ * The AI lane is stubbed at the network edge (its states are what the button has
+ * to survive: still searching, done with rows, done empty, failed, off); the
+ * quick-start and the sessions themselves are REAL against the fixture server +
+ * mock CLI, so the column, the transcript and the task on the board are the
+ * product's own.
  */
 import { expect, test } from '@playwright/test';
 import { REAL_PANEL, REAL_PANEL_IN_COLUMN, homeColumns } from './draft-helpers';
@@ -122,6 +131,105 @@ test('one click while the AI lane is still searching: pending column, real sessi
   if (!(await pendingSeen)) {
     test.info().annotations.push({ type: 'note', description: 'pending column was shorter than one frame (not a failure)' });
   }
+});
+
+test('when the search HAS a session, the click reopens THAT one and starts nothing', async ({ page }) => {
+  await stubEmptyInstantSearch(page);
+  const lane = await stubAgentSearch(page, () => ({ status: 200, body: AGENT_PAYLOAD, delayMs: 20_000 }));
+  await openHome(page);
+
+  // A real session for the server to hand back. On a live Mac this is the
+  // search's OWN claude session, adopted by POST /api/search/agent/session; the
+  // fixture has no AI lane, so the endpoint is stubbed while the session, its
+  // task and its transcript stay real.
+  const seeded = await page.request.post('/api/sessions/quick-start', {
+    data: {
+      cwd: '', message: `seeded ask ${STAMP}`, project: 'Ask Walnut',
+      walnutAgent: true, taskMeta: { pinTier: 'focus' },
+    },
+  });
+  expect(seeded.status(), await seeded.text()).toBe(200);
+  const { sessionId, taskId } = await seeded.json() as { sessionId: string; taskId: string };
+
+  const adoptBodies: Array<{ q?: string; search?: boolean; progressId?: string }> = [];
+  await page.route('**/api/search/agent/session', async (route) => {
+    adoptBodies.push(route.request().postDataJSON() as { q?: string; search?: boolean });
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ sessionId, taskId, reused: false }),
+    });
+  });
+  // Registered AFTER the seed above, so only the page's own launches count.
+  const quickStarts: string[] = [];
+  page.on('request', (req) => { if (isQuickStart(req)) quickStarts.push(req.url()); });
+
+  await page.locator('.todo-search-input').fill(QUERY);
+  await expect(openBtn(page)).toBeVisible({ timeout: 20_000 });
+  // Wait for the lane's request to be genuinely in flight before pressing: the
+  // card mints its progress id when it fires that request (the button is usable
+  // ~1s earlier, during the debounce, and then there is simply no id to pass —
+  // which is correct, just a different case than the one asserted below).
+  await expect.poll(() => lane.calls, { timeout: 20_000 }).toBeGreaterThan(0);
+  await openBtn(page).click();
+
+  // The adopted session's own column, with the real panel and its conversation —
+  // proof the user landed in an existing session, not an empty shell.
+  const column = page.locator(`.main-page-session-column:has([data-session-id="${sessionId}"])`);
+  await expect(column).toBeVisible({ timeout: 60_000 });
+  await expect(column.locator(REAL_PANEL_IN_COLUMN)).toBeVisible({ timeout: 60_000 });
+  await expect(column.getByText(new RegExp(`seeded ask ${STAMP}`)).first()).toBeVisible({ timeout: 60_000 });
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/08-reopened-search-session.png`, fullPage: false });
+
+  // NOTHING was started: no quick-start at all, and the server was asked by
+  // QUERY (it resolves the session id itself — a client may never name one).
+  await page.waitForTimeout(500);
+  expect(quickStarts, 'reopening must not launch a session').toHaveLength(0);
+  expect(adoptBodies).toHaveLength(1);
+  expect(adoptBodies[0]?.q).toBe(QUERY);
+  // The lane is ON here, so the press permits the server to run the search it
+  // needs (the lane's 1s debounce means a fast click has nothing to reopen yet)
+  // and hands over the card's progress id so those live lines land in this card.
+  expect(adoptBodies[0]?.search).toBe(true);
+  expect(adoptBodies[0]?.progressId, 'the card\'s progress id rides along').toBeTruthy();
+  await expect(openBtn(page)).toBeEnabled({ timeout: 15_000 });
+});
+
+test('pressing it twice reopens the same column, still starting nothing', async ({ page }) => {
+  await stubEmptyInstantSearch(page);
+  await stubAgentSearch(page, () => ({ status: 200, body: AGENT_PAYLOAD }));
+  await openHome(page);
+
+  const seeded = await page.request.post('/api/sessions/quick-start', {
+    data: {
+      cwd: '', message: `seeded twice ${STAMP}`, project: 'Ask Walnut',
+      walnutAgent: true, taskMeta: { pinTier: 'focus' },
+    },
+  });
+  const { sessionId, taskId } = await seeded.json() as { sessionId: string; taskId: string };
+  // The server's own second answer: same session, reused:true.
+  let calls = 0;
+  await page.route('**/api/search/agent/session', async (route) => {
+    calls++;
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ sessionId, taskId, reused: calls > 1 }),
+    });
+  });
+  const quickStarts: string[] = [];
+  page.on('request', (req) => { if (isQuickStart(req)) quickStarts.push(req.url()); });
+
+  await page.locator('.todo-search-input').fill(QUERY);
+  await expect(openBtn(page)).toBeVisible({ timeout: 20_000 });
+  const columns = page.locator(`.main-page-session-column:has([data-session-id="${sessionId}"])`);
+  await openBtn(page).click();
+  await expect(columns).toHaveCount(1, { timeout: 60_000 });
+  await expect(openBtn(page)).toBeEnabled({ timeout: 15_000 });
+  await openBtn(page).click();
+  await expect.poll(() => calls, { timeout: 15_000 }).toBe(2);
+  // ONE column for ONE conversation (a second open moves it, never duplicates),
+  // and still no launch.
+  await expect(columns).toHaveCount(1);
+  expect(quickStarts).toHaveLength(0);
 });
 
 test('a finished search seeds its rows into the briefing; a double click launches ONE session', async ({ page }) => {
@@ -269,9 +377,16 @@ test('clearing the search box mid-launch and retyping does not mint a second ses
   await expect.poll(() => posts.length, { timeout: 20_000 }).toBe(2);
 });
 
-test('the button survives a failed AI lane and an AI lane switched off', async ({ page }) => {
+test('the button survives a failed AI lane and an AI lane switched off, and never searches behind the off switch', async ({ page }) => {
   await stubEmptyInstantSearch(page);
   await stubAgentSearch(page, () => ({ status: 502, body: { error: 'agent failed', code: 'agent_failed' } }));
+  // Recorded, then passed through to the real server (which answers 404 here —
+  // no search ever ran on a fixture): the FLAG is what matters.
+  const adoptBodies: Array<{ search?: boolean }> = [];
+  await page.route('**/api/search/agent/session', async (route) => {
+    adoptBodies.push(route.request().postDataJSON() as { search?: boolean });
+    await route.fallback();
+  });
   await openHome(page);
 
   await page.locator('.todo-search-input').fill(QUERY);
@@ -290,6 +405,12 @@ test('the button survives a failed AI lane and an AI lane switched off', async (
   const { body } = await clickOpenSession(page);
   expect(body.walnutAgent).toBe(true);
   expect(body.message?.split('\n')[0]).toBe(`Find everything about: ${QUERY}`);
+  // THE POINT of this half: with the lane switched off, the press must not ask
+  // the server to run a search. Turning the lane off is a token/privacy choice,
+  // and a button that quietly spends a model run behind it is a bug, not a
+  // convenience — so the fallback launch is the correct answer here.
+  expect(adoptBodies.length).toBeGreaterThan(0);
+  expect(adoptBodies.at(-1)?.search, 'the off switch must reach the server').toBe(false);
 
   // Leave the pref as the other specs expect it.
   await panel(page).locator('.agent-search-enable').click();

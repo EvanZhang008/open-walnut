@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { peekAgentSearch } from '@/api/agentSearch';
+import { peekAgentSearch, type AdoptSearchSessionOptions } from '@/api/agentSearch';
 import { isAgentSearchEligible } from '@/hooks/agentSearchTrigger';
 import { useAgentTaskSearch } from '@/hooks/useAgentTaskSearch';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -101,11 +101,12 @@ function shortModel(model: string): string {
 }
 
 /**
- * "Open as session": the one-click hand-off from the one-shot AI lane to a full
- * Ask Walnut session on the same question. Disabled while the launch's HTTP
- * round-trip is in flight, so a double click cannot mint two sessions; the
- * pending column the owner opens is the visible feedback, this label only
- * covers the beat before it appears.
+ * "Open as session": one click turns this search into a conversation. The AI
+ * lane IS a claude session, so the owner reopens THAT one (the answer is
+ * already in it — nothing re-runs) and only falls back to starting a fresh
+ * session when there is none to reopen. Disabled while the round-trip is in
+ * flight, so a double click cannot mint two sessions; the column the owner
+ * opens is the visible feedback, this label only covers the beat before it.
  */
 function OpenSessionButton({ launching, onClick }: { launching: boolean; onClick: () => void }) {
   return (
@@ -115,7 +116,7 @@ function OpenSessionButton({ launching, onClick }: { launching: boolean; onClick
       data-testid="agent-search-open-session"
       disabled={launching}
       aria-busy={launching || undefined}
-      title="Open a full Ask Walnut session on this search: it digs through tasks, transcripts, memory and notes, and you can ask follow-up questions"
+      title="Continue this search as a conversation: opens the session that ran it, with its answer already there, so you can just ask follow-up questions"
       onClick={onClick}
     >
       <span className="agent-search-open-session-icon" aria-hidden="true">{ICON_CHAT}</span>
@@ -129,10 +130,12 @@ function OpenSessionButton({ launching, onClick }: { launching: boolean; onClick
 export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
   query: string;
   onOpenTask: (taskId: string) => void;
-  /** Start an Ask Walnut session whose first message is `message` (the owner
-   *  opens the pending column and runs the quick-start). The returned promise
-   *  settles when the HTTP round-trip lands, either way; absent = no button. */
-  onOpenSession?: (message: string) => Promise<void> | void;
+  /** Continue `query` as a conversation. The owner first tries to REOPEN the
+   *  session the AI lane ran the search in (its answer is already there);
+   *  `message` is the briefing for the fallback, when there is no such session
+   *  to reopen (lane off, failed, or its run has aged out). The returned promise
+   *  settles when the round-trip lands, either way; absent = no button. */
+  onOpenSession?: (message: string, query: string, opts: AdoptSearchSessionOptions) => Promise<void> | void;
 }) {
   const { state, data, sid, enabled, toggle, retry } = useAgentTaskSearch(query);
   const progress = useAgentProgress(sid);
@@ -152,10 +155,10 @@ export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
   }, []);
   // Read at click time, not captured: the button's identity must not change on
   // every progress tick (it sits in the header of a re-rendering card).
-  const latest = useRef({ query, state, onOpenSession });
-  latest.current = { query, state, onOpenSession };
+  const latest = useRef({ query, state, onOpenSession, enabled, sid });
+  latest.current = { query, state, onOpenSession, enabled, sid };
   const openSession = useCallback(() => {
-    const { query: q, state: s, onOpenSession: open } = latest.current;
+    const { query: q, state: s, onOpenSession: open, enabled: on, sid: progressId } = latest.current;
     if (!open) return;
     // Only a FINISHED search's rows ride along, and they are read back from the
     // memo BY QUERY (`peekAgentSearch`) rather than taken from `data`: that pairs
@@ -163,11 +166,19 @@ export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
     // last snapshot still describes the text now in the box. A miss (evicted
     // entry, unfinished search) just sends the briefing without candidates.
     // Built BEFORE the button is disabled, so a throw in here cannot strand it
-    // in its "Opening…" state.
+    // in its "Opening…" state. Only the FALLBACK path sends it: when the lane's
+    // own session can be reopened, that conversation already holds the question.
     const message = buildSearchSessionMessage(q, s === 'done' ? peekAgentSearch(q) : undefined);
+    // `search` is the human's own switch, forwarded: with the lane ON the server
+    // may run the search this press needs (the lane's 1s debounce means a fast
+    // click has nothing to reopen yet); with it OFF, or after it failed, the
+    // press must not spend a model run behind that choice — it launches a session
+    // instead. `progressId` is the lane's, so a search started by this press
+    // still shows its live lines in this very card.
+    const searchOpts = { search: on && s !== 'error', ...(progressId ? { progressId } : {}) };
     setLaunching(true);
     Promise.resolve()
-      .then(() => open(message))
+      .then(() => open(message, q, searchOpts))
       .catch(() => { /* the owner reports the failure in its pending column */ })
       .finally(() => { if (mountedRef.current) setLaunching(false); });
   }, []);

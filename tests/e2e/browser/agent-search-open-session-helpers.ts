@@ -51,12 +51,19 @@ export async function stubAgentSearch(
   respond: () => { status: number; body: unknown; delayMs?: number },
 ): Promise<{ calls: number }> {
   const stub = { calls: 0 };
-  await page.route('**/api/search/agent**', async (route) => {
-    stub.calls++;
-    const { status, body, delayMs } = respond();
-    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
-    await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
-  });
+  // Matched by PATHNAME, not by a `**/api/search/agent**` glob: the adopt call
+  // (POST /api/search/agent/session) lives one segment below the lane and a glob
+  // swallows it, so the card's own stub would answer a search payload to the
+  // "reopen" request — which is how the first run of these tests hung.
+  await page.route(
+    (url) => url.pathname === '/api/search/agent',
+    async (route) => {
+      stub.calls++;
+      const { status, body, delayMs } = respond();
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    },
+  );
   return stub;
 }
 

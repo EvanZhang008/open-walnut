@@ -1317,6 +1317,23 @@ export async function importSessionRecord(opts: {
    *  imported session sort as if it were just active. */
   engine?: SessionRecord['engine'];
   provider?: SessionRecord['provider'];
+  /**
+   * Spawn-time persona for the imported session — a RESUME builds its argv from
+   * the record (claude-code-session's resolveResumeArgs), so a session that must
+   * wake up as the Personal AI has to carry the profile from the moment it is
+   * registered. Set here rather than patched afterwards for the same reason
+   * `engine` is: updateSessionRecord bumps lastActiveAt on every write.
+   */
+  profile?: SessionRecord['profile'];
+  effort?: SessionRecord['effort'];
+  /**
+   * Why this record is stopped. Without one, classifySessionError reads
+   * 'unknown' and the imported session stays a "rescuable stopped record" for a
+   * day — the health monitor and every local-daemon reconnect then spend probe
+   * budget on a session no daemon has ever heard of. Pass a terminal reason
+   * (e.g. 'normal_completion') when the import is of a conversation that ENDED.
+   */
+  status_reason?: SessionRecord['status_reason'];
   human_note?: string;
 }): Promise<SessionRecord> {
   await ensureSessionInit();
@@ -1343,6 +1360,9 @@ export async function importSessionRecord(opts: {
         ...(opts.title ? { title: opts.title } : {}),
         ...(opts.engine ? { engine: opts.engine } : {}),
         ...(opts.provider ? { provider: opts.provider } : {}),
+        ...(opts.profile ? { profile: opts.profile } : {}),
+        ...(opts.effort ? { effort: opts.effort } : {}),
+        ...(opts.status_reason ? { status_reason: opts.status_reason } : {}),
         ...(opts.human_note ? { human_note: opts.human_note } : {}),
         statusRevision: 1,
         statusUpdatedAt: now,

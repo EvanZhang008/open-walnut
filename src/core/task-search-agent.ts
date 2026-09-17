@@ -9,6 +9,11 @@
  * prompt, and its stream translated into live progress events. The seam stays
  * injectable so a test can script an answer without a child process.
  *
+ * Because that child is a REAL Claude Code session, each run is ADOPTABLE: the
+ * session it ran in is remembered here (see `runs` / resolveAgentSearchRun) so
+ * "open this search as a session" can hand the user the finished conversation
+ * instead of a second agent redoing the search (sessions/adopt-search-session).
+ *
  * NOTE: backgroundAiDisabled() gates this feature, so it is OFF on every test
  * server (vitest/Playwright fixtures) and under WALNUT_DISABLE_BACKGROUND_AI=1
  * — a hidden AI panel there is correct behavior, not a bug.
@@ -65,11 +70,12 @@ export interface AgentSearchEngineOptions {
   progressId?: string;
 }
 
-/** The seam: returns the child's final answer text. */
+/** The seam: returns the child's final answer text. `sessionId`/`cwd` (the CLI
+ *  engine's own claude session) make the run ADOPTABLE — see recordRun. */
 export type AgentSearchEngine = (
   userPrompt: string,
   options: AgentSearchEngineOptions,
-) => Promise<{ response: string; model?: string; costUsd?: number }>;
+) => Promise<{ response: string; model?: string; costUsd?: number; sessionId?: string; cwd?: string }>;
 
 // Sonnet is the quality floor the user set; the slim shell keeps its cost
 // roughly a tenth of the stock-shell sonnet run ($0.68 measured pre-slim).
@@ -117,7 +123,7 @@ async function appendSeedResults(
 async function claudeCliEngine(
   userPrompt: string,
   options: AgentSearchEngineOptions,
-): Promise<{ response: string; model?: string; costUsd?: number }> {
+): Promise<{ response: string; model?: string; costUsd?: number; sessionId?: string; cwd?: string }> {
   const { runMicroClaude } = await import('../providers/micro-claude.js');
   const progress = makeProgress(options.progressId);
   const prompt = await appendSeedResults(userPrompt, options.query, progress);
@@ -186,7 +192,15 @@ async function claudeCliEngine(
     warm: true,
     onBlock,
   });
-  return { response: run.response, model: options.model, costUsd: run.costUsd };
+  return {
+    response: run.response,
+    model: options.model,
+    costUsd: run.costUsd,
+    // The child IS a resumable claude session; carrying its id out is what lets
+    // the user open THIS conversation instead of a second agent redoing it.
+    ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+    ...(run.cwd ? { cwd: run.cwd } : {}),
+  };
 }
 
 // Every input token is round-trip latency in the answer turn (profiled: a
@@ -253,6 +267,122 @@ function releaseCallSlot(): void {
 const inflight = new Map<string, Promise<AgentSearchResponse>>();
 const cache = new Map<string, { at: number; value: AgentSearchResponse }>();
 
+/**
+ * Adoptable runs: which claude session each query's search actually ran in.
+ *
+ * The engine child is a real Claude Code session (transcript on disk, `--resume`
+ * from the same cwd continues it), so "open this search as a session" can hand
+ * the user THAT finished conversation. Kept server-side and keyed by query on
+ * purpose: the browser asks by the text it typed and never gets to name a
+ * session id, so it can't ask Walnut to adopt an arbitrary session on the host.
+ */
+export interface AgentSearchRun {
+  sessionId: string;
+  /** The cwd the child reported — its encoding names the transcript directory. */
+  cwd: string;
+  /** When the run finished (ms epoch). */
+  at: number;
+  /** The trimmed query, for the adopted task's title. */
+  query: string;
+  model: string;
+}
+
+/** Longer than the ANSWER cache (10 min): a search stays worth continuing long
+ *  after its rows stop being fresh enough to serve as a search result. */
+const RUN_TTL_MS = 2 * 60 * 60_000;
+const RUN_CAP = 60;
+/** How long an adopt request may wait on a search still in flight. The button is
+ *  meant to be pressable during the lane's 14-second spinner, so waiting IS the
+ *  feature; the engine's own 80s timeout is the real ceiling. */
+const RUN_WAIT_MS = 85_000;
+
+const runs = new Map<string, AgentSearchRun>();
+
+function recordRun(key: string, run: AgentSearchRun): void {
+  // delete-then-set, so re-recording a query moves it to the END of the Map's
+  // insertion order: eviction below drops the oldest KEY, and an overwrite in
+  // place would leave a query the user keeps searching pinned at the front,
+  // first in line to be evicted.
+  runs.delete(key);
+  runs.set(key, run);
+  if (runs.size > RUN_CAP) {
+    const oldest = runs.keys().next().value;
+    if (oldest !== undefined) runs.delete(oldest);
+  }
+}
+
+/**
+ * The claude session a search for `query` ran in, WAITING for a run that is
+ * still in flight (pressing the button at second 3 of a 14-second search must
+ * still land on that search's own session, not start a second one).
+ *
+ * `startIfMissing` covers the window that made this feature look broken: the
+ * card's lane debounces for a second, so a fast click arrives when NOTHING has
+ * run yet — and answering "no session" there sent the user into a fresh agent
+ * redoing the search, the exact complaint. Starting the search here is also the
+ * cheaper branch (a slim sonnet child vs. a whole session), and runTaskSearchAgent
+ * dedups by the same key, so a lane request already in flight is JOINED rather
+ * than duplicated.
+ *
+ * Never rejects: a failed or disabled search resolves to undefined, and the
+ * caller degrades to starting a fresh session.
+ */
+export async function resolveAgentSearchRun(
+  query: string,
+  opts: { waitMs?: number; startIfMissing?: boolean; progressId?: string } = {},
+): Promise<AgentSearchRun | undefined> {
+  const key = `${AGENT_SEARCH_PROMPT_V}:${normalizeQueryKey(query)}`;
+  const fresh = (): AgentSearchRun | undefined => {
+    const run = runs.get(key);
+    return run && Date.now() - run.at < RUN_TTL_MS ? run : undefined;
+  };
+  const hit = fresh();
+  if (hit) return hit;
+  let running = inflight.get(key);
+  if (!running && opts.startIfMissing) {
+    // The caller's progress id rides along: a search started by a button press
+    // must still stream its live lines into the ✦ card the user is watching,
+    // otherwise the panel spins with nothing to show for 10-20s. (A search
+    // already in flight keeps the lane's own id — the joiner cannot retrofit one.)
+    running = runTaskSearchAgent(query, {
+      ...(opts.progressId ? { progressId: opts.progressId } : {}),
+      ...(testEngine ? { engine: testEngine } : {}),
+    });
+    running.catch(() => undefined); // handled below; never an unhandled rejection
+  }
+  if (!running) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      running.catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, opts.waitMs ?? RUN_WAIT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  return fresh();
+}
+
+/** Test hook: pretend a search for `query` ran in this session. */
+export function _seedAgentSearchRunForTesting(query: string, run: Omit<AgentSearchRun, 'at' | 'query'> & { at?: number }): void {
+  const key = `${AGENT_SEARCH_PROMPT_V}:${normalizeQueryKey(query)}`;
+  recordRun(key, { ...run, at: run.at ?? Date.now(), query: query.trim() });
+}
+
+/**
+ * Test hook for the `startIfMissing` branch, which is otherwise unreachable in a
+ * test process: the child engine is gated off there (backgroundAiDisabled), and
+ * resolveAgentSearchRun starts its own run rather than taking a caller's engine.
+ * Pass undefined to clear.
+ */
+let testEngine: AgentSearchEngine | undefined;
+export function _setAgentSearchEngineForTesting(engine: AgentSearchEngine | undefined): void {
+  testEngine = engine;
+}
+
 /** `which claude` equivalent, resolved once — a missing CLI is permanent for
  *  the process lifetime, and the client latches 503 ai_disabled the same way. */
 let cliAvailable: boolean | null = null;
@@ -311,7 +441,7 @@ async function inner(
 
   await acquireCallSlot();
   const t0 = Date.now();
-  let answer: { response: string; model?: string; costUsd?: number };
+  let answer: Awaited<ReturnType<AgentSearchEngine>>;
   try {
     const engine = opts.engine ?? claudeCliEngine;
     // The child searches via curl on the RUNNING server's own address (tens
@@ -342,6 +472,18 @@ async function inner(
   }
 
   const model = answer.model ?? CLI_ENGINE_MODEL;
+  // Remember the session this ran in BEFORE parsing the answer: even an answer
+  // Walnut can't parse leaves a real conversation the user may want to continue,
+  // and that is the case where continuing is most useful.
+  if (answer.sessionId && answer.cwd) {
+    recordRun(cacheKey, {
+      sessionId: answer.sessionId,
+      cwd: answer.cwd,
+      at: Date.now(),
+      query: trimmed,
+      model,
+    });
+  }
   if (answer.costUsd !== undefined) {
     try {
       usageTracker.record({
@@ -415,6 +557,8 @@ export function prewarmAgentSearchChild(): void {
 export function _resetAgentSearchStateForTesting(): void {
   cache.clear();
   inflight.clear();
+  runs.clear();
+  testEngine = undefined;
   cliAvailable = null;
   activeCalls = 0;
   waiters.length = 0;
