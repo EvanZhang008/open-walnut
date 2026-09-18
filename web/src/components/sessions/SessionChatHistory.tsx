@@ -296,6 +296,7 @@ interface TreeTurn {
 function isTransparentStreamItem(item: TimelineItem): boolean {
   if (item.kind !== 'block') return false;
   const block = item.block;
+  if (isLaneChild(block)) return true;
   if ((block.type === 'text' || block.type === 'thinking') && !block.content.trim()) {
     return true;
   }
@@ -369,6 +370,10 @@ function buildTimeline(
 
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
+/** How long after real input inside the transcript its growth still counts as the
+ *  reader's own doing (see the follower below). A click's layout lands within a
+ *  frame or two, so this only has to cover a gesture, not a thought. */
+const FOLLOW_INPUT_QUIET_MS = 700;
 
 /** Serial for quote-pin highlight slices. Two timelines can show the SAME session
  *  (a column plus the fullscreen overlay), so the session id alone is not a
@@ -895,6 +900,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // geometry), which falsely sets isAtBottom=false. By ignoring scroll events during the
   // debounce window, we prevent resize-induced geometry shifts from corrupting isAtBottom.
   const ignoreScrollUntil = useRef(0);
+  // Last real input (wheel / touch / pointer / key) inside the scroller. A ref,
+  // not a closure local, because two effects need the same answer: the scroll
+  // handler's echo guard and the follower below both have to tell "the reader
+  // moved" apart from "the box moved under the reader".
+  const lastUserInput = useRef(0);
 
   // A scroll write was suppressed for an active selection. While the gap is
   // still small, keep isAtBottom=true (seamless resume). Once the suppressed
@@ -1777,8 +1787,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // gap>NEAR_BOTTOM_PX) — those echoes used to flip isAtBottom=false with
     // zero user action, parking the view mid-history ("jumps up then down
     // while loading"). Growth may never flip isAtBottom; only people may.
-    let lastUserInput = 0;
-    const markUserInput = () => { lastUserInput = Date.now(); };
+    const markUserInput = () => { lastUserInput.current = Date.now(); };
     // Wheel-UP is unambiguous "stop following, I'm reading" intent — honor it
     // SYNCHRONOUSLY (inc-1786690697303: while streaming, debouncedScroll
     // re-arms ignoreScrollUntil every content tick, so the wheel's scroll
@@ -1805,6 +1814,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     el.addEventListener('touchmove', onTouchMove, { passive: true });
     el.addEventListener('pointerdown', markUserInput, { passive: true });
     el.addEventListener('keydown', markUserInput, { passive: true });
+    // A CLICK counts as input in its own right, not just the pointerdown that
+    // usually precedes it: the follower below asks "did the reader grow this?",
+    // and expanding a tool run is a click. Keyboard activation arrives as keydown.
+    el.addEventListener('click', markUserInput, { passive: true });
     const onScroll = () => {
       const rawTop = el.scrollTop;
       const rawSh = el.scrollHeight;
@@ -1839,7 +1852,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // Echo guard: leaving-the-bottom requires recent user input. A no-input
       // "left bottom" is our own write racing content growth — heal it by
       // re-closing the gap instead of surrendering follow-bottom.
-      if (isAtBottom.current && !nearBottom && Date.now() - lastUserInput > 500) {
+      if (isAtBottom.current && !nearBottom && Date.now() - lastUserInput.current > 500) {
         if (!selectionActive()) {
           el.scrollTop = el.scrollHeight;
           ignoreScrollUntil.current = Date.now() + 100;
@@ -1889,9 +1902,111 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('pointerdown', markUserInput);
       el.removeEventListener('keydown', markUserInput);
+      el.removeEventListener('click', markUserInput);
       clearInterval(pollTimer);
     };
   }, [sid8, jumpForensics, selectionActive]);
+
+  /** FOLLOW THE NEWEST ROW — the other half of "the way back is geometry".
+   *
+   *  Every other follow path keys on an EVENT: a new message, one more streaming
+   *  block, an image's load, the scroller resizing. A transcript also grows with
+   *  none of those: the streamed text block grows IN PLACE (one block, re-rendered
+   *  every 150ms flush), a tool result is backfilled into a row that already
+   *  exists, WebKit reserves a scrollbar track in a code block a beat late, a font
+   *  swaps. `blocks.length` never moves, so Path A-2 fires once and never again,
+   *  and the reader who was sitting at the bottom is left behind by however much
+   *  the answer grew. Two reported shapes, same cause:
+   *    · a long prose answer (no tool calls to bump the block count) scrolls away
+   *      while it streams — measured at 1,164px adrift in both engines;
+   *    · a finished turn whose last line ends up ~40px under the composer glass.
+   *      That one is invisible to everything else: 40px is INSIDE the 80px
+   *      near-bottom tolerance, so `isAtBottom` still says "following" and the ↓
+   *      arrow stays hidden — nothing follows it and nothing offers a way down.
+   *
+   *  So this watches the BOX, at the cadence the growth happens: every frame while
+   *  a turn streams, 2Hz otherwise (late layout — scrollbar tracks, fonts, decoded
+   *  images — lands after the turn ends).
+   *
+   *  It only ever follows GROWTH, and that distinction is the whole safety
+   *  argument: a gap that opened because `scrollHeight` grew is the box moving
+   *  under a stationary reader, and closing it is what they asked for by staying
+   *  at the bottom; a gap that opened because `scrollTop` FELL is the reader
+   *  moving, and must be left alone — including the 40px nudge someone makes to
+   *  read a clipped line, which a plain `isAtBottom` gate would have yanked back.
+   *  `owed` latches the follow across ticks: the growth and the chance to act on
+   *  it can land in different frames (a selection, a gesture still in flight), and
+   *  a missed edge must not become a permanently short view.
+   *
+   *  Growth the READER caused is not followed either, and that is a deliberate
+   *  product decision, not an implementation detail: opening a collapsed tool run
+   *  while parked at the bottom means "show me that output", so the view stays put
+   *  and the ↓ arrow becomes the way back (the 2026-09-16 decision behind
+   *  `syncArrow`). Recent real input inside the scroller is what tells the two
+   *  apart — a click that grows the transcript lands a frame or two after the
+   *  click, far inside the window.
+   */
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let prevSh = el.scrollHeight;
+    let prevTop = el.scrollTop;
+    let owed = false;
+    // Aggregate log (one line per 2s at most): a per-frame line during streaming
+    // would be its own main-thread problem, and the useful signal is "how much
+    // did the follower have to close, how often".
+    let closes = 0;
+    let maxGap = 0;
+    let lastLog = 0;
+    const step = () => {
+      const sh = el.scrollHeight;
+      const top = el.scrollTop;
+      const grew = sh > prevSh + 0.5;
+      const readerMoved = top < prevTop - 0.5;
+      prevSh = sh;
+      prevTop = top;
+      if (readerMoved) owed = false;
+      if (grew && isAtBottom.current) {
+        // Who grew it: the reader's own click/key (leave it, the arrow answers) or
+        // the app writing output (follow it).
+        owed = Date.now() - lastUserInput.current >= FOLLOW_INPUT_QUIET_MS;
+      }
+      if (!owed) return;
+      // Intent lost (wheel-up, a drag away, the arrow's own hide) ends it.
+      if (!isAtBottom.current) { owed = false; return; }
+      // Mid-gesture: let the fingers finish before touching scrollTop, or the
+      // write lands inside their scroll and reads as the box fighting back.
+      if (Date.now() - lastUserInput.current < FOLLOW_INPUT_QUIET_MS) return;
+      if (selectionActive()) { noteSuppressedScroll(); return; }
+      const gap = sh - top - el.clientHeight;
+      if (gap <= 2) { owed = false; return; }
+      el.scrollTop = sh;
+      prevTop = el.scrollTop;
+      owed = false;
+      closes++;
+      if (gap > maxGap) maxGap = gap;
+      const now = Date.now();
+      if (now - lastLog > 2000) {
+        lastLog = now;
+        console.log(`[scroll-follow:${sid8}] closed n=${closes} maxGap=${Math.round(maxGap)} sh=${Math.round(sh)} streaming=${isStreaming}`);
+        closes = 0; maxGap = 0;
+      }
+    };
+    // 2Hz always: the post-turn shapes (scrollbar track, font swap, decoded
+    // image) each open the gap once, and one tick closes it.
+    const timer = setInterval(step, 500);
+    // Per-frame while streaming: text arrives every ~150ms, and half a second of
+    // lag behind live output is visible as the view trailing the words.
+    let raf = 0;
+    if (isStreaming) {
+      const loop = () => { step(); raf = requestAnimationFrame(loop); };
+      raf = requestAnimationFrame(loop);
+    }
+    return () => {
+      clearInterval(timer);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [sid8, isStreaming, selectionActive, noteSuppressedScroll]);
 
   // Mark initial load done once Phase 2 completes for the first time.
   // This prevents force-scroll from firing on batch-refresh re-fetches
