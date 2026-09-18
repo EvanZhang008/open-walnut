@@ -49,7 +49,7 @@ function pumpFetchQueue(): void {
   }
 }
 
-function acquireFetchSlot(urgent: boolean, callerSignal?: AbortSignal): Promise<void> {
+function acquireFetchSlot(urgent: boolean, label: string, callerSignal?: AbortSignal): Promise<void> {
   if (callerSignal?.aborted) {
     return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
   }
@@ -68,6 +68,13 @@ function acquireFetchSlot(urgent: boolean, callerSignal?: AbortSignal): Promise<
         if (callerSignal && entry.onCallerAbort) {
           callerSignal.removeEventListener('abort', entry.onCallerAbort);
         }
+        // This rejection happens BEFORE attemptRequest, so its FAILED log never
+        // fires: without a line here the request vanishes without a trace
+        // (2026-09-17: the folder registry died this way and the only evidence
+        // was the server's request log NOT having it).
+        console.error(`[api] ${label} rejected after ${MAX_QUEUE_WAIT_MS}ms in the connection queue (pool saturated)`, {
+          queued: fetchQueue.length, inFlight: inFlightFetches,
+        });
         // TimeoutError so existing timeout handling applies; the message makes
         // the saturation case distinguishable from a real network timeout.
         reject(new DOMException(
@@ -116,7 +123,7 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   // painting the screen. Without this, the draft composer's per-keystroke AI parse
   // (a POST) took all six slots ahead of the path picker's listings and held each
   // for its full 10s model timeout (2026-09-17).
-  await acquireFetchSlot(method !== 'GET' && !extra?.background, extra?.signal);
+  await acquireFetchSlot(method !== 'GET' && !extra?.background, `${method} ${path}`, extra?.signal);
   let retryWithBypass = false;
   try {
     return await attemptRequest<T>(method, path, body, extra);
@@ -269,7 +276,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
   const headers: Record<string, string> = {};
   const deviceToken = getDeviceToken();
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
-  await acquireFetchSlot(false);
+  await acquireFetchSlot(false, `GET ${path}`);
   let res: Response;
   try {
     res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(opts?.timeoutMs ?? 30_000) });

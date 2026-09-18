@@ -44,6 +44,23 @@ vi.mock('../../web/src/api/client', () => ({
   apiPatch: async () => ({}),
   ApiError: class ApiError extends Error {},
 }));
+// A stand-in for the WS singleton: the store's module-scope `_ws:reconnected`
+// registration is captured so a test can be the socket coming back.
+const ws = vi.hoisted(() => {
+  const handlers = new Map<string, Set<(data: unknown) => void>>();
+  return {
+    wsClient: {
+      onEvent(name: string, cb: (data: unknown) => void) {
+        let set = handlers.get(name);
+        if (!set) { set = new Set(); handlers.set(name, set); }
+        set.add(cb);
+      },
+      offEvent(name: string, cb: (data: unknown) => void) { handlers.get(name)?.delete(cb); },
+    },
+    emit(name: string) { for (const cb of handlers.get(name) ?? []) cb({}); },
+  };
+});
+vi.mock('../../web/src/api/ws', () => ({ wsClient: ws.wsClient }));
 vi.mock('../../web/src/utils/log', () => ({
   log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
 }));
@@ -65,9 +82,12 @@ import {
 } from '../../web/src/utils/engines';
 import {
   _resetEngineCatalogStore,
+  _subscribeEngineCatalogForTests,
   getEngineCatalog,
   refreshEngineCatalog,
 } from '../../web/src/hooks/useEngineCatalog';
+
+const subscribeForTest = () => _subscribeEngineCatalogForTests(() => {});
 
 function serverEntry(
   id: string,
@@ -243,6 +263,94 @@ describe('catalog store hydration', () => {
     refreshEngineCatalog();
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(getEngineCatalog().map((e) => e.id)).toEqual(['claude', 'codex']);
+  });
+
+  // A boot-time hydrate lost to a stalled server (2026-09-17: the connection
+  // queue rejected it) used to stamp the TTL like a real answer, pinning the
+  // compiled-in default for a minute with the real catalog one request away.
+  describe('a lost answer is retried, not treated as the server\'s verdict', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('a timeout is retried on the registry schedule and the answer replaces the default', async () => {
+      apiGet
+        .mockRejectedValueOnce(new DOMException('pool saturated', 'TimeoutError'))
+        .mockResolvedValueOnce({ engines: [serverEntry('claude', { isDefault: true }), serverEntry('gemini')] });
+      refreshEngineCatalog();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getEngineCatalog().map((e) => e.id)).toEqual(['claude', 'codex']);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(apiGet).toHaveBeenCalledTimes(2);
+      expect(getEngineCatalog().map((e) => e.id)).toEqual(['claude', 'gemini']);
+    });
+
+    it('a retryable failure that outlives the schedule leaves the TTL unstamped, so the next subscribe asks again', async () => {
+      apiGet.mockRejectedValue(new TypeError('Failed to fetch'));
+      refreshEngineCatalog();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(apiGet).toHaveBeenCalledTimes(5);
+
+      apiGet.mockReset();
+      apiGet.mockResolvedValue({ engines: [serverEntry('claude', { isDefault: true }), serverEntry('gemini')] });
+      const unsubscribe = subscribeForTest();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(apiGet).toHaveBeenCalledTimes(1);
+      expect(getEngineCatalog().map((e) => e.id)).toEqual(['claude', 'gemini']);
+      unsubscribe();
+    });
+
+    it('an old server (non-retryable) still starts the TTL, so we stop asking it', async () => {
+      apiGet.mockRejectedValue(new Error('404 not found'));
+      refreshEngineCatalog();
+      // Rejected at once (nothing to retry), and a subscribe inside the 60s TTL
+      // must not ask again.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(apiGet).toHaveBeenCalledTimes(1);
+      const unsubscribe = subscribeForTest();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(apiGet).toHaveBeenCalledTimes(1);
+      unsubscribe();
+    });
+
+    it('the socket coming back re-pulls the catalog', async () => {
+      apiGet.mockResolvedValue({ engines: [serverEntry('claude', { isDefault: true }), serverEntry('gemini')] });
+      ws.emit('_ws:reconnected');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(apiGet).toHaveBeenCalledTimes(1);
+      expect(getEngineCatalog().map((e) => e.id)).toEqual(['claude', 'gemini']);
+    });
+
+    it('a reconnect DURING a retrying chain is honoured with one more pull after it settles', async () => {
+      // Boot against a stalled server: the chain is on its way to exhausting the
+      // schedule. The socket comes back mid-chain; the old `if (!hydrating)`
+      // guard dropped that signal, and nothing else asks once every toggle is
+      // mounted, so the catalog stayed on the compiled-in default.
+      // The server answers only from t=31s: every attempt of the boot chain
+      // (t=0, 2, 6, 14, 30) fails, so only a pull that starts AFTER the chain
+      // can succeed.
+      const t0 = Date.now();
+      apiGet.mockImplementation(async () => {
+        if (Date.now() - t0 < 31_000) throw new TypeError('Failed to fetch');
+        return { engines: [serverEntry('claude', { isDefault: true }), serverEntry('gemini')] };
+      });
+      refreshEngineCatalog();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(apiGet).toHaveBeenCalledTimes(2);
+
+      ws.emit('_ws:reconnected');
+      await vi.advanceTimersByTimeAsync(0);
+      // Not a second concurrent chain: the running one finishes first.
+      expect(apiGet).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      // t=30: the boot chain has spent its schedule (5 attempts),
+      expect(apiGet).toHaveBeenCalledTimes(5 + 1);
+      // and the honoured refresh has started a fresh chain (its first attempt
+      // at t=30 fails, its retry at t=32 lands).
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(apiGet).toHaveBeenCalledTimes(7);
+      expect(getEngineCatalog().map((e) => e.id)).toEqual(['claude', 'gemini']);
+    });
   });
 
   it('seeds from localStorage on module load, before any fetch', async () => {

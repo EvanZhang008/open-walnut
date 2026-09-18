@@ -8,7 +8,7 @@ import { ApiError } from '@/api/client';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import { scrollLog } from '@/utils/scroll-debug';
-import { isRetryableTaskFetchError } from '@/utils/task-fetch-errors';
+import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
 import { tasksShallowEqual, mergeFetchedTasks } from './task-list-merge';
 
 /**
@@ -407,10 +407,30 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const hasLoadedRef = useRef(false);
 
   // Refresh the group-name registry (group_id → label). Cheap, separate from
-  // the task list; called on initial load + whenever groups change.
+  // the task list; called on initial load, on every WS connect, and whenever
+  // groups change.
+  //
+  // The registry is the ONLY source of a folder's name (membership rides on
+  // task.group_id, which the list fetch carries), so a lost answer here renders
+  // every folder as a bare icon + count. This used to be one attempt with the
+  // error swallowed: when it died at boot (2026-09-17, rejected by the
+  // connection queue during a server stall) the names stayed blank until a
+  // manual reload while the task list, which retries, recovered on its own.
+  // Now it retries on the registry schedule and a failure leaves the map alone,
+  // so the names the page already has survive a bad refetch.
+  const groupsGeneration = useRef(0);
+  const groupsAbort = useRef<AbortController | null>(null);
   const refetchGroups = useCallback(() => {
-    tasksApi.fetchTaskGroups()
+    // A newer call supersedes an older one still waiting between retries.
+    groupsAbort.current?.abort();
+    const abort = new AbortController();
+    groupsAbort.current = abort;
+    const generation = ++groupsGeneration.current;
+    fetchWithRetry(() => tasksApi.fetchTaskGroups(), {
+      subsystem: 'tasks', label: 'task folder registry', signal: abort.signal,
+    })
       .then((groups) => {
+        if (generation !== groupsGeneration.current) return;
         const map: Record<string, string> = {};
         const hidden = new Set<string>();
         const meta: Record<string, FolderMeta> = {};
@@ -427,7 +447,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         setHiddenGroups(hidden);
         setFolderMeta(meta);
       })
-      .catch(() => { /* groups are best-effort UI sugar — ignore fetch errors */ });
+      // Logged by fetchWithRetry (an abort is not a failure). The next WS
+      // connect or task:groups-changed event asks again.
+      .catch(() => {});
   }, []);
 
   const showOperationError = useCallback((msg: string) => {
@@ -441,10 +463,12 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     if (opErrorTimer.current) clearTimeout(opErrorTimer.current);
   }, []);
 
-  // Clean up timer on unmount
+  // Clean up timers on unmount
   useEffect(() => {
     return () => {
       fetchGeneration.current++;
+      groupsGeneration.current++;
+      groupsAbort.current?.abort();
       if (opErrorTimer.current) clearTimeout(opErrorTimer.current);
       if (retryTimer.current) clearTimeout(retryTimer.current);
     };
@@ -533,7 +557,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         if (generation !== fetchGeneration.current) return;
         const elapsed = Math.round(performance.now() - t0);
         endPerf?.('error');
-        const isRetryable = isRetryableTaskFetchError(e);
+        const isRetryable = isRetryableFetchError(e);
         log.error('tasks', 'fetch FAILED', { error: e.message, elapsed, attempt, isRetryable, isTimeout: e.name === 'TimeoutError' });
         if (isRetryable && attempt < MAX_RETRIES) {
           const delayMs = 2000 * (attempt + 1);
@@ -573,12 +597,17 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       // refetch the whole list per flap, contributing to reconnect-storm
       // main-thread freezes (starvation report 2026-07-15).
       const timer = setTimeout(() => {
-        log.info('tasks', 'ws connected → refetching tasks');
+        log.info('tasks', 'ws connected → refetching tasks + folder registry');
         refetch();
+        // The registry rides along: a socket that just came (back) up is the
+        // one signal that a boot-time or mid-gap failure can now succeed. It
+        // restarts the retry schedule; the 1s debounce above plus the socket's
+        // own reconnect backoff bound how often that can happen.
+        refetchGroups();
       }, 1_000);
       return () => clearTimeout(timer);
     }
-  }, [wsConnected, refetch]);
+  }, [wsConnected, refetch, refetchGroups]);
 
   // WS event counters for startup diagnostics — resets on refetch
   const wsEventCounts = useRef({ created: 0, updated: 0, completed: 0, lastLogAt: 0 });

@@ -25,7 +25,7 @@
  */
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { wsClient } from '@/api/ws';
-import { log } from '@/utils/log';
+import { fetchWithRetry } from '@/utils/fetch-retry';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { fetchProjects, type ProjectSummary } from '@/api/projects';
 
@@ -123,6 +123,8 @@ let loadedOnce = false;
 let lastLoadedAt = 0;
 let inflight: Promise<void> | null = null;
 let loadSeq = 0;
+/** Cancels the wait of a load that a newer `fresh` load has superseded. */
+let loadAbort: AbortController | null = null;
 let debounce: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<() => void>();
 const mutationListeners = new Set<(m: ProjectRegistryMutation) => void>();
@@ -194,9 +196,22 @@ function rebuild(): void {
 function runLoad(): Promise<void> {
   const startedAt = Date.now();
   const seq = ++loadSeq;
+  // A newer load supersedes an older one still waiting between retries; the
+  // older one's request, if already in flight, lands and is ignored below.
+  loadAbort?.abort();
+  const abort = new AbortController();
+  loadAbort = abort;
   const p = (async () => {
     try {
-      const data = await fetchProjects();
+      // Retried: a boot-time answer lost to a stalled server left every surface
+      // on task-derived names (no source badges, every project "new") until a
+      // consumer happened to remount (2026-09-17).
+      const data = await fetchWithRetry(() => fetchProjects(), {
+        subsystem: 'tasks', label: 'project registry', signal: abort.signal,
+      });
+      // Only the newest load may write: an older answer arriving after a
+      // fresh load started would put pre-write rows back on screen.
+      if (loadSeq !== seq) return;
       serverRows = toRows(data.projects ?? []);
       // Drop the optimistic ops this response already reflects. A request that
       // started BEFORE the route answered cannot carry the write, so its op stays.
@@ -204,12 +219,13 @@ function runLoad(): Promise<void> {
       loadedOnce = true;
       lastLoadedAt = Date.now();
       rebuild();
-    } catch (err) {
-      // Non-critical — callers fall back to task-derived names.
-      log.warn('tasks', 'project registry load failed', { error: String(err) });
+    } catch {
+      // Logged by fetchWithRetry (an abort is not a failure). Non-critical:
+      // callers fall back to task-derived names, and the next mount or WS
+      // reconnect asks again.
     } finally {
-      // Only the NEWEST load owns the slot — a chained fresh load has already
-      // replaced it by the time an older one settles.
+      // Only the NEWEST load owns the slot — a fresh load has already replaced
+      // it by the time a superseded one settles.
       if (loadSeq === seq) inflight = null;
     }
   })();
@@ -220,12 +236,15 @@ function runLoad(): Promise<void> {
 /**
  * Fetch the registry. Concurrent callers share one request; `fresh` forces a
  * request that starts AFTER this call, which is what a just-confirmed write
- * needs (reusing an older in-flight GET would answer with pre-write rows).
+ * needs (reusing an older in-flight GET would answer with pre-write rows). A
+ * fresh load starts NOW and supersedes the in-flight one rather than queueing
+ * behind it: that one may be a boot-time load still retrying for up to ~30s,
+ * and a confirmed write must not wait that long to be reconciled.
  */
 function load(fresh = false): Promise<void> {
   if (!inflight) return runLoad();
   if (!fresh) return inflight;
-  return inflight.then(() => runLoad());
+  return runLoad();
 }
 
 function scheduleRefresh(): void {
@@ -412,6 +431,10 @@ export function resetProjectRegistryForTests(): void {
   pendingOps = [];
   loadedOnce = false;
   lastLoadedAt = 0;
+  loadAbort?.abort();
+  loadAbort = null;
+  inflight = null;
+  loadSeq = 0;
   aliases.clear();
   if (debounce) { clearTimeout(debounce); debounce = null; }
   snapshot = derive([], false);

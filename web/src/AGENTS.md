@@ -92,6 +92,21 @@ still live on the client.
   `tests/e2e/browser/session-settings-store-same-browser-instant.spec.ts` (holds the PATCH and
   requires the pill AND a second surface to move inside 700ms, both directions) and
   `tests/web/session-settings-store-overlay.test.ts` (the retirement rules).
+- **A boot-time registry fetch is never a single attempt.** Anything fetched once and read for
+  the life of the page (folder names, the project registry, custom Focus tiers, the engine
+  catalog, the plugin app catalogue) goes through `fetchWithRetry` (`utils/fetch-retry.ts`:
+  timeouts, network errors, 5xx and malformed 2xx retried on a 2s/4s/8s/16s schedule, a 4xx
+  never), is re-pulled on the socket coming (back) up, keeps its last good value when a refetch
+  fails, and guards stale answers with a generation counter plus an AbortController that a newer
+  call aborts. `api.fetchX().then(set).catch(warn)` in a mount effect is the anti-pattern: on
+  2026-09-17 a hidden tab reloaded onto a new build while the server's event loop was stalled,
+  the client's 6-slot connection queue rejected every request that had waited 20s (before
+  `attemptRequest`, so nothing was logged), and every folder rendered as a bare icon + count
+  until a manual reload while the task list, which already retried, recovered on its own. Ratchets:
+  `tests/web/fetch-retry.test.ts`, `tests/web/task-groups-registry-recovery.test.ts`,
+  `tests/web/project-registry-recovery.test.ts`, `tests/e2e/browser/folder-registry-recovery.spec.ts`
+  (+ the `.webkit` twin: kills the first registry GETs at the network layer and requires the
+  name to arrive with no reload).
 - Use the structured logger `import { log } from '@/utils/log'` — never raw `console.log`;
   never `console.debug` (invisible to the disk forwarder). IDs full, never truncated.
 - **`<suggest>` action cards render in BOTH lanes through one module**

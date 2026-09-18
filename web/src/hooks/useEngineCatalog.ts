@@ -19,7 +19,8 @@
  */
 import { useSyncExternalStore } from 'react';
 import { apiGet } from '@/api/client';
-import { log } from '@/utils/log';
+import { wsClient } from '@/api/ws';
+import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
 import {
   DEFAULT_ENGINE_CATALOG,
   isSessionEngine,
@@ -61,6 +62,11 @@ let catalog: EngineCatalog = loadFromStorage() ?? DEFAULT_ENGINE_CATALOG;
 const listeners = new Set<() => void>();
 let lastHydrateAt = 0;
 let hydrating: Promise<void> | null = null;
+/** A refresh asked for while a hydrate chain was already running: the chain may
+ *  be a boot-time one that is retrying against a server that has since come
+ *  back, so the request is honoured with ONE more pull after it settles rather
+ *  than dropped (the old `if (!hydrating)` guard swallowed it). */
+let refreshRequested = false;
 /** One outstanding pending re-pull, cleared only by a settled answer — so a
  *  catalog that stays pending never grows a timer chain. */
 let pendingRepull: ReturnType<typeof setTimeout> | null = null;
@@ -181,7 +187,10 @@ function schedulePendingRepull(): void {
 async function hydrate(): Promise<void> {
   if (Date.now() - lastHydrateAt < HYDRATE_TTL_MS) return;
   if (!hydrating) {
-    hydrating = apiGet<{ engines: unknown }>('/api/engines')
+    hydrating = fetchWithRetry(
+      () => apiGet<{ engines: unknown }>('/api/engines'),
+      { subsystem: 'engine-catalog', label: 'engine catalog' },
+    )
       .then((res) => {
         const parsed = parseCatalog(res?.engines);
         // Merge BEFORE deciding pending: a pending row backed by a known-good
@@ -199,12 +208,23 @@ async function hydrate(): Promise<void> {
         if (pending) schedulePendingRepull();
       })
       .catch((err) => {
-        // Old server / offline: the compiled-in default is a correct answer for
-        // the engines that shipped with this build, so this is not user-facing.
-        lastHydrateAt = Date.now();
-        log.warn('engine-catalog', 'engine catalog hydrate failed', { error: String(err) });
+        // The compiled-in default is a correct answer for the engines that
+        // shipped with this build, so this is not user-facing. An OLD server
+        // (404) will keep answering that way: start the TTL so we stop asking.
+        // A retryable failure that outlived the schedule (stalled server, no
+        // network) is left un-stamped so the next subscribe or reconnect asks
+        // again instead of pinning the default for a minute.
+        // (fetchWithRetry already logged the failure and whether it was retryable.)
+        if (!isRetryableFetchError(err)) lastHydrateAt = Date.now();
       })
-      .finally(() => { hydrating = null; });
+      .finally(() => {
+        hydrating = null;
+        if (refreshRequested) {
+          refreshRequested = false;
+          lastHydrateAt = 0;
+          void hydrate();
+        }
+      });
   }
   return hydrating;
 }
@@ -229,8 +249,21 @@ export function getEngineCatalog(): EngineCatalogEntry[] {
 /** Force the next read to re-pull (e.g. after a config change that can add a
  *  custom adapter). Fire-and-forget. */
 export function refreshEngineCatalog(): void {
+  if (hydrating) { refreshRequested = true; return; }
   lastHydrateAt = 0;
   void hydrate();
+}
+
+// A socket gap can hide a config change that added an adapter, and a boot-time
+// hydrate that died against a stalled server needs one more ask. One pull per
+// reconnect: the socket's own reconnect backoff (1s doubling to 30s) is what
+// bounds this, the same way useHostStatus re-hydrates on the event.
+wsClient.onEvent('_ws:reconnected', () => { refreshEngineCatalog(); });
+
+/** Test hook: the store's subscribe, exactly what useSyncExternalStore calls
+ *  (a subscribe is the TTL-respecting hydrate trigger; refreshEngineCatalog is not). */
+export function _subscribeEngineCatalogForTests(cb: () => void): () => void {
+  return subscribe(cb);
 }
 
 /** Test hook — back to the compiled-in default, nothing hydrated. */
@@ -238,6 +271,7 @@ export function _resetEngineCatalogStore(): void {
   catalog = DEFAULT_ENGINE_CATALOG;
   lastHydrateAt = 0;
   hydrating = null;
+  refreshRequested = false;
   if (pendingRepull) clearTimeout(pendingRepull);
   pendingRepull = null;
   pendingRepullScheduled = false;

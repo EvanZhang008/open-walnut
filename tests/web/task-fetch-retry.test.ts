@@ -13,8 +13,8 @@ vi.mock('../../web/src/api/client', async (importOriginal) => {
 });
 
 import { ApiError } from '../../web/src/api/client';
+import { isRetryableFetchError } from '../../web/src/utils/fetch-retry';
 import { fetchTasks } from '../../web/src/api/tasks';
-import { isRetryableTaskFetchError } from '../../web/src/utils/task-fetch-errors';
 
 beforeEach(() => {
   mocks.apiGet.mockReset();
@@ -25,24 +25,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('isRetryableTaskFetchError', () => {
-  it.each([
-    ['request timeout', new DOMException('timed out', 'TimeoutError')],
-    ['network failure', new TypeError('Failed to fetch')],
-    ['malformed successful response', new ApiError(200, 'Invalid JSON')],
-    ['server error', new ApiError(500, 'Internal Server Error')],
-    ['upstream server error', new ApiError(503, 'Service Unavailable')],
-  ])('retries %s', (_label, error) => {
-    expect(isRetryableTaskFetchError(error)).toBe(true);
-  });
-
-  it.each([
-    ['bad request', new ApiError(400, 'Bad Request')],
-    ['missing task endpoint', new ApiError(404, 'Not Found')],
-  ])('does not retry %s', (_label, error) => {
-    expect(isRetryableTaskFetchError(error)).toBe(false);
-  });
-});
+// The retryable/non-retryable classification lives in fetch-retry.test.ts now
+// (the classifier is shared by every registry, not task-specific).
 
 describe('fetchTasks response validation', () => {
   it.each([
@@ -60,7 +44,7 @@ describe('fetchTasks response validation', () => {
 
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 200 });
-    expect(isRetryableTaskFetchError(error)).toBe(true);
+    expect(isRetryableFetchError(error)).toBe(true);
     expect(mocks.apiGet).toHaveBeenCalledWith('/api/tasks', { fields: 'list' });
   });
 });

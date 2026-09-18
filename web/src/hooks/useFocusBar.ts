@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useEvent } from './useWebSocket';
-import { log } from '@/utils/log';
+import { fetchWithRetry } from '@/utils/fetch-retry';
 import * as focusApi from '@/api/focus';
 import type { FocusTier, CustomTierDef } from '@/api/focus';
 import type { Task } from '@open-walnut/core';
@@ -97,13 +97,35 @@ export function useFocusBar(): UseFocusBarReturn {
   // ── Custom tier registry ──
   const [customTiersRaw, setCustomTiers] = useState<CustomTierDef[]>([]);
   const [customTiersLoaded, setCustomTiersLoaded] = useState(false);
-  useEffect(() => {
-    focusApi.fetchCustomTiers()
-      .then((r) => { setCustomTiers(r.tiers); setCustomTiersLoaded(true); })
-      // Not silent: a failed fetch hides every custom tier (tabs, subgroups,
-      // picker entries) with no other symptom — leave a trace for triage.
-      .catch((err) => { log.warn('focus', 'custom tier registry fetch failed', { err: String(err) }); });
+  // A failed fetch hides every custom tier (tabs, subgroups, picker entries)
+  // with no other symptom, so the load retries on the registry schedule, is
+  // re-pulled when the socket comes back, and only ever REPLACES the defs from
+  // a successful answer. A newer load supersedes an older one still waiting.
+  const tiersGeneration = useRef(0);
+  const tiersAbort = useRef<AbortController | null>(null);
+  const loadCustomTiers = useCallback(() => {
+    tiersAbort.current?.abort();
+    const abort = new AbortController();
+    tiersAbort.current = abort;
+    const generation = ++tiersGeneration.current;
+    fetchWithRetry(() => focusApi.fetchCustomTiers(), {
+      subsystem: 'focus', label: 'custom tier registry', signal: abort.signal,
+    })
+      .then((r) => {
+        if (generation !== tiersGeneration.current) return;
+        setCustomTiers(r.tiers);
+        setCustomTiersLoaded(true);
+      })
+      .catch(() => { /* logged by fetchWithRetry; the next reconnect asks again */ });
   }, []);
+  useEffect(() => {
+    loadCustomTiers();
+    return () => { tiersGeneration.current++; tiersAbort.current?.abort(); };
+  }, [loadCustomTiers]);
+  // Events during a socket gap are gone for good, and this registry is not
+  // polled. One load per reconnect (it restarts the schedule); the socket's own
+  // reconnect backoff (1s doubling to 30s) is what bounds a flapping server.
+  useEvent('_ws:reconnected', loadCustomTiers);
   const customTiers = useStableDefs(customTiersRaw);
   const customIdSet = useMemo(() => new Set(customTiers.map((t) => t.id)), [customTiers]);
 
@@ -219,9 +241,7 @@ export function useFocusBar(): UseFocusBarReturn {
   useEvent('config:changed', (data: unknown) => {
     const { key } = (data ?? {}) as { key?: string };
     if (key === 'focus_tiers') {
-      focusApi.fetchCustomTiers()
-        .then((r) => { setCustomTiers(r.tiers); setCustomTiersLoaded(true); })
-        .catch((err) => { log.warn('focus', 'custom tier registry refetch failed', { err: String(err) }); });
+      loadCustomTiers();
       return;
     }
     if (key !== 'focus_bar') return;
