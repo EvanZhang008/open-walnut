@@ -420,16 +420,9 @@ struct NewSessionChatView: View {
             onCreated(session)
             return true
         } catch let APIError.server(_, code, msg, _, _) {
-            switch code {
-            case "not_supported_cloud":
-                createError = "This cloud companion is too old to create sessions — update it, or connect directly to your primary box."
-            case "session_launch_needs_upgrade":
-                createError = "Your primary box's daemon needs an update for mobile session launch — it updates on its next reconnect. Try again in a minute."
-            case "bridge_offline":
-                createError = "The primary box isn't reachable from the cloud right now — try again when it reconnects."
-            default:
-                createError = msg
-            }
+            // Same ladder as the form-shaped launcher, including the reason
+            // `bridge_offline` prefers the server's sentence (see that function).
+            createError = NewSessionSheet.createErrorMessage(code: code, serverMessage: msg)
             return false
         } catch {
             createError = error.localizedDescription

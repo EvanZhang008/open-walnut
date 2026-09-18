@@ -48,6 +48,10 @@ struct NewSessionSheet: View {
 
     @State private var options: SessionLaunchOptions?
     @State private var loadFailed: String?
+    /// Non-nil = the form works but Start does not (see `LaunchOptionsFailure`).
+    /// Separate from `loadFailed` because it is NOT an either/or with the form:
+    /// this one rides above it and changes nothing else about the sheet.
+    @State private var startBlockedReason: String?
     @State private var selectedHost: String = ""   // "" = the primary box
     @State private var path: String = ""
     @State private var message: String = ""
@@ -82,6 +86,9 @@ struct NewSessionSheet: View {
                 if let error = loadFailed {
                     unavailableSection(error)
                 } else {
+                    if let startBlockedReason {
+                        startBlockedSection(startBlockedReason)
+                    }
                     hostSection
                     pathSection
                     modeSection
@@ -219,6 +226,58 @@ struct NewSessionSheet: View {
         }
     }
 
+    /// The warning that leads the form when Start cannot work right now.
+    ///
+    /// Non-blocking on purpose: every field below still does its job, and a user
+    /// may well be filling this in *while* walking over to open the laptop lid.
+    /// What it must not do is arrive late — as `createError`, after the host, the
+    /// path and the whole first message have been typed — which is exactly what
+    /// the 2026-09-17 report described.
+    ///
+    /// Same warning idiom this app already uses for "a human has to deal with
+    /// this": `exclamationmark.triangle.fill` beside stacked text in
+    /// `Theme.warning` (`PermissionRequestCard`, `LetterReaderView`'s decision
+    /// card, this sheet's own `createError` row). `Theme.warning`, not
+    /// `Theme.danger`: nothing has failed yet.
+    ///
+    /// An `HStack` rather than a `Label`, for ONE measured reason: a `Label`
+    /// merges its content into a single accessibility element, which swallows the
+    /// button whole — automation could not find it and VoiceOver could not reach
+    /// it. The icon is decorative either way, so it is hidden and the two lines
+    /// carry the message.
+    private func startBlockedSection(_ reason: String) -> some View {
+        Section {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Theme.warning)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Sessions can't start right now")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.warning)
+                        .accessibilityIdentifier("newSession.startBlocked")
+                    Text(reason)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    // The one thing the user can do from here besides wait. Start
+                    // is the other, and it stays enabled — this sheet warns, it
+                    // does not decide.
+                    Button("Check again") { Task { await loadOptions() } }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.tint)
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("newSession.startBlocked.recheck")
+                }
+                .multilineTextAlignment(.leading)
+                // Wrap, never truncate. The server's sentence carries the one
+                // fact the app cannot know — how long the box has been gone —
+                // and a truncated line drops exactly that at large text sizes.
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
     private func unavailableSection(_ error: String) -> some View {
         Section {
             VStack(spacing: 10) {
@@ -266,6 +325,13 @@ struct NewSessionSheet: View {
         }
         do {
             let opts = try await api.sessionLaunchOptions()
+            // A fetch that worked PROVES the relay is up, so a warning left from
+            // an earlier attempt is now a lie — drop it here, in the success
+            // branch, so both entry points (first open and the Check again /
+            // Retry refresh) clear it. Deliberately NOT cleared at the top of
+            // this function next to `loadFailed`: on a link that is still down
+            // that would blink the warning off and back on every refresh.
+            startBlockedReason = nil
             DiskCache.save(opts, key: Self.optionsCacheKey)
             apply(opts)
         } catch let APIError.server(_, code, _, _, _) where code == "not_supported_cloud" {
@@ -277,15 +343,19 @@ struct NewSessionSheet: View {
             // to unavailable. Neither substitutes for the other.
             options = nil
             DiskCache.remove(key: Self.optionsCacheKey)
+            startBlockedReason = nil
             loadFailed = "This cloud companion is too old to create sessions — update it, or connect the app to your primary box directly."
         } catch let APIError.server(_, code, msg, _, _) where code == "session_launch_needs_upgrade" || code == "bridge_offline" {
             // Transient/self-healing cloud-relay states: the daemon upgrades
             // on the next primary reconnect / the bridge redials. Keep the
-            // cache (the form is valid once the relay recovers) but show the
-            // honest state with Retry when nothing is on screen yet.
-            if options == nil {
-                loadFailed = msg
-            }
+            // cache (the form is valid once the relay recovers) and say so:
+            // either the whole sheet is unavailable with Retry (nothing on
+            // screen yet), or the form stays usable under a warning.
+            let verdict = Self.launchOptionsFailure(
+                code: code, serverMessage: msg, hasOptions: options != nil
+            )
+            startBlockedReason = verdict.warning
+            loadFailed = verdict.blocking
         } catch {
             // With cached options on screen the form still works (host list is
             // near-static); only a truly empty sheet degrades to the error state.
@@ -337,6 +407,89 @@ struct NewSessionSheet: View {
         // No else-latch: an empty cache apply (zero dirs, no task session)
         // must not burn the one preselect — the live fetch right behind it
         // may carry real suggestions.
+    }
+
+    /// Copy for a failed create, from the server's error `code` plus the raw
+    /// `message` it sent. Pure and static so the ladder is testable without a
+    /// network or a view, and so both launchers (this sheet and
+    /// `NewSessionChatView`) answer a given code identically.
+    ///
+    /// `bridge_offline` PREFERS the server's own sentence, unlike its neighbours:
+    /// the server knows something this app cannot, namely how long the primary has
+    /// been unreachable ("...for 41 minutes (it may be asleep or offline)"). That
+    /// duration is the whole difference between a two-second blip worth retrying
+    /// and a laptop that has been shut for half an hour, and without it the user
+    /// has no way to reach the only useful conclusion. The fixed sentence stays as
+    /// the fallback: an older replica sends nothing more specific, and the copy
+    /// still has to read well against that. The two upgrade codes keep their
+    /// client-side wording, because their server text is diagnostic rather than
+    /// something to put in front of a person.
+    static func createErrorMessage(code: String, serverMessage: String?) -> String {
+        let server = (serverMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        switch code {
+        case "not_supported_cloud":
+            return "This cloud companion is too old to create sessions — update it, or connect directly to your primary box."
+        case "session_launch_needs_upgrade":
+            return "Your primary box's daemon needs an update for mobile session launch — it updates automatically on its next reconnect. Try again in a minute."
+        case "bridge_offline":
+            return server.isEmpty
+                ? "The primary box isn't reachable from the cloud right now — try again when it reconnects."
+                : server
+        default:
+            // Validation 4xx from the primary: its text IS the user-facing answer.
+            return serverMessage ?? ""
+        }
+    }
+
+    /// What a failed launch-options fetch must put on screen: nothing at all, a
+    /// warning above a working form, or the whole form replaced.
+    struct LaunchOptionsFailure: Equatable {
+        /// Replaces the entire form with the retryable unavailable section.
+        var blocking: String?
+        /// Rides ABOVE a form that stays fully usable.
+        var warning: String?
+    }
+
+    /// Verdict for the two self-healing relay failures (`bridge_offline`,
+    /// `session_launch_needs_upgrade`). Pure and static so every rule below is
+    /// testable without a network or a view.
+    ///
+    /// THE BUG THIS EXISTS TO CLOSE (2026-09-17 report): a user tried to create a
+    /// session on a remote host from the phone, over and over, and it failed every
+    /// time, while messages to an already-running session kept going through. Their
+    /// MacBook was asleep with the lid shut, and sessions are created ON that box.
+    /// The sheet said NOTHING: hosts and recent paths are restored from a disk
+    /// cache on purpose (a near-static list beats a spinner), so `options` was
+    /// non-nil, and the old code dropped the failure on the floor for exactly that
+    /// case (`if options == nil`). Two states existed — a working form, and a fully
+    /// unavailable sheet — and the state that actually happens is neither: the form
+    /// is usable, and Start is doomed. So there are three now.
+    ///
+    /// `session_launch_needs_upgrade` earns the same warning as `bridge_offline`:
+    /// the cloud relay serves the options fetch and the launch through the SAME
+    /// `session.launch` bridge command, so a daemon too old to answer one is too
+    /// old to answer the other. The failure is equally certain and the harm is
+    /// identical (a typed-out prompt thrown away), which is the only thing this
+    /// warning is about. They differ in COPY, not in whether to warn: the wording
+    /// comes from `createErrorMessage`, so `bridge_offline` prefers the server's
+    /// own sentence (only the server knows for how long the box has been gone)
+    /// while the upgrade code keeps its client-side wording (its server text is
+    /// diagnostic, not something to put in front of a person).
+    ///
+    /// Sharing that ladder with the create path is deliberate: the pre-flight
+    /// warning and the post-Start error are the same fact, and they must not read
+    /// like two different problems.
+    static func launchOptionsFailure(
+        code: String, serverMessage: String?, hasOptions: Bool
+    ) -> LaunchOptionsFailure {
+        let copy = createErrorMessage(code: code, serverMessage: serverMessage)
+        // A usable form: warn, and leave everything else alone.
+        guard !hasOptions else { return LaunchOptionsFailure(blocking: nil, warning: copy) }
+        // Nothing on screen at all: keep degrading to the unavailable section,
+        // still showing the server's raw sentence there. The fallback is only for
+        // a server that sent no message — an empty error card explains nothing.
+        let server = (serverMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return LaunchOptionsFailure(blocking: server.isEmpty ? copy : server, warning: copy)
     }
 
     private func create() async {
@@ -399,18 +552,7 @@ struct NewSessionSheet: View {
             onCreated(session)
             dismiss()
         } catch let APIError.server(_, code, msg, _, _) {
-            // Honest, actionable messages for the cloud-relay failure ladder;
-            // everything else (validation 4xx from the primary) verbatim.
-            switch code {
-            case "not_supported_cloud":
-                createError = "This cloud companion is too old to create sessions — update it, or connect directly to your primary box."
-            case "session_launch_needs_upgrade":
-                createError = "Your primary box's daemon needs an update for mobile session launch — it updates automatically on its next reconnect. Try again in a minute."
-            case "bridge_offline":
-                createError = "The primary box isn't reachable from the cloud right now — try again when it reconnects."
-            default:
-                createError = msg
-            }
+            createError = Self.createErrorMessage(code: code, serverMessage: msg)
         } catch {
             createError = error.localizedDescription
         }
