@@ -322,9 +322,10 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           ancestors but NOT stacking contexts, and this menu's home is inside
           .session-panel-header (position:absolute, z-index:30). Its own
           z-index:9999 only orders it WITHIN that context, so the whole subtree
-          competed as 30 and the composer (.session-panel-input, z-index:40) drew
-          over it — the menu rendered fine, just underneath. Raising the number
-          would only lose to the next overlay; leaving the context is the fix.
+          competed as 30 and the composer overlay of the time (.session-panel-input,
+          then z-index:40) drew over it, the menu rendered fine, just underneath.
+          Raising the number would only lose to the next overlay; leaving the
+          context is the fix.
           Same reason ViewDropdown/TaskDetailModal portal. */}
       {slot !== 'phase' && kebabOpen && createPortal(
         <div

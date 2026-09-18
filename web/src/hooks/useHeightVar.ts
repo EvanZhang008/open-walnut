@@ -2,28 +2,25 @@ import { useEffect, useRef, type RefObject } from 'react';
 
 /**
  * Track an overlay element's height into a CSS custom property on a host
- * element — the mechanism behind the G4 liquid-glass overlays: the glass
- * header/composer are absolutely positioned OVER the scroll area, and the
- * scroll container pads itself by `var(--x-h)` so content starts clear of the
- * glass while still scrolling UNDER it.
+ * element, the mechanism behind the G4 liquid-glass header: the glass header
+ * is absolutely positioned OVER the scroll area, and the scroll container pads
+ * its top by `var(--x-h)` so content starts clear of the glass while still
+ * scrolling UNDER it.
  *
  * Returns a ref to attach to the measured overlay element. Every resize
- * (textarea autogrow, image previews, queue indicator, chips row wrap) writes
- * `${varName}: <offsetHeight>px` onto the host element.
+ * (chip-row wrap, title growth) writes `${varName}: <offsetHeight>px` onto the
+ * host element.
  *
- * `pinScrollSelector` (optional): a scroll container inside the host to keep
- * pinned to the bottom across the padding change — growing the composer grows
- * the scroller's padding-bottom, which would otherwise leave the last lines
- * hidden behind the glass until the next auto-scroll tick.
+ * Only the header is measured. The composer used to be a second overlay tracked
+ * the same way (with a pin-to-bottom across the padding change); it is in normal
+ * flow now, so the scroller ends where the composer starts and nothing has to be
+ * measured for it (globals.css, "Session panel: composer").
  */
 export function useHeightVar(
   hostRef: RefObject<HTMLElement | null>,
   varName: string,
-  pinScrollSelector?: string,
 ) {
   const targetRef = useRef<HTMLElement | null>(null);
-  const pinRef = useRef(pinScrollSelector);
-  pinRef.current = pinScrollSelector;
 
   useEffect(() => {
     const el = targetRef.current;
@@ -34,28 +31,17 @@ export function useHeightVar(
       // An element with NO BOX measures 0: a session column the mobile layout
       // hides, a panel inside a display:none tab, anything mounted before its
       // container is shown. Writing that 0 is worse than writing nothing — the
-      // scroller then pads by ~0 and the overlay covers the newest rows, with
+      // scroller then pads by ~0 and the overlay covers the rows under it, with
       // no scroll position that can bring them out. Drop the property instead,
-      // so the CSS fallback (a real composer's height) is what applies until
-      // the box is back, and re-measure then.
+      // so the CSS fallback (a real header's height) is what applies until the
+      // box is back, and re-measure then.
       if (el.offsetHeight === 0 && el.getClientRects().length === 0) {
         host.style.removeProperty(varName);
         return;
       }
       const next = `${el.offsetHeight}px`;
-      // The pin below compensates for a PADDING CHANGE. The host is observed too
-      // (see below), so most callbacks now arrive with the same height — those
-      // must not move a reader who is quietly sitting near the bottom.
       if (host.style.getPropertyValue(varName) === next) return;
-      const sel = pinRef.current;
-      const scroller = sel ? host.querySelector<HTMLElement>(sel) : null;
-      // Capture "was at bottom" BEFORE the padding var changes layout.
-      const nearBottom = scroller
-        ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160
-        : false;
       host.style.setProperty(varName, next);
-      // Reading scrollHeight after the property write reflects the new padding.
-      if (scroller && nearBottom) scroller.scrollTop = scroller.scrollHeight;
     };
 
     apply();

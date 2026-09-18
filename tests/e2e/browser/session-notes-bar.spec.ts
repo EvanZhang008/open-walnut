@@ -88,9 +88,9 @@ test('empty → pill next to btw; saving a note swaps to the always-visible bar'
   await expect(bar).toBeVisible()
   await expect(bar.locator('.session-notes-preview')).toHaveText(/remember: deploy after AREX confirms/)
 
-  // Bar is docked at the bottom: inside the composer overlay, above the input.
-  // NOT "below .session-panel-body" — the composer overlay FLOATS over the
-  // scroll area (G4 glass), so the bar's y sits inside the body's box by design.
+  // Bar is docked at the bottom: inside the composer block, above the input.
+  // Asserted against the composer's own box rather than against
+  // .session-panel-body so the check does not depend on how the two are stacked.
   const barBox = await bar.boundingBox()
   const inputBox = await panel.locator('.session-panel-input').boundingBox()
   expect(barBox!.y).toBeGreaterThanOrEqual(inputBox!.y - 1)
@@ -128,9 +128,8 @@ test('homepage session panel: bar when note exists, pill when empty', async ({ p
   await expect(bar.locator('.session-notes-preview')).toHaveText('home panel note')
   await expect(panel.locator('.session-notes-pill')).toHaveCount(0)
 
-  // Bottom-docked: the bar sits at the TOP of the composer overlay, above the
-  // ChatInput card. (See the note above — the overlay floats over the body, so
-  // "below .session-panel-body" is not a valid assertion.)
+  // Bottom-docked: the bar sits at the TOP of the composer block, above the
+  // ChatInput card.
   const barBox = await bar.boundingBox()
   const inputBox = await panel.locator('.session-panel-input').boundingBox()
   const chatCardBox = await panel.locator('.session-panel-input .chat-input-card, .session-panel-input textarea').first().boundingBox()

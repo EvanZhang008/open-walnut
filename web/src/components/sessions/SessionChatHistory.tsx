@@ -890,6 +890,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useSelectionAnchoredScroll(containerRef);
   const scrollRafId = useRef<number | null>(null);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Frames still owed by the composer-shrink chase (Path B-2), and the height
+   *  that chase is allowed to close (the shrink itself, nothing the transcript
+   *  grew by in the meantime). */
+  const shrinkChaseRaf = useRef<number | null>(null);
+  const shrinkOwed = useRef(0);
   const firstScrollDone = useRef(false);
   const initialLoadDone = useRef(false);  // true after Phase 2 completes for the first time
   const prevOptimisticLen = useRef(0);
@@ -987,12 +992,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setShowScrollArrow(false);
     if (scrollRafId.current !== null) { cancelAnimationFrame(scrollRafId.current); scrollRafId.current = null; }
     if (resizeTimerRef.current) { clearTimeout(resizeTimerRef.current); resizeTimerRef.current = null; }
+    if (shrinkChaseRaf.current !== null) { cancelAnimationFrame(shrinkChaseRaf.current); shrinkChaseRaf.current = null; }
+    shrinkOwed.current = 0;
   }, [sessionId]);
 
   // Cleanup on unmount
   useEffect(() => () => {
     if (scrollRafId.current !== null) cancelAnimationFrame(scrollRafId.current);
     if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
+    if (shrinkChaseRaf.current !== null) cancelAnimationFrame(shrinkChaseRaf.current);
   }, []);
 
   // Restore the user's reading position after "Show earlier" expands the
@@ -2243,11 +2251,58 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         scrollLog('resize', `delta=${delta > 0 ? '+' : ''}${Math.round(delta)}`, el);
         prevHeight = newHeight;
       }
+      // A SHRINK while following is closed right here, before paint. The
+      // composer is a flow sibling below this scroller, so every time it grows
+      // (textarea autogrow, the recap tip landing after a turn, a note opening)
+      // the scroller loses exactly that height off its bottom edge, and the
+      // browser keeps scrollTop where it was: the newest rows would sit under
+      // the composer for the debounce window (250ms, a visible flash on every
+      // typed newline). ResizeObserver callbacks run after layout and before
+      // paint, so a pin here is never seen. The debounced pass below stays as
+      // the net for growth that lands in several steps.
+      //
+      // Gates: only while following, never over a selection, and only for the
+      // gap the shrink itself opened (`shrinkOwed`, accumulated across shrinks
+      // that land in quick succession). A larger gap means the transcript grew
+      // at the same time, and whether to follow THAT is the geometric follower's
+      // decision above (it refuses growth the reader caused, e.g. a click that
+      // expanded a tool run); this pin never overrides it. No input-quiet gate
+      // here: a shrink is the composer's doing, never the transcript's, and
+      // "wheel to the end, start typing" must stay frame-perfect. A box that
+      // measured 0 (a column the narrow layout hides) has nothing to pin.
+      const closeShrinkGap = () => {
+        const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (gap <= 2) { shrinkOwed.current = 0; return; }
+        if (gap <= shrinkOwed.current + 2) el.scrollTop = el.scrollHeight;
+      };
+      if (delta < 0 && newHeight > 0 && isAtBottom.current && !selectionActive()) {
+        shrinkOwed.current += -delta;
+        closeShrinkGap();
+        // Chromium keeps that write. WebKit reads it back correctly and then
+        // REVERTS it at the frame's commit (the next scroll event carries the
+        // pre-shrink position again: async scrolling overwrites a main-thread
+        // write made in the ResizeObserver phase), while a write one frame later
+        // sticks. So chase for a few frames, the way the composer-prefill jump
+        // does, and stop the moment the reader is not following any more.
+        if (shrinkChaseRaf.current !== null) cancelAnimationFrame(shrinkChaseRaf.current);
+        let frames = 0;
+        const chase = () => {
+          shrinkChaseRaf.current = null;
+          if (!isAtBottom.current || selectionActive()) { shrinkOwed.current = 0; return; }
+          closeShrinkGap();
+          if (frames++ < 3) shrinkChaseRaf.current = requestAnimationFrame(chase);
+          else shrinkOwed.current = 0;
+        };
+        shrinkChaseRaf.current = requestAnimationFrame(chase);
+      }
       debouncedScroll('resize');
     });
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [debouncedScroll, scrollLog]);
+    return () => {
+      ro.disconnect();
+      if (shrinkChaseRaf.current !== null) cancelAnimationFrame(shrinkChaseRaf.current);
+    };
+  }, [debouncedScroll, scrollLog, selectionActive]);
 
   // Click handler for the scroll-to-bottom arrow
   const handleScrollToBottom = useCallback(() => {

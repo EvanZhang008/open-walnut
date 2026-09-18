@@ -9802,11 +9802,19 @@ body.walnut-dragging {
   justify-content: center;
 }
 
-/* No separator line above the composer — the card's own border is enough. */
+/* No separator line above the composer, the card's own border is enough.
+   Positioned: ChatInput's own popovers (command palette, file mention) place
+   themselves against this box (`bottom: 100%`), for the draft panel too.
+   z-index: the composer is in flow, so this only orders PAINT, and it keeps the
+   wrapper a stacking context above the absolute header (z 30): a popover that
+   opens upward into the header band stays on top, and the card's glass layer
+   (a z-index:-1 ::before) paints inside this box instead of under some
+   ancestor's opaque background. Same value it had as an overlay. */
 .session-panel-input {
   flex-shrink: 0;
   padding: 8px;
   position: relative;
+  z-index: 40;
 }
 
 .session-panel-input .chat-input-container {
@@ -22671,8 +22679,8 @@ td.usage-share-col {
 
 /* ===== Draft Session Panel ("+" → an empty column, nothing on the server) =====
    Same chrome as the pending panel: an IN-FLOW header + body + composer, i.e.
-   deliberately outside the G4 absolute-overlay layout (which needs the
-   --sp-header-h / --sp-composer-h vars only SessionPanel measures — hence the
+   deliberately outside the G4 header-overlay layout (which needs the
+   --sp-header-h var only SessionPanel measures, hence the
    `:not(.draft-session-panel)` exemptions in the glass region). */
 
 .draft-session-panel {
@@ -22921,12 +22929,6 @@ td.usage-share-col {
 .draft-launch-pills .session-action-chip-ai {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
-/* The composer wrapper stays positioned: ChatInput's own overlays (command
-   palette, file-mention popup) place themselves against it. */
-.draft-session-panel .session-panel-input {
-  position: relative;
-}
-
 /* The draft's controlsSlot row reuses .session-mode-bar wholesale (wrap +
    row-gap: a session column can be ~270px wide) and carries the marker class
    .draft-actions-bar purely as a DOM hook. Deliberately no `margin-left: auto` on
@@ -29486,12 +29488,12 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 /* ===== G4 Liquid Glass Pass ("milky glass", readability-first) =====
-   Content SCROLLS UNDER the chrome. Three overlay surfaces:
-   - Session panel: header bar (top) + composer (bottom) float over the chat
-     scroll area; the scroll container pads itself by the measured heights
-     (--sp-header-h / --sp-composer-h, written by ResizeObservers in
-     SessionPanel via useHeightVar — composer height is dynamic: textarea
-     autogrow, image previews, queue indicator).
+   Content SCROLLS UNDER the chrome. Overlay surfaces:
+   - Session panel: the header bar floats over the chat scroll area; the scroll
+     container pads its top by the measured height (--sp-header-h, written by a
+     ResizeObserver in SessionPanel via useHeightVar).
+     The composer is NOT an overlay any more (2026-09-18): it sits in normal
+     flow under the scroller, see "Session panel: composer" below.
    - Main chat column: the composer overlay (QuickAccessBar pills + quick-start
      bar + ChatInput ride together) floats over .chat-panel; padding via
      --chat-composer-h on .chat-page.
@@ -29513,8 +29515,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 /* The two placeholder panels (pending / draft) are EXEMPT from the overlay
    layout: they render their own flow header + body and never set
-   --sp-header-h / --sp-composer-h (only SessionPanel's ResizeObservers do), so
-   an absolute header would float over a body with zero compensating padding. */
+   --sp-header-h (only SessionPanel's ResizeObserver does), so an absolute
+   header would float over a body with zero compensating padding. */
 .session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header {
   position: absolute;
   top: 0;
@@ -29524,34 +29526,29 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   background: var(--bg); /* fallback; replaced by glass below */
 }
 
-/* ── Session panel: composer overlay ──
-   Wrapper = transparent padding (glass lives on the card). pointer-events
-   none so the 8px gutter around the card doesn't swallow clicks on content
-   scrolling beneath. */
-.session-panel:not(.draft-session-panel) .session-panel-input {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 40;
-  background: var(--bg); /* fallback; transparent when glass is on */
-}
+/* ── Session panel: composer ──
+   The composer (.session-panel-input) is a normal flow sibling BELOW the
+   scroller, never an overlay on top of it. As a G4 overlay (2026-08 → 09-18) the
+   scroller's box ran on under it to the panel's bottom edge, and so did the
+   native scrollbar: scrolled to the end, the thumb continued 36px past the last
+   row and dissolved into the glass fade, which reads as "more below, hidden".
+   No padding value fixes that; only ending the box where the composer starts
+   does. In flow the thumb ends with the last row and the newest rows cannot be
+   covered by construction (no measured height, no variable to publish wrong,
+   see the 2026-09-17 boxless 0px bug). The card keeps its glass material; the
+   header stays an overlay because nothing has to end at it. Pinned by
+   tests/e2e/browser/composer-in-flow-helpers.ts. */
 
-/* Scroll area extends behind both overlays; padding keeps content readable
-   at rest while it visibly passes under the glass mid-scroll. Padding on the
-   scroll container is included in scrollHeight, so the existing pin-to-bottom
-   logic keeps working. */
+/* The scroller pads its top so content starts clear of the header glass and
+   visibly passes under it mid-scroll. Padding on the scroll container is
+   included in scrollHeight, so the pin-to-bottom logic keeps working. */
 .session-panel-body .session-history {
   padding-top: calc(var(--sp-header-h, 76px) + 8px);
-  padding-bottom: calc(var(--sp-composer-h, 84px) + 8px);
 }
-/* NO bottom override for the sticky arrow here (removed 2026-08-14): the
-   history's padding-bottom above ALREADY lifts the sticky arrow clear of the
-   composer glass — a sticky element is confined to its containing block's
-   CONTENT box, which excludes that padding. Adding bottom:
-   calc(--sp-composer-h + 8px) on top double-counted the composer height and
-   floated the arrow to mid-page (318px above the glass with the recap tip
-   visible). The base rule's bottom: 8px is correct in glass panels too. */
+/* The sticky ↓ arrow keeps the base rule's bottom: 8px. A sticky element is
+   confined to its containing block's CONTENT box, so the scroller's own bottom
+   padding is what holds the arrow above the composer; an extra offset here
+   double-counted (2026-08-14: arrow floated to mid-page). */
 /* Non-scroll siblings rendered above the history (team tab bar, workflow
    card) sit in normal flow at the panel top — push the first one below the
    glass header and drop the history's compensating padding (the history's
@@ -29565,8 +29562,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 /* Split view (Changed/Files/Terminal): columns start below the header so the
    diff/file toolbars aren't buried; the chat column then no longer needs the
-   header padding (composer overlay anchors to the chat column, which is
-   position:relative in split mode). */
+   header padding (the composer is a flow child of the chat column, which is a
+   flex column in split mode). */
 .session-panel-split.is-changed-open {
   padding-top: var(--sp-header-h, 76px);
 }
@@ -29704,34 +29701,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
     backdrop-filter: var(--glass-g4-blur);
   }
 
-  /* Session composer wrapper: the card carries the main glass; the wrapper adds
-     the same soft-edged wash as the chat overlay so the rows ABOVE the card
-     (notes bar, recap tip, send-error line, queue indicator) are never bare
-     over scrolling transcript text. Soft top edge, no border/radius/shadow. */
-  .session-panel:not(.draft-session-panel) .session-panel-input {
-    background: transparent;
-    pointer-events: none;
-  }
-  .session-panel:not(.draft-session-panel) .session-panel-input > * {
-    pointer-events: auto;
-  }
-  .session-panel:not(.draft-session-panel) .session-panel-input::before {
-    content: '';
-    position: absolute;
-    /* Fade lives above the content box (see the chat overlay note) so the notes
-       bar / recap tip sit on fully opaque glass, not mid-ramp. */
-    inset: calc(-1 * var(--glass-g4-fade)) 0 0 0;
-    z-index: -1;
-    pointer-events: none;
-    background: var(--glass-g4-bg);
-    -webkit-backdrop-filter: var(--glass-g4-blur);
-    backdrop-filter: var(--glass-g4-blur);
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--glass-g4-fade));
-    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--glass-g4-fade));
-  }
-
   /* Session composer card: G4 milky glass. Keeps the D6 focus behavior —
-     firmer hairline on :focus-within, never an accent ring. */
+     firmer hairline on :focus-within, never an accent ring. (The wrapper used
+     to add a masked wash above the card for the rows riding over scrolling
+     text; the composer is in flow now, nothing scrolls under those rows.) */
   .session-panel-input .chat-input-box {
     position: relative; /* anchors the ::before glass layer */
     background: var(--glass-g4-bg);
@@ -29829,9 +29802,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   margin-top: calc(var(--sp-header-h, 76px) + 6px);
 }
 
-/* Inside the session composer overlay the notes bar / send-error rows float
-   over scrolling content — give them their own readable card surface (the
-   recap tip and queue indicator already have opaque backgrounds). */
+/* The notes bar / send-error rows above the composer card get their own card
+   surface, matching the recap tip and queue indicator next to them. */
 .session-panel-input .session-notes {
   border-top: none;
   border: 0.5px solid var(--border);

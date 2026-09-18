@@ -301,14 +301,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     routeChangedAt.current = Date.now();
   }, [pathname]);
 
-  // G4 liquid glass: header + composer overlay the chat column (position:
-  // absolute) so content scrolls UNDER them; the scroll area pads itself by
-  // these measured heights (CSS vars on the panel root). Composer height is
-  // dynamic (textarea autogrow, image previews, queue bar) so it MUST be
-  // tracked, not hardcoded; header varies with chip-row wrap.
+  // G4 liquid glass: the header overlays the chat column (position: absolute)
+  // so content scrolls UNDER it; the scroll area pads its top by the measured
+  // height (a CSS var on the panel root, it varies with chip-row wrap). The
+  // composer is deliberately NOT measured: it sits in flow below the scroller,
+  // so the scroller ends where the composer starts (globals.css, "Session
+  // panel: composer").
   const panelRef = useRef<HTMLDivElement>(null);
   const glassHeaderRef = useHeightVar(panelRef, '--sp-header-h');
-  const glassComposerRef = useHeightVar(panelRef, '--sp-composer-h', '.session-panel-body .session-history');
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
@@ -2177,12 +2177,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           />
         </div>
 
-        <div className="session-panel-input" ref={glassComposerRef}>
+        <div className="session-panel-input">
           {/* Sticky-note bar — always visible once a note exists (also hosts the
-              editor when opened from the pill/kebab while empty). Lives INSIDE
-              the composer overlay so the tracked --sp-composer-h includes it
-              (the overlay floats over the scroll area; anything outside it
-              would be hidden behind the glass). */}
+              editor when opened from the pill/kebab while empty). Docked in the
+              composer block, above the input card. */}
           <SessionNotesBar
             noteState={noteState}
             expanded={notesOpen}
@@ -2205,9 +2203,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             </div>
           )}
           {/* Thread anchor — the one visible answer to "where will this message
-              go?". Inside the composer overlay (like the notes bar) so the tracked
-              --sp-composer-h includes it; outside ChatInput, which owns only the
-              input card itself. */}
+              go?". In the composer block (like the notes bar), outside ChatInput,
+              which owns only the input card itself. */}
           {effectiveAnchor && (
             <ThreadAnchorChip
               anchor={effectiveAnchor}
