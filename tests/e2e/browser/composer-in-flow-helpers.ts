@@ -14,7 +14,9 @@
  *
  * Scenario matrix (each engine, the Mac app is WebKit, runs every row):
  *  1. at rest, scrolled to the end: scroller bottom == composer top, no bottom
- *     padding worth the name, the newest row fully on screen;
+ *     padding worth the name, the newest row fully on screen, and EVERY row of
+ *     composer chrome (notes bar, recap tip, input card) below the scroller's
+ *     end, so the scrollbar stops above all of it;
  *  2. the composer GROWS under a following reader (a multi-line draft): the
  *     scroller shrinks by the same height and the newest row stays on screen,
  *     closed within a frame, not after the 250ms debounce (the old overlay's
@@ -69,9 +71,12 @@ export async function mockFlowSession(page: Page, id = FLOW_SESSION): Promise<vo
           // A cwd is what lets the "@" mention palette open (scenario 5 needs
           // the tallest popover the composer owns).
           cwd: '/tmp',
-          // A sticky note docks its bar above the input card, the layout of the
-          // report (note + composer under the newest row).
+          // A sticky note docks its bar above the input card, and a recap adds the
+          // one-line tip under it: the layout both reports were taken from (note +
+          // recap + composer under the newest row).
           human_note: 'sticky note above the composer',
+          recap: 'One line of what just happened, shown above the composer.',
+          recapAt: new Date().toISOString(),
         },
       },
     });
@@ -99,6 +104,7 @@ export type Geometry = {
   composerPosition: string;
   paddingBottom: number;
   lastRowBottom: number | null;
+  chrome: Array<{ label: string; top: number }>;
   arrowVisible: boolean;
   arrowBottom: number | null;
 };
@@ -121,6 +127,19 @@ export async function geometry(panel: Locator): Promise<Geometry> {
       composerPosition: getComputedStyle(input).position,
       paddingBottom: parseFloat(getComputedStyle(hist).paddingBottom),
       lastRowBottom: last ? last.getBoundingClientRect().bottom : null,
+      // Every row of chrome the composer block can carry, in DOM order.
+      chrome: ([
+        ['notes bar', '.session-notes'],
+        ['send error', '.session-panel-input > .text-xs'],
+        ['recap tip', '.session-recap-tip'],
+        ['thread chip', '.session-panel-input .thread-anchor-chip'],
+        ['image strip', '.session-panel-input .chat-image-previews'],
+        ['queue bar', '.session-panel-input .chat-queue-indicator'],
+        ['input card', '.session-panel-input .chat-input-box'],
+      ] as const).flatMap(([label, sel]) => {
+        const el = p.querySelector<HTMLElement>(sel);
+        return el ? [{ label, top: el.getBoundingClientRect().top }] : [];
+      }),
       arrowVisible: !!arrow && arrow.classList.contains('visible'),
       arrowBottom: arrow ? arrow.getBoundingClientRect().bottom : null,
     };
@@ -141,6 +160,21 @@ export async function expectScrollerEndsAtComposer(panel: Locator): Promise<Geom
   expect(g.lastRowBottom!, 'the newest row is fully above the composer').toBeLessThanOrEqual(g.composerTop);
   // The thumb's end IS the last row's end, give or take the row gap + padding.
   expect(g.scrollerBottom - g.lastRowBottom!, 'nothing but the base padding below the newest row').toBeLessThanOrEqual(24);
+  // …and that holds for EVERY row of chrome, not just the input card: the notes
+  // bar, the recap tip and the rest ride inside the composer block, so the
+  // scrollbar ends above all of them (asked directly, 2026-09-18: "can it also
+  // respect the notes and whatever"). A row that moved out of the block would
+  // sit inside the scroller's box again and the thumb would run alongside it.
+  // The notes bar is the row to require: unlike the recap tip it has no dismiss
+  // state, so "the fixture really has chrome above the input card" cannot become
+  // a tripwire for an unrelated change to the tip. Whatever else renders is
+  // still checked by the loop below.
+  expect(g.chrome.map((c) => c.label), 'the fixture renders chrome above the input card')
+    .toEqual(expect.arrayContaining(['notes bar', 'input card']));
+  for (const row of g.chrome) {
+    expect(row.top, `${row.label} (top ${row.top}) is below the scroller's end (${g.scrollerBottom})`)
+      .toBeGreaterThanOrEqual(g.scrollerBottom - 1);
+  }
   return g;
 }
 
