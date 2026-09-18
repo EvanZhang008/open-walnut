@@ -32,7 +32,11 @@
  * ladder mirrors image.save: pre-session.launch daemon → 400
  * session_launch_needs_upgrade (self-heals on the next primary reconnect);
  * no live bridge / primary down → 503 bridge_offline; validation errors from
- * the primary surface verbatim with their original 4xx code.
+ * the primary surface verbatim with their original 4xx code. A *momentary*
+ * missing bridge is waited out and retried once instead (only that one error
+ * proves the primary never saw the request), while a longer outage answers
+ * immediately and says how long the primary has been gone — see
+ * relayLaunchAction.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -66,6 +70,33 @@ const PRIMARY_BRIDGE_ALIAS = '__local__'
 // Launch does task-store writes + bus emits on the primary; give it headroom
 // over the 15s bridge default. Options is a pair of file reads — default is fine.
 const LAUNCH_RELAY_TIMEOUT_MS = 30_000
+/**
+ * How long a relay waits out a MISSING bridge before it gives up. Sized from
+ * the link's measured behavior: a routine bridge teardown re-registers in 1–3s
+ * (the daemon's own redial loop), so 8s covers several redial attempts while
+ * staying far inside the phone's 30s request timeout — a POST that dies on that
+ * timeout is deliberately NOT auto-retried client-side, so overrunning it would
+ * turn a momentary flap into a launch the user has to notice and repeat.
+ * Spent ONLY on a FRESH loss (see BRIDGE_FLAP_FRESHNESS_MS): a host that has
+ * been asleep for minutes gets an instant, specific 503 instead.
+ */
+const BRIDGE_RECONNECT_WAIT_MS = 8_000
+/**
+ * How RECENT the primary's bridge loss has to be for waiting to be worth it.
+ *
+ * A fresh loss means a flap: the daemon is mid-redial and one bounded wait
+ * usually turns into a real 201. A stale loss (or a loss this box never saw)
+ * means the primary is asleep or powered off, and spending the budget there only
+ * adds 8s of latency before the identical "no" — a budget you spend when you
+ * already know the answer is not a budget. So the wait is CONDITIONAL. Do not
+ * "simplify" this back into an unconditional wait.
+ *
+ * 30s is where the two measured populations separate cleanly: 9 of 11 observed
+ * bridge holes were 0–3s (routine teardown + redial), and the 2 long ones were
+ * 24.7 and 19.0 minutes, both caused by the host sleeping (lid shut, deep sleep
+ * with ~45s dark-wake windows).
+ */
+const BRIDGE_FLAP_FRESHNESS_MS = 30_000
 
 /**
  * Buffer a relay's `res.status().json()` instead of sending it, so the cloud box
@@ -97,6 +128,47 @@ function captureJson(real: Response): {
   }
 }
 
+/** `3` → `3 seconds`, `1` → `1 minute`. */
+function plural(n: number, unit: string): string {
+  return `${n} ${unit}${n === 1 ? '' : 's'}`
+}
+
+/**
+ * Coarse, phone-readable elapsed time. Null when there is nothing worth saying
+ * (a sub-second value, or a clock that ran backwards) — a wrong duration is
+ * worse than none.
+ */
+function humanizeElapsed(ms: number): string | null {
+  if (!Number.isFinite(ms) || ms < 1_000) return null
+  const secs = Math.round(ms / 1_000)
+  if (secs < 60) return plural(secs, 'second')
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return plural(mins, 'minute')
+  return plural(Math.round(mins / 60), 'hour')
+}
+
+/**
+ * The 503 body when the primary's bridge is not there. The code is frozen
+ * (`bridge_offline`); this is only the human sentence, and it is the whole point
+ * of the change: the 2026-09-17 report was a MacBook asleep with the lid shut,
+ * unreachable in 8-to-15-minute stretches, and "try again when it reconnects"
+ * reads identically to a 2-second redial hole. With a known duration the user can
+ * tell the two apart and act ("open the lid"); without one we stay vague rather
+ * than invent a number. `waitedMs` is 0 when no wait happened, because claiming
+ * a wait we did not do is the same kind of lie in the other direction.
+ *
+ * Plain sentences, no dashes: this string is read on a phone.
+ */
+function bridgeOfflineMessage(lastLossAt: number | null, waitedMs: number): string {
+  const downFor = lastLossAt === null ? null : humanizeElapsed(Date.now() - lastLossAt)
+  const waited = waitedMs > 0 ? ` Waited ${Math.round(waitedMs / 1000)}s for it to reconnect.` : ''
+  if (!downFor) {
+    return `No live bridge to the primary box. Your primary box (Mac) is asleep or offline.${waited}`
+  }
+  return `Your primary box (Mac) has been unreachable for ${downFor}. `
+    + `It may be asleep (open the lid) or offline.${waited}`
+}
+
 /** errorKind from the relay reply → frozen v1 HTTP status. */
 function relayErrorStatus(errorKind: string): number {
   if (errorKind === 'not_found') return 404
@@ -108,6 +180,15 @@ function relayErrorStatus(errorKind: string): number {
 /**
  * Drive one launch-relay action over the bridge and translate the reply into
  * the frozen v1 response. Never throws — every failure is a precise HTTP error.
+ *
+ * A missing bridge is NOT treated as a verdict: the link's common failure is a
+ * 1–3s teardown/redial hole, and answering it with a hard 503 is what made
+ * "my phone cannot create a session on a remote host" look absolute while sends
+ * to a running session kept working (they bank the message instead — see the
+ * FAST-ACCEPT note in session-stream-v1.ts). So a FRESH hole is waited out once
+ * and re-sent, while a link that has been gone longer than the flap window gets
+ * an immediate, specific answer instead of 8s of pointless latency. See
+ * BRIDGE_RECONNECT_WAIT_MS and BRIDGE_FLAP_FRESHNESS_MS.
  */
 async function relayLaunchAction(
   res: Response,
@@ -115,22 +196,72 @@ async function relayLaunchAction(
   params: Record<string, unknown> | undefined,
   successStatus: number,
 ): Promise<void> {
-  const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
+  const registry = await import('../ws/bridge-registry.js')
+  const { bridgeRequest, BridgeOfflineError } = registry
+  const sendRelay = (): Promise<Record<string, unknown>> => bridgeRequest(
+    PRIMARY_BRIDGE_ALIAS,
+    'session.launch',
+    { action, ...(params !== undefined ? { params } : {}) },
+    action === 'launch' ? LAUNCH_RELAY_TIMEOUT_MS : undefined,
+  )
   let reply: Record<string, unknown>
   try {
-    reply = await bridgeRequest(
-      PRIMARY_BRIDGE_ALIAS,
-      'session.launch',
-      { action, ...(params !== undefined ? { params } : {}) },
-      action === 'launch' ? LAUNCH_RELAY_TIMEOUT_MS : undefined,
-    )
+    reply = await sendRelay()
   } catch (err) {
-    if (err instanceof BridgeOfflineError) {
-      sendError(res, 503, 'bridge_offline', 'No live bridge to the primary box — try again when it reconnects')
+    // RETRY ONLY ON BridgeOfflineError, and only once. That error is raised
+    // before any byte reaches a socket — there was no socket — so the primary
+    // provably never saw this request and re-sending it cannot create a second
+    // session or a second task. EVERY other failure (a relay timeout, a send
+    // that threw mid-flight, a settled non-ok reply) may already have executed
+    // the launch on the primary, so it must stay a single attempt. Same
+    // reasoning as `canFallback` in session-stream-v1.ts's cloudSend().
+    if (!(err instanceof BridgeOfflineError)) {
+      sendError(res, 503, 'bridge_offline', err instanceof Error ? err.message : String(err))
       return
     }
-    sendError(res, 503, 'bridge_offline', err instanceof Error ? err.message : String(err))
-    return
+    // How long the link has been gone decides BOTH whether waiting is worth it
+    // and what the 503 says. Never lets the request fail differently: a registry
+    // that cannot answer is treated as "duration unknown". Same rule as the wait.
+    let lastLossAt: number | null = null
+    try {
+      lastLossAt = registry.lastBridgeLossAt(PRIMARY_BRIDGE_ALIAS)
+    } catch { /* no duration to report */ }
+    // Fresh loss = a flap, worth one bounded wait (the daemon is mid-redial).
+    // Stale or unknown loss = the box is asleep or off, and the honest answer is
+    // instant: see BRIDGE_FLAP_FRESHNESS_MS for why this is not unconditional.
+    const midRedial = lastLossAt !== null && Date.now() - lastLossAt <= BRIDGE_FLAP_FRESHNESS_MS
+    let reconnected = false
+    if (midRedial) {
+      try {
+        reconnected = await registry.waitForBridge(PRIMARY_BRIDGE_ALIAS, BRIDGE_RECONNECT_WAIT_MS)
+      } catch {
+        // A wait we could not perform is not a different outcome: treat it as
+        // "the link never came back" and fall through to the honest 503.
+        reconnected = false
+      }
+    }
+    if (!reconnected) {
+      // Logged so an outage can be told apart from a flap after the fact: the
+      // 2026-09-17 diagnosis had to be reconstructed from daemon heartbeat gaps.
+      log.web.info('launch relay: primary bridge unavailable', {
+        action, waited: midRedial,
+        downForMs: lastLossAt === null ? null : Date.now() - lastLossAt,
+      })
+      sendError(res, 503, 'bridge_offline',
+        bridgeOfflineMessage(lastLossAt, midRedial ? BRIDGE_RECONNECT_WAIT_MS : 0))
+      return
+    }
+    log.web.info('launch relay: bridge came back, retrying once', { action })
+    try {
+      reply = await sendRelay()
+    } catch (retryErr) {
+      // The link was there a moment ago and is already gone: that is an outage,
+      // not a flap, so it gets an answer rather than a second wait.
+      sendError(res, 503, 'bridge_offline', retryErr instanceof BridgeOfflineError
+        ? 'The primary box\'s bridge reconnected and dropped again before the request landed'
+        : retryErr instanceof Error ? retryErr.message : String(retryErr))
+      return
+    }
   }
   if (reply.ok === true && reply.result && typeof reply.result === 'object') {
     // Successful launch: seed the id→host mapping NOW. The other v1 session

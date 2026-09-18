@@ -1076,6 +1076,27 @@ host's SSH daemon). Works on BOTH boxes:
     `503 bridge_offline` — no live bridge, or the primary's server is
     disconnected from its daemon; validation errors from the primary surface
     verbatim with their original code/status (`bad_request`/`not_found`/…).
+  - A momentary missing bridge is not treated as an answer (additive,
+    2026-09). When the relay finds no socket at all and the cloud box saw the
+    link drop within the last 30 seconds, it waits up to 8 seconds for the
+    primary's daemon to redial and then retries the relay exactly once, so a
+    routine teardown (measured at 1 to 3 seconds) produces a normal `201`
+    instead of a failure. Only that one failure is retried: "no socket"
+    proves the primary never saw the request, so the retry cannot create a
+    duplicate session. A relay timeout, a transport error mid flight, or any
+    non-ok reply from the primary is reported as it is, because the launch
+    may already have run there.
+  - A longer outage is answered immediately, with no wait: a primary that has
+    been unreachable for minutes (a laptop asleep with its lid shut) is not
+    mid-redial, and spending the budget would only delay the same answer. The
+    code stays `503 bridge_offline` (frozen), and only the human message
+    changes: it names how long the primary has been unreachable when the
+    cloud box knows (for example "has been unreachable for 41 minutes. It may
+    be asleep (open the lid) or offline."), which is what tells a user that a
+    sleeping laptop, not a momentary blip, is the problem. A cloud box that
+    just restarted has no such duration, keeps the plain wording rather than
+    inventing one, and does not wait either. The message never claims a wait
+    that did not happen.
   - Older cloud servers answer `503 not_supported_cloud`; clients should
     treat that as "update the cloud companion".
 

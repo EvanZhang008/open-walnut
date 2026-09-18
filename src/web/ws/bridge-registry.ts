@@ -70,6 +70,26 @@ const preHello = new Map<WebSocket, { deviceName: string; timer: NodeJS.Timeout 
  * "bridge-offline" forever (the bridge-online event went to an empty set).
  */
 const hostInterest = new Map<string, Set<string>>()
+/**
+ * Callers parked in waitForBridge(), per host alias. A routine bridge teardown
+ * re-registers within seconds (the daemon's own redial loop), so a request that
+ * lands inside that hole can wait for the redial instead of failing — see
+ * relayLaunchAction in routes/session-launch-v1.ts. Waiters are woken by
+ * registerBridge and are removed on BOTH settle paths (wake and timeout).
+ */
+const bridgeWaiters = new Map<string, Set<(connected: boolean) => void>>()
+/**
+ * When each alias's bridge was last seen to GO AWAY (epoch ms). Written where
+ * the conn leaves the map, cleared by a successful re-registration, so the value
+ * is always the LATEST loss of a link this process actually had — never an
+ * invented duration on a freshly restarted replica.
+ *
+ * Exists because "no live bridge" alone is not actionable: the 2026-09-17 report
+ * was a laptop asleep with the lid shut (deep sleep, ~45s dark-wake windows,
+ * holes of 8 to 15 minutes), and the phone's error read exactly like a 2-second
+ * redial hole. Naming the duration is what tells the user to open the lid.
+ */
+const bridgeLossAt = new Map<string, number>()
 
 let silenceSweepTimer: NodeJS.Timeout | null = null
 
@@ -396,6 +416,12 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     lastInbound: Date.now(),
   }
   bridges.set(hostAlias, conn)
+  // The link is back: this host has no outage to report until it drops again.
+  bridgeLossAt.delete(hostAlias)
+  // Wake anything parked on this host's reconnect BEFORE the slower re-attach
+  // work below: the waiter only needs the conn to be registered, and its
+  // continuation runs as a microtask, so it can never observe a half-built map.
+  wakeBridgeWaiters(hostAlias)
   log.ws.info('bridge: host connected', {
     hostAlias, deviceName, version: conn.version,
     sids: Array.isArray(hello.sids) ? hello.sids.length : 0,
@@ -420,6 +446,14 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
       }
     }
   }
+}
+
+/** Resolve every waiter parked on this alias. Never wakes another alias. */
+function wakeBridgeWaiters(hostAlias: string): void {
+  const waiters = bridgeWaiters.get(hostAlias)
+  if (!waiters) return
+  bridgeWaiters.delete(hostAlias)
+  for (const wake of [...waiters]) wake(true)
 }
 
 async function reattachInterestedSessions(conn: BridgeConn): Promise<void> {
@@ -454,7 +488,13 @@ function emitSseToAllAttachedChannels(conn: BridgeConn, event: 'bridge-online' |
 
 function dropBridge(conn: BridgeConn, reason: string): void {
   // Only drop if this exact conn is still registered (replace races).
-  if (bridges.get(conn.hostAlias) === conn) bridges.delete(conn.hostAlias)
+  if (bridges.get(conn.hostAlias) === conn) {
+    bridges.delete(conn.hostAlias)
+    // Stamp the loss for lastBridgeLossAt(). A 'replaced' drop stamps too and is
+    // cleared by the registration that replaced it a moment later, so a redial
+    // never reads as an outage.
+    bridgeLossAt.set(conn.hostAlias, Date.now())
+  }
   for (const [, req] of conn.pending) {
     clearTimeout(req.timer)
     req.reject(new Error('bridge disconnected'))
@@ -468,6 +508,49 @@ function dropBridge(conn: BridgeConn, reason: string): void {
 
 export function bridgeForHost(hostAlias: string): { connected: boolean } {
   return { connected: bridges.has(hostAlias) }
+}
+
+/**
+ * Wait until a bridge for `hostAlias` is registered. Resolves true the moment
+ * one is (immediately when it already was), false when `timeoutMs` elapses
+ * first. Never rejects: "did the link come back" is the whole answer.
+ *
+ * This exists because a bridge hole is usually momentary — a teardown plus the
+ * daemon's redial is a couple of seconds — while the requests riding it (a
+ * mobile session launch) have nothing to fall back on and used to fail hard the
+ * instant bridgeRequest found no socket.
+ */
+export function waitForBridge(hostAlias: string, timeoutMs: number): Promise<boolean> {
+  if (bridges.has(hostAlias)) return Promise.resolve(true)
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    let waiters = bridgeWaiters.get(hostAlias)
+    if (!waiters) { waiters = new Set(); bridgeWaiters.set(hostAlias, waiters) }
+    const holder = waiters
+    const settle = (connected: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      holder.delete(settle)
+      // Only drop the bucket if it is still OURS: a wake already replaced the
+      // map entry, and a later waiter may have installed a fresh set since.
+      if (holder.size === 0 && bridgeWaiters.get(hostAlias) === holder) bridgeWaiters.delete(hostAlias)
+      resolve(connected)
+    }
+    const timer = setTimeout(() => settle(false), timeoutMs)
+    timer.unref?.()
+    holder.add(settle)
+  })
+}
+
+/**
+ * Epoch ms of the most recent moment this process lost the bridge for
+ * `hostAlias`, or null when there is nothing honest to report: the bridge is
+ * live, or this process never had it (a replica that just restarted knows
+ * nothing about how long the host has been down, and must not guess).
+ */
+export function lastBridgeLossAt(hostAlias: string): number | null {
+  return bridgeLossAt.get(hostAlias) ?? null
 }
 
 export function bridgeHosts(): Array<{ hostAlias: string; since: number; version?: string }> {
