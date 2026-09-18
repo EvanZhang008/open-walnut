@@ -173,6 +173,12 @@ describe('importExternalSessions — one task per session', () => {
     });
     expect(record?.host).toBeUndefined(); // local stores no host sentinel
     expect(record?.human_note).toContain('outside Walnut');
+    // A terminal session the user ran themselves wakes up ASKING. Bypass is now
+    // an option on importSessionRecord (an adopted ✦ search already ran
+    // unattended, so continuing it must not prompt) — this pins that the option
+    // stays opt-in: resuming someone's own session must not silently hand it
+    // more than it had at their prompt.
+    expect(record?.mode).toBe('default');
   });
 
   it('groups each host under its own project and persists the remote host', async () => {

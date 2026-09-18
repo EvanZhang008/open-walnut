@@ -178,6 +178,12 @@ describe('adoptAgentSearchSession', () => {
     // in a temp directory, unable to search anything.
     expect(record?.profile?.systemPrompt).toBeTruthy();
     expect(record?.effort).toBeTruthy();
+    // …and so does the permission mode, for the same argv reason but with the
+    // opposite default: a fresh spawn with no mode starts in bypass, a RESUME
+    // with no mode on the record falls back to 'default' and asks Allow/Deny for
+    // every tool — including the search tool this very session had just used
+    // unattended (user report, 2026-09-17).
+    expect(record?.mode).toBe('bypass');
 
     // The board hears about it — nothing else on this path emits for the UI.
     // The task in the event must ALREADY carry the slot, or the row lands
@@ -346,6 +352,36 @@ describe('adoptAgentSearchSession', () => {
     const record = await getSessionByClaudeId(sessionId);
     expect(record?.taskId).toBe(second.taskId);
     expect((await getTask(second.taskId)).session_id).toBe(sessionId);
+    // The re-link writes the same argv fields the import does — a conversation
+    // recovered this way must not start asking permission either.
+    expect(record?.mode).toBe('bypass');
+    expect(record?.profile?.systemPrompt).toBeTruthy();
+  });
+
+  it('heals an ask adopted before the mode was recorded, so it stops asking Allow/Deny', async () => {
+    // Every ask adopted before 2026-09-18 carries mode 'default' (what
+    // importSessionRecord wrote unconditionally), and a resume reads exactly
+    // that: the user's existing search asks would keep prompting forever. The
+    // conversations a reuse path hands back get the mode on the way out.
+    const sessionId = randomUUID();
+    const cwd = freshCwd();
+    await writeTranscript(sessionId, cwd);
+    _seedAgentSearchRunForTesting(QUERY, { sessionId, cwd, model: 'sonnet' });
+    const first = await adoptAgentSearchSession(QUERY);
+    // Exactly what a pre-fix row looks like.
+    await updateSessionRecord(sessionId, { mode: 'default' });
+
+    const second = await adoptAgentSearchSession(QUERY);
+    expect(second).toEqual({ sessionId, taskId: first.taskId, reused: true });
+    expect((await getSessionByClaudeId(sessionId))?.mode).toBe('bypass');
+
+    // And the OTHER reuse path — the run has aged out, so the ask is found by
+    // title rather than by the live run.
+    await updateSessionRecord(sessionId, { mode: 'default' });
+    _seedAgentSearchRunForTesting(QUERY, { sessionId, cwd, model: 'sonnet', at: Date.now() - 3 * 60 * 60_000 });
+    const third = await adoptAgentSearchSession(QUERY);
+    expect(third).toEqual({ sessionId, taskId: first.taskId, reused: true });
+    expect((await getSessionByClaudeId(sessionId))?.mode).toBe('bypass');
   });
 
   it('refuses to hand back an ARCHIVED conversation', async () => {

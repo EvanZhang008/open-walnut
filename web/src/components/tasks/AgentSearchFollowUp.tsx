@@ -14,6 +14,12 @@
  * the card above, which is why the card hides its own rows while this is live.
  * Showing both would be the same four rows twice.
  *
+ * The composer is ChatInput's one-line `compact` variant. The full one (attach
+ * menu, mic, big send, in a controls row of their own) measured 82px under an
+ * answer card in a panel this narrow, where this one is 30px — more furniture
+ * than conversation. Enter sends, the draft persists, and everything dropped is
+ * in the full session column the header's button opens.
+ *
  * Two ordering traps this file encodes:
  *  · useSessionSend CLEARS its optimistic rows whenever its session id changes
  *    (it re-reads the server queue for the new session). So the id is put in
@@ -128,6 +134,7 @@ export function AgentSearchFollowUp({
         <ChatInput
           onSend={handleSend}
           disabled={opening}
+          compact
           placeholder={opening ? 'Opening this search’s conversation…' : 'Ask a follow-up…'}
           showCommands={false}
           draftKey={`draft:agent-search:${query}`}
@@ -158,6 +165,7 @@ export function AgentSearchFollowUp({
         )}
         <ChatInput
           onSend={(message: string, images?: ImageAttachment[]) => sessionSend.send(sessionId, message, images)}
+          compact
           placeholder="Ask a follow-up…"
           showCommands={false}
           draftKey={`draft:session:${sessionId}`}

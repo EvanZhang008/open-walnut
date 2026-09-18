@@ -18,9 +18,9 @@ import {
   stubEmptyInstantSearch, uniqueQuery,
 } from './agent-search-open-session-helpers';
 import {
-  SCREENSHOT_DIR, askInCard, expectAnsweredInsideTheCard, expectComposerWaitsForTheAnswer,
-  expectRowsSteppedAside, expectWindowStaysInItsBox, followUp, followUpInput, seedAdoptedSession,
-  typeSearch,
+  SCREENSHOT_DIR, askInCard, expectAnsweredInsideTheCard, expectComposerIsOneLine,
+  expectComposerWaitsForTheAnswer, expectRowsSteppedAside, expectWindowStaysInItsBox, followUp,
+  followUpInput, seedAdoptedSession, typeSearch,
 } from './agent-search-followup-helpers';
 
 const STAMP = Date.now().toString(36);
@@ -35,6 +35,8 @@ test('the composer appears with the answer, not before it', async ({ page }) => 
   await stubAgentSearch(page, () => ({ status: 200, body: AGENT_PAYLOAD, delayMs: 2_000 }));
   await openHome(page);
   await expectComposerWaitsForTheAnswer(page, uniqueQuery(`w${STAMP}`));
+  // And it is the lightweight one: one line, send beside the text.
+  await expectComposerIsOneLine(page);
   mkdirSync(SCREENSHOT_DIR, { recursive: true });
   await panel(page).screenshot({ path: `${SCREENSHOT_DIR}/1-composer-under-rows.png` });
 });
@@ -69,6 +71,9 @@ test('the window stays a window: capped, scrolling inside, panel unchanged', asy
   await typeSearch(page, uniqueQuery(`g${STAMP}`));
   await expectAnsweredInsideTheCard(page, `and the geometry ${STAMP}`);
   await expectWindowStaysInItsBox(page);
+  // The LIVE window's composer is the one-liner too — the transcript above it is
+  // what the height belongs to.
+  await expectComposerIsOneLine(page);
   await panel(page).screenshot({ path: `${SCREENSHOT_DIR}/3-window-box.png` });
 });
 

@@ -1331,6 +1331,20 @@ export async function importSessionRecord(opts: {
   profile?: SessionRecord['profile'];
   effort?: SessionRecord['effort'];
   /**
+   * Permission mode the resumed session wakes up in. Same reason `profile` lives
+   * here: a RESUME builds its argv from the record, and the two defaults differ —
+   * a fresh spawn with no mode starts in 'bypass' (see claude-code-session's
+   * `start`), while a resume with no mode on the record falls back to 'default'
+   * and prompts Allow/Deny for every tool. So an import of a conversation that
+   * ALREADY ran unattended must say so, or continuing it asks permission for
+   * work the same session did without asking a minute earlier.
+   *
+   * Left unset (the default below) for an import of someone's own terminal
+   * session: it was run by a human at a prompt, and waking it up with bypass
+   * would hand it more than it ever had.
+   */
+  mode?: SessionRecord['mode'];
+  /**
    * Why this record is stopped. Without one, classifySessionError reads
    * 'unknown' and the imported session stays a "rescuable stopped record" for a
    * day — the health monitor and every local-daemon reconnect then spend probe
@@ -1353,7 +1367,7 @@ export async function importSessionRecord(opts: {
         taskId: opts.taskId,
         project: opts.project,
         process_status: 'stopped',
-        mode: 'default',
+        mode: opts.mode ?? 'default',
         last_status_change: now,
         startedAt: opts.startedAt ?? now,
         lastActiveAt: opts.lastActiveAt ?? now,

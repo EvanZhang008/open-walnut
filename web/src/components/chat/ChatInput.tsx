@@ -71,6 +71,17 @@ interface ChatInputProps {
   onClearFocus?: () => void;
   queueCount?: number;
   placeholder?: string;
+  /**
+   * ONE-LINE composer: the text row and a single send button, no controls row.
+   *
+   * For a lightweight spot where a full composer is more furniture than the
+   * conversation it carries (the ✦ search card's follow-up window). Dropped: the
+   * "+" attachment menu, the mic, the controls slot and the send split-menu —
+   * everything those reach is still there in the full session column, one click
+   * away. Enter still sends, drafts still persist, and the primary button still
+   * becomes Stop while a turn streams with an empty box.
+   */
+  compact?: boolean;
   showCommands?: boolean;
   /** Session-mode: external slash commands for autocomplete. Selecting inserts text instead of executing. */
   sessionCommands?: SlashCommandItem[];
@@ -139,7 +150,7 @@ interface ChatInputProps {
   onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1197,9 +1208,40 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // Stop turn). When stop IS the primary button, the menu would be redundant.
   const showSendMenu = !!isStreaming && !showStopPrimary && (!!onInterruptSend || !!onStop);
 
+  // The primary action, built once: the full controls row wraps it in the split
+  // group (with the "▾" menu beside it), the compact one-liner puts it straight
+  // next to the text. One definition so the two variants can never drift.
+  const primaryButton = showStopPrimary ? (
+    <button
+      className="chat-send-btn-icon chat-stop-btn-icon"
+      onClick={handleStop}
+      type="button"
+      aria-label="Stop the running turn"
+      title="Stop the running turn"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <rect x="7" y="7" width="10" height="10" rx="1.5" />
+      </svg>
+    </button>
+  ) : (
+    <button
+      className="chat-send-btn-icon"
+      onClick={handleSend}
+      disabled={!canSend}
+      type="button"
+      aria-label={sendTitle}
+      title={sendTitle}
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="12" y1="19" x2="12" y2="5" />
+        <polyline points="6 11 12 5 18 11" />
+      </svg>
+    </button>
+  );
+
   return (
     <div
-      className={`chat-input-container${dragOver ? ' drag-over' : ''}`}
+      className={`chat-input-container${compact ? ' is-compact' : ''}${dragOver ? ' drag-over' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1320,7 +1362,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             rows={1}
             {...NO_AUTOFILL_PROPS}
           />
+          {/* Compact: the send button sits IN the text row — no controls row at all. */}
+          {compact && <div className="chat-input-compact-actions">{primaryButton}</div>}
           {/* Controls row inside the card */}
+          {!compact && (
           <div className="chat-input-controls">
         {/* "+" attach menu — anchors a small popover of attachment actions */}
         <div className="chat-plus-group" ref={plusGroupRef}>
@@ -1433,33 +1478,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             primary swaps to a square STOP (Claude-style); typing flips it back
             to send, which grows a split "▾" exposing Interrupt & send. */}
         <div className={`chat-send-group${showSendMenu ? ' has-menu' : ''}`} ref={sendGroupRef}>
-          {showStopPrimary ? (
-            <button
-              className="chat-send-btn-icon chat-stop-btn-icon"
-              onClick={handleStop}
-              type="button"
-              aria-label="Stop the running turn"
-              title="Stop the running turn"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                <rect x="7" y="7" width="10" height="10" rx="1.5" />
-              </svg>
-            </button>
-          ) : (
-          <button
-            className="chat-send-btn-icon"
-            onClick={handleSend}
-            disabled={!canSend}
-            type="button"
-            aria-label={sendTitle}
-            title={sendTitle}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="19" x2="12" y2="5" />
-              <polyline points="6 11 12 5 18 11" />
-            </svg>
-          </button>
-          )}
+          {primaryButton}
           {showSendMenu && (
             <>
               <button
@@ -1507,7 +1526,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             </>
           )}
         </div>
-          </div>{/* .chat-input-controls */}
+          </div>
+          )}{/* .chat-input-controls */}
         </div>{/* .chat-input-box */}
       </div>
     </div>

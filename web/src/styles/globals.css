@@ -7038,6 +7038,45 @@ select {
 }
 .chat-input-controls-spacer { flex: 1; }
 
+/* ── One-line composer (ChatInput `compact`) ──────────────────────────────────
+   Text and send in ONE row, no controls row. For a lightweight spot where the
+   full composer (~100px of attach / mic / big send) outweighs the conversation
+   it carries — the ✦ search card's follow-up window.
+
+   The floors are restated, not inherited: the JS auto-resize writes
+   style.height from scrollHeight, but CSS still owns min/max-height, so the
+   full composer's `min-height: 40px` alone would keep a one-line box two lines
+   tall. And `flex: 1` on the text is safe HERE while it is wrong in the column
+   layout: in a row the flex-basis it implies sizes WIDTH, so the JS-set height
+   is untouched (see the note on .chat-input-textarea). */
+.chat-input-container.is-compact .chat-input-box {
+  flex-direction: row;
+  align-items: flex-end;
+  border-radius: 10px;
+  padding-right: 3px;
+}
+.chat-input-container.is-compact .chat-input-textarea {
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 28px;
+  max-height: calc(4 * 1.5em + 10px);
+  padding: 4px 4px 4px 10px;
+}
+.chat-input-compact-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-bottom: 3px;
+}
+.chat-input-container.is-compact .chat-send-btn-icon {
+  width: 24px;
+  height: 24px;
+}
+.chat-input-container.is-compact .chat-send-btn-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 .chat-input-textarea {
   flex: none; /* flex: 1 would set flex-basis: 0%, overriding the JS-set style.height in a column flex container; use flex: none so height is controlled entirely by JS auto-resize */
   resize: none;

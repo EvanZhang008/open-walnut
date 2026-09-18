@@ -66,6 +66,43 @@ export async function typeSearch(page: Page, query: string): Promise<void> {
   }, { timeout: 30_000, message: 'the search box never kept the query' }).toBe(query);
 }
 
+/**
+ * ONE LINE, not a composer: the text and a send button share a row, and the
+ * attach menu / mic / split-menu of the full composer are gone.
+ *
+ * The user's words for the first version were "can we only have a small one like
+ * one line, this is just for a lightweight one" — the full composer stood ~100px
+ * tall under an answer card in a panel this narrow. Height alone would be a weak
+ * assertion (a stacked send button under a short textarea also measures small),
+ * so the geometry check is that send sits BESIDE the text, not below it.
+ */
+export async function expectComposerIsOneLine(page: Page): Promise<void> {
+  const card = followUp(page);
+  const row = card.locator('.chat-input-row');
+  const send = card.locator('.chat-send-btn-icon');
+  await expect(send).toBeVisible();
+  const [rowBox, textBox, sendBox] = await Promise.all([
+    row.boundingBox(), followUpInput(page).boundingBox(), send.boundingBox(),
+  ]);
+  const geometry = JSON.stringify({ rowBox, textBox, sendBox });
+  expect(rowBox!.height, `the composer must stay one line tall: ${geometry}`).toBeLessThanOrEqual(46);
+  // Beside, not below — and past the text's right edge, so they cannot be two
+  // rows that happen to be short.
+  expect(sendBox!.x, `send must sit beside the text: ${geometry}`)
+    .toBeGreaterThanOrEqual(textBox!.x + textBox!.width - 1);
+  expect(sendBox!.y + sendBox!.height, `send must share the text's row: ${geometry}`)
+    .toBeLessThanOrEqual(textBox!.y + textBox!.height + 2);
+  // The send button is now the row's rightmost thing, so it is the one that goes
+  // over the edge of a panel that CLIPS — invisible and unclickable.
+  const cardBox = (await panel(page).boundingBox())!;
+  expect(sendBox!.x + sendBox!.width, `send must end inside the card: ${geometry}`)
+    .toBeLessThanOrEqual(cardBox.x + cardBox.width + 1);
+  // What "lightweight" drops. All of it is in the full session column.
+  await expect(card.locator('.chat-plus-btn')).toHaveCount(0);
+  await expect(card.locator('.mic-btn-wrapper')).toHaveCount(0);
+  await expect(card.locator('.chat-input-controls')).toHaveCount(0);
+}
+
 /** The composer only exists once there is an answer to follow up ON. */
 export async function expectComposerWaitsForTheAnswer(page: Page, query: string): Promise<void> {
   await typeSearch(page, query);

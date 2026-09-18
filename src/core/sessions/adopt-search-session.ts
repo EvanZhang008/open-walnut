@@ -37,7 +37,7 @@ import { bus, EventNames } from '../event-bus.js';
 import { canonicalJsonlPath } from '../session-file-reader.js';
 import { resolveAgentSearchRun } from '../task-search-agent.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID } from './ask-agent.js';
-import type { SessionProfile, SessionEffort } from '../types.js';
+import type { SessionProfile, SessionEffort, SessionRecord } from '../types.js';
 
 export class AdoptSearchSessionError extends Error {
   statusCode: number;
@@ -178,7 +178,10 @@ export async function adoptAgentSearchSession(
   const run = await resolveAgentSearchRun(trimmed, { ...opts, startIfMissing: false });
   if (!run) {
     const previous = await findExistingSearchAsk(trimmed);
-    if (previous) return previous;
+    if (previous) {
+      await ensureBypassMode(previous.sessionId);
+      return previous;
+    }
   }
   const resolved = run ?? (opts.startIfMissing
     ? await resolveAgentSearchRun(trimmed, opts)
@@ -190,6 +193,7 @@ export async function adoptAgentSearchSession(
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const already = await getSessionByClaudeId(resolved.sessionId);
   if (already && !already.archived && already.taskId) {
+    await ensureBypassMode(resolved.sessionId, already);
     return { sessionId: resolved.sessionId, taskId: already.taskId, reused: true };
   }
   if (already?.archived) {
@@ -323,6 +327,27 @@ async function createAskTask(title: string, query: string): Promise<{ taskId: st
 }
 
 /**
+ * A conversation this module hands back must wake up unattended.
+ *
+ * A REUSE path hands back a record someone else wrote, possibly before the mode
+ * was set — an ask adopted yesterday carries 'default', and the next follow-up
+ * then asks Allow/Deny for the search tool the same session used without asking.
+ * Writing it on the way out heals those once; the guard makes every later press a
+ * no-op, which matters because updateSessionRecord bumps lastActiveAt (a bump
+ * that is honest here — the caller is about to speak into this session).
+ *
+ * Record-only on purpose: an adopted search is stopped, so the next send cold-
+ * resumes and reads exactly this. A session that happens to be live keeps its
+ * process mode for the current turn and picks this up on its next resume.
+ */
+async function ensureBypassMode(sessionId: string, known?: SessionRecord | null): Promise<void> {
+  const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
+  const record = known ?? await getSessionByClaudeId(sessionId).catch(() => null);
+  if (!record || record.mode === 'bypass') return;
+  await updateSessionRecord(sessionId, { mode: 'bypass' }).catch(() => undefined);
+}
+
+/**
  * Put the existing claude session in this task's slot: import it, or RE-LINK a
  * record that is already tracked but whose task is gone (the user deleted the
  * ask; `deleteTask` clears `task_id` and leaves the session row). Treating that
@@ -359,6 +384,12 @@ async function claimSession(args: {
       messageCount: 2,
       profile: args.profile,
       effort: args.effort,
+      // The mode the search ITSELF ran in: micro-claude spawns its child with
+      // `--permission-mode bypassPermissions`, and a normal Ask Walnut launch
+      // starts there too (no mode = bypass). Without it the resume falls back to
+      // 'default' and the continued conversation asks Allow/Deny for the very
+      // search tool it had just used — the 2026-09-17 report.
+      mode: 'bypass',
       // Without a reason, a stopped record classifies as "unknown" and the health
       // monitor keeps spending its rescue-probe budget on a session no daemon has
       // ever heard of. This search ENDED; say so.
@@ -376,6 +407,10 @@ async function claimSession(args: {
       title: args.title,
       profile: args.profile,
       effort: args.effort,
+      // Re-linked records need the mode for the same reason the import does —
+      // this path is reached after a deleted ask, and the conversation behind it
+      // is the same unattended search.
+      mode: 'bypass',
     }).catch(() => undefined) ?? undefined;
   }
 }

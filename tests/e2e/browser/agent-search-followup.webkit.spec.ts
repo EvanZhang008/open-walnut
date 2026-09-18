@@ -17,7 +17,7 @@ import {
   AGENT_PAYLOAD, openHome, panel, stubAgentSearch, stubEmptyInstantSearch, uniqueQuery,
 } from './agent-search-open-session-helpers';
 import {
-  SCREENSHOT_DIR, expectAnsweredInsideTheCard, expectRowsSteppedAside,
+  SCREENSHOT_DIR, expectAnsweredInsideTheCard, expectComposerIsOneLine, expectRowsSteppedAside,
   expectWindowStaysInItsBox, followUpInput, seedAdoptedSession, typeSearch,
 } from './agent-search-followup-helpers';
 
@@ -39,6 +39,7 @@ test('the follow-up is asked, answered and boxed in WebKit too', async ({ page }
 
   await typeSearch(page, uniqueQuery(`wk${STAMP}`));
   await expect(followUpInput(page)).toBeVisible({ timeout: 30_000 });
+  await expectComposerIsOneLine(page);
   await expectAnsweredInsideTheCard(page, `webkit follow-up ${STAMP}`);
   await expectRowsSteppedAside(page);
   await expectWindowStaysInItsBox(page);
@@ -56,7 +57,13 @@ test('at a narrow task panel the window still fits', async ({ page }) => {
 
   await page.setViewportSize({ width: 900, height: 800 });
   await typeSearch(page, uniqueQuery(`wkn${STAMP}`));
+  // The one-liner at the narrowest the card gets: a send button pushed out of a
+  // clipped card is invisible AND unclickable (three fixed widths did exactly
+  // that in WebKit while Chromium stayed green).
+  await expect(followUpInput(page)).toBeVisible({ timeout: 30_000 });
+  await expectComposerIsOneLine(page);
   await expectAnsweredInsideTheCard(page, `narrow webkit ${STAMP}`);
   await expectWindowStaysInItsBox(page);
+  await expectComposerIsOneLine(page);
   await panel(page).screenshot({ path: `${SCREENSHOT_DIR}/6-webkit-narrow.png` });
 });
