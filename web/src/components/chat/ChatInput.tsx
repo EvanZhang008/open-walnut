@@ -148,9 +148,37 @@ interface ChatInputProps {
    *  on `value`, so every mutation path is covered (draft restore, prefill, mention
    *  rewrite, voice insert, post-send reset), not just typing. */
   onValueChange?: (text: string) => void;
+  /**
+   * On/off rows for the "+" menu, under their own divider below Shortcuts.
+   *
+   * ChatInput owns the ROW (so every toggle looks the same and obeys the menu
+   * rules in web/src/AGENTS.md) and the caller owns the MEANING — this component
+   * stays ignorant of any one feature. Rows are fixed height in both states: a
+   * menu whose height changes because the user interacted with it is the inline-
+   * growth bug those rules exist to prevent.
+   *
+   * Pass nothing on surfaces where the setting does not apply. A switch that does
+   * not affect the composer you are looking at is worse than no switch.
+   */
+  plusMenuToggles?: Array<{
+    id: string;
+    label: string;
+    on: boolean;
+    /** Hover text — the one place to explain the cost of turning it on. */
+    title?: string;
+    onToggle: (next: boolean) => void;
+    /**
+     * The menu is opening and is about to draw this row: load whatever backs `on`.
+     *
+     * Exists so a setting does not have to be fetched when the composer MOUNTS.
+     * Opening a draft column is a network-free path (it is what the parse burst
+     * starved), and a switch is only looked at once the menu is open.
+     */
+    onMenuOpen?: () => void;
+  }>;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange, plusMenuToggles }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1371,7 +1399,15 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         <div className="chat-plus-group" ref={plusGroupRef}>
           <button
             className={`chat-plus-btn${plusOpen ? ' active' : ''}`}
-            onClick={() => setPlusOpen((o) => !o)}
+            onClick={() => {
+              // Opening: let each toggle load its value, so the switch is right by the
+              // time the row paints instead of being fetched at mount. Outside the
+              // state updater — React may run an updater twice, and a side effect in
+              // there fires twice with it.
+              const opening = !plusOpen;
+              if (opening) for (const t of plusMenuToggles ?? []) t.onMenuOpen?.();
+              setPlusOpen(opening);
+            }}
             type="button"
             disabled={disabled}
             aria-label="Add attachment"
@@ -1452,6 +1488,31 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       <span>Commands</span>
                     </button>
                   )}
+                </>
+              )}
+              {/* On/off rows. `menuitemcheckbox` + aria-checked is the role a
+                  toggle has in a menu; a native checkbox is banned here (its
+                  macOS popup swallows pointerup — see web/src/AGENTS.md). The
+                  menu stays OPEN on toggle: this is a setting the user may want
+                  to flip and immediately see, not a command that dismisses. */}
+              {!!plusMenuToggles?.length && (
+                <>
+                  <div className="chat-plus-menu-divider" role="separator" />
+                  {plusMenuToggles.map((t) => (
+                    <button
+                      key={t.id}
+                      className={`chat-plus-menu-item chat-plus-menu-toggle${t.on ? ' is-on' : ''}`}
+                      onClick={() => t.onToggle(!t.on)}
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={t.on}
+                      title={t.title}
+                      data-toggle-id={t.id}
+                    >
+                      <span className="chat-plus-menu-switch" aria-hidden="true" />
+                      <span>{t.label}</span>
+                    </button>
+                  ))}
                 </>
               )}
             </div>

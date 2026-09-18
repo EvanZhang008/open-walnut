@@ -39,7 +39,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
-import { quickParseEnabled, loadQuickParseEnabled } from '@/api/config';
+import { useQuickParseEnabled, setQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
 import { useModelOptions } from './path-selector/MetaFooter';
@@ -357,6 +357,9 @@ export function DraftSessionPanel({
   // NEWER response has already landed (appliedSeq). A plain "latest nonce wins"
   // guard would discard every eager response — the user typing one more character
   // bumps the nonce before the response lands, which is precisely the eager case.
+  // `agent.quick_parse`, surfaced as a toggle in the composer's "+" menu below.
+  // False until config says otherwise, so a slow config read reads as off.
+  const aiParseOn = useQuickParseEnabled();
   const parseSeqRef = useRef(0);
   const parseAppliedSeqRef = useRef(0);
   const textRef = useRef(text);
@@ -391,9 +394,11 @@ export function DraftSessionPanel({
       return;
     }
     // After the empty check, so opening a draft with an empty composer still costs
-    // nothing at all. Fails closed while the flag is loading; the next keystroke
-    // picks it up once it lands.
-    if (!quickParseEnabled()) { void loadQuickParseEnabled(); return; }
+    // nothing at all — the flag's own `/api/config` read is triggered HERE, by there
+    // being something to parse, and never by a column appearing. `aiParseOn` is a dep,
+    // so turning the toggle on with a sentence already typed parses it right away
+    // instead of waiting for one more keystroke.
+    if (!aiParseOn) { void ensureQuickParseLoaded(); return; }
 
     const fire = (eager: boolean) => {
       const seq = ++parseSeqRef.current;
@@ -430,7 +435,7 @@ export function DraftSessionPanel({
     // the eager path skipped).
     const timer = setTimeout(() => fire(false), PARSE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [draft.id, text, isFork, isWalnut]);
+  }, [draft.id, text, isFork, isWalnut, aiParseOn, abortAllParses]);
 
   // `async` on purpose: every exit path resolves a Promise<boolean>, so the
   // no-cwd case (open the picker, keep the text) can never degrade into the
@@ -586,6 +591,25 @@ export function DraftSessionPanel({
         <ChatInput
           onSend={(body, images) => startWith(body, images)}
           onValueChange={setText}
+          // Only offered where the parse actually runs. A fork has nothing to
+          // guess at, Ask Walnut has no launch pills, and a column with no
+          // onAiParse has nowhere to put the answer — a switch that changes
+          // nothing about the composer in front of you is worse than none.
+          plusMenuToggles={onAiParse && !isFork && !isWalnut ? [{
+            id: 'quick-parse',
+            // Kept as short as its neighbours ("Attach image", "Commands") so the
+            // row stays one line; the cost of turning it on lives in the tooltip.
+            label: 'Auto-fill fields',
+            on: aiParseOn,
+            title: aiParseOn
+              ? 'A model reads what you type and fills the folder, project and date pills. Off by default: on a Claude Code provider each guess starts a whole CLI process, which is slow enough to hold up the rest of the page.'
+              : 'Off. Turn on to let a model read what you type and fill the folder, project and date pills — one background request per sentence.',
+            onToggle: setQuickParseEnabled,
+            // The other half of "mounting a composer costs nothing": the flag is
+            // read when the menu that draws this switch opens, so the row tells the
+            // truth for someone who turned it on and reloaded without typing yet.
+            onMenuOpen: ensureQuickParseLoaded,
+          }] : undefined}
           draftKey={draftComposerKey(draft.id)}
           placeholder={isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER

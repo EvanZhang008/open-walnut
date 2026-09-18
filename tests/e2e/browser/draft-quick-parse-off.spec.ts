@@ -37,7 +37,7 @@
  * tests/e2e/browser/quick-session-path-load.spec.ts (the picker's own health).
  */
 
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
   draftComposer, draftCwdPill, draftQuickChips, draftQuickKey, DRAFT_PANEL,
   loadHome, openDraft, watchForbiddenRequests,
@@ -132,6 +132,44 @@ test.setTimeout(180_000)
 // browsers' worth of load to a machine-wide-serialized Playwright gate.
 test.describe.configure({ mode: 'serial' })
 
+/** Whether the server currently has the flag on. */
+async function readQuickParse(page: Page): Promise<boolean> {
+  const res = await page.request.get('/api/config')
+  expect(res.ok(), await res.text()).toBe(true)
+  const body = (await res.json()) as { config?: { agent?: { quick_parse?: boolean } } }
+  return body.config?.agent?.quick_parse ?? false
+}
+
+/**
+ * Write `agent.quick_parse`, KEEPING every sibling key.
+ *
+ * `PUT /api/config` replaces a whole top-level key, so sending `{ agent: { quick_parse } }`
+ * on its own deletes the fixture's model, language and catalog — the same trap the
+ * product's toggle has to avoid (tests/web/quick-parse-toggle.test.ts pins it there).
+ * Asserted rather than best-effort: a restore that silently no-ops leaves the fixture
+ * flipped, and every "zero requests" assertion in this file would then be inverted.
+ */
+async function writeQuickParse(page: Page, on: boolean): Promise<void> {
+  const read = await page.request.get('/api/config')
+  expect(read.ok(), await read.text()).toBe(true)
+  const { config } = (await read.json()) as { config: { agent?: Record<string, unknown> } }
+  const res = await page.request.put('/api/config', {
+    data: { agent: { ...config.agent, quick_parse: on } },
+  })
+  expect(res.ok(), await res.text()).toBe(true)
+}
+
+/**
+ * Put the flag back OFF between scenarios.
+ *
+ * In a hook, not in the scenario's own `finally`: an assertion that fails in a hook is
+ * reported ALONGSIDE the test's failure, while one in a finally block replaces it —
+ * and a restore failing is exactly the moment the real error matters most.
+ */
+test.afterEach(async ({ page }) => {
+  if (await readQuickParse(page)) await writeQuickParse(page, false)
+})
+
 /**
  * The precondition every scenario below depends on. Without it the whole file is
  * vacuous: if the fixture ever ships `agent.quick_parse: true`, "zero requests"
@@ -139,10 +177,7 @@ test.describe.configure({ mode: 'serial' })
  */
 test('the fixture leaves agent.quick_parse OFF — the default this file asserts', async ({ page }) => {
   await loadHome(page)
-  const res = await page.request.get('/api/config')
-  expect(res.ok(), await res.text()).toBe(true)
-  const body = (await res.json()) as { config?: { agent?: { quick_parse?: boolean } } }
-  expect(body.config?.agent?.quick_parse ?? false,
+  expect(await readQuickParse(page),
     'default OFF — flip this fixture and every assertion below inverts').toBe(false)
 })
 
@@ -306,10 +341,12 @@ test('the folder picker opens and populates, and the Quick folders row renders',
 
 test('opening a draft with an empty composer fires no quick-parse and no config read', async ({ page }) => {
   // The draft-open path is contractually network-free, and the GATE must not be the
-  // thing that breaks that: `quickParseEnabled()` is checked AFTER the empty-text
-  // check precisely so an empty composer never triggers `loadQuickParseEnabled()`'s
-  // `/api/config`. A gate that asked first would have re-added one request per
-  // opened column to the very path this work exists to keep clear.
+  // thing that breaks that. Two design choices keep it that way, and both are easy to
+  // undo by accident: `useQuickParseEnabled()` only SUBSCRIBES (a composer that mounts
+  // fetches nothing — the obvious shape, a load in the hook's effect, would put one
+  // `/api/config` on every opened column), and `ensureQuickParseLoaded()` is called
+  // only where the answer is needed: after the empty-text check in the parse effect,
+  // and when the "+" menu that draws the switch opens. Neither happens here.
   await page.setViewportSize({ width: 1280, height: 900 })
   await loadHome(page)
   // networkidle inside loadHome already settled the page's own loads; anything
@@ -332,4 +369,120 @@ test('opening a draft with an empty composer fires no quick-parse and no config 
   expect(forbidden, 'the draft-open path stays network-free').toEqual([])
 
   await panel.screenshot({ path: `${SHOT_DIR}/04-empty-draft-no-network.png` })
+})
+
+// ── 5. The "+" menu offers the switch, and drawing it changes no geometry ─────
+
+/** The composer's "+" menu, and the one toggle row in it. */
+const plusMenu = (panel: Locator) => panel.locator('.chat-plus-menu')
+const quickParseRow = (panel: Locator) => panel.locator('.chat-plus-menu-toggle[data-toggle-id="quick-parse"]')
+
+/** Open the draft's "+" menu and return [menu, the toggle row]. */
+async function openPlusMenu(panel: Locator): Promise<[Locator, Locator]> {
+  await panel.locator('.chat-plus-btn').click()
+  const menu = plusMenu(panel)
+  await expect(menu).toBeVisible({ timeout: 15_000 })
+  return [menu, quickParseRow(panel)]
+}
+
+test('the "+" menu carries an OFF switch for the parse, one line tall, and toggling it does not resize the menu', async ({ page }) => {
+  // The switch is how this feature comes back for someone who wants it, so its own
+  // state has to be honest: default OFF, which is `aria-checked=false` on a
+  // `menuitemcheckbox` (a native checkbox is banned inside these menus — its macOS
+  // popup swallows pointerup; see web/src/AGENTS.md → Menus & overlays).
+  //
+  // The geometry half is the menu rule those same notes encode: a menu must not grow
+  // because the user interacted with it. Measured rather than eyeballed — the label
+  // wrapping to a second line is invisible in a screenshot at a glance but changes the
+  // row height, and the first draft of this row did exactly that.
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await loadHome(page)
+  const panel = await openDraft(page)
+
+  const [menu, row] = await openPlusMenu(panel)
+  await expect(row, 'default OFF').toHaveAttribute('aria-checked', 'false')
+  await expect(row).toHaveText(/Auto-fill/)
+
+  // One line: the label's own box, compared with the line height it renders at.
+  const label = row.locator('span:not(.chat-plus-menu-switch)')
+  const lines = await label.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2
+    return { h: el.getBoundingClientRect().height, lh }
+  })
+  expect(lines.h, `label ${lines.h}px vs line-height ${lines.lh}px — wrapped to 2 lines`)
+    .toBeLessThan(lines.lh * 1.6)
+
+  // Same height as an ordinary row, so the switch reads as part of the same menu.
+  const plainRow = menu.locator('.chat-plus-menu-item:not(.chat-plus-menu-toggle)').first()
+  const [rowBox, plainBox, before] = await Promise.all([
+    row.boundingBox(), plainRow.boundingBox(), menu.boundingBox(),
+  ])
+  expect(Math.abs(rowBox!.height - plainBox!.height),
+    `toggle ${rowBox!.height}px vs plain ${plainBox!.height}px`).toBeLessThan(1.5)
+
+  await row.click()
+  // Still open (a setting, not a command) and exactly the same size.
+  await expect(menu).toBeVisible()
+  await expect(row).toHaveAttribute('aria-checked', 'true')
+  const after = await menu.boundingBox()
+  expect(after!.width, `menu ${before!.width}→${after!.width}px`).toBeCloseTo(before!.width, 0)
+  expect(after!.height, `menu ${before!.height}→${after!.height}px`).toBeCloseTo(before!.height, 0)
+
+  await menu.screenshot({ path: `${SHOT_DIR}/05-plus-menu-toggle.png` })
+  // afterEach puts the flag back — the scenarios above assert the default, and other
+  // spec files share this server.
+})
+
+// ── 6. The switch is real: on → the parse runs, off → it stops ───────────────
+
+test('turning the switch ON makes typing parse, and turning it OFF stops it again', async ({ page }) => {
+  // Without this, everything above is satisfied by a feature that no longer works at
+  // all — "zero requests" is also what a deleted feature looks like. Deliberately
+  // LAST in a serial file: it is the only scenario that writes config, so the default
+  // the others depend on is still untouched when they run.
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await loadHome(page)
+  const panel = await openDraft(page)
+
+  // The agent keys the fixture has BEFORE the click — compared after, so this holds
+  // whatever the fixture ships rather than naming a key that might not be there.
+  const agentKeysBefore = await page.request.get('/api/config')
+    .then(async (r) => Object.keys(((await r.json()) as { config?: { agent?: object } }).config?.agent ?? {}))
+  expect(agentKeysBefore.length, 'the fixture must have an agent block for this to prove anything')
+    .toBeGreaterThan(0)
+
+  const [, row] = await openPlusMenu(panel)
+  await row.click()
+  await expect(row).toHaveAttribute('aria-checked', 'true')
+  // The write landed server-side, not just in the optimistic echo…
+  await expect.poll(() => readQuickParse(page),
+    { timeout: 15_000, message: 'the toggle never persisted' }).toBe(true)
+  // …and it did not eat the rest of the agent block on the way (the one-click data
+  // loss the read-then-spread exists to prevent).
+  const afterWrite = await page.request.get('/api/config')
+  const cfg = (await afterWrite.json()) as { config?: { agent?: Record<string, unknown> } }
+  const agentKeysAfter = Object.keys(cfg.config?.agent ?? {})
+  for (const key of agentKeysBefore) {
+    expect(agentKeysAfter, `turning the switch on deleted agent.${key}`).toContain(key)
+  }
+  await page.keyboard.press('Escape')
+
+  const parses = watchQuickParse(page)
+  await typeInBursts(page)
+  // Only that it REACHED the route: whether a parse comes back depends on the
+  // fixture's model, which this file is not about.
+  await expect.poll(() => parses.length,
+    { timeout: 15_000, message: 'the switch is on but typing never parsed' }).toBeGreaterThan(0)
+
+  // …and off again, with the same sentence still in the composer.
+  const [, row2] = await openPlusMenu(panel)
+  await row2.click()
+  await expect(row2).toHaveAttribute('aria-checked', 'false')
+  await page.keyboard.press('Escape')
+
+  parses.length = 0
+  await draftComposer(page).pressSequentially(' and land it', { delay: 25 })
+  await page.waitForTimeout(SETTLE_MS)
+  expect(parses, 'switched off mid-sentence, so nothing more may leave').toEqual([])
 })

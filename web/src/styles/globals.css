@@ -7206,6 +7206,41 @@ select {
 }
 .chat-plus-menu-item svg { color: var(--fg-muted); flex-shrink: 0; }
 .chat-send-menu-item.danger { color: var(--error); }
+/* "+" menu on/off row (role=menuitemcheckbox). The switch is a plain span, not a
+   native checkbox: a native control inside a styled menu looks foreign AND its
+   macOS popup swallows pointerup (see web/src/AGENTS.md → Menus & overlays).
+   Fixed box in both states — a row that changes size when toggled would resize
+   the open menu, which is the inline-growth bug those rules forbid. */
+.chat-plus-menu-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--border);
+  transition: background 0.14s;
+}
+.chat-plus-menu-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 0.14s;
+}
+.chat-plus-menu-toggle.is-on .chat-plus-menu-switch { background: var(--accent); }
+.chat-plus-menu-toggle.is-on .chat-plus-menu-switch::after { transform: translateX(10px); }
+/* Off reads as secondary text; on reads as normal. The label must not shift, so
+   only the colour changes, never the weight. */
+.chat-plus-menu-toggle:not(.is-on) { color: var(--fg-muted); }
+/* One line, always. The menu has a min-width and no max-width, so a longer label
+   WIDENS it (how the "Reference a task, session or project" row already behaves)
+   instead of wrapping to a second line and changing this row's height. */
+.chat-plus-menu-toggle > span:not(.chat-plus-menu-switch) { white-space: nowrap; }
 
 /* "+" menu Shortcuts section: the composer's special-command index. */
 .chat-plus-menu-divider {

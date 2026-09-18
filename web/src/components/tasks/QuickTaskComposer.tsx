@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
-import { quickParseEnabled, loadQuickParseEnabled } from '@/api/config';
+import { useQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
 
 /** Built-in tier name or a custom tier id (`ct_*`). */
@@ -53,6 +53,9 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
   const [draft, setDraft] = useState<ConfirmDraft>(emptyDraft);
   const [parseInFlight, setParseInFlight] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // `agent.quick_parse`. The toggle lives in the draft composer's "+" menu; this
+  // surface follows the same app-wide value rather than offering a second switch.
+  const aiParseOn = useQuickParseEnabled();
 
   const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -149,8 +152,10 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       setParseInFlight(false);
       return;
     }
-    if (!quickParseEnabled()) {
-      void loadQuickParseEnabled();
+    if (!aiParseOn) {
+      // After the empty check, so a composer that is merely open costs nothing; the
+      // flag's config read is triggered by there being text to parse.
+      void ensureQuickParseLoaded();
       setParseInFlight(false);
       return;
     }
@@ -171,7 +176,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     // Abort on cleanup, not just clearTimeout: once the request is away, cancelling
     // the timer no longer frees the slot it holds.
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [applyParse, open, text]);
+  }, [applyParse, open, text, aiParseOn]);
 
   const handleTextChange = useCallback((value: string) => {
     textRef.current = value;

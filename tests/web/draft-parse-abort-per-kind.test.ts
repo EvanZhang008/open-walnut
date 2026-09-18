@@ -48,10 +48,14 @@ vi.mock('@/api/tasks', () => ({
   },
 }));
 
-// The effect is gated off unless `agent.quick_parse` is on.
-vi.mock('@/api/config', () => ({
-  quickParseEnabled: () => true,
-  loadQuickParseEnabled: async () => true,
+// The effect is gated off unless `agent.quick_parse` is on. The real hook reads
+// config over the network; these cases are about abort bookkeeping, so the flag is
+// pinned on. (Its own behaviour — default off, persistence, sibling keys — is
+// covered in tests/web/quick-parse-toggle.test.ts.)
+vi.mock('@/hooks/useQuickParse', () => ({
+  useQuickParseEnabled: () => true,
+  setQuickParseEnabled: () => {},
+  ensureQuickParseLoaded: async () => {},
 }));
 
 // A keystroke is "the composer told the panel its new text" — nothing else about
