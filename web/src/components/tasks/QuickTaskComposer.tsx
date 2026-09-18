@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
+import { quickParseEnabled, loadQuickParseEnabled } from '@/api/config';
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
 
 /** Built-in tier name or a custom tier id (`ct_*`). */
@@ -137,6 +138,9 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
 
   // Debounced background parse of the sentence. Purely additive — nothing
   // waits on it, and a stale response (nonce or text moved on) is dropped.
+  // OFF unless `agent.quick_parse` opts in (see that field in types.ts): on a CLI
+  // provider each call spawns a whole `claude -p` and blows its 10s timeout, and
+  // dropping the RESULT never freed the connection slot the request still held.
   useEffect(() => {
     if (!open) return;
     const requestedText = text.trim();
@@ -145,10 +149,16 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       setParseInFlight(false);
       return;
     }
+    if (!quickParseEnabled()) {
+      void loadQuickParseEnabled();
+      setParseInFlight(false);
+      return;
+    }
     const nonce = ++requestNonceRef.current;
     setParseInFlight(true);
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      quickParseTask(requestedText)
+      quickParseTask(requestedText, controller.signal)
         .then((result) => {
           if (nonce !== requestNonceRef.current || requestedText !== textRef.current.trim()) return;
           applyParse(result, requestedText);
@@ -158,7 +168,9 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
           if (nonce === requestNonceRef.current) setParseInFlight(false);
         });
     }, 500);
-    return () => clearTimeout(timer);
+    // Abort on cleanup, not just clearTimeout: once the request is away, cancelling
+    // the timer no longer frees the slot it holds.
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [applyParse, open, text]);
 
   const handleTextChange = useCallback((value: string) => {

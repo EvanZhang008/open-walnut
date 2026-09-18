@@ -110,8 +110,13 @@ export function getFetchQueueStats(): { inFlight: number; queued: number } {
  *  can deadlock the pool if several requests hit the cache race at once). */
 const RETRY_WITH_CACHE_BYPASS = Symbol('retry-with-cache-bypass');
 
-async function request<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[] }): Promise<T> {
-  await acquireFetchSlot(method !== 'GET', extra?.signal);
+async function request<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; background?: boolean }): Promise<T> {
+  // A non-GET jumps the queue because it is normally a USER action. `background: true`
+  // opts out: a write nobody is waiting on must not outrank the GETs that are
+  // painting the screen. Without this, the draft composer's per-keystroke AI parse
+  // (a POST) took all six slots ahead of the path picker's listings and held each
+  // for its full 10s model timeout (2026-09-17).
+  await acquireFetchSlot(method !== 'GET' && !extra?.background, extra?.signal);
   let retryWithBypass = false;
   try {
     return await attemptRequest<T>(method, path, body, extra);
@@ -285,7 +290,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
 // quietStatuses is offered here for the same reason apiGet offers it: a POST can have a DESIGNED
 // non-2xx outcome (a refused credential, a capability the provider does not have), and those must
 // not land in the error-log audit as if something broke.
-export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[] }): Promise<T> {
+export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean }): Promise<T> {
   return request<T>('POST', path, body, opts);
 }
 

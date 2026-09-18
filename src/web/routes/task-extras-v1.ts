@@ -270,6 +270,14 @@ taskExtrasV1Router.post('/tasks/quick-parse', async (req: Request, res: Response
       return
     }
 
+    // Same opt-in gate as the web route, for the same reason: skip the all-tasks
+    // digest walk when the answer is already decided. See agent.quick_parse.
+    const { quickParseEnabled, unparsedTask } = await import('../../core/quick-task-parse.js')
+    if (!(await quickParseEnabled())) {
+      res.json(unparsedTask(text).parse)
+      return
+    }
+
     const startedAt = Date.now()
     const { buildProjectDigest } = await import('../../core/quick-task-digest.js')
     let projectDigest: import('../../core/quick-task-digest.js').ProjectDigest = { digest: '', projects: [] }

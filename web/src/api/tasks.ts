@@ -70,11 +70,18 @@ export type { TaskQuery } from '@open-walnut/task-query';
 
 export type { QuickTaskParse } from '@open-walnut/core';
 
-export async function quickParseTask(text: string): Promise<QuickTaskParse> {
+/**
+ * Background NL parse. Callers MUST pass a signal and abort the previous call
+ * before starting another: the parse can take as long as the server's model
+ * timeout, and abandoning one without aborting leaves it holding a connection
+ * slot for that whole time even though its result is already unwanted.
+ * `background: true` keeps it from outranking the GETs painting the screen.
+ */
+export async function quickParseTask(text: string, signal?: AbortSignal): Promise<QuickTaskParse> {
   // Browser timezone rides along so relative dates ("tomorrow 10am") resolve in the
   // user's zone even when the server runs elsewhere (e.g. a UTC cloud instance).
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return apiPost<QuickTaskParse>('/api/tasks/quick-parse', { text, timeZone });
+  return apiPost<QuickTaskParse>('/api/tasks/quick-parse', { text, timeZone }, { signal, background: true });
 }
 
 // ── Suggestion accuracy ledger ───────────────────────────────────────────────
@@ -190,12 +197,17 @@ export interface UpdateTaskInput {
 export async function fetchTasks(opts?: { slim?: boolean; minimal?: boolean }): Promise<Task[]> {
   const params: Record<string, string> = {};
   if (opts?.minimal) {
-    // List payload: drops note/conversation_log AND summary/description/ext
-    // (~2.6MB on top of the slim ~400KB). The detail pane lazy-loads the full
-    // task on focus via fetchTask(id). Use for the home task list.
+    // List payload: drops note/conversation_log AND summary/description/ext. The
+    // detail pane lazy-loads the full task on focus via fetchTask(id). Use for the
+    // home task list.
+    //
+    // Measured 2026-09-17 at 6,431 tasks: full 21.8MB → slim 9.3MB → list 6.3MB
+    // (`note` alone is 11.7MB of the full payload, 62%). These numbers scale with
+    // the board, so read them as "what the projections are worth", not as a budget:
+    // `list` is still MEGABYTES, and the browser parses it on the main thread.
     params.fields = 'list';
   } else if (opts?.slim !== false) {
-    // Default to slim mode (omits note/conversation_log, ~400KB savings)
+    // Slim omits note/conversation_log — the biggest single win (see above).
     params.slim = '1';
   }
   const res = await apiGet<{ tasks: Task[] }>('/api/tasks', Object.keys(params).length ? params : undefined);

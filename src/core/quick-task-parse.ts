@@ -182,6 +182,35 @@ function validLocalDueDate(value: unknown): string | undefined {
   return dueDate;
 }
 
+/**
+ * Whether the background NL parse may call a model at all (`agent.quick_parse`,
+ * default OFF — see the field's comment in types.ts for what it costs when the
+ * provider is a CLI).
+ *
+ * Ask this AT THE CALL SITE, before assembling the prompt: building the project
+ * digest walks every task, and doing that for a request whose answer is already
+ * decided is pure tax on the one event loop every route shares. This mirrors
+ * `backgroundAiDisabled()` in cheap-model.ts, which gates unprompted background
+ * model work the same way and for the same reason — the check belongs to the
+ * caller, so parseQuickTask itself stays a plain function its unit tests can
+ * drive without standing up a config.
+ */
+export async function quickParseEnabled(): Promise<boolean> {
+  try {
+    const { getConfig } = await import('./config-manager.js');
+    return (await getConfig()).agent?.quick_parse === true;
+  } catch {
+    // Unreadable config is not consent. Fail closed.
+    return false;
+  }
+}
+
+/** The answer when no model is consulted: the sentence itself, nothing invented. */
+export function unparsedTask(text: string): QuickTaskParseEnvelope {
+  const trimmed = text.trim();
+  return { parse: { title: trimmed.slice(0, 200) || text }, parseMs: 0 };
+}
+
 /** Best-effort parsing for quick task notes. Never throws. */
 export async function parseQuickTask(
   text: string,

@@ -39,6 +39,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
+import { quickParseEnabled, loadQuickParseEnabled } from '@/api/config';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
 import { useModelOptions } from './path-selector/MetaFooter';
@@ -342,8 +343,16 @@ export function DraftSessionPanel({
   // configured → the route 500s; offline; 400) is swallowed, leaving the draft
   // exactly as the user left it.
   //
-  // The draft OPEN path stays network-free by construction: this effect only fires
-  // on non-empty text, and text can only appear by typing.
+  // OFF unless `agent.quick_parse` says otherwise — see that field in types.ts.
+  //
+  // Not "network-free because text can only appear by typing": the composer RESTORES
+  // a persisted draft, so a panel opening on left-over text fired this on MOUNT with
+  // no keystroke at all. That is what the user saw ("I didn't type").
+  //
+  // Every in-flight parse is now aborted before the next one starts. The seq guard
+  // below only ever discarded the RESULT; the request itself kept running and kept
+  // its connection slot until the server's 10s timeout, which is how one sentence
+  // put six ten-second no-ops in the air at once.
   // Ordering: every request takes the next seq; a response applies only if no
   // NEWER response has already landed (appliedSeq). A plain "latest nonce wins"
   // guard would discard every eager response — the user typing one more character
@@ -356,15 +365,43 @@ export function DraftSessionPanel({
   onAiParseRef.current = onAiParse;
   // When the last EAGER (mid-typing) parse fired, for the throttle window.
   const lastEagerParseRef = useRef(0);
+  // In-flight parse PER KIND, so a request that is being replaced is aborted
+  // instead of left to hold a connection slot until the server gives up on it.
+  //
+  // Per kind, not one shared controller: the eager and trailing paths are two
+  // different questions about the same sentence, and one controller let the
+  // trailing fire (350ms later) cancel the eager one before it could ever answer,
+  // which quietly deleted the eager feature while looking like a fix. So an eager
+  // parse only ever supersedes the previous EAGER parse. Ceiling: two in flight
+  // per composer, against the eleven that one continuous sentence used to reach.
+  const parseAbortRef = useRef<{ eager: AbortController | null; trailing: AbortController | null }>({ eager: null, trailing: null });
+  const abortAllParses = useCallback(() => {
+    parseAbortRef.current.eager?.abort();
+    parseAbortRef.current.trailing?.abort();
+    parseAbortRef.current = { eager: null, trailing: null };
+  }, []);
+  useEffect(() => () => abortAllParses(), [abortAllParses]);
   useEffect(() => {
     if (!onAiParseRef.current || isFork || isWalnut) return;
     const requested = text.trim();
     // Empty composer → invalidate everything in flight and stop.
-    if (!requested) { parseAppliedSeqRef.current = ++parseSeqRef.current; return; }
+    if (!requested) {
+      parseAppliedSeqRef.current = ++parseSeqRef.current;
+      abortAllParses();
+      return;
+    }
+    // After the empty check, so opening a draft with an empty composer still costs
+    // nothing at all. Fails closed while the flag is loading; the next keystroke
+    // picks it up once it lands.
+    if (!quickParseEnabled()) { void loadQuickParseEnabled(); return; }
 
     const fire = (eager: boolean) => {
       const seq = ++parseSeqRef.current;
-      quickParseTask(requested.slice(0, PARSE_MAX_CHARS))
+      const kind = eager ? 'eager' : 'trailing';
+      parseAbortRef.current[kind]?.abort();
+      const controller = new AbortController();
+      parseAbortRef.current[kind] = controller;
+      quickParseTask(requested.slice(0, PARSE_MAX_CHARS), controller.signal)
         .then((result) => {
           // Out-of-order guard: never let an older response overwrite a newer one.
           if (seq <= parseAppliedSeqRef.current) return;

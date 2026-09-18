@@ -9,6 +9,26 @@ export async function fetchConfig(): Promise<Config & { _envTokenHint?: string }
 }
 
 /**
+ * May the composers run their background AI parse? (`agent.quick_parse`, default
+ * OFF.) Read SYNCHRONOUSLY and answer `false` until config has actually said yes,
+ * because the failure mode is a burst of requests, not a missing one: a composer
+ * that asks per keystroke must never fire while the answer is still in flight.
+ *
+ * `load` is fire-and-forget and never retries a failure — a config read that
+ * failed is not permission, and a retry loop next to a per-keystroke effect is
+ * the very shape this whole gate exists to prevent.
+ */
+let _quickParseEnabled = false;
+let _quickParseLoad: Promise<void> | null = null;
+export function quickParseEnabled(): boolean { return _quickParseEnabled; }
+export function loadQuickParseEnabled(): Promise<void> {
+  _quickParseLoad ??= fetchConfig()
+    .then((c) => { _quickParseEnabled = c.agent?.quick_parse === true; })
+    .catch(() => { /* stay off */ });
+  return _quickParseLoad;
+}
+
+/**
  * Walnut's own source checkout (drives the "Fix Walnut" button). null on npm
  * installs / cloud replicas → the button hides. Cached for the page lifetime:
  * the install dir can't change without a server restart.

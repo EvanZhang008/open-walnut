@@ -7,7 +7,8 @@
  * for requests the server never saw. The client now gates concurrency itself:
  *  - at most 6 fetches dispatched at once, the rest queue client-side
  *  - the timeout timer starts at DISPATCH, not at enqueue
- *  - writes (non-GET) jump the queue ahead of background GETs
+ *  - writes (non-GET) jump the queue ahead of background GETs, UNLESS the caller
+ *    marks them `background: true` (2026-09-17 — see the `background` block below)
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -15,6 +16,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // jsdom-free: the client only needs fetch/AbortSignal/performance, all present
 // in the node test environment.
 import { apiGet, apiPost, getFetchQueueStats } from '../../web/src/api/client';
+// The real product call site for `background: true`. tasks.ts pulls in the session
+// status store, which is DOM-free too, so it loads in this tier unchanged.
+import { quickParseTask } from '../../web/src/api/tasks';
 
 type Resolver = { resolve: (r: Response) => void; url: string };
 
@@ -135,5 +139,180 @@ describe('fetch admission control', () => {
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await Promise.all(blockers);
+  });
+
+  it('a request that waits out the queue budget fails as a retryable TimeoutError AND names itself in the log', async () => {
+    // The 2026-09-17 folder-registry outage: six slow requests pinned the pool
+    // while a boot burst queued behind them; everything past 20s was rejected
+    // HERE, before attemptRequest, so no "[api] … FAILED" line was ever written
+    // and the only evidence was the server's request log NOT containing the
+    // request. The rejection must (a) say which request died, with the queue
+    // state, and (b) be classified retryable, because the request never left
+    // the browser and asking again is always safe.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.useFakeTimers();
+    try {
+      const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/pinned${i}`).catch(() => {}));
+      await vi.advanceTimersByTimeAsync(0);
+      const starved = apiGet('/api/tasks/groups').then(() => 'ok', (e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getFetchQueueStats().queued).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(getFetchQueueStats().queued).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+
+      const err = (await starved) as DOMException;
+      expect(err).toBeInstanceOf(DOMException);
+      expect(err.name).toBe('TimeoutError');
+      expect(err.message).toContain('pool saturated');
+      expect(getFetchQueueStats().queued).toBe(0);
+      // The server never saw it.
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/tasks/groups')).toBe(false);
+
+      const line = errorSpy.mock.calls.find((c) => String(c[0]).includes('/api/tasks/groups'));
+      expect(line, 'a queue rejection must be logged with the request it killed').toBeDefined();
+      expect(String(line![0])).toContain('GET /api/tasks/groups rejected after 20000ms in the connection queue (pool saturated)');
+      expect(line![1]).toEqual({ queued: 0, inFlight: 6 });
+
+      for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(blockers);
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+    }
+  });
+
+  // ── `background: true` — a write nobody is waiting on stops outranking paint ──
+  // Before this flag EVERY non-GET jumped the queue, and the draft composer's
+  // per-keystroke AI parse is a POST that holds its slot for a full 10s model
+  // timeout. A continuous sentence therefore parked six of those at the head of
+  // the queue and the GETs painting the screen never got a connection
+  // (2026-09-17). The three cases below pin the FIFO half, the anti-starvation
+  // half, and the slot accounting when a queued background write is aborted.
+
+  it('a background write stays FIFO while a normal write still jumps the queue', async () => {
+    // Starting state: gate idle. Six GETs take every slot, then two more GETs
+    // queue (these are "the screen"), then one background POST, then one ordinary
+    // (user-action) POST.
+    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+
+    const paints = [apiGet('/api/paint0').catch(() => {}), apiGet('/api/paint1').catch(() => {})];
+    const background = apiPost('/api/tasks/quick-parse', { text: 'x' }, { background: true }).catch(() => {});
+    const userWrite = apiPost('/api/tasks/save', { text: 'x' }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 4 });
+
+    // Free the pool one connection at a time and record the dispatch order.
+    for (let i = 0; i < 4; i++) {
+      pending.shift()!.resolve(jsonResponse({}));
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const order = fetchMock.mock.calls.slice(6).map((c) => String(c[0]));
+    expect(order).toEqual([
+      '/api/tasks/save',      // user action — still jumps to the front
+      '/api/paint0',          // …then the screen, in the order it asked
+      '/api/paint1',
+      '/api/tasks/quick-parse', // background write goes LAST (old code: first)
+    ]);
+
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await new Promise((r) => setTimeout(r, 0));
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all([...blockers, ...paints, background, userWrite]);
+  });
+
+  it('quickParseTask is wired as a background write, so it does not outrank the screen', async () => {
+    // Starting state: gate idle. Same assertion as above but through the real
+    // product call site — the flag is only useful if the caller actually passes it.
+    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const paint = apiGet('/api/files/list', { path: '/' }).catch(() => {});
+    const parse = quickParseTask('lunch with sam tomorrow 12pm').catch(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 2 });
+
+    pending.shift()!.resolve(jsonResponse({}));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(String(fetchMock.mock.calls[6][0])).toBe('/api/files/list?path=%2F');
+
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await new Promise((r) => setTimeout(r, 0));
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all([...blockers, paint, parse]);
+  });
+
+  it('background writes saturating all 6 slots cannot starve a GET behind them', async () => {
+    // Starting state: gate idle. Six background POSTs (the per-keystroke parse
+    // burst) hold every connection; a GET queues; then ANOTHER keystroke's POST
+    // arrives. Under the old "every non-GET is urgent" rule that late POST
+    // unshifted ahead of the GET, and a continuous sentence repeated that forever
+    // — the GET was starved for as long as the user kept typing.
+    const saturate = Array.from({ length: 6 }, (_, i) =>
+      apiPost(`/api/tasks/quick-parse?k=${i}`, { text: `k${i}` }, { background: true }).catch(() => {}));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
+
+    const paint = apiGet('/api/tasks/groups').catch(() => {});
+    const laterKeystroke = apiPost('/api/tasks/quick-parse?k=6', { text: 'k6' }, { background: true }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 2 });
+
+    pending.shift()!.resolve(jsonResponse({}));
+    await new Promise((r) => setTimeout(r, 0));
+    // Queue order, not write-priority order: the GET is next.
+    expect(String(fetchMock.mock.calls[6][0])).toBe('/api/tasks/groups');
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).not.toContain('/api/tasks/quick-parse?k=6');
+
+    pending.shift()!.resolve(jsonResponse({}));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(String(fetchMock.mock.calls[7][0])).toBe('/api/tasks/quick-parse?k=6');
+
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await new Promise((r) => setTimeout(r, 0));
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all([...saturate, paint, laterKeystroke]);
+  });
+
+  it('aborting a queued background write drops it and leaks no slot', async () => {
+    // Starting state: gate idle. A superseded keystroke parse aborts while still
+    // queued — the common case, since the composer aborts the previous parse on
+    // every new fire. If that path forgot the accounting, the pool would shrink by
+    // one connection per keystroke and the app would wedge with zero in flight.
+    const blockers = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const ctrl = new AbortController();
+    const superseded = apiPost('/api/tasks/quick-parse', { text: 'lunch wi' }, {
+      background: true, signal: ctrl.signal,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 1 });
+
+    ctrl.abort();
+    await expect(superseded).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).not.toContain('/api/tasks/quick-parse');
+
+    // Drain the pool: accounting must return to exactly zero…
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all(blockers);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+
+    // …and all six connections must still be acquirable afterwards.
+    const after = Array.from({ length: 6 }, (_, i) => apiGet(`/api/after${i}`).catch(() => {}));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 0 });
+    expect(fetchMock.mock.calls.slice(-6).map((c) => String(c[0]))).toEqual(
+      Array.from({ length: 6 }, (_, i) => `/api/after${i}`));
+
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all(after);
   });
 });

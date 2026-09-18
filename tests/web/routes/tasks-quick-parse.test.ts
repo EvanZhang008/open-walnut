@@ -14,6 +14,7 @@ import { tasksRouter } from '../../../src/web/routes/tasks.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { addTask, _resetForTesting } from '../../../src/core/task-manager.js';
 import { closeDb } from '../../../src/core/task-db.js';
+import { updateConfig } from '../../../src/core/config-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -42,6 +43,13 @@ beforeEach(async () => {
   closeDb();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  // The parse is opt-in (agent.quick_parse, default OFF). Every case below asserts
+  // what the route does WHEN ENABLED, so each states that initial value explicitly
+  // rather than inheriting it. The default-off behaviour has its own file:
+  // tests/web/routes/tasks-quick-parse-disabled.test.ts
+  // mkdir first: the rm above took the whole home, and updateConfig writes into it.
+  await fs.mkdir(WALNUT_HOME, { recursive: true });
+  await updateConfig({ agent: { quick_parse: true } });
 });
 
 afterEach(async () => {

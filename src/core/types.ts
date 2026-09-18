@@ -833,6 +833,20 @@ export interface AgentConfig {
   main_model?: string;
   /** Model ID for cheap background parses (quick-task parse, fork/conversation titles); unset = first haiku in the provider catalog. */
   fast_model?: string;
+  /**
+   * Opt IN to the composers' background natural-language parse (the draft column's
+   * launch pills and quick-add's date/project guesses). DEFAULT OFF, and it stays
+   * off until someone asks for it, because the feature's cost is paid on the one
+   * resource the whole UI shares. On a CLI provider `fast_model` resolves to the
+   * catalog's `claude_cli` haiku, so every parse spawns a whole `claude -p`
+   * process; measured 2026-09-17, all 144 of them blew the 10s abort in
+   * quick-task-parse.ts (a bare spawn is ~5s before any prompt), so the feature
+   * returned nothing but burned ten seconds a call. Each call is a POST, and
+   * client.ts prioritises non-GETs, so those ten-second no-ops took all six
+   * connection slots ahead of the GETs the user was waiting on. Turning this on
+   * without also setting `fast_model` to a DIRECT-API model re-creates that.
+   */
+  quick_parse?: boolean;
   /** Preferred language for AI-generated UI text (diff summaries etc.), ISO
    *  639-1 (e.g. 'zh'). Unset = follow the browser locale, else English. */
   language?: string;

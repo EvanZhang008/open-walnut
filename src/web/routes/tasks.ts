@@ -62,7 +62,7 @@ import {
   type TaskQueryTime,
 } from '../../core/task-query.js'
 import { VALID_PRIORITIES, type Task, type ProcessStatus, type SessionMode } from '../../core/types.js'
-import { parseQuickTask } from '../../core/quick-task-parse.js'
+import { parseQuickTask, quickParseEnabled, unparsedTask } from '../../core/quick-task-parse.js'
 import { buildProjectDigest, type ProjectDigest } from '../../core/quick-task-digest.js'
 import {
   SUGGEST_FIELDS,
@@ -605,6 +605,15 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
       new Intl.DateTimeFormat('en-US', { timeZone })
     } catch {
       res.status(400).json({ error: 'timeZone must be a valid IANA timezone' })
+      return
+    }
+
+    // Opt-in gate FIRST: buildProjectDigest walks every task, and the answer for a
+    // disabled parse does not depend on it. Answering here also keeps a window
+    // running a pre-gate bundle cheap (2ms) instead of letting it hold one of the
+    // browser's six connection slots for the full 10s model timeout.
+    if (!(await quickParseEnabled())) {
+      res.json(unparsedTask(text).parse)
       return
     }
 
