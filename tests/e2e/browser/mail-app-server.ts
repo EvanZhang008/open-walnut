@@ -29,6 +29,7 @@
  */
 
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -49,8 +50,13 @@ process.argv.push('--_ephemeral-child')
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
 
+// Reclaim siblings left by fixture servers that were SIGKILLed before their shutdown
+// handler ran, then claim this dir so the next run can tell it from debris.
+const { sweepStaleTmpDirs, writeOwnerPid } = await import('../../setup/stale-tmp.js')
+sweepStaleTmpDirs([{ prefix: 'walnut-mail-app-', name: /^walnut-mail-app-\d+-\d+$/, pidFrom: 'owner-file' }])
 await fs.rm(tmpBase, { recursive: true, force: true })
 await fs.mkdir(path.join(tmpBase, 'tasks'), { recursive: true })
+writeOwnerPid(tmpBase)
 await fs.mkdir(path.join(tmpBase, 'plugins'), { recursive: true })
 
 /**
@@ -124,15 +130,41 @@ const fixture = {
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`MAIL_FIXTURE_READY ${JSON.stringify(fixture)}`)
 
+let shuttingDown = false
 const shutdown = async () => {
-  await viteServer.close().catch(() => {})
-  await stopServer()
-  try {
-    const { localDaemon } = await import('../../../src/providers/local-daemon.js')
-    await localDaemon.stopIfIsolated()
-  } catch { /* best effort */ }
+  // SIGTERM arrives both directly and relayed by tsx; one teardown, not two.
+  if (shuttingDown) return
+  shuttingDown = true
+  const teardown = (async () => {
+    await viteServer.close().catch(() => {})
+    await stopServer()
+    try {
+      const { localDaemon } = await import('../../../src/providers/local-daemon.js')
+      await localDaemon.stopIfIsolated()
+    } catch { /* best effort */ }
+  })()
+  // Bounded: stopIfIsolated() polls the daemon pid for up to 30s while the spec
+  // SIGKILLs us at 15s; the rm must run while this process still can.
+  await Promise.race([teardown.catch(() => {}), new Promise((r) => setTimeout(r, 8_000))])
   await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {})
   process.exit(0)
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
+// Two other SIGTERM handlers in this process end it before `shutdown` gets past
+// its first await, leaving the isolated daemon and tmpBase behind — observed
+// 2026-09-18: two of these fixtures orphaned for 4-6h with their daemons, 25
+// `walnut-mail-app-*` homes in $TMPDIR. Same defect test-server.ts had:
+//  1. startServer() re-raises SIGTERM with the default disposition unless told an
+//     owner will exit after teardown.
+//  2. Vite's dev server registers `parentSigtermCallback` (also on stdin 'end'),
+//     which closes itself and process.exit()s. No opt-out API; unhooked by name.
+const { armGracefulSignalExit } = await import('../../../src/web/server.js')
+armGracefulSignalExit()
+for (const l of process.listeners('SIGTERM')) if (l.name === 'parentSigtermCallback') process.off('SIGTERM', l)
+for (const l of process.stdin.listeners('end')) if (l.name === 'parentSigtermCallback') process.stdin.off('end', l)
+// Last word on the tmpdir: startServer()'s own 'exit' handler appends a final log
+// line inside tmpBase after `shutdown` removed it. Registered after it, runs after it.
+process.on('exit', () => {
+  try { fsSync.rmSync(tmpBase, { recursive: true, force: true, maxRetries: 3 }) } catch { /* best effort */ }
+})
