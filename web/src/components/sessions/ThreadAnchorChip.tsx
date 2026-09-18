@@ -5,13 +5,15 @@ import type { ComposerThreadAnchor } from '@/utils/thread-tree';
  * The composer's thread chip: "↳ asking about: <passage>", sitting directly above
  * the input box.
  *
- * It is the one visible answer to "where will this message go?". Anchoring is
- * STICKY (a follow-up stays in the thread without re-selecting anything), which is
- * exactly the kind of hidden state that surprises people — so the chip stays until
- * it is dismissed, and the first one a browser ever shows says what sticky means.
+ * It is the one visible answer to "where will this message go?". In the timeline
+ * view the send CONSUMES it (one Ask, one anchored message; see SessionPanel's
+ * sendAnchored), so there is nothing hidden to explain. In the node view the chip
+ * is derived from the thread on screen and every send stays in it — that IS hidden
+ * state of the kind that surprises people, so the first such chip a browser shows
+ * says so (`sticky`).
  */
 
-/** Shown once per browser, next to the first chip that ever appears. */
+/** Shown once per browser, next to the first sticky chip that ever appears. */
 const TIP_KEY = 'walnut:thread-chip-tip-seen';
 
 function tipSeen(): boolean {
@@ -23,10 +25,12 @@ interface ThreadAnchorChipProps {
   /** hsl hue of the thread this anchor belongs to. */
   hue: number;
   onClear: () => void;
+  /** The chip survives the send (node view). Earns the one-time tip. */
+  sticky?: boolean;
 }
 
-export function ThreadAnchorChip({ anchor, hue, onClear }: ThreadAnchorChipProps) {
-  const [showTip, setShowTip] = useState(() => !tipSeen());
+export function ThreadAnchorChip({ anchor, hue, onClear, sticky = false }: ThreadAnchorChipProps) {
+  const [showTip, setShowTip] = useState(() => sticky && !tipSeen());
 
   const dismissTip = useCallback(() => {
     setShowTip(false);

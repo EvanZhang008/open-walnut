@@ -73,8 +73,8 @@ const STREAM_PHRASE = 'never blocks on a slow writer'
  *  for the wrong reason. */
 const STREAM_SESSION_ID = 'pw-voicesel2-session'
 const STREAM_TASK_ID = 'pw-task-voicesel2'
-const STICKY_SESSION_ID = 'pw-voicesel3-session'
-const STICKY_TASK_ID = 'pw-task-voicesel3'
+const SEND_SESSION_ID = 'pw-voicesel3-session'
+const SEND_TASK_ID = 'pw-task-voicesel3'
 const TREE_SESSION_ID = 'pw-voicesel4-session'
 const TREE_TASK_ID = 'pw-task-voicesel4'
 const STRAY_SESSION_ID = 'pw-voicesel5-session'
@@ -474,46 +474,47 @@ test.describe('Voice input keeps the selected passage', () => {
       await shot(page, '10-tree-mode-stands-down')
     })
 
-    test('a sticky anchor left by an earlier send stays through dictation; Ask on the held pill is what moves it', async ({ page }) => {
+    test('a send consumes the chip; dictation brings none back; Ask on the held pill is what makes the next one', async ({ page }) => {
       test.setTimeout(150_000)
       await page.context().grantPermissions(['microphone'])
       await stubSttStatus(page)
       await stubDictation(page)
 
-      // Own session: this one SENDS, and a sticky anchor is what the send path
-      // leaves behind.
+      // Own session: this one SENDS, and what the send path leaves behind is the
+      // question this test asks.
       await page.goto('/')
-      const panel = await openSession(page, STICKY_SESSION_ID, STICKY_TASK_ID)
+      const panel = await openSession(page, SEND_SESSION_ID, SEND_TASK_ID)
       const textarea = panel.locator('.chat-input-textarea').first()
       const chip = panel.locator('[data-testid="thread-anchor-chip"]')
 
-      // Ask about passage one, send it. Linear mode then keeps the anchor STICKY so a
-      // follow-up stays in the thread without re-selecting anything.
-      const pill = await selectPassage(page, panel, PHRASE, STICKY_SESSION_ID)
+      // Ask about passage one, send it. The send CONSUMES the chip (2026-09-18: "after
+      // I ask the question I want it automatically de-selected") — until then linear
+      // mode flipped it to sticky and the NEXT message went into the thread too. The
+      // anchor itself was recorded: the message is filed, the composer is free.
+      const pill = await selectPassage(page, panel, PHRASE, SEND_SESSION_ID)
       await pill.locator('[data-testid="quote-ask-btn"]').click()
       await expect(chip).toBeVisible()
       await textarea.click()
       await textarea.fill('and what does that cost')
       await textarea.press('Enter')
       await expect(textarea).toHaveValue('')
-      await expect(chip).toBeVisible()
-      expect((await chip.textContent()) ?? '', 'sticky, still naming passage one').toContain('rewrites the index')
+      await expect(chip, 'the send consumed the chip').toHaveCount(0)
+      await expect.poll(async () => (await threadAnchorsOf(page, SEND_SESSION_ID)).length).toBe(1)
       // Let the reply land first: rows arriving under a drag move the words out from
       // under the mouse (a run selected from the row above down to mid-paragraph).
       await expect(panel.locator('.session-history')).toContainText(REPLY_PHRASE, { timeout: 30_000 })
+      await expect(chip, 'and nothing brought it back at turn end').toHaveCount(0)
 
-      // A second passage, dictated. The sticky chip is the user's standing answer to
-      // "what am I asking about" and a highlight does not overrule it — the held pill
-      // offers the move, and Ask is the move.
-      const held = await selectPassage(page, panel, PHRASE2, STICKY_SESSION_ID)
+      // A second passage, dictated. A highlight is not a request: the composer stays
+      // un-aimed, the held pill offers the move, and Ask is the move.
+      const held = await selectPassage(page, panel, PHRASE2, SEND_SESSION_ID)
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      await expect(chip).toBeVisible()
-      expect((await chip.textContent()) ?? '', 'still sticky on passage one').toContain('rewrites the index')
+      await expect(chip, 'dictation made no chip').toHaveCount(0)
       await expect(held).toBeVisible()
       await held.locator('[data-testid="quote-ask-btn"]').click()
       await expect(chip).toContainText('only verifies checksums')
-      await shot(page, '07-sticky-anchor-moved-only-by-ask')
+      await shot(page, '07-chip-consumed-by-send-remade-only-by-ask')
     })
 
     test('a selection held inside a LIVE reply survives dictation, and the reply catches up after', async ({ page }) => {

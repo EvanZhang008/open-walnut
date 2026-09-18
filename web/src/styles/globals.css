@@ -33307,6 +33307,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .session-msg--threaded {
   /* Sub-threads read lighter: same branch, less weight. */
   --thread-bar: hsl(var(--thread-hue, 214) 70% 50% / 0.45);
+  position: relative;
   border-left: 3px solid var(--thread-bar);
   border-radius: 2px 0 0 2px;
   padding-left: 8px;
@@ -33314,6 +33315,19 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 .session-msg--threaded[data-thread-depth="1"] {
   --thread-bar: hsl(var(--thread-hue, 214) 70% 50%);
+}
+/* The bar is a way back to where the thread branches from: a press on this strip
+   (bar + padding, THREAD_BAR_HIT_PX in SessionChatHistory) jumps to the passage.
+   A pseudo-element only for the cursor — it cannot be a click target of its own,
+   so the wrapper's handler reads the press position instead. */
+.session-msg--threaded::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 11px;
+  cursor: pointer;
 }
 
 /* Hovering the thread's row in the outline tints its turns, which is how the rail
@@ -33325,17 +33339,36 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* "↳ <thread>" above a user bubble. Same scale as .msg-time: it labels the
    message, it is not part of it. Right-anchored, because the bubble it labels is
    (`.session-msg-user` is margin-left:auto) — a left-aligned tag reads as a
-   caption for the assistant reply above instead. */
+   caption for the assistant reply above instead. A BUTTON: it goes to the passage
+   the thread is about (a label that named a place without going there was the
+   2026-09-18 report), so it wears the button reset and a hover underline. */
 .session-msg-thread-tag {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
-  margin: 0 0 2px;
+  margin: 0 0 2px auto;
+  padding: 0 2px;
+  max-width: 100%;
+  border: 0;
+  border-radius: 3px;
+  background: none;
   color: hsl(var(--thread-hue, 214) 55% var(--thread-ink-l));
+  font: inherit;
   font-size: 10.5px;
   line-height: 1.3;
   min-width: 0;
+  cursor: pointer;
+  text-align: right;
+}
+.session-msg-thread-tag:hover,
+.session-msg-thread-tag:focus-visible {
+  background: hsl(var(--thread-hue, 214) 70% 50% / 0.1);
+  outline: none;
+}
+.session-msg-thread-tag:hover .session-msg-thread-tag-label,
+.session-msg-thread-tag:focus-visible .session-msg-thread-tag-label {
+  text-decoration: underline;
 }
 .session-msg-thread-tag-label {
   overflow: hidden;

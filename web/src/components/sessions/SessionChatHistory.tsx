@@ -393,6 +393,18 @@ const TRIPWIRE_SETTLE_MS = (typeof window !== 'undefined'
  *  on the child keys does not re-run on every render of a leaf thread. */
 const NO_CHILD_KEYS: string[] = [];
 
+/** Width of a threaded row's clickable gutter strip: the 3px bar plus the 8px
+ *  padding beside it (`.session-msg--threaded` in globals.css, whose `::before`
+ *  paints the pointer cursor over exactly this run). */
+const THREAD_BAR_HIT_PX = 11;
+
+/** Tooltip of a turn's `↳` tag: what the click does, then the WHOLE passage (the
+ *  tag's label is one clipped line, and the reader must be able to check which
+ *  passage without going anywhere). */
+function threadTagTitle(passage: string): string {
+  return `Go to the passage this thread is about:\n“${passage}”`;
+}
+
 export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus }: SessionChatHistoryProps) {
   // Slow-commit detector: renderT0 is per-render-pass (closure), the layout
   // effect runs after THAT pass commits — the delta is the synchronous
@@ -1138,26 +1150,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     [rowThreadInfo],
   );
 
-  /**
-   * Gutter-bar props for ONE row wrapper.
-   *
-   * Applied to every wrapper kind (plain rows, merged tool runs, system runs) so a
-   * thread's bar is CONTINUOUS: the timeline groups an assistant turn's tool calls
-   * into their own wrapper, and decorating only the plain rows drew a dashed bar
-   * with gaps wherever the grouping happened to fall.
-   */
-  const threadWrapperProps = useCallback((
-    rowId: string | undefined, baseClass?: string,
-  ): Record<string, unknown> => {
-    const info = rowThreadInfo(rowId);
-    if (!info || info.depth < 1) return baseClass ? { className: baseClass } : {};
-    return {
-      className: `${baseClass ? `${baseClass} ` : ''}session-msg--threaded${threadsApi.hoverThreadKey === info.key ? ' is-thread-hover' : ''}`,
-      'data-thread-depth': info.depth,
-      style: { ['--thread-hue' as string]: info.hue } as React.CSSProperties,
-    };
-  }, [rowThreadInfo, threadsApi.hoverThreadKey]);
-
   // ── Node view: which thread is on screen ───────────────────────────────────
   // The KEY lives on the context (the panel owns it) because the composer's anchor
   // is derived from it — see SessionPanel's `effectiveAnchor`. This component is the
@@ -1196,13 +1188,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    * next message go" — and the chip's `×` (which navigates to the top level) would
    * fight it forever.
    */
-  const navigateThread = useCallback((key: string) => {
+  const navigateThread = useCallback((key: string, opts?: { landing?: 'newest' | 'caller' }) => {
     userNavigated.current = true;
     setCurrentKey(key);
     setExpandedTurns(new Set());
     // The thread's newest turn is where the reading continues, and the composer
     // sits right under it. Chased across two frames because the rows this view
     // shows change completely on a navigation.
+    //
+    // `landing: 'caller'` — the caller is about to place the view itself (a jump
+    // to a passage in the thread being opened). Its own two-frame chase would run
+    // right after this one, and this one's `isAtBottom = true` would then hand the
+    // view straight back to follow-bottom on the next growth, undoing the jump
+    // (measured: the passage rendered 2264px above the centre it was scrolled to).
+    if (opts?.landing === 'caller') return;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const el = containerRef.current;
       if (!el) return;
@@ -1638,23 +1637,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     containerRef, pinsApi.pins, quotePanelKey, messages.length + truncationOffset,
   );
 
-  /** Jump to a pin: reveal its message (the render window is a tail slice), then
-   *  centre it — the PASSAGE for a quote pin, the row for a whole-message pin —
-   *  and flash it. The pre-jump scrollTop is remembered so "Back" can undo a jump;
-   *  losing your reading place is the cost of a look at a pin otherwise. */
-  const jumpToPin = useCallback((pinKey: string) => {
+  /** Jump to a place in the transcript: reveal its message (the render window is
+   *  a tail slice), then centre it — the PASSAGE when there is one, the row
+   *  otherwise — and flash it. The pre-jump scrollTop is remembered so "Back" can
+   *  undo a jump; losing your reading place is the cost of a look otherwise.
+   *  Shared by the outline (pins and thread rows) and by a threaded turn's own
+   *  `↳` tag / gutter bar, which all name a place the same way. `via` only labels
+   *  the log lines. */
+  const jumpToPlace = useCallback((msgId: string, quote: SessionPinnedQuote | undefined, via: string) => {
     const el = containerRef.current;
-    if (!el || !pinKey) return;
-    const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinKey);
-    // A thread row is a place in the transcript with no pin behind it: the SAME
-    // jump, resolved through the passage the thread hangs off instead of a pin's.
-    const threadTarget = pin ? undefined : threadEntryTargets.get(pinKey);
-    const msgId = pin?.msgId ?? threadTarget?.msgId;
-    const quote = pin?.quote ?? threadTarget?.quote;
-    if (!msgId) return;
+    if (!el || !msgId) return;
     const index = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === msgId);
     if (index < 0) {
-      log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId, pinKey });
+      log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId, via });
       return;
     }
     jumpReturnTop.current = el.scrollTop;
@@ -1692,7 +1687,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           // Passage gone (message edited, /compact rewrote it): the row is still
           // the right place to land, so fall through to the row flash.
           log.info('session', 'pin jump: passage did not locate — falling back to the row', {
-            sessionId, msgId, pinKey,
+            sessionId, msgId, via,
           });
         }
         target.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1700,7 +1695,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         setTimeout(() => target.classList.remove('user-messages-highlight'), 1500);
       });
     });
-  }, [messages, truncationOffset, sessionId, pinsApi.pins, quotePaint, threadEntryTargets]);
+  }, [messages, truncationOffset, sessionId, quotePaint]);
+
+  /** An outline row's jump: a pin's passage, or — for a thread row, which is a
+   *  place in the transcript with no pin behind it — the passage the thread hangs
+   *  off (resolved through `threadEntryTargets`). */
+  const jumpToPin = useCallback((pinKey: string) => {
+    if (!pinKey) return;
+    const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinKey);
+    const threadTarget = pin ? undefined : threadEntryTargets.get(pinKey);
+    const msgId = pin?.msgId ?? threadTarget?.msgId;
+    if (!msgId) return;
+    jumpToPlace(msgId, pin?.quote ?? threadTarget?.quote, pinKey);
+  }, [pinsApi.pins, threadEntryTargets, jumpToPlace]);
 
   const jumpBack = useCallback(() => {
     const el = containerRef.current;
@@ -1728,10 +1735,73 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         return;
       }
       const key = rowThreadKey(entry?.msgId);
-      if (key !== currentKeyRef.current) navigateThread(key);
+      if (key !== currentKeyRef.current) navigateThread(key, { landing: 'caller' });
     }
     jumpToPin(pinKey);
   }, [treeMode, tocEntries, navigateThread, rowThreadKey, jumpToPin]);
+
+  /**
+   * "Where does this thread branch from?" — the click on a threaded turn's own
+   * `↳ <passage>` tag or its gutter bar. Lands on the PASSAGE the thread hangs off
+   * (the reply the user selected in and pressed Ask), the same place the outline's
+   * thread row jumps to; a tag that only named the passage without going there was
+   * the 2026-09-18 report ("if it branches out from a place, it needs to be
+   * clickable").
+   *
+   * Resolved from the tree when it knows the thread, else from the row's own
+   * anchor: a just-sent bubble wears its tag before history has absorbed the row,
+   * and its anchor already names the parent. In the node view the passage lives in
+   * the PARENT thread, so the view goes there first (same two-frame chase as an
+   * outline row that lands in another thread).
+   */
+  const jumpToThreadOrigin = useCallback((threadKey: string, rowId: string | undefined) => {
+    const node = threadTree.byKey.get(threadKey);
+    const anchor = rowId ? anchorByRowId.get(rowId) : undefined;
+    const parent = node?.parent ?? anchor?.parent;
+    if (!parent) return;
+    const quote = node ? node.quote : anchor?.quote;
+    if (treeMode) {
+      const parentKey = node?.parentKey ?? rowThreadKey(parent);
+      if (parentKey !== currentKeyRef.current) navigateThread(parentKey, { landing: 'caller' });
+    }
+    jumpToPlace(parent, quote, `thread-origin:${threadKey}`);
+  }, [threadTree, anchorByRowId, treeMode, rowThreadKey, navigateThread, jumpToPlace]);
+
+  /**
+   * Gutter-bar click for ONE row wrapper: only a press on the wrapper's own box
+   * inside the bar's strip (border + padding, `THREAD_BAR_HIT_PX`) counts — the
+   * message content is a child and keeps its own clicks (links, images, the
+   * selection pill), and the empty run beside a user bubble is the wrapper too
+   * but not the bar.
+   */
+  const onThreadBarClick = useCallback((e: React.MouseEvent<HTMLDivElement>, threadKey: string, rowId: string | undefined) => {
+    if (e.target !== e.currentTarget) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (e.clientX > rect.left + THREAD_BAR_HIT_PX) return;
+    jumpToThreadOrigin(threadKey, rowId);
+  }, [jumpToThreadOrigin]);
+
+  /**
+   * Gutter-bar props for ONE row wrapper.
+   *
+   * Applied to every wrapper kind (plain rows, merged tool runs, system runs) so a
+   * thread's bar is CONTINUOUS: the timeline groups an assistant turn's tool calls
+   * into their own wrapper, and decorating only the plain rows drew a dashed bar
+   * with gaps wherever the grouping happened to fall. The bar is also the turn's
+   * way back to where its thread branches from (`onThreadBarClick`).
+   */
+  const threadWrapperProps = useCallback((
+    rowId: string | undefined, baseClass?: string,
+  ): Record<string, unknown> => {
+    const info = rowThreadInfo(rowId);
+    if (!info || info.depth < 1) return baseClass ? { className: baseClass } : {};
+    return {
+      className: `${baseClass ? `${baseClass} ` : ''}session-msg--threaded${threadsApi.hoverThreadKey === info.key ? ' is-thread-hover' : ''}`,
+      'data-thread-depth': info.depth,
+      style: { ['--thread-hue' as string]: info.hue } as React.CSSProperties,
+      onClick: (e: React.MouseEvent<HTMLDivElement>) => onThreadBarClick(e, info.key, rowId),
+    };
+  }, [rowThreadInfo, threadsApi.hoverThreadKey, onThreadBarClick]);
 
   // Scroll handler: track whether user is near bottom.
   // Ignores scroll events caused by container resizes (which corrupt isAtBottom).
@@ -2930,10 +3000,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           </div>
         )}
         {threaded && threadNode && m.role === 'user' && (
-          <div className="session-msg-thread-tag" title={threadNode.quote?.exact ?? threadNode.label}>
+          <button
+            type="button"
+            className="session-msg-thread-tag"
+            title={threadTagTitle(threadNode.quote?.exact ?? threadNode.label)}
+            onClick={() => jumpToThreadOrigin(threaded.key, rowId)}
+          >
             <span aria-hidden="true">↳</span>
             <span className="session-msg-thread-tag-label">{threadNode.quoteLabel ?? threadNode.label}</span>
-          </div>
+          </button>
         )}
         <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
       </div>
@@ -3454,10 +3529,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               return (
                 <div key={`u-${m.queueId}`} {...threadWrapperProps(optimisticRowId, wrapperClass)}>
                   {optimisticThread && optimisticThread.depth >= 1 && (
-                    <div className="session-msg-thread-tag" title={optimisticLabel}>
+                    <button
+                      type="button"
+                      className="session-msg-thread-tag"
+                      title={threadTagTitle(
+                        optimisticNode?.quote?.exact
+                          ?? anchorByRowId.get(optimisticRowId ?? '')?.quote?.exact
+                          ?? optimisticLabel,
+                      )}
+                      onClick={() => jumpToThreadOrigin(optimisticThread.key, optimisticRowId)}
+                    >
                       <span aria-hidden="true">↳</span>
                       <span className="session-msg-thread-tag-label">{optimisticLabel}</span>
-                    </div>
+                    </button>
                   )}
                   <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                   <OptimisticImagePreviews images={m.images} />

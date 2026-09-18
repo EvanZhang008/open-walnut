@@ -305,6 +305,14 @@ interface StreamToolProgressEvent {
   type: 'tool_progress'
 }
 
+/** command_lifecycle (CLI 2.1.25x): brackets one turn — `started` right before
+ *  its `system/init`, `completed` after its `result`. Plumbing, never rendered. */
+interface StreamCommandLifecycleEvent {
+  type: 'command_lifecycle'
+  command_uuid?: string
+  state?: 'started' | 'completed' | string
+}
+
 /** control_cancel_request: the CLI WITHDRAWS a pending control_request it
  *  previously emitted (turn aborted / resume / restart). Must clear the
  *  matching pending permission or the session sticks "Waiting" forever. */
@@ -313,7 +321,7 @@ interface StreamControlCancelRequestEvent {
   request_id?: string
 }
 
-type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent | StreamToolProgressEvent | StreamControlCancelRequestEvent
+type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent | StreamToolProgressEvent | StreamCommandLifecycleEvent | StreamControlCancelRequestEvent
 
 /**
  * Map a CLI permissionMode string (JSONL/stream system events) to our internal
@@ -5800,6 +5808,15 @@ export class ClaudeCodeSession {
         // Heartbeat progress marker for long-running tools, emitted about once
         // every 30 seconds per tool. It has no user value as a timeline block;
         // swallowing it keeps it out of the unknown-event catch-all.
+        break
+      }
+
+      case 'command_lifecycle': {
+        // Per-turn bracket added in CLI 2.1.25x: `{state:'started'}` lands right
+        // before the turn's `system/init`, `{state:'completed'}` after its result.
+        // Protocol plumbing like the control_* family, not conversation content —
+        // through the catch-all it rendered an "Unknown Claude event" card on
+        // every turn (reported 2026-09-18).
         break
       }
 

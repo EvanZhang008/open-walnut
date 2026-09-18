@@ -763,6 +763,8 @@ if (outputFormat === 'stream-json') {
     //     "stream-partial-unknown"        → includes a made-up stream_event type
     //                                       and a made-up top-level JSONL type
     //     "stream-partial-tool-progress"  → tool_progress heartbeat (must NOT reach UI)
+    //     "stream-partial-command-lifecycle" → command_lifecycle started/completed
+    //                                       bracket (CLI 2.1.25x; must NOT reach UI)
     //     "stream-partial-signature"      → signature_delta (must NOT reach UI)
     //
     //   The full text streamed is 'Hello, world!' split into small deltas.
@@ -772,6 +774,16 @@ if (outputFormat === 'stream-json') {
 
       function emitStream(line) { process.stdout.write(JSON.stringify(line) + '\n'); }
       function wrap(ev) { return { type: 'stream_event', event: ev, session_id: outputSessionId, parent_tool_use_id: null }; }
+
+      // CLI 2.1.25x brackets every turn: `started` lands before the turn's own
+      // events, `completed` AFTER the result line (real order, captured from a
+      // 2.1.258 stream). Neither is conversation content.
+      const commandUuid = 'cmd-mock-' + outputSessionId.slice(0, 6);
+      const lifecycle = (state) => ({
+        type: 'command_lifecycle', command_uuid: commandUuid, state,
+        uuid: `mock-lifecycle-${state}`, session_id: outputSessionId,
+      });
+      if (mode === 'command-lifecycle') emitStream(lifecycle('started'));
 
       // message_start
       emitStream(wrap({ type: 'message_start', message: { id: msgId, role: 'assistant', content: [], model: modelFlag || 'mock-model', usage: { input_tokens: 10, output_tokens: 0 } } }));
@@ -973,7 +985,9 @@ if (outputFormat === 'stream-json') {
         total_cost_usd: 0.001,
         usage: { input_tokens: 10, output_tokens: 10 },
       };
-      process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
+      const tail = JSON.stringify(resultEvent) + '\n'
+        + (mode === 'command-lifecycle' ? JSON.stringify(lifecycle('completed')) + '\n' : '');
+      process.stdout.write(tail, () => process.exit(0));
       return; // skip default assistant+result tail
     }
 

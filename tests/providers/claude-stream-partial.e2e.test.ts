@@ -246,6 +246,23 @@ describe('stream_event pipeline: drop rules', () => {
     expect(c.unknownEvents.filter(u => u.eventType === 'tool_progress')).toHaveLength(0);
   });
 
+  it('swallows the command_lifecycle turn bracket (started AND completed) without SESSION_UNKNOWN_EVENT', async () => {
+    // CLI 2.1.258 wraps every turn in `command_lifecycle` markers; through the
+    // catch-all each one became an "Unknown Claude event" card (2026-09-18).
+    // `completed` arrives AFTER the result line, so the collector has to wait
+    // for the process to drain rather than stop at the result.
+    const c = makeCollector();
+    const session = newSession('task-cmd-lifecycle');
+    session.send('stream-partial-command-lifecycle');
+
+    await waitForResult(c);
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(c.unknownEvents.filter(u => u.eventType === 'command_lifecycle')).toHaveLength(0);
+    // The turn itself still streamed: the bracket must not eat its content.
+    expect(c.textDeltas.join('')).toBe('Hello, world!');
+  });
+
   it('signature_delta never reaches any bus channel', async () => {
     const c = makeCollector();
     const session = newSession('task-sig');

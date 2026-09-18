@@ -5,11 +5,12 @@
  * this spec covers both plus the gesture that creates an anchor:
  *
  *  · B (light) — the timeline is untouched; an anchored turn gains a gutter bar
- *    (`.session-msg--threaded[data-thread-depth]`) and a `↳ <passage>` tag, and the
- *    outline rail gains one indented row per thread. Asserted from PATCHed anchors
- *    rather than from a send, because the fixture session has no live CLI: the
- *    anchors are the input to the renderers, and a send is a different contract
- *    (covered by the unit + live layers);
+ *    (`.session-msg--threaded[data-thread-depth]`) and a `↳ <passage>` tag — both
+ *    of them the turn's way BACK to the passage it is about — and the outline rail
+ *    gains one indented row per thread. Asserted from PATCHed anchors rather than
+ *    from a send: the anchors are the input to the renderers. The one test that
+ *    does send (Ask → send → tag) has its own fixture session, because the mock
+ *    CLI's reply lands in the stream file and would shift every count here;
  *  · the Ask pill → composer chip → `×` loop, which is the only way a person makes
  *    an anchor. Driven with a REAL mouse drag, the way `session-quote-pin.spec.ts`
  *    does: the quote is captured when the SELECTION CHANGES (main.tsx clears the
@@ -641,5 +642,240 @@ test.describe('Conversation threads', () => {
     await expect(history).toHaveAttribute('data-view-mode', 'linear')
     await expect(history).not.toHaveAttribute('data-thread-map', 'panel')
     await expect(panel.locator('.session-toc-rail')).toBeVisible()
+  })
+
+  /**
+   * The turn's OWN way back to where its thread branches from. Reported 2026-09-18
+   * with a screenshot of a `↳ ExternalName` tag: "this can't be clicked — if it
+   * branches out from a place, it needs to be clickable". The tag and the gutter
+   * bar now both go to the passage the thread hangs off, exactly where the
+   * outline's thread row goes; the message content inside the bar does not.
+   *
+   * Same far anchor as the map-row test: the passage (reply 5) sits ~37 rows above
+   * the question (ask 24), outside the initial render window, so a jump that only
+   * pretended to move would be caught.
+   */
+  test('the ↳ tag and the gutter bar on a question jump to the passage it is about; its content does not', async ({ page, request }) => {
+    const FAR_QUOTE = 'filler reply 5'
+    await patchAnchors(request, [{
+      msgId: askUuid(24),
+      parent: replyUuid(5),
+      quote: { exact: FAR_QUOTE },
+      source: 'selection',
+      at: new Date(Date.now() - 10_000).toISOString(),
+    }])
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openSession(page)
+    const history = panel.locator('.session-history')
+    const question = rowWrap(panel, askUuid(24))
+
+    /** How far each row's centre is from the timeline's centre (null = not rendered). */
+    const centred = () => history.evaluate((el, ids) => {
+      const box = el.getBoundingClientRect()
+      const centre = box.top + box.height / 2
+      const distance = (id: string): number | null => {
+        const node = el.querySelector(`[data-message-id="${id}"]`)
+        if (!node) return null
+        const r = node.getBoundingClientRect()
+        return Math.abs((r.top + r.height / 2) - centre)
+      }
+      return { parent: distance(ids[0]), question: distance(ids[1]), height: box.height, top: el.scrollTop }
+    }, [replyUuid(5), askUuid(24)])
+    /** The timeline is parked at the bottom, so the question row is on screen. */
+    const backToTheQuestion = async () => {
+      for (let i = 0; i < 12; i++) {
+        if (await question.isVisible()) break
+        await wheel(page, panel, 4000)
+      }
+      await expect(question).toBeVisible()
+      await page.waitForTimeout(300)
+    }
+
+    // 1. The tag is a BUTTON that says what it does and names the whole passage:
+    //    an affordance, not a caption.
+    const tag = question.locator('.session-msg-thread-tag')
+    await expect(tag).toBeVisible()
+    expect(await tag.evaluate((el) => el.tagName)).toBe('BUTTON')
+    expect(await tag.getAttribute('title')).toContain(FAR_QUOTE)
+    expect(await tag.getAttribute('title')).toMatch(/passage/i)
+    expect(await tag.evaluate((el) => getComputedStyle(el).cursor)).toBe('pointer')
+
+    // 2. Clicking the message CONTENT of a threaded turn is not a jump: the bar and
+    //    the tag are the affordance, the bubble keeps its own clicks (links, images,
+    //    the selection pill).
+    const before = await centred()
+    await question.locator('.session-msg-content').first().click()
+    await page.waitForTimeout(700)
+    const untouched = await centred()
+    // Not byte-equal: hovering a row reveals its action strip, which in WebKit
+    // takes a line of layout and nudges a bottom-parked timeline by ~22px. A jump
+    // here would be ~2000px.
+    expect(Math.abs(untouched.top - before.top), 'a click on the bubble is not a jump').toBeLessThan(80)
+    expect(untouched.parent === null || untouched.parent > untouched.height).toBe(true)
+    await expect(question).toBeVisible()
+
+    // 3. The tag jumps to the PASSAGE (reply 5), not to the question.
+    await tag.click()
+    await page.waitForTimeout(1200)
+    const afterTag = await centred()
+    expect(afterTag.parent, 'the anchored reply rendered after the jump').not.toBeNull()
+    expect(afterTag.parent!).toBeLessThan(afterTag.height / 2)
+    expect(afterTag.question === null || afterTag.question > afterTag.height).toBe(true)
+    await shot(page, '11-tag-jump-to-passage')
+
+    // 4. The gutter bar is the same way back. Pressed on the strip itself (bar +
+    //    padding, left of the content), at the bubble's height.
+    await backToTheQuestion()
+    const box = (await question.boundingBox())!
+    expect(await question.evaluate((el) => getComputedStyle(el, '::before').cursor)).toBe('pointer')
+    await page.mouse.click(box.x + 5, box.y + box.height / 2)
+    await page.waitForTimeout(1200)
+    const afterBar = await centred()
+    expect(afterBar.parent, 'the anchored reply rendered after the bar click').not.toBeNull()
+    expect(afterBar.parent!).toBeLessThan(afterBar.height / 2)
+    expect(afterBar.question === null || afterBar.question > afterBar.height).toBe(true)
+    await shot(page, '12-bar-jump-to-passage')
+  })
+
+  /**
+   * The same tag in the node view. There the passage lives in the PARENT thread
+   * (the turns on screen are the child's), so the click is a navigation first and a
+   * jump second: the view goes back to the parent and lands on the passage.
+   */
+  test('in tree mode the ↳ tag returns to the parent thread and lands on the passage', async ({ page, request }) => {
+    const FAR_QUOTE = 'filler reply 5'
+    await patchAnchors(request, [{
+      msgId: askUuid(24),
+      parent: replyUuid(5),
+      quote: { exact: FAR_QUOTE },
+      source: 'selection',
+      at: new Date(Date.now() - 10_000).toISOString(),
+    }])
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openSession(page)
+    const history = panel.locator('.session-history')
+
+    await panel.locator('.session-view-toggle-btn[data-view="tree"]').click()
+    await expect(history).toHaveAttribute('data-view-mode', 'tree')
+    // The node view follows the newest message, which is the thread's own question.
+    await expect(panel.locator('.thread-crumb')).toHaveCount(2)
+    await expect(panel.locator('.thread-crumb.is-current')).toHaveText(FAR_QUOTE)
+    const tag = rowWrap(panel, askUuid(24)).locator('.session-msg-thread-tag')
+    await expect(tag).toBeVisible()
+
+    await tag.click()
+    // Back at the top level (the parent thread)…
+    await expect(panel.locator('.thread-crumb')).toHaveCount(1)
+    await expect(panel.locator('.thread-crumb.is-current')).toHaveText('Top level')
+    await page.waitForTimeout(1200)
+    // …centred on the passage, with the question's turn out of the DOM (it belongs
+    // to the child thread).
+    const seen = await history.evaluate((el, ids) => {
+      const box = el.getBoundingClientRect()
+      const centre = box.top + box.height / 2
+      const distance = (id: string): number | null => {
+        const node = el.querySelector(`[data-message-id="${id}"]`)
+        if (!node) return null
+        const r = node.getBoundingClientRect()
+        return Math.abs((r.top + r.height / 2) - centre)
+      }
+      return { parent: distance(ids[0]), question: distance(ids[1]), height: box.height }
+    }, [replyUuid(5), askUuid(24)])
+    expect(seen.parent, 'the anchored reply rendered in the parent thread').not.toBeNull()
+    expect(seen.parent!).toBeLessThan(seen.height / 2)
+    expect(seen.question).toBeNull()
+    await shot(page, '13-tree-tag-back-to-parent')
+  })
+
+  /**
+   * The whole loop through a REAL send (own fixture session: the mock CLI's reply is
+   * appended to the stream file and would shift every count above). Reported
+   * 2026-09-18: "after I ask the question I want it automatically de-selected" —
+   * the chip used to flip to sticky after the send, and the next message went into
+   * the thread whether or not it was about the passage.
+   */
+  test('Ask → send: the chip is consumed, the bubble wears a tag that leads back, and the next message is top level', async ({ page, request }) => {
+    const SEND_SESSION = 'pw-threads-send-session'
+    const SEND_TASK = 'pw-task-threads-send'
+    const reset = await request.patch(`/api/sessions/${SEND_SESSION}`, {
+      data: { pinned_messages: [], thread_anchors: [] },
+    })
+    expect(reset.ok()).toBe(true)
+    const anchorsOf = async () => {
+      const res = await request.get(`/api/sessions/${SEND_SESSION}`)
+      expect(res.ok()).toBe(true)
+      return ((await res.json()).session.threadAnchors ?? []) as unknown[]
+    }
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = page.locator(`.session-panel[data-session-id="${SEND_SESSION}"]`)
+    await page.locator('.todo-search-input').fill(SEND_SESSION)
+    const task = page.locator(`.todo-panel-item[data-task-id="${SEND_TASK}"]`)
+    await expect(task).toBeVisible()
+    await task.locator('.todo-item-title').click()
+    await expect(panel).toBeVisible()
+    const history = panel.locator('.session-history')
+    await expect(history).toContainText(PARAGRAPH, { timeout: 20000 })
+    const textarea = panel.locator('.chat-input-textarea').first()
+    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
+    const tags = panel.locator('.session-msg-thread-tag')
+
+    // 1. Ask about a passage, type, send.
+    await centreRow(page, panel, panel.locator('.session-msg', { hasText: PARAGRAPH }).first())
+    await dragSelect(page, PHRASE)
+    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+    await expect(chip).toBeVisible()
+    await textarea.click()
+    await textarea.fill('and what does that cost')
+    await textarea.press('Enter')
+    await expect(textarea).toHaveValue('')
+
+    // 2. The send consumed the chip; the anchor is recorded; the bubble wears the
+    //    tag in the same frame (its pre-assigned uuid is the anchor's key).
+    await expect(chip, 'the send consumed the chip').toHaveCount(0)
+    // The anchor PATCH is optimistic and rides its own request.
+    await expect.poll(async () => (await anchorsOf()).length).toBe(1)
+    await expect(tags).toHaveCount(1)
+    await expect(tags.first()).toContainText('rewrites the index')
+    await shot(page, '14-sent-chip-gone-tag-on')
+
+    // 3. The reply lands; history absorbs the bubble; still ONE tag (the persisted
+    //    row's, replacing the optimistic one — never both).
+    await expect(history).toContainText('processed your message', { timeout: 30_000 })
+    await expect(tags).toHaveCount(1)
+
+    // 4. A follow-up with no selection is a TOP-LEVEL message: no chip, no new
+    //    anchor, no second tag. (Before: filed under the passage by the sticky chip.)
+    await textarea.click()
+    await textarea.fill('and one more thing')
+    await textarea.press('Enter')
+    await expect(textarea).toHaveValue('')
+    await expect(chip).toHaveCount(0)
+    await expect(history).toContainText('and one more thing')
+    expect(await anchorsOf()).toHaveLength(1)
+    await expect(tags).toHaveCount(1)
+
+    // 5. The tag on the persisted bubble leads back to the passage: the paragraph
+    //    is scrolled to the middle and the view moved to get there.
+    await expect(history).toContainText('processed your message', { timeout: 30_000 })
+    const before = await history.evaluate((el) => el.scrollTop)
+    await tags.first().click()
+    await page.waitForTimeout(1200)
+    const seen = await history.evaluate((el, needle) => {
+      const box = el.getBoundingClientRect()
+      const centre = box.top + box.height / 2
+      const row = Array.from(el.querySelectorAll('[data-message-id] .session-msg-content'))
+        .find((n) => (n.textContent ?? '').includes(needle))?.closest('[data-message-id]')
+      if (!row) return null
+      const r = row.getBoundingClientRect()
+      return { distance: Math.abs((r.top + r.height / 2) - centre), height: box.height, top: el.scrollTop }
+    }, PARAGRAPH)
+    expect(seen, 'the paragraph is rendered').not.toBeNull()
+    expect(seen!.distance).toBeLessThan(seen!.height / 2)
+    expect(seen!.top).not.toBe(before)
+    await shot(page, '15-tag-leads-back-after-send')
   })
 })

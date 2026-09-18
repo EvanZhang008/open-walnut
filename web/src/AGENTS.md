@@ -131,14 +131,19 @@ still live on the client.
   persists the user line under exactly that uuid, its own stream-json contract), and names the
   reply it hangs off by that row's msgId (an API `msg_…` id on real transcripts, so never gate a
   parent on the v4 shape). Everything else is derived: `utils/thread-tree.ts` is the only model
-  (thread key = parent + passage; a sticky follow-up copies the anchor verbatim, which is what
-  keeps it in the same thread), the rail / gutter / `↳` tag in linear mode and the node view in
-  tree mode are two renderers of that tree. Tree mode FILTERS the existing timeline items inside
-  `SessionChatHistory` by row thread; it must never grow a second row renderer or history/stream
-  pipeline. Anything the send adds for the model (the quoted passage, the one-line "Back to the
-  earlier thread about …" re-orientation) is composed into the visible message text
-  (`composeAnchoredText`), never a hidden side channel. Ratchets: `tests/web/thread-tree.test.ts`,
-  `tests/e2e/browser/session-threads.spec.ts`.
+  (thread key = parent + passage; a follow-up filed in the same thread, from the node view or an
+  outline row's click, copies the anchor verbatim, which is what keeps it in the same thread), the
+  rail / gutter / `↳` tag in linear mode and the node view in tree mode are two renderers of that
+  tree. Tree mode FILTERS the existing timeline items inside `SessionChatHistory` by row thread;
+  it must never grow a second row renderer or history/stream pipeline. Anything the send adds for
+  the model (the quoted passage, the one-line "Back to the earlier thread about …"
+  re-orientation) is composed into the visible message text (`composeAnchoredText`), never a
+  hidden side channel. **The composer chip is consumed by the send** (one Ask, one anchored
+  message; 2026-09-18 user call, the same "a leftover state is not a request" rule as the quote
+  pill), and in the node view it is DERIVED from the thread on screen, never stored. **Every mark
+  a thread paints is also the way back to its passage**: the `↳` tag is a button and the gutter
+  bar's strip is clickable (`jumpToThreadOrigin`), landing where the outline's thread row lands.
+  Ratchets: `tests/web/thread-tree.test.ts`, `tests/e2e/browser/session-threads.spec.ts`.
 - **The session "/" palette lists what the CLI advertised, not what Walnut found.** Every
   `system/init` line carries `slash_commands` (already filtered by the CLI to what works in `-p`
   mode); `ClaudeCodeSession` captures it and `GET /api/sessions/:id/slash-commands` serves it,

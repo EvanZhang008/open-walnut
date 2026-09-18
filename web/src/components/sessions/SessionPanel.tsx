@@ -1353,11 +1353,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
    *     an anchor whose row never materialises is invisible by definition, whereas
    *     removing it would file the retried message at the top level while the chip
    *     still promised a thread;
-   *  4. in LINEAR mode the chip flips to 'sticky' and stays, because the next
-   *     message almost always belongs to the same thread; the × is how you leave.
-   *     In TREE mode there is nothing to flip — the anchor is derived from the
-   *     thread on screen (`effectiveAnchor`), and the only thing a send consumes is
-   *     a pending Ask, whose passage must not be quoted a second time.
+   *  4. the send CONSUMES the stored chip. One Ask, one anchored message: the next
+   *     message is the user's to aim again (the pill's Ask, an outline row), never
+   *     filed under a passage by a chip left over from the last question. Until
+   *     2026-09-18 linear mode flipped the chip to 'sticky' instead and kept it,
+   *     and the user asked for it to be "automatically de-selected" after asking —
+   *     the same rule as the quote pill's (a residual state is not a request). It
+   *     is dropped only on SUCCESS, so a failed send still shows what it was about
+   *     and Retry has the same anchor. In TREE mode the anchor is derived from the
+   *     thread on screen (`effectiveAnchor`), so the composer stays pointed at the
+   *     thread you are reading; what the send consumes there is the pending Ask,
+   *     whose passage must not be quoted a second time.
    *
    * The anchor read here is ALWAYS `effectiveAnchor`: the composed text (including
    * the "(Back to the earlier thread …)" line, which still applies whenever the
@@ -1389,18 +1395,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     } else {
       log.warn('session-panel', 'no crypto.randomUUID — sending without a thread anchor', { sessionId });
     }
-    // Linear: sticky from here on, so a follow-up with no selection stays in this
-    // thread. Tree: the derived anchor already keeps the composer in the thread on
-    // screen, so the only stored state is the pending Ask — dropped on success, so
-    // the passage is quoted exactly once, and KEPT on failure so Retry still has it.
-    if (viewMode === 'tree') {
-      const ok = await dispatch(sessionId, text, images, userUuid ? { userUuid } : undefined);
-      if (ok && composerAnchor) setComposerAnchor(null);
-      return ok;
-    }
-    if (anchor.source !== 'sticky') setComposerAnchor({ ...anchor, source: 'sticky' });
-    return dispatch(sessionId, text, images, userUuid ? { userUuid } : undefined);
-  }, [composerAnchor, viewMode, interruptSend, send, sessionId, setComposerAnchor, threadsStore]);
+    // The stored chip is dropped on success (point 4 above: quoted exactly once,
+    // and the next message is not filed anywhere by a leftover) and KEPT on failure
+    // so Retry still has it. In tree mode the composer stays pointed at the thread
+    // on screen through the derived anchor, which nothing here touches.
+    const ok = await dispatch(sessionId, text, images, userUuid ? { userUuid } : undefined);
+    if (ok && composerAnchor) setComposerAnchor(null);
+    return ok;
+  }, [composerAnchor, interruptSend, send, sessionId, setComposerAnchor, threadsStore]);
 
   // Every send goes to THIS session. An "@" reference in the text is a pill the
   // agent receives (plus a server-appended reference card); the composer never
@@ -2210,6 +2212,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               anchor={effectiveAnchor}
               hue={hueForAnchor(threadTree, effectiveAnchor)}
               onClear={clearComposerAnchor}
+              sticky={viewMode === 'tree'}
             />
           )}
           <ChatInput

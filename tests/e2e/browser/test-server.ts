@@ -482,6 +482,29 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Threads fixture that SENDS (session-threads.spec.ts, the Ask → send →
+        // tag round trip): a send appends the mock CLI's reply to the session's
+        // stream file, which would shift every row count the other threads tests
+        // assert on — so the sending test gets its own record.
+        id: 'pw-task-threads-send',
+        title: 'Threads send fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-threads-send-session'],
+        active_session_ids: [],
+        session_id: 'pw-threads-send-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Same-browser task-store fixture (task-store-same-browser-instant.spec).
         // Its OWN task: that spec renames and completes it mid-run, which would
         // break every spec asserting on a shared fixture's title or phase.
@@ -1422,7 +1445,8 @@ await fs.writeFile(
   // The SAME transcript is written once per session id, each with its own uuid
   // prefix: `pw-pins-session` (0199aa…) for session-outline-rewind.spec.ts,
   // `pw-quote-session` (0199cc…) for session-quote-pin.spec.ts,
-  // `pw-threads-session` (0199bb…) for session-threads.spec.ts and
+  // `pw-threads-session` (0199bb…) and `pw-threads-send-session` (0199bc…, the one
+  // that SENDS) for session-threads.spec.ts and
   // `pw-stream-select-session` (0199dd…), `pw-streamsel2-session` (0199de…) and
   // `pw-streamsel3-session` (0199df…) for session-stream-selection.spec.ts, and
   // `pw-voicesel1-session` (0199e0…), `pw-voicesel2-session` (0199e1…),
@@ -1520,6 +1544,7 @@ await fs.writeFile(
   await fs.writeFile(path.join(jsonlDir, 'pw-pins-session.jsonl'), pinsTranscript('pw-pins-session', '0199aa'))
   await fs.writeFile(path.join(jsonlDir, 'pw-quote-session.jsonl'), pinsTranscript('pw-quote-session', '0199cc'))
   await fs.writeFile(path.join(jsonlDir, 'pw-threads-session.jsonl'), pinsTranscript('pw-threads-session', '0199bb'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-threads-send-session.jsonl'), pinsTranscript('pw-threads-send-session', '0199bc'))
   await fs.writeFile(path.join(jsonlDir, 'pw-stream-select-session.jsonl'), pinsTranscript('pw-stream-select-session', '0199dd'))
   await fs.writeFile(path.join(jsonlDir, 'pw-streamsel2-session.jsonl'), pinsTranscript('pw-streamsel2-session', '0199de'))
   await fs.writeFile(path.join(jsonlDir, 'pw-streamsel3-session.jsonl'), pinsTranscript('pw-streamsel3-session', '0199df'))
@@ -2004,6 +2029,19 @@ await fs.writeFile(
         messageCount: 53,
         cwd: vscodeFixtureRoot,
         title: 'Threads fixture session',
+      },
+      {
+        claudeSessionId: 'pw-threads-send-session',
+        taskId: 'pw-task-threads-send',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 27_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Threads send fixture session',
       },
       {
         claudeSessionId: 'pw-stream-select-session',
