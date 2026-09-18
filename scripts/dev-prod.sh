@@ -924,6 +924,39 @@ case "$index_html" in
     ;;
 esac
 
+# ── Live render: does `/` paint against the REAL data? ─────────────────────────
+# Serving the entry HTML is not painting it, and the smoke render above cannot
+# answer this: it runs against a TEMP data dir, so every component that only
+# mounts once there are real sessions/tasks never renders there at all.
+# 2026-09-18: a bundle built while a component was half-saved (a ref deleted from
+# its declaration but not from its JSX) passed the smoke render on the empty
+# dataset, then crashed the live home page — error boundary, "Something went wrong
+# rendering the page", for ten minutes, while /api/config and GET / both stayed
+# green. This check runs the same script against :$PORT, where the real data is.
+#
+# Ordering matters twice: AFTER readiness (the server must be up to be loaded) and
+# BEFORE snapshot_lkg, so a crashing build can never become the thing we roll back
+# TO. Three-valued like the smoke render — only a definitive crash rolls back;
+# "could not tell" (no browser, page never settled under load) keeps the new
+# server, because a deploy blocked by a busy Mac is its own outage.
+live_render_rc=0
+if [[ "${WALNUT_DEVPROD_SKIP_RENDER:-0}" != "1" ]]; then
+  RENDER_SECS="${WALNUT_DEVPROD_RENDER_SECS:-60}"
+  "$NODE_BIN" "$REPO_ROOT/scripts/devprod-render-check.mjs" \
+    "http://localhost:$PORT/" --timeout-ms "$(( RENDER_SECS * 1000 ))" \
+    || live_render_rc=$?
+  if [[ "$live_render_rc" == "2" && "${WALNUT_DEVPROD_RENDER_STRICT:-0}" != "1" ]]; then
+    echo "Live render UNDETERMINED — keeping the new server (WALNUT_DEVPROD_RENDER_STRICT=1 fails closed here)." >&2
+    live_render_rc=0
+  fi
+fi
+if [[ "$live_render_rc" != "0" ]]; then
+  stop_new_server
+  echo "Live render FAILED: :$PORT serves the app but crashes on the first paint of /." >&2
+  rollback_to_lkg
+  exit 1
+fi
+
 if ! snapshot_lkg; then
   echo "Warning: last-known-good snapshot failed; rollback will use the previous one." >&2
 fi

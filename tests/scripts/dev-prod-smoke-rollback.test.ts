@@ -125,6 +125,42 @@ describe('dev-prod.sh last-known-good rollback', () => {
     }
   })
 
+  it('a crashing build never becomes the LKG: the live render check runs BEFORE the snapshot', () => {
+    // 2026-09-18. The pre-kill smoke render runs against a TEMP data dir, so a
+    // component that only mounts once there are real sessions never renders there
+    // — a bundle built while such a component was half-saved passed the smoke
+    // render and then crashed the live home page for ten minutes. The live check
+    // closes that gap, and its position is the load-bearing part: snapshotting
+    // first would make the crashing dist the thing a later failure rolls back TO.
+    const live = indexOfOrFail('Live render FAILED')
+    const snapshot = indexOfOrFail('if ! snapshot_lkg')
+    expect(live).toBeLessThan(snapshot)
+    const branch = script.slice(live, snapshot)
+    expect(branch).toMatch(/stop_new_server|rollback_to_lkg/)
+    expect(branch).toMatch(/rollback_to_lkg/)
+    expect(branch).toMatch(/exit 1/)
+  })
+
+  it('the live render check probes the PRODUCTION port, after readiness', () => {
+    // Against :$PORT, not the smoke port: the real data is the whole point.
+    const ready = indexOfOrFail('if [[ "$ready" != "1" ]]; then')
+    const call = indexOfOrFail('"http://localhost:$PORT/" --timeout-ms')
+    expect(call).toBeGreaterThan(ready)
+    expect(script.slice(0, call)).toContain('devprod-render-check.mjs')
+  })
+
+  it('an UNDETERMINED live render keeps the new server unless STRICT is set', () => {
+    // A render check that cannot tell (no browser, page never settled under
+    // machine load) must not roll back a healthy deploy — that would turn a busy
+    // Mac into an outage of its own.
+    const call = indexOfOrFail('"http://localhost:$PORT/" --timeout-ms')
+    const fail = indexOfOrFail('Live render FAILED')
+    const between = script.slice(call, fail)
+    expect(between).toMatch(/live_render_rc"? == "2"/)
+    expect(between).toMatch(/WALNUT_DEVPROD_RENDER_STRICT/)
+    expect(between).toMatch(/live_render_rc=0/)
+  })
+
   it('verifies a launchctl submit actually registered, with a nohup fallback', () => {
     // 2026-08-23: a submit silently created nothing and the readiness window
     // probed a server that never existed.
