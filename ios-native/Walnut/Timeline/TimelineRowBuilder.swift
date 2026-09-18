@@ -104,22 +104,26 @@ enum TimelineMetrics {
 
     /// Height a hosted, WRAPPED `Text` of `lines` lines occupies.
     ///
-    /// Deliberately NOT `lines * hostedLineHeight(font)`. That constant's slack
-    /// is per-row, so multiplying it by a line count multiplies the slack too —
-    /// measured, an 8-line caption body came out 23pt taller than SwiftUI laid it
-    /// out, which is a visible band of nothing under the text. SwiftUI's own
-    /// numbers, measured through `UIHostingController` at the default text size:
-    /// 8 caption lines render at 104.3pt against `8 * lineHeight = 105.0`, i.e.
-    /// each additional line costs slightly UNDER `UIFont.lineHeight`. So
-    /// `lines * lineHeight + 2.5` tracks it within ~3pt at 8 lines, and its
-    /// margin GROWS with the line count rather than shrinking — which is the
-    /// direction that matters, because the cell clips.
+    /// Deliberately NOT `lines * hostedLineHeight(font)`. That constant's slack is
+    /// per-row, so multiplying it by a line count multiplies the slack too, and an
+    /// 8-line caption body came out 23pt taller than SwiftUI laid it out — a
+    /// visible band of nothing under the text.
     ///
-    /// Measured for `caption1`/`caption2`, which is all this is used with (the
-    /// reasoning card). Re-measure before pointing it at a larger text style.
+    /// SwiftUI stacks the SECOND line onward at `lineHeight + leading` and the
+    /// first at `lineHeight`, then rounds the total up to the display grid.
+    /// Measured through `UIHostingController` on `Text(…).font(.caption)`, 1 / 2 /
+    /// 8 lines: 14.33 / 30.33 / 126.33 at the default text size (lineHeight 14.32,
+    /// leading 1.68), 13.33 / 26.33 / 104.33 at extraSmall (13.13, -0.13) and
+    /// 51.33 / 102.33 / 408.33 at AccessibilityXXXL (51.31, -0.31). The +1 covers
+    /// that grid round-up, which is the only part of the sum this cannot name.
+    ///
+    /// `leading` is why the per-line term has to come off the FONT rather than
+    /// being a flat cushion: it is positive at the default caption size and
+    /// negative at extraSmall and at the accessibility sizes, so any one constant
+    /// shaves ink at one end of the range while reserving dead space at the other.
     static func hostedTextHeight(lines: Int, font: UIFont) -> CGFloat {
         guard lines > 0 else { return 0 }
-        return CGFloat(lines) * font.lineHeight + 2.5
+        return CGFloat(lines) * font.lineHeight + CGFloat(lines - 1) * font.leading + 1
     }
 
     /// Width available to assistant text at a given page width.
@@ -864,17 +868,15 @@ final class TimelineRowBuilder {
     /// with the assertion while disagreeing with the row.
     func wrappedLineCount(_ text: String, font: UIFont, width: CGFloat) -> Int {
         guard !text.isEmpty else { return 0 }
-        // No lineSpacing in the attributes: the division below has to recover a
-        // line COUNT, which a styled paragraph's extra leading would corrupt.
+        // Counted, never divided out of a height: TextKit stacks its line
+        // fragments at `lineHeight + leading` (16.0 for the default caption,
+        // whose lineHeight is 14.32), so `height / lineHeight` reads 5 lines as 6
+        // and 8 as 9 — and every extra line is a line of reserved emptiness under
+        // the card. No lineSpacing in the attributes either: the count has to be
+        // the one SwiftUI will wrap this text into, and a styled paragraph's
+        // extra leading is not part of that question.
         let attributed = NSAttributedString(string: text, attributes: [.font: font])
-        let measured = measurer.height(attributed, width: max(40, width))
-        // Round to NEAREST, not up. One font means the measured height is n whole
-        // line heights — but `TimelineTextMeasurer.measure` CEILS its result, so a
-        // single 13.13pt line comes back as 14 and `.up` turned that into two
-        // lines. Measured: that off-by-one reserved a whole extra line on every
-        // reasoning row, and made a one-line row with nothing to reveal look
-        // expandable.
-        return max(1, Int((measured / font.lineHeight).rounded()))
+        return max(1, measurer.lineCount(attributed, width: max(40, width)))
     }
 
     private func notificationRow(_ message: ChatMessage, namespace: String, width: CGFloat,

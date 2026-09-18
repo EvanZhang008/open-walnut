@@ -27,6 +27,34 @@ final class TimelineTextMeasurer {
         measure(text, width: width).height
     }
 
+    /// How many WRAPPED lines `text` takes at `width`, asked of TextKit itself.
+    ///
+    /// Not derivable from `height(_:width:)`: a line fragment is `lineHeight +
+    /// leading` tall, not `lineHeight` (measured on the pinned simulator, caption
+    /// at the default text size: 16.0 against a 14.32 lineHeight), so dividing a
+    /// measured height by the font's line height counts a 7-line paragraph as 8 —
+    /// and the count is what a hosted row reserves room for.
+    func lineCount(_ text: NSAttributedString, width: CGFloat) -> Int {
+        guard text.length > 0, width > 0 else { return 0 }
+        container.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        contentStorage.performEditingTransaction {
+            contentStorage.attributedString = text
+        }
+        layoutManager.ensureLayout(for: layoutManager.documentRange)
+        var lines = 0
+        layoutManager.enumerateTextLayoutFragments(
+            from: nil, options: [.ensuresLayout]
+        ) { fragment in
+            lines += fragment.textLineFragments.count
+            return true
+        }
+        // Same reason as `measure`: don't retain a big string between calls.
+        contentStorage.performEditingTransaction {
+            contentStorage.attributedString = NSAttributedString()
+        }
+        return lines
+    }
+
     /// Full used size (bubbles hug their text, so the used WIDTH matters too).
     func measure(_ text: NSAttributedString, width: CGFloat) -> CGSize {
         guard text.length > 0, width > 0 else { return .zero }
