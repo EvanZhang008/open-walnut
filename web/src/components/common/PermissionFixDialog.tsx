@@ -111,16 +111,20 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
   // access" does not. Only labels that are already sentence case get their first
   // letter lowered — a Title Case or acronym label ("Full Disk Access") would be
   // mangled into "full Disk Access", so it is left exactly as written.
-  // Click-to-copy on the path itself: on this machine it is the whole action,
-  // and the Open-Settings button copies it on the MAC anyway for the case where
-  // this UI is a phone.
-  const [copied, setCopied] = useState(false);
-  const copyTarget = () => {
-    navigator.clipboard?.writeText(permission.grantTarget).then(
-      () => { setCopied(true); setTimeout(() => setCopied(false), 2_000); },
+  // Copy lives in the step that says "paste", so the path the user pastes and
+  // the path they copied are the same object on screen.
+  const [copied, setCopied] = useState<string | null>(null);
+  const copyPath = (value: string) => {
+    navigator.clipboard?.writeText(value).then(
+      () => { setCopied(value); setTimeout(() => setCopied(null), 2_000); },
       () => log.warn('permissions', 'clipboard copy refused'),
     );
   };
+
+  // A step that opens the pane makes a second Open-Settings button at the bottom
+  // a duplicate of itself, so the dialog drops the button rather than asking
+  // which of the two identical actions is the real one.
+  const aStepOpensSettings = permission.steps.some((s) => typeof s !== 'string' && s.open);
 
   const setupLabel = /^[A-Z][a-z]+ [a-z]/.test(permission.label)
     ? permission.label.charAt(0).toLowerCase() + permission.label.slice(1)
@@ -148,36 +152,54 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
           <div className="app-modal-message">
             <p>{permission.why}</p>
             {/* Naming the launcher is only true for grants that FOLLOW the
-                launcher. A self-responsible helper's grant is its own, and
+                launcher: a self-responsible helper's grant is its own, and
                 mentioning the launcher there makes a correct instruction read
-                like a mismatch the user should not follow. */}
-            <p className="permission-grant-target">
-              {permission.launcherIndependent ? (
-                <>
-                  {/* The grant target is sometimes Walnut.app itself (agent sessions
-                      run under it) and sometimes a small helper binary. Calling the
-                      app "Walnut's own helper" reads as the wrong program, and this
-                      line exists precisely to be trusted and copied. */}
-                  macOS checks this grant for{' '}
-                  {/\.app(\/|$)/.test(permission.grantTarget) ? 'Walnut itself' : "Walnut's own helper"}:{' '}
-                  <button type="button" className="permission-copy" onClick={copyTarget}
-                    title="Copy this path">
-                    <code>{permission.grantTarget}</code>
-                    <span className="permission-copy-hint">{copied ? ' copied' : ' copy'}</span>
-                  </button>
-                </>
-              ) : (
-                <>
-                  Walnut is currently launched by <strong>{launcherName}</strong>, so macOS checks the grant
-                  for: <code>{permission.grantTarget}</code>
-                </>
-              )}
-            </p>
+                like a mismatch the user should not follow. Kept out of the steps
+                because it is a caveat, not something to do. */}
+            {!permission.launcherIndependent && (
+              <p className="permission-grant-target">
+                Walnut is currently launched by <strong>{launcherName}</strong>, so macOS checks the grant
+                for: <code>{permission.grantTarget}</code>
+              </p>
+            )}
             {!showPromptButton && (
               <ol className="permission-steps">
-                {permission.steps.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
+                {permission.steps.map((s, i) => {
+                  const step = typeof s === 'string' ? { text: s } : s;
+                  return (
+                    <li key={i}>
+                      {'open' in step && step.open ? (
+                        <a
+                          className="permission-step-link"
+                          role="button"
+                          tabIndex={0}
+                          onClick={openSettings}
+                          onKeyDown={(e) => {
+                            if (e.key !== 'Enter' && e.key !== ' ') return;
+                            e.preventDefault();
+                            openSettings();
+                          }}
+                        >
+                          {step.text}
+                        </a>
+                      ) : (
+                        step.text
+                      )}
+                      {'copy' in step && step.copy ? (
+                        <>
+                          {' '}
+                          <button type="button" className="permission-copy" title="Copy this path"
+                            onClick={() => copyPath(step.copy as string)}>
+                            <code>{step.copy}</code>
+                            <span className="permission-copy-hint">
+                              {copied === step.copy ? 'copied' : 'copy'}
+                            </span>
+                          </button>
+                        </>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ol>
             )}
             {/* Promising a green that can never arrive is worse than saying
@@ -204,16 +226,17 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
           <button className="app-modal-btn" onClick={onClose}>
             {state === 'granted' ? 'Done' : 'Close'}
           </button>
-          {state !== 'granted' &&
-            (showPromptButton ? (
-              <button className="app-modal-btn primary" disabled={requesting} onClick={triggerPrompt}>
-                {requesting ? 'Waiting for macOS dialog…' : 'Request access'}
-              </button>
-            ) : (
-              <button className="app-modal-btn primary" onClick={openSettings}>
-                Open System Settings
-              </button>
-            ))}
+          {state !== 'granted' && showPromptButton && (
+            <button className="app-modal-btn primary" disabled={requesting} onClick={triggerPrompt}>
+              {requesting ? 'Waiting for macOS dialog…' : 'Request access'}
+            </button>
+          )}
+          {/* Only for a row whose steps carry no opener of their own. */}
+          {state !== 'granted' && !showPromptButton && !aStepOpensSettings && (
+            <button className="app-modal-btn primary" onClick={openSettings}>
+              Open System Settings
+            </button>
+          )}
         </div>
       </div>
     </div>,

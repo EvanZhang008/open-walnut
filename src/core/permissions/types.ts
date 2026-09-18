@@ -43,6 +43,25 @@ export type PermissionFixKind =
    *  (Full Disk Access is the canonical case: macOS NEVER prompts for it). */
   | 'settings-only';
 
+/**
+ * One numbered step in the fix dialog.
+ *
+ * A plain string is something the user does on their own. The object form
+ * carries the step's OWN control, because an instruction that names a click
+ * ("Open System Settings → …") should BE that click: pointing at a button
+ * elsewhere in the dialog makes the reader hold the sentence in their head,
+ * find the button, and hope it does what the sentence said.
+ */
+export type PermissionStep =
+  | string
+  | {
+      text: string;
+      /** Render `text` as the control that opens this permission's pane. */
+      open?: true;
+      /** Append this path as an inline click-to-copy control. */
+      copy?: string;
+    };
+
 export interface PermissionStatus {
   id: PermissionId;
   /** Human name for UI rows ("Calendar", "Full Disk Access"). */
@@ -68,7 +87,7 @@ export interface PermissionStatus {
   /** x-apple.systempreferences deep link opened by the fix endpoint. */
   settingsUrl: string;
   /** Short numbered steps rendered inside the fix dialog. */
-  steps: string[];
+  steps: PermissionStep[];
   /**
    * Set when the grant EXISTS in System Settings but no longer applies, which
    * happens to an ad-hoc signed helper whenever it is rebuilt: TCC keyed the

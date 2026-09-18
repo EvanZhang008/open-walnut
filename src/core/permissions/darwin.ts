@@ -265,6 +265,11 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
   // a full calendar is how a correct panel loses the user's trust.
   const calFallback = calState === 'granted' ? null : calendarHelperFallback();
 
+  // ONE binding for the path the session row names: the row's grantTarget and
+  // the copy control inside its paste step have to be the same string, and
+  // writing the fallback twice already produced an empty copy chip once.
+  const sessionTarget = session.app ?? 'Walnut.app';
+
   const permissions: PermissionStatus[] = [
     {
       id: 'calendar',
@@ -299,7 +304,7 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
               'Click Allow Full Access in the macOS dialog.',
             ]
           : [
-              'Open System Settings → Privacy & Security → Calendars.',
+              { text: 'Open System Settings → Privacy & Security → Calendars.', open: true },
               'Find the walnut-calendar entry and enable Full Access.',
               'No entry? Click "Request access" below to re-trigger the prompt.',
             ],
@@ -331,15 +336,15 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
             // as nonsense and toggling it does nothing: tccd has to re-read the
             // helper, which only happens on a fresh add.
             'The helper is already listed, but macOS no longer recognizes it (Walnut rebuilt it).',
-            'Open System Settings → Privacy & Security → Full Disk Access.',
+            { text: 'Open System Settings → Privacy & Security → Full Disk Access.', open: true },
             'Select the walnut-reader row and click the − button to remove it.',
-            `Click +, press Cmd+Shift+G, then Cmd+V to paste the same path back (already copied): ${fda.target}`,
+            { text: 'Click +, press ⌘⇧G, then paste the same path back:', copy: fda.target },
             'Turning the toggle off and on does NOT work — it has to be removed and re-added.',
           ]
         : [
-            'Open System Settings → Privacy & Security → Full Disk Access.',
+            { text: 'Open System Settings → Privacy & Security → Full Disk Access.', open: true },
             'Click + (authenticate if asked).',
-            `Press Cmd+Shift+G, then Cmd+V (the path is already copied): ${fda.target}`,
+            { text: 'Press ⌘⇧G, then paste:', copy: fda.target },
             'Select it and make sure its toggle is ON.',
             // Not a permission step, but it is the other half of "why is it still
             // empty", and this list is the only place the user is looking.
@@ -364,7 +369,7 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
       why:
         'Optional. Stops the repeated "wants to access data from other apps" popups '
         + 'while Claude Code reads files in a session.',
-      grantTarget: session.app ?? 'Walnut.app',
+      grantTarget: sessionTarget,
       // The app makes ITSELF the responsible process before starting the daemon,
       // so this grant does not depend on whether a terminal or the Mac app
       // started Walnut.
@@ -380,11 +385,13 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
         + 'helper above because it grants access per program, not per app you think of as '
         + 'one. Sessions already running keep the identity they started with, so the switch '
         + 'applies after the session daemon next restarts.',
-      // Actions only, as few as the flow allows: the button below does the
-      // navigating, and the path is on the clipboard before step 2 is read.
+      // Each step owns its action: step 1 IS the link that opens the pane, and
+      // step 3 IS the copy control for the path it tells you to paste. Nothing
+      // here points at a button somewhere else in the dialog.
       steps: [
-        'Press Open System Settings, then + in the Full Disk Access list.',
-        'Press ⌘⇧G, then ⌘V, then Enter — the path is already copied.',
+        { text: 'Open System Settings → Privacy & Security → Full Disk Access.', open: true },
+        'Click + (authenticate if asked).',
+        { text: 'Press ⌘⇧G, then paste:', copy: sessionTarget },
         // The honest completion signal, because there is nothing to turn green.
         'Turn its toggle on. The popups stop — that is how you know.',
       ],

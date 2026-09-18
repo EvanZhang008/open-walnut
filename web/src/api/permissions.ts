@@ -11,6 +11,9 @@ export type PermissionId = 'calendar' | 'full-disk-access' | 'session-full-disk-
 
 export type PermissionState = 'granted' | 'denied' | 'not-determined' | 'not-applicable' | 'unknown';
 
+/** Mirror of the server's PermissionStep: a step can carry its own control. */
+export type PermissionStep = string | { text: string; open?: true; copy?: string };
+
 export interface PermissionStatus {
   id: PermissionId;
   label: string;
@@ -26,7 +29,7 @@ export interface PermissionStatus {
    *  the launcher — the UI must not name the launcher for these rows. */
   launcherIndependent?: boolean;
   settingsUrl: string;
-  steps: string[];
+  steps: PermissionStep[];
   /** The grant is IN System Settings with its toggle on, but keyed to an older
    *  build of the helper, so it no longer applies. Only a remove-and-re-add
    *  fixes it; toggling does nothing. The UI must say "re-add", not "add". */

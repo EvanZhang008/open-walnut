@@ -26982,9 +26982,16 @@ a.file-link:hover {
    before the numbered steps. Spacing is the only thing making it scannable. */
 .permission-fix-modal .app-modal-message > p + p,
 .permission-fix-modal .app-modal-message > ol + p { margin-top: 8px; }
-/* The path IS a button: one click copies it, so the steps never have to say
-   "copy this". Styled as text, because a button-looking path invites a click
-   that does something bigger. */
+/* A step that names a click IS that click. Styled as a link, left-aligned with
+   the prose around it, so the numbered list still reads as a list. */
+.permission-step-link {
+  color: var(--accent);
+  cursor: pointer;
+}
+.permission-step-link:hover { text-decoration: underline; }
+/* The path IS a button: one click copies it, so no step has to say "copy this".
+   Styled as text, because a button-looking path invites a click that does
+   something bigger. */
 .permission-copy {
   padding: 0;
   border: 0;
@@ -26997,7 +27004,7 @@ a.file-link:hover {
   margin-left: 4px;
   font-size: 11px;
   color: var(--fg-muted);
-  opacity: 0;
+  opacity: 0.7;
   transition: opacity 0.12s;
 }
 .permission-copy:hover .permission-copy-hint,

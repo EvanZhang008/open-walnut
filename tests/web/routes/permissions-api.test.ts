@@ -80,9 +80,27 @@ describe('GET /api/permissions', () => {
       for (const p of report.permissions) {
         expect(['granted', 'denied', 'not-determined', 'not-applicable', 'unknown']).toContain(p.state);
         expect(['prompt', 'settings-only']).toContain(p.fixKind);
+        // A settings-only row is fixed by navigating, so one of its steps must BE
+        // the opener — otherwise the dialog is back to describing a click and
+        // leaving the user to find the control. Same for pasting: a step that
+        // says "paste" carries the path it wants pasted.
+        if (p.fixKind === 'settings-only') {
+          const steps = p.steps as (string | { text: string; open?: true; copy?: string })[];
+          expect(steps.some((s) => typeof s !== 'string' && s.open)).toBe(true);
+          for (const step of steps) {
+            const text = typeof step === 'string' ? step : step.text;
+            if (!/\bpaste\b/i.test(text)) continue;
+            expect(typeof step === 'string' ? null : step.copy).toBeTruthy();
+          }
+        }
         expect(p.grantTarget).toBeTruthy();
         expect(p.settingsUrl).toMatch(/^x-apple\.systempreferences:/);
         expect(p.steps.length).toBeGreaterThan(0);
+        // Prose or a control-carrying object, never an empty shell — that would
+        // render as a blank numbered line.
+        for (const step of p.steps as (string | { text: string })[]) {
+          expect(typeof step === 'string' ? step : step.text).toBeTruthy();
+        }
       }
     } else {
       // Linux CI / cloud: nothing actionable, and nothing invented.
@@ -108,12 +126,19 @@ describe('GET /api/permissions', () => {
     expect(row.context).toContain('Skipping it costs nothing');
     // And the numbered list stays ACTIONS. An explanation rendered as "step 1"
     // reads as something to perform, and the user hunts for the thing to click.
-    // Short enough to act on at a glance: the dialog's button does the
-    // navigating and puts the path on the clipboard, so nothing here restates it.
-    expect(row.steps.length).toBeLessThanOrEqual(3);
-    for (const step of row.steps as string[]) {
-      expect(step).not.toContain('Claude Code runs inside Walnut');
-      expect(step.length).toBeLessThan(80);
+    // Short enough to act on at a glance, and every step that names an action
+    // CARRIES it: the step saying "Open System Settings" IS the opener, and the
+    // one saying "paste" carries the path to copy. Otherwise the user reads an
+    // instruction and then has to hunt for the control that performs it.
+    const steps = row.steps as (string | { text: string; open?: true; copy?: string })[];
+    expect(steps.length).toBeLessThanOrEqual(4);
+    expect(steps.some((s) => typeof s !== 'string' && s.open)).toBe(true);
+    const paster = steps.find((s) => typeof s !== 'string' && s.copy) as { copy: string };
+    expect(paster.copy).toBe(row.grantTarget);
+    for (const step of steps) {
+      const text = typeof step === 'string' ? step : step.text;
+      expect(text).not.toContain('Claude Code runs inside Walnut');
+      expect(text.length).toBeLessThan(80);
     }
   });
 
