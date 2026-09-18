@@ -298,6 +298,15 @@ export function ftsMatchFor(query: string): string {
 export interface MessagePageCursor {
   sentAt: number
   messageId: string
+  /**
+   * The third sort field, present only on a CROSS-ACCOUNT page (`scope=role:*`).
+   *
+   * A message id is unique per account, so two accounts can hand back the same id in the same
+   * second (IMAP UIDs are small per-mailbox numbers), and a two-field comparison would then drop the
+   * rest of that tie group or serve it twice. A per-account page never sets it, so its predicate
+   * stays exactly the two-field one it has always been.
+   */
+  accountId?: string
 }
 
 /** The separator inside the encoded cursor: a NUL can never occur in a message id. */
@@ -313,7 +322,12 @@ const CURSOR_SEPARATOR = '\u0000'
  * the server never issued.
  */
 export function encodeMessageCursor(cursor: MessagePageCursor): string {
-  return Buffer.from(`${cursor.sentAt}${CURSOR_SEPARATOR}${cursor.messageId}`, 'utf8').toString('base64url')
+  // The third segment is APPENDED only when there is one, so a per-account token is byte for byte
+  // the token this server issued before scopes existed.
+  const body = cursor.accountId === undefined
+    ? `${cursor.sentAt}${CURSOR_SEPARATOR}${cursor.messageId}`
+    : `${cursor.sentAt}${CURSOR_SEPARATOR}${cursor.messageId}${CURSOR_SEPARATOR}${cursor.accountId}`
+  return Buffer.from(body, 'utf8').toString('base64url')
 }
 
 /**
@@ -344,9 +358,16 @@ export function decodeMessageCursor(raw: string | undefined): MessagePageCursor 
   const at = decoded.indexOf(CURSOR_SEPARATOR)
   if (at <= 0) return undefined
   const sentAt = Number(decoded.slice(0, at))
-  const messageId = decoded.slice(at + 1)
+  const rest = decoded.slice(at + 1)
+  // A third segment is a cross-account position. Split on the separator rather than parsing loosely:
+  // no id from any provider can contain a NUL, so the segments cannot run into each other.
+  const next = rest.indexOf(CURSOR_SEPARATOR)
+  const messageId = next < 0 ? rest : rest.slice(0, next)
+  const accountId = next < 0 ? '' : rest.slice(next + 1)
   if (!Number.isFinite(sentAt) || !messageId) return undefined
-  return { sentAt, messageId }
+  // An empty third segment is dropped, not kept: a token carrying `accountId: ''` would add a
+  // comparison layer that can never be true and would silently truncate the page at the tie group.
+  return accountId ? { sentAt, messageId, accountId } : { sentAt, messageId }
 }
 
 export interface MailSyncLimits extends RetentionLimits {

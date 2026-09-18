@@ -50,6 +50,23 @@ export function senderLabel(from: MailAddress | undefined): string {
   return from.name?.trim() || from.address || 'Unknown sender';
 }
 
+/**
+ * The ROW's answer to the question a sent list is scanned for: who it went to.
+ *
+ * The first recipient and how many more there were, never the whole list joined: a row has one line for
+ * this and a sent list to a mailing list would spend it on eleven names. `senderLabel` is the wrong
+ * answer in these folders, and the visible one was worse than wrong: it printed this account's own name
+ * on every row, twice per row while the account chip was also a name.
+ */
+export function rowRecipientLabel(to: MailAddress[] | undefined): string {
+  const first = to?.[0];
+  // EMPTY, not a stand-in: the row puts the word `To` in front of whatever this returns, and a live sent
+  // folder does hold messages whose cached recipients are empty, which read as "To No recipient".
+  if (!first) return '';
+  const name = first.name?.trim() || first.address || 'Unknown recipient';
+  return to && to.length > 1 ? `${name} +${to.length - 1}` : name;
+}
+
 export function recipientLabel(to: MailAddress[]): string {
   if (to.length === 0) return '';
   return to.map((one) => one.name?.trim() || one.address).filter(Boolean).join(', ');

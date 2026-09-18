@@ -114,6 +114,19 @@ function folder(page: Page, mailboxId: string) {
   return page.locator(`.mail-mailbox[data-mailbox-id="${mailboxId}"]`)
 }
 
+/**
+ * `Aged` is role 'other', so the pane keeps it in the collapsed tail behind "1 more folder".
+ * Every folder this spec is about is still one click away; what is asserted below is the SWEEP,
+ * not the sidebar, so reveal the tail once and let the folder assertions read as they did.
+ */
+async function revealTail(page: Page): Promise<void> {
+  const toggle = page.locator('.mail-tail-toggle')
+  if ((await toggle.count()) === 0) return
+  if ((await toggle.first().getAttribute('aria-expanded')) === 'true') return
+  await toggle.first().click()
+  await expect(toggle.first()).toHaveAttribute('aria-expanded', 'true')
+}
+
 async function openFolder(page: Page, mailboxId: string): Promise<void> {
   await folder(page, mailboxId).click()
   await expect(page.getByTestId('mail-list-section')).toBeVisible({ timeout: 30_000 })
@@ -175,6 +188,7 @@ test('one folder the server refuses does not starve the folders behind it', asyn
   // `Aged` is the refused folder and it sorts FIRST among the non-inbox folders, so everything else
   // is queued behind it. Before the fix its refusal ended the sweep here and nothing below was ever
   // polled; the folders' own sizes still showed, because the mailbox LIST is a different request.
+  await revealTail(page)
   await expect(folder(page, 'Aged')).toBeVisible({ timeout: 60_000 })
 
   // The inbox, which the sweep reaches before the refusal.
@@ -203,6 +217,7 @@ test('a folder that was never fetched says so, and offers to fetch it', async ({
   await page.getByTestId('sidebar-core-app-mail').click()
   await expect(page.getByTestId('mail-accounts-pane')).toBeVisible({ timeout: 60_000 })
 
+  await revealTail(page)
   await openFolder(page, 'Aged')
 
   // The header still reports the folder's real size, which is right: the mailbox list knows it.

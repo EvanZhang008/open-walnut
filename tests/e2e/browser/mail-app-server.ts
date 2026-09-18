@@ -21,6 +21,11 @@
  * (the IMAP provider): the flag only changes how many plugins the cascade ask names, so keeping
  * it off keeps that spec's screenshots and copy about what a real fresh install looks like.
  *
+ * `PW_MAIL_DENSE=1` links `fixtures/mail-dense-provider/` instead: TWO accounts at production density
+ * (64 folders against 6, the same roles under different mailbox ids, stale unread in the collapsed
+ * tail), adopted with no dialog. See the note next to the symlink below for why it is a separate
+ * fixture and not a mode of the one above.
+ *
  * Never :3456 and never the developer's data: OPEN_WALNUT_HOME, HOME and the daemon dirs all
  * point inside one temp directory that is removed on shutdown.
  *
@@ -96,6 +101,26 @@ if (withProvider) {
   await fs.symlink(providerSource, path.join(tmpBase, 'plugins', 'mail-fixture-provider'), 'dir')
 }
 
+/**
+ * `PW_MAIL_DENSE=1` links the DENSE provider instead: two accounts, 70 folders, 160 messages.
+ *
+ * Its own flag and its own directory rather than a mode of the other fixture, because the two answer
+ * opposite questions. `mail-fixture-provider` is a small mailbox whose every row a spec can name, and
+ * several specs count its folders; this one is production density (64 folders against 6, the same roles
+ * under different ids, a 90-character folder id, stale unread in the tail) and exists so the sidebar's
+ * collapse and its smart rows are graded against the numbers they were designed for.
+ *
+ * It declares no setup fields, so both accounts are adopted at registration with no dialog. The two are
+ * not mutually exclusive here, but a spec should pick ONE: with both linked the add-an-account dialog
+ * offers two providers and every folder count doubles.
+ */
+const withDense = process.env.PW_MAIL_DENSE === '1'
+if (withDense) {
+  const denseSource = path.join(repoRoot, 'tests/e2e/browser/fixtures/mail-dense-provider')
+  await fs.access(path.join(denseSource, 'server.mjs'))
+  await fs.symlink(denseSource, path.join(tmpBase, 'plugins', 'mail-dense-provider'), 'dir')
+}
+
 const { startServer, stopServer } = await import('../../../src/web/server.js')
 const apiServer = await startServer({ port: 0, dev: true })
 const apiAddress = apiServer.address()
@@ -124,8 +149,10 @@ const fixture = {
   port,
   home: tmpBase,
   provider: withProvider,
+  dense: withDense,
   digestOff,
   outbox: path.join(tmpBase, 'mail-fixture-sends.json'),
+  denseOutbox: path.join(tmpBase, 'mail-dense-sends.json'),
 }
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`MAIL_FIXTURE_READY ${JSON.stringify(fixture)}`)

@@ -16,7 +16,7 @@ import {
   type MailDraftDto,
 } from '@/api/mail';
 import { log } from '@/utils/log';
-import { patch, store } from '../mail-store';
+import { noteMailIdentity, patch, store } from '../mail-store';
 import { forgetDraft, mergeDraft } from './compose-drafts';
 import {
   flushMailComposerSave,
@@ -102,6 +102,8 @@ export function sendMailNow(): Promise<void> {
     const answer = await sendMailDraft(draft.draftId, draft.revision);
     const composer = store.state.composer;
     if (!composer) return;
+    // Sent AS this identity, so the next compose from a merged list defaults to it.
+    noteMailIdentity(composer.accountId);
     const settled = answer.draft
       ? statusFollowing(composer.status, answer.draft, answer.send ? [answer.send] : [])
       : { ...composer.status, phase: 'sending' as SendPhase };

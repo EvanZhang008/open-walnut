@@ -140,6 +140,45 @@ function handOver(make: () => MailComposer, after?: (composer: MailComposer) => 
   return releaseComposer().then(install);
 }
 
+/**
+ * Send this message as a different identity.
+ *
+ * From a merged list the compose identity is RESOLVED (the most recently used account that can send), and
+ * a resolved default with no way to change it is a guess the human has to leave the view to correct. So
+ * the head's identity is a control, and this is what it does: the same text, written by another account.
+ *
+ * A NEW MESSAGE only. A reply carries the threading headers of a message held in the other account's
+ * cache and its quote is that account's mail; moving it would ask the server to copy headers from a
+ * message the new identity cannot see. The composer offers no switch there, and this refuses one.
+ *
+ * The old row is DELETED rather than left behind: a draft belongs to one account, and keeping it would
+ * leave a copy of this letter waiting in the identity the human just rejected.
+ */
+export function switchMailComposerAccount(accountId: string): Promise<void> {
+  const from = store.state.composer;
+  if (!from || from.accountId === accountId) return Promise.resolve();
+  if (from.replyTo || from.intent) return Promise.resolve();
+  const { fields, showCc, showBcc } = from;
+  const carried = { fields, showCc, showBcc };
+  const oldAccountId = from.accountId;
+  return releaseComposer().then(async () => {
+    const draftId = store.state.composer?.draftId ?? from.draftId;
+    retireComposerEpoch();
+    if (draftId) {
+      forgetDraft(oldAccountId, draftId);
+      await deleteMailDraft(draftId).catch((error) => {
+        log.warn('mail', 'draft of the abandoned identity could not be deleted', {
+          draftId, error: mailFailure(error).message,
+        });
+      });
+    }
+    patch({ composer: newComposer(accountId, carried), open: null });
+    // Only text already worth a row is saved again: switching identity on an empty composer creates
+    // nothing, exactly as opening one does.
+    if (hasContent(store.state.composer!)) { markComposerDirty(); scheduleComposerSave(); }
+  });
+}
+
 /** A blank message. Nothing is created until the human types: an empty draft is not a draft. */
 export function openMailComposer(accountId: string): Promise<void> {
   return handOver(() => newComposer(accountId));

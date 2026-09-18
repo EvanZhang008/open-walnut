@@ -149,6 +149,23 @@
   overflow-wrap: anywhere;
 }
 
+/* Which account holds this mail. One line and clipped rather than wrapped: it sits between the
+   sender's name and the date, and a two-line pill here would push the date and the Details control
+   down and reflow the whole header on a long display name. It never shrinks the sender's own name
+   below a readable measure either, hence the cap rather than `flex: 1`. */
+.mail-reader-account {
+  flex: 0 0 auto;
+  max-width: 30%;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .mail-reader-when {
   flex: 0 0 auto;
   display: flex;

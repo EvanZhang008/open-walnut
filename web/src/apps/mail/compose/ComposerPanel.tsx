@@ -20,23 +20,39 @@
  * when the draft is saved), so showing it is honest; making it editable would mean the human could
  * silently rewrite what somebody else wrote and send it back to them as a quote.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+} from 'react';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { ContextMenu } from '@/components/common/ContextMenu';
 import type { MailDraftDto, MailboxDto } from '@/api/mail';
 import { BackIcon, ClipIcon, SentIcon, TrashIcon } from '../mail-icons';
-import { selectMailbox } from '../mail-actions';
-import { DRAFTS_MAILBOX, type MailComposer } from '../mail-store';
+import { selectMailbox, selectSmartMailbox } from '../mail-actions';
+import { smartRowVisible } from '../mail-smart';
+import {
+  DRAFTS_MAILBOX,
+  SMART_DRAFTS,
+  getMailSnapshot,
+  subscribeMail,
+  type MailComposer,
+} from '../mail-store';
 import { AddressChipsField } from './AddressChipsField';
 import { SendStatusCard } from './SendStatusCard';
 import {
   closeMailComposer,
   setMailComposerFields,
   showMailComposerStatus,
+  switchMailComposerAccount,
   toggleMailComposerField,
 } from './compose-actions';
 import { askMailOnPhone, discardMailComposerDraft, sendMailNow } from './compose-send';
 import { hasInvalidAddress } from './mail-address';
-import { isOpenDraft } from './send-status';
+import { canSendFrom, isOpenDraft } from './send-status';
 
 interface Props {
   composer: MailComposer;
@@ -85,11 +101,43 @@ function needsDiscardConfirm(composer: MailComposer): boolean {
 
 export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, cannotSendTitle }: Props) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [identityPoint, setIdentityPoint] = useState<{ x: number; y: number } | null>(null);
+  // Read from the store rather than taken as props: the identity below and the drafts chip's
+  // destination are questions about EVERY account, and the pane above only ever hands this one its
+  // own account's rows. A subscription, not the console hook: this pane starts nothing.
+  const snapshot = useSyncExternalStore(subscribeMail, getMailSnapshot, getMailSnapshot);
   const inbox = mailboxes.find((one) => one.role === 'inbox')?.mailboxId;
   const showing = composer.mode === 'status' ? 'status' : 'edit';
   // Other drafts, not this one: a chip that counts the draft you are looking at is a number that
   // never means anything.
   const others = drafts.filter((one) => isOpenDraft(one) && one.draftId !== composer.draftId).length;
+  // WHICH IDENTITY this goes out as. The send is already right (it uses `composer.accountId`), but a
+  // reply started from a merged list gave no way to see which of two accounts is signing it.
+  const account = snapshot.accounts.length > 1
+    ? snapshot.accounts.find((one) => one.accountId === composer.accountId)
+    : undefined;
+  const merged = smartRowVisible(snapshot.mailboxes, snapshot.accounts, 'drafts');
+  // WHICH IDENTITY it may be changed to. From a merged list the identity is resolved rather than chosen
+  // (see `sendableAccountFor`), so a guess with no control beside it meant leaving the merged view,
+  // selecting a folder in the other account and pressing New message again. A reply is not offered the
+  // switch: its threading headers and its quote belong to the account whose mail it answers.
+  const sendable = snapshot.accounts.filter(
+    (one) => canSendFrom(snapshot.providers, one.accountId, snapshot.accounts),
+  );
+  const switchable = showing === 'edit' && !composer.replyTo && !composer.intent && sendable.length > 1;
+
+  /**
+   * The chip's destination.
+   *
+   * It used to select this account's own Drafts row, which threw a person out of the merged list they
+   * were reading to write this. With All Drafts on screen that row is where these drafts already are.
+   * Without it there are fewer than two accounts (that IS the row's condition), so there is no merged
+   * view to be thrown out of and the old behaviour cannot hijack anything.
+   */
+  const openDrafts = () => {
+    if (merged) selectSmartMailbox(SMART_DRAFTS);
+    else selectMailbox(composer.accountId, DRAFTS_MAILBOX);
+  };
 
   const askDiscard = () => {
     if (needsDiscardConfirm(composer)) setConfirmDiscard(true);
@@ -116,13 +164,61 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
         <div className="mail-compose-card">
           <div className="mail-compose-card-head">
             <span className="mail-compose-title">{titleOf(composer)}</span>
+            {account && (switchable ? (
+              <button
+                type="button"
+                className="mail-compose-account pick"
+                data-testid="mail-compose-account"
+                data-account-id={account.accountId}
+                aria-haspopup="menu"
+                /* The ADDRESS, as the plain chip carries it: two display names sharing a prefix are told
+                   apart by nothing else. What the click does is in the accessible name and in the
+                   chevron, which is drawn in CSS so the identity's own text stays exactly the name. */
+                title={account.address}
+                aria-label={`Sending as ${account.displayName || account.address}. Change the account.`}
+                onClick={(event) => {
+                  const box = event.currentTarget.getBoundingClientRect();
+                  setIdentityPoint({ x: box.left, y: box.bottom });
+                }}
+              >
+                {account.displayName || account.address}
+              </button>
+            ) : (
+              <span
+                className="mail-compose-account"
+                data-testid="mail-compose-account"
+                data-account-id={account.accountId}
+                title={account.address}
+                aria-label={`Sending as ${account.displayName || account.address}`}
+              >
+                {account.displayName || account.address}
+              </span>
+            ))}
+            {identityPoint && (
+              <ContextMenu
+                point={identityPoint}
+                ariaLabel="Send as"
+                testId="mail-compose-identity-menu"
+                onClose={() => setIdentityPoint(null)}
+                items={[
+                  { key: 'head', label: 'Send as', section: true },
+                  ...sendable.map((one) => ({
+                    key: one.accountId,
+                    label: one.displayName || one.address,
+                    title: one.address,
+                    disabled: one.accountId === composer.accountId,
+                    onSelect: () => { void switchMailComposerAccount(one.accountId); },
+                  })),
+                ]}
+              />
+            )}
             {others > 0 && (
               <button
                 type="button"
                 className="mail-compose-drafts-chip"
                 data-testid="mail-compose-drafts-chip"
-                title="Open the drafts waiting on this account"
-                onClick={() => selectMailbox(composer.accountId, DRAFTS_MAILBOX)}
+                title={merged ? "Open every account's drafts" : 'Open the drafts waiting on this account'}
+                onClick={openDrafts}
               >
                 {others === 1 ? '1 draft' : `${others} drafts`}
               </button>

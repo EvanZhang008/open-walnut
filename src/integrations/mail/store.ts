@@ -66,9 +66,13 @@ export interface KnownMessage extends Record<string, unknown> {
   rowid: number
   envelope_hash: string | null
   body_ref: string | null
+  body_error: string | null
   snippet: string
   /** Carried forward by an envelope-only update, so a stored body keeps its real shape. */
   payload: string | null
+  /** The instants the stored body was fetched under: an envelope that moves them retires it. */
+  sent_at: number
+  received_at: number | null
 }
 
 /** What an upsert needs, already flattened to columns by the caller. */
@@ -275,6 +279,21 @@ export class MailStore {
   }
 
   /**
+   * Every (account, mailbox) that carries one role, for the cross-account list.
+   *
+   * ONE query for every account, not a `listMailboxes` per account: this runs on the request path of
+   * the smart rows, and the answer is a handful of small pairs. Ordered so the predicate the page
+   * builds from it is stable across requests, which is what makes a cursor comparable to the page
+   * before it.
+   */
+  mailboxesByRole(role: string): Promise<Array<Pick<MailboxRow, 'account_id' | 'mailbox_id'>>> {
+    return this.db.all<Pick<MailboxRow, 'account_id' | 'mailbox_id'>>(
+      'SELECT account_id, mailbox_id FROM mailboxes WHERE role = ? ORDER BY account_id, mailbox_id',
+      [role],
+    )
+  }
+
+  /**
    * Forget ONE folder row, for a container the provider has stopped listing.
    *
    * The folder list is upserted, never replaced, so a row outlives whatever put it there: a label
@@ -365,7 +384,8 @@ export class MailStore {
   ): Promise<Map<string, KnownMessage>> {
     if (messageIds.length === 0) return new Map()
     const rows = await this.db.all<KnownMessage & { message_id: string }>(
-      `SELECT rowid, message_id, envelope_hash, body_ref, snippet, payload FROM messages`
+      'SELECT rowid, message_id, envelope_hash, body_ref, body_error, snippet, payload,'
+      + ' sent_at, received_at FROM messages'
       + ` WHERE account_id = ? AND message_id IN (${placeholders(messageIds.length)})`,
       [accountId, ...messageIds],
     )
@@ -373,8 +393,11 @@ export class MailStore {
       rowid: row.rowid,
       envelope_hash: row.envelope_hash,
       body_ref: row.body_ref,
+      body_error: row.body_error,
       snippet: row.snippet,
       payload: row.payload,
+      sent_at: row.sent_at,
+      received_at: row.received_at,
     }]))
   }
 
@@ -426,24 +449,60 @@ export class MailStore {
     mailboxId?: string
     limit: number
     unread?: boolean
-    before?: { sentAt: number; messageId: string }
+    before?: { sentAt: number; messageId: string; accountId?: string }
+    /**
+     * A CROSS-ACCOUNT page: every (account, mailbox) the role resolved to.
+     *
+     * Pairs, never a bare mailbox id list, because the same role has a different id per account and
+     * `INBOX` collides across them. An EMPTY array means the role exists nowhere, which answers with
+     * no rows: falling through to "no filter" would answer the unified inbox with every folder.
+     */
+    pairs?: Array<{ accountId: string; mailboxId: string }>
   }): Promise<MessageRow[]> {
+    if (query.pairs && query.pairs.length === 0) return Promise.resolve([])
     const where: string[] = []
     const params: unknown[] = []
     if (query.accountId) { where.push('account_id = ?'); params.push(query.accountId) }
     if (query.mailboxId) { where.push('mailbox_id = ?'); params.push(query.mailboxId) }
+    // Only ever emitted for a scope request, so a per-account page keeps today's predicate exactly:
+    // its equality terms still let `messages_by_mailbox` / `messages_by_unread` serve the seek.
+    // Plan A of the spec (one OR group rather than a UNION ALL of per-pair seeks): the pair count is
+    // the number of accounts, the rows are bounded by the 180-day retention window, and the measured
+    // cost on the real cache is recorded in the scope test.
+    if (query.pairs) {
+      where.push(`(${query.pairs.map(() => '(account_id = ? AND mailbox_id = ?)').join(' OR ')})`)
+      for (const pair of query.pairs) params.push(pair.accountId, pair.mailboxId)
+    }
     // Ahead of the cursor so the three equality terms sit together and `messages_by_unread` can
     // serve the seek: account, mailbox, seen, then the range on sent_at.
     if (query.unread) where.push('seen = 0')
     if (query.before) {
-      where.push('(sent_at < ? OR (sent_at = ? AND message_id < ?))')
-      params.push(query.before.sentAt, query.before.sentAt, query.before.messageId)
+      // The third layer exists only when the token carries an account, so a two-segment cursor (and
+      // the legacy bare number) compares exactly the two fields it always did.
+      if (query.before.accountId === undefined) {
+        where.push('(sent_at < ? OR (sent_at = ? AND message_id < ?))')
+        params.push(query.before.sentAt, query.before.sentAt, query.before.messageId)
+      } else {
+        where.push('(sent_at < ? OR (sent_at = ? AND message_id < ?)'
+          + ' OR (sent_at = ? AND message_id = ? AND account_id < ?))')
+        params.push(
+          query.before.sentAt,
+          query.before.sentAt, query.before.messageId,
+          query.before.sentAt, query.before.messageId, query.before.accountId,
+        )
+      }
     }
     params.push(query.limit)
+    // The sort grows a third field for pair requests ONLY. Two accounts can hand back the same
+    // message id in the same second, and a two-field order leaves that tie group in an arbitrary
+    // arrangement the cursor cannot resume from.
+    const order = query.pairs
+      ? 'sent_at DESC, message_id DESC, account_id DESC'
+      : 'sent_at DESC, message_id DESC'
     return this.db.all<MessageRow>(
       `SELECT ${MESSAGE_COLUMNS} FROM messages`
       + (where.length ? ` WHERE ${where.join(' AND ')}` : '')
-      + ' ORDER BY sent_at DESC, message_id DESC LIMIT ?',
+      + ` ORDER BY ${order} LIMIT ?`,
       params,
     )
   }
@@ -621,6 +680,19 @@ export class MailStore {
   async clearMessageBody(rowid: number): Promise<void> {
     await this.db.run(
       'UPDATE messages SET body_ref = NULL, body_bytes = NULL WHERE rowid = ?',
+      [rowid],
+    )
+  }
+
+  /**
+   * The row is a different message now (see `bodyBelongsTo`), so everything learned about the old
+   * one's body goes: the reference, the size AND the "can never be fetched" marker, which was a
+   * verdict on bytes that no longer describe this row. One statement, so a crash cannot leave the
+   * marker refusing a body the reference no longer blocks.
+   */
+  async retireMessageBody(rowid: number): Promise<void> {
+    await this.db.run(
+      'UPDATE messages SET body_ref = NULL, body_bytes = NULL, body_error = NULL WHERE rowid = ?',
       [rowid],
     )
   }

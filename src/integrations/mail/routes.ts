@@ -16,6 +16,7 @@ import type { MailDrafts } from './drafts.js'
 import type { MailMessageTasks } from './message-tasks.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import { registerMailWriteRoutes } from './routes-write.js'
+import { messageScopeValues, parseMessageScope } from './scope.js'
 import type { MailSends } from './sends.js'
 import type { MailService } from './service.js'
 import type { MailStore } from './store.js'
@@ -54,6 +55,9 @@ import type { MailSync } from './sync.js'
  *        (one folder, now, for a folder the sweep has not reached) | 202 { running: true }
  * GET    /messages?account=&mailbox=&limit=&before=    -> { messages: MailMessageDto[], nextBefore? }
  *        &unread=1                                        (unread only, over the whole mailbox)
+ *        &scope=role:inbox|role:sent|role:drafts           (ONE list across every account holding
+ *                                                          that role; refuses `account` alongside it,
+ *                                                          and 400s on any other scope value)
  * GET    /messages/:accountId/:messageId               -> { message, body, bodyError? }
  * POST   /messages/:accountId/:messageId/read { read } -> { ok: true, message } | 409 unsupported
  * POST   /messages/:accountId/:messageId/task {...}    -> 201 { taskId, created: true }
@@ -322,14 +326,36 @@ export function registerMailRoutes(
     // so `unread=0`, `unread=false` and a missing parameter are all the same unfiltered request:
     // anything truthier would make a typo silently hide most of somebody's mail.
     const unread = firstQuery(request.query.unread) === '1'
+    const account = firstQuery(request.query.account)
+    // Both refusals are 400 on purpose. This route with neither `account` nor `mailbox` answers with
+    // EVERY account and EVERY folder, so a mistyped scope value would quietly serve spam and trash as
+    // somebody's unified inbox, and a request carrying both would have to guess which one the caller
+    // meant. See scope.ts.
+    const scope = parseMessageScope(firstQuery(request.query.scope))
+    if (scope === 'invalid') {
+      return {
+        status: 400,
+        json: {
+          error: 'invalid',
+          message: `scope must be one of ${messageScopeValues().join(', ')}`,
+        },
+      }
+    }
+    if (scope && account) {
+      return {
+        status: 400,
+        json: { error: 'invalid', message: 'scope covers every account; do not also pass account' },
+      }
+    }
     try {
       return {
         json: await service.listMessages({
-          ...(firstQuery(request.query.account) ? { accountId: firstQuery(request.query.account)! } : {}),
+          ...(account ? { accountId: account } : {}),
           ...(firstQuery(request.query.mailbox) ? { mailboxId: firstQuery(request.query.mailbox)! } : {}),
           limit: intQuery(request.query.limit, DEFAULT_PAGE, MAX_PAGE),
           ...(unread ? { unread: true } : {}),
           ...(before ? { before } : {}),
+          ...(scope ? { scope: scope.role } : {}),
         }),
       }
     } catch (error) {

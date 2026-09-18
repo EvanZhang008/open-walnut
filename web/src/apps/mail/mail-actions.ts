@@ -33,12 +33,22 @@ import { closeMailComposer, onMailDraftEvent } from './compose/compose-actions';
 import { loadMailDrafts } from './compose/compose-drafts';
 import { loadProviders } from './mail-providers';
 import { markReadIfAllowed } from './mail-read-flag';
+import { noteRecentFolder, readSelectedPref, writeSelectedPref } from './mail-sidebar-prefs';
+import { arrivalsAfterOpen, smartPairs, smartRowVisible, type SmartRole } from './mail-smart';
 import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
 import { keepOpenRow, readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
 import {
   DRAFTS_MAILBOX,
   EMPTY_SEARCH,
   PAGE_SIZE,
+  SMART_ACCOUNT,
+  SMART_DRAFTS,
+  SMART_INBOX,
+  SMART_ROLE,
+  isRunning,
+  isSmartSelection,
+  noteMailIdentity,
+  onMailStoreReset,
   pairKey,
   patch,
   publishBadge,
@@ -49,6 +59,8 @@ import {
   standIn,
   store,
   type MailSelection,
+  type MailSnapshot,
+  type SmartMailboxId,
 } from './mail-store';
 
 // ── reads ──
@@ -67,13 +79,78 @@ function loadAccounts(force = false): Promise<void> {
   }, force);
 }
 
+/**
+ * Mail that ARRIVED in a folder during this session, held until the mailbox rows carrying the same
+ * event's unread counts land.
+ *
+ * Held rather than patched on the spot so both halves of the sidebar move in ONE render: the badge
+ * comes from the mailbox rows, the folder's promotion out of the collapsed tail comes from these
+ * counts, and drawing a folder's new unread count one frame before the folder itself appears is the
+ * flicker this exists to avoid.
+ */
+const pendingArrivals = new Map<string, number>();
+
+onMailStoreReset(() => { pendingArrivals.clear(); });
+
+function noteArrival(accountId: string | undefined, mailboxId: string | undefined, added: unknown): void {
+  const count = typeof added === 'number' ? Math.round(added) : 0;
+  if (!accountId || !mailboxId || count <= 0) return;
+  const key = pairKey(accountId, mailboxId);
+  pendingArrivals.set(key, (pendingArrivals.get(key) ?? 0) + count);
+}
+
+/** The held counts as a patch fragment, folded onto what the session already counted. */
+function drainArrivals(): Partial<MailSnapshot> {
+  if (pendingArrivals.size === 0) return {};
+  const arrivals = { ...store.state.arrivals };
+  for (const [key, added] of pendingArrivals) arrivals[key] = (arrivals[key] ?? 0) + added;
+  pendingArrivals.clear();
+  return { arrivals };
+}
+
+/**
+ * Held while EVERY account's folder list is being read, so exactly one `ensureSelection` decides the row.
+ *
+ * Mailbox lists land one account at a time, and each one used to pick: the first to answer auto-picked its
+ * own inbox and fetched a page for it, and the second made the remembered or defaulted smart row visible,
+ * which replaced the selection and fetched again. One cold open therefore issued a per-account page nobody
+ * ever saw plus a merged page, and the merged one is the query that trades an index seek for a scan and a
+ * temporary sort, on the single event loop every route shares.
+ */
+let selectionHeld = false;
+
+onMailStoreReset(() => { selectionHeld = false; });
+
+/**
+ * Read every account's folders, then let ONE `ensureSelection` run. Returns whether the row changed.
+ *
+ * `pick: false` reads the folders and picks NOTHING, which is what the badge preload wants: it runs in a
+ * tab that never opened Mail, and a selection there means a page read for a pane nobody is looking at.
+ */
+async function loadEveryMailboxList(force = false, pick = true): Promise<boolean> {
+  selectionHeld = true;
+  try {
+    await Promise.all(store.state.accounts.map((account) => loadMailboxesFor(account.accountId, force)));
+  } finally {
+    selectionHeld = false;
+  }
+  return pick ? ensureSelection() : false;
+}
+
 function loadMailboxesFor(accountId: string, force = false): Promise<void> {
   return run(`mailboxes:${accountId}`, async () => {
     try {
       const answer = await listMailboxes(accountId);
-      patch({ mailboxes: { ...store.state.mailboxes, [accountId]: answer.mailboxes ?? [] } });
+      patch({
+        mailboxes: { ...store.state.mailboxes, [accountId]: answer.mailboxes ?? [] },
+        ...drainArrivals(),
+      });
       ensureSelection();
     } catch (error) {
+      // The rows did not come, but the arrival is still true: dropping it would leave the folder in
+      // the collapsed tail for the rest of the session.
+      const held = drainArrivals();
+      if (held.arrivals) patch(held);
       log.warn('mail', 'mailbox list failed', { accountId, error: mailFailure(error).message });
     }
   }, force);
@@ -86,18 +163,59 @@ function loadMailboxesFor(accountId: string, force = false): Promise<void> {
  * A console that opens with three panes and no mailbox chosen would ask the human to click
  * something before it could show anything, on every single visit.
  */
-function ensureSelection(): void {
+/**
+ * Is this selection still a row a person could click?
+ *
+ * Three kinds, and the two virtual ones are the reason this is a function rather than a lookup. The
+ * Drafts row is never in a provider's mailbox list: comparing it against that list said "gone" and
+ * moved the human back to the inbox on the next mailbox refresh, which any sync event triggers. A
+ * smart row is not in there either, and it is judged by the SAME rule that decides whether it is
+ * drawn (`smartRowVisible`), never by a second copy of that rule: `sync-completed` carries an
+ * accountId and fires every two minutes, so a smart selection judged dead by a table lookup bounced
+ * the human back to the first account's inbox while they were reading.
+ *
+ * This is also what validates a REMEMBERED selection, for the same reason: the two questions are the
+ * same question.
+ */
+function selectionAlive(selection: MailSelection): boolean {
   const state = store.state;
-  // The Drafts row is virtual, so it is never in a provider's mailbox list: comparing it against
-  // that list said "gone" and moved the human back to the inbox on the next mailbox refresh, which
-  // any sync event triggers. It is alive for as long as its ACCOUNT is.
-  const selected = state.selected;
-  if (selected) {
-    const alive = selected.mailboxId === DRAFTS_MAILBOX
-      ? state.accounts.some((account) => account.accountId === selected.accountId)
-      : state.mailboxes[selected.accountId]?.some((mailbox) => mailbox.mailboxId === selected.mailboxId);
-    if (alive) return;
+  if (selection.mailboxId === DRAFTS_MAILBOX) {
+    return state.accounts.some((account) => account.accountId === selection.accountId);
   }
+  const role = smartRoleOf(selection);
+  if (role) return smartRowVisible(state.mailboxes, state.accounts, role);
+  return !!state.mailboxes[selection.accountId]?.some((mailbox) => mailbox.mailboxId === selection.mailboxId);
+}
+
+/**
+ * Whether the row on screen was picked by the CONSOLE rather than by the human or their remembered
+ * preference, in which case a better answer arriving later is allowed to replace it.
+ *
+ * Load-bearing because mailboxes arrive ONE ACCOUNT AT A TIME: the first list to land is enough to
+ * auto-pick that account's inbox, and at that moment no smart row is visible yet (visibility needs
+ * two accounts holding the role) so a remembered `All Inboxes` fails validation and is discarded.
+ * Without this flag the automatic pick would then be final, and the remembered row would be lost on
+ * every fresh tab.
+ */
+let autoPicked = false;
+
+onMailStoreReset(() => { autoPicked = false; });
+
+/** True when this call CHANGED the selection, which means a page for it is already in flight. */
+function ensureSelection(): boolean {
+  const state = store.state;
+  // Every account's folder list is still being read: one caller runs this once at the end instead, so a
+  // half-read set cannot pick a row that the rest of the set would immediately replace.
+  if (selectionHeld) return false;
+  const selected = state.selected;
+  const alive = !!selected && selectionAlive(selected);
+  if (alive && !autoPicked) return false;
+  const before = selected ? selectionKey(selected) : '';
+  if (adoptRemembered()) {
+    const now = store.state.selected;
+    return (now ? selectionKey(now) : '') !== before;
+  }
+  if (alive) return false;
   const preferred = store.preferAccount;
   const order = preferred
     ? [...state.accounts].sort((a, b) => (a.accountId === preferred ? -1 : b.accountId === preferred ? 1 : 0))
@@ -111,16 +229,92 @@ function ensureSelection(): void {
       ?? mailboxes[0];
     if (!target) continue;
     if (preferred === account.accountId) store.preferAccount = null;
-    selectMailbox(account.accountId, target.mailboxId);
-    return;
+    applySelection(account.accountId, target.mailboxId, 'auto');
+    return selectionKey({ accountId: account.accountId, mailboxId: target.mailboxId }) !== before;
   }
+  return false;
+}
+
+/**
+ * Take up the row this person was last reading, when it is still a row.
+ *
+ * Validated here rather than in the preference file, which has never seen a mailbox list: a smart
+ * pair only when its row is visible, a real pair only when it is still in that account's list (or it
+ * is that account's Drafts row). Anything else is discarded and the ordinary automatic pick decides.
+ *
+ * NOTHING remembered on a fresh install with two accounts means `All Inboxes`, which is the answer to
+ * "where is there new mail" and the reason the smart rows exist. A stored row that failed validation
+ * is deliberately NOT replaced by that: it falls through to the ordinary order, so a row that
+ * disappeared behaves like it was never selected.
+ *
+ * A just-added account wins over both: that is an explicit action taken seconds ago.
+ */
+function adoptRemembered(): boolean {
+  const state = store.state;
+  // No accounts yet means the accounts read has not landed, so nothing can be validated against it.
+  if (state.accounts.length === 0 || store.preferAccount) return false;
+  const remembered = readSelectedPref(state.accounts.map((one) => one.accountId));
+  const wanted = remembered && selectionAlive(remembered)
+    ? remembered
+    : (!remembered && smartRowVisible(state.mailboxes, state.accounts, 'inbox')
+      ? { accountId: SMART_ACCOUNT, mailboxId: SMART_INBOX }
+      : null);
+  if (!wanted) return false;
+  const selected = state.selected;
+  if (selected && selected.accountId === wanted.accountId && selected.mailboxId === wanted.mailboxId) {
+    // Already on it: the provisional pick turned out to be the wanted row, so stop calling it
+    // provisional or every later mailbox list would try to replace it again.
+    autoPicked = false;
+    return true;
+  }
+  applySelection(wanted.accountId, wanted.mailboxId, 'restored');
+  return true;
 }
 
 export function selectMailbox(accountId: string, mailboxId: string): void {
+  applySelection(accountId, mailboxId, 'human');
+}
+
+/** Select the merged list of one role. The reserved pair is a selection like any other. */
+export function selectSmartMailbox(id: SmartMailboxId): void {
+  selectMailbox(SMART_ACCOUNT, id);
+}
+
+/**
+ * Who chose this row, which three different things downstream need to tell apart.
+ *
+ * - `human`: a click or a keyboard activation, happening now.
+ * - `restored`: the row they were last reading, or the default `All Inboxes`, taken up as the console
+ *   loads. Written down and final like a human pick, because it IS their row, but nothing they just did.
+ * - `auto`: the console picking for them because nothing else resolved. Provisional (see `autoPicked`)
+ *   and never written down, because remembering it would overwrite the row they actually chose with
+ *   whichever account's mailbox list answered first.
+ */
+type SelectionSource = 'human' | 'restored' | 'auto';
+
+function applySelection(accountId: string, mailboxId: string, source: SelectionSource): void {
   const selected = store.state.selected;
   if (selected && selected.accountId === accountId && selected.mailboxId === mailboxId) return;
+  const auto = source === 'auto';
+  autoPicked = auto;
+  const accountIds = store.state.accounts.map((one) => one.accountId);
+  if (!auto) {
+    writeSelectedPref(accountIds, { accountId, mailboxId });
+    // An ordinary label opened by hand is one of the three the collapse row lifts back out next time.
+    const row = (store.state.mailboxes[accountId] ?? []).find((one) => one.mailboxId === mailboxId);
+    if (row?.role === 'other') noteRecentFolder(accountIds, accountId, mailboxId);
+    // Picking a real folder is using that identity: it is what a compose from a merged list defaults to.
+    noteMailIdentity(accountId);
+  }
   patch({
     selected: { accountId, mailboxId },
+    // Only a HUMAN pick spends the sidebar's aim (see `picks`). The console's own picks, restored or
+    // automatic, land as the folder lists answer, which is while a pointer may be resting on a row.
+    ...(source === 'human' ? { picks: store.state.picks + 1 } : {}),
+    // Opening the folder ENDS its arrival: the `New` mark says "mail arrived here and nobody has looked",
+    // and it used to be kept until Mail was remounted, so it came back the moment the person moved to the
+    // next folder and said New about mail they had just read.
+    arrivals: arrivalsAfterOpen(store.state.arrivals, pairKey(accountId, mailboxId)),
     messages: [],
     nextBefore: null,
     listError: null,
@@ -145,9 +339,19 @@ export function selectMailbox(accountId: string, mailboxId: string): void {
  * not trigger a fetch of something nobody can name.
  */
 function folderEverFetched(selection: MailSelection): boolean {
+  // A merged list is not a folder, so there is nothing to fetch and nothing to say: it reads from
+  // folders the sweep stamps on their own, and "Fetching this folder" over a list of several folders
+  // would name one that does not exist.
+  if (isSmartSelection(selection)) return true;
   const row = (store.state.mailboxes[selection.accountId] ?? [])
     .find((one) => one.mailboxId === selection.mailboxId);
   return !row || row.lastSyncAt !== undefined;
+}
+
+/** Which role a smart selection stands for, or null for every real selection. */
+function smartRoleOf(selection: MailSelection): SmartRole | null {
+  if (!isSmartSelection(selection)) return null;
+  return SMART_ROLE[selection.mailboxId as SmartMailboxId] ?? null;
 }
 
 /**
@@ -165,7 +369,11 @@ function folderEverFetched(selection: MailSelection): boolean {
  */
 export function fetchSelectedFolder(auto = false): Promise<void> {
   const selection = store.state.selected;
-  if (!selection || selection.mailboxId === DRAFTS_MAILBOX) return Promise.resolve();
+  // The route takes a real (accountId, mailboxId). Both virtual rows return here, on the first line,
+  // rather than sending a reserved id the provider would have to refuse.
+  if (!selection || selection.mailboxId === DRAFTS_MAILBOX || isSmartSelection(selection)) {
+    return Promise.resolve();
+  }
   const key = selectionKey(selection);
   if (auto) {
     if (store.folderFetchAsked.has(key)) return Promise.resolve();
@@ -212,8 +420,41 @@ export function fetchSelectedFolder(auto = false): Promise<void> {
  * means there is no page to read, only this console's drafts.
  */
 function pageMailboxOf(selection: MailSelection): string | null {
+  // A smart selection has no single folder at all: its page is one server query over the pairs of a
+  // role, and answering with the reserved id would send it to the route as `mailbox`.
+  if (isSmartSelection(selection)) return null;
   if (selection.mailboxId !== DRAFTS_MAILBOX) return selection.mailboxId;
   return serverDraftsMailbox(store.state.mailboxes[selection.accountId])?.mailboxId ?? null;
+}
+
+/**
+ * The query a page read carries, except the cursor.
+ *
+ * ONE place on purpose: page 2 has to be identical to page 1 apart from `before`, or it is a
+ * different query and the rows it answers with do not continue the list on screen. A smart selection
+ * carries `scope` and NEITHER `account` nor `mailbox` (the server refuses the combination), which is
+ * also what makes the merged list one query rather than a merge of per-account pages.
+ */
+function pageQuery(selection: MailSelection, mailboxId: string | null): {
+  accountId?: string;
+  mailboxId?: string;
+  limit: number;
+  unread?: true;
+  scope?: 'role:inbox' | 'role:sent' | 'role:drafts';
+} {
+  const role = smartRoleOf(selection);
+  return {
+    limit: PAGE_SIZE,
+    ...(role
+      ? { scope: `role:${role}` as const }
+      : { accountId: selection.accountId, ...(mailboxId ? { mailboxId } : {}) }),
+    ...(unreadOnlyFor(selection) ? { unread: true as const } : {}),
+  };
+}
+
+/** Neither Drafts row carries the unread filter: a draft is not unread mail. */
+function unreadFilterable(selection: MailSelection): boolean {
+  return selection.mailboxId !== DRAFTS_MAILBOX && selection.mailboxId !== SMART_DRAFTS;
 }
 
 /**
@@ -225,7 +466,9 @@ function pageMailboxOf(selection: MailSelection): string | null {
  * and neither is search, which is a different route entirely.
  */
 function unreadOnlyFor(selection: MailSelection): boolean {
-  if (selection.mailboxId === DRAFTS_MAILBOX) return false;
+  if (!unreadFilterable(selection)) return false;
+  // The reserved pair is a legal key of this store like any other, so a smart row carries its own
+  // flag and turning it on leaves every account's own row exactly as it was.
   return readUnreadOnly(selection.accountId, selection.mailboxId);
 }
 
@@ -244,7 +487,7 @@ function unreadOnlyFor(selection: MailSelection): boolean {
  */
 export function setMailUnreadOnly(on: boolean): Promise<void> {
   const selection = store.state.selected;
-  if (!selection || selection.mailboxId === DRAFTS_MAILBOX) return Promise.resolve();
+  if (!selection || !unreadFilterable(selection)) return Promise.resolve();
   writeUnreadOnly(selection.accountId, selection.mailboxId, on);
   patch({ nextBefore: null, listError: null });
   return loadMailMessages(true);
@@ -253,6 +496,14 @@ export function setMailUnreadOnly(on: boolean): Promise<void> {
 export function loadMailMessages(force = false): Promise<void> {
   const selection = store.state.selected;
   if (!selection) return Promise.resolve();
+  const role = smartRoleOf(selection);
+  if (role) {
+    const page = loadMessagePage(selection, null, force);
+    // All Drafts is the per-account Drafts row's two halves, merged: this console's own drafts (one
+    // request already covers every account) above the providers' drafts folders.
+    if (role !== 'drafts') return page;
+    return Promise.all([loadMailDrafts(force), page]).then(() => undefined);
+  }
   if (selection.mailboxId === DRAFTS_MAILBOX) {
     const mailboxId = pageMailboxOf(selection);
     // Two stores, so two reads: the drafts this console wrote, and the provider's drafts folder.
@@ -276,17 +527,12 @@ export function loadMailMessages(force = false): Promise<void> {
  * arriving mid-flight therefore rides `force`, which queues exactly one more pass, and the pass
  * re-reads the preference.
  */
-function loadMessagePage(selection: MailSelection, mailboxId: string, force: boolean): Promise<void> {
+function loadMessagePage(selection: MailSelection, mailboxId: string | null, force: boolean): Promise<void> {
   return run(`messages:${selectionKey(selection)}`, async () => {
     patch({ listLoading: true, listError: null });
     const unread = unreadOnlyFor(selection);
     try {
-      const page = await listMailMessages({
-        accountId: selection.accountId,
-        mailboxId,
-        limit: PAGE_SIZE,
-        ...(unread ? { unread: true } : {}),
-      });
+      const page = await listMailMessages(pageQuery(selection, mailboxId));
       // The human may have moved to another mailbox while this was in flight.
       if (!sameSelection(selection)) return;
       const rows = page.messages ?? [];
@@ -325,25 +571,25 @@ export function loadOlderMailMessages(): Promise<void> {
   const before = store.state.nextBefore;
   if (!selection || before === null) return Promise.resolve();
   const mailboxId = pageMailboxOf(selection);
-  if (!mailboxId) return Promise.resolve();
+  if (!mailboxId && !smartRoleOf(selection)) return Promise.resolve();
   return run(`older:${selectionKey(selection)}:${before}`, async () => {
     patch({ olderLoading: true });
     try {
-      const page = await listMailMessages({
-        accountId: selection.accountId,
-        mailboxId,
-        limit: PAGE_SIZE,
-        before,
-        // The cursor came from a page read under this same filter, so the two have to agree or the
-        // next page would be taken from a different list than the one it continues.
-        ...(unreadOnlyFor(selection) ? { unread: true } : {}),
-      });
+      // The same query as page 1 plus the cursor, from the one builder: the cursor was issued for
+      // that query, so a second page assembled from different parameters continues a different list.
+      const page = await listMailMessages({ ...pageQuery(selection, mailboxId), before });
       if (!sameSelection(selection)) return;
       // Appending is also what keeps a row the server has stopped returning: a message read while the
       // filter is on is already in this list, and it is not in any later page.
-      const known = new Set(store.state.messages.map((one) => one.messageId));
+      //
+      // Keyed by PAIR, because a merged list is the first place two providers' id spaces share a
+      // column: a bare messageId set lets account A's ids silently delete account B's rows.
+      const known = new Set(store.state.messages.map((one) => pairKey(one.accountId, one.messageId)));
       patch({
-        messages: [...store.state.messages, ...(page.messages ?? []).filter((one) => !known.has(one.messageId))],
+        messages: [
+          ...store.state.messages,
+          ...(page.messages ?? []).filter((one) => !known.has(pairKey(one.accountId, one.messageId))),
+        ],
         nextBefore: page.nextBefore ?? null,
         olderLoading: false,
       });
@@ -374,6 +620,9 @@ export function openMailMessage(
   // look like it did nothing at all.
   if (store.state.composer) void closeMailComposer();
   const seq = ++store.openSeq;
+  // Reading a message is using its identity, which is what makes New message from a merged list write
+  // as the account whose mail is on screen rather than as whichever account happens to be listed first.
+  noteMailIdentity(accountId);
   const known = [...store.state.messages, ...store.state.search.messages]
     .find((one) => one.messageId === messageId && one.accountId === accountId) ?? null;
   patch({
@@ -490,7 +739,11 @@ export function openMailDeepLink(accountId: string, messageId: string): Promise<
 export function runMailSearch(query: string): Promise<void> {
   const trimmed = query.trim();
   if (!trimmed) { clearMailSearch(); return Promise.resolve(); }
-  const accountId = store.state.selected?.accountId;
+  // A merged list is every account, so its search is too: the route reads a missing `account` as
+  // "all of them". Sending the reserved id instead would filter by an account no provider has and
+  // answer zero rows under "Nothing matched", which reads as lost mail.
+  const selection = store.state.selected;
+  const accountId = selection && !isSmartSelection(selection) ? selection.accountId : undefined;
   patch({ search: { ...store.state.search, query: trimmed, active: true, loading: true, error: null } });
   return run(`search:${pairKey(accountId ?? '', trimmed)}`, async () => {
     try {
@@ -588,20 +841,31 @@ export async function addMailAccount(
 export function loadMailBadgeSource(): Promise<void> {
   return run('badge-source', async () => {
     await Promise.all([loadProviders(), loadAccounts(true)]);
-    await Promise.all(store.state.accounts.map((account) => loadMailboxesFor(account.accountId)));
+    // No pick: this runs in a tab that never opened Mail, and picking a row reads that row's page for a
+    // pane nobody is looking at. The console's own open resolves the row (see `openMailConsole`).
+    await loadEveryMailboxList(false, false);
   });
 }
 
 export function openMailConsole(): Promise<void> {
-  if (store.state.loaded) return refreshMailAll();
+  // A second mount while the first is still booting JOINS it (`run` coalesces by key). React runs an
+  // effect twice in development and the accounts read marks the store loaded before the boot has its page,
+  // so the second call used to take the refresh path and read every list and the merged page AGAIN, 38ms
+  // after the first: three identical cross-account pages for one open.
+  // `force: false`, so a second mount JOINS the refresh the first one started instead of queueing another
+  // pass over every list and the page (`run`'s force is "one more pass", which is what a human pressing
+  // Refresh mid-flight wants and what a duplicate mount must not do).
+  if (store.state.loaded && !isRunning('bootstrap')) return refreshMailAll(false);
   return run('bootstrap', async () => {
     patch({ loading: true });
     try {
       // Drafts ride along with the accounts: the Drafts row's count badge is part of the first
       // paint of the left pane, and every account's drafts arrive in ONE request.
       await Promise.all([loadProviders(), loadAccounts(), loadMailDrafts()]);
-      await Promise.all(store.state.accounts.map((account) => loadMailboxesFor(account.accountId)));
-      ensureSelection();
+      // A selection change has already started this row's page (see `applySelection`), and this call
+      // carries no `force`, so it joins that request rather than queueing a second pass over the same
+      // rows. It still has to be awaited: with the row unchanged it is the only page read there is.
+      await loadEveryMailboxList();
       await loadMailMessages();
     } finally {
       patch({ loading: false });
@@ -609,13 +873,24 @@ export function openMailConsole(): Promise<void> {
   });
 }
 
-export function refreshMailAll(): Promise<void> {
+/**
+ * Read everything again: accounts, drafts, every folder list, and the page on screen.
+ *
+ * `force` is what a HUMAN pressing Refresh means (do it again even if one is running) and what a socket
+ * reconnect means (the gap lost events). Entering the console passes false: it wants the console fresh, and
+ * a refresh already in flight is exactly that.
+ */
+export function refreshMailAll(force = true): Promise<void> {
   return run('refresh-all', async () => {
     await Promise.all([loadAccounts(true), loadMailDrafts(true)]);
-    await Promise.all(store.state.accounts.map((account) => loadMailboxesFor(account.accountId, true)));
-    ensureSelection();
-    await loadMailMessages(true);
-  }, true);
+    const changed = await loadEveryMailboxList(true);
+    // `force` ONLY when the row is the same one AND no page for it is already on its way: a changed row has
+    // a fresh page in flight already, and forcing on top of one queues a second identical read of a
+    // cross-account scan (see `isRunning`).
+    const selected = store.state.selected;
+    const onItsWay = !!selected && isRunning(`messages:${selectionKey(selected)}`);
+    await loadMailMessages(!changed && !onItsWay);
+  }, force);
 }
 
 /**
@@ -641,7 +916,13 @@ function clearRefreshNoteFor(accountId: string | undefined): void {
  * badge moving, and it is why nothing here pulls a page unless a pane is showing that mailbox.
  */
 export function onMailEvent(name: string, data: unknown): void {
-  const payload = (data ?? {}) as { accountId?: string; mailboxId?: string; messageId?: string; taskId?: string };
+  const payload = (data ?? {}) as {
+    accountId?: string;
+    mailboxId?: string;
+    messageId?: string;
+    taskId?: string;
+    added?: number;
+  };
   if (name === 'providers-changed') { void loadProviders(true); return; }
 
   // A task made anywhere (this tab, another tab, an agent). Ahead of the loaded gate and it makes no
@@ -675,13 +956,25 @@ export function onMailEvent(name: string, data: unknown): void {
   if (name === 'sync-completed' || name === 'messages-received') {
     clearRefreshNoteFor(payload.accountId);
     void loadAccounts(true);
+    // Noted BEFORE the mailbox read, so it rides in the same patch as the rows it promotes.
+    noteArrival(payload.accountId, payload.mailboxId, payload.added);
     if (payload.accountId) void loadMailboxesFor(payload.accountId, true);
     const selection = store.state.selected;
-    // The page on screen, by the mailbox it was READ from: with the Drafts row open that is the
-    // provider's drafts folder, so a sync of that folder is news for this pane too.
-    const mine = selection
-      && (!payload.accountId || payload.accountId === selection.accountId)
-      && (!payload.mailboxId || payload.mailboxId === pageMailboxOf(selection));
+    const role = selection ? smartRoleOf(selection) : null;
+    // Whether this event belongs to the list on screen. For a merged list the question is asked of
+    // the PAIRS that list is made of, the same pairs the server's scope resolves to: the reserved
+    // accountId matches no real account, so comparing it would freeze the merged list while the
+    // badges next to it kept moving. `messages-received` carries no mailboxId, so the loose reading
+    // stands: any account taking part in this role is news for this pane.
+    const mine = selection && (role
+      ? smartPairs(store.state.mailboxes, store.state.accounts, role).some((pair) => (
+        (!payload.accountId || pair.accountId === payload.accountId)
+        && (!payload.mailboxId || pair.mailboxId === payload.mailboxId)
+      ))
+      // The page on screen, by the mailbox it was READ from: with the Drafts row open that is the
+      // provider's drafts folder, so a sync of that folder is news for this pane too.
+      : (!payload.accountId || payload.accountId === selection.accountId)
+        && (!payload.mailboxId || payload.mailboxId === pageMailboxOf(selection)));
     if (mine) void loadMailMessages(true);
   }
 }

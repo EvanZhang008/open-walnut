@@ -1,21 +1,49 @@
 /**
- * The left pane: every account, its mailboxes, and the two controls that change the set.
+ * The left pane: the smart mailboxes, every account with its folders, and the controls that change
+ * the set. The two lists themselves live next door (`MailSmartRows`, `MailAccountFolders`); this file
+ * is the shell, the preferences, and the one rule that is easy to get wrong.
  *
- * An account that cannot be reached is shown WITH its state rather than hidden or silently
- * empty: a mailbox that has stopped updating and never says so is the failure this pane exists
- * to prevent. `auth-required` also says what fixes it, because polling has stopped for that
- * account until a human acts and no amount of waiting or clicking refresh will change that.
+ * That rule is REFLOW SUSPENSION. Rows move on their own here: a folder that receives mail during a
+ * session is lifted out of the collapsed tail, and the clock decides when (a poll is every two minutes
+ * and one account has 64 folders). The collapse row and the Drafts row right above it are the most
+ * aimed-at targets in this pane, so an insertion landing between `pointerdown` and `click` makes a
+ * person open a folder they did not choose. While the pointer or the focus is inside the pane, row
+ * insertions, removals and moves are HELD: the numbers keep moving (they are what tell you something
+ * arrived), only the geometry stands still, and the held shape lands on `pointerleave`, on the next
+ * selection change, or after an idle gap. No flash, no "new mail" marker: the badges already said it.
  */
-import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent } from 'react';
 import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
 import { ContextMenu } from '@/components/common/ContextMenu';
-import { DRAFTS_MAILBOX, serverDraftsMailbox, type MailSelection } from './mail-store';
-import { requestMailRefresh, selectMailbox } from './mail-actions';
+import {
+  getMailSnapshot,
+  isSmartSelection,
+  pairKey,
+  selectionKey,
+  subscribeMail,
+  type MailSelection,
+} from './mail-store';
+import { requestMailRefresh } from './mail-actions';
 import { sendMailDigest } from './mail-task-actions';
 import { openMailComposer } from './compose/compose-actions';
-import { CANNOT_SEND_TITLE, canSendFrom, isOpenDraft } from './compose/send-status';
-import { formatCount } from './mail-format';
-import { ComposeIcon, DraftsIcon, MailboxRoleIcon, RefreshIcon } from './mail-icons';
+import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
+import {
+  draftsRowCount,
+  draftsTotalCount,
+  smartUnread,
+  sendableAccountFor,
+  type SmartRole,
+} from './mail-smart';
+import {
+  readSidebarPrefs,
+  writeSmartExpanded,
+  writeTailExpanded,
+  type SidebarPrefs,
+  type SmartPrefId,
+} from './mail-sidebar-prefs';
+import { MailSmartRows } from './MailSmartRows';
+import { MailAccountFolders } from './MailAccountFolders';
+import { ComposeIcon, RefreshIcon } from './mail-icons';
 
 interface Props {
   accounts: MailAccountDto[];
@@ -29,6 +57,9 @@ interface Props {
   /** A narrow viewport drills back to the list once a mailbox is picked. */
   onPicked: () => void;
 }
+
+/** How long a still pointer inside the pane counts as aiming at something. */
+const IDLE_MS = 2_500;
 
 /**
  * Where a menu opened from a BUTTON belongs.
@@ -44,31 +75,191 @@ function menuPointFor(event: ReactMouseEvent<HTMLElement>): { x: number; y: numb
   return { x: box.left, y: box.bottom };
 }
 
-/**
- * The folder rows with the Drafts row put back where the provider's own Drafts folder was.
- *
- * A splice rather than an append: the server lists an account's folders inbox first and then by
- * name (Inbox, Archive, Drafts, Junk, Sent), so appending the merged row would move Drafts past
- * Sent and reorder a list the person already knows. An account whose provider keeps no drafts
- * folder gets the row last, which is where it has always been.
- */
-function withDraftsRow(rows: ReactNode[], at: number, draftsRow: ReactNode): ReactNode[] {
-  return [...rows.slice(0, at), draftsRow, ...rows.slice(at)];
+interface Aim {
+  /** True while somebody is pointing at or tabbing through the pane and has not gone idle. */
+  busy: boolean;
+  handlers: {
+    onPointerEnter: () => void;
+    onPointerMove: () => void;
+    onPointerLeave: () => void;
+    onPointerDown: () => void;
+    onPointerCancel: () => void;
+    onClick: () => void;
+    onFocus: () => void;
+    onBlur: (event: { currentTarget: HTMLElement; relatedTarget: EventTarget | null }) => void;
+  };
 }
 
-const STATE_LABEL: Record<string, string> = {
-  'auth-required': 'Sign-in needed',
-  disabled: 'Paused',
-};
+/**
+ * Whether this pane is being aimed at, and the handlers that decide it.
+ *
+ * A press is its own state and outranks the idle timer: between `pointerdown` and `click` nothing may
+ * move, however long the button is held. Focus counts too, because Tab through 29 rows is the same
+ * problem for anyone not using a mouse.
+ */
+function useAim(): Aim {
+  const [pointer, setPointer] = useState(false);
+  const [focus, setFocus] = useState(false);
+  const [pressing, setPressing] = useState(false);
+  const [idle, setIdle] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastMove = useRef(0);
+
+  const arm = () => {
+    setIdle(false);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setIdle(true), IDLE_MS);
+  };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  return {
+    busy: ((pointer || focus) && !idle) || pressing,
+    handlers: {
+      onPointerEnter: () => { setPointer(true); arm(); },
+      // Throttled: a move only matters as proof the pointer is still hunting.
+      onPointerMove: () => {
+        const now = Date.now();
+        if (now - lastMove.current < 250) return;
+        lastMove.current = now;
+        arm();
+      },
+      onPointerLeave: () => { setPointer(false); setPressing(false); },
+      onPointerDown: () => { setPressing(true); arm(); },
+      onPointerCancel: () => setPressing(false),
+      onClick: () => setPressing(false),
+      onFocus: () => { setFocus(true); arm(); },
+      onBlur: (event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        setFocus(false);
+      },
+    },
+  };
+}
+
+/**
+ * The row shape to render: the current one, or the last one that landed while nobody was aiming.
+ *
+ * Both halves are store objects with stable identities, so the effect only runs when one of them
+ * really changed, and `setHeld` returns the previous object when nothing did: holding a freshly built
+ * object here instead would re-render forever.
+ */
+function useHeldRows(
+  mailboxes: Record<string, MailboxDto[]>,
+  arrivals: Record<string, number>,
+  busy: boolean,
+  release: number,
+): { mailboxes: Record<string, MailboxDto[]>; arrivals: Record<string, number> } {
+  const [held, setHeld] = useState({ mailboxes, arrivals });
+  const landed = useRef(release);
+  useEffect(() => {
+    // A PERSON'S pick is a release: they just told the pane what they wanted, so the row they are
+    // looking at has to be one that is really there. Counted picks, not the selection key, because the
+    // console also picks a row by itself as the folder lists land (`applySelection(auto)`): that key
+    // change released the hold mid-hover and let a row move under a resting pointer, which is the very
+    // thing the hold exists to stop (it showed up as this spec passing alone and failing in a batch,
+    // where the automatic pick lands later).
+    if (busy && release === landed.current) return;
+    landed.current = release;
+    setHeld((prev) => (
+      prev.mailboxes === mailboxes && prev.arrivals === arrivals ? prev : { mailboxes, arrivals }
+    ));
+  }, [mailboxes, arrivals, busy, release]);
+  return held;
+}
 
 export function MailAccountsPane({
   accounts, mailboxes, drafts, providers, selected, refreshing, refreshNote, onAddAccount, onPicked,
 }: Props) {
-  // The compose entry point belongs to the SELECTED account, and whether it may send is that
-  // ACCOUNT's own capability when the server sent one, the provider's otherwise. An account that
-  // cannot send says so on the button rather than failing on the click.
-  const composeAccount = selected?.accountId;
-  const canCompose = canSendFrom(providers, composeAccount, accounts);
+  const aim = useAim();
+  // `arrivals` is session churn nothing else in the console renders, so it is read from the store here
+  // rather than threaded through the app shell.
+  const snapshot = useSyncExternalStore(subscribeMail, getMailSnapshot);
+  const arrivals = snapshot.arrivals;
+  const identities = snapshot.identities;
+  const held = useHeldRows(mailboxes, arrivals, aim.busy, snapshot.picks);
+
+  const accountIds = accounts.map((one) => one.accountId);
+  const idsKey = accountIds.join(' ');
+  // One read of one key. Re-read when the account set changes, which is also when the stored blob is
+  // pruned of the accounts that no longer exist.
+  const [prefs, setPrefs] = useState<SidebarPrefs>(() => readSidebarPrefs([]));
+  useEffect(() => { setPrefs(readSidebarPrefs(idsKey ? idsKey.split(' ') : [])); }, [idsKey]);
+  // The "opened lately" list is written by the selection (see `noteRecentFolder`), so the pane has to read
+  // it again when the selection changes. Read only at mount it was one selection behind, which nothing
+  // showed while a new-mail arrival was also holding the row out; once opening a folder spends that arrival
+  // (see `arrivalsAfterOpen`), a label lifted out for new mail vanished from the pane the moment the person
+  // opened it and moved on. Same object when the list has not changed, so this cannot loop.
+  const selectedKey = selected ? selectionKey(selected) : '';
+  useEffect(() => {
+    setPrefs((prev) => {
+      const recent = readSidebarPrefs(idsKey ? idsKey.split(' ') : []).recent;
+      return JSON.stringify(recent) === JSON.stringify(prev.recent) ? prev : { ...prev, recent };
+    });
+  }, [selectedKey, idsKey]);
+
+  // Memory first, storage second: a browser that refuses to keep the preference still expands the row.
+  const toggleSmart = (id: SmartPrefId, on: boolean) => {
+    setPrefs((prev) => {
+      const smart = { ...prev.smart };
+      if (on) smart[id] = 1; else delete smart[id];
+      return { ...prev, smart };
+    });
+    try { writeSmartExpanded(accountIds, id, on); } catch { /* the row is already open */ }
+  };
+  const toggleTail = (accountId: string, on: boolean) => {
+    setPrefs((prev) => {
+      const tail = { ...prev.tail };
+      if (on) tail[accountId] = 1; else delete tail[accountId];
+      return { ...prev, tail };
+    });
+    try { writeTailExpanded(accountIds, accountId, on); } catch { /* the tail is already open */ }
+  };
+
+  const live = useMemo(() => {
+    const map: Record<string, MailboxDto> = {};
+    for (const [accountId, rows] of Object.entries(mailboxes)) {
+      for (const row of rows) map[pairKey(accountId, row.mailboxId)] = row;
+    }
+    return map;
+  }, [mailboxes]);
+  const unread = useMemo<Record<SmartRole, number>>(() => ({
+    inbox: smartUnread(mailboxes, 'inbox'),
+    sent: smartUnread(mailboxes, 'sent'),
+    drafts: smartUnread(mailboxes, 'drafts'),
+  }), [mailboxes]);
+  // ONE derivation of the Drafts badge, for the per-account rows and the All Drafts row: the drafts
+  // written in this console, which is the first section of the view each of them opens and therefore a
+  // number a person can check by counting rows (see `draftsRowCount`).
+  const draftsCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const account of accounts) {
+      map[account.accountId] = draftsRowCount(drafts[account.accountId]);
+    }
+    return map;
+  }, [accounts, drafts]);
+  const draftsTotal = useMemo(() => draftsTotalCount(drafts, accounts), [drafts, accounts]);
+
+  // The compose entry point belongs to the SELECTED account, and whether it may send is that ACCOUNT's
+  // own capability when the server sent one, the provider's otherwise. A SMART selection has no account,
+  // and reading its reserved id as an identity turned the pane's primary button grey in what is now the
+  // default view, under a sentence about an account that does not exist: it resolves to a real account
+  // that can send, and the button says which one.
+  const landedAccounts = accounts.filter((one) => held.mailboxes[one.accountId] !== undefined);
+  const smart = isSmartSelection(selected);
+  // `identities` is what this session has just read from or sent as, so New message from a merged list
+  // writes as the account whose mail is on screen instead of as whichever account is listed first.
+  const composeAccount = smart
+    ? sendableAccountFor(accounts, providers, identities)
+    : selected?.accountId;
+  const canCompose = canSendFrom(providers, composeAccount ?? undefined, accounts);
+  const identity = accounts.find((one) => one.accountId === composeAccount);
+  const composeTitle = !composeAccount || !canCompose
+    ? CANNOT_SEND_TITLE
+    : (smart && identity
+      ? `Write a new message as ${identity.displayName || identity.address}`
+      : 'Write a new message');
+
   // A portalled menu, so one more pane action costs no width in a head that already holds two
   // controls. See web/src/AGENTS.md: placement, portalling and dismissal are the shared component's,
   // never hand-rolled here.
@@ -79,8 +270,9 @@ export function MailAccountsPane({
   // `menuPointFor`. In state, not a ref, because `useMenuPlacement` takes the point as a dependency
   // and needs it to be referentially stable across renders.
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(null);
+
   return (
-    <aside className="mail-accounts-pane" data-testid="mail-accounts-pane">
+    <aside className="mail-accounts-pane" data-testid="mail-accounts-pane" {...aim.handlers}>
       {/* No pane title: the folders are directly below and name themselves, and the 232px head has
           three controls to fit. The primary action gets the room instead. */}
       <div className="mail-pane-head">
@@ -88,7 +280,7 @@ export function MailAccountsPane({
           type="button"
           className="mail-compose-new"
           data-testid="mail-compose-new"
-          title={canCompose ? 'Write a new message' : CANNOT_SEND_TITLE}
+          title={composeTitle}
           disabled={!composeAccount || !canCompose}
           onClick={() => { if (composeAccount) void openMailComposer(composeAccount); }}
         >
@@ -141,99 +333,37 @@ export function MailAccountsPane({
       )}
 
       <div className="mail-accounts-scroll">
-        {accounts.map((account) => {
-          const all = mailboxes[account.accountId] ?? [];
-          // The provider's own Drafts folder leaves the list: the ONE Drafts row below reaches it,
-          // in the place that folder held, so the order a person knows their mailbox by is kept.
-          const rows = all.filter((mailbox) => mailbox.role !== 'drafts');
-          const draftsAt = serverDraftsMailbox(all) ? all.findIndex((one) => one.role === 'drafts') : rows.length;
-          const stateLabel = account.state === 'active' ? null : STATE_LABEL[account.state] ?? account.state;
-          return (
-            <section className="mail-account" key={account.accountId} data-account-id={account.accountId}>
-              <header className="mail-account-head">
-                <span className="mail-account-name">{account.displayName || account.address}</span>
-                {account.address && account.displayName !== account.address && (
-                  <span className="mail-account-address">{account.address}</span>
-                )}
-                {stateLabel && (
-                  <span
-                    className="mail-account-state"
-                    data-testid="mail-account-state"
-                    data-state={account.state}
-                  >
-                    {stateLabel}
-                  </span>
-                )}
-              </header>
-
-              {account.state === 'auth-required' && (
-                <p className="mail-account-hint" title={account.health?.detail ?? undefined}>
-                  Fix credentials: update the password where this provider keeps it, then press
-                  Refresh. Walnut has stopped polling this account until then.
-                </p>
-              )}
-
-              {/* `all`, not the filtered rows: an account whose only folder is Drafts has been
-                  listed, and the merged row below is showing it. */}
-              {all.length === 0 && (
-                <p className="mail-account-hint">No folders yet. The first sync lists them.</p>
-              )}
-
-              <ul className="mail-mailboxes">
-                {withDraftsRow(
-                  rows.map((mailbox) => {
-                    const active = selected?.accountId === account.accountId
-                      && selected.mailboxId === mailbox.mailboxId;
-                    return (
-                      <li key={mailbox.mailboxId}>
-                        <button
-                          type="button"
-                          className={`mail-mailbox${active ? ' active' : ''}`}
-                          data-mailbox-id={mailbox.mailboxId}
-                          data-account-id={account.accountId}
-                          data-unread={mailbox.unread}
-                          data-total={mailbox.total}
-                          aria-current={active ? 'true' : undefined}
-                          onClick={() => {
-                            selectMailbox(account.accountId, mailbox.mailboxId);
-                            onPicked();
-                          }}
-                        >
-                          <MailboxRoleIcon role={mailbox.role} />
-                          <span className="mail-mailbox-name">{mailbox.name}</span>
-                          {/* The EXACT number, from this mailbox row, which is the same row the list
-                              header's own two numbers come from. It used to cap at "99+", and a
-                              folder saying "Inbox 99+" next to a header saying "5 unread" is two
-                              numbers a human cannot reconcile by looking. The badge grows instead
-                              and the folder name gives up the width (see mail.css). */}
-                          {mailbox.unread > 0 && (
-                            <span className="mail-unread-badge" data-testid="mail-mailbox-unread">
-                              {formatCount(mailbox.unread)}
-                            </span>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  }),
-                  draftsAt,
-                  /* ONE Drafts row for both kinds. Walnut's own drafts live in the plugin's
-                     database with their approval state, which a provider's Drafts folder knows
-                     nothing about; the folder holds what another device wrote. The row opens a
-                     list with a section for each. */
-                  <li key="walnut-drafts">
-                    <DraftsRow
-                      accountId={account.accountId}
-                      drafts={drafts[account.accountId] ?? []}
-                      active={selected?.accountId === account.accountId
-                        && selected.mailboxId === DRAFTS_MAILBOX}
-                      onPicked={onPicked}
-                    />
-                  </li>,
-                )}
-              </ul>
-            </section>
-          );
-        })}
+        <MailSmartRows
+          /* Only accounts whose folder list has LANDED. A smart row stands for a set of folders, and
+             during the first paint that set is not known yet: drawn from the account list alone, the
+             group appears for a moment with one account's mail behind it and then rearranges. An
+             account whose folder read failed is left out for the same reason. */
+          accounts={landedAccounts}
+          mailboxes={held.mailboxes}
+          live={live}
+          unread={unread}
+          draftsCounts={draftsCounts}
+          draftsTotal={draftsTotal}
+          selected={selected}
+          expanded={prefs.smart}
+          onToggle={toggleSmart}
+          onPicked={onPicked}
+        />
+        {accounts.map((account) => (
+          <MailAccountFolders
+            key={account.accountId}
+            account={account}
+            rows={held.mailboxes[account.accountId] ?? []}
+            live={live}
+            draftsCount={draftsCounts[account.accountId] ?? 0}
+            selected={selected}
+            arrivals={held.arrivals}
+            recent={prefs.recent[account.accountId] ?? []}
+            expanded={prefs.tail[account.accountId] === 1}
+            onToggleTail={toggleTail}
+            onPicked={onPicked}
+          />
+        ))}
       </div>
 
       <button
@@ -245,47 +375,5 @@ export function MailAccountsPane({
         + Add account
       </button>
     </aside>
-  );
-}
-
-/**
- * One account's Drafts row.
- *
- * The badge counts what is still WAITING ON A HUMAN (composing, waiting for approval, failed,
- * unknown) rather than the list length: a row that is mid-send needs nobody's attention, and a
- * badge that counts it trains the human to ignore the number.
- */
-function DraftsRow({ accountId, drafts, active, onPicked }: {
-  accountId: string;
-  drafts: MailDraftDto[];
-  active: boolean;
-  onPicked: () => void;
-}) {
-  const waiting = drafts.filter(isOpenDraft).length;
-  return (
-    <button
-      type="button"
-      className={`mail-mailbox${active ? ' active' : ''}`}
-      data-testid="mail-drafts-row"
-      data-mailbox-id={DRAFTS_MAILBOX}
-      data-account-id={accountId}
-      data-count={waiting}
-      aria-current={active ? 'true' : undefined}
-      onClick={() => {
-        selectMailbox(accountId, DRAFTS_MAILBOX);
-        onPicked();
-      }}
-    >
-      <DraftsIcon />
-      <span className="mail-mailbox-name">Drafts</span>
-      {/* Exact and grouped, like the mailbox badges above: the two sit in the same column of the
-          same list, and one of them capping while the other does not is a difference with no
-          meaning behind it. */}
-      {waiting > 0 && (
-        <span className="mail-unread-badge" data-testid="mail-drafts-count">
-          {formatCount(waiting)}
-        </span>
-      )}
-    </button>
   );
 }

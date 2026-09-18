@@ -47,6 +47,13 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
   const [details, setDetails] = useState(false);
   const mark = senderMark(message.from);
   const extras = detailRows(message);
+  // WHICH ACCOUNT this mail is in, and therefore which identity the reply buttons above would send
+  // as. Only with more than one account, because with one it is noise. It was never on screen: the
+  // reply is already correct (it uses `open.accountId`), but a merged list is the first place a
+  // person reads two accounts' mail in one column and cannot tell which one they are answering from.
+  const account = accounts.length > 1
+    ? accounts.find((one) => one.accountId === open.accountId)
+    : undefined;
 
   return (
     <header className="mail-reader-head mail-reader-column">
@@ -73,6 +80,17 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
             <span className="mail-reader-address">{message.from.address}</span>
           )}
         </span>
+        {account && (
+          <span
+            className="mail-reader-account"
+            data-testid="mail-reader-account"
+            data-account-id={account.accountId}
+            title={account.address}
+            aria-label={`This message is in ${account.displayName || account.address}`}
+          >
+            {account.displayName || account.address}
+          </span>
+        )}
         <span className="mail-reader-when">
           <time className="mail-reader-date" title={message.sentAtHeader ?? undefined}>
             {formatMailDate(message.sentAt)}

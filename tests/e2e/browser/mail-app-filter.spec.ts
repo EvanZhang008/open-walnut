@@ -317,15 +317,20 @@ async function mergedDraftsRow(page: Page, theme: string): Promise<string[]> {
   // claim rather than a coincidence), so the order a person knows their mailbox by is kept.
   const order = await page.locator('.mail-accounts-pane .mail-mailbox-name').allInnerTexts()
   expect(order, 'the merged row sits where the folder was').toEqual(['Inbox', 'Archive', 'Drafts', 'Junk'])
-  // The badge counts what a human can act on, which is the local drafts, not the server's two.
+  // The badge is the FIRST SECTION of the view this row opens: the one draft written here, which a person
+  // can check by counting rows. It added the provider's Drafts folder as the mailbox row declares it, and a
+  // folder's declared size counts drafts outside this cache's retention window, so on a real account a
+  // badge of 51 sat over sections adding up to 8. The header below still counts the whole view.
   await expect(merged.getByTestId('mail-drafts-count')).toHaveText('1', { timeout: 30_000 })
   shots.push(await shoot(page.locator('.mail-accounts-pane'), theme, 'folders'))
 
   await merged.click()
 
-  // The folder header counts everything below it, and each section counts its own.
+  // The folder header counts everything below it, and each section counts its own: one written here plus
+  // the two the provider holds. The row's badge above is the first of those sections.
   await expect(page.getByTestId('mail-list-section')).toContainText('Drafts', { timeout: 30_000 })
-  await expect(page.getByTestId('mail-list-section')).toContainText('3')
+  await expect(page.locator('.mail-list-section .mail-list-section-count')).toHaveText('3')
+  await expect(page.getByTestId('mail-list-count-word'), 'a page of a folder, not a total').toHaveText('loaded')
   const groups = page.getByTestId('mail-drafts-group')
   await expect(groups).toHaveCount(2, { timeout: 30_000 })
   const here = groups.nth(0)

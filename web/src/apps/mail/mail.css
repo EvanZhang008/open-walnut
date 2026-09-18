@@ -270,14 +270,23 @@
 .mail-mailbox {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* 4px between the glyph and the name, which is what puts a folder row's text at 31px (8px list inset +
+     4px row padding + 15px glyph + this). The badge and the new-mail mark add their own 4px back, so only
+     the glyph moved. See the hierarchy note below. */
+  gap: 4px;
   width: 100%;
-  padding: 6px 8px;
+  /* 4px, so the glyph lands in the pane's one glyph column at 12px. See the hierarchy note below. */
+  padding: 6px 8px 6px 4px;
   border: none;
   border-radius: 8px;
   background: none;
   color: var(--fg-secondary);
   font-size: 13px;
+  /* Load-bearing on a BUTTON in WebKit (see `.mail-tail-row` and `.mail-tail-filter`): left alone, every
+     row in this pane is drawn in the engine's own control face, which is wider than the app's and made the
+     collapse row's sentence 3px too long for its slot in WebKit while it fitted in Chromium. One face for
+     the whole column, in both engines. */
+  font-family: inherit;
   text-align: left;
   cursor: pointer;
 }
@@ -303,6 +312,8 @@
 .mail-unread-badge {
   flex: 0 0 auto;
   min-width: 18px;
+  /* The row's own gap is the glyph's 4px; the badge keeps the 8px it always had. */
+  margin-left: 4px;
   padding: 1px 5px;
   border-radius: 999px;
   background: var(--accent);
@@ -312,6 +323,15 @@
   font-variant-numeric: tabular-nums;
   text-align: center;
   white-space: nowrap;
+}
+
+/* Archive, Junk and Trash. The number is the same exact unread the header reads; what changes is that it
+   stops competing with the inbox counts, which are the only ones anybody acts on. At real density ten
+   badges were on screen and the loudest two were a Trash 2,609 and an Archive 177. */
+.mail-unread-badge.quiet {
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font-weight: 500;
 }
 
 .mail-add-account {
@@ -623,15 +643,49 @@
   white-space: nowrap;
 }
 
-.mail-row-mailbox {
-  align-self: flex-start;
-  margin-top: 2px;
-  padding: 1px 6px;
-  border-radius: 999px;
+/* In a merged list this slot carries the ACCOUNT's short name, at the right end of the title row. It
+   keeps its width whatever the name is and gives up characters instead of a second line: one provider
+   here answers 90-character mailbox ids, and a wrapping label would push the time off the row.
+   Muted and small on purpose: fifty of these read as metadata beside the time, not as a second
+   column of senders. These declarations are what the label IS, so they are not optional decoration. */
+/* A CHIP, not a second grey word. It was 11px/400/--fg-muted directly beside a time that is 11px/400/
+   --fg-muted, so a merged row printed a bold person name, then a grey person name, then a grey relative
+   time, and nothing said which of the two names was the account. It has to read as a different KIND of
+   thing from the clock. */
+/* ONE GLYPH WIDE. Measured at 1280x800 over the same 50 rows: the name chip took 110px, more than the
+   102px the sender was left with, and was itself ellipsised on 19 rows (mid domain for an account whose
+   display name is its address, so two accounts on one mail host would have drawn the same chip). A mark
+   cannot truncate, and the sender keeps its per-account measure. The name is on the row's title, the
+   reader head and the composer head. `overflow`/`ellipsis` stay: they are what makes a mark of one
+   character a promise rather than a hope. */
+.mail-row-account {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   background: var(--bg-tertiary);
-  color: var(--fg-secondary);
   font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  color: var(--fg-secondary);
 }
+
+/* Four tones, by the account's place in the pane's own list: an initial alone cannot tell two accounts
+   apart when their names begin with the same letter. Existing tokens only, so both themes follow. */
+.mail-row-account[data-tone='0'] { background: var(--accent-subtle); color: var(--accent); }
+.mail-row-account[data-tone='1'] { background: var(--bg-tertiary); color: var(--fg-secondary); }
+.mail-row-account[data-tone='2'] { background: rgba(255, 149, 0, 0.14); color: var(--warning); }
+.mail-row-account[data-tone='3'] { background: rgba(52, 199, 89, 0.14); color: var(--success); }
+
+/* `To` in a sent or drafts list: the unit of the name beside it, in the same word the reader head uses.
+   Quieter than the name, because the name is the thing being scanned for. */
+.mail-row-to { color: var(--fg-muted); font-weight: 400; }
 
 /* Unread is the one thing a list must never be subtle about: the SENDER carries the weight (that
    is the column the eye scans) and the subject stays readable rather than shouting too. */
@@ -768,4 +822,320 @@
    chevron sits directly under it (seen in the narrow verification screenshot). */
 @media (max-width: 768px) {
   .mail-console { padding-top: 56px; }
+}
+
+/* ── smart mailboxes and the collapsed folder tail ──
+   Existing tokens only, so the dark theme follows for free. The measurements ARE the hierarchy, and they
+   are measured from the PANE's left edge rather than from each list's own content box, because the two
+   lists are inset differently and per-list numbers hid that:
+
+     glyph column     12px  for all three kinds of glyph (smart chevron, folder icon, collapse chevron)
+     smart parent     28px  8px list inset + a 20px chevron box, and nothing else: leftmost and heaviest
+     ordinary folder  31px  8px inset + 4px row padding + a 15px glyph + a 4px gap
+     smart child      36px  8px inside its parent, and 5px right of the folder rows it does not belong to
+     collapse row     28px  the parent's column, because it belongs to the account's list as a whole
+
+   The parent is LEFT of the folder rows on purpose: it is the entry to a group that contains them, and an
+   indent is the only thing that says so. An earlier pass aligned all three at 35px, which read as three
+   folders of one list, one of which had lost its icon. */
+
+.mail-smart-head {
+  margin: 0;
+  padding: 2px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  /* NOT uppercase with letter spacing. It was the only uppercase header in the pane, directly above the
+     account heads, so one pane stacked two header styles for the same job.
+     `--fg-secondary`, NOT `--fg-muted`: muted measured 3.33:1 on this pane in the light theme at 11px,
+     under the 4.5:1 this size needs, and this is the one label that says what the three new rows are. */
+  color: var(--fg-secondary);
+  /* One line at 204px: wrapped, the group title reads as a row of its own. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The group's own hairline, which is why an install with no smart row draws no separator at all. */
+.mail-smart {
+  list-style: none;
+  margin: 0 8px 8px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mail-mailbox-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* No left padding: the chevron box IS this row's indent, which puts the parent's text at 28px. */
+.mail-mailbox-line .mail-mailbox { min-width: 0; padding-left: 0; }
+
+.mail-twist {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  /* Left aligned, not centred: the glyph has to land in the pane's one glyph column (12px from the
+     pane edge = 4px into a list inset by 8px), and centring it in the hit area put it at 12, 16 or
+     20px depending on which list it belonged to. 20x24 is the hit area the spec sizes. */
+  justify-content: flex-start;
+  width: 20px;
+  height: 24px;
+  padding: 0 0 0 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.mail-twist:hover { background: var(--bg-hover); color: var(--fg-secondary); }
+
+/* The ONLY animation in this pane: one element, one transform, no layout. A height transition over 58
+   rows repaints the whole subtree in WebKit, and expanding a folder list is navigation, not decoration. */
+.mail-twist svg,
+.mail-tail-twist svg { transition: transform 120ms ease; }
+
+.mail-twist[aria-expanded='true'] svg,
+.mail-tail-row[aria-expanded='true'] svg { transform: rotate(90deg); }
+
+.mail-mailbox.smart { font-weight: 600; }
+.mail-mailbox.smart:not(.active) { color: var(--fg); }
+
+.mail-smart-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* 8px list inset + 38px = 46px: 18px inside the parent's 28px, about one glyph column, which is an indent
+   a person can see. At 36px the three left edges of the pane (parent 28, folder 31, child 36) all lived
+   within 8px of each other and the children read as loose text under the row rather than as its members. */
+.mail-mailbox.child { padding-left: 38px; }
+.mail-mailbox.child:not(.current) { font-weight: 400; }
+
+/* The QUIET mark for "this child's mailbox is the list on screen". The mailbox is also drawn as that
+   account's own role row further down the pane, and giving both the full `.active` fill left two rows
+   looking clicked, the louder of which carried no `aria-current`. A rail and the accent, no fill. */
+.mail-mailbox.child.current {
+  font-weight: 600;
+  color: var(--accent);
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+/* Six pixels of `--warning` before the badge: this row's list still reads, but one of the accounts in
+   it has stopped syncing, and a merged list that hides that is the failure this pane exists to prevent. */
+.mail-smart-warn {
+  flex: 0 0 auto;
+  /* The row's own gap is the glyph's 4px; this mark keeps the 8px it always had. */
+  margin-left: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+/* The collapse row: ONE LINE, the same height as a folder row, one type size, muted, never a badge.
+   It used to wrap at 204px, which made it 46px tall against its neighbours' 32px, with 13px and 12px
+   text in the same row and the chevron sitting against the second line. */
+.mail-tail-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  /* 2px on the RIGHT, not 8px: this row is the only one in the column that never draws a badge, so the
+     space a badge would need is width the sentence can have. */
+  padding: 6px 2px 6px 4px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  /* NOT `--fg-muted`, which measured 3.33:1 against this pane in the light theme. This row is a button,
+     and it is the only place in the product that says how many folders are hidden and how many of them
+     hold unread mail: it cannot be the least readable text in the pane. `--fg-secondary` is 9.6:1 light
+     and 12.6:1 dark. */
+  color: var(--fg-secondary);
+  /* 10px, ONE size for both clauses, and the smallest type in this pane on purpose. This is a measurement,
+     not a taste, and the sentence is what it is measured against: `58 more folders, 6 with unread`, whose
+     second clause names its unit because a bare `6 unread` was read as six unread messages while the row
+     stood over 202 of them.
+     The slot is 165px at the 204px default pane and 158px once the pane SCROLLS (WebKit's scrollbar takes
+     layout width), and every other pixel is already spoken for: 16px of section inset, a 12px glyph column,
+     a 16px chevron box, 2px of row padding. The sentence measures 147px at 10px, 161px at 11px, 175px at
+     12px and 187px at 13px. So 11px holds it only while the pane does not scroll, which is not a state this
+     pane can promise, and the two larger sizes never do. The alternatives were all worse: bleeding into the
+     section inset buys 8px and makes the pane scroll SIDEWAYS by 7px in WebKit, wrapping makes this row
+     46px tall against its neighbours' 32px (a defect this pane has already shipped), and ellipsising leaves
+     `58 more folder…` over 202 unread messages. The size gives way; the sentence stays whole. Re-measured,
+     not re-argued, in `tests/e2e/browser/mail-sidebar-round3.spec.ts` and its WebKit twin, in both the
+     scrolled and unscrolled pane. */
+  font-size: 10px;
+  /* `font-family: inherit` is load-bearing on a BUTTON in WebKit, exactly as it is on the filter input
+     below: left alone, a button is drawn in the engine's own control face, which is wider than the app's
+     and is the difference between this row's sentence fitting and being ellipsised. */
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The repeat above a long expanded tail: the same control, and nothing else is different about it. */
+.mail-tail-head { margin-bottom: 2px; }
+
+.mail-tail-row:hover { background: var(--bg-hover); color: var(--fg); }
+
+.mail-tail-twist {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  /* Left aligned into the pane's one glyph column (4px of row padding + 8px of list inset = 12px), and
+     16px wide so the text starts at 28px, the smart parent's column: this row belongs to the account's
+     whole list rather than sitting inside it. */
+  justify-content: flex-start;
+  width: 16px;
+  height: 20px;
+}
+
+/* Two clauses, one line, separated by a REAL GAP. A trailing space at the end of an inline box is
+   dropped in layout, so "58 more folders, " + "6 with unread" rendered as "58 more folders,6 with
+   unread" at every width where both fitted, and `textContent` still held the space, so no DOM assertion
+   could ever see it. The gap is a layout fact instead. The unread clause keeps its width and the label
+   is the item that gives up characters: the number this row exists to admit is the one that must survive
+   a narrow pane. */
+.mail-tail-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  /* 3px, not 4: a real gap (a trailing space at the end of an inline box is dropped in layout, which is how
+     this row once rendered "58 more folders,6 with unread"), and every pixel over that belongs to the
+     sentence at the 204px pane. */
+  gap: 3px;
+  line-height: 1.35;
+}
+
+.mail-tail-label {
+  /* `0 1 auto`, so the clause sits right after the comma instead of being pushed to the far edge of the
+     row: `58 folders,` with 60px of air before `202 unread` reads as a broken sentence. It still shrinks
+     (and only it) when the pane is too narrow for both. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-tail-unread {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A filled well, not a bordered box, and the same 32px as the rows it filters. With a 1px border, a focus
+   ring and a clear button it was the heaviest element in a 204px column of 58 navigation rows, and its own
+   text started 19px left of every folder name, so the pane had two text columns. Its text now starts in
+   the folder column (4px padding + 15px of glyph column and gap = the rows' 31px). */
+.mail-tail-filter {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 2px 0 4px;
+  /* The ROW's own box, stated OUTRIGHT: an input's intrinsic height is the engine's business (WebKit made
+     this 34px against 31px rows through `type="search"` metrics, and neither `line-height` nor
+     `appearance: none` moved it), so the height is set and the padding keeps the text in the folder column. */
+  height: 32px;
+  padding: 6px 8px 6px 23px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--fg);
+  /* `appearance: none` is load-bearing on a `type="search"` box: WebKit gives that type its own control
+     appearance with its own intrinsic metrics, which is what kept this 34px against 31px rows. */
+  appearance: none;
+  -webkit-appearance: none;
+  /* `font-family: inherit` is load-bearing: an input's default face in WebKit is a system control font
+     whose metrics made this box 34px against 31px rows even with the row's own padding and size. The line
+     height is stated too, so the box is 20 + 12 = 32px in both engines rather than each engine's idea of
+     `normal` for a control. */
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+/* Aligned to the folder text column: this line stands in for the rows it replaced, so it starts where
+   their names do rather than 19px to their left. */
+.mail-tail-empty {
+  margin: 2px 0 6px;
+  padding: 4px 8px 4px 23px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+/* Drawn INSIDE the row (`outline-offset: -2px`), because the pane scrolls with `overflow-y: auto` and
+   an outside ring is clipped on the left. The alternative on the table was 2px of horizontal padding on
+   the scroll container, which would move every folder row of every install by two pixels. */
+.mail-mailbox:focus-visible,
+.mail-twist:focus-visible,
+.mail-tail-row:focus-visible,
+.mail-tail-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ── the numbers' own words, the degraded line, and the new mail mark ── */
+
+/* One word saying what the header's count IS. A title attribute never renders, and a header reading
+   62,972 over a list that can page to about four thousand is a number nobody can act on. */
+.mail-list-section-scope {
+  flex: 0 0 auto;
+  letter-spacing: 0.05em;
+}
+
+/* The line under the list header: an account of this merged list has stopped syncing, or the mailbox's
+   unread count and the unread rows on screen are not the same number. Both used to live in title
+   attributes, which is the same as not saying them. */
+.mail-list-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 0 12px 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+
+/* The mark on a folder lifted out of the tail because mail arrived in it this session. Accent text on
+   the accent's subtle fill, so it reads as new rather than as a second unread badge. */
+.mail-mailbox-new {
+  flex: 0 0 auto;
+  /* The row's own gap is the glyph's 4px; this mark keeps the 8px it always had. */
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* The drill-down pane is the WHOLE window, and a row that stretches to fill it puts its count 660px from
+   its name. Rows keep a sane measure, and so does the HEAD above them: capping only the rows left them
+   ending 312px short of a pane whose New message button and search field filled it, with the badges mid
+   page and the smart group's hairline reading as a line that failed to draw. One block, one measure. */
+.mail-console[data-narrow-pane='accounts'] .mail-smart,
+.mail-console[data-narrow-pane='accounts'] .mail-mailboxes {
+  max-width: 420px;
+}
+
+/* Everything that is NOT inset by the lists' own 8px margin gets that 8px back, so every box in the column
+   ends on one line: the two lists run from 8px to 428px, and a head capped at 420px stopped 8px short of
+   every row under it while its New message button reached 240px past them. */
+.mail-console[data-narrow-pane='accounts'] .mail-account-head,
+.mail-console[data-narrow-pane='accounts'] .mail-smart-head,
+.mail-console[data-narrow-pane='accounts'] .mail-accounts-pane > .mail-pane-head,
+.mail-console[data-narrow-pane='accounts'] .mail-refresh-note {
+  max-width: 428px;
 }

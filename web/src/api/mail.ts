@@ -194,8 +194,14 @@ export interface MailBodyDto {
 
 export interface MailMessagePage {
   messages: MailMessageDto[];
-  /** Feed back as `before` for the next page. Absent means the list ended. */
-  nextBefore?: number;
+  /**
+   * Feed back as `before` for the next page. Absent means the list ended.
+   *
+   * An OPAQUE token, never a number to reason about: it carries the whole sort key (a timestamp, a
+   * message id, and on a cross-account page the account too), so the server can grow the key without
+   * a client change and a caller cannot invent a position the server never issued.
+   */
+  nextBefore?: string;
 }
 
 export interface MailMessageRead {
@@ -312,20 +318,26 @@ export function listMailboxes(accountId: string): Promise<{ mailboxes: MailboxDt
  * `unread` is the SERVER's filter, over the whole mailbox rather than over the page: a mailbox with
  * more unread mail than a page holds cannot be filtered in the browser without calling a fraction of
  * the unread mail all of it. It pages with `before` exactly like the unfiltered list.
+ *
+ * `scope` is the cross-account list: ONE query the server answers from every account holding that
+ * role, never several per-account pages merged here (a merge in the browser cannot page). It is
+ * mutually exclusive with `accountId`, which the server refuses with a 400 rather than guessing.
  */
 export function listMailMessages(query: {
   accountId?: string;
   mailboxId?: string;
   limit?: number;
-  before?: number;
+  before?: string;
   unread?: boolean;
+  scope?: 'role:inbox' | 'role:sent' | 'role:drafts';
 }): Promise<MailMessagePage> {
   const params: Record<string, string> = {};
   if (query.accountId) params.account = query.accountId;
   if (query.mailboxId) params.mailbox = query.mailboxId;
   if (query.limit) params.limit = String(query.limit);
-  if (query.before !== undefined) params.before = String(query.before);
+  if (query.before !== undefined) params.before = query.before;
   if (query.unread) params.unread = '1';
+  if (query.scope) params.scope = query.scope;
   return apiGet(`${BASE}/messages`, params, QUIET);
 }
 

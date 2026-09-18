@@ -63,6 +63,48 @@
   color: var(--fg);
 }
 
+/* Which account signs this mail. Quieter than the drafts chip beside it (it is a fact, not a
+   control) and clipped to one line: the head also holds Status, Discard and Close, so a long display
+   name has to give way rather than wrap the row and move those three buttons down a line. */
+.mail-compose-account {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The identity as a CONTROL, when there is more than one account that can send: a resolved default with
+   nothing to change it by is a guess the human has to leave the view to correct. */
+.mail-compose-account.pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.mail-compose-account.pick:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* Drawn, not typed: a glyph in the button's text would join the identity's own name in `textContent`. */
+.mail-compose-account.pick::after {
+  content: '';
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  margin-bottom: 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  opacity: 0.6;
+}
+
 .mail-compose-drafts-chip {
   flex: 0 0 auto;
   padding: 3px 9px;

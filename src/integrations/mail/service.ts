@@ -19,8 +19,10 @@ import type { MailBodyStore } from './bodies.js'
 import { MailBodyTooLargeError, MAX_BODY_BYTES, plainTextOf, snippetOf } from './bodies.js'
 import { keyOfMessage } from './message-tasks.js'
 import {
+  bodyBelongsTo,
   fillAddressesFromBody,
   filledAddresses,
+  payloadForRetiredBody,
   senderForUpdate,
   type BodyAddressFill,
 } from './service-body.js'
@@ -48,6 +50,7 @@ import {
   type MessagePageCursor,
 } from './contract.js'
 import type { MailProviderRegistry } from './provider-registry.js'
+import type { MessageScopeRole } from './scope.js'
 import type { MailStore, MessageRow, MessageWrite } from './store.js'
 import type {
   MailAccount,
@@ -75,6 +78,11 @@ const CAPABILITY_TTL_MS = 60_000
  */
 const UNREAD_LIST_DEADLINE_MS = 8_000
 
+/** The `sent_at` column an envelope writes: one definition, so the row and the retire check agree. */
+function sentAtOf(envelope: MailEnvelope): number {
+  return Number.isFinite(envelope.sentAt) ? envelope.sentAt : 0
+}
+
 export class MailService {
   /** Per account: the last `send` verdict and when it was learned. See `sendCapabilityOf`. */
   private readonly sendCache = new Map<string, { send: boolean; at: number }>()
@@ -84,8 +92,11 @@ export class MailService {
     bodies: MailBodyStore
     providers: MailProviderRegistry
     now?: () => number
-    /** Optional: the only thing logged here is an address a body offered and the base refused. */
-    log?: { debug(message: string, fields?: Record<string, unknown>): void }
+    /** Optional: an address a body offered and the base refused (debug), a body retired because its row moved (info). */
+    log?: {
+      debug(message: string, fields?: Record<string, unknown>): void
+      info?(message: string, fields?: Record<string, unknown>): void
+    }
   }) {}
 
   private get now(): number {
@@ -271,16 +282,33 @@ export class MailService {
     limit: number
     unread?: boolean
     before?: MessagePageCursor
+    /**
+     * One list across every account holding this role (`scope=role:inbox` and friends).
+     *
+     * Resolved to (account_id, mailbox_id) pairs from the cached mailbox rows, so it costs one extra
+     * indexed read and NO provider call. `accountId` is meaningless with it and the route refuses the
+     * combination rather than picking one.
+     */
+    scope?: MessageScopeRole
   }): Promise<{ messages: MailMessageDto[]; nextBefore?: string }> {
     // The FIRST unread page asks the provider what is unread right now and ingests it before the
     // cache is read: a flag flipped on the phone, or a message the backfill has not reached, is
     // otherwise missing from a list whose folder badge (provider truth, every tick) shows it.
     // Later pages page the cache the first one just corrected. Never awaited past its deadline,
     // and a provider that cannot answer leaves the list exactly as the cache has it.
-    if (query.unread && !query.before && query.accountId && query.mailboxId) {
+    //
+    // Single (account, mailbox) ONLY. A scope page covers several accounts, and ingesting each one in
+    // turn would put N provider round trips on a request whose whole point is one query; the smart
+    // list stays a cache read, and the per-account pages the same folders also appear in keep doing
+    // the correction.
+    if (query.unread && !query.before && query.accountId && query.mailboxId && !query.scope) {
       await this.ingestUnreadFromProvider(query.accountId, query.mailboxId, query.limit)
     }
-    const rows = await this.deps.store.listMessages(query)
+    const pairs = query.scope
+      ? (await this.deps.store.mailboxesByRole(query.scope))
+        .map((row) => ({ accountId: row.account_id, mailboxId: row.mailbox_id }))
+      : undefined
+    const rows = await this.deps.store.listMessages({ ...query, ...(pairs ? { pairs } : {}) })
     const messages = await this.withTaskIds(rows.map((row) => toDto(row)))
     // `nextBefore` is only offered when the page filled: handing one back on a short page
     // makes a console ask for an empty page every time it reaches the end. It carries the
@@ -289,7 +317,18 @@ export class MailService {
     const last = rows.length === query.limit ? rows[rows.length - 1]! : undefined
     return {
       messages,
-      ...(last ? { nextBefore: encodeMessageCursor({ sentAt: last.sent_at, messageId: last.message_id }) } : {}),
+      ...(last
+        ? {
+          nextBefore: encodeMessageCursor({
+            sentAt: last.sent_at,
+            messageId: last.message_id,
+            // The third segment only on a scope page: it is what breaks a tie between two accounts
+            // that answered with the same id in the same second, and a per-account token that
+            // carried it would compare a field its own ORDER BY does not sort on.
+            ...(query.scope ? { accountId: last.account_id } : {}),
+          }),
+        }
+        : {}),
     }
   }
 
@@ -473,16 +512,37 @@ export class MailService {
       const existing = known.get(envelope.messageId)
       const hash = envelopeHashOf(envelope)
       if (existing?.envelope_hash === hash) continue
-      const write = this.toWrite(accountId, envelope, hash, existing)
       if (existing) {
+        // The row moved in time, so it is a different message than the one its body was read for
+        // (a conversation row after a reply landed: see `bodyBelongsTo`). The old body goes BEFORE
+        // the envelope is rewritten, file first and then the columns, the order body-revision.ts
+        // uses so a crash leaves a row that still names its file rather than a file nobody names.
+        const arrived = { sentAt: sentAtOf(envelope), receivedAt: envelope.receivedAt ?? null }
+        const retire = (existing.body_ref !== null || existing.body_error !== null)
+          && !bodyBelongsTo(existing, arrived)
+        if (retire) {
+          if (existing.body_ref) await this.deps.bodies.remove(existing.body_ref)
+          await this.deps.store.retireMessageBody(existing.rowid)
+          this.deps.log?.info?.('mail body retired: the envelope moved', {
+            accountId, messageId: envelope.messageId, storedSentAt: existing.sent_at, sentAt: arrived.sentAt,
+          })
+        }
+        // A retired body's snippet is text from ANOTHER message, so it is not carried forward the
+        // way body-revision keeps a mis-decoded one: the preview, when the listing has one, or
+        // nothing until the re-fetch.
+        const carried = retire
+          ? { snippet: '', payload: JSON.stringify(payloadForRetiredBody(parseJson<MessagePayload>(existing.payload, {}))) }
+          : existing
+        const write = this.toWrite(accountId, envelope, hash, carried)
         await this.deps.store.updateMessage(existing.rowid, write, this.now)
         // Only the envelope fields are re-indexed, and ONLY when there is no stored body: an
         // envelope-only update used to overwrite the FTS row with an empty `body_text`, so a
         // changed subject silently deleted the body from search.
-        if (!existing.body_ref) await this.reindex(existing.rowid, write)
+        if (!existing.body_ref || retire) await this.reindex(existing.rowid, write)
         result.updated += 1
         continue
       }
+      const write = this.toWrite(accountId, envelope, hash, existing)
       const rowid = await this.deps.store.insertMessage(write, this.now)
       await this.reindex(rowid, write)
       result.added += 1
@@ -693,7 +753,7 @@ export class MailService {
       subject: envelope.subject ?? '',
       // An envelope with no preview must not wipe a snippet the body already produced.
       snippet: envelope.snippet ? snippetOf(envelope.snippet) : existing?.snippet ?? '',
-      sentAt: Number.isFinite(envelope.sentAt) ? envelope.sentAt : 0,
+      sentAt: sentAtOf(envelope),
       receivedAt: envelope.receivedAt ?? null,
       flagsJson: JSON.stringify(envelope.flags ?? []),
       attachmentsJson: JSON.stringify(envelope.attachments ?? []),

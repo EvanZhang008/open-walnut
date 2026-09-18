@@ -37,6 +37,37 @@ export const SEEN = '\\Seen';
 export const DRAFTS_MAILBOX = '__walnut_drafts__';
 
 /**
+ * The reserved pair a SMART row selects: one list across every account holding a role.
+ *
+ * Same reasoning as `DRAFTS_MAILBOX`, and deliberately the same shape: a smart row is a
+ * `MailSelection` like any other, so `selectionKey`, `pairKey`, `sameSelection`, the narrow-viewport
+ * drill and every existing action keep working with no second selection concept threaded through
+ * them. The leading underscores are not an account id or a mailbox name any provider would hand back,
+ * and `ensureSelection` only ever auto-picks a row it found in a provider's own list.
+ *
+ * What the reserved ids must NEVER reach: `POST /mailboxes/fetch`, the read-flag route and the
+ * make-a-task route all take a real (accountId, mailboxId). Actions inside a merged list use the
+ * ROW's own accountId; the reserved pair only ever names the list.
+ */
+export const SMART_ACCOUNT = '__walnut_smart__';
+export const SMART_INBOX = '__smart_inbox__';
+export const SMART_SENT = '__smart_sent__';
+export const SMART_DRAFTS = '__smart_drafts__';
+
+export type SmartMailboxId = typeof SMART_INBOX | typeof SMART_SENT | typeof SMART_DRAFTS;
+
+/** Which role each smart row resolves to, which is also the `scope` the page request carries. */
+export const SMART_ROLE: Record<SmartMailboxId, 'inbox' | 'sent' | 'drafts'> = {
+  [SMART_INBOX]: 'inbox',
+  [SMART_SENT]: 'sent',
+  [SMART_DRAFTS]: 'drafts',
+};
+
+export function isSmartSelection(selection: MailSelection | null): boolean {
+  return !!selection && selection.accountId === SMART_ACCOUNT;
+}
+
+/**
  * The provider's OWN drafts mailbox, when it keeps one.
  *
  * There is one Drafts row per account and it shows both kinds: the drafts composed in this console
@@ -192,7 +223,8 @@ export interface MailSnapshot {
   mailboxes: Record<string, MailboxDto[]>;
   selected: MailSelection | null;
   messages: MailMessageDto[];
-  nextBefore: number | null;
+  /** The opaque token the last page handed back. Never parsed here; fed straight back as `before`. */
+  nextBefore: string | null;
   listLoading: boolean;
   olderLoading: boolean;
   listError: string | null;
@@ -214,6 +246,33 @@ export interface MailSnapshot {
   draftsLoading: boolean;
   /** The open composer, which replaces the reader pane. */
   composer: MailComposer | null;
+  /**
+   * How much mail ARRIVED in each folder during this session, keyed by `pairKey(accountId, mailboxId)`.
+   *
+   * The sidebar keeps an ordinary label out of sight only while nothing new has landed in it, and
+   * "new" has to mean `added > 0` from a sync event rather than `unread > 0`: an archived label that
+   * stopped months ago can hold hundreds of unread and is exactly the noise the collapse exists to
+   * remove, while a folder that just received mail must never be hidden. Session-scoped on purpose,
+   * so it is not a preference and never persisted: reopening Mail starts the day's arrivals again.
+   */
+  arrivals: Record<string, number>;
+  /**
+   * The accounts this session has read from or sent as, newest first (see `noteMailIdentity`).
+   *
+   * What a compose started from a merged list goes out as. Session-scoped and never persisted: it is
+   * the answer to "which of my identities am I using now", which a stored preference would outlive.
+   */
+  identities: string[];
+  /**
+   * How many times a PERSON has picked a row, which is the only thing that spends the sidebar's aim.
+   *
+   * The pane holds its row shape still while somebody is pointing at it, and a pick releases the hold
+   * (they have just said what they wanted, so the row under them has to be real). The selection key
+   * cannot be that signal: the console also picks for them (`applySelection(auto)`) as the folder lists
+   * land, and that arrives while the pointer is resting on a row, which released the hold and let rows
+   * move under it. A COUNT rather than a boolean, so two picks of the same row are two releases.
+   */
+  picks: number;
 }
 
 /**
@@ -256,7 +315,28 @@ function initialState(): MailSnapshot {
     drafts: {},
     draftsLoading: false,
     composer: null,
+    arrivals: {},
+    identities: [],
+    picks: 0,
   };
+}
+
+/** How many identities are worth remembering: a compose default only ever reads the first that can send. */
+const IDENTITY_MEMORY = 4;
+
+/**
+ * Remember an account as one this session has just used, newest first.
+ *
+ * A compose started from a merged list has no account of its own, and it used to resolve to the FIRST
+ * sendable account whatever the human had been doing: reading the second account's mail and pressing
+ * New message wrote as the first one. Reading and sending are both "using an identity", so both are
+ * recorded here. Session memory, not a preference: it answers "what am I doing right now".
+ */
+export function noteMailIdentity(accountId: string): void {
+  if (!accountId || accountId === SMART_ACCOUNT) return;
+  const prev = store.state.identities;
+  if (prev[0] === accountId) return;
+  patch({ identities: [accountId, ...prev.filter((one) => one !== accountId)].slice(0, IDENTITY_MEMORY) });
 }
 
 /**
@@ -352,6 +432,18 @@ export function standIn(error: unknown): MailStand | null {
  * during a page load still ends with fresh data and never with two overlapping fetches.
  * `work` must handle its own failures: a throw here would skip the queued pass.
  */
+/**
+ * Is a read under this key still in flight?
+ *
+ * Asked by a caller deciding whether to FORCE another pass. `force` on an inflight key queues exactly one
+ * more identical request, which is right for a live event (the data changed) and pure waste for a refresh
+ * that arrived 30ms after the read it wants: one open of Mail issued the same cross-account page three
+ * times that way, and that query is a scan plus a temporary sort on the one event loop every route shares.
+ */
+export function isRunning(key: string): boolean {
+  return inflight.has(key);
+}
+
 export function run(key: string, work: () => Promise<void>, force = false): Promise<void> {
   const running = inflight.get(key);
   if (running) {

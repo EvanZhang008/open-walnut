@@ -115,6 +115,52 @@ export function senderForUpdate(
   return from?.name ? { name: from.name, address: learned } : { address: learned }
 }
 
+/** The two columns that say WHICH message a cached row is, as the store holds them. */
+export interface StoredInstant {
+  sent_at: number
+  received_at: number | null
+}
+
+/**
+ * Whether a body cached for this row still describes the envelope that just arrived for it.
+ *
+ * A body is fetched once and served for good, which is right when a message id names bytes that
+ * cannot change: an IMAP UID is one message forever. A conversation-shaped transport breaks that
+ * assumption. Its row IS the thread, `messageId` is `<folder>:<conversation id>`, and the body it
+ * hands over is "the newest message in the thread" as of the read. When a reply lands, the poll
+ * returns the same id with a later delivery time, the base rewrote the envelope and kept the body,
+ * and the reader showed the new sender and time over a message from weeks earlier (measured on a
+ * real mailbox: a 42 KB body from August under a header dated September, `body_ref` still in the
+ * August bucket).
+ *
+ * The signal is the timestamp pair and nothing else. A new message always moves the delivery time.
+ * A flag change, a move between folders, a re-decoded subject and a sender a body later filled in
+ * never do, and each of those is a reason a row gets rewritten, so comparing any field the envelope
+ * may legitimately restate would retire bodies that are still right.
+ */
+export function bodyBelongsTo(
+  stored: StoredInstant,
+  write: { sentAt: number; receivedAt: number | null },
+): boolean {
+  return stored.sent_at === write.sentAt && (stored.received_at ?? null) === (write.receivedAt ?? null)
+}
+
+/**
+ * The stored blob with everything the OLD body taught removed, for a row whose body is being
+ * retired because the envelope moved.
+ *
+ * `bodyFormat` and `bodyTruncated` describe bytes that are about to be unlinked. `from` may carry
+ * an address a body read filled in (`fillAddressesFromBody`), and that address belongs to the
+ * sender of the PREVIOUS newest message: carrying it under the new listing's display name would
+ * pair one person's name with another's address, and Reply would aim there. The listing's own word
+ * is restored by `senderForUpdate` reading an empty `from`, and the next body read fills the gap
+ * again, this time for the right message.
+ */
+export function payloadForRetiredBody(stored: MessagePayload): MessagePayload {
+  const { bodyFormat: _format, bodyTruncated: _truncated, from: _from, ...rest } = stored
+  return rest
+}
+
 /**
  * The DTO fields a fill wrote, so the read that FETCHED the body answers with them.
  *

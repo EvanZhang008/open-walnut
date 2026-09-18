@@ -1,0 +1,14 @@
+{
+  "id": "mail-dense-provider",
+  "name": "Dense Fixture Mail",
+  "description": "Two mail accounts at production density: 64 folders against 6, the same roles under different ids, and the divergences the sidebar has to render honestly",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.0.0"
+  },
+  "server": "server.mjs",
+  "dependencies": {
+    "mail": "^1.0.0"
+  }
+}

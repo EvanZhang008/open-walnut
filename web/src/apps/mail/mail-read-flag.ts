@@ -11,7 +11,21 @@
 import { mailFailure, markMailMessageRead, type MailMessageDto } from '@/api/mail';
 import { log } from '@/utils/log';
 import { providerFor } from './mail-providers';
-import { SEEN, patch, publishBadge, store } from './mail-store';
+import { SEEN, pairKey, patch, publishBadge, store } from './mail-store';
+
+/**
+ * A MESSAGE's identity is (accountId, messageId), never the id alone.
+ *
+ * The id space belongs to the provider and Walnut may assume nothing about its shape, and the merged
+ * smart lists are the first surface where two providers' id spaces share one column. Every match in
+ * this file goes through here, the same way `mail-task-actions.ts` and `mail-unread-filter.ts`
+ * already do: an id-only match let one account's already-read row make marking the OTHER account's
+ * message read a silent no-op, and let a server answer overwrite a row with another account's sender
+ * and subject.
+ */
+function handle(one: { accountId: string; messageId: string }): string {
+  return pairKey(one.accountId, one.messageId);
+}
 
 /**
  * May this account's read flag be moved? Three answers, and the third is what this bug was about.
@@ -72,7 +86,8 @@ export async function setOpenMessageRead(read: boolean): Promise<void> {
   if (!await mayMarkRead(opened.accountId)) return;
   // Re-read AFTER the await for the same reason the automatic path does: a second press, or the
   // automatic mark landing in between, would otherwise move the badge twice off a stale copy.
-  const message = store.state.open?.messageId === opened.messageId ? store.state.open?.message : undefined;
+  const open = store.state.open;
+  const message = open && handle(open) === handle(opened) ? open.message : undefined;
   if (!message || message.flags.includes(SEEN) === read) return;
 
   applySeen(message, read);
@@ -93,9 +108,10 @@ export async function setOpenMessageRead(read: boolean): Promise<void> {
 /** Is the row this console is holding for that message already read? */
 function heldSeen(message: MailMessageDto): boolean {
   const state = store.state;
-  const held = state.messages.find((one) => one.messageId === message.messageId)
-    ?? state.search.messages.find((one) => one.messageId === message.messageId)
-    ?? (state.open?.messageId === message.messageId ? state.open.message : undefined)
+  const key = handle(message);
+  const held = state.messages.find((one) => handle(one) === key)
+    ?? state.search.messages.find((one) => handle(one) === key)
+    ?? (state.open && handle(state.open) === key ? state.open.message : undefined)
     ?? message;
   return held.flags.includes(SEEN);
 }
@@ -105,9 +121,14 @@ function withSeen(message: MailMessageDto, seen: boolean): MailMessageDto {
   return { ...message, flags: seen ? [...flags, SEEN] : flags };
 }
 
-function mapMessage(list: MailMessageDto[], messageId: string, fn: (one: MailMessageDto) => MailMessageDto) {
-  return list.some((one) => one.messageId === messageId)
-    ? list.map((one) => (one.messageId === messageId ? fn(one) : one))
+function mapMessage(
+  list: MailMessageDto[],
+  target: { accountId: string; messageId: string },
+  fn: (one: MailMessageDto) => MailMessageDto,
+) {
+  const key = handle(target);
+  return list.some((one) => handle(one) === key)
+    ? list.map((one) => (handle(one) === key ? fn(one) : one))
     : list;
 }
 
@@ -117,12 +138,12 @@ function applySeen(message: MailMessageDto, seen: boolean): void {
   const delta = seen ? -1 : 1;
   const mailboxes = state.mailboxes[message.accountId];
   patch({
-    messages: mapMessage(state.messages, message.messageId, (one) => withSeen(one, seen)),
+    messages: mapMessage(state.messages, message, (one) => withSeen(one, seen)),
     search: {
       ...state.search,
-      messages: mapMessage(state.search.messages, message.messageId, (one) => withSeen(one, seen)),
+      messages: mapMessage(state.search.messages, message, (one) => withSeen(one, seen)),
     },
-    open: state.open?.messageId === message.messageId && state.open.message
+    open: state.open && handle(state.open) === handle(message) && state.open.message
       ? { ...state.open, message: withSeen(state.open.message, seen) }
       : state.open,
     ...(mailboxes ? {
@@ -147,11 +168,11 @@ function applySeen(message: MailMessageDto, seen: boolean): void {
 function replaceMessage(message: MailMessageDto): void {
   const state = store.state;
   patch({
-    messages: mapMessage(state.messages, message.messageId, () => message),
+    messages: mapMessage(state.messages, message, () => message),
     search: {
       ...state.search,
-      messages: mapMessage(state.search.messages, message.messageId, () => message),
+      messages: mapMessage(state.search.messages, message, () => message),
     },
-    open: state.open?.messageId === message.messageId ? { ...state.open, message } : state.open,
+    open: state.open && handle(state.open) === handle(message) ? { ...state.open, message } : state.open,
   });
 }

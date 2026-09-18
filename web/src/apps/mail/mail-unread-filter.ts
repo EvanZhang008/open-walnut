@@ -65,9 +65,11 @@ export function writeUnreadOnly(accountId: string, mailboxId: string, on: boolea
  * filter promised not to do: it takes the reply and make-a-task buttons with it and leaves nothing to
  * go back to. The row leaves when another row is selected, which the pane decides.
  *
- * Spliced at its own place in the sort order (newest first, message id breaking a tie) so nothing
- * appears to jump. A row older than the whole page lands at the end of it, which is the honest place
- * for it until "Load older" fills the gap.
+ * Spliced at its own place in the sort order so nothing appears to jump. THREE segments, the same
+ * ones the server pages by (`sent_at DESC, message_id DESC, account_id DESC`): a merged list holds two
+ * accounts whose ids tie, and a two-segment comparison here would put the held row where the server
+ * would never have returned it. A row older than the whole page lands at the end of it, which is the
+ * honest place for it until "Load older" fills the gap.
  */
 export function keepOpenRow(
   page: MailMessageDto[],
@@ -81,7 +83,11 @@ export function keepOpenRow(
   // would put a mail from another mailbox into this folder's column.
   if (!sticky) return page;
   const at = page.findIndex((one) => (
-    one.sentAt < sticky.sentAt || (one.sentAt === sticky.sentAt && one.messageId < sticky.messageId)
+    one.sentAt < sticky.sentAt
+    || (one.sentAt === sticky.sentAt && (
+      one.messageId < sticky.messageId
+      || (one.messageId === sticky.messageId && one.accountId < sticky.accountId)
+    ))
   ));
   if (at < 0) return [...page, sticky];
   return [...page.slice(0, at), sticky, ...page.slice(at)];

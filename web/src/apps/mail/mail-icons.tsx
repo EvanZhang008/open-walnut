@@ -121,6 +121,17 @@ export function ChevronIcon({ size = 12 }: IconProps) {
   return frame(size, <path d="M6 9l6 6 6-6" />);
 }
 
+/**
+ * The disclosure chevron of the sidebar groups: points right closed, and CSS rotates it 90deg open.
+ *
+ * An SVG rather than a CSS triangle or a text glyph on purpose. A character triangle sits on the text
+ * baseline, and its size and vertical position differ between WebKit and Chromium, so the Mac app got a
+ * chevron that floated above the row it belonged to.
+ */
+export function TwistIcon({ size = 12 }: IconProps) {
+  return frame(size, <path d="M9 6l6 6-6 6" />);
+}
+
 export function SearchIcon({ size = 14 }: IconProps) {
   return frame(size, <>
     <circle cx="11" cy="11" r="6.5" />
