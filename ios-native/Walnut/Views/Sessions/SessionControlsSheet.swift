@@ -388,7 +388,7 @@ struct SessionControlsSheet: View {
         case "session_control_needs_upgrade":
             return "Your primary box's daemon is upgrading for mobile session control — try again in a minute."
         case "bridge_offline":
-            return "The primary box isn't reachable right now — try again when it reconnects."
+            return BridgeOfflineCopy.message(apiError)
         case "conflict":
             return apiError.localizedDescription // e.g. unsupported effort level
         case "not_found":

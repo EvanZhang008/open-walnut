@@ -286,7 +286,7 @@ struct RoutinesView: View {
         case "session_control_needs_upgrade":
             return "Your primary box is upgrading for mobile routines — try again in a minute."
         case "bridge_offline":
-            return "The primary box isn't reachable right now — try again when it reconnects."
+            return BridgeOfflineCopy.message(apiError)
         case "not_found":
             return "This routine no longer exists on the server."
         case "internal" where apiError.localizedDescription.contains("not running"):

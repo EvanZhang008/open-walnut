@@ -229,7 +229,7 @@ final class SessionLifecycleController {
         case "session_control_needs_upgrade":
             return "Your primary box is upgrading for mobile session control — try again in a minute."
         case "bridge_offline":
-            return "The primary box isn't reachable right now — try again when it reconnects."
+            return BridgeOfflineCopy.message(apiError)
         case "cron_owner":
             return "This session owns scheduled routines — force-terminate to kill it anyway."
         case "not_found":

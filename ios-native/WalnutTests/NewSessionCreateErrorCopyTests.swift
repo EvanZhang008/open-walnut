@@ -19,9 +19,10 @@ final class NewSessionCreateErrorCopyTests: XCTestCase {
         NewSessionSheet.createErrorMessage(code: code, serverMessage: serverMessage)
     }
 
-    /// The historical fixed sentence, still the fallback.
-    private let genericOfflineCopy =
-        "The primary box isn't reachable from the cloud right now — try again when it reconnects."
+    /// The historical fixed sentence, still the fallback. Read from the shipped
+    /// constant rather than retyped, so this file can never assert a string the app
+    /// stopped showing.
+    private let genericOfflineCopy = BridgeOfflineCopy.fallback
 
     // MARK: - bridge_offline prefers the server
 

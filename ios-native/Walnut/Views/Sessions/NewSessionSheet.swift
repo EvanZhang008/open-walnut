@@ -414,27 +414,21 @@ struct NewSessionSheet: View {
     /// network or a view, and so both launchers (this sheet and
     /// `NewSessionChatView`) answer a given code identically.
     ///
-    /// `bridge_offline` PREFERS the server's own sentence, unlike its neighbours:
-    /// the server knows something this app cannot, namely how long the primary has
-    /// been unreachable ("...for 41 minutes (it may be asleep or offline)"). That
-    /// duration is the whole difference between a two-second blip worth retrying
-    /// and a laptop that has been shut for half an hour, and without it the user
-    /// has no way to reach the only useful conclusion. The fixed sentence stays as
-    /// the fallback: an older replica sends nothing more specific, and the copy
-    /// still has to read well against that. The two upgrade codes keep their
-    /// client-side wording, because their server text is diagnostic rather than
-    /// something to put in front of a person.
+    /// `bridge_offline` PREFERS the server's own sentence, unlike its neighbours,
+    /// because the server is the only side that knows how long the primary has been
+    /// unreachable. That branch (and the fixed sentence it falls back to) lives in
+    /// `BridgeOfflineCopy`, shared with the three control ladders that answer the
+    /// same outage. The two upgrade codes keep their client-side wording, because
+    /// their server text is diagnostic rather than something to put in front of a
+    /// person.
     static func createErrorMessage(code: String, serverMessage: String?) -> String {
-        let server = (serverMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         switch code {
         case "not_supported_cloud":
             return "This cloud companion is too old to create sessions — update it, or connect directly to your primary box."
         case "session_launch_needs_upgrade":
             return "Your primary box's daemon needs an update for mobile session launch — it updates automatically on its next reconnect. Try again in a minute."
         case "bridge_offline":
-            return server.isEmpty
-                ? "The primary box isn't reachable from the cloud right now — try again when it reconnects."
-                : server
+            return BridgeOfflineCopy.message(serverMessage: serverMessage)
         default:
             // Validation 4xx from the primary: its text IS the user-facing answer.
             return serverMessage ?? ""

@@ -305,7 +305,9 @@ final class EventsFeedTests: XCTestCase {
         XCTAssertTrue(SessionControlsSheet.friendlyControlError(upgrade).contains("upgrading"))
         let offline = APIError.server(status: 503, code: "bridge_offline",
                                       message: "no bridge", serverHash: nil, serverContent: nil)
-        XCTAssertTrue(SessionControlsSheet.friendlyControlError(offline).contains("isn't reachable"))
+        // bridge_offline shows the SERVER's sentence: it is the only side that knows
+        // how long the primary has been gone. See BridgeOfflineCopy.
+        XCTAssertEqual(SessionControlsSheet.friendlyControlError(offline), "no bridge")
         let conflict = APIError.server(status: 409, code: "conflict",
                                        message: "effort not supported", serverHash: nil, serverContent: nil)
         XCTAssertEqual(SessionControlsSheet.friendlyControlError(conflict), "effort not supported")
