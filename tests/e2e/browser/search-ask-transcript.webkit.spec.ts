@@ -14,7 +14,7 @@ import { expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import {
   SCREENSHOT_DIR, expectAnswerCarded, expectNoSidewaysScroll, expectPromptFolded,
-  expectReasoningKeptAboveCard, expectSeedDisclosed, openSearchAsk,
+  expectReasoningKeptAboveCard, expectSeedDisclosed, expectTitleLabelled, openSearchAsk,
 } from './search-ask-transcript-helpers';
 
 test.use({ browserName: 'webkit' });
@@ -39,5 +39,6 @@ test('no sideways scroll at a narrow window', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 900 });
   const panel = await openSearchAsk(page);
   await expectNoSidewaysScroll(panel);
+  await expectTitleLabelled(panel);
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/5-webkit-narrow.png` });
 });

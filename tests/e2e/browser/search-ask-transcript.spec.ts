@@ -23,7 +23,7 @@ import {
   ANSWER_CARD, DEAD_TASK_ID, SCREENSHOT_DIR,
   expectAnswerCarded, expectNarrationStillProse, expectNoSidewaysScroll,
   expectPromptFolded, expectReasoningKeptAboveCard, expectRowOpensTask,
-  expectSeedDisclosed, openSearchAsk,
+  expectSeedDisclosed, expectTitleLabelled, openSearchAsk,
 } from './search-ask-transcript-helpers';
 
 test.describe.configure({ mode: 'serial' });
@@ -32,6 +32,7 @@ test.setTimeout(180_000);
 test('the question is the bubble, the seeded prompt is one folded row', async ({ page }) => {
   const panel = await openSearchAsk(page);
   await expectPromptFolded(panel);
+  await expectTitleLabelled(panel);
   mkdirSync(SCREENSHOT_DIR, { recursive: true });
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/1-carded.png` });
 });
@@ -72,6 +73,9 @@ test('at a narrow window the rows ellipsize instead of overflowing', async ({ pa
   await page.setViewportSize({ width: 900, height: 900 });
   const panel = await openSearchAsk(page);
   await expectNoSidewaysScroll(panel);
+  // The label makes the title 14 characters longer, so the narrowest column is
+  // where it would show as a wrap or a widened panel.
+  await expectTitleLabelled(panel);
   const row = panel.locator(`${ANSWER_CARD} .agent-search-row-title`).first();
   const fits = await row.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 || getComputedStyle(el).textOverflow === 'ellipsis');
   expect(fits).toBe(true);

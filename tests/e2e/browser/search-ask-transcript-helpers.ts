@@ -51,6 +51,27 @@ export async function expectPromptFolded(panel: Locator): Promise<void> {
   expect(text).not.toContain('Find the Walnut task matching');
 }
 
+/**
+ * The panel says what this conversation IS.
+ *
+ * The adopt path titles the ask `Search query: <what was typed>` (2026-09-17):
+ * bare search words read as a todo the user wrote themselves, on the board and in
+ * the session header alike. The label costs 14 characters of a one-line title, so
+ * the geometry is checked with it: the header must ellipsize, never widen the
+ * panel or wrap into a second line.
+ */
+export async function expectTitleLabelled(panel: Locator): Promise<void> {
+  const title = panel.locator('.session-panel-title').first();
+  await expect(title).toHaveText('Search query: unit test');
+  // The header is `nowrap` + ellipsis, so the failure the label can cause is not a
+  // wrap: it is the query disappearing into "Search query: uni…". Nothing may be
+  // clipped at the widths tested here — that is what bounds how long the label
+  // may get, and it is the reason the label is short.
+  const fit = await title.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+  expect(fit.scrollWidth, `the labelled title is clipped: ${JSON.stringify(fit)}`)
+    .toBeLessThanOrEqual(fit.clientWidth + 1);
+}
+
 /** WCAG relative luminance of a computed `rgb(...)` / `rgba(...)` colour. */
 function luminance(color: string): number {
   const [r, g, b] = (color.match(/[\d.]+/g) ?? ['0', '0', '0']).slice(0, 3).map(Number);

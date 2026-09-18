@@ -63,9 +63,46 @@ const TITLE_MAX = 80;
  *  a query whose search run has since aged out of the in-memory map. */
 export const SEARCH_ASK_TAG = 'walnut:ai-search-ask';
 
-function taskTitle(query: string): string {
-  const flat = query.replace(/\s+/g, ' ').trim();
-  return flat.length > TITLE_MAX ? `${flat.slice(0, TITLE_MAX - 1).trimEnd()}…` : flat;
+/**
+ * Says what the row IS. Bare search words ("unit test") read as a todo the user
+ * typed themselves — on the board, in the ask drawer and in the session header
+ * alike (user report, 2026-09-17). Same `Label: value` shape as the other
+ * machine-minted titles (`Routine: …`, `Fix Walnut: …`).
+ */
+const SEARCH_ASK_TITLE_PREFIX = 'Search query: ';
+
+/** One line, no runs of whitespace — a board row is one line whatever was typed. */
+function flatten(query: string): string {
+  return query.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Clip to `max` UTF-16 units, ellipsis included, without ever cutting between
+ * the halves of a surrogate pair: a lone surrogate survives JSON.stringify into
+ * tasks.json and then breaks whoever decodes that file.
+ */
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = max - 1;
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return `${text.slice(0, cut).trimEnd()}…`;
+}
+
+/** The prefix is never what gets clipped — a half-written label stops labelling. */
+export function searchAskTitle(query: string): string {
+  return SEARCH_ASK_TITLE_PREFIX + clip(flatten(query), TITLE_MAX - SEARCH_ASK_TITLE_PREFIX.length);
+}
+
+/**
+ * The query as one clipped line. Two uses: what a human-readable note quotes,
+ * and — before the prefix landed (2026-09-17) — the whole title an ask got. Asks
+ * created then still wear it and findExistingSearchAsk matches BY TITLE, so
+ * without this second candidate the first press after the change forks a new ask
+ * for a query whose conversation is right there. Nothing writes it as a title.
+ */
+function queryLabel(query: string): string {
+  return clip(flatten(query), TITLE_MAX);
 }
 
 export interface AdoptAgentSearchSessionOptions {
@@ -85,14 +122,15 @@ export interface AdoptAgentSearchSessionOptions {
 }
 
 /** The ask a previous press already created for this query, if its session is
- *  still usable. Keyed by tag + title, which IS the query (taskTitle is pure). */
+ *  still usable. Keyed by tag + title, which is derived from the query (both
+ *  title functions are pure) — the legacy shape included, see there. */
 async function findExistingSearchAsk(query: string): Promise<AdoptedSearchSession | undefined> {
-  const title = taskTitle(query);
+  const titles = new Set([searchAskTitle(query), queryLabel(query)]);
   try {
     const { queryTasks } = await import('../task-manager.js');
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const candidates = (await queryTasks({ tagsAll: [SEARCH_ASK_TAG], projects: [ASK_WALNUT_PROJECT] }))
-      .filter((t) => t.title === title && !!t.session_id)
+      .filter((t) => titles.has(t.title) && !!t.session_id)
       .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
     for (const task of candidates) {
       const sessionId = task.session_id!;
@@ -205,13 +243,14 @@ export async function adoptAgentSearchSession(
     });
   }
 
-  const title = taskTitle(trimmed);
+  const title = searchAskTitle(trimmed);
   const created = await createAskTask(title, trimmed);
   const at = new Date(resolved.at).toISOString();
   const record = await claimSession({
     sessionId: resolved.sessionId,
     taskId: created.taskId,
     title,
+    query: queryLabel(trimmed),
     cwd,
     at,
     profile: laneProfile.profile,
@@ -294,6 +333,9 @@ async function claimSession(args: {
   sessionId: string;
   taskId: string;
   title: string;
+  /** The search words alone — the note reads as a sentence, so it quotes the
+   *  query, not the labelled title ("… for \"Search query: x\"" reads broken). */
+  query: string;
   cwd: string;
   at: string;
   profile: SessionProfile;
@@ -321,7 +363,7 @@ async function claimSession(args: {
       // monitor keeps spending its rescue-probe budget on a session no daemon has
       // ever heard of. This search ENDED; say so.
       status_reason: 'normal_completion',
-      human_note: `Adopted from the ✦ AI search for "${args.title}".`,
+      human_note: `Adopted from the ✦ AI search for "${args.query}".`,
     });
   } catch {
     const existing = await getSessionByClaudeId(args.sessionId).catch(() => null);

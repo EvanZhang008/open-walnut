@@ -217,7 +217,9 @@ await fs.writeFile(
         // messages the transcript renderer cards. Own task + own session so the
         // spec never shares mutable state with the other transcript fixtures.
         id: 'pw-task-search-ask',
-        title: 'unit test',
+        // The label the adopt path writes (searchAskTitle) — a row titled with the
+        // bare search words reads as a todo the user typed.
+        title: 'Search query: unit test',
         status: 'in_progress',
         phase: 'IN_PROGRESS',
         priority: 'none',
@@ -1962,7 +1964,7 @@ await fs.writeFile(
         lastActiveAt: new Date(sessionFixtureNow - 30_000).toISOString(),
         messageCount: 2,
         cwd: searchAskFixtureRoot,
-        title: 'unit test',
+        title: 'Search query: unit test',
       },
       {
         claudeSessionId: 'pw-pins-session',

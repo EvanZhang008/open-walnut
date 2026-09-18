@@ -33,6 +33,7 @@ vi.mock('../../src/core/cheap-model.js', async (importOriginal) => ({
 
 import {
   adoptAgentSearchSession,
+  searchAskTitle,
   AdoptSearchSessionError,
 } from '../../src/core/sessions/adopt-search-session.js';
 import {
@@ -50,6 +51,7 @@ import {
 import {
   getTask,
   queryTasks,
+  updateTask,
   deleteTasksByIds,
   _resetForTesting as _resetTaskManager,
 } from '../../src/core/task-manager.js';
@@ -142,7 +144,9 @@ describe('adoptAgentSearchSession', () => {
     expect(task.walnut_agent).toBe(true);
     expect(task.pinned).toBe(true);
     expect(task.focus_tier).toBe('focus');
-    expect(task.title).toBe(QUERY);
+    // LABELLED, not bare: a row reading just "quokka rollout rollback plan" is
+    // indistinguishable from a todo the user typed (user report, 2026-09-17).
+    expect(task.title).toBe(`Search query: ${QUERY}`);
     // 1-session-per-task: the adopted session is in the SLOT, not just history.
     expect(task.session_id).toBe(sessionId);
 
@@ -165,6 +169,10 @@ describe('adoptAgentSearchSession', () => {
     expect(record?.status_reason).toBe('normal_completion');
     // Local sessions store NO host (the sentinel is in-memory only).
     expect(record?.host).toBeUndefined();
+    // The session header wears the same label as the board row…
+    expect(record?.title).toBe(`Search query: ${QUERY}`);
+    // …while the note is a sentence, so it quotes the search words alone.
+    expect(record?.human_note).toBe(`Adopted from the ✦ AI search for "${QUERY}".`);
     // The profile has to be on the RECORD: a cold resume builds its argv from
     // the record, so without this the follow-up wakes up as a bare coding agent
     // in a temp directory, unable to search anything.
@@ -386,5 +394,67 @@ describe('adoptAgentSearchSession', () => {
     const task = await getTask(adopted.taskId);
     expect(task.title.length).toBeLessThanOrEqual(80);
     expect(task.title.endsWith('…')).toBe(true);
+    // The QUERY is what gets clipped. A clipped label ("Search que…") would stop
+    // saying what the row is, which is the whole reason the label exists.
+    expect(task.title.startsWith('Search query: ')).toBe(true);
+  });
+
+  it('finds an ask created BEFORE the label existed, instead of forking a second one', async () => {
+    // Asks minted before 2026-09-17 wear the bare query as their title, and the
+    // dedup lookup matches by title. Without the legacy candidate, the first
+    // press after the label landed searches again and forks a duplicate ask for a
+    // conversation the user already has.
+    const sessionId = randomUUID();
+    const cwd = freshCwd();
+    await writeTranscript(sessionId, cwd);
+    _seedAgentSearchRunForTesting(QUERY, { sessionId, cwd, model: 'sonnet' });
+    const first = await adoptAgentSearchSession(QUERY);
+    // Exactly what an old row looks like: same tag, same project, bare title.
+    await updateTask(first.taskId, { title: QUERY });
+
+    // Three hours on, the run has left the in-memory map, so the lookup is the
+    // only thing that can find this conversation.
+    _seedAgentSearchRunForTesting(QUERY, { sessionId, cwd, model: 'sonnet', at: Date.now() - 3 * 60 * 60_000 });
+    aiDisabledRef.value = false;
+    let engineCalls = 0;
+    _setAgentSearchEngineForTesting(async () => {
+      engineCalls++;
+      return { response: '{"results":[]}' };
+    });
+    const again = await adoptAgentSearchSession(QUERY, { startIfMissing: true });
+    expect(again).toEqual({ sessionId, taskId: first.taskId, reused: true });
+    expect(engineCalls, 'the legacy ask makes a fresh search unnecessary').toBe(0);
+    expect(await queryTasks({ projects: ['Ask Walnut'] })).toHaveLength(1);
+    // Found, not renamed: the row is the user's now, and a title they may have
+    // edited themselves is not ours to rewrite.
+    expect((await getTask(first.taskId)).title).toBe(QUERY);
+  });
+});
+
+describe('searchAskTitle', () => {
+  it('labels the query and keeps it verbatim', () => {
+    expect(searchAskTitle('aihub cos')).toBe('Search query: aihub cos');
+  });
+
+  it('flattens what the user typed onto one line', () => {
+    expect(searchAskTitle('  aihub \n\t cos  ')).toBe('Search query: aihub cos');
+  });
+
+  it('spends the 80-char budget on the query, never on the label', () => {
+    const title = searchAskTitle('zebra '.repeat(40));
+    expect(title.length).toBeLessThanOrEqual(80);
+    expect(title.startsWith('Search query: ')).toBe(true);
+    expect(title.endsWith('…')).toBe(true);
+  });
+
+  it('never cuts an emoji in half at the boundary', () => {
+    // A lone surrogate goes through JSON.stringify into tasks.json and then
+    // breaks whoever decodes the file — one bad title, a whole store unreadable.
+    for (let pad = 60; pad <= 70; pad++) {
+      const title = searchAskTitle('a'.repeat(pad) + '\u{1F600}b');
+      expect(title).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+      expect(title).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+      expect(title.length).toBeLessThanOrEqual(80);
+    }
   });
 });
