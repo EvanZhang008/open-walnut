@@ -158,11 +158,32 @@ export function providerError(code: ProviderErrorCode, message: string): ImapErr
 const AUTH_RESPONSE_PATTERN = /\b(?:authentication (?:failed|error)|invalid credentials|login failed|invalid (?:user|username|password)|bad credentials)\b/i
 
 /**
+ * What the server said when it REFUSED a command, or null for anything else.
+ *
+ * imapflow answers a tagged `NO` or `BAD` with `new Error('Command failed')` and hangs the useful
+ * part off the error: `responseStatus` is the word the server used and `responseText` is its own
+ * explanation. Telling this apart from a transport failure matters twice over, because the two need
+ * opposite handling: a refusal is an answer, so the connection is fine and must be kept, while
+ * "unreachable" tears the connection down and arms a reconnect backoff. Reporting one as the other
+ * turned a single unopenable folder into an account-wide stall every ten minutes.
+ */
+export function serverRefusal(error: unknown): { status: 'NO' | 'BAD'; text: string } | null {
+  const raw = error as { responseStatus?: unknown; responseText?: unknown } | null
+  const status = typeof raw?.responseStatus === 'string' ? raw.responseStatus.toUpperCase() : ''
+  if (status !== 'NO' && status !== 'BAD') return null
+  return { status, text: typeof raw?.responseText === 'string' ? raw.responseText : '' }
+}
+
+/**
  * A transport failure as one of the contract's codes.
  *
  * Only two outcomes are worth distinguishing to the human: the credential is wrong, or the
  * server could not be reached. Everything else (a reset socket, DNS, a TLS mismatch, our own
  * deadline) is `unreachable`, because the user's next action is the same in all of them.
+ *
+ * The server's OWN WORDS ride along whenever it gave any. `Error('Command failed')` is all imapflow
+ * puts in `message`, so a real refusal ("Unable to open this folder", a quota, a disabled mailbox)
+ * reached the log as five characterless words and every diagnosis had to start from scratch.
  */
 export function toProviderError(error: unknown, what: string): ImapError {
   const raw = error as {
@@ -193,7 +214,11 @@ export function toProviderError(error: unknown, what: string): ImapError {
   if (claimed) {
     return providerError('auth', `The mail server rejected the sign-in for ${what}. ${message}`)
   }
-  return providerError('unreachable', `The mail server could not be reached for ${what}. ${message}`)
+  const refusal = serverRefusal(error)
+  // `${message}` first, then what the server actually said, so the shape of the line is unchanged
+  // for every caller that already reads it and the added words are strictly extra.
+  const said = refusal ? ` The server answered ${refusal.status}${refusal.text ? `: ${refusal.text}` : '.'}` : ''
+  return providerError('unreachable', `The mail server could not be reached for ${what}. ${message}${said}`)
 }
 
 function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {

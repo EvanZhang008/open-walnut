@@ -274,6 +274,21 @@ export class MailStore {
     )
   }
 
+  /**
+   * Forget ONE folder row, for a container the provider has stopped listing.
+   *
+   * The folder list is upserted, never replaced, so a row outlives whatever put it there: a label
+   * renamed on the server, a folder deleted, or one this provider now recognises as unopenable.
+   * Its cached messages are deliberately left to retention rather than deleted here, so a mailbox
+   * list that comes back short for any reason cannot take a mailbox of mail with it.
+   */
+  async deleteMailbox(accountId: string, mailboxId: string): Promise<void> {
+    await this.db.run(
+      'DELETE FROM mailboxes WHERE account_id = ? AND mailbox_id = ?',
+      [accountId, mailboxId],
+    )
+  }
+
   /** Never touches `cursor` or `last_sync_at`: a mailbox re-list must not void a cursor. */
   async upsertMailbox(row: {
     accountId: string

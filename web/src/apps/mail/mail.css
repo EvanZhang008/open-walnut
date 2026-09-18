@@ -454,6 +454,23 @@
   gap: 8px;
 }
 
+/* A sentence, an optional second line from the provider, and the button that answers them. A COLUMN
+   rather than the unread line's single row: the provider's text is a whole sentence written by a
+   plugin, and running it onto the end of ours read as one broken sentence. */
+.mail-folder-unfetched {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Whatever the provider said, one step quieter than the console's own sentence. */
+.mail-folder-detail {
+  max-width: 34ch;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
 /* A group inside one list: the two halves of the merged Drafts row. Sticky, so scrolling a long
    list never leaves a row without the header that says which half it belongs to. The list pane's
    own tone, or the rows would show through it. */

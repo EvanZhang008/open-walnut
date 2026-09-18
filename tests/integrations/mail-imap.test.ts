@@ -89,6 +89,8 @@ interface Wire {
   connectOptions: ImapConnectOptions[];
   failConnectWith: unknown;
   failListWith: unknown;
+  /** Thrown by `mailboxOpen`, for the folder a server lists and then refuses to SELECT. */
+  failOpenWith: unknown;
   hangOn: string | null;
   flagOps: Array<{ range: string; flags: string[]; add: boolean; uid: boolean }>;
   /** Every IMAP APPEND, which is how a Sent copy is filed. */
@@ -148,6 +150,7 @@ class FakeImap implements ImapClient {
 
   async mailboxOpen(mailbox: string) {
     await this.step(`open ${mailbox}`);
+    if (wire.failOpenWith) throw wire.failOpenWith;
     const box = wire.boxes[mailbox];
     if (!box) throw new Error(`no such mailbox: ${mailbox}`);
     this.open = mailbox;
@@ -417,6 +420,7 @@ function freshWire(): Wire {
     connectOptions: [],
     failConnectWith: null,
     failListWith: null,
+    failOpenWith: null,
     hangOn: null,
     flagOps: [],
     appends: [],
@@ -1126,6 +1130,86 @@ describe('a mailbox list', () => {
       { mailboxId: 'Projects/2026', name: 'Projects/2026', role: 'other', unread: 0, total: 1 },
       { mailboxId: 'Papierkorb', name: 'Papierkorb', role: 'trash', unread: 0, total: 0 },
     ]);
+  });
+
+  it('leaves out the names in the hierarchy that no client can open', async () => {
+    // Every Gmail account has at least one: `[Gmail]` is a namespace node, and a label that only
+    // exists so a nested label has a parent is another. LIST reports them, SELECT answers NO. They
+    // used to be stored as ordinary folders, so the sidebar carried rows that opened to nothing and
+    // the poll loop spent a round trip failing on each one — which is how one of them took a whole
+    // account's sweep down with it.
+    wire.listing = [
+      ...freshWire().listing,
+      { path: '[Gmail]', flags: ['\\Noselect', '\\HasChildren'] },
+      // `\NonExistent` is RFC 5258's version of the same statement, and imapflow adds `\Noselect`
+      // alongside it. Checked on its own anyway: this must not depend on that normalisation.
+      { path: 'Phantom', flags: ['\\NonExistent'] },
+      // Case-insensitive, because IMAP flag names are.
+      { path: 'Shouty', flags: ['\\NOSELECT'] },
+    ];
+
+    const paths = (await live.provider.listMailboxes(ACCOUNT_ID)).map((one) => one.mailboxId);
+
+    expect(paths).toEqual(['INBOX', 'Projects/2026', 'Papierkorb']);
+  });
+
+  it('keeps every folder when the server sends no attributes at all', async () => {
+    // A LIST answer without flags is not evidence that nothing can be opened. Reading it that way
+    // would empty the folder list, which is the one outcome worse than a dead row in it.
+    wire.listing = [{ path: 'INBOX' }, { path: 'Plain' }];
+
+    const paths = (await live.provider.listMailboxes(ACCOUNT_ID)).map((one) => one.mailboxId);
+
+    expect(paths).toEqual(['INBOX', 'Plain']);
+  });
+
+  it('keeps INBOX even if the server marks it unopenable', async () => {
+    wire.listing = [{ path: 'INBOX', flags: ['\\Noselect'] }, { path: 'Other', flags: ['\\Noselect'] }];
+
+    const paths = (await live.provider.listMailboxes(ACCOUNT_ID)).map((one) => one.mailboxId);
+
+    expect(paths).toEqual(['INBOX']);
+  });
+});
+
+describe('a folder the server refuses to open', () => {
+  it('is reported as not-found, so the connection is kept and the sweep moves on', async () => {
+    // imapflow answers a tagged NO with `Error('Command failed')` plus the server's own words. Read
+    // as `unreachable` — which is a claim about the NETWORK — it made the pool drop a healthy
+    // connection into a reconnect backoff and the sync loop call the whole account down.
+    const refused = Object.assign(new Error('Command failed'), {
+      responseStatus: 'NO',
+      responseText: 'Unable to open this mailbox',
+    });
+    wire.failOpenWith = refused;
+
+    await expect(live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 }))
+      .rejects.toMatchObject({ code: 'not-found' });
+    // The server's own sentence survives into the message, which is the whole diagnosis: "Command
+    // failed" alone said nothing and a day was spent working out what it meant.
+    await expect(live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 }))
+      .rejects.toThrow(/Unable to open this mailbox/);
+  });
+
+  it('still reports a transport failure as unreachable', async () => {
+    // No `responseStatus`: nothing answered, so this really is the network and the pool SHOULD drop
+    // the connection. Pinned because the new branch sits directly in front of this one.
+    wire.failOpenWith = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+
+    await expect(live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 }))
+      .rejects.toMatchObject({ code: 'unreachable' });
+  });
+
+  it('still reports a refusal that names the credential as auth', async () => {
+    // A NO can also be the sign-in being rejected, and that answer must not be downgraded to "no
+    // such folder": one asks the human for a password, the other never does.
+    wire.failOpenWith = Object.assign(new Error('Command failed'), {
+      responseStatus: 'NO',
+      responseText: 'AUTHENTICATIONFAILED Invalid credentials',
+    });
+
+    await expect(live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 }))
+      .rejects.toMatchObject({ code: 'auth' });
   });
 });
 

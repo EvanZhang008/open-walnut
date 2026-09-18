@@ -178,6 +178,21 @@ if (dense && deep) MESSAGES.push(...deepTail());
  * badge that no longer says "99+". A number that wide has to fit the folder row without clipping or
  * wrapping, in both engines, and no amount of cached fixture mail would produce it.
  */
+/**
+ * A folder this server LISTS and then refuses to poll, which every real IMAP account has.
+ *
+ * Gmail lists a name for every label that only exists as a parent, plus its own `[Gmail]` namespace
+ * node, and answers `NO` to anybody who tries to open one. That refusal used to escape the sync
+ * loop's container loop, which ended the whole sweep: on a real account with 67 folders the twelfth
+ * in order was one of these, so the 55 after it were never polled once and the console showed each
+ * of their true sizes over an empty message list.
+ *
+ * Its own flag, because it changes what the folder list contains and the other specs count those
+ * rows. `declared` gives it a size, which is the half the console CAN read: the bug is only visible
+ * when a folder has a number and no mail.
+ */
+const coldFolder = process.env.MAIL_FIXTURE_COLD_FOLDER === '1';
+
 const MAILBOXES = [
   { mailboxId: 'INBOX', name: 'Inbox', role: 'inbox' },
   { mailboxId: 'Archive', name: 'Archive', role: 'archive' },
@@ -190,7 +205,19 @@ const MAILBOXES = [
       ...(deep ? { declared: { total: 45_231, unread: 12_345 } } : {}),
     },
   ] : []),
+  // Named to sort FIRST among the non-inbox folders, which is the whole point: the sweep visits
+  // them inbox-first then by name, so a refusal here is a refusal with folders queued behind it.
+  // Sorted last it would prove nothing, since there would be nothing left for it to starve.
+  ...(coldFolder ? [{
+    mailboxId: 'Aged',
+    name: 'Aged',
+    role: 'other',
+    declared: { total: 1962, unread: 2 },
+  }] : []),
 ];
+
+/** The folder above, and the only mailbox this server ever refuses. */
+const COLD_MAILBOX = 'Aged';
 
 /** Read state, as a server holds it. Seeded from the canned envelopes. */
 const seen = new Set(MESSAGES.filter((one) => !one.unreadAtFirstSight).map((one) => one.messageId));
@@ -228,6 +255,19 @@ function authError(message) {
 function notFound(message) {
   const error = new Error(message);
   error.code = 'not-found';
+  return error;
+}
+
+/**
+ * The refusal a folder nobody can open really arrives as.
+ *
+ * `unreachable` rather than `not-found`, deliberately, because that is the code the real one had and
+ * the reason the bug existed: `not-found` was already handled inside the container's own loop, so a
+ * refusal that mapped to it was contained. This one is the shape that escaped.
+ */
+function unreachable(message) {
+  const error = new Error(message);
+  error.code = 'unreachable';
   return error;
 }
 
@@ -329,6 +369,9 @@ const spec = {
     });
   },
   async poll(_accountId, request) {
+    if (coldFolder && request.mailbox === COLD_MAILBOX) {
+      throw unreachable(`this server will not open ${request.mailbox}`);
+    }
     const held = MESSAGES.filter((one) => one.mailboxId === request.mailbox);
     return {
       messages: held.map(envelopeOf),

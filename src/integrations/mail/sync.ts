@@ -14,9 +14,18 @@
  * - PUSH AND POLL SHARE ONE FETCH PATH. `provider.watch` hands back a hint; the hint flips a
  *   flag and kicks this loop. No provider callback ever does I/O, so no provider callback can
  *   block the event loop.
+ * - ONE CONTAINER FAILING IS ONE CONTAINER FAILING. Any code but `auth` is logged, counted and
+ *   stepped over; the sweep carries on and the account is only called down when EVERY container it
+ *   reached failed. This is the rule the 2026-09-17 report came down to: a Gmail label the server
+ *   refuses to SELECT threw out of the container loop, which ended the sweep, so the 55 folders
+ *   after it in order were never polled once and each showed its true size (the mailbox LIST works)
+ *   over an empty message list. It ran every ten minutes for a day.
  * - PER ACCOUNT BACKOFF, and an `auth` failure STOPS that account. Retrying a wrong password
  *   every two minutes is how an account gets locked out; the account waits for the human, one
  *   recoverable notification says so, and the next good poll retires it.
+ * - A FOLDER SOMEBODY IS LOOKING AT JUMPS THE QUEUE (`refreshMailbox`). The rotation is the right
+ *   answer for a background loop and the wrong answer to a click: with 67 folders it is the better
+ *   part of an hour before a given one comes around.
  * - It does not run on a replica at all. Two boxes polling one mailbox double every fetch and
  *   every write, and only the primary owns the outside account.
  */
@@ -51,6 +60,15 @@ export const MAX_PAGES_PER_TICK = 20
 export const MIN_BACKOFF_MS = 60_000
 export const MAX_BACKOFF_MS = 30 * 60_000
 
+/**
+ * How long ONE on-demand folder fetch may run.
+ *
+ * Under the tick budget on purpose: a human is holding a browser connection open waiting for this,
+ * and the first page is what fills the screen. Whatever history is left behind it is the background
+ * sweep's job, so this can afford to be short.
+ */
+export const MAILBOX_FETCH_BUDGET_MS = 9_000
+
 export interface TickReport {
   polled: number
   added: number
@@ -58,6 +76,16 @@ export interface TickReport {
   skipped: number
   /** True when the budget ran out before every account had its turn. */
   incomplete: boolean
+}
+
+/** What one on-demand fetch of a single folder did. `reason` is only set when it did nothing. */
+export interface MailboxFetchReport {
+  fetched: boolean
+  added: number
+  updated: number
+  reason?: 'replica' | 'stopped' | 'unknown-mailbox' | 'failed'
+  /** The provider's own words, for a `failed` fetch, so the console can say what went wrong. */
+  detail?: string
 }
 
 interface AccountState {
@@ -121,7 +149,7 @@ export class MailSync {
   private timer: Disposable | null = null
   private configWatch: Disposable | null = null
   private kickPending: Disposable | null = null
-  private running: Promise<TickReport> | null = null
+  private running: Promise<unknown> | null = null
   private rotation = 0
   private lastTickAt = 0
   private limits: MailSyncLimits = DEFAULT_LIMITS
@@ -267,16 +295,90 @@ export class MailSync {
   }
 
   /**
+   * Fetch ONE container now, because somebody is looking at it.
+   *
+   * The rotation gets every folder eventually, and "eventually" is the wrong answer to a click: a
+   * real account with 67 folders needs several sweeps ten minutes apart to come around, so a folder
+   * the human just opened would show its true size next to an empty list for the best part of an
+   * hour. This is the one place that jumps the queue.
+   *
+   * Deliberately NOT `markDirty` plus a kick, which is the cheaper-looking version of this: a
+   * narrow tick visits the INBOX first, and an inbox still walking its history backwards takes
+   * twenty pages a tick, so the folder somebody is waiting for sits behind it. This polls the one
+   * container and nothing else, and re-lists nothing (a mailbox list costs a STATUS round trip per
+   * folder, which is the whole reason it only runs every fifth tick).
+   *
+   * Queued behind any tick already running, for the same reason ticks are queued behind each other:
+   * two polls of one container race each other's cursor writes.
+   */
+  async refreshMailbox(accountId: string, mailboxId: string): Promise<MailboxFetchReport> {
+    if (this.deps.walnut.replica) return { fetched: false, reason: 'replica', added: 0, updated: 0 }
+    return this.queue(async () => {
+      if (this.stopped) return { fetched: false, reason: 'stopped', added: 0, updated: 0 }
+      if (this.ready) await this.ready.catch(() => undefined)
+      const rows = await this.deps.store.listMailboxes(accountId)
+      const row = rows.find((one) => one.mailbox_id === mailboxId)
+      // Not an error the human can act on: a folder the server stopped listing is exactly what the
+      // prune above removes, and the console's next mailbox read will drop the row from the screen.
+      if (!row) return { fetched: false, reason: 'unknown-mailbox', added: 0, updated: 0 }
+      const state = this.stateFor(accountId)
+      const spec = this.deps.service.provider(accountId)
+      try {
+        const outcome = await this.syncContainer(
+          accountId,
+          row,
+          spec,
+          Date.now() + MAILBOX_FETCH_BUDGET_MS,
+        )
+        state.dirty.delete(mailboxId)
+        // A poll that succeeded is what retires a park, here as much as in the loop: this one went
+        // through the same connection with the same credential.
+        await this.onGoodPoll(accountId, state)
+        // The server answered, and what it said was "there is no such folder". Reported as such
+        // rather than as a fetch of nothing, or the console would go on to explain an empty list as
+        // a folder whose mail is all older than the cache keeps.
+        if (outcome.missing) return { fetched: false, reason: 'unknown-mailbox', added: 0, updated: 0 }
+        return { fetched: true, added: outcome.added, updated: outcome.updated }
+      } catch (error) {
+        // Only `auth` is the ACCOUNT's problem. One folder refusing must not park an account whose
+        // password is fine, which is the same rule the sweep follows.
+        if (providerErrorCode(error) === 'auth') await this.onFailedPoll(accountId, state, error)
+        this.deps.walnut.log.warn('mail on-demand folder fetch failed', {
+          accountId,
+          mailboxId,
+          code: providerErrorCode(error) ?? 'unknown',
+          error: reasonOf(error).slice(0, 200),
+        })
+        return {
+          fetched: false,
+          reason: 'failed',
+          added: 0,
+          updated: 0,
+          detail: reasonOf(error).slice(0, 300),
+        }
+      }
+    })
+  }
+
+  /**
    * One tick. Also the test seam: a test drives this directly rather than waiting on a timer.
    *
    * Serialized on `this.running`: two overlapping ticks would double every fetch and race
    * every cursor write, and the interval firing while a slow tick is still going is normal.
    */
   runTick(options: { force?: boolean; only?: string }): Promise<TickReport> {
+    return this.queue(() => this.tick(options))
+  }
+
+  /**
+   * Run `work` after whatever this loop is already doing, and never two at once.
+   *
+   * A previous job that REJECTED does not stop the next one: the chain is about ordering, and each
+   * job owns its own failure handling.
+   */
+  private queue<T>(work: () => Promise<T>): Promise<T> {
     const previous = this.running ?? Promise.resolve(null)
-    const current = previous
-      .catch(() => null)
-      .then(() => this.tick(options))
+    const current = previous.catch(() => null).then(work)
     this.running = current
     void current.finally(() => { if (this.running === current) this.running = null }).catch(() => undefined)
     return current
@@ -394,9 +496,51 @@ export class MailSync {
       let visitedRotated = 0
       /** The container loop stopped on the deadline, so some containers were never reached. */
       let ranOut = false
+      /** Containers the sweep reached whose own poll failed. */
+      let failed = 0
+      let lastFailure: unknown = null
       for (const mailbox of containers) {
         if (Date.now() >= deadlineAt) { exhausted = false; ranOut = true; break }
-        const outcome = await this.syncContainer(accountId, mailbox, spec, deadlineAt)
+        let outcome
+        try {
+          outcome = await this.syncContainer(accountId, mailbox, spec, deadlineAt)
+        } catch (error) {
+          // ONE CONTAINER FAILING IS ONE CONTAINER FAILING. This used to escape to the account's
+          // catch, which ended the sweep, so every folder after the bad one was never reached —
+          // and because the rotation cursor is only advanced on the deadline path below, the next
+          // wide sweep restarted at the same index and died at the same folder. Permanently. A real
+          // Gmail account with 67 folders spent a whole day polling the same 11 and refusing to
+          // select the 12th (a label with children that the server will not open), so the other 55,
+          // Sent Mail among them, showed the folder's true size next to an empty list forever.
+          //
+          // `auth` is the one code that still stops the sweep: the credential belongs to the
+          // ACCOUNT, so carrying on would be sixty more wrong sign-ins on the way to a lockout.
+          if (providerErrorCode(error) === 'auth') throw error
+          failed += 1
+          lastFailure = error
+          // Counted as VISITED, because it was: the rotation must move past a container that
+          // cannot be polled, or a permanent refusal pins the cursor and starves the tail again.
+          visited += 1
+          if (mailbox.role === ('inbox' satisfies MailboxRole)) {
+            // `exhausted` decides exactly ONE thing now: whether this account's first backfill is
+            // done, which is what suppresses "you have 4812 new messages" for an account being
+            // added. That number counts INBOX mail, so only a failed inbox can leave the question
+            // open. Letting any refused folder clear the flag was wrong in the other direction:
+            // an account with one permanently unopenable label would never announce new mail
+            // again, silently, for as long as the folder existed.
+            exhausted = false
+          } else {
+            visitedRotated += 1
+          }
+          state.dirty.delete(mailbox.mailbox_id)
+          this.deps.walnut.log.warn('mail container poll failed, sweep continues', {
+            accountId,
+            mailboxId: mailbox.mailbox_id,
+            code: providerErrorCode(error) ?? 'unknown',
+            error: reasonOf(error).slice(0, 200),
+          })
+          continue
+        }
         added += outcome.added
         updated += outcome.updated
         if (mailbox.role === ('inbox' satisfies MailboxRole)) {
@@ -417,12 +561,18 @@ export class MailSync {
         })
       }
       // Only a WIDE sweep moves the cursor, and that includes the reset. A narrow tick visits the
-      // inbox and drains it, so it reports `exhausted` almost every time: resetting on those would
-      // put every wide sweep back at index 0 and undo the rotation entirely.
-      if (wide && ranOut) {
-        state.sweepFrom = sweep.rotated > 0 ? (state.sweepFrom + visitedRotated) % sweep.rotated : 0
-      } else if (wide && exhausted) {
-        state.sweepFrom = 0
+      // inbox and drains it, so it would report a completed sweep almost every time: resetting on
+      // those would put every wide sweep back at index 0 and undo the rotation entirely.
+      //
+      // Which way it moves is decided by `ranOut` — did the loop stop early — and NOT by whether
+      // every container drained. Those were the same question until a container was allowed to fail
+      // without ending the sweep: a folder the server refuses never drains, so keying the reset on
+      // `exhausted` left the cursor untouched on a sweep that had in fact visited everything, and
+      // the next one repeated the same prefix.
+      if (wide) {
+        state.sweepFrom = ranOut && sweep.rotated > 0
+          ? (state.sweepFrom + visitedRotated) % sweep.rotated
+          : 0
       }
 
       const inbox = mailboxes.find((row) => row.role === 'inbox')
@@ -434,7 +584,12 @@ export class MailSync {
       // new messages" is the account being added, not news.
       if (state.backfilled) this.deps.events.messagesReceived(accountId, received, headlines)
       if (exhausted) state.backfilled = true
-      await this.onGoodPoll(accountId, state)
+      // EVERY container the sweep reached failed, so whatever is wrong is the account's, not one
+      // folder's, and it gets the backoff. One folder refusing while the inbox and ten others
+      // synced is not an account failure, and treating it as one is what put a healthy mailbox
+      // into a thirty-minute backoff every ten minutes.
+      if (failed > 0 && failed === visited) await this.onFailedPoll(accountId, state, lastFailure)
+      else await this.onGoodPoll(accountId, state)
     } catch (error) {
       // A provider that is not registered right now is not a failure of this account: its
       // plugin is reloading or off, and the loop picks the account up again when it is back.
@@ -467,6 +622,24 @@ export class MailSync {
         total: mailbox.total ?? 0,
       })
     }
+    // Rows the provider no longer lists go, because an upsert-only folder list means a row lives
+    // forever: a label renamed on the server, a folder deleted, or one the provider has learned it
+    // cannot open. Each of those stayed in the sidebar as a row that opens to nothing, and the poll
+    // loop spent a container slot on it every sweep.
+    //
+    // ONLY on a non-empty listing. An empty answer and "this account has no folders" are the same
+    // shape, and acting on the first would wipe the folder list off the screen; a provider that
+    // really has no folders will keep them for one more re-list, which costs nothing.
+    if (listed.length > 0) {
+      const live = new Set(listed.map((mailbox) => mailbox.mailboxId))
+      for (const row of rows) {
+        if (live.has(row.mailbox_id)) continue
+        await this.deps.store.deleteMailbox(accountId, row.mailbox_id)
+        this.deps.walnut.log.info('mail folder no longer listed, row dropped', {
+          accountId, mailboxId: row.mailbox_id,
+        })
+      }
+    }
     rows = await this.deps.store.listMailboxes(accountId)
     return rows
   }
@@ -476,12 +649,20 @@ export class MailSync {
     mailbox: MailboxRow,
     spec: MailProviderSpec,
     deadlineAt: number,
-  ): Promise<{ added: number; updated: number; headlines: Array<{ from: string; subject: string }>; exhausted: boolean }> {
+  ): Promise<{
+    added: number
+    updated: number
+    headlines: Array<{ from: string; subject: string }>
+    exhausted: boolean
+    /** The provider says this container is not there. Reported so a caller can say so. */
+    missing: boolean
+  }> {
     const startedAt = Date.now()
     let cursor = mailbox.cursor ?? undefined
     let added = 0
     let updated = 0
     let exhausted = false
+    let missing = false
     const headlines: Array<{ from: string; subject: string }> = []
 
     for (let page = 0; page < MAX_PAGES_PER_TICK; page += 1) {
@@ -502,7 +683,7 @@ export class MailSync {
         )
       } catch (error) {
         // A container that vanished is not an account failure: the next mailbox list drops it.
-        if (providerErrorCode(error) === 'not-found') { exhausted = true; break }
+        if (providerErrorCode(error) === 'not-found') { exhausted = true; missing = true; break }
         throw error
       }
       // A reset discovered PAST page 0 stops the container here, without writing the new
@@ -535,7 +716,7 @@ export class MailSync {
       { accountId, mailboxId: mailbox.mailbox_id, added, updated, tookMs: Date.now() - startedAt },
       cursor ?? null,
     )
-    return { added, updated, headlines, exhausted }
+    return { added, updated, headlines, exhausted, missing }
   }
 
   private async onGoodPoll(accountId: string, state: AccountState): Promise<void> {

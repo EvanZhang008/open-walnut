@@ -839,6 +839,109 @@ describe('a watch hint', () => {
   }, 30_000);
 });
 
+/**
+ * A folder the rotation has not come around to yet, which on a real account is most of them.
+ *
+ * The state below (a row with a size and no cursor, no stamp and no rows) is what 55 of one Gmail
+ * account's 67 folders were in for a whole day. The console read the size from the mailbox list and
+ * the rows from the cache, so it drew `SENT MAIL · 1,962 · 2 unread` over "No mail in this folder
+ * yet". Nothing was broken about either number; there was simply no way to ask for the folder.
+ */
+describe('a folder the sweep has not reached', () => {
+  const FILED = encodeURIComponent('Projects/2026');
+
+  async function forgetTheFolder(): Promise<void> {
+    const db = mailDatabaseForTesting()!;
+    await db.run("DELETE FROM messages WHERE mailbox_id = 'Projects/2026'");
+    await db.run(
+      "UPDATE mailboxes SET cursor = NULL, last_sync_at = NULL WHERE mailbox_id = 'Projects/2026'",
+    );
+  }
+
+  it('is fetched by itself, on demand, and the page fills', async () => {
+    await forgetTheFolder();
+    const before = await getJson<{ messages: unknown[] }>(
+      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=${FILED}`,
+    );
+    // What the console saw: a folder the mailbox list says holds one message, and no rows.
+    expect(before.body.messages).toEqual([]);
+
+    const fetched = await sendJson<{ ok: boolean; fetched: boolean; added: number }>(
+      'POST', '/mailboxes/fetch', { accountId: ACCOUNT_ID, mailboxId: 'Projects/2026' },
+    );
+
+    expect(fetched.status).toBe(200);
+    expect(fetched.body).toMatchObject({ ok: true, fetched: true, added: 1 });
+    const after = await getJson<{ messages: Array<{ subject: string }> }>(
+      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=${FILED}`,
+    );
+    expect(after.body.messages.map((one) => one.subject)).toEqual(['Filed away']);
+    // The stamp is what ends the console's question: without it every reload would ask again.
+    const stamped = await rows<{ last_sync_at: number | null }>(
+      "SELECT last_sync_at FROM mailboxes WHERE mailbox_id = 'Projects/2026'",
+    );
+    expect(stamped[0]!.last_sync_at).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('polls only that folder, so an inbox mid-backfill cannot starve it', async () => {
+    await forgetTheFolder();
+    marks().polls.length = 0;
+
+    await sendJson('POST', '/mailboxes/fetch', { accountId: ACCOUNT_ID, mailboxId: 'Projects/2026' });
+
+    expect(marks().polls.map((one) => one.mailbox)).toEqual(['Projects/2026']);
+  }, 60_000);
+
+  it('refuses a request that names no folder', async () => {
+    const answer = await sendJson<{ error: string }>('POST', '/mailboxes/fetch', { accountId: ACCOUNT_ID });
+    expect(answer.status).toBe(400);
+    expect(answer.body.error).toBe('invalid');
+  });
+});
+
+/**
+ * The folder list is upserted, never replaced, so a row used to outlive the folder it named.
+ *
+ * Three ways that happens: a label renamed on the server, a folder deleted, and (the one that
+ * started this) a hierarchy placeholder the provider has learned it cannot open. Each left a row in
+ * the sidebar that opened to nothing and cost the sweep a container slot every pass.
+ */
+describe('a folder the provider stops listing', () => {
+  // The tests below take folders off the fixture's listing, and everything after this describe
+  // reads the two it started with. Put them back, and re-list so the rows come back with them.
+  afterAll(async () => {
+    marks().mailboxes = [{ path: 'INBOX', role: 'inbox' }, { path: 'Projects/2026', role: 'archive' }];
+    await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+  }, 60_000);
+
+  it('loses its row, and the folders still listed keep their cursors', async () => {
+    const cursorBefore = await rows<{ cursor: string | null }>(
+      "SELECT cursor FROM mailboxes WHERE mailbox_id = 'INBOX'",
+    );
+    marks().mailboxes = [{ path: 'INBOX', role: 'inbox' }];
+
+    await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+
+    expect(await rows<{ mailbox_id: string }>('SELECT mailbox_id FROM mailboxes ORDER BY mailbox_id'))
+      .toEqual([{ mailbox_id: 'INBOX' }]);
+    const cursorAfter = await rows<{ cursor: string | null }>(
+      "SELECT cursor FROM mailboxes WHERE mailbox_id = 'INBOX'",
+    );
+    expect(cursorAfter[0]!.cursor).toBe(cursorBefore[0]!.cursor);
+  }, 60_000);
+
+  it('keeps every row when the listing comes back empty, which is not an answer', async () => {
+    // An empty list and "this account has no folders" are the same shape on the wire. Acting on the
+    // first would take the folder list off the screen, so it takes one more re-list to be sure.
+    marks().mailboxes = [];
+
+    await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+
+    expect((await rows<{ mailbox_id: string }>('SELECT mailbox_id FROM mailboxes')).length)
+      .toBeGreaterThan(0);
+  }, 60_000);
+});
+
 describe('a voided cursor', () => {
   it('drops the container rows before the resync lands', async () => {
     const before = await rows<{ message_id: string }>("SELECT message_id FROM messages WHERE mailbox_id = 'INBOX'");

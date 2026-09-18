@@ -18,6 +18,7 @@
  */
 import {
   createMailAccount,
+  fetchMailbox,
   listMailAccounts,
   listMailMessages,
   listMailboxes,
@@ -125,8 +126,81 @@ export function selectMailbox(accountId: string, mailboxId: string): void {
     listError: null,
     open: null,
     search: EMPTY_SEARCH,
+    // A fetch note describes ONE folder. Carrying it across a selection would say "fetching" over
+    // the folder just opened while the request in flight is about the one just left.
+    folderFetch: null,
   });
   void loadMailMessages();
+}
+
+/**
+ * Has this folder ever been fetched?
+ *
+ * `lastSyncAt` is the plugin's stamp, written when a poll of that container completes. Absent means
+ * the background sweep has not reached it yet, which on a big account is the normal state of most
+ * folders for the first hour: the console's own message list is then EMPTY for a folder whose size
+ * it can see, and saying "no mail in this folder" there is a confident wrong answer.
+ *
+ * An unknown mailbox counts as fetched, so a selection the mailbox list has not caught up with does
+ * not trigger a fetch of something nobody can name.
+ */
+function folderEverFetched(selection: MailSelection): boolean {
+  const row = (store.state.mailboxes[selection.accountId] ?? [])
+    .find((one) => one.mailboxId === selection.mailboxId);
+  return !row || row.lastSyncAt !== undefined;
+}
+
+/**
+ * Fetch the folder on screen now, because the sweep has not reached it.
+ *
+ * `auto` is the once-per-selection path taken when a page came back empty; a human pressing the
+ * retry link passes false and goes around that record. Either way the answer is only applied while
+ * the same folder is still selected.
+ *
+ * Note which way `auto` maps onto `run`'s force flag, because the two are opposite ON PURPOSE. This
+ * function awaits a page read, and a page read that comes back empty is what calls it: forcing on
+ * the automatic path would put a `want` on this very key, `run` would loop the body again, and the
+ * pair would spin. The once-per-folder record is what really prevents that, and the flag agreeing
+ * with it means neither one is load-bearing alone.
+ */
+export function fetchSelectedFolder(auto = false): Promise<void> {
+  const selection = store.state.selected;
+  if (!selection || selection.mailboxId === DRAFTS_MAILBOX) return Promise.resolve();
+  const key = selectionKey(selection);
+  if (auto) {
+    if (store.folderFetchAsked.has(key)) return Promise.resolve();
+    store.folderFetchAsked.add(key);
+  }
+  return run(`folder-fetch:${key}`, async () => {
+    patch({ folderFetch: { key, state: 'fetching' } });
+    try {
+      const answer = await fetchMailbox(selection.accountId, selection.mailboxId);
+      if (!sameSelection(selection)) return;
+      if (answer.running) {
+        // A 202: still going, and `sync-completed` will bring the rows. Saying "fetching" is the
+        // truth, and it is also what keeps the empty-folder sentence off the screen meanwhile.
+        patch({ folderFetch: { key, state: 'running' } });
+        return;
+      }
+      if (answer.fetched) {
+        patch({ folderFetch: null });
+        // The rows are in the cache now; this is the read that puts them on screen. The sync event
+        // does the same thing, and `run` collapses the two into one request.
+        await loadMailMessages(true);
+        return;
+      }
+      patch({
+        folderFetch: {
+          key,
+          state: 'failed',
+          ...(answer.detail ? { detail: answer.detail } : {}),
+        },
+      });
+    } catch (error) {
+      if (!sameSelection(selection)) return;
+      patch({ folderFetch: { key, state: 'failed', detail: mailFailure(error).message } });
+    }
+  }, !auto);
 }
 
 /**
@@ -216,13 +290,25 @@ function loadMessagePage(selection: MailSelection, mailboxId: string, force: boo
       // The human may have moved to another mailbox while this was in flight.
       if (!sameSelection(selection)) return;
       const rows = page.messages ?? [];
+      // Rows on screen retire the fetch note whatever it said: they are the outcome it was waiting
+      // for, and a "fetching" line above a full list is the console describing its own past.
+      const fetching = store.state.folderFetch;
+      const settled = rows.length > 0 && fetching?.key === selectionKey(selection);
       patch({
         // The message being read is not in a fresh unread answer any more, because opening it is
         // what marked it read. It stays until another row is selected; see `keepOpenRow`.
         messages: unread ? keepOpenRow(rows, store.state.messages, store.state.open) : rows,
         nextBefore: page.nextBefore ?? null,
         listLoading: false,
+        ...(settled ? { folderFetch: null } : {}),
       });
+      // NOTHING CACHED AND NEVER FETCHED is not an empty folder, it is a folder whose turn in the
+      // sweep has not come. On an account with 67 folders that turn is an hour away, so the folder
+      // somebody just opened asks for itself. Once per selection, and never for the unread filter's
+      // empty answer (that page is a question about flags, not about whether the folder is here).
+      if (rows.length === 0 && !unread && !folderEverFetched(selection)) {
+        void fetchSelectedFolder(true);
+      }
     } catch (error) {
       if (!sameSelection(selection)) return;
       const expected = standIn(error);

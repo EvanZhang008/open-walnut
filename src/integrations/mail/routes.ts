@@ -50,6 +50,8 @@ import type { MailSync } from './sync.js'
  * POST   /accounts        { providerId, values }       -> 201 { account: MailAccount }
  * DELETE /accounts/:accountId                          -> { ok: true, messages }
  * GET    /mailboxes?account=                           -> { mailboxes: MailboxDto[] }
+ * POST   /mailboxes/fetch { accountId, mailboxId }      -> { ok, fetched, added, updated, reason? }
+ *        (one folder, now, for a folder the sweep has not reached) | 202 { running: true }
  * GET    /messages?account=&mailbox=&limit=&before=    -> { messages: MailMessageDto[], nextBefore? }
  *        &unread=1                                        (unread only, over the whole mailbox)
  * GET    /messages/:accountId/:messageId               -> { message, body, bodyError? }
@@ -67,6 +69,12 @@ import type { MailSync } from './sync.js'
 
 /** A refresh is a user action, so it answers fast rather than truthfully-but-eventually. */
 const REFRESH_DEADLINE_MS = 8_000
+
+/**
+ * One folder, fetched because somebody opened it. A shade over the sync's own 9s budget, so the
+ * usual outcome is the loop's own answer rather than this clock beating it to a 202 every time.
+ */
+const FOLDER_FETCH_DEADLINE_MS = 10_000
 
 /**
  * Every other route that can reach a provider or delete in bulk gets the same treatment.
@@ -360,6 +368,35 @@ export function registerMailRoutes(
     } catch (error) {
       // A tick reaches the database, so this can fail with `db_unavailable`, which every other
       // route answers as a 503. Without the try it escaped as an unexplained 500.
+      return errorReply(walnut, error)
+    }
+  })
+
+  /**
+   * "Fetch the folder I just opened", from the console.
+   *
+   * The background sweep reaches every folder eventually and a click cannot wait for eventually: an
+   * account with 67 folders takes several sweeps ten minutes apart to come around, so a folder that
+   * has never been fetched showed its true size (which the mailbox list knows) next to an empty
+   * message list. Answering it needs no new knowledge, only a way to say "this one, now".
+   *
+   * 202 when the fetch outran its budget, exactly like `/refresh`: the work carries on in the loop
+   * and the sync event tells the console when rows land, so nothing is lost and no connection is
+   * held open waiting for a big folder's first page.
+   */
+  walnut.http.route('post', '/mailboxes/fetch', async (request) => {
+    if (primaryOnly()) return PRIMARY_ONLY
+    const body = await readBody(request)
+    const accountId = typeof body?.accountId === 'string' ? body.accountId : ''
+    const mailboxId = typeof body?.mailboxId === 'string' ? body.mailboxId : ''
+    if (!accountId || !mailboxId) {
+      return { status: 400, json: { error: 'invalid', message: 'accountId and mailboxId are required' } }
+    }
+    try {
+      const report = await withBudget(sync.refreshMailbox(accountId, mailboxId), FOLDER_FETCH_DEADLINE_MS)
+      if (!report) return { status: 202, json: { ok: true, fetched: false, running: true } }
+      return { json: { ok: true, ...report } }
+    } catch (error) {
       return errorReply(walnut, error)
     }
   })

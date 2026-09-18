@@ -197,6 +197,14 @@ export interface MailSnapshot {
   olderLoading: boolean;
   listError: string | null;
   search: MailSearchState;
+  /**
+   * The first fetch of a folder the background sweep has never reached, and how it went.
+   *
+   * `key` is the selection it belongs to, so an answer that arrives after the human has moved on is
+   * dropped instead of describing the folder now on screen. Null means there is nothing to say:
+   * either the folder has been fetched before or this console has not asked.
+   */
+  folderFetch: MailFolderFetch | null;
   open: MailOpenMessage | null;
   refreshing: boolean;
   /** What a 202 refresh left behind: a sentence, not an error. */
@@ -206,6 +214,18 @@ export interface MailSnapshot {
   draftsLoading: boolean;
   /** The open composer, which replaces the reader pane. */
   composer: MailComposer | null;
+}
+
+/**
+ * A folder being fetched on demand, for the one folder on screen.
+ *
+ * `running` is the plugin's 202: the fetch outlived its budget and the sync event will finish it, so
+ * the pane keeps saying "fetching" rather than claiming the folder is empty.
+ */
+export interface MailFolderFetch {
+  key: string;
+  state: 'fetching' | 'running' | 'failed';
+  detail?: string;
 }
 
 export const EMPTY_SEARCH: MailSearchState = {
@@ -229,6 +249,7 @@ function initialState(): MailSnapshot {
     olderLoading: false,
     listError: null,
     search: EMPTY_SEARCH,
+    folderFetch: null,
     open: null,
     refreshing: false,
     refreshNote: null,
@@ -252,7 +273,24 @@ export const store: {
   preferAccount: string | null;
   /** Whose sync the "still syncing" note is about, so the right event can clear it. */
   refreshNoteAccount: string | null;
-} = { state: initialState(), openSeq: 0, preferAccount: null, refreshNoteAccount: null };
+  /**
+   * Selections this console has already asked the plugin to fetch on demand, ONCE each.
+   *
+   * The trigger is "the page came back empty and this folder has never been synced", and a folder
+   * that is genuinely empty answers empty again after the fetch. Without a record of having asked,
+   * every reload of that page would ask again: the mailbox list's `lastSyncAt` is what ends the
+   * condition and it arrives in a separate request, so there is a window where the answer is still
+   * "never synced". Session-scoped on purpose, and never a reason not to try: the Refresh button
+   * and the retry link both go around it.
+   */
+  folderFetchAsked: Set<string>;
+} = {
+  state: initialState(),
+  openSeq: 0,
+  preferAccount: null,
+  refreshNoteAccount: null,
+  folderFetchAsked: new Set(),
+};
 
 const listeners = new Set<() => void>();
 const inflight = new Map<string, Promise<void>>();
@@ -406,6 +444,9 @@ export function __resetMailStore(): void {
   store.openSeq = 0;
   store.preferAccount = null;
   store.refreshNoteAccount = null;
+  // Session-scoped, so a test that forgot this would carry "already asked for that folder" into the
+  // next case and the automatic fetch would silently not happen.
+  store.folderFetchAsked.clear();
   inflight.clear();
   wants.clear();
   badge = null;

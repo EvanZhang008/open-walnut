@@ -12,12 +12,13 @@ import type { MailMessageDto } from '@/api/mail';
 import { formatCount, formatMailTime, isUnread, senderLabel } from './mail-format';
 import {
   clearMailSearch,
+  fetchSelectedFolder,
   loadOlderMailMessages,
   openMailMessage,
   runMailSearch,
   setMailUnreadOnly,
 } from './mail-actions';
-import { DRAFTS_MAILBOX, serverDraftsMailbox, type MailSnapshot } from './mail-store';
+import { DRAFTS_MAILBOX, selectionKey, serverDraftsMailbox, type MailSnapshot } from './mail-store';
 import { readUnreadOnly } from './mail-unread-filter';
 import { MailDraftsList } from './compose/MailDraftsList';
 import { AttachmentIcon, BackIcon, SearchIcon } from './mail-icons';
@@ -182,14 +183,12 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
               Show all
             </button>
           </p>
-        ) : visible.length === 0 ? (
-          /* An EMPTY answer, which with the filter on is the branch above: the server returns the
-             unread set now, so "nothing unread" and "nothing at all" are the same zero rows and only
-             the filter tells them apart. */
+        ) : visible.length === 0 && search.active ? (
           <p className="mail-pane-empty" data-testid="mail-list-empty">
-            {search.active ? 'Nothing matched. Cached search only sees mail Walnut has already fetched.'
-              : 'No mail in this folder yet.'}
+            Nothing matched. Cached search only sees mail Walnut has already fetched.
           </p>
+        ) : visible.length === 0 ? (
+          <EmptyFolder snapshot={snapshot} section={section} />
         ) : visible.map((message) => (
           <MailRow
             key={`${message.accountId} ${message.messageId}`}
@@ -213,6 +212,93 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
       )}
     </section>
   );
+}
+
+/**
+ * A folder with nothing on screen, told apart from the other two things that look exactly like it.
+ *
+ * "No mail in this folder yet" used to be the answer to all three, and for a real Gmail account it
+ * was the wrong one twice: the header said `SENT MAIL · 1,962 · 2 unread` (the mailbox list knows the
+ * folder's true size) directly above a message list claiming the folder was empty. Nothing on screen
+ * hinted that Walnut simply had not fetched it yet, so the only reading available was "Walnut lost my
+ * sent mail".
+ *
+ * The three cases, and what makes them different:
+ *
+ * - NEVER FETCHED. `lastSyncAt` is absent, so no poll of this container has ever completed. It is
+ *   fetched on the spot (see `fetchSelectedFolder`), and while that runs this says so.
+ * - FETCHED AND KEPT NOTHING. The folder has messages on the server and none of them are inside the
+ *   cache's window. The number is on screen, so the sentence has to account for it or it reads as a
+ *   contradiction.
+ * - ACTUALLY EMPTY. The only case the old sentence was right about.
+ */
+function EmptyFolder({ snapshot, section }: { snapshot: MailSnapshot; section: Section | null }) {
+  const selection = snapshot.selected;
+  const mailbox = selection
+    ? (snapshot.mailboxes[selection.accountId] ?? []).find((one) => one.mailboxId === selection.mailboxId)
+    : undefined;
+  const fetch = selection && snapshot.folderFetch?.key === selectionKey(selection)
+    ? snapshot.folderFetch
+    : null;
+  const total = section?.count ?? mailbox?.total ?? 0;
+
+  if (fetch?.state === 'fetching' || fetch?.state === 'running') {
+    return (
+      <p className="mail-pane-empty" data-testid="mail-folder-fetching">
+        Fetching this folder…
+      </p>
+    );
+  }
+  if (fetch?.state === 'failed') {
+    return (
+      <p className="mail-pane-empty mail-folder-unfetched" data-testid="mail-folder-fetch-failed">
+        <span>Walnut could not fetch this folder.</span>
+        {/* The provider's own sentence, on its OWN line rather than run on after that full stop. A
+            plugin writes this text and nothing here can promise it starts with a capital: joined
+            inline it read as "could not fetch this folder. this server will not open Aged", which
+            looks like the console broke its own sentence in half. */}
+        {fetch.detail && <span className="mail-folder-detail">{fetch.detail}</span>}
+        <button
+          type="button"
+          className="mail-text-btn"
+          data-testid="mail-folder-fetch"
+          onClick={() => { void fetchSelectedFolder(); }}
+        >
+          Try again
+        </button>
+      </p>
+    );
+  }
+  // The button is here for the second visit: the automatic fetch runs once per folder per tab, so a
+  // page reloaded after that would otherwise be a dead end with no way to ask.
+  if (mailbox && mailbox.lastSyncAt === undefined) {
+    return (
+      <p className="mail-pane-empty mail-folder-unfetched" data-testid="mail-folder-unfetched">
+        <span>Walnut has not fetched this folder yet.</span>
+        <button
+          type="button"
+          className="mail-text-btn"
+          data-testid="mail-folder-fetch"
+          onClick={() => { void fetchSelectedFolder(); }}
+        >
+          Fetch it now
+        </button>
+      </p>
+    );
+  }
+  if (total > 0) {
+    return (
+      <p className="mail-pane-empty" data-testid="mail-folder-outside-window">
+        {/* States what is OBSERVED (fetched, holding none of them) and then the rule that explains
+            it, rather than asserting that every one of those messages is old. Walnut can see the
+            first two things; the third is an inference, and it is the cache's rule that is worth
+            telling somebody anyway. */}
+        {`Walnut fetched this folder and kept none of its ${formatCount(total)} messages:`
+          + ' the mail cache only keeps recent mail.'}
+      </p>
+    );
+  }
+  return <p className="mail-pane-empty" data-testid="mail-list-empty">No mail in this folder yet.</p>;
 }
 
 /**

@@ -221,6 +221,18 @@ export interface MailRefreshResult {
   incomplete?: boolean;
 }
 
+/** What one on-demand folder fetch did. Mirrors `MailboxFetchReport` in the plugin. */
+export interface MailboxFetchResult {
+  ok: boolean;
+  fetched: boolean;
+  added?: number;
+  updated?: number;
+  /** Only set when nothing was fetched. `running` is the 202: it is still going. */
+  reason?: 'replica' | 'stopped' | 'unknown-mailbox' | 'failed';
+  running?: boolean;
+  detail?: string;
+}
+
 export interface MailHealth {
   ok: boolean;
   providers: number;
@@ -410,6 +422,20 @@ export function refreshMail(accountId?: string): Promise<MailRefreshResult> {
   return apiPost(`${BASE}/refresh`, accountId ? { accountId } : {}, {
     timeoutMs: 20_000,
     // 503 is the replica and the cache-still-opening answer, both of which the console explains.
+    quietStatuses: [503],
+  });
+}
+
+/**
+ * Fetch ONE folder now, for a folder the background sweep has not reached yet.
+ *
+ * `fetched: false` with a `reason` is a real answer, not a failure: the loop declines on a replica
+ * and for a folder the provider has stopped listing. A 202 (`running`) means the fetch outlived its
+ * budget and `plugin:mail:sync-completed` will say when the rows land.
+ */
+export function fetchMailbox(accountId: string, mailboxId: string): Promise<MailboxFetchResult> {
+  return apiPost(`${BASE}/mailboxes/fetch`, { accountId, mailboxId }, {
+    timeoutMs: 20_000,
     quietStatuses: [503],
   });
 }

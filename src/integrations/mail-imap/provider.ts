@@ -36,7 +36,10 @@ import {
   ImapConnection,
   ImapPool,
   providerError,
+  serverRefusal,
   toProviderError,
+  type ImapClient,
+  type ImapMailboxInfo,
 } from './client.js'
 import { accountIdFor, ImapAccountStore, PROVIDER_ID } from './config.js'
 import { decodeCursor, decodeMessageId, encodeCursor, mailboxRole } from './coords.js'
@@ -65,6 +68,67 @@ function tooLarge(bytes: number) {
     'too-large',
     `That message is ${Math.round(bytes / 1024)} KB, over the ${MAX_SOURCE_BYTES / 1024} KB cap Walnut will parse.`,
   )
+}
+
+/**
+ * Is this LIST entry a real folder, or only a name in the hierarchy?
+ *
+ * `\Noselect` (RFC 3501) and `\NonExistent` (RFC 5258) both mean the same thing to anybody trying to
+ * read mail: the name exists so that its children have a parent, and SELECT will refuse it. Gmail
+ * ships two of them to every account (`[Gmail]`, and one per label that only exists as a prefix),
+ * and Walnut used to store them as ordinary folders, so they appeared in the sidebar as rows nobody
+ * could open and the poll loop spent a round trip failing on each one.
+ *
+ * Missing flags mean KEEP. A server that answers LIST without attributes, or a fake in a test, must
+ * not have its whole mailbox list read as unopenable: the cost of keeping one dead row is a failed
+ * SELECT that is now handled, and the cost of dropping a real folder is mail that never appears.
+ * INBOX is kept whatever the flags say, for the same reason and because it always exists.
+ */
+function selectable(entry: { path: string; flags?: Iterable<string> }): boolean {
+  if (entry.path.toUpperCase() === 'INBOX') return true
+  if (!entry.flags) return true
+  for (const flag of entry.flags) {
+    // Flag names are case-insensitive in IMAP, so the comparison has to be too.
+    const name = String(flag).toLowerCase()
+    if (name === '\\noselect' || name === '\\nonexistent') return false
+  }
+  return true
+}
+
+/**
+ * SELECT one mailbox, translating "the server will not open this one" into `not-found`.
+ *
+ * Every IMAP account has folders it lists but will not select. Gmail's `[Gmail]` namespace node is
+ * one, and so is any label whose only reason to exist is that a nested label lives under it: LIST
+ * reports them (RFC 5258 calls them `\Noselect`), SELECT answers `NO`. Without this the refusal was
+ * mapped as `unreachable`, which is a claim about the NETWORK, and two mechanisms built for network
+ * faults then fired on a healthy connection: the pool dropped the account's socket into a reconnect
+ * backoff, and the sweep treated it as this account being down.
+ *
+ * `not-found` is the code the contract already has for "that container is not there", and both
+ * layers above already do the right thing with it: the pool passes it through without touching the
+ * connection, and the sync loop marks the container done and moves to the next folder.
+ */
+async function openMailbox(
+  client: Pick<ImapClient, 'mailboxOpen'>,
+  path: string,
+): Promise<ImapMailboxInfo> {
+  try {
+    return await client.mailboxOpen(path)
+  } catch (error) {
+    const refused = serverRefusal(error)
+    if (!refused) throw error
+    // A NO can also be the SIGN-IN being rejected, and that answer outranks this one: the two send
+    // the human to opposite places, and only the credential reading ever asks them for a password.
+    // Deciding that is `toProviderError`'s job, so it gets asked first rather than second-guessed.
+    const mapped = toProviderError(error, `the folder "${path}"`)
+    if (mapped.code === 'auth') throw mapped
+    throw providerError(
+      'not-found',
+      `The mail server will not open the folder "${path}". It answered ${refused.status}`
+      + `${refused.text ? `: ${refused.text}` : '.'}`,
+    )
+  }
 }
 
 /**
@@ -298,7 +362,7 @@ export function createImapProvider(deps: {
         'a mailbox list',
         (client) => client.list({ statusQuery: { messages: true, unseen: true } }),
       )
-      return listed.map((one) => ({
+      return listed.filter(selectable).map((one) => ({
         mailboxId: one.path,
         name: one.name ?? one.path,
         role: mailboxRole(one, entry.roles),
@@ -319,7 +383,7 @@ export function createImapProvider(deps: {
       const connection = await pool.for(accountId)
       const limit = Math.max(1, Math.min(request.limit || 50, 200))
       return connection.run(`a poll of ${request.mailbox}`, async (client) => {
-        const box = await client.mailboxOpen(request.mailbox)
+        const box = await openMailbox(client, request.mailbox)
         const uidValidity = String(box.uidValidity)
         const previous = decodeCursor(request.cursor)
         // A changed UIDVALIDITY voids every UID we hold. Answering `reset` is the contract's way
@@ -407,7 +471,7 @@ export function createImapProvider(deps: {
       if (sizeHint !== undefined && sizeHint > MAX_SOURCE_BYTES) throw tooLarge(sizeHint)
       const connection = await pool.for(accountId)
       const fetched = await connection.run(`a body for ${messageId}`, async (client) => {
-        await client.mailboxOpen(coord.mailbox)
+        await openMailbox(client, coord.mailbox)
         return client.fetchOne(
           String(coord.uid),
           // `bodyStructure` rides along in the SAME fetch: it is the server's own parse of these
@@ -449,7 +513,7 @@ export function createImapProvider(deps: {
       if (!coord) throw providerError('invalid', `"${messageId}" is not an IMAP message handle.`)
       const connection = await pool.for(accountId)
       await connection.run(`a read flag for ${messageId}`, async (client) => {
-        await client.mailboxOpen(coord.mailbox)
+        await openMailbox(client, coord.mailbox)
         return read
           ? client.messageFlagsAdd(String(coord.uid), ['\\Seen'], { uid: true })
           : client.messageFlagsRemove(String(coord.uid), ['\\Seen'], { uid: true })
