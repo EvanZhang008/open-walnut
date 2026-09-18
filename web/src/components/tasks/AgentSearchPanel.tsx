@@ -14,6 +14,7 @@ import { isAgentSearchEligible } from '@/hooks/agentSearchTrigger';
 import { useAgentTaskSearch } from '@/hooks/useAgentTaskSearch';
 import { useEvent } from '@/hooks/useWebSocket';
 import { ICON_CHAT } from '@/components/common/Icons';
+import { AgentSearchFollowUp } from './AgentSearchFollowUp';
 import { AgentSearchResultRows } from './AgentSearchResultRows';
 import { buildSearchSessionMessage } from './agent-search-session';
 
@@ -98,7 +99,7 @@ function shortModel(model: string): string {
  * flight, so a double click cannot mint two sessions; the column the owner
  * opens is the visible feedback, this label only covers the beat before it.
  */
-function OpenSessionButton({ launching, onClick }: { launching: boolean; onClick: () => void }) {
+function OpenSessionButton({ launching, live, onClick }: { launching: boolean; live: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -106,13 +107,19 @@ function OpenSessionButton({ launching, onClick }: { launching: boolean; onClick
       data-testid="agent-search-open-session"
       disabled={launching}
       aria-busy={launching || undefined}
-      title="Continue this search as a conversation: opens the session that ran it, with its answer already there, so you can just ask follow-up questions"
+      title={live
+        // With the small window open, this conversation is already on screen —
+        // the button's job changed to "give it the whole column".
+        ? 'Open this conversation in a full session column'
+        : 'Continue this search as a conversation: opens the session that ran it, with its answer already there, so you can just ask follow-up questions'}
       onClick={onClick}
     >
       <span className="agent-search-open-session-icon" aria-hidden="true">{ICON_CHAT}</span>
       {/* The label ellipsizes at the task panel's narrowest width; the icon and
           the title never go away, so the control stays usable and explained. */}
-      <span className="agent-search-open-session-label">{launching ? 'Opening…' : 'Open as session'}</span>
+      <span className="agent-search-open-session-label">
+        {launching ? 'Opening…' : live ? 'Open full session' : 'Open as session'}
+      </span>
     </button>
   );
 }
@@ -175,8 +182,13 @@ export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
   // Eligibility gates the button as well as the lane. Without it the OFF branch
   // (which renders for any non-empty query, not just a searchable one) offered to
   // spend a whole session on a one-character search box.
+  // The follow-up window's session, once one is open. While it is, the card's own
+  // rows step aside: the transcript in the window renders the SAME answer card
+  // (AgentSearchResultRows) as its second message, so keeping both would show the
+  // same rows twice in a panel this narrow.
+  const [followUpSessionId, setFollowUpSessionId] = useState<string | null>(null);
   const openButton = onOpenSession && isAgentSearchEligible(query)
-    ? <OpenSessionButton launching={launching} onClick={openSession} />
+    ? <OpenSessionButton launching={launching} live={!!followUpSessionId} onClick={openSession} />
     : null;
 
   if (state === 'hidden' && enabled) return null;
@@ -242,13 +254,26 @@ export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
           <button type="button" className="agent-search-retry" onClick={retry}>Retry</button>
         </div>
       )}
-      {state === 'done' && data && !noMatches && (
+      {state === 'done' && data && !noMatches && !followUpSessionId && (
         <>
           {data.summary && <p className="agent-search-summary">{data.summary}</p>}
           {/* Shared with the transcript card (AgentSearchResultRows): the same
               answer renders identically wherever it is read back. */}
           <AgentSearchResultRows rows={data.results} onOpenTask={onOpenTask} />
         </>
+      )}
+      {/* Ask right here. Only once the search is DONE: before that there is no
+          answer to follow up ON, and the header's button already covers "take me
+          to the conversation now". A no-match search keeps it — that is exactly
+          when asking is the way forward. */}
+      {state === 'done' && onOpenSession && isAgentSearchEligible(query) && (
+        <AgentSearchFollowUp
+          query={query}
+          searchEnabled={enabled}
+          {...(sid ? { progressId: sid } : {})}
+          onLive={setFollowUpSessionId}
+          onOpenTask={onOpenTask}
+        />
       )}
     </section>
   );

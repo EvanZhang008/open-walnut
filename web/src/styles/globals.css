@@ -32705,6 +32705,61 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   padding: 0;
 }
 
+/* ── The follow-up window (AgentSearchFollowUp) ──────────────────────────────
+   A conversation inside the card, so the question after the answer costs no
+   navigation. Two things it must never do to the task panel it lives in: grow
+   without bound (the transcript is capped and scrolls INSIDE, so the panel's own
+   list keeps its place), and widen it (a session transcript carries code blocks
+   and long paths — `min-width: 0` + hidden overflow keep them ellipsized instead
+   of setting this column's min-content width). */
+.agent-search-followup {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.agent-search-followup.is-live {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.agent-search-followup-history {
+  min-width: 0;
+  overflow: hidden;
+}
+/* Capped by viewport height, not by a fixed pixel count: the card sits above the
+   task list, and on a short window a tall transcript would push the list off. */
+.agent-search-followup-history .session-history {
+  max-height: min(380px, 38vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* A message's action row is a flex row of fixed-size buttons whose min-content
+   (~175px measured) is wider than this window gets when the task panel is dragged
+   narrow — and it is laid out even while INVISIBLE (opacity, not display). Without
+   this it silently sets the transcript's content width and clips the whole
+   conversation: the same phantom-width shape as the tooltip that once widened
+   session-history. Wrapping costs a second row on hover and nothing when hidden. */
+.agent-search-followup .session-msg-actions,
+.agent-search-followup .msg-copy-actions { flex-wrap: wrap; }
+.agent-search-followup-input {
+  min-width: 0;
+  padding-top: 4px;
+}
+/* The composer's text row carries `min-width: 200px` so that in a session column
+   its buttons wrap to a second line instead of squeezing the text. In a card that
+   can be dragged down to ~160px that floor is wider than the card itself, and the
+   task panel CLIPS: the composer's right edge (with its send button) went
+   invisible AND unclickable. A lower floor keeps the wrap behaviour — the buttons
+   still cannot sit beside it — while the whole thing fits. */
+.agent-search-followup .chat-input-row { min-width: 100px; }
+.agent-search-followup-error {
+  padding: 2px 0 4px;
+  color: var(--error, #b3261e);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 /* ── Pinned-message outline (SessionPinnedToc) ───────────────────────────────
    Sticky in the timeline's top-left corner. `height: 0` + a negative bottom
    margin keep it out of the flex flow entirely: the ticks float over the
