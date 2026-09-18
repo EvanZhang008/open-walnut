@@ -21,11 +21,12 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-snap-apply')
 const liveRunnerSync = vi.fn()
 const liveWatermarkReset = vi.fn()
 let liveSessionId: string | null = null
+const liveSession = { turnGen: 1, setProcessStatusFromReconciler: liveRunnerSync, resetConsumedOffsetFromSnapshot: liveWatermarkReset }
 vi.mock('../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
     findSessionByClaudeId: (sid: string) =>
       sid === liveSessionId
-        ? { setProcessStatusFromReconciler: liveRunnerSync, resetConsumedOffsetFromSnapshot: liveWatermarkReset }
+        ? liveSession
         : undefined,
   },
 }))
@@ -34,6 +35,7 @@ import type { SessionSnapshot } from '../../src/providers/daemon-fold.js'
 import {
   projectProcessStatus,
   applySnapshot,
+  captureSnapshotReadGuard,
   setSnapshotModeForTests,
   isSnapshotCovered,
   markSnapshotCovered,
@@ -83,6 +85,7 @@ beforeEach(async () => {
   _resetSnapshotApplyForTests()
   bus.clear()
   liveSessionId = null
+  liveSession.turnGen = 1
   liveRunnerSync.mockClear()
   liveWatermarkReset.mockClear()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -202,6 +205,114 @@ describe('applySnapshot — v-gate', () => {
     // v beyond the watermark passes the gate and is evaluated.
     const beyond = await applySnapshot(sid, snap({ v: 1100 }), 'test')
     expect(beyond.outcome).toBe('shadow')
+  })
+})
+
+describe('applySnapshot connection recovery at a settled watermark', () => {
+  const connectionError = {
+    process_status: 'error', status_reason: 'remote_unreachable', status_changed_by: 'health-monitor',
+    errorKind: 'infra', errorMessage: 'Connection lost', consumedOffset: 100, streamEpoch: 'connection-epoch',
+  }
+  const settled = () => snap({ v: 100, cliState: 'idle', turnActive: false,
+    lastResult: { isError: false, endOffset: 90 }, streamEpoch: 'connection-epoch' })
+
+  it.each([0, 1])('recovers %s detached tasks, clears connection activity, and preserves completed tasks', async (detachedBgCount) => {
+    setSnapshotModeForTests('enforce')
+    const { task } = await addTask({ title: 'Completed recovery check' })
+    await updateTaskRaw(task.id, { phase: 'COMPLETE' })
+    const sid = `connection-bg-${detachedBgCount}`
+    await seedSession(sid, { ...connectionError, taskId: task.id, activity: 'Reconnecting to remote host...' })
+    const guard = await captureSnapshotReadGuard(sid)
+    const value = { ...settled(), detachedBgCount }
+    expect(await applySnapshot(sid, value, 'reconnect-pull', guard)).toMatchObject({ outcome: 'applied', projected: detachedBgCount ? 'running' : 'idle' })
+    const after = (await getSessionByClaudeId(sid))!
+    expect(after).toMatchObject({ consumedOffset: 100, streamEpoch: 'connection-epoch', status_reason: 'snapshot_projection' })
+    expect(after.errorMessage).toBeUndefined()
+    expect(after.activity).toBeUndefined()
+    expect((await getTask(task.id)).phase).toBe('COMPLETE')
+    expect(await applySnapshot(sid, value, 'reconnect-pull', await captureSnapshotReadGuard(sid))).toMatchObject({ outcome: 'noop' })
+  })
+
+  it('clears a disproven connection diagnosis even when the real turn ended with an error', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'connection-still-error'
+    await seedSession(sid, connectionError)
+    const value = { ...settled(), lastResult: { isError: true, endOffset: 90 } }
+    expect(await applySnapshot(sid, value, 'pull-30s', await captureSnapshotReadGuard(sid))).toMatchObject({ outcome: 'applied', projected: 'error' })
+    const after = (await getSessionByClaudeId(sid))!
+    expect(after.status_reason).toBe('snapshot_projection')
+    expect(after.errorMessage).toBeUndefined()
+    expect(after.errorKind).toBe('infra')
+  })
+
+  it('does not grant equal-version recovery to an unsolicited snapshot', async () => {
+    setSnapshotModeForTests('enforce')
+    await seedSession('connection-no-guard', connectionError)
+    expect(await applySnapshot('connection-no-guard', settled(), 'daemon-push')).toMatchObject({ outcome: 'skipped' })
+    expect((await getSessionByClaudeId('connection-no-guard'))?.process_status).toBe('error')
+  })
+
+  it.each([
+    { status_changed_by: 'user' },
+    { status_changed_by: 'snapshot' },
+    { errorKind: 'terminal' },
+    { status_reason: 'daemon_reported_exit' },
+    { status_reason: 'api_error' },
+    { process_status: 'stopped', status_reason: 'user_stopped' },
+    { archived: true },
+  ])('preserves non-connection terminal evidence and archived records: %j', async (overrides) => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'connection-protected'
+    await seedSession(sid, { ...connectionError, ...overrides })
+    const before = (await getSessionByClaudeId(sid))!
+    const result = await applySnapshot(sid, { ...settled(), detachedBgCount: 1 }, 'pull-30s', await captureSnapshotReadGuard(sid))
+    expect(result.outcome).toBe('skipped')
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe(before.process_status)
+  })
+
+  it('does not restore a connection with a snapshot older than the durable watermark', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'connection-old-snapshot'
+    await seedSession(sid, connectionError)
+    expect(await applySnapshot(sid, { ...settled(), v: 99 }, 'pull-30s', await captureSnapshotReadGuard(sid))).toMatchObject({ outcome: 'stale' })
+    expect((await getSessionByClaudeId(sid))?.status_reason).toBe('remote_unreachable')
+  })
+
+  it.each(['before-apply', 'inside-write'])('refuses a new turn that arrives %s', async (timing) => {
+    setSnapshotModeForTests('enforce')
+    const sid = `connection-turn-${timing}`
+    liveSessionId = sid
+    await seedSession(sid, connectionError)
+    const guard = await captureSnapshotReadGuard(sid)
+    if (timing === 'before-apply') liveSession.turnGen++
+    else {
+      const update = sessionTracker.updateSessionRecordConditionally
+      vi.spyOn(sessionTracker, 'updateSessionRecordConditionally').mockImplementationOnce(async (...args) => {
+        liveSession.turnGen++
+        return update(...args)
+      })
+    }
+    expect(await applySnapshot(sid, settled(), 'pull-30s', guard)).toMatchObject({ outcome: 'skipped' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('error')
+    expect(liveRunnerSync).not.toHaveBeenCalled()
+  })
+
+  it.each(['revision', 'epoch', 'watermark', 'permission', 'archive'])('refuses a concurrent %s change under the write lock', async (change) => {
+    setSnapshotModeForTests('enforce')
+    const sid = `connection-race-${change}`
+    await seedSession(sid, connectionError)
+    const guard = await captureSnapshotReadGuard(sid)
+    const update = sessionTracker.updateSessionRecordConditionally
+    vi.spyOn(sessionTracker, 'updateSessionRecordConditionally').mockImplementationOnce(async (...args) => {
+      if (change === 'revision') await updateSessionRecord(sid, { activity: 'Using Bash' })
+      if (change === 'epoch') await updateSessionRecord(sid, { streamEpoch: 'next-epoch', consumedOffset: 0 })
+      if (change === 'watermark') await updateSessionRecord(sid, { consumedOffset: 200 })
+      if (change === 'permission') await updateSessionRecord(sid, { pendingPermission: { requestId: 'req-new', toolName: 'Bash', input: {}, receivedAt: new Date().toISOString() } })
+      if (change === 'archive') await updateSessionRecord(sid, { archived: true })
+      return update(...args)
+    })
+    expect(await applySnapshot(sid, settled(), 'pull-30s', guard)).toMatchObject({ outcome: 'skipped' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('error')
   })
 })
 

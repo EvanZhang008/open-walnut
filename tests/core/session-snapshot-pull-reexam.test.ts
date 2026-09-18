@@ -351,8 +351,9 @@ describe('checkSnapshotPull — oldest-pull-first rotation holds for both classe
 })
 
 describe('checkSnapshotPull — the wedged record actually converges (real applySnapshot)', () => {
-  it('an infra error converges to the daemon-projected status and the stale prose is cleared', async () => {
-    const sid = 'converge-1'
+  it.each([0, 1])('an equal-watermark connection error converges with %s detached tasks', async (detachedBgCount) => {
+    const sid = `converge-${detachedBgCount}`
+    pooledConn = fakeConn({ ...IDLE_SNAP, detachedBgCount, streamEpoch: 'reexam-epoch' })
     await createSessionRecord(sid, '', 'proj', '/tmp/reexam', { host: 'devhost' })
     const before = await updateSessionRecord(sid, {
       process_status: 'error',
@@ -361,6 +362,8 @@ describe('checkSnapshotPull — the wedged record actually converges (real apply
       last_status_change: ago(2 * HOUR),
       status_reason: 'remote_unreachable',
       status_changed_by: 'health-monitor',
+      consumedOffset: IDLE_SNAP.v,
+      streamEpoch: 'reexam-epoch',
     } as never)
     expect(before.process_status).toBe('error')
 
@@ -369,7 +372,9 @@ describe('checkSnapshotPull — the wedged record actually converges (real apply
     await pull(monitor, [], undefined, [before])
 
     const after = await getSessionByClaudeId(sid)
-    expect(after?.process_status).toBe('idle')
+    expect(after?.process_status).toBe(detachedBgCount ? 'running' : 'idle')
+    expect(after?.consumedOffset).toBe(IDLE_SNAP.v)
+    expect(after?.streamEpoch).toBe('reexam-epoch')
     expect(after?.status_reason).toBe('snapshot_projection')
     expect(after?.errorMessage ?? null).toBeNull()
     expect(after?.errorKind ?? null).toBeNull()
@@ -377,6 +382,26 @@ describe('checkSnapshotPull — the wedged record actually converges (real apply
 })
 
 describe('checkSnapshotPull — wired into the real tick', () => {
+  it('does not apply a recovered snapshot when a permission arrives during its RPC', async () => {
+    const sid = 'pull-connection-race'
+    await createSessionRecord(sid, '', 'proj', '/tmp/reexam-race', { host: 'devhost' })
+    const before = await updateSessionRecord(sid, {
+      process_status: 'error', errorKind: 'infra', status_reason: 'remote_unreachable',
+      status_changed_by: 'health-monitor', consumedOffset: IDLE_SNAP.v,
+      last_status_change: ago(2 * HOUR),
+    })
+    setSnapshotModeForTests('enforce')
+    const permission = { requestId: 'req-rpc-race', toolName: 'Bash', input: {}, receivedAt: new Date().toISOString() }
+    pooledConn = { send: vi.fn(async () => {
+      await updateSessionRecord(sid, { pendingPermission: permission })
+      return { ok: true, snapshot: IDLE_SNAP }
+    }) }
+    await pull(new SessionHealthMonitor(), [], undefined, [before])
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('error')
+    expect(after?.pendingPermission).toEqual(permission)
+  })
+
   it('monitor.check() re-examines a persisted wedged error record', async () => {
     // The tick's own working set drops 'error' rows (isTerminalSession), so this
     // only passes if the wider health-scan set is what feeds re-examination.

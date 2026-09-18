@@ -1187,7 +1187,7 @@ export class SessionHealthMonitor {
       const { getSnapshotStatusMode } = await import('./session-snapshot-gate.js')
       if (getSnapshotStatusMode() === 'off') return
       const { getPooledSnapshotConnection } = await import('../providers/daemon-connection.js')
-      const { applySnapshot } = await import('./session-snapshot-apply.js')
+      const { applySnapshot, captureSnapshotReadGuard } = await import('./session-snapshot-apply.js')
 
       const now = Date.now()
       /** Exclusions shared by both classes (contract §5 step 4 shapes). */
@@ -1258,13 +1258,14 @@ export class SessionHealthMonitor {
           try {
             // Sequential on purpose: this is a background safety net; parallel
             // fan-out to a slow host would stack daemon RPCs on the tick budget.
+            const canRecoverConnection = await captureSnapshotReadGuard(s.claudeSessionId)
             const resp = await probeWithTimeout(
               conn.send('getState', { sid: s.claudeSessionId }),
               null as Record<string, unknown> | null,
               'snapshot-pull-getState', s.claudeSessionId,
             )
             const snapshot = resp?.ok ? (resp as { snapshot?: import('../providers/daemon-fold.js').SessionSnapshot }).snapshot : undefined
-            if (snapshot) await applySnapshot(s.claudeSessionId, snapshot, 'pull-30s')
+            if (snapshot) await applySnapshot(s.claudeSessionId, snapshot, 'pull-30s', canRecoverConnection)
           } catch (err) {
             log.session.debug('health monitor: snapshot pull failed', {
               sessionId: s.claudeSessionId, host: s.host ?? '__local__',
@@ -1657,8 +1658,16 @@ export class SessionHealthMonitor {
               // and a false green Running badge also shields the record from
               // idle-capacity eviction. The reconciler/snapshot lane promotes
               // a genuinely streaming session to 'running' within seconds.
+              const { isSnapshotCovered, getSnapshotStatusMode } = await import('./session-snapshot-gate.js')
+              if (getSnapshotStatusMode() === 'enforce' && isSnapshotCovered(s.claudeSessionId)) {
+                if (typeof probe.pid === 'number' && s.pid !== probe.pid) {
+                  await updateSessionRecord(s.claudeSessionId, { pid: probe.pid } as any).catch(() => {})
+                }
+                continue
+              }
+              const recoveredStatus = wasStopped ? 'idle' : 'running'
               const updated = await updateSessionRecord(s.claudeSessionId, {
-                process_status: wasStopped ? 'idle' : 'running',
+                process_status: recoveredStatus,
                 errorMessage: undefined,
                 errorKind: undefined,
                 activity: undefined,
@@ -1674,6 +1683,7 @@ export class SessionHealthMonitor {
                 await updateSessionRecord(s.claudeSessionId, { pid: probe.pid } as any)
                   .catch(() => {})
               }
+              if (updated.process_status !== recoveredStatus || updated.status_reason !== 'auto_recovered') continue
               emitSessionStatusChanged(
                 updated,
                 {},

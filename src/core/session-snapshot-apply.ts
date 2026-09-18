@@ -199,16 +199,26 @@ function shouldWarnDivergence(
   return { warn: false, count: prev.total, suppressed: prev.sinceLastWarn }
 }
 
-/**
- * Apply one daemon snapshot to the session record. Idempotent; safe to call
- * from push, 30s pull, and reconnect pull concurrently (the conditional write
- * re-reads under the tracker's write lock, and consumedOffset arbitration is
- * monotonic).
- */
+export async function captureSnapshotReadGuard(sessionId: string): Promise<(current: Readonly<SessionRecord>) => boolean> {
+  const { getSessionByClaudeId } = await import('./session-tracker.js')
+  const { sessionRunner } = await import('../providers/claude-code-session.js')
+  const record = await getSessionByClaudeId(sessionId)
+  const revision = record?.statusRevision
+  const epoch = record?.streamEpoch
+  const live = sessionRunner.findSessionByClaudeId(sessionId)
+  const turn = live?.turnGen
+  return (current) => !!record && !current.archived
+    && current.statusRevision === revision
+    && current.streamEpoch === epoch
+    && sessionRunner.findSessionByClaudeId(sessionId) === live
+    && live?.turnGen === turn
+}
+
 export async function applySnapshot(
   sessionId: string,
   snapshot: SessionSnapshot,
   source: string,
+  canRecoverConnection?: (current: Readonly<SessionRecord>) => boolean,
 ): Promise<ApplyOutcome> {
   // Stream offsets cannot order every state change; see docs/decision/task-session-status.md.
   const mode = getSnapshotStatusMode()
@@ -333,7 +343,14 @@ export async function applySnapshot(
   )
   if (snapshot.v < gate) return { outcome: 'stale' }
 
-  const duplicate = snapshot.v === gate && projected === actual
+  const connectionError = (current: Readonly<SessionRecord>) => current.process_status === 'error'
+    && current.status_reason === 'remote_unreachable' && current.errorKind !== 'terminal'
+    && current.status_changed_by !== 'user' && current.status_changed_by !== 'snapshot'
+  if (connectionError(record) && canRecoverConnection && !canRecoverConnection(record)) {
+    return { outcome: 'skipped', reason: 'connection-read-superseded', projected }
+  }
+  const recoveringConnection = connectionError(record) && canRecoverConnection?.(record) === true
+  const duplicate = snapshot.v === gate && projected === actual && !recoveringConnection
 
   // From here the snapshot is live evidence for this session: it is covered.
   markSnapshotCovered(sessionId, snapshot.v)
@@ -366,7 +383,7 @@ export async function applySnapshot(
   }
 
   let reconnectActivityCleared = false
-  if (record.activity === 'Reconnecting to remote host...') {
+  if (!recoveringConnection && record.activity === 'Reconnecting to remote host...') {
     const cleared = await updateSessionRecordConditionally(sessionId, { activity: undefined }, (current) =>
       !current.archived && current.statusRevision === record.statusRevision
       && current.streamEpoch === record.streamEpoch
@@ -420,6 +437,7 @@ export async function applySnapshot(
     status_reason: 'snapshot_projection',
     status_changed_by: 'snapshot',
   }
+  if (recoveringConnection && record.activity === 'Reconnecting to remote host...') updates.activity = undefined
   // Turn-END watermark only (C15) — a mid-turn 'running' projection writes the
   // status WITHOUT touching consumedOffset.
   if (adoptWatermark) updates.consumedOffset = snapshot.v
@@ -483,7 +501,7 @@ export async function applySnapshot(
       })
     }
     const stashed = takeSuppressedErrorReason(sessionId)
-    if (stashed) {
+    if (stashed && (!recoveringConnection || stashed.reason !== 'remote_unreachable')) {
       // Only fill a BLANK message — a real message already on the record came
       // from a writer with first-hand knowledge and outranks a stash. A message
       // just dropped above counts as blank: it was disproven, not merely old.
@@ -505,6 +523,9 @@ export async function applySnapshot(
     sessionId,
     updates as Parameters<typeof updateSessionRecordConditionally>[1],
     (current) => {
+      if (current.archived) return false
+      if (recoveringConnection && (!connectionError(current) || !canRecoverConnection?.(current)
+        || (getAppliedV(sessionId) ?? 0) > snapshot.v)) return false
       // Re-checked UNDER the tracker's write lock — the check-then-act above
       // spans awaits, so this is the only place the decision is atomic (C5).
       const currentOffset = typeof current.consumedOffset === 'number' ? current.consumedOffset : -1
@@ -532,10 +553,11 @@ export async function applySnapshot(
       // settled snapshot from regressing a live one after a walnut restart).
       // Out-of-band evidence (process death / permission pause) is genuinely
       // new at the same v and passes.
-      if (currentOffset === snapshot.v && !outOfBand) return false
+      // 连接恢复不产生新流字节，但只有读取前后的身份未变时才能推翻连接错误。
+      if (currentOffset === snapshot.v && !outOfBand && !recoveringConnection) return false
 
       // (3) Something must actually change (a first-sight epoch stamp counts).
-      return current.process_status !== projected
+      return recoveringConnection || current.process_status !== projected
         || (adoptWatermark && currentOffset < snapshot.v)
         || (typeof updates.streamEpoch === 'string' && current.streamEpoch !== updates.streamEpoch)
     },

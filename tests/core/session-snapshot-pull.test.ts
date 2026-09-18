@@ -29,8 +29,9 @@ vi.mock('../../src/providers/daemon-connection.js', () => ({
 
 // applySnapshot is the unit under test's downstream — assert the routing.
 const applySnapshotMock = vi.fn(async () => ({ outcome: 'shadow' as const, diverged: false }))
-vi.mock('../../src/core/session-snapshot-apply.js', () => ({
-  applySnapshot: (...args: unknown[]) => applySnapshotMock(...(args as [never, never, never])),
+vi.mock('../../src/core/session-snapshot-apply.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/core/session-snapshot-apply.js')>(),
+  applySnapshot: (...args: unknown[]) => applySnapshotMock(...(args as [never, never, never, never])),
 }))
 
 // Full-tick support mocks (same shape as session-health-monitor-reconcile.test.ts).
@@ -155,7 +156,7 @@ describe('checkSnapshotPull — eligibility + routing', () => {
     expect(getPooledSnapshotConnection).toHaveBeenCalledWith('devhost')
     expect(pooledConn!.send).toHaveBeenCalledWith('getState', { sid: 'pull-1' })
     expect(applySnapshotMock).toHaveBeenCalledTimes(1)
-    expect(applySnapshotMock).toHaveBeenCalledWith('pull-1', SNAP, 'pull-30s')
+    expect(applySnapshotMock).toHaveBeenCalledWith('pull-1', SNAP, 'pull-30s', expect.any(Function))
   })
 
   it('idle sessions are eligible; stopped/error are not', async () => {
@@ -332,6 +333,6 @@ describe('checkSnapshotPull — wired into the real tick', () => {
     const monitor = new SessionHealthMonitor()
     await monitor.check()
 
-    expect(applySnapshotMock).toHaveBeenCalledWith('pull-tick', SNAP, 'pull-30s')
+    expect(applySnapshotMock).toHaveBeenCalledWith('pull-tick', SNAP, 'pull-30s', expect.any(Function))
   })
 })

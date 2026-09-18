@@ -3362,12 +3362,14 @@ export class DaemonConnection {
           let result: DaemonCommandResult
           let snapshotHandled = false
           if (this.supportsSnapshots) {
+            const { captureSnapshotReadGuard } = await import('../core/session-snapshot-apply.js')
+            const canRecoverConnection = await captureSnapshotReadGuard(s.claudeSessionId)
             result = await this.send('getState', { sid: s.claudeSessionId }) as DaemonGetStateResult
             const snapshot = (result as DaemonGetStateResult).snapshot
             if (result.ok && snapshot) {
               try {
                 const { applySnapshot, getSnapshotStatusMode } = await import('../core/session-snapshot-apply.js')
-                const applied = await applySnapshot(s.claudeSessionId, snapshot, 'reconnect-pull')
+                const applied = await applySnapshot(s.claudeSessionId, snapshot, 'reconnect-pull', canRecoverConnection)
                 snapshotHandled = getSnapshotStatusMode() === 'enforce'
                   && applied.outcome !== 'error'
                   && applied.outcome !== 'no-record'

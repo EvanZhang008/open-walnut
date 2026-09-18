@@ -85,6 +85,14 @@ A recovered host can return the same stream version and the same Running project
 
 Code: [`applySnapshot`](../../src/core/session-snapshot-apply.ts). Regression: the reconnect activity cases in [`session-snapshot-apply.test.ts`](../../tests/core/session-snapshot-apply.test.ts), including equal versions, stale snapshots, and an activity that changes away and back during the conditional write.
 
+### Recovered transport can leave the stream watermark unchanged
+
+A disconnected session can keep the same `consumedOffset` and daemon `v` after its host returns. The equal-version rule that protects true process death must not permanently preserve a `remote_unreachable` error. Capture record revision, stream epoch, runner identity, and turn generation before requesting the snapshot, then recheck them under the write lock before replacing that connection diagnosis. Keep unsolicited snapshots and genuinely terminal records under the existing ordering rules. A live CLI can project Idle or Running depending on its remaining work; do not use process liveness alone to choose Running.
+
+Tests must seed the durable watermark at the returned snapshot version. A fixture with no `consumedOffset` skips the exact branch that stranded the real records. A covered session's legacy recovery writer must not announce success for a patch the snapshot gate rejects; retain the separate PID update, but leave status to the guarded snapshot path.
+
+Code: [`captureSnapshotReadGuard` and `applySnapshot`](../../src/core/session-snapshot-apply.ts), [`checkSnapshotPull` and `recoverInfraFailedSessions`](../../src/core/session-health-monitor.ts), and [`recoverDisconnectedSessions`](../../src/providers/daemon-connection.ts). Regressions: [`session-snapshot-pull-reexam.test.ts`](../../tests/core/session-snapshot-pull-reexam.test.ts), [`session-snapshot-apply.test.ts`](../../tests/core/session-snapshot-apply.test.ts), and [`session-health-monitor-autorecover-arming.test.ts`](../../tests/core/session-health-monitor-autorecover-arming.test.ts).
+
 ### FIFO markers must precede consumption, not merely acknowledgment
 
 Appending the user marker after a successful send lets a fast CLI answer before the turn-start marker exists. Appending first and truncating on failure is also unsafe: concurrent CLI output may already follow the marker, so truncation would delete real history.

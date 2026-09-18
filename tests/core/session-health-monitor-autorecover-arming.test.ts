@@ -18,10 +18,11 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-arming'))
 
 // Daemon reachable, process confirmed dead — the host-reboot shape.
+let probeResult = { alive: false, pid: null as number | null }
 vi.mock('../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => true,
   getDaemonDisconnectedSince: () => null,
-  probeDaemonSession: async () => ({ alive: false, pid: null }),
+  probeDaemonSession: async () => probeResult,
   getPooledSnapshotConnection: () => null,
 }))
 
@@ -54,7 +55,7 @@ import { SessionHealthMonitor } from '../../src/core/session-health-monitor.js'
 import type { SessionRecord } from '../../src/core/types.js'
 import { bus } from '../../src/core/event-bus.js'
 import {
-  markSnapshotCovered, _clearSnapshotRegistryForTests,
+  markSnapshotCovered, _clearSnapshotRegistryForTests, setSnapshotModeForTests,
 } from '../../src/core/session-snapshot-gate.js'
 
 type Update = (id: string, up: Record<string, unknown>) => Promise<SessionRecord>
@@ -96,6 +97,9 @@ function fakeUpdate(): Update & { calls: () => Record<string, unknown>[] } {
 
 beforeEach(() => {
   bus.clear()
+  _clearSnapshotRegistryForTests()
+  setSnapshotModeForTests('enforce')
+  probeResult = { alive: false, pid: null }
   scheduleMock.mockClear()
   applySessionPhaseMock.mockClear()
   taskPhase = 'IN_PROGRESS'
@@ -154,6 +158,67 @@ describe('probe-dead branch — auto-recover arming', () => {
     const rec = { ...wedged(), taskId: undefined } as SessionRecord
     await recover(new SessionHealthMonitor(), [rec], fakeUpdate())
     expect(scheduleMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('probe-alive recovery reporting', () => {
+  it('a covered live session leaves status recovery to snapshots without claiming success', async () => {
+    probeResult = { alive: true, pid: null }
+    markSnapshotCovered('alive-covered', 100)
+    const update = fakeUpdate()
+    const emitted: unknown[] = []
+    bus.subscribe('session:status-changed', (event) => { emitted.push(event) })
+    const { log } = await import('../../src/logging/index.js')
+    const info = vi.spyOn(log.session, 'info')
+    try {
+      await recover(new SessionHealthMonitor(), [wedged('alive-covered')], update)
+      expect(update.calls()).toEqual([])
+      expect(emitted).toEqual([])
+      expect(info.mock.calls.some(([message]) => message === 'health monitor: auto-recovered connection-lost session')).toBe(false)
+      expect(scheduleMock).not.toHaveBeenCalled()
+    } finally {
+      info.mockRestore()
+    }
+  })
+
+  it('a covered live session still restores its process identity', async () => {
+    probeResult = { alive: true, pid: 4242 }
+    markSnapshotCovered('alive-pid', 100)
+    const update = fakeUpdate()
+    await recover(new SessionHealthMonitor(), [wedged('alive-pid')], update)
+    expect(update.calls()).toEqual([{ pid: 4242 }])
+  })
+
+  it.each(['off', 'shadow'] as const)('a covered session keeps legacy recovery in %s mode', async (mode) => {
+    setSnapshotModeForTests(mode)
+    probeResult = { alive: true, pid: null }
+    markSnapshotCovered('alive-legacy-mode', 100)
+    const update = fakeUpdate()
+    await recover(new SessionHealthMonitor(), [wedged('alive-legacy-mode')], update)
+    expect(update.calls()[0]).toMatchObject({ process_status: 'running', status_reason: 'auto_recovered' })
+  })
+
+  it('an uncovered live session retains its recovery path', async () => {
+    probeResult = { alive: true, pid: null }
+    const update = fakeUpdate()
+    await recover(new SessionHealthMonitor(), [wedged('alive-uncovered')], update)
+    expect(update.calls()[0]).toMatchObject({ process_status: 'running', status_reason: 'auto_recovered' })
+    expect(scheduleMock).not.toHaveBeenCalled()
+  })
+
+  it('a rejected legacy recovery write does not announce success', async () => {
+    probeResult = { alive: true, pid: null }
+    const { log } = await import('../../src/logging/index.js')
+    const info = vi.spyOn(log.session, 'info')
+    const emitted: unknown[] = []
+    bus.subscribe('session:status-changed', (event) => { emitted.push(event) })
+    try {
+      await recover(new SessionHealthMonitor(), [wedged('alive-rejected')], async (id) => wedged(id))
+      expect(emitted).toEqual([])
+      expect(info.mock.calls.some(([message]) => message === 'health monitor: auto-recovered connection-lost session')).toBe(false)
+    } finally {
+      info.mockRestore()
+    }
   })
 })
 
