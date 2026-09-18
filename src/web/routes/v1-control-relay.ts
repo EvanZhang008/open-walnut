@@ -16,6 +16,7 @@
 
 import type { Response } from 'express'
 import type { SessionControlAction } from '../../core/sessions/session-controls.js'
+import { bridgeOfflineMessage } from './bridge-offline-copy.js'
 
 /** Frozen v1 error shape: { error: { code, message } }. */
 export function sendV1Error(res: Response, status: number, code: string, message: string, extra?: Record<string, unknown>): void {
@@ -61,7 +62,8 @@ export async function driveControlRelay(
   sessionId: string,
   params: Record<string, unknown> | undefined,
 ): Promise<Record<string, unknown> | null> {
-  const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
+  const registry = await import('../ws/bridge-registry.js')
+  const { bridgeRequest, BridgeOfflineError } = registry
   try {
     return await bridgeRequest(
       PRIMARY_BRIDGE_ALIAS,
@@ -71,7 +73,23 @@ export async function driveControlRelay(
     )
   } catch (err) {
     if (err instanceof BridgeOfflineError) {
-      sendV1Error(res, 503, 'bridge_offline', 'No live bridge to the primary box — try again when it reconnects')
+      // COPY ONLY. Same sentence as session-launch-v1.ts, and deliberately NOT
+      // its wait-and-retry: that route may re-send because BridgeOfflineError
+      // proves the primary never saw the request, so a launch cannot be
+      // duplicated. This function drives ARBITRARY control actions (terminate,
+      // fork, restart, writes behind files/notes/tasks), so no such guarantee
+      // exists here; per-action idempotence would need its own argument. Do not
+      // "finish the job" by adding the wait here.
+      // waitedMs is 0 because no wait happened: claiming one would be a lie.
+      let lastLossAt: number | null = null
+      try {
+        // Strictly diagnostic: a registry that cannot answer means "duration
+        // unknown" and falls back to the plain wording. Never changes the HTTP
+        // outcome. (Not optional chaining: reading an undefined export of a
+        // mocked ESM module THROWS rather than yielding undefined.)
+        lastLossAt = registry.lastBridgeLossAt(PRIMARY_BRIDGE_ALIAS)
+      } catch { /* no duration to report */ }
+      sendV1Error(res, 503, 'bridge_offline', bridgeOfflineMessage(lastLossAt, 0))
       return null
     }
     sendV1Error(res, 503, 'bridge_offline', err instanceof Error ? err.message : String(err))
