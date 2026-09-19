@@ -99,6 +99,14 @@ A seeded session starts with `awaiting_spawn`, which excludes it from snapshot i
 
 Code: [`createSessionRecord`](../../src/core/session-tracker.ts). Regressions: reservation cases in [`session-tracker.test.ts`](../../tests/core/session-tracker.test.ts), the first-turn pull case in [`session-snapshot-pull-reexam.test.ts`](../../tests/core/session-snapshot-pull-reexam.test.ts), and the reservation browser flow in [`session-hold-turn-subagents.spec.ts`](../../tests/e2e/browser/session-hold-turn-subagents.spec.ts). Seed the actual reservation before providing the PID; a test starting with an ordinary Running record cannot exercise this failure.
 
+### Snapshot-only turn completion must hand back the task
+
+A recovered snapshot changed a running session to Idle after the normal result notification was lost, but only Stopped/Error projections invoked task handback. The session was correct while its task remained In Progress. Checking the regular result path did not test recovery. A repeated equal-version Idle snapshot also needs to repair that mismatch without waiting for another process-status edge.
+
+Require a clean result, trailing Idle, no active turn, no gating or detached work, no team, and no armed wakeup. Reuse the sibling-session handback guard. Recheck the session revision, epoch, runner identity, turn generation, and task phase/change-time identity inside the task write lock. Record phase changes separately from note updates; otherwise a delayed summary hides a missing handback. Hold the queue file lock across an asynchronous fresh read and the task decision so another process's pending input cannot be hidden by the server's queue cache. A phase chosen after the existing Idle transition must not be overwritten by repeated old snapshots; legacy records without a phase timestamp use the conservative task-update time, and missing evidence or explicit TODO/COMPLETE choices remain unchanged.
+
+Code: [`applySnapshot`](../../src/core/session-snapshot-apply.ts). Regression: the snapshot-only completion and duplicate-idle cases in [`session-snapshot-apply.test.ts`](../../tests/core/session-snapshot-apply.test.ts), with the normal result notification absent, plus task-edit and new-turn races.
+
 ### FIFO markers must precede consumption, not merely acknowledgment
 
 Appending the user marker after a successful send lets a fast CLI answer before the turn-start marker exists. Appending first and truncating on failure is also unsafe: concurrent CLI output may already follow the marker, so truncation would delete real history.

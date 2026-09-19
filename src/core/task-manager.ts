@@ -6639,6 +6639,9 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
     merged.status = deriveStatusFromPhase(merged.phase);
     safeUpdates.status = merged.status;
   }
+  if (safeUpdates.phase && safeUpdates.phase !== task.phase) {
+    safeUpdates.phase_changed_at = new Date(Math.max(Date.now(), (Date.parse(task.phase_changed_at ?? '') || 0) + 1)).toISOString();
+  }
   return safeUpdates as Partial<Task>;
 }
 

@@ -19,8 +19,10 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
+import { sessionResultPhase } from '../../src/core/phase.js';
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js';
 import { createSessionRecord } from '../../src/core/session-tracker.js';
+import { setSnapshotModeForTests, _resetSnapshotGateForTests } from '../../src/core/session-snapshot-gate.js';
 
 let server: HttpServer;
 
@@ -56,6 +58,44 @@ afterAll(async () => {
   await stopServer();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   delete process.env.WALNUT_DISABLE_SEARCH;
+});
+
+describe('snapshot-only handback reaches the task API', () => {
+  it('recovers a missed result, serves the red phase, and preserves a later human choice', async () => {
+    const { applySnapshot } = await import('../../src/core/session-snapshot-apply.js');
+    const { foldLine, initialFoldState, assembleSnapshot } = await import('../../src/providers/daemon-fold.js');
+    const sid = 'snapshot-only-http';
+    const taskId = await makeTaskWithSession(sid);
+    await updateTaskRaw(taskId, { updated_at: '2026-01-01T00:00:00Z' });
+    let state = initialFoldState();
+    let offset = 0;
+    for (const event of [
+      { type: 'system', subtype: 'session_state_changed', state: 'running' },
+      { type: 'result', is_error: false, num_turns: 74 },
+      { type: 'system', subtype: 'session_state_changed', state: 'idle' },
+    ]) {
+      const line = JSON.stringify(event);
+      offset += Buffer.byteLength(line) + 1;
+      state = foldLine(state, line, offset);
+    }
+    const snapshot = assembleSnapshot({ foldState: state, pendingCtrl: null, dead: false, pid: 4242, exitCode: null });
+    setSnapshotModeForTests('enforce');
+    try {
+      await applySnapshot(sid, snapshot, 'pull-30s');
+      const address = server.address() as { port: number };
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/tasks/${taskId}`);
+      expect(response.ok).toBe(true);
+      const { task } = await response.json() as { task: { phase: string; session_status: { process_status: string } } };
+      expect(task.phase).toBe(sessionResultPhase('IN_PROGRESS'));
+      expect(task.session_status.process_status).toBe('idle');
+      await updateTaskRaw(taskId, { phase: 'IN_PROGRESS', updated_at: '2099-01-01T00:00:00Z' });
+      await applySnapshot(sid, snapshot, 'pull-30s');
+      expect((await getTask(taskId)).phase).toBe('IN_PROGRESS');
+    } finally {
+      _resetSnapshotGateForTests();
+      setSnapshotModeForTests('off');
+    }
+  });
 });
 
 describe('detached background work gates the AGENT_COMPLETE flip', () => {

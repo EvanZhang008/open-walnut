@@ -584,6 +584,7 @@ export interface Task {
   // `milestones` was removed 2026-07-18 — the note's Work Log section replaced it.
   // Old data still carries the key harmlessly inside the payload blob.
   phase: TaskPhase;
+  phase_changed_at?: string;
   sprint?: string;
   tags?: string[];
   source: TaskSource;

@@ -26,6 +26,8 @@
  * (unparkMessage, from Retry) puts it back in line, or deleteMessage discards it.
  */
 
+import fs from 'node:fs/promises';
+import { withFileLock } from '../utils/file-lock.js';
 import { readJsonFile, updateJsonFile } from '../utils/fs.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
@@ -593,6 +595,21 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
 export async function getQueue(sessionId: string): Promise<QueuedMessage[]> {
   const s = await getStore();
   return s.queues[sessionId] ?? [];
+}
+
+export async function withUndeliveredMessageGuard<T>(
+  check: (hasUndelivered: (sessionId: string) => boolean) => Promise<T>,
+): Promise<T> {
+  return withFileLock(SESSION_QUEUE_FILE, async () => {
+    let current: QueueStore;
+    try {
+      current = JSON.parse(await fs.readFile(SESSION_QUEUE_FILE, 'utf8')) as QueueStore;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      current = { version: 1, queues: {} };
+    }
+    return check(sessionId => (current.queues[sessionId] ?? []).some(message => message.status !== 'parked'));
+  });
 }
 
 /**

@@ -49,6 +49,7 @@ export interface SessionSnapshot {
    *  block in daemon-core.ts — Walnut now denies durable creates). The disk
    *  side is a separate signal the fold cannot see: hasDiskCronInterest. */
   cronActive: boolean
+  wakeupAt?: number | null
   lastResult: { isError: boolean; numTurns?: number; endOffset: number } | null
   pid: number | null
   /** Normalized via isTurnCompleteExit by the daemon when dead. */
@@ -552,4 +553,11 @@ export function foldLines(content: string, baseV?: number): FoldState {
     state = foldLine(state, line, v)
   }
   return state
+}
+
+export const WAKEUP_FIRE_GRACE_MS = 60_000
+
+export function isWakeupArmed(wakeupAt: number | null | undefined, nowMs?: number): boolean {
+  if (typeof wakeupAt !== 'number' || wakeupAt <= 0) return false
+  return wakeupAt + WAKEUP_FIRE_GRACE_MS > (nowMs ?? Date.now())
 }

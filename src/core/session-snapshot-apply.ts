@@ -27,7 +27,7 @@
  *                  `adoptWatermark` below). The coarse, restart-surviving floor.
  */
 
-import type { SessionSnapshot } from '../providers/daemon-fold.js'
+import { isWakeupArmed, type SessionSnapshot } from '../providers/daemon-fold.js'
 import type { ProcessStatus, SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
 import { bus, EventNames } from './event-bus.js'
@@ -234,6 +234,13 @@ export async function applySnapshot(
     emitSessionStatusChanged,
   } = await import('./session-tracker.js')
 
+  const { sessionRunner } = await import('../providers/claude-code-session.js')
+  const observedLive = sessionRunner.findSessionByClaudeId(sessionId)
+  const observedTurn = observedLive?.turnGen
+  const sameTurn = () => {
+    const live = sessionRunner.findSessionByClaudeId(sessionId)
+    return live === observedLive && live?.turnGen === observedTurn
+  }
   const record = await getSessionByClaudeId(sessionId)
   if (!record) return { outcome: 'no-record' }
 
@@ -397,7 +404,55 @@ export async function applySnapshot(
     }
   }
 
-  if (duplicate) return { outcome: reconnectActivityCleared ? 'applied' : 'noop', projected }
+  const settledTurn = projected === 'idle' && snapshot.cliState === 'idle'
+    && !snapshot.turnActive && !!snapshot.lastResult && !snapshot.lastResult.isError
+    && !snapshot.pendingPermission && snapshot.gatingBgCount === 0
+    && (snapshot.detachedBgCount ?? 0) === 0 && !snapshot.teamActive
+    && !isWakeupArmed(snapshot.wakeupAt)
+  const handbackTask = settledTurn && record.taskId
+    ? await import('./task-manager.js').then(({ getTask }) => getTask(record.taskId!)).catch(() => null)
+    : null
+  const handbackCutoff = actual === 'idle'
+    ? record.status_history?.find(entry => entry.process_status === 'idle')?.timestamp ?? record.last_status_change
+    : new Date().toISOString()
+  const reconcileSettledPhase = async (settled: SessionRecord): Promise<void> => {
+    const phaseAt = handbackTask?.phase_changed_at ?? handbackTask?.updated_at
+    if (!handbackTask || handbackTask.phase !== 'IN_PROGRESS' || !handbackCutoff || !phaseAt
+      || !Number.isFinite(Date.parse(phaseAt)) || !Number.isFinite(Date.parse(handbackCutoff))
+      || Date.parse(phaseAt) > Date.parse(handbackCutoff)
+      || settled.process_status !== 'idle' || settled.status_reason !== 'snapshot_projection'
+      || settled.pendingPermission || settled.stopRequest || settled.consumedOffset !== snapshot.v) return
+    const { withUndeliveredMessageGuard } = await import('./session-message-queue.js')
+    const { getSessionsForTaskSync } = await import('./session-tracker.js')
+    const { handBackTaskOnSessionEnd } = await import('./phase.js')
+    try {
+      await withUndeliveredMessageGuard(async (hasUndelivered) => {
+        await handBackTaskOnSessionEnd(handbackTask.id, sessionId, `snapshot-apply:${source}`, {
+          shouldApply: (current) => {
+            const latest = getSessionsForTaskSync(handbackTask.id).find(member => member.claudeSessionId === sessionId)
+            return !!latest && sameTurn() && getAppliedV(sessionId) === snapshot.v
+              && latest.statusRevision === settled.statusRevision
+              && latest.streamEpoch === settled.streamEpoch && latest.process_status === 'idle'
+              && latest.consumedOffset === snapshot.v
+              && !latest.pendingPermission && !latest.stopRequest
+              && !getSessionsForTaskSync(handbackTask.id).some(member =>
+                !member.archived && hasUndelivered(member.claudeSessionId))
+              && current.phase === handbackTask.phase
+              && (current.phase_changed_at ?? current.updated_at) === phaseAt
+          },
+        })
+      })
+    } catch (error) {
+      log.session.warn('snapshot settled task handback failed', {
+        sessionId, taskId: handbackTask.id, error: String(error),
+      })
+    }
+  }
+
+  if (duplicate) {
+    await reconcileSettledPhase(record)
+    return { outcome: reconnectActivityCleared ? 'applied' : 'noop', projected }
+  }
 
   // ── Turn-start phase pullback on snapshot evidence (inc-1787512825254) ──
   // The CLI emits NO session_state_changed{running} for self-woken turns (a
@@ -607,5 +662,6 @@ export async function applySnapshot(
     }
   } catch { /* runner not loaded — session is attach-only */ }
 
+  await reconcileSettledPhase(updated)
   return { outcome: 'applied', projected }
 }

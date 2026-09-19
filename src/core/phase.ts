@@ -153,6 +153,9 @@ export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
  * AGENT_COMPLETE stay dot-less while a session-driven one lit up.
  */
 export function applyPhase(task: Task, phase: TaskPhase): void {
+  if (task.phase !== phase) {
+    task.phase_changed_at = new Date(Math.max(Date.now(), (Date.parse(task.phase_changed_at ?? '') || 0) + 1)).toISOString();
+  }
   task.phase = phase;
   task.status = deriveStatusFromPhase(phase);
 
@@ -445,7 +448,7 @@ export async function handBackTaskOnSessionEnd(
   taskId: string | null | undefined,
   sessionId: string,
   source: string,
-  opts?: { shouldApply?: () => boolean },
+  opts?: { shouldApply?: (current: Readonly<Task>) => boolean },
 ): Promise<boolean> {
   if (!taskId) return false
   try {
@@ -463,7 +466,7 @@ export async function handBackTaskOnSessionEnd(
       sessionId,
       newPhase: handback,
       shouldApply: (current) => {
-        if (opts?.shouldApply && !opts.shouldApply()) return false
+        if (opts?.shouldApply && !opts.shouldApply(current)) return false
         const sessions = getSessionsForTaskSync(taskId)
         const ending = sessions.find((s) => s.claudeSessionId === sessionId)
         if (!ending || ending.archived) return false
