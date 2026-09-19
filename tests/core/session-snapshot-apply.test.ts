@@ -431,6 +431,56 @@ describe('applySnapshot — shadow mode', () => {
 
 // ── enforce mode ──
 describe('applySnapshot — enforce mode', () => {
+  it('a projection that ends a turn itself (running → idle) announces session:turn-settled for the turn-end hooks', async () => {
+    // The live runner never saw this result (server detached when the CLI
+    // finished); hooks derive from session:result, so the settle must be told.
+    setSnapshotModeForTests('enforce')
+    const sid = 'enforce-turn-settled'
+    await seedSession(sid, { process_status: 'running', taskId: 'task-settled' })
+    const settled: BusEvent[] = []
+    bus.subscribe('snap-apply-settled', (e) => {
+      if (e.name === EventNames.SESSION_TURN_SETTLED) settled.push(e)
+    })
+
+    const res = await applySnapshot(sid, snap({
+      v: 900, cliState: 'idle', turnActive: false,
+      lastResult: { isError: false, endOffset: 880 },
+    }), 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'idle' })
+    expect(settled).toHaveLength(1)
+    expect(settled[0]!.data).toEqual({ sessionId: sid, taskId: 'task-settled', source: 'pull-30s', v: 900 })
+
+    // Replaying the same settled snapshot changes nothing and announces nothing.
+    await applySnapshot(sid, snap({
+      v: 900, cliState: 'idle', turnActive: false,
+      lastResult: { isError: false, endOffset: 880 },
+    }), 'pull-30s')
+    expect(settled).toHaveLength(1)
+  })
+
+  it('a projection that STARTS a turn (idle → running) or stops a session announces no settle', async () => {
+    setSnapshotModeForTests('enforce')
+    const settled: BusEvent[] = []
+    bus.subscribe('snap-apply-settled-neg', (e) => {
+      if (e.name === EventNames.SESSION_TURN_SETTLED) settled.push(e)
+    })
+
+    const starting = 'enforce-turn-starting'
+    await seedSession(starting, { process_status: 'idle' })
+    liveSessionId = starting
+    expect(await applySnapshot(starting, snap({ v: 500, cliState: 'processing', turnActive: true }), 'daemon-push'))
+      .toMatchObject({ outcome: 'applied', projected: 'running' })
+
+    const dying = 'enforce-turn-dying'
+    await seedSession(dying, { process_status: 'running' })
+    expect(await applySnapshot(dying, snap({
+      v: 700, cliState: 'dead', turnActive: false, exitCode: 0, pid: null,
+      lastResult: { isError: false, endOffset: 690 },
+    }), 'daemon-push')).toMatchObject({ outcome: 'applied', projected: 'stopped' })
+
+    expect(settled).toHaveLength(0)
+  })
+
   it('writes the projection, adopts the watermark, and emits status-changed', async () => {
     setSnapshotModeForTests('enforce')
     const sid = 'enforce-write'

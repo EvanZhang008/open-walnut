@@ -171,6 +171,26 @@ export function deriveSessionHookPoints(
       break;
     }
 
+    case EventNames.SESSION_TURN_SETTLED: {
+      // A snapshot saw the turn end while no live runner did (server restart or
+      // detach at the moment the CLI finished): the turn-end hooks would
+      // otherwise never run for that turn. Same hook point as a real result;
+      // the payload carries no text because the snapshot has none. Every
+      // builtin on this point tolerates a repeat (the triage debounce collapses
+      // a later real result into the same run, the title hook is placeholder-
+      // guarded, the cwd check is idempotent), so a rare double fire is fine.
+      const state = getOrCreateSessionState(states, sessionId);
+      results.push({
+        hookPoint: 'onTurnComplete',
+        extraPayload: {
+          result: '',
+          turnIndex: state.turnIndex,
+          isPlanSession: state.lastMode === 'plan',
+        } satisfies Partial<OnTurnCompletePayload>,
+      });
+      break;
+    }
+
     case EventNames.SESSION_RESULT: {
       // Skip hooks entirely when team subagents OR background workflow tasks are
       // still active. The lead session emits intermediate `result` events while

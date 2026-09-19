@@ -30,6 +30,7 @@
 import type { SessionSnapshot } from '../providers/daemon-fold.js'
 import type { ProcessStatus, SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
+import { bus, EventNames } from './event-bus.js'
 import {
   getSnapshotStatusMode,
   markSnapshotCovered,
@@ -571,6 +572,19 @@ export async function applySnapshot(
     sessionId, projected, previous: actual, v: snapshot.v,
     watermarkAdopted: adoptWatermark, source,
   })
+
+  // The projection itself ended a turn (running → idle under the lock): the
+  // live runner never reported this result, or it would have written idle
+  // first and the predicate would have found nothing to change. Turn-end hooks
+  // derive from session:result, so tell them separately; a session the server
+  // reattaches later skips replay and would otherwise never self-report this
+  // turn (session 145318ca, 2026-09-19: detached 02:13, settled 02:18, tip and
+  // note stayed one turn behind).
+  if (actual === 'running' && updated.process_status === 'idle') {
+    bus.emit(EventNames.SESSION_TURN_SETTLED, {
+      sessionId, ...(updated.taskId ? { taskId: updated.taskId } : {}), source, v: snapshot.v,
+    }, ['*'], { source: `snapshot:${source}` })
+  }
 
   // Sync the live runner's in-memory status so the next writeMessage bases its
   // mid-turn decision on the converged value (setProcessStatusFromReconciler

@@ -561,6 +561,22 @@ export interface SessionSideThreadRenamedEvent {
   title: string;
 }
 
+/** A daemon snapshot moved a session from `running` to `idle` while no live
+ *  runner reported that turn's `session:result` (the server was restarting or
+ *  detached when the CLI finished). Turn-end hooks derive from `session:result`,
+ *  so without this the self-report, auto-title and cwd check for that turn
+ *  never run: the recap tip and task note stay one turn behind until the next
+ *  turn. Carries no result text: the snapshot has none, and the hooks that
+ *  need one ask the session itself. */
+export interface SessionTurnSettledEvent {
+  sessionId: string;
+  taskId?: string;
+  /** Snapshot source that observed the settle (daemon-push, pull-30s, ...). */
+  source: string;
+  /** Stream watermark the settle was observed at. */
+  v: number;
+}
+
 /** The turn-complete self-report wrote a new recap tip (overview and/or recap)
  *  onto the session record. Fires minutes after the turn, so an open panel
  *  needs it: nothing else refetches the record then. Only the fields that
@@ -1058,6 +1074,7 @@ export interface EventPayloadMap {
   'session:side-question-error': SessionSideQuestionErrorEvent;
   'session:side-thread-renamed': SessionSideThreadRenamedEvent;
   'session:recap-updated': SessionRecapUpdatedEvent;
+  'session:turn-settled': SessionTurnSettledEvent;
   'session:cron-fired': SessionCronFiredEvent;
   'session:will-reap': SessionWillReapEvent;
 
