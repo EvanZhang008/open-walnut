@@ -21,6 +21,7 @@ import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished
 import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trailingThinkingStart, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
+import { placePins } from './outline-order';
 import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
 import { QuotePinPopover } from './QuotePinPopover';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
@@ -480,6 +481,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** scrollTop the last outline jump left from — armed for one "Back". */
   const jumpReturnTop = useRef<number | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
+  /** A jump whose target row is outside the loaded tail: parked here while the
+   *  full history loads, finished by the effect next to jumpToPlace. */
+  const pendingJump = useRef<{ msgId: string; quote?: SessionPinnedQuote; via: string } | null>(null);
 
   // ── blockIndexMap: assigns each optimistic message a fixed position in the streaming timeline ──
   // Key: queueId, Value: blocks.length at creation time. Set once, never updated.
@@ -1476,32 +1480,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // ── Outline (pinned messages + thread heads) ───────────────────────────────
   // Entries are ordered by TRANSCRIPT position, not by when they were pinned: the
   // outline is a map of the conversation, so it has to read in the conversation's
-  // own order. A pin whose message isn't in the loaded array yet (older tail not
-  // fetched, /compact rewrote it) sorts last on its pin time rather than being
-  // dropped — the row still jumps correctly once the message loads, and silently
-  // hiding a pin the user made is worse than showing it out of order.
+  // own order. A pin whose message isn't in the loaded array (older than the tail
+  // window, /compact rewrote it) is placed by its message's TIMESTAMP among the
+  // loaded rows rather than dropped or parked at the end — see outline-order.ts for
+  // the rule and the report that fixed it. Its jump loads the older history first
+  // (jumpToPlace), so the row is a real destination, not a dead entry.
   const pinTocEntries = useMemo(() => {
     if (pinsApi.pins.length === 0) {
       return [] as Array<TocEntry & { at: number; quoteExact?: string }>;
     }
-    const indexOf = new Map<string, number>();
-    for (let i = 0; i < messages.length; i++) {
-      const id = messages[i].msgId ?? messages[i].walnutMessageId;
-      if (id && !indexOf.has(id)) indexOf.set(id, i);
-    }
-    return pinsApi.pins
-      .map((pin) => ({ pin, at: indexOf.get(pin.msgId) ?? Number.MAX_SAFE_INTEGER }))
-      .sort((a, b) => {
-        if (a.at !== b.at) return a.at - b.at;
-        // Within ONE message: the whole-message pin heads the group, then its
-        // passages in the order they were pinned. (Passage order inside the
-        // message body would be truer, but it is only knowable while the row is
-        // rendered — and the outline must read the same either way.)
-        const aQuote = a.pin.quote ? 1 : 0;
-        const bQuote = b.pin.quote ? 1 : 0;
-        if (aQuote !== bQuote) return aQuote - bQuote;
-        return a.pin.pinnedAt.localeCompare(b.pin.pinnedAt);
-      })
+    return placePins(pinsApi.pins, messages)
       .map(({ pin, at }) => {
         const fallback = pin.role === 'user' ? 'Your message' : 'Reply';
         const base = pin.label
@@ -1649,6 +1637,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!el || !msgId) return;
     const index = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === msgId);
     if (index < 0) {
+      // The loaded rows are a TAIL window; a pin on an older message is a real
+      // destination the window just does not hold yet. Fetch the rest (the same
+      // request the "Load earlier messages" button makes) and finish the jump when
+      // the row lands (the effect below). A row that is not there even then (a
+      // /compact rewrote it) is logged, not silently ignored.
+      if (olderHidden > 0 || olderWindowed) {
+        log.info('session', 'pin jump: target is outside the loaded tail — loading the full history first', {
+          sessionId, msgId, via,
+        });
+        pendingJump.current = { msgId, quote, via };
+        loadFullHistory();
+        return;
+      }
       log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId, via });
       return;
     }
@@ -1695,7 +1696,29 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         setTimeout(() => target.classList.remove('user-messages-highlight'), 1500);
       });
     });
-  }, [messages, truncationOffset, sessionId, quotePaint]);
+  }, [messages, truncationOffset, sessionId, quotePaint, olderHidden, olderWindowed, loadFullHistory]);
+
+  // The second half of a jump to an unloaded row: the full history has landed (or
+  // the load ended without it). Keyed on `messages` because that is what the load
+  // replaces; `phase2Pending` false + no row = the load is over and the row is
+  // gone for good (a rewrite), so the pending jump is dropped rather than left
+  // armed to fire on some unrelated later refetch.
+  useEffect(() => {
+    const pending = pendingJump.current;
+    if (!pending) return;
+    const present = messages.some((m) => (m.msgId ?? m.walnutMessageId) === pending.msgId);
+    if (present) {
+      pendingJump.current = null;
+      jumpToPlace(pending.msgId, pending.quote, pending.via);
+      return;
+    }
+    if (!phase2Pending) {
+      pendingJump.current = null;
+      log.warn('session', 'pin jump: message not in the transcript even after loading the full history', {
+        sessionId, msgId: pending.msgId, via: pending.via,
+      });
+    }
+  }, [messages, phase2Pending, jumpToPlace, sessionId]);
 
   /** An outline row's jump: a pin's passage, or — for a thread row, which is a
    *  place in the transcript with no pin behind it — the passage the thread hangs

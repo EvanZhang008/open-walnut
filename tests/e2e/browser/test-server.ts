@@ -505,6 +505,28 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Outline-window fixture (session-outline-window.spec.ts): a 460-row
+        // transcript, longer than the panel's lazy tail, so a pin can sit on a
+        // row the panel has not loaded.
+        id: 'pw-task-outline-window',
+        title: 'Outline window fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-outline-window-session'],
+        active_session_ids: [],
+        session_id: 'pw-outline-window-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Same-browser task-store fixture (task-store-same-browser-instant.spec).
         // Its OWN task: that spec renames and completes it mid-run, which would
         // break every spec asserting on a shared fixture's title or phase.
@@ -1561,6 +1583,39 @@ await fs.writeFile(
       }),
       '',
     ].join('\n')
+  // A transcript LONGER than the panel's tail window (HISTORY_TAIL_LIMIT = 400 rows),
+  // for session-outline-window.spec.ts: a pin on one of the first rows is a pin
+  // whose message is NOT loaded, which is the case the outline used to sort last
+  // and could not jump to. The first 30 pairs are stamped two days ago, so the
+  // outline's "another day" time label has something to show.
+  const longTranscript = (sessionId: string, u: string, pairs: number): string => {
+    const twoDays = 2 * 24 * 60 * 60 * 1_000
+    const stamp = (i: number, offsetMs: number) => new Date(
+      i < 30 ? sessionFixtureNow - twoDays + i * 400 + offsetMs : sessionFixtureNow - 30_000 + i * 400 + offsetMs,
+    ).toISOString()
+    return [
+      ...Array.from({ length: pairs }, (_, i) => [
+        JSON.stringify({
+          type: 'user',
+          uuid: `${u}02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          parentUuid: i === 0 ? null : `${u}03-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
+          sessionId,
+          timestamp: stamp(i, 0),
+          message: { role: 'user', content: `outline filler ask ${i + 1}` },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          uuid: `${u}03-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          parentUuid: `${u}02-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+          sessionId,
+          timestamp: stamp(i, 200),
+          message: { role: 'assistant', content: [{ type: 'text', text: `outline filler reply ${i + 1}` }] },
+        }),
+      ]).flat(),
+      '',
+    ].join('\n')
+  }
+  await fs.writeFile(path.join(jsonlDir, 'pw-outline-window-session.jsonl'), longTranscript('pw-outline-window-session', '0199bd', 230))
   await fs.writeFile(path.join(jsonlDir, 'pw-pins-session.jsonl'), pinsTranscript('pw-pins-session', '0199aa'))
   await fs.writeFile(path.join(jsonlDir, 'pw-quote-session.jsonl'), pinsTranscript('pw-quote-session', '0199cc'))
   await fs.writeFile(path.join(jsonlDir, 'pw-threads-session.jsonl'), pinsTranscript('pw-threads-session', '0199bb'))
@@ -2062,6 +2117,19 @@ await fs.writeFile(
         messageCount: 53,
         cwd: vscodeFixtureRoot,
         title: 'Threads send fixture session',
+      },
+      {
+        claudeSessionId: 'pw-outline-window-session',
+        taskId: 'pw-task-outline-window',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 27_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 460,
+        cwd: vscodeFixtureRoot,
+        title: 'Outline window fixture session',
       },
       {
         claudeSessionId: 'pw-stream-select-session',

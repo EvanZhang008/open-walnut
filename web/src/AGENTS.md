@@ -156,6 +156,14 @@ still live on the client.
   a thread paints is also the way back to its passage**: the `↳` tag is a button and the gutter
   bar's strip is clickable (`jumpToThreadOrigin`), landing where the outline's thread row lands.
   Ratchets: `tests/web/thread-tree.test.ts`, `tests/e2e/browser/session-threads.spec.ts`.
+- **The outline reads in transcript order, and the loaded history is a TAIL window.** A pin
+  whose message is not loaded is almost always OLDER than every loaded row, so it is placed by
+  its message's timestamp (`components/sessions/outline-order.ts`: half a step before the first
+  loaded row stamped after it), never parked at the end (2026-09-18: a two-day-old pin sat under
+  one made an hour ago). Its row is a real destination: `jumpToPlace` loads the full history
+  first and finishes the jump when the row lands. Rows from another day show their date, since a
+  bare clock time is what made the mis-order look impossible. Ratchets:
+  `tests/web/outline-order.test.ts`, `tests/e2e/browser/session-outline-window.spec.ts`.
 - **The session "/" palette lists what the CLI advertised, not what Walnut found.** Every
   `system/init` line carries `slash_commands` (already filtered by the CLI to what works in `-p`
   mode); `ClaudeCodeSession` captures it and `GET /api/sessions/:id/slash-commands` serves it,

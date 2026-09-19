@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { outlineTimeLabel } from './outline-order';
 
 /**
  * The transcript outline: one tick per pinned message, parked in the timeline's
@@ -72,12 +73,8 @@ interface SessionPinnedTocProps {
  *  leave the panel for a frame and collapse it under the cursor. */
 const COLLAPSE_DELAY_MS = 140;
 
-function timeLabel(ts: string | undefined): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
+/** Today's rows show the clock, any other day shows its date too (outline-order.ts). */
+const timeLabel = (ts: string | undefined): string => outlineTimeLabel(ts);
 
 /** Per-row style: the thread's hue for the dash, its depth for the indent. Both
  *  ride CSS vars so the indent step and the colour recipe live in one place. */
