@@ -10,7 +10,7 @@
  *
  * Five status lines is what a real auto-compaction emits: the CLI re-emits that
  * status every 30s as a transport keep-alive and a real compaction runs 147-539s.
- * The spec spaces them 400ms apart (`compaction-test:5:400`) so the assertions land
+ * The spec spaces them 1s apart (`compaction-test:5:1000`) so the assertions land
  * WHILE the compaction is in flight — emitted in one burst the whole thing would be
  * over before the browser painted, and only the history parser would be tested.
  *
@@ -18,7 +18,10 @@
  *   1. Mid-compaction: ONE placeholder row, no matter how many keep-alives landed.
  *   2. After the boundary: that row IS the outcome (the placeholder is gone), and
  *      the numbers are labelled at both ends so "444K" can't read as a percentage.
- *   3. A reload says the same thing (the history parser is the other twin).
+ *   3. A reload still says it once. (Which twin answers depends on what survives
+ *      the reload: the server's stream snapshot, or the JSONL parser. Both apply
+ *      the same rule, which is the point of sharing it; the parser's exact wording
+ *      is pinned in tests/core/session-history.test.ts.)
  */
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test'
 
@@ -77,21 +80,18 @@ test.describe('Compaction renders as ONE row (real mock-CLI pipeline)', () => {
   test('five keep-alives collapse into one row that becomes the labelled outcome', async ({ page, request }) => {
     test.setTimeout(120_000)
 
-    // Turn 1 keeps the mock CLI alive and arms the next FIFO line, so the
-    // compaction of turn 2 streams into an ALREADY-OPEN panel.
+    // ONE turn, deliberately: a second FIFO turn would make this spec depend on
+    // the mock CLI's between-turns stdin path, which is not what is under test.
+    // The keep-alives are 1s apart instead, so the boundary lands ~7s in and the
+    // panel is open long before the compaction finishes.
     await page.goto('/')
     await sendViaRpc(page, 'session:start', {
-      taskId: TASK_ID, message: 'snapshot-clean-turn:Ready for the compaction turn.', project: 'Walnut',
+      taskId: TASK_ID, message: 'compaction-test:5:1000', project: 'Walnut',
     })
     const sid = await waitForSessionId(request, TASK_ID)
 
     await page.goto(`/sessions?id=${sid}`)
     const history = page.locator('.session-history')
-    await expect(history).toContainText('Ready for the compaction turn.', { timeout: 20_000 })
-
-    // Turn 2: the compaction, keep-alives 600ms apart so the boundary lands at
-    // ~4.2s and the mid-flight state is observable for seconds.
-    await sendViaRpc(page, 'session:send', { sessionId: sid, message: 'compaction-test:5:600' })
 
     await expect(history).toContainText(PRE, { timeout: 25_000 })
 
@@ -130,8 +130,8 @@ test.describe('Compaction renders as ONE row (real mock-CLI pipeline)', () => {
     expect(await history.textContent()).not.toContain('system messages')
     await page.screenshot({ path: '/tmp/compaction-one-row/live-one-row.png' })
 
-    // (3) A reload reads from the REAL history parser (the other twin): same
-    // single row, same labelled numbers, still no placeholder.
+    // (3) A reload must still show exactly one row with its numbers. Whether the
+    // stream snapshot or the JSONL parser serves it, both run the shared rule.
     await page.reload()
     await expect(history).toContainText(POST, { timeout: 25_000 })
     await expect.poll(async () => count(await history.textContent(), 'Context compacted'), {

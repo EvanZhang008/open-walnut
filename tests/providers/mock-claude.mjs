@@ -379,10 +379,10 @@ if (outputFormat === 'stream-json') {
       const keepAlives = Number(args?.[1]) || 5;
       const gapMs = Number(args?.[2]) || 0;
       const sid = outputSessionId;
-      const emit = (line) => {
-        if (line.type === 'assistant') persistMockTurn(sid, effectiveMessage, line);
-        process.stdout.write(JSON.stringify(line) + '\n');
-      };
+      // Deliberately no canonical-transcript write: history for this scenario comes
+      // from the daemon's stream file, which is the dialect that carries
+      // `compact_metadata` (snake_case) in the first place.
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
       const say = (id, text) => emit({ type: 'assistant', session_id: sid, message: {
         id, type: 'message', role: 'assistant', model: 'mock-model',
         content: [{ type: 'text', text }], stop_reason: 'end_turn',
