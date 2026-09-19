@@ -73,6 +73,9 @@ export interface StreamingSystemBlock {
   variant: 'compact' | 'error' | 'info';
   message: string;
   detail?: string;
+  /** Placeholder for work still running; the outcome replaces it in place rather
+   *  than stacking a second row. See `@open-walnut/compaction-notice`. */
+  progress?: boolean;
 }
 
 export interface StreamingPermissionBlock {

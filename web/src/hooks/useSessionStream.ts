@@ -682,7 +682,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     interruptPendingText();
     flushPendingThinking();
 
-    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail }));
+    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail, progress }));
   });
 
   // Handle permission request events (control_request from Claude Code)

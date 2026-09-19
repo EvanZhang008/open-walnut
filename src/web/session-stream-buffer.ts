@@ -51,6 +51,9 @@ export interface StreamingSystemBlock {
   variant: 'compact' | 'error' | 'info'
   message: string
   detail?: string
+  /** Placeholder for work still running; the outcome replaces it in place.
+   *  See `src/core/stream/compaction-notice.ts`. */
+  progress?: boolean
 }
 
 export interface StreamingPermissionBlock {
