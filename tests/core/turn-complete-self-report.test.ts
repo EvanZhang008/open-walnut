@@ -39,6 +39,7 @@ const SID_OK = 'self-report-session-ok';
 const SID_FAIL = 'self-report-session-fail';
 const SID_NOTIFY = 'self-report-session-notify';
 const SID_DEDUP = 'self-report-session-dedup';
+const SID_TIP = 'self-report-session-tip';
 
 // Deliberately uses the legacy "## Goal" header: the assemble pass must both
 // preserve its content and normalize the header to "## User Request".
@@ -108,6 +109,7 @@ function unregisterFakeSessions() {
   map.delete(SID_FAIL);
   map.delete(SID_NOTIFY);
   map.delete(SID_DEDUP);
+  map.delete(SID_TIP);
 }
 
 /** Capture subagent:result emits (the notify event) via a global bus subscriber. */
@@ -363,6 +365,65 @@ describe('turn-complete self-report (skip paths)', () => {
       .toBe('Implemented the normalizeLabel fallback; tests green, e2e verify next.');
     // The recap persist path (updateSessionRecord) is best-effort — no session
     // record exists in this unit store; covered by the parse assertion above.
+  });
+
+  it('recap tip: follows agent.language, persists OVERVIEW + RECAP on the record, tells the browser', async () => {
+    // A REAL session record this time: the tip write and its event are the
+    // deliverable, not a best-effort side path.
+    const { createSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    const { updateConfig } = await import('../../src/core/config-manager.js');
+    await createSessionRecord(SID_TIP, taskId, 'Walnut', '/tmp/x', { title: 'tip session' });
+    await updateNote(taskId, BASE_NOTE);
+
+    const recapEvents: Record<string, unknown>[] = [];
+    bus.subscribe('test-capture-recap', (event) => {
+      if (event.name === 'session:recap-updated') recapEvents.push(event.data as Record<string, unknown>);
+    }, { global: true });
+
+    try {
+      // 1. Default install: no display language → the prompt carries no directive.
+      const fakeEn = registerFakeSession(SID_TIP, async () => SAMPLE_REPORT);
+      await runTriage(makePayload(SID_TIP));
+      const promptEn = fakeEn.askSideQuestion.mock.calls[0][0] as string;
+      expect(promptEn).toContain('\nOVERVIEW:');
+      expect(promptEn).not.toContain('shown to the user in the UI');
+      // The old report shape (RECAP only) still refreshes the recap; no overview yet.
+      let rec = await getSessionByClaudeId(SID_TIP);
+      expect(rec?.recap).toBe('Implemented the normalizeLabel fallback; tests green, e2e verify next.');
+      expect(rec?.overview).toBeUndefined();
+      expect(recapEvents).toHaveLength(1);
+      expect(recapEvents[0]).toMatchObject({ sessionId: SID_TIP, taskId, recap: rec?.recap });
+      expect(recapEvents[0]).not.toHaveProperty('overview');
+
+      // 2. The user's setting (the reported case): agent.language = zh.
+      await updateConfig({ agent: { language: 'zh' } } as never);
+      __clearTriageCooldown();
+      const zhReport = SAMPLE_REPORT.replace(
+        /^RECAP: .*$/m,
+        'OVERVIEW: 给 fork 标题加回退逻辑；已实现并通过单测，待 e2e 验证。\nRECAP: 实现了 normalizeLabel 回退，测试通过，下一步 e2e 验证。',
+      );
+      const fakeZh = registerFakeSession(SID_TIP, async () => zhReport);
+      await runTriage(makePayload(SID_TIP));
+      const promptZh = fakeZh.askSideQuestion.mock.calls[0][0] as string;
+      expect(promptZh).toContain('write BOTH in Simplified Chinese (简体中文)');
+      expect(promptZh).toContain('Every other field stays English.');
+
+      rec = await getSessionByClaudeId(SID_TIP);
+      expect(rec?.overview).toBe('给 fork 标题加回退逻辑；已实现并通过单测，待 e2e 验证。');
+      expect(rec?.recap).toBe('实现了 normalizeLabel 回退，测试通过，下一步 e2e 验证。');
+      expect(rec?.overviewAt).toBeTruthy();
+      expect(rec?.recapAt).toBeTruthy();
+      expect(recapEvents).toHaveLength(2);
+      expect(recapEvents[1]).toMatchObject({
+        sessionId: SID_TIP, overview: rec?.overview, recap: rec?.recap,
+      });
+      // The note itself stayed on the English contract (the report's note fields).
+      const t = await getTask(taskId);
+      expect(t.summary).toBe('Adding a fallback for fork titles. Implemented and unit-tested; e2e verify is next.');
+    } finally {
+      try { bus.unsubscribe('test-capture-recap'); } catch {}
+      await updateConfig({ agent: {} } as never);
+    }
   });
 
   it('backfills SessionRecord.summary from the derived summary (gist replacement)', async () => {

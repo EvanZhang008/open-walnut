@@ -71,10 +71,15 @@ still live on the client.
   store), permission requests (`stores/permission-request-store.ts`: timeline card, rail card
   and toast are three readers of one `requestId` row; a settled request is never re-armed),
   letters (`components/inbox/letter-store.ts`: rail, session Inbox tab and reader are lenses
-  over one list), calendar events / routines / agents (`stores/*-store.ts`), and document
+  over one list), calendar events / routines / agents (`stores/*-store.ts`), document
   saves (`stores/file-save-signal.ts`: a save in one editor carries its hash AND bytes to every
   other view of the same file, note or memory doc in this browser, so a clean sibling adopts
-  without a refetch and an echo of your own write never reads as an external change).
+  without a refetch and an echo of your own write never reads as an external change), and the
+  session recap tip (`stores/recap-tip-store.ts`: the Overall / Latest rows above the composer,
+  the plan popover's composer and the Todo detail row read ONE merge of the session record with
+  the live `session:recap-updated` copy, newest field wins by its `*At` stamp; a per-panel
+  `setSession` patch used to lose the event when it beat the record's first fetch, and an
+  in-flight fetch used to put the old recap back; dismissals live there too, keyed by the text).
 - **One browser, one session-SETTINGS store.** Same rule for the session record's composer
   settings (permission mode, model, effort, reply style, ACP model): a surface never patches its
   own copy. Writes go through `applySessionSettings` / `clearSessionSettings`

@@ -16,6 +16,7 @@ import {
 import { pinLabelFor } from '@/hooks/useSessionPins';
 import { releaseSelectionHold, requestSelectionHold } from '@/utils/selection-hold';
 import { ThreadAnchorChip } from './ThreadAnchorChip';
+import { SessionRecapTip } from './SessionRecapTip';
 import { SessionViewToggle } from './SessionThreadNav';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
 import { SessionRewindDialog } from './SessionRewindDialog';
@@ -1626,16 +1627,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                         )}
                       </div>
                       <div className="plan-popup-input">
-                        {/* Recap tip — one line "what just happened" (self-report) right above
-              the composer, so the user re-orients on a long session without
+                        {/* Recap tip (Overall / Latest, self-report) right above the
+              composer, so the user re-orients on a long session without
               re-reading the transcript. Hidden while streaming (live output
               makes it redundant). */}
-          {session?.recap && !isStreaming && (
-            <div className="session-recap-tip" title={session.recap}>
-              <span className="session-recap-tip-icon">💬</span>
-              <span className="session-recap-tip-text">{session.recap}</span>
-            </div>
-          )}
+          <SessionRecapTip sessionId={sessionId} session={session} hidden={isStreaming} />
           <ChatInput
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
@@ -2194,16 +2190,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               {sendError}
             </div>
           )}
-          {/* Recap tip — one line "what just happened" (self-report) right above
-              the composer, so the user re-orients on a long session without
-              re-reading the transcript. Hidden while streaming (live output
-              makes it redundant). */}
-          {session?.recap && !isStreaming && (
-            <div className="session-recap-tip" title={session.recap}>
-              <span className="session-recap-tip-icon">💬</span>
-              <span className="session-recap-tip-text">{session.recap}</span>
-            </div>
-          )}
+          {/* Recap tip (Overall / Latest, self-report) right above the composer,
+              so the user re-orients on a long session without re-reading the
+              transcript. Hidden while streaming (live output makes it redundant). */}
+          <SessionRecapTip sessionId={sessionId} session={session} hidden={isStreaming} />
           {/* Thread anchor — the one visible answer to "where will this message
               go?". In the composer block (like the notes bar), outside ChatInput,
               which owns only the input card itself. */}

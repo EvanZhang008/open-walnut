@@ -40,6 +40,7 @@ import { structuredPatch } from 'diff';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { SessionControlError } from './sessions/session-controls.js';
+import { configuredUiLanguage, normalizeLang, uiLanguageName } from './ui-language.js';
 
 /** Bump when the prompt changes shape (buildDiffSummaryQuestion, buildDiffText,
  *  or the MAX_* budgets) — invalidates every cached summary. */
@@ -122,23 +123,6 @@ export function diffSummaryHash(
     .slice(0, 16);
 }
 
-/** Normalize a language hint ('zh-CN', 'ZH_Hans') to its primary subtag. */
-export function normalizeLang(hint: string | undefined): string | undefined {
-  const primary = (hint ?? '').trim().toLowerCase().split(/[-_]/)[0];
-  return /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
-}
-
-const LANG_NAMES: Record<string, string> = {
-  zh: 'Simplified Chinese (简体中文)',
-  en: 'English',
-  ja: 'Japanese (日本語)',
-  ko: 'Korean (한국어)',
-  de: 'German',
-  fr: 'French',
-  es: 'Spanish',
-  pt: 'Portuguese',
-};
-
 /** Filenames whose content we never ship into a prompt, even though the
  *  session itself may have touched them. Matched on the basename. */
 const SENSITIVE_BASENAME_RE = /^(\.env(\..*)?|\.npmrc|\.netrc|credentials(\..*)?|secrets?\..*|id_(rsa|ed25519|ecdsa|dsa)(\..*)?)$|\.(pem|key|p12|pfx|keystore|jks)$/i;
@@ -209,7 +193,7 @@ export function buildDiffText(file: FileForSummary): string {
  * 就够了") — the reader glances mid-review, not reads. Exported for tests.
  */
 export function buildDiffSummaryQuestion(file: FileForSummary, lang: string): string {
-  const langName = LANG_NAMES[lang] ?? `the language with ISO 639-1 code '${lang}'`;
+  const langName = uiLanguageName(lang);
   return [
     `Caption YOUR change to \`${file.relPath}\` (${file.status}) in as FEW words as possible — you made this change, so you know why.`,
     'Output (nothing else):',
@@ -368,9 +352,7 @@ async function summarizeInner(
 
   // Output language: explicit config wins, else the browser locale the client
   // sent, else English. Part of the content hash — switching regenerates.
-  const { getConfig } = await import('./config-manager.js');
-  const config = await getConfig();
-  const lang = normalizeLang(config.agent?.language) ?? normalizeLang(langHint) ?? 'en';
+  const lang = (await configuredUiLanguage()) ?? normalizeLang(langHint) ?? 'en';
 
   // Reuse the Changed tab's own retrieval chain (cache → daemon → compute).
   // The cold path can be a whale recompute — cap it and answer degraded.
@@ -503,7 +485,7 @@ export function triageHash(files: TriageFile[], lang: string): string {
 /** The triage side question. STRICT JSON out — the session picks the files a
  *  reviewer must read first and captions each in one short sentence. */
 export function buildTriageQuestion(files: TriageFile[], lang: string): string {
-  const langName = LANG_NAMES[lang] ?? `the language with ISO 639-1 code '${lang}'`;
+  const langName = uiLanguageName(lang);
   const listed = files.slice(0, TRIAGE_MAX_LIST);
   const lines = listed.map((f) => `${f.status.padEnd(8)} ${f.relPath}`).join('\n');
   const more = files.length > listed.length ? `\n…and ${files.length - listed.length} more files` : '';
@@ -557,9 +539,7 @@ async function triageInner(sessionId: string, langHint?: string): Promise<Triage
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new DiffSummaryError('Session not found', 404);
 
-  const { getConfig } = await import('./config-manager.js');
-  const config = await getConfig();
-  const lang = normalizeLang(config.agent?.language) ?? normalizeLang(langHint) ?? 'en';
+  const lang = (await configuredUiLanguage()) ?? normalizeLang(langHint) ?? 'en';
 
   const { getSessionChanges } = await import('./sessions/session-lifecycle.js');
   const list = await withTimeout(

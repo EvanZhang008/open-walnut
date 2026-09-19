@@ -10,6 +10,9 @@ import path from 'node:path';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import { buildTitleQuestion, cleanTitleAnswer } from '../session-title-backend.js';
+import { configuredUiLanguage, nonEnglishUiLanguage, uiLanguageName } from '../ui-language.js';
+import { cutEnd } from '../text-cut.js';
+import type { SessionRecord } from '../types.js';
 import type {
   SessionHookDefinition,
   OnTurnCompletePayload,
@@ -178,10 +181,22 @@ const SECTION_LABEL_VARIANTS: Partial<Record<NoteSection, string>> = {
  *  never needs to remember the task's beginning. Cheap-by-default protocol: most
  *  sections answer `unchanged`; Work Log appends one entry; Progress is rewritten
  *  only when a workitem's status actually moved. */
-export function buildSelfReportPrompt(existingNote?: string, currentTitle?: string): string {
+export function buildSelfReportPrompt(
+  existingNote?: string,
+  currentTitle?: string,
+  opts?: { uiLanguage?: string },
+): string {
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
   const title = currentTitle?.trim() ?? '';
+  // OVERVIEW and RECAP are the two fields the user READS (the recap tip above
+  // the composer), so they follow config.agent.language like the diff captions
+  // do. The note stays English by contract: it is a search surface and a
+  // hand-off document for a fresh AI, and plugin content rules validate it.
+  const uiLang = nonEnglishUiLanguage(opts?.uiLanguage);
+  const tipLanguage = uiLang
+    ? `\nOVERVIEW and RECAP are shown to the user in the UI: write BOTH in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
+    : '';
 
   let noteBlock: string;
   if (!existing) {
@@ -206,7 +221,8 @@ NEVER delete facts: when something is superseded, update it in place and keep an
 
 Then these status fields (same plain-label format):
 ${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change, and when it must, PREFER \`prefix:\` over \`rewrite:\`: the original name is usually good, so keep it and add to it. Three exceptions: (a) the work CHANGED DIRECTION or gained a focus the title doesn't cover → answer \`prefix: <1-3 words>\` (English Title Case, one word if it's enough). It lands in FRONT as "New Topic · <old title>"; up to two prefixes stack newest-first, a third rotates the oldest one out, and the original tail is NEVER dropped — so brevity is everything; (b) the title is VAGUE and you now know the real subject — it names only an activity or a source ("Handle Slack thread request", "Investigate the issue") because the first message was just a pointer, and this turn revealed what it's actually about → answer \`rewrite: <new title>\` naming the specific subject ("CoreDNS OOM Slack thread"), 2-6 words, no filler verbs like Handle/Process/Address. Do this the FIRST turn you know — a vague title is a bug, not something to preserve; (c) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt (except case b), \`unchanged\`.
-` : ''}RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".
+` : ''}OVERVIEW: 1-2 short sentences — what this WHOLE session is about and where it stands overall, for a user re-opening it after a while ("Reworking the composer layout so the scrollbar ends at the last row; fix landed, waiting on review"). Always answer this; never "unchanged".
+RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".${tipLanguage}
 PHASE_SIGNAL: one of — plan-written | implement-done | reconfirmed | verify-pass | verify-fail | review-done | committed(<hash>) | conversational(user-asked-question).
 STATUS: <succeeded|failed|blocked|waiting> — one sentence on what works / what doesn't.
 WHAT_I_DID: 1-2 sentences, this turn's concrete change (used verbatim in notifications).
@@ -227,7 +243,7 @@ VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.`;
  *  missing this list makes the new label bleed into the previous field. */
 const SELF_REPORT_LABELS = [
   'EXEC_SUMMARY', 'USER_REQUEST', 'GOAL', 'CONTEXT', 'PROGRESS', 'REFERENCES', 'WORK_LOG',
-  'TITLE', 'RECAP',
+  'TITLE', 'OVERVIEW', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
 ] as const;
@@ -270,6 +286,38 @@ function extractLabeledField(report: string, labelPattern: string): string {
   );
   const m = report.match(re);
   return m ? m[1].trim() : '';
+}
+
+/** 300-char cap per tip field: the recap tip (web/src/components/sessions/
+ *  SessionRecapTip.tsx) renders the FULL text with wrapping — this server-side
+ *  cap is what bounds each row to ~5 lines worst case. */
+const RECAP_TIP_FIELD_MAX = 300;
+
+/** The session-record patch a self-report's OVERVIEW / RECAP answers produce, or
+ *  null when neither field carries new text. Each field is independent: an old
+ *  or partial report that answers only RECAP still refreshes the recap, and a
+ *  literal `unchanged` (which the prompt forbids) never overwrites stored text.
+ *  Timestamps are set per field so the UI can tell a fresh recap from an old
+ *  overview. Exported for unit tests. */
+export function readRecapTipFields(
+  report: string,
+  now: Date = new Date(),
+): Pick<SessionRecord, 'recap' | 'recapAt' | 'overview' | 'overviewAt'> | null {
+  const read = (label: string): string | undefined => {
+    const text = extractField(report, label).replace(/\s+/g, ' ').trim();
+    // A prefix match: "unchanged from last turn." is the same non-answer, and a
+    // hedged one is worse shown than dropped. cutEnd keeps a surrogate pair whole.
+    if (!text || /^unchanged\b/i.test(text)) return undefined;
+    return text.slice(0, cutEnd(text, RECAP_TIP_FIELD_MAX));
+  };
+  const recap = read('RECAP');
+  const overview = read('OVERVIEW');
+  if (!recap && !overview) return null;
+  const at = now.toISOString();
+  return {
+    ...(recap ? { recap, recapAt: at } : {}),
+    ...(overview ? { overview, overviewAt: at } : {}),
+  };
 }
 
 /** Split an existing NOTE into its canonical sections. Content before the
@@ -609,6 +657,7 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
     let existingNote = '';
     let promptedTitle = '';
     let selfReport = '';
+    let uiLanguage: string | undefined;
     const askedAt = Date.now();
     try {
       try {
@@ -631,9 +680,12 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
         return;
       }
 
+      // Only config can say which language the tip is in: unlike the diff
+      // captions, this runs with no browser locale to fall back on.
+      uiLanguage = await configuredUiLanguage();
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote, promptedTitle), SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage }), SELF_REPORT_TIMEOUT_MS,
       )).trim();
     } catch (err) {
       log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
@@ -779,23 +831,32 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
       void applyTitleDirective(taskId, titleDirective, promptedTitle);
     }
 
-    // (a2) Session recap — one line, "what just happened here", shown as a tip
-    // under the session in the UI. Independent of the note persist: even an
-    // all-unchanged report carries a fresh recap of the latest turn.
-    const recap = extractField(selfReport, 'RECAP').replace(/\s+/g, ' ').trim();
-    if (recap && !/^unchanged\b[.!]?$/i.test(recap)) {
+    // (a2) Session recap tip — OVERVIEW (the whole session, where it stands) and
+    // RECAP (what just happened), shown above the composer in the UI. Independent
+    // of the note persist: even an all-unchanged report carries a fresh recap.
+    const tipUpdate = readRecapTipFields(selfReport);
+    if (tipUpdate) {
+      let persisted = false;
       try {
         const { updateSessionRecord } = await import('../session-tracker.js');
-        await updateSessionRecord(p.sessionId, {
-          // 300-char cap: the composer recap tip (.session-recap-tip in
-          // web/src/styles/globals.css) renders the FULL recap with wrapping —
-          // this server-side cap is what bounds it to ~5 lines worst case.
-          recap: recap.slice(0, 300),
-          recapAt: new Date().toISOString(),
-        });
+        await updateSessionRecord(p.sessionId, tipUpdate);
+        persisted = true;
       } catch (err) {
         log.session.debug('turn-complete-summary: recap persist skipped', {
           sessionId: p.sessionId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (persisted) {
+        // The record write emits nothing the browser hears (recap is not search
+        // content), and this fires minutes after the turn — without the event an
+        // open panel keeps the PREVIOUS turn's recap until something else refetches.
+        bus.emit(EventNames.SESSION_RECAP_UPDATED, {
+          sessionId: p.sessionId, taskId: p.taskId, ...tipUpdate,
+        }, ['web-ui'], { source: 'turn-complete-summary' });
+        log.session.info('turn-complete-summary: recap tip written', {
+          sessionId: p.sessionId, taskId: p.taskId,
+          fields: Object.keys(tipUpdate).filter((k) => !k.endsWith('At')),
+          language: uiLanguage ?? 'en',
         });
       }
     }

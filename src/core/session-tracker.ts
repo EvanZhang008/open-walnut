@@ -494,6 +494,7 @@ export async function querySessions(options: SessionQueryOptions = {}): Promise<
       session.description,
       session.summary,
       session.recap,
+      session.overview,
     ].some((value) => typeof value === 'string' && value.toLowerCase().includes(query));
   });
   matching.sort((a, b) => {

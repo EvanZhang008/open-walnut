@@ -1979,6 +1979,12 @@ export interface SessionRecord {
   recap?: string;
   /** ISO timestamp of the last recap update. */
   recapAt?: string;
+  /** 1-2 sentences on the WHOLE session (what it is about, where it stands),
+   *  the "overall" row of the same tip; written by the same self-report pass.
+   *  Both tip fields follow config.agent.language; the task note does not. */
+  overview?: string;
+  /** ISO timestamp of the last overview update. */
+  overviewAt?: string;
   /** Error message when process_status is 'error' — persisted for post-mortem display. */
   errorMessage?: string;
   /** STRUCTURED verdict on an 'error' status: is the cause infrastructure (host

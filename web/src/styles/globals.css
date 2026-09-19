@@ -20363,31 +20363,7 @@ td.usage-share-col {
   row-gap: 2px;
 }
 
-/* Recap tip — "what just happened" above the mode bar (session composer).
-   Shown in FULL, wrapping as needed — recap is one short sentence (≤300 chars,
-   capped server-side in session-hooks/builtins.ts) and its whole point is
-   re-orienting without opening anything, so never ellipsize. Explicit user
-   decision (2026-07-19); the dense LIST rows (SessionRow, TodoPanel) keep
-   single-line truncate on purpose — don't "unify" either direction. */
-.session-recap-tip {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin: 4px 12px 0;
-  padding: 3px 10px;
-  border-radius: 6px;
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  font-size: 11px;
-  line-height: 1.4;
-  min-width: 0;
-}
-.session-recap-tip-icon { flex-shrink: 0; }
-.session-recap-tip-text {
-  white-space: normal;
-  overflow-wrap: break-word;
-  min-width: 0;
-}
+/* Recap tip (.session-recap-tip) lives in session-recap.css (SessionRecapTip.tsx). */
 
 /* Plan popover — based on .session-fork-popover */
 /* Plan chip modal — extra header controls (reuses plan-popup-overlay/container) */

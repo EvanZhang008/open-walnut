@@ -144,6 +144,10 @@ export interface SessionRecord {
   recap?: string;
   /** ISO timestamp of the last recap update. */
   recapAt?: string;
+  /** 1-2 sentences on the WHOLE session — the "Overall" row of the same tip. */
+  overview?: string;
+  /** ISO timestamp of the last overview update. */
+  overviewAt?: string;
 }
 
 export interface SessionSummaryInfo {

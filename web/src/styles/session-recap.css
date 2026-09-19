@@ -1,0 +1,85 @@
+/* Recap tip — the "Overall / Latest" card above the composer.
+   Owned by components/sessions/SessionRecapTip.tsx. The class name
+   .session-recap-tip is load-bearing: the composer layout specs locate the
+   row by it.
+
+   Both rows show in FULL, wrapping as needed — each is a short sentence
+   (≤300 chars, capped server-side in session-hooks/builtins.ts) and the whole
+   point is re-orienting without opening anything, so never ellipsize. Explicit
+   user decision (2026-07-19); the dense LIST rows (SessionRow, TodoPanel) keep
+   single-line truncate on purpose — don't "unify" either direction. */
+
+.session-recap-tip {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 12px 0;
+  /* Right padding reserves the × so a long row never runs under it. */
+  padding: 4px 26px 4px 10px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.session-recap-tip-icon {
+  flex-shrink: 0;
+  /* Sit on the first row's baseline, like the old single-line tip did. */
+  line-height: 1.4;
+}
+
+/* A two-column grid the rows join through subgrid, so both labels share the
+   widest label's column and the two texts start on one line, whatever the font. */
+.session-recap-tip-rows {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  row-gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.session-recap-tip-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  column-gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.session-recap-tip-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.session-recap-tip-text {
+  white-space: normal;
+  overflow-wrap: break-word;
+  min-width: 0;
+}
+
+.session-recap-tip-close {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.session-recap-tip-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}

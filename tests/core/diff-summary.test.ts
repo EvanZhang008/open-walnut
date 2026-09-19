@@ -48,9 +48,10 @@ vi.mock('../../src/core/sessions/session-lifecycle.js', () => ({
 import { WALNUT_HOME } from '../../src/constants.js';
 import {
   diffSummaryHash, buildDiffText, buildDiffSummaryQuestion, isSensitivePath,
-  normalizeLang, summarizeSessionFileChange, DiffSummaryError,
+  summarizeSessionFileChange, DiffSummaryError,
   triageHash, buildTriageQuestion, parseTriageAnswer, triageSessionChangeset,
 } from '../../src/core/diff-summary.js';
+import { normalizeLang } from '../../src/core/ui-language.js';
 
 function fileChange(over: Partial<{
   filePath: string; relPath: string; before: string; after: string;

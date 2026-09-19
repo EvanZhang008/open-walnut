@@ -557,6 +557,19 @@ export interface SessionSideThreadRenamedEvent {
   title: string;
 }
 
+/** The turn-complete self-report wrote a new recap tip (overview and/or recap)
+ *  onto the session record. Fires minutes after the turn, so an open panel
+ *  needs it: nothing else refetches the record then. Only the fields that
+ *  changed are present. */
+export interface SessionRecapUpdatedEvent {
+  sessionId: string;
+  taskId?: string;
+  recap?: string;
+  recapAt?: string;
+  overview?: string;
+  overviewAt?: string;
+}
+
 export interface SessionSideQuestionErrorEvent {
   sessionId: string;
   question: string;
@@ -1040,6 +1053,7 @@ export interface EventPayloadMap {
   'session:side-question-done': SessionSideQuestionDoneEvent;
   'session:side-question-error': SessionSideQuestionErrorEvent;
   'session:side-thread-renamed': SessionSideThreadRenamedEvent;
+  'session:recap-updated': SessionRecapUpdatedEvent;
   'session:cron-fired': SessionCronFiredEvent;
   'session:will-reap': SessionWillReapEvent;
 

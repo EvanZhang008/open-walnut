@@ -70,8 +70,30 @@ After the trailing-debounce quiet window
 (`config.agent.triage.debounce_minutes`, default four minutes), the session
 answers `buildSelfReportPrompt` through `side_question`. The labeled response
 contains the note sections (`EXEC_SUMMARY`, `USER_REQUEST`, `CONTEXT`,
-`PROGRESS`, `REFERENCES`, `WORK_LOG`) plus `WHAT_I_DID`, `STATUS`, `PHASE_SIGNAL`, `NEXT_STEPS`,
-`BLOCKERS`, `USER_INTENT`, and `VERIFIED`.
+`PROGRESS`, `REFERENCES`, `WORK_LOG`) plus `TITLE`, `OVERVIEW`, `RECAP`,
+`WHAT_I_DID`, `STATUS`, `PHASE_SIGNAL`, `NEXT_STEPS`, `BLOCKERS`, `USER_INTENT`,
+and `VERIFIED`.
+
+### Recap Tip
+
+`OVERVIEW` (1-2 sentences on the whole session) and `RECAP` (one line on the
+latest turn) are the only fields the user reads directly: the session panel
+shows them as the "Overall" and "Latest" rows of the tip above the composer
+(`web/src/components/sessions/SessionRecapTip.tsx`). They are stored on the
+session record (`overview`, `recap`, with timestamps), never on the task, and a
+`session:recap-updated` event carries each write to open panels, because the
+report fires minutes after the turn when nothing else refetches the record.
+
+Both fields follow `config.agent.language`, the same setting the diff captions
+use (added 2026-09-18 after a `language: zh` user got English tips). The note
+does not: it is a search surface and a hand-off document for a fresh AI, and
+plugin content rules validate it, so its English contract stands. The prompt
+adds the language directive only when the setting is set and is not English,
+so a default install's prompt is unchanged.
+
+The × on the tip hides one version of it, remembered per session in the
+browser; the next self-report brings it back. It is not a switch that turns
+recaps off.
 
 ### One Living Note
 

@@ -55,6 +55,7 @@ import {
   taskReferenceMatchField,
 } from './search-results';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
+import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
 import {
   DndContext,
   DragOverlay,
@@ -2011,16 +2012,16 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
                         </span>
                       )}
                     </div>
-                    {/* Recap tip — one line "what just happened" (self-report); hidden
+                    {/* Recap line — one line "what just happened" (self-report), read
+                        through the same store as the session column's tip; hidden
                         while running (live activity above covers that state). */}
-                    {record?.recap && processStatus !== 'running' && (
-                      <div
+                    {processStatus !== 'running' && (
+                      <SessionRecapLine
+                        sessionId={sid}
+                        session={record}
                         className="text-xs truncate"
                         style={{ color: 'var(--fg-muted)', marginTop: '2px' }}
-                        title={record.recap}
-                      >
-                        💬 {record.recap}
-                      </div>
+                      />
                     )}
                     {/* Row 3: cwd (conditional) */}
                     {record?.cwd && (
