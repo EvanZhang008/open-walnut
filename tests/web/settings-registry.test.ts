@@ -15,7 +15,10 @@ const EXPECTED_IDS = [
   'providers', 'general',
   // Tasks owns task defaults + Task Summary; Focus Tiers renders under it and
   // shares its nav entry (navHidden).
-  'tasks', 'focus-tiers', 'sessions',
+  // Sessions = how Walnut runs an engine; Engines = the engine's OWN settings
+  // (its command-line config screen's keys) on the host the sessions run on.
+  // Engines sits directly after Sessions, which is the next question a reader asks.
+  'tasks', 'focus-tiers', 'sessions', 'engines',
   // `stt` is labelled Voice and also carries Text-to-Speech now.
   'stt', 'audio-capture', 'integrations', 'calendar', 'permissions', 'heartbeat', 'search', 'backup',
   // Phones & Cloud: `devices` is the nav entry, `cloud` renders under it (navHidden).

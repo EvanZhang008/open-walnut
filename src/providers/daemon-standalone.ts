@@ -4937,6 +4937,28 @@ async function cmdImageSave(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   }
 }
 
+// A conditional write hashes the whole current file; the caller could only have
+// hashed what it read, and reads stop at this ceiling (DaemonFileReader).
+const FS_WRITE_PRECONDITION_MAX_BYTES = 32 * 1024 * 1024
+// A temp sibling this old was left by a daemon that died between write and
+// rename; the live write that would have renamed it is long gone.
+const FS_WRITE_TEMP_STALE_MS = 60 * 60 * 1000
+
+/** Remove `.name.walnut-*.tmp` siblings an interrupted atomic write left behind. Best effort. */
+async function sweepStaleWriteTemps(dir: string, prefix: string): Promise<void> {
+  let names: string[] = []
+  try { names = await fs.promises.readdir(dir) } catch { return }
+  const cutoff = Date.now() - FS_WRITE_TEMP_STALE_MS
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith('.tmp')) continue
+    const full = path.join(dir, name)
+    try {
+      const st = await fs.promises.lstat(full)
+      if (st.isFile() && st.mtimeMs < cutoff) await fs.promises.unlink(full)
+    } catch { /* another writer may have renamed or removed it first */ }
+  }
+}
+
 async function cmdFsWrite(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { path: filePath, data, encoding } = cmd as { path: string; data: string; encoding?: string }
   // `typeof` not truthiness: EMPTY data is legal (clearing a file to zero bytes
@@ -4947,6 +4969,15 @@ async function cmdFsWrite(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   // existing file is an EEXIST rather than a silent clobber. Absent = the
   // editor's save path, unchanged.
   const exclusive = cmd.exclusive === true
+  // 'fs-write-atomic-v1' — two opt-in fields for read-modify-write callers that
+  // edit a file ANOTHER process also rewrites (the engine-settings route editing
+  // ~/.claude/settings.json while a CLI watches and rewrites it). `atomic` makes
+  // the replacement a rename, so a watcher never observes a half-written file;
+  // `expectSha256` makes the write conditional on the bytes the caller read, so a
+  // concurrent edit is refused instead of clobbered. Both absent = today's
+  // behaviour, unchanged.
+  const atomic = cmd.atomic === true
+  const expectSha256 = typeof cmd.expectSha256 === 'string' ? cmd.expectSha256 : null
 
   // The mutation floor applies to the exclusive (Files-panel "new file") path
   // ONLY. The plain save path predates this command and legitimately writes
@@ -4959,16 +4990,96 @@ async function cmdFsWrite(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     const resolved = await fsMutateResolve(filePath)
     if (!resolved) return sendError(ws, id, 'fs.write refused: path outside the mutation floor (EDENIED)')
     target = resolved
+  } else if (target === '~' || target.startsWith('~/')) {
+    // Node fs does no shell expansion — same expansion fs.read/fs.mkdir/fs.stat
+    // have always done. Its absence here meant a `~/...` write landed in a
+    // literal './~' directory next to the daemon's cwd. The exclusive branch
+    // expands inside fsMutateResolve, so it is deliberately not touched.
+    target = HOME_DIR + target.slice(1)
   }
 
+  // Set only once a temp file exists, so the failure path knows to remove it.
+  let tmpPath: string | null = null
   try {
-    if (!exclusive) await fs.promises.mkdir(path.dirname(target), { recursive: true })
     const enc = encoding || 'base64'
     const buf = enc === 'base64' ? Buffer.from(data, 'base64') : Buffer.from(data, 'utf-8')
-    if (exclusive) await fs.promises.writeFile(target, buf, { flag: 'wx' })
-    else await fs.promises.writeFile(target, buf)
-    sendOk(ws, id, { written: true, size: buf.length })
+
+    // rename(2) replaces the NAME, not what it points to: an atomic write onto a
+    // symlink (a dotfiles-managed ~/.claude/settings.json) would swap the link
+    // for a plain file and quietly detach the user's repo copy. Every other step
+    // here follows the link, so the rename has to as well.
+    if (atomic && !exclusive) {
+      try {
+        target = await fs.promises.realpath(target)
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      }
+    }
+
+    // Precondition BEFORE anything is created: a refusal must leave the disk
+    // exactly as it was, parents included. Regular files only, checked before
+    // open, for the same reason as cmdFsRead: opening a FIFO with no writer
+    // wedges a fs-pool thread forever. The size gate exists because the caller
+    // can only have hashed bytes it was able to read (32MB read ceiling).
+    if (expectSha256 !== null) {
+      let current = 'absent'
+      let st: fs.Stats | null = null
+      try {
+        st = await fs.promises.stat(target)
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      }
+      if (st !== null) {
+        if (!st.isFile()) return sendError(ws, id, 'fs.write refused: not a regular file (ENOTFILE)')
+        if (st.size > FS_WRITE_PRECONDITION_MAX_BYTES) {
+          return sendError(ws, id, 'fs.write refused: file too large for a conditional write (EFBIG)')
+        }
+        current = crypto.createHash('sha256').update(await fs.promises.readFile(target)).digest('hex')
+      }
+      if (current !== expectSha256) {
+        return sendError(ws, id, 'fs.write refused: file changed since it was read (EMODIFIED)')
+      }
+    }
+
+    if (!exclusive) await fs.promises.mkdir(path.dirname(target), { recursive: true })
+    const sha256 = crypto.createHash('sha256').update(buf).digest('hex')
+    if (exclusive) {
+      // 'wx' IS the atomicity the create path wants (and its EEXIST contract);
+      // a rename would silently replace the file it exists to protect.
+      await fs.promises.writeFile(target, buf, { flag: 'wx' })
+    } else if (atomic) {
+      // Temp file in the SAME directory: rename(2) is only atomic within one
+      // filesystem, and a dotfile sibling keeps it out of the watcher's way.
+      // Preserve the old mode — a fresh temp file would silently widen a 0600
+      // credential file to the umask default.
+      let mode: number | null = null
+      try {
+        mode = (await fs.promises.stat(target)).mode & 0o777
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      }
+      const tmpPrefix = '.' + path.basename(target) + '.walnut-'
+      await sweepStaleWriteTemps(path.dirname(target), tmpPrefix)
+      tmpPath = path.join(path.dirname(target), tmpPrefix + crypto.randomBytes(4).toString('hex') + '.tmp')
+      // fsync before the rename, like the registry writer in daemon-core: a
+      // rename that lands before the data does leaves an empty file after a crash.
+      const fh = await fs.promises.open(tmpPath, 'w')
+      try {
+        await fh.writeFile(buf)
+        await fh.sync()
+      } finally {
+        await fh.close()
+      }
+      if (mode !== null) await fs.promises.chmod(tmpPath, mode)
+      await fs.promises.rename(tmpPath, target)
+      tmpPath = null
+    } else {
+      await fs.promises.writeFile(target, buf)
+    }
+    sendOk(ws, id, { written: true, size: buf.length, sha256 })
   } catch (err: unknown) {
+    // Never leave a half-written sibling behind for the next caller to trip on.
+    if (tmpPath) { try { await fs.promises.unlink(tmpPath) } catch { /* best effort */ } }
     const e = err as NodeJS.ErrnoException
     const code = e.code ?? ''
     sendError(ws, id, 'fs.write failed: ' + e.message + (code ? ' (' + code + ')' : ''))

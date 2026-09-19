@@ -7,6 +7,7 @@ import { BugReportSection } from './sections/BugReportSection'
 import { CalendarSection } from './sections/CalendarSection'
 import { CloudSection } from './sections/CloudSection'
 import { DevicesSection } from './sections/DevicesSection'
+import { EnginesSection } from './sections/EnginesSection'
 import { FocusTiersSection } from './sections/FocusTiersSection'
 import { GeneralSection } from './sections/GeneralSection'
 import { HeartbeatSection } from './sections/HeartbeatSection'
@@ -67,6 +68,10 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'tasks', label: 'Tasks', title: 'Tasks', group: 'configure', render: ({ config, saveSection }) => <TasksSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'focus-tiers', label: 'Focus Tiers', title: 'Focus Tiers', group: 'configure', navHidden: true, render: () => <FocusTiersSection /> },
   { owner: 'walnut', id: 'sessions', label: 'Sessions', title: 'Sessions', group: 'configure', render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} /> },
+  // Sessions is how WALNUT runs an engine; Engines is the engine's OWN settings
+  // (what its command-line config screen edits) on the host the sessions run on.
+  // Directly after Sessions because that is the question a reader asks next.
+  { owner: 'walnut', id: 'engines', label: 'Engines', title: 'Engines', group: 'configure', render: ({ config }) => <EnginesSection config={config} /> },
   // Voice = both directions: dictation in (STT) and read-aloud out (TTS).
   { owner: 'walnut', id: 'stt', label: 'Voice', title: 'Voice', group: 'configure', render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} /> },
   { owner: 'walnut', id: 'audio-capture', label: 'Audio Capture', title: 'Audio Capture', group: 'configure', render: ({ config, saveSection }) => <AudioCaptureSection config={config} onSave={saveSection} /> },

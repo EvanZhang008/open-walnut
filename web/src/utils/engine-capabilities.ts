@@ -40,6 +40,8 @@ export interface EngineUiCaps {
   providerModelCatalog: boolean;
   /** Permission modes are provider config options, not the Claude mode set. */
   configModes: boolean;
+  /** The engine's own settings files can be read and edited from Settings › Engines. */
+  ownSettings: boolean;
   /** The engine's CLI/adapter is present on this machine. */
   installed: boolean;
   /** Why the engine is unusable, when it is; null when usable. */
@@ -68,6 +70,7 @@ export function engineCaps(engine: unknown, catalog: EngineCatalog): EngineUiCap
     fork: entry.capabilities.fork,
     providerModelCatalog: entry.capabilities.modelCatalog === 'provider-advertised',
     configModes: entry.capabilities.modeControl === 'config-options',
+    ownSettings: entry.capabilities.settings,
     installed: entry.availability.installed,
     // Host-independent half of the lock rule: availability only. The local-only
     // half needs a host, which only the launch surfaces have.

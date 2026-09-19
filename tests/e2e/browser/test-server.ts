@@ -1035,6 +1035,47 @@ await fs.writeFile(
 const planPlanFile = path.join(tmpBase, '.claude', 'plans', 'test-plan.md')
 await fs.mkdir(path.dirname(planPlanFile), { recursive: true })
 await fs.writeFile(planPlanFile, '# Test Plan\n\nStep 1: Do the thing\nStep 2: Verify the thing\n')
+
+// Engine settings (Settings → Engines): a realistically dense claude user
+// settings file and a codex config.toml under the fixture HOME, so the spec can
+// prove an edit changes ONE key and leaves hooks, allowlists, model overrides,
+// comments and tables byte-for-byte alone. Every value is neutral fixture data.
+// Deliberately NO `env` / `model` / `availableModels` keys: the credential
+// resolver and the host model catalog read those from this very file, and the
+// other specs are written against a fixture that has none.
+const engineSettingsClaudeFile = path.join(tmpBase, '.claude', 'settings.json')
+await fs.writeFile(engineSettingsClaudeFile, JSON.stringify({
+  cleanupPeriodDays: 99999,
+  includeCoAuthoredBy: false,
+  permissions: { defaultMode: 'bypassPermissions', allow: ['Bash(git *)', 'Read'], deny: ['WebFetch'] },
+  hooks: { PreToolUse: [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command: '~/guard.sh' }] }] },
+  statusLine: { type: 'command', command: 'walnut statusline' },
+  enabledPlugins: { 'acme-tools@acme': true },
+  outputStyle: 'Explanatory',
+  language: 'Chinese',
+  alwaysThinkingEnabled: true,
+  autoUpdatesChannel: 'stable',
+  verbose: false,
+}, null, 2))
+const engineSettingsCodexFile = path.join(tmpBase, '.codex', 'config.toml')
+await fs.mkdir(path.dirname(engineSettingsCodexFile), { recursive: true })
+await fs.writeFile(engineSettingsCodexFile, [
+  '# fixture codex config',
+  'model = "example.gpt-5"',
+  'model_reasoning_effort = "max" # keep this comment',
+  'personality = "pragmatic"',
+  'check_for_update_on_startup = false',
+  'notify = [',
+  '    "/Applications/Example.app/Contents/MacOS/client",',
+  '    "turn-ended",',
+  ']',
+  'approval_policy = "never"',
+  'sandbox_mode = "danger-full-access"',
+  '',
+  '[projects."/Users/example"]',
+  'trust_level = "trusted"',
+  '',
+].join('\n'))
 const codexModeRuntimeId = 'pw-mode-runtime'
 const codexCustomerRuntimeId = 'pw-customer-runtime'
 const codexOrderRuntimeId = 'pw-order-runtime'

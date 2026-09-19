@@ -122,6 +122,9 @@ function parseEntry(value: unknown): EngineCatalogEntry | null {
       modelCatalog: caps.modelCatalog === 'provider-advertised' ? 'provider-advertised' : 'static',
       modeControl: caps.modeControl === 'config-options' ? 'config-options' : 'claude-modes',
       idProvisioning: caps.idProvisioning === 'provider-issued' ? 'provider-issued' : 'preassigned',
+      // An older server (and a catalog persisted by an older build) simply omits
+      // this axis, which reads as "no settings surface", the honest answer.
+      settings: caps.settings === true,
     },
     availability: {
       installed: avail.installed === true,

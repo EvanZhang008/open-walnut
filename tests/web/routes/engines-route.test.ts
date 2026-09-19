@@ -37,6 +37,7 @@ interface EngineEntry {
     modelCatalog: 'static' | 'provider-advertised'
     modeControl: 'claude-modes' | 'config-options'
     idProvisioning: 'preassigned' | 'provider-issued'
+    settings: boolean
   }
   availability: { installed: boolean; version: string | null; reason: string | null }
 }
@@ -84,9 +85,11 @@ describe('GET /api/engines', () => {
       modelCatalog: 'static',
       modeControl: 'claude-modes',
       idProvisioning: 'preassigned',
+      settings: true,
     })
 
-    // Every ACP engine is local-only today and shares codex's capability axes.
+    // Every ACP engine is local-only today and shares codex's capability axes;
+    // only codex declares a settings surface (its own config.toml).
     for (const engine of engines.filter((e) => e.runtimeKind === 'acp')) {
       expect(engine.isDefault, engine.id).toBe(false)
       expect(engine.localOnly, engine.id).toBe(true)
@@ -96,6 +99,7 @@ describe('GET /api/engines', () => {
         modelCatalog: 'provider-advertised',
         modeControl: 'config-options',
         idProvisioning: 'provider-issued',
+        settings: engine.id === 'codex',
       })
     }
 

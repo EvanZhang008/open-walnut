@@ -182,6 +182,24 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * files. Optional: without it the route answers 501 daemon_needs_upgrade, which
  * self-heals on the next auto-deploy.
  *
+ * 'fs-write-atomic-v1' — fs.write learns `~` expansion, an `atomic` flag (write a
+ * temp file in the same directory, then rename it over the target, preserving the
+ * old file's mode), an `expectSha256` precondition (the sha256 the caller read, or
+ * the literal 'absent' for "must not exist yet") and a `sha256` echo of the bytes
+ * written. Why: the server edits engine config files such as ~/.claude/settings.json
+ * that RUNNING CLIs watch and rewrite themselves — a plain writeFile is observable
+ * half-done, so the watcher reads it as invalid JSON, and an unconditional write
+ * clobbers the edit that CLI just made. The rename makes the swap atomic for the
+ * watcher; the precondition turns a concurrent edit into a refusal
+ * ('fs.write refused: file changed since it was read (EMODIFIED)') instead of data
+ * loss, and the echoed sha256 lets a caller chain a second conditional write with no
+ * re-read. NOT sidecar-gated: both twins implement it inline over fs.promises +
+ * crypto, so a current daemon of either flavor can always answer. Deliberately NOT
+ * on the bridge allowlist either — fs.write has never been reachable from a
+ * compromised cloud box and this does not change that. Optional: without it the
+ * engine-settings route answers 501 daemon_needs_upgrade, which self-heals on the
+ * next auto-deploy.
+ *
  * 'grep-v1' — host-local symbol search (fs.grep), backing "find references" in
  * the Files viewer. The daemon runs `git grep` (or a pruned `grep -r` outside a
  * repo) next to the files and returns only the small match list, never the
@@ -239,6 +257,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'triggers-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
+  'fs-write-atomic-v1',
   'fs.readBounded',
   // 'skill-sync-v2' — walnut-skill distribution (skills.sync command). The
   // server pushes the current walnut SKILL.md at connect; the daemon keeps

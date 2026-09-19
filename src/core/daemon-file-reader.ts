@@ -168,6 +168,41 @@ export class DaemonFileReader implements SessionFileReader {
   }
 
   /**
+   * A small file's exact bytes (null when absent), for callers that hash what
+   * they read and hand the hash back as a write precondition: decoding to a
+   * string first would make a file with one stray non-UTF-8 byte unwritable
+   * forever, its hash never matching the daemon's. Throws with 'EFBIG' in the
+   * message when the file is larger than `maxBytes`, after a stat and before
+   * any byte crosses the tunnel.
+   */
+  async readFileBytes(remotePath: string, maxBytes: number): Promise<Buffer | null> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const st = await this.stat(remotePath)
+    if (st === null) return null
+    if (st.size > maxBytes) {
+      throw new Error(`file is ${st.size} bytes, larger than the ${maxBytes}-byte limit for this read (EFBIG)`)
+    }
+    if (st.size > DaemonFileReader.CHUNK_THRESHOLD) {
+      const chunks: Buffer[] = []
+      let offset = 0
+      for (;;) {
+        const part = await this.readRangeBytes(remotePath, offset, DaemonFileReader.CHUNK_SIZE)
+        if (part === null) return null
+        chunks.push(part.buf)
+        offset += part.buf.length
+        if (part.eof) break
+      }
+      return Buffer.concat(chunks)
+    }
+    const result = await conn.send('fs.read', { path: remotePath, encoding: 'base64' })
+    if (result.ok) return Buffer.from(result.data as string, 'base64')
+    const errMsg = typeof result.error === 'string' ? result.error : ''
+    if (/ENOENT|ENOTFILE|no such file/i.test(errMsg)) return null
+    throw new Error('fs.read transport failure: ' + (errMsg || 'unknown'))
+  }
+
+  /**
    * Write a file's UTF-8 text via the daemon's `fs.write`.
    *
    * The daemon takes base64 so the payload survives the JSON frame byte-exact
@@ -191,6 +226,48 @@ export class DaemonFileReader implements SessionFileReader {
     if (!result.ok) {
       const errMsg = typeof result.error === 'string' ? result.error : 'unknown'
       throw new Error('fs.write failed: ' + errMsg)
+    }
+  }
+
+  /**
+   * Replace a file atomically, conditional on what the caller last read
+   * ('fs-write-atomic-v1'): the daemon writes a temp sibling and renames it over
+   * the target, after checking the target's sha256 still equals `expectSha256`
+   * ('absent' for a file that must not exist yet). Used for files another
+   * process also rewrites (an engine's own settings file, hot-reloaded by its
+   * running CLIs): a torn write would be read as invalid JSON, an unconditional
+   * one would clobber a concurrent edit. Rejects with a message containing
+   * 'EMODIFIED' when the guard fails, so callers can re-read and retry.
+   */
+  async writeFileAtomic(remotePath: string, content: string, expectSha256: string): Promise<void> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    // Stricter than mutateConnection(): UNKNOWN capabilities refuse too. A daemon
+    // that predates the option ignores it, writes plainly and answers ok, and
+    // since it also predates `~` expansion on fs.write, that plain write lands in
+    // a literal './~' directory. Refusing is the only honest answer until the
+    // handshake has said which daemon this is.
+    if (!conn.capabilitiesKnown) {
+      throw new Error(`The Walnut daemon on ${this.host} has not finished its handshake yet. Try again in a moment.`)
+    }
+    if (!conn.hasCapability('fs-write-atomic-v1')) {
+      throw new DaemonNeedsUpgradeError(this.host, 'fs-write-atomic-v1')
+    }
+    const result = await conn.send('fs.write', {
+      path: remotePath,
+      data: Buffer.from(content, 'utf-8').toString('base64'),
+      encoding: 'base64',
+      atomic: true,
+      expectSha256,
+    })
+    if (!result.ok) {
+      const errMsg = typeof result.error === 'string' ? result.error : 'unknown'
+      throw new Error('fs.write failed: ' + errMsg)
+    }
+    // A current daemon always echoes the hash of what it wrote; its absence means
+    // the option was silently ignored, which the gate above should make impossible.
+    if (typeof result.sha256 !== 'string') {
+      throw new DaemonNeedsUpgradeError(this.host, 'fs-write-atomic-v1')
     }
   }
 

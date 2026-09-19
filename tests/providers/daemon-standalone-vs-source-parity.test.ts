@@ -865,6 +865,66 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       }
     }
   })
+  // Conditional/atomic fs.write ('fs-write-atomic-v1'): the server edits engine
+  // config files a RUNNING CLI watches and rewrites. Behavioral coverage runs the
+  // SOURCE twin (daemon-fs-write-atomic.test.ts); the bun binary has no harness,
+  // so these byte checks are its only guard. Both clauses are data-loss shapes —
+  // without the precondition a concurrent edit is clobbered, and without the
+  // rename the watcher reads a half-written file as invalid JSON.
+  it('both twins carry the EMODIFIED precondition and the tmp→rename swap in cmdFsWrite', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.search(/function cmdFsWrite/)
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      // The refusal string the server matches on — a reworded one is a silent
+      // downgrade to clobbering.
+      expect(body).toContain('EMODIFIED')
+      // Temp file in the target's own directory, then an atomic rename over it.
+      expect(body).toContain(".walnut-'")
+      expect(body).toMatch(/rename\(tmpPath, target\)/)
+      // ORDER is the contract, not presence: the link is resolved before anything
+      // reads or renames; the regular-file gate runs before the hash's open();
+      // the refusal runs before mkdir (a refusal leaves no trace); data is synced
+      // and the mode restored before the rename publishes the file.
+      const steps = [
+        'realpath(target)',
+        'isFile()',
+        'ENOTFILE',
+        'createHash(\'sha256\').update(await fs.promises.readFile(target))',
+        'EMODIFIED',
+        'mkdir(path.dirname(target)',
+        'sweepStaleWriteTemps(',
+        'fh.sync()',
+        'chmod(tmpPath',
+        'rename(tmpPath, target)',
+      ]
+      const positions = steps.map((s) => body.indexOf(s))
+      for (let i = 0; i < steps.length; i++) {
+        expect(positions[i], `${steps[i]} missing from cmdFsWrite`).toBeGreaterThan(-1)
+        if (i > 0) expect(positions[i], `${steps[i]} must come after ${steps[i - 1]}`).toBeGreaterThan(positions[i - 1])
+      }
+      // The sweep helper itself exists on both sides with the same staleness rule.
+      expect(src).toMatch(/FS_WRITE_TEMP_STALE_MS = 60 \* 60 \* 1000/)
+      expect(src).toMatch(/FS_WRITE_PRECONDITION_MAX_BYTES = 32 \* 1024 \* 1024/)
+    }
+    // Advertised, never required — an old daemon must stay usable (the route
+    // answers 501 daemon_needs_upgrade until the next auto-deploy).
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    expect(reqStart).toBeGreaterThan(-1)
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart)))
+      .not.toMatch(/'fs-write-atomic-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart)))
+      .toMatch(/'fs-write-atomic-v1'/)
+    // NOT sidecar-gated: both twins implement it inline, so the static literal
+    // getDaemonSource() substitutes is the whole answer for a source deploy.
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart)))
+      .not.toContain("'fs-write-atomic-v1'")
+  })
+
   it("'fs-mutate-v1' is advertised but NOT required (old daemons must stay usable)", () => {
     const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
     const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')

@@ -40,6 +40,14 @@ export interface EngineCatalogCapabilities {
   modelCatalog: 'static' | 'provider-advertised';
   modeControl: 'claude-modes' | 'config-options';
   idProvisioning: 'preassigned' | 'provider-issued';
+  /**
+   * The engine declares its OWN settings (what its command-line config screen
+   * edits), so GET/PATCH /api/engines/:id/settings answer for it and Settings ›
+   * Engines shows it a tab. False in the compiled-in default below: a tab that
+   * 404s on open is worse than one that appears a moment after hydration, so
+   * this axis is only ever trusted from the hydrated catalog.
+   */
+  settings: boolean;
 }
 
 export interface EngineAvailability {
@@ -72,6 +80,7 @@ const ACP_CAPABILITIES: EngineCatalogCapabilities = {
   modelCatalog: 'provider-advertised',
   modeControl: 'config-options',
   idProvisioning: 'provider-issued',
+  settings: false,
 };
 
 /**
@@ -93,6 +102,7 @@ export const DEFAULT_ENGINE_CATALOG: EngineCatalog = [
       modelCatalog: 'static',
       modeControl: 'claude-modes',
       idProvisioning: 'preassigned',
+      settings: false,
     },
     availability: { installed: true, version: null, reason: null },
   },

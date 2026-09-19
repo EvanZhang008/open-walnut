@@ -19,6 +19,9 @@
  */
 
 import { SESSION_ENGINE_IDS, type SessionEngine } from '../types.js';
+import type { EngineSettingsSchema } from './engine-settings-schema.js';
+import { CLAUDE_SETTINGS } from './engine-settings/claude.js';
+import { CODEX_SETTINGS } from './engine-settings/codex.js';
 
 /** How the engine's runtime is reached (which provider class / daemon command family). */
 export type EngineRuntimeKind = 'native' | 'acp';
@@ -100,6 +103,13 @@ export interface EngineCapabilities {
   readonly modelCatalog: 'static' | 'provider-advertised';
   /** How the ACP adapter process is obtained. Absent for native engines. */
   readonly acpAdapter?: EngineAcpAdapter;
+  /**
+   * The engine's OWN settings (what its CLI's config screen edits), declared as
+   * data so Walnut can read and write them in the engine's files on the host
+   * where its sessions run (engine-settings-service.ts). Absent = the engine
+   * has no settings surface in Walnut; the UI shows no tab for it.
+   */
+  readonly settings?: EngineSettingsSchema;
 }
 
 const CLAUDE: EngineCapabilities = {
@@ -118,11 +128,13 @@ const CLAUDE: EngineCapabilities = {
   skillSync: true,
   externalImport: true,
   modelCatalog: 'static',
+  settings: CLAUDE_SETTINGS,
 };
 
-const CODEX: EngineCapabilities = {
-  id: 'codex',
-  displayName: 'Codex',
+// Every axis the ACP-worker family shares. Codex adds its settings schema on
+// top; the other ACP engines spread from THIS base so they never inherit a
+// settings surface that describes codex's config.toml.
+const ACP_BASE: Omit<EngineCapabilities, 'id' | 'displayName'> = {
   runtimeKind: 'acp',
   historySource: 'acp-journal',
   idProvisioning: 'provider-issued',
@@ -139,12 +151,19 @@ const CODEX: EngineCapabilities = {
   acpAdapter: { source: 'bundled', binary: 'codex', args: null, versionArgs: ['--version'] },
 };
 
+const CODEX: EngineCapabilities = {
+  ...ACP_BASE,
+  id: 'codex',
+  displayName: 'Codex',
+  settings: CODEX_SETTINGS,
+};
+
 // The other ACP engines ride the SAME acp-worker transport as codex, so they
 // share every capability axis with it; what differs is the label, how the
 // adapter argv is obtained, and whether walnut can import/skill-sync them.
 
 const GEMINI: EngineCapabilities = {
-  ...CODEX,
+  ...ACP_BASE,
   id: 'gemini',
   displayName: 'Gemini',
   acpAdapter: { source: 'cli', binary: 'gemini', args: ['--experimental-acp'], versionArgs: ['--version'] },
@@ -153,7 +172,7 @@ const GEMINI: EngineCapabilities = {
 };
 
 const OPENCODE: EngineCapabilities = {
-  ...CODEX,
+  ...ACP_BASE,
   id: 'opencode',
   displayName: 'OpenCode',
   acpAdapter: { source: 'cli', binary: 'opencode', args: ['acp'], versionArgs: ['--version'] },
@@ -162,7 +181,7 @@ const OPENCODE: EngineCapabilities = {
 };
 
 const GOOSE: EngineCapabilities = {
-  ...CODEX,
+  ...ACP_BASE,
   id: 'goose',
   displayName: 'Goose',
   acpAdapter: { source: 'cli', binary: 'goose', args: ['acp'], versionArgs: ['--version'] },
@@ -171,7 +190,7 @@ const GOOSE: EngineCapabilities = {
 };
 
 const PI: EngineCapabilities = {
-  ...CODEX,
+  ...ACP_BASE,
   id: 'pi',
   displayName: 'Pi',
   acpAdapter: { source: 'bundled', binary: 'pi', args: null, versionArgs: ['--version'] },
@@ -180,7 +199,7 @@ const PI: EngineCapabilities = {
 };
 
 const DSH: EngineCapabilities = {
-  ...CODEX,
+  ...ACP_BASE,
   id: 'dsh',
   displayName: 'DeepSeek Harness',
   acpAdapter: { source: 'cli', binary: 'dsh', args: ['--profile', 'acp'], versionArgs: ['--version'] },
@@ -190,7 +209,7 @@ const DSH: EngineCapabilities = {
 
 /** User-supplied ACP adapter: argv comes from config, so there is no binary to probe. */
 const CUSTOM: EngineCapabilities = {
-  ...CODEX,
+  ...ACP_BASE,
   id: 'custom',
   displayName: 'Custom (ACP)',
   acpAdapter: { source: 'config', binary: null, args: null, versionArgs: [] },

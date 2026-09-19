@@ -58,6 +58,10 @@ must live under one of these top-level categories instead of directly under
 - [Cloud sync](reference/cloud-sync.md) - one-click cloud-companion setup, the
   git-over-HTTPS data plane, and the live-session bridge.
 - [Claude model configuration](reference/claude-model-configuration.md)
+- [Engine settings](reference/engine-settings.md) - Settings → Engines: editing
+  Claude Code's `/config` rows and Codex's `config.toml` from Walnut, where each
+  key is stored, and the atomic conditional write that keeps the engine's file
+  intact
 - [macOS session identity](reference/macos-session-identity.md) - why sessions are
   attributed to Walnut instead of to `node`, what to grant, and what the separation
   does not cover
