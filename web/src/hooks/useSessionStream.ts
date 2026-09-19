@@ -671,8 +671,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle system events (compact, error, info notifications)
   useEvent('session:system-event', (data) => {
-    const { sessionId: sid, variant, message, detail } = data as {
-      sessionId: string; variant: 'compact' | 'error' | 'info'; message: string; detail?: string;
+    const { sessionId: sid, variant, message, detail, progress } = data as {
+      sessionId: string; variant: 'compact' | 'error' | 'info'; message: string;
+      detail?: string; progress?: boolean;
     };
     if (!sessionId || sid !== sessionId) return;
 

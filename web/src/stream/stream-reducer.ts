@@ -29,6 +29,7 @@
  * React setState callers skip no-op re-renders).
  */
 import { splitPendingMarkup } from '@open-walnut/pending-markup';
+import { placeSystemRow } from '@open-walnut/compaction-notice';
 
 // ── Block types (moved here from useSessionStream so the reducer, the hook,
 //    the cache, and components all share one source; the hook re-exports them
@@ -404,11 +405,28 @@ export function backfillToolResult(
 
 // ── System notices ──────────────────────────────────────────────────────────
 
+/**
+ * Add one system notice — except a compaction, where ONE compaction is ONE row:
+ * the CLI's 30s keep-alive repeats collapse into the placeholder already on
+ * screen, and the boundary REPLACES that placeholder in place. See
+ * `@open-walnut/compaction-notice` for why (and for the incident).
+ */
 export function appendSystemBlock(
   blocks: readonly StreamingBlock[],
-  ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string },
+  ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string; progress?: boolean },
 ): StreamingBlock[] {
-  return [...blocks, { type: 'system', variant: ev.variant, message: ev.message, detail: ev.detail }];
+  const row: StreamingSystemBlock = {
+    type: 'system', variant: ev.variant, message: ev.message, detail: ev.detail,
+    ...(ev.progress ? { progress: true } : {}),
+  };
+  const placement = placeSystemRow(blocks, row);
+  if (placement.action === 'drop') return blocks as StreamingBlock[];
+  if (placement.action === 'replace') {
+    const updated = [...blocks];
+    updated[placement.index] = row;
+    return updated;
+  }
+  return [...blocks, row];
 }
 
 // ── Permission requests ─────────────────────────────────────────────────────

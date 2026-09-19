@@ -29,6 +29,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
+import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { isProcessAliveAsync } from '../utils/process.js'
 import { isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
@@ -579,6 +580,14 @@ export class ClaudeCodeSession {
    *  Key format: `{message.id}:tool_use:{block.id}` or length-based text keys.
    *  Cleared on send()/writeMessage(). */
   private _emittedStreamKeys = new Set<string>()
+  /** uuids of compaction system lines already turned into a UI row; bounded by
+   *  firstSightingOfLine. Survives turns and process restarts on purpose — a
+   *  reattach replays the stream tail, and the line it replays is the one already
+   *  on screen. */
+  private _seenCompactionLineUuids = new Set<string>()
+  /** A compaction placeholder row is on screen, waiting for its boundary. Gates
+   *  the CLI's 30s keep-alive re-emits, which carry no new information. */
+  private _compactionNoticeOpen = false
   /** Tracks last emitted text per (messageId, textBlockIndex) for progressive delta
    *  extraction. Claude Code writes multiple JSONL lines per message with accumulated
    *  text; we must emit only the NEW suffix, not the full snapshot. */
@@ -1984,6 +1993,10 @@ export class ClaudeCodeSession {
     this.fullText = ''
     this._emittedAssistantText = false  // Fresh process — nothing streamed yet
     this._emittedStreamKeys.clear()
+    // A fresh CLI process can't finish the previous process's compaction, so its
+    // placeholder will never get a boundary. Reopen the gate. (The seen-uuid set
+    // deliberately survives — replays of the dead process's lines still arrive.)
+    this._compactionNoticeOpen = false
     this._lastEmittedText.clear()
     this._currentStreamMsgId = null
     this._warnedUnknownTypes.clear()
@@ -3989,25 +4002,49 @@ export class ClaudeCodeSession {
           const sid = this.claudeSessionId
           if (sys.subtype === 'status' && sys.status === 'compacting') {
             this._activity = 'compacting context'
-            bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
-              sessionId: sid, taskId: this.taskId,
-              variant: 'compact' as const, message: 'Compacting context...',
-            }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+            // ONE row per compaction (compaction-notice.ts). This line is a
+            // 30-SECOND TRANSPORT KEEP-ALIVE, not an event — the CLI re-emits it
+            // for the whole compaction, which measurably runs 147-539s, so one
+            // compaction used to stack up to ~18 identical rows. A reattach
+            // replaying the stream tail added more, since system lines carry no
+            // dedup key. Emit the placeholder once per episode, and never twice
+            // for the same line.
+            const firstSeen = firstSightingOfLine(this._seenCompactionLineUuids, sys.uuid)
+            if (firstSeen && !this._compactionNoticeOpen) {
+              this._compactionNoticeOpen = true
+              bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+                sessionId: sid, taskId: this.taskId,
+                variant: 'compact' as const, message: COMPACTING_MESSAGE, progress: true,
+              }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+            }
           } else if (sys.subtype === 'compact_boundary') {
-            const meta = sys.compact_metadata as { trigger?: string; pre_tokens?: number } | undefined
-            const pre = meta?.pre_tokens
-            bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
-              sessionId: sid, taskId: this.taskId,
-              variant: 'compact' as const, message: 'Context compacted',
-              detail: pre ? `${Math.round(pre / 1000)}K tokens` : undefined,
-            }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+            // Only the FIRST sighting of this line does anything. A replayed tail
+            // would otherwise add a second outcome row AND re-run the CLI query
+            // below for a number we already have. (The dedup CANNOT live in the
+            // branch condition: a falling-through `compact_boundary` reaches the
+            // unknown-subtype catch-all and surfaces as a raw "compact_boundary"
+            // notice — worse than the duplicate it was meant to prevent.)
+            const firstBoundary = firstSightingOfLine(this._seenCompactionLineUuids, sys.uuid)
+            this._compactionNoticeOpen = false
+            // canonical JSONL uses compactMetadata/preTokens; the CLI's stream-json
+            // stdout (what the daemon stream files hold) uses compact_metadata/pre_tokens.
+            const meta = sys.compact_metadata as { trigger?: string; pre_tokens?: number; post_tokens?: number } | undefined
+            if (firstBoundary) {
+              bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+                sessionId: sid, taskId: this.taskId,
+                variant: 'compact' as const, message: COMPACTED_MESSAGE,
+                detail: compactedDetail({
+                  trigger: meta?.trigger, preTokens: meta?.pre_tokens, postTokens: meta?.post_tokens,
+                }),
+              }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+            }
             // Post-compact authoritative usage pull (ACP Phase 2): the badge's
             // context% still shows the PRE-compact numerator until the next
             // assistant usage arrives — which on an idle session is never. Ask
             // the CLI directly (same source as /context) and push the corrected
             // figure. Fire-and-forget: an unreadable CLI keeps the stale badge,
             // strictly no worse than before.
-            void this.getContextUsage().then((cu) => {
+            if (firstBoundary) void this.getContextUsage().then((cu) => {
               if (!cu || cu.totalTokens == null || !this.claudeSessionId) return
               if (cu.maxTokens && cu.maxTokens > 0) this._cliContextWindow = cu.maxTokens
               const { window: windowSize, autoCompactAt } = this.contextLimits(cu.totalTokens)

@@ -21,6 +21,13 @@ still live on the client.
 - Frontend accumulation semantics live in ONE place: `web/src/stream/stream-reducer.ts` (pure
   functions). The server buffer (`src/web/session-stream-buffer.ts`) is its only twin — keep
   them semantically aligned when touching either.
+- **ONE compaction is ONE row** (`src/core/stream/compaction-notice.ts`, shared by the reducer,
+  the server buffer and the history parser). `status: compacting` is a 30s transport keep-alive
+  the CLI re-emits for a compaction that runs minutes, so its repeats collapse into the
+  placeholder already on screen and the boundary REPLACES that placeholder in place. This is the
+  one sanctioned exception to append-only: it swaps a system PLACEHOLDER for its own outcome at
+  the same index, so no model output is touched and array indices (the render identities) do not
+  shift. Never extend it to text/thinking/tool blocks.
 - Optimistic bubble dedup is two-tier (`optimistic-dedup.ts`): non-committed messages only dedup
   against history since the turn watermark; committed against all. Id-first
   (`walnutMessageId`), then count-based multiset text matching.

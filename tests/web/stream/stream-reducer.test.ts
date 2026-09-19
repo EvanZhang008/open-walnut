@@ -400,6 +400,61 @@ describe('appendSystemBlock', () => {
     const blocks = appendSystemBlock([], { variant: 'compact', message: 'Compacted', detail: 'ctx' });
     expect(blocks[0]).toEqual({ type: 'system', variant: 'compact', message: 'Compacted', detail: 'ctx' });
   });
+
+  /**
+   * The reported shape (2026-09-18): five "Compacting context..." rows above one
+   * result. Those five are ONE compaction — the CLI re-emits the status every 30s
+   * as a transport keep-alive and an auto-compaction runs minutes. The rule lives
+   * in `@open-walnut/compaction-notice`; these pin the reducer half of it.
+   */
+  const COMPACTING = { variant: 'compact' as const, message: 'Compacting context...', progress: true };
+  const COMPACTED = { variant: 'compact' as const, message: 'Context compacted', detail: '444K → 45K tokens · auto' };
+
+  it('five keep-alives and a boundary render ONE row — the outcome', () => {
+    let blocks: StreamingBlock[] = [text('working on it', 'msg_1')];
+    for (let i = 0; i < 5; i++) blocks = appendSystemBlock(blocks, COMPACTING);
+    expect(blocks.filter((b) => b.type === 'system')).toHaveLength(1);
+
+    blocks = appendSystemBlock(blocks, COMPACTED);
+    expect(blocks).toEqual([
+      { type: 'text', content: 'working on it', msgId: 'msg_1' },
+      { type: 'system', variant: 'compact', message: 'Context compacted', detail: '444K → 45K tokens · auto' },
+    ]);
+  });
+
+  it('the outcome lands where the placeholder was, not at the tail', () => {
+    let blocks: StreamingBlock[] = [text('before', 'msg_1')];
+    blocks = appendSystemBlock(blocks, COMPACTING);
+    blocks = [...blocks, text('after', 'msg_2')];
+    blocks = appendSystemBlock(blocks, COMPACTED);
+    expect(blocks.map((b) => b.type)).toEqual(['text', 'system', 'text']);
+    expect((blocks[1] as { message: string }).message).toBe('Context compacted');
+  });
+
+  it('a replayed boundary (daemon reattach) does not add a second outcome row', () => {
+    let blocks = appendSystemBlock([], COMPACTING);
+    blocks = appendSystemBlock(blocks, COMPACTED);
+    blocks = appendSystemBlock(blocks, COMPACTED);
+    blocks = appendSystemBlock(blocks, COMPACTING);   // the replayed status line too
+    expect(blocks).toHaveLength(1);
+  });
+
+  it('a second real compaction gets its own row', () => {
+    let blocks = appendSystemBlock([], COMPACTING);
+    blocks = appendSystemBlock(blocks, COMPACTED);
+    blocks = [...blocks, text('continuing', 'msg_2')];
+    blocks = appendSystemBlock(blocks, COMPACTING);
+    blocks = appendSystemBlock(blocks, { ...COMPACTED, detail: '612K → 47K tokens · auto' });
+    expect(blocks.filter((b) => b.type === 'system')).toHaveLength(2);
+  });
+
+  it('errors and infos never collapse — a retry loop must show every attempt', () => {
+    let blocks = appendSystemBlock([], { variant: 'error', message: 'API error: ECONNRESET' });
+    blocks = appendSystemBlock(blocks, { variant: 'error', message: 'API error: ECONNRESET' });
+    blocks = appendSystemBlock(blocks, { variant: 'info', message: 'Upstream retry 1/3' });
+    blocks = appendSystemBlock(blocks, { variant: 'info', message: 'Upstream retry 1/3' });
+    expect(blocks).toHaveLength(4);
+  });
 });
 
 /**

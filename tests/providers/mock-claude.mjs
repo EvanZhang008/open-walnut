@@ -357,6 +357,66 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.-2. "compaction-test[:<keepAliveCount>[:<gapMs>]]" — an AUTO-COMPACTION
+    //        exactly as the real CLI streams one (shapes copied from this machine's
+    //        stream files, 2026-09-18):
+    //          text → status{compacting} × N → compact_boundary → text → result
+    //        N defaults to 5 because `status: compacting` is a 30-SECOND TRANSPORT
+    //        KEEP-ALIVE the CLI re-emits for the whole compaction, and a real
+    //        auto-compaction runs 147-539s. All N must collapse into ONE timeline
+    //        row that ends as the outcome (the reported bug rendered all six).
+    //
+    //        gapMs stretches the keep-alives over real time, which is the only way
+    //        a spec can watch the LIVE reducer hold one placeholder across repeats:
+    //        emitted in one burst, the whole compaction is over before the browser
+    //        paints and only the history parser gets tested.
+    if (effectiveMessage.startsWith('compaction-test')) {
+      // Parse the numbers with an anchored regex, NOT split(':'): the delivered
+      // message carries trailing decoration (the "[Rich output mode enabled…]"
+      // suffix), which made `Number(gapArg)` NaN → every keep-alive fired in one
+      // burst → the spec could only ever see the finished state.
+      const args = effectiveMessage.match(/^compaction-test(?::(\d+))?(?::(\d+))?/);
+      const keepAlives = Number(args?.[1]) || 5;
+      const gapMs = Number(args?.[2]) || 0;
+      const sid = outputSessionId;
+      const emit = (line) => {
+        if (line.type === 'assistant') persistMockTurn(sid, effectiveMessage, line);
+        process.stdout.write(JSON.stringify(line) + '\n');
+      };
+      const say = (id, text) => emit({ type: 'assistant', session_id: sid, message: {
+        id, type: 'message', role: 'assistant', model: 'mock-model',
+        content: [{ type: 'text', text }], stop_reason: 'end_turn',
+        usage: { input_tokens: 400000, output_tokens: 12 },
+      } });
+      const finish = () => {
+        emit({ type: 'system', subtype: 'compact_boundary', session_id: sid, uuid: 'mock-boundary-1',
+          compact_metadata: {
+            trigger: 'auto', pre_tokens: 443847, post_tokens: 49108,
+            cumulative_dropped_tokens: 17494300, duration_ms: 181769,
+          } });
+        say('msg_postcompact', 'Compaction done; carrying on with the task.');
+        emit({ type: 'result', subtype: 'success', is_error: false, session_id: sid,
+          result: 'Compaction done; carrying on with the task.', num_turns: 2,
+          total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 49108, output_tokens: 12 },
+        });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      };
+      emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+      say('msg_precompact', 'Context is nearly full; compacting before I continue.');
+      const keepAlive = (i) => emit({
+        type: 'system', subtype: 'status', status: 'compacting', session_id: sid, uuid: `mock-ka-${i}`,
+      });
+      if (gapMs <= 0) {
+        for (let i = 0; i < keepAlives; i++) keepAlive(i);
+        finish();
+      } else {
+        for (let i = 0; i < keepAlives; i++) setTimeout(() => keepAlive(i), gapMs * (i + 1));
+        setTimeout(finish, gapMs * (keepAlives + 2));
+      }
+      return;
+    }
+
     // 2a.-1. "snapshot-clean-turn[:<text>]" — ONE clean turn then STAY ALIVE
     //         (real FIFO-mode CLI behavior), so the daemon's fold sees the
     //         canonical settle sequence and the session converges to idle

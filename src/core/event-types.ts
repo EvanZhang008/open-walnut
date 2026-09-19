@@ -413,6 +413,10 @@ export interface SessionSystemEventPayload {
   variant: 'compact' | 'error' | 'info';
   message: string;
   detail?: string;
+  /** This notice is a PLACEHOLDER for work still running, not an outcome. The
+   *  outcome that follows replaces it in place instead of stacking a second row
+   *  (`src/core/stream/compaction-notice.ts`). Only compaction uses it today. */
+  progress?: boolean;
 }
 
 /**

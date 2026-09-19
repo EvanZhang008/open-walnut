@@ -10,6 +10,7 @@
 
 import { log } from '../logging/index.js'
 import { splitPendingMarkup } from '../core/stream/pending-markup.js'
+import { placeSystemRow } from '../core/stream/compaction-notice.js'
 
 // ── Types (mirror the frontend StreamingBlock types) ──
 
@@ -336,13 +337,26 @@ class SessionStreamBuffer {
     }
   }
 
-  appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string): void {
+  appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string, progress?: boolean): void {
     const entry = this.getOrCreate(sessionId)
     this.resetIfTurnEnded(entry, sessionId)
+    const row: StreamingSystemBlock = {
+      type: 'system', variant, message,
+      ...(detail ? { detail } : {}), ...(progress ? { progress: true } : {}),
+    }
+    // ONE compaction = ONE row, same rule the browser reducer applies — a snapshot
+    // must not hand a reconnecting client the pile the live stream just avoided.
+    const placement = placeSystemRow(entry.blocks, row)
+    if (placement.action === 'drop') return
+    if (placement.action === 'replace') {
+      entry.blocks[placement.index] = row
+      this.touch(entry)
+      return
+    }
     this.carryPendingMarkup(entry)  // card breaks text flow; an unfinished tag rides across
     entry.thinkingAccumulator = ''
     this.touch(entry)
-    entry.blocks.push({ type: 'system', variant, message, ...(detail ? { detail } : {}) } as StreamingSystemBlock)
+    entry.blocks.push(row)
   }
 
   /** Accumulate thinking text deltas (model's reasoning, gated behind thinking mode). */

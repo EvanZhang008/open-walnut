@@ -28,6 +28,7 @@ import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workfl
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
 import { toDisplayedUserText } from './sessions/reference-cards.js';
 import { cutEnd } from './text-cut.js';
+import { compactedHistoryText } from './stream/compaction-notice.js';
 import { computeRewindDeadSet, queueEnqueueKey, type SkippedRewindCut } from './transcript-chain.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
@@ -1086,12 +1087,16 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
         // canonical JSONL uses compactMetadata/preTokens; the CLI's stream-json
         // stdout (daemon stream files) uses compact_metadata/pre_tokens.
         const r = raw as {
-          compactMetadata?: { trigger?: string; preTokens?: number };
-          compact_metadata?: { trigger?: string; pre_tokens?: number };
+          compactMetadata?: { trigger?: string; preTokens?: number; postTokens?: number };
+          compact_metadata?: { trigger?: string; pre_tokens?: number; post_tokens?: number };
         };
-        const trigger = r.compactMetadata?.trigger ?? r.compact_metadata?.trigger;
-        const pre = r.compactMetadata?.preTokens ?? r.compact_metadata?.pre_tokens;
-        sysText = `Context compacted${pre ? ` (${Math.round(pre / 1000)}K tokens)` : ''}${trigger === 'auto' ? ' · auto' : ''}`;
+        // Same text the live row settles on (compaction-notice.ts owns the wording),
+        // so a reload doesn't rename or re-explain the event.
+        sysText = compactedHistoryText({
+          trigger: r.compactMetadata?.trigger ?? r.compact_metadata?.trigger,
+          preTokens: r.compactMetadata?.preTokens ?? r.compact_metadata?.pre_tokens,
+          postTokens: r.compactMetadata?.postTokens ?? r.compact_metadata?.post_tokens,
+        });
         sysVariant = 'compact';
       } else if (sub === 'api_error') {
         const err = (raw as { error?: { formatted?: string; message?: string } }).error;

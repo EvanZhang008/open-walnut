@@ -3162,9 +3162,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:system-event') {
-      const { sessionId, variant, message, detail } = eventData<'session:system-event'>(event)
+      const { sessionId, variant, message, detail, progress } = eventData<'session:system-event'>(event)
       if (sessionId) {
-        sessionStreamBuffer.appendSystem(sessionId, variant, message, detail)
+        sessionStreamBuffer.appendSystem(sessionId, variant, message, detail, progress)
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:background-tasks') {

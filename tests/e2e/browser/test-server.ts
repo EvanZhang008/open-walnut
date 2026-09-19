@@ -527,6 +527,26 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Auto-compaction fixture. Its OWN task so the spec starts exactly one
+        // mock-CLI session and counts rows in an otherwise empty timeline.
+        id: 'pw-task-compaction',
+        title: 'Compaction fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Session-envelope provenance card fixture. Its OWN task, so the spec can
         // open exactly one session from the kebab (pw-task-001 owns hundreds).
         id: 'pw-task-provenance',
