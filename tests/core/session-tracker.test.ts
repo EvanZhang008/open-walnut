@@ -209,6 +209,96 @@ describe('createSessionRecord', () => {
     expect(second.lastActiveAt).toBe(first.lastActiveAt);
   });
 
+  it.each(['idle', 'running'] as const)('releases a %s reservation when the confirmed PID is persisted', async (status) => {
+    await createSessionRecord('reserved', 'task-1', 'proj', undefined, {
+      initialProcessStatus: status, initialStatusReason: 'awaiting_spawn',
+    });
+    const started = await createSessionRecord('reserved', 'task-1', 'proj', undefined, { pid: 4242 });
+    expect(started).toMatchObject({ pid: 4242, process_status: 'running', status_reason: 'session_started', status_changed_by: 'session-runner' });
+    closeDb();
+    _resetSessionTrackerForTesting();
+    expect(await getSessionByClaudeId('reserved')).toMatchObject({ pid: 4242, status_reason: 'session_started' });
+  });
+
+  it('releases an already-persisted PID reservation even when every other field matches', async () => {
+    await createSessionRecord('reserved-existing-pid', 'task-1', 'proj', undefined, {
+      pid: 4242, initialProcessStatus: 'running', initialStatusReason: 'awaiting_spawn',
+    });
+    const started = await createSessionRecord('reserved-existing-pid', 'task-1', 'proj', undefined, { pid: 4242 });
+    expect(started.status_reason).toBe('session_started');
+    expect(await createSessionRecord('reserved-existing-pid', 'task-1', 'proj', undefined, { pid: 4242 })).toEqual(started);
+  });
+
+  it('keeps an init-only reservation idle when its PID arrives', async () => {
+    await createSessionRecord('reserved-parked', 'task-1', 'proj', undefined, {
+      initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    });
+    expect(await createSessionRecord('reserved-parked', 'task-1', 'proj', undefined, {
+      pid: 4242, initialProcessStatus: 'idle',
+    })).toMatchObject({ pid: 4242, process_status: 'idle', status_reason: 'session_started' });
+  });
+
+  it('metadata without a confirmed PID cannot release a reservation', async () => {
+    await createSessionRecord('reserved-no-pid', 'task-1', 'proj', undefined, {
+      initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    });
+    expect(await createSessionRecord('reserved-no-pid', 'task-1', 'proj', undefined, { mode: 'plan' }))
+      .toMatchObject({ process_status: 'idle', status_reason: 'awaiting_spawn' });
+  });
+
+  it.each(['turn_completed', 'user_stopped', 'message_sent'] as const)(
+    'a repeated PID persist preserves the newer %s state', async (reason) => {
+      await createSessionRecord('reserved-newer', 'task-1', 'proj', undefined, {
+        pid: 4242, initialProcessStatus: 'running', initialStatusReason: 'awaiting_spawn',
+      });
+      const status = reason === 'user_stopped' ? 'stopped' : reason === 'turn_completed' ? 'idle' : 'running';
+      await updateSessionRecord('reserved-newer', {
+        process_status: status, status_reason: reason, status_changed_by: reason === 'user_stopped' ? 'user' : 'session-runner',
+      });
+      expect(await createSessionRecord('reserved-newer', 'task-1', 'proj', undefined, { pid: 4242, cliModel: 'test-model' }))
+        .toMatchObject({ process_status: status, status_reason: reason });
+    },
+  );
+
+  it.each([undefined, 4242])('does not release an archived reservation with previous PID %s', async (pid) => {
+    await createSessionRecord('reserved-archived', 'task-1', 'proj', undefined, {
+      pid, initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    });
+    await updateSessionRecord('reserved-archived', { archived: true });
+    expect(await createSessionRecord('reserved-archived', 'task-1', 'proj', undefined, { pid: 4242, cliModel: 'test-model' }))
+      .toMatchObject({ archived: true, process_status: 'idle', status_reason: 'awaiting_spawn' });
+  });
+
+  it.each(['pending', 'confirmed'] as const)('does not release a reservation with a %s stop request', async (state) => {
+    await createSessionRecord('reserved-stop', 'task-1', 'proj', undefined, {
+      initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    });
+    await updateSessionRecord('reserved-stop', {
+      stopRequest: { id: 'stop-reservation', state, requestedAt: new Date().toISOString() },
+    });
+    expect(await createSessionRecord('reserved-stop', 'task-1', 'proj', undefined, { pid: 4242 }))
+      .toMatchObject({ process_status: 'idle', status_reason: 'awaiting_spawn', stopRequest: { state } });
+  });
+
+  it.each(['stopped', 'error'] as const)('does not reopen a %s reservation when its PID arrives late', async (status) => {
+    await createSessionRecord('reserved-terminal', 'task-1', 'proj', undefined, {
+      initialProcessStatus: status, initialStatusReason: 'awaiting_spawn',
+    });
+    expect(await createSessionRecord('reserved-terminal', 'task-1', 'proj', undefined, { pid: 4242 }))
+      .toMatchObject({ process_status: status, status_reason: 'awaiting_spawn' });
+  });
+
+  it('keeps a permission received before the init-only PID persist visible', async () => {
+    await createSessionRecord('reserved-permission', 'task-1', 'proj', undefined, {
+      initialProcessStatus: 'running', initialStatusReason: 'awaiting_spawn',
+    });
+    const permission = { requestId: 'permission-reservation', toolName: 'Bash', input: {}, reason: 'Approval required' };
+    await updateSessionRecord('reserved-permission', { pendingPermission: permission });
+    expect(await createSessionRecord('reserved-permission', 'task-1', 'proj', undefined, {
+      pid: 4242, initialProcessStatus: 'idle',
+    })).toMatchObject({ process_status: 'running', status_reason: 'session_started', pendingPermission: permission });
+  });
+
   it('persists session to store', async () => {
     await createSessionRecord('claude-sess-2', 'task-1', 'proj');
     const sessions = await listSessions();

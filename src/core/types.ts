@@ -1996,6 +1996,7 @@ export interface SessionRecord {
   /** Auto-recover budget, persisted so a host in a reboot loop can't respawn a
    *  session forever (an in-memory counter resets with the server). */
   autoRecover?: SessionAutoRecoverState;
+  stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed'; error?: string };
   /** Why the last process_status change happened (K8s condition style). */
   status_reason?: StatusReason;
   /** Who triggered the last process_status change. */

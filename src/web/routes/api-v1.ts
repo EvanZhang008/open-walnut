@@ -669,12 +669,7 @@ const SPAWN_GRACE_MS = 2 * 60 * 1000
 /**
  * "The record exists but the CLI was never up, so there is nothing to read yet."
  *
- * Why ALL THREE record conditions: a successful spawn writes pid/outputFile but
- * NEVER rewrites status_reason — 'awaiting_spawn' lingers on the record until the
- * first turn completes. Gating on status_reason alone would keep reporting
- * "nothing yet" over a live, growing transcript for the whole first turn;
- * pid==null && !outputFile is the earliest visible spawn signal and the real
- * disengage latch.
+ * Older or stop-requested reservations may retain awaiting_spawn after launch; PID/output evidence keeps their transcript readable.
  *
  * Why the grace window: the persist that records pid/outputFile can fail (logged
  * as CRITICAL in claude-code-session) with the CLI alive and writing JSONL — an

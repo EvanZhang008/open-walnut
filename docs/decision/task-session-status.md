@@ -93,6 +93,12 @@ Tests must seed the durable watermark at the returned snapshot version. A fixtur
 
 Code: [`captureSnapshotReadGuard` and `applySnapshot`](../../src/core/session-snapshot-apply.ts), [`checkSnapshotPull` and `recoverInfraFailedSessions`](../../src/core/session-health-monitor.ts), and [`recoverDisconnectedSessions`](../../src/providers/daemon-connection.ts). Regressions: [`session-snapshot-pull-reexam.test.ts`](../../tests/core/session-snapshot-pull-reexam.test.ts), [`session-snapshot-apply.test.ts`](../../tests/core/session-snapshot-apply.test.ts), and [`session-health-monitor-autorecover-arming.test.ts`](../../tests/core/session-health-monitor-autorecover-arming.test.ts).
 
+### A confirmed spawn must release its reservation
+
+A seeded session starts with `awaiting_spawn`, which excludes it from snapshot intake. Persisting the real PID without clearing that reason leaves an executing first turn outside both push and pull projection. Release the reservation in the same locked upsert that records the confirmed PID, including an idempotent retry with an already-stored PID. An init-only spawn remains Idle; pending permission stays visible. Do not release archived, stopped, failed, or stop-requested reservations, and do not overwrite a newer reason from another lifecycle event.
+
+Code: [`createSessionRecord`](../../src/core/session-tracker.ts). Regressions: reservation cases in [`session-tracker.test.ts`](../../tests/core/session-tracker.test.ts), the first-turn pull case in [`session-snapshot-pull-reexam.test.ts`](../../tests/core/session-snapshot-pull-reexam.test.ts), and the reservation browser flow in [`session-hold-turn-subagents.spec.ts`](../../tests/e2e/browser/session-hold-turn-subagents.spec.ts). Seed the actual reservation before providing the PID; a test starting with an ordinary Running record cannot exercise this failure.
+
 ### FIFO markers must precede consumption, not merely acknowledgment
 
 Appending the user marker after a successful send lets a fast CLI answer before the turn-start marker exists. Appending first and truncating on failure is also unsafe: concurrent CLI output may already follow the marker, so truncation would delete real history.

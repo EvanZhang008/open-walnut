@@ -64,25 +64,8 @@ export function mintSideThreadId(): string {
   return `sth-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 }
 
-/**
- * Does this record's transcript exist yet? A fork's id appears in no JSONL until
- * its FIRST real turn, so `--resume`ing it dies with "No conversation found"
- * (lane-fork.ts applies the same rule using the conversation's messageCount,
- * which only exists for chat lanes).
- *
- * Deliberately requires POSITIVE evidence of never-turned: a wrong "never
- * turned" verdict would silently fork from the GRANDparent and lose the
- * parent's turns. `awaiting_spawn` = the record was seeded and no CLI ever ran;
- * otherwise a session that reached a CLI has a pid or an output file, and one
- * that processed a stream event has a consumed watermark.
- */
 function neverTurned(r: SessionRecord): boolean {
-  // NOTE: `status_reason === 'awaiting_spawn'` alone is NOT enough — a
-  // successful spawn writes pid/outputFile but never rewrites status_reason,
-  // so it lingers through the parent's whole first turn (see api-v1.ts, which
-  // applies the same three-way rule). Judging by it alone made every
-  // first-turn parent look unforkable (false 409) or, worse, silently forked
-  // from the GRANDparent. The spawn evidence must be absent too.
+  // A stale reservation reason must not fork from the grandparent; require absent spawn evidence, as in api-v1.ts.
   return r.consumedOffset === undefined && r.pid == null && !r.outputFile;
 }
 

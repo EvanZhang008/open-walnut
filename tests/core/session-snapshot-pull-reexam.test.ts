@@ -240,6 +240,35 @@ describe('checkSnapshotPull — re-examination eligibility', () => {
     expect(pulledSids()).toEqual([])
   })
 
+  it('admits a reserved session to snapshot pull after the confirmed spawn and settles its first turn', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'spawn-then-pull'
+    const monitor = new SessionHealthMonitor()
+    const reserved = await createSessionRecord(sid, '', 'proj', undefined, {
+      initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    })
+    await pull(monitor, [reserved])
+    expect(pulledSids()).toEqual([])
+
+    const started = await createSessionRecord(sid, '', 'proj', undefined, { pid: 4242 })
+    pooledConn = fakeConn({
+      ...IDLE_SNAP, v: 100, cliState: 'running', turnActive: true, lastResult: null,
+      pid: 4242, streamEpoch: 'spawn-epoch',
+    })
+    await pull(monitor, [started])
+    expect(pulledSids()).toEqual([sid])
+    const active = (await getSessionByClaudeId(sid))!
+    expect(active).toMatchObject({ process_status: 'running', status_reason: 'snapshot_projection', streamEpoch: 'spawn-epoch' })
+    expect(active.consumedOffset ?? -1).toBeLessThan(100)
+
+    livePullAt(monitor).set(sid, 0)
+    pooledConn = fakeConn({ ...IDLE_SNAP, pid: 4242, streamEpoch: 'spawn-epoch' })
+    await pull(monitor, [active])
+    expect(await getSessionByClaudeId(sid)).toMatchObject({
+      process_status: 'idle', status_reason: 'snapshot_projection', consumedOffset: IDLE_SNAP.v,
+    })
+  })
+
   it('mode off → no re-examination either', async () => {
     setSnapshotModeForTests('off')
     const monitor = new SessionHealthMonitor()

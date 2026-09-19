@@ -1113,7 +1113,10 @@ export async function createSessionRecord(
         // Detect whether anything material would actually change. Remote daemon replays
         // and resume paths can re-invoke persistSessionRecord() 9× with identical values;
         // skipping the write avoids starving readers on the write lock.
-        let materialChange = false;
+        const spawnConfirmed = existing.status_reason === 'awaiting_spawn'
+          && extra?.pid != null && !existing.archived && !existing.stopRequest
+          && (existing.process_status === 'idle' || existing.process_status === 'running');
+        let materialChange = spawnConfirmed;
         if (cwd && existing.cwd !== cwd) materialChange = true;
         if (extra?.pid != null && existing.pid !== extra.pid) materialChange = true;
         if (extra?.outputFile && existing.outputFile !== extra.outputFile) materialChange = true;
@@ -1156,7 +1159,16 @@ export async function createSessionRecord(
           // and the createSessionRecord overwrites agent_complete → in_progress.
           const pidChanged = extra.pid !== existing.pid;
           existing.pid = extra.pid;
-          if (pidChanged) {
+          if (spawnConfirmed) {
+            // Snapshot intake excludes reservations until the confirmed PID releases them.
+            existing.status_reason = 'session_started';
+            existing.status_changed_by = 'session-runner';
+            const status = existing.pendingPermission ? 'running' : extra.initialProcessStatus ?? 'running';
+            if (existing.process_status !== status) {
+              existing.process_status = status;
+              existing.last_status_change = now;
+            }
+          } else if (pidChanged && existing.status_reason !== 'awaiting_spawn') {
             if (existing.process_status !== 'running') {
               existing.process_status = 'running';
               existing.last_status_change = now;

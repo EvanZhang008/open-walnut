@@ -136,6 +136,72 @@ async function processStatus(page: Page, sessionId: string): Promise<string> {
   return ((await response.json()) as { session: { process_status: string } }).session.process_status
 }
 
+test('a spawned reservation joins snapshot tracking before its first turn ends', async ({ page }, testInfo) => {
+  const errors: string[] = []
+  const failedResponses: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('response', response => {
+    if (response.status() >= 400) failedResponses.push(`${response.status()} ${response.url()}`)
+  })
+  await openQuickStart(page)
+  const taskId = await sendQuickStart(page, 'slow:8000 snapshot-clean-turn:Reservation tracking verified')
+  const sessionId = await sessionIdForTask(page, taskId)
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
+  await expect(panel).toBeVisible()
+  const read = async () => {
+    const response = await page.request.get(`/api/sessions/${sessionId}`)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).session
+  }
+  await expect.poll(async () => (await read()).pid).toBeGreaterThan(1)
+  const started = await read()
+  expect(started.process_status).toBe('running')
+  expect(started.status_reason).not.toBe('awaiting_spawn')
+  const runningTask = await page.request.get(`/api/tasks/${taskId}`)
+  expect(runningTask.ok()).toBe(true)
+  const running = (await runningTask.json()).task
+  expect(running.phase).toBe('IN_PROGRESS')
+  await selectSection(page, running.focus_tier === 'focus' ? 'Focus' : 'Satellite')
+  const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
+  await expect(card).toBeVisible()
+  await expect(card).not.toHaveClass(/needs-action/)
+  await card.scrollIntoViewIfNeeded()
+  await expect(card).toBeInViewport()
+  await expect(panel.locator('.session-panel-badge')).toContainText('Running')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/reservation-${testInfo.project.name}-started.png` })
+
+  await expect.poll(async () => (await read()).process_status, { timeout: 20000 }).toBe('idle')
+  const settled = await read()
+  expect(settled.status_reason).not.toBe('awaiting_spawn')
+  expect(settled.consumedOffset).toBeGreaterThan(0)
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/tasks/${taskId}`)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).task.phase
+  }).toBe(sessionResultPhase('IN_PROGRESS'))
+  await expect(card).toHaveClass(/needs-action/)
+  await expect(panel.locator('.session-panel-badge')).toContainText('Idle')
+  await expect(panel.getByText('Reservation tracking verified', { exact: true }).first()).toBeVisible()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/reservation-${testInfo.project.name}-settled.png` })
+
+  const composer = panel.locator('.chat-input-textarea')
+  await composer.fill('slow:300 snapshot-clean-turn:Followup stayed on the original process')
+  await composer.press('Enter')
+  await expect(panel.getByText('Followup stayed on the original process', { exact: true }).first()).toBeVisible()
+  await expect.poll(async () => (await read()).process_status).toBe('idle')
+  expect((await read()).pid).toBe(started.pid)
+  await expect(card).toHaveClass(/needs-action/)
+  await expect(panel.locator('.rich-app-building')).toHaveCount(0)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/reservation-${testInfo.project.name}-followup.png` })
+  const evidence = JSON.stringify({ started, settled, final: await read(), failedResponses, errors,
+    scripts: await page.locator('script[src]').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))),
+  })
+  await fs.writeFile(`${SCREENSHOT_DIR}/reservation-${testInfo.project.name}-state.json`, evidence)
+  await testInfo.attach('reservation-state', { body: evidence, contentType: 'application/json' })
+  expect(failedResponses).toEqual([])
+  expect(errors).toEqual([])
+})
+
 test('a resumed background agent stays running until its new invocation ends', async ({ page }) => {
   await openQuickStart(page)
   const taskId = await sendQuickStart(page, 'resumed-background-agent-test')

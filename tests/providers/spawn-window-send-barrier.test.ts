@@ -17,9 +17,8 @@
  * The fix: `send()` publishes a `_spawnSettled` barrier before awaiting the
  * spawn; `awaitSpawn()` exposes it, and the delivery paths await it first.
  *
- * What's real: ClaudeCodeSession.send()'s spawn sequencing + awaitSpawn().
- * What's mocked: the transport (a deliberately SLOW start, so the window is
- * observable) and the session record persistence.
+ * What's real: ClaudeCodeSession.send(), awaitSpawn(), and isolated SQLite persistence.
+ * What's mocked: the transport and cwd pre-flight.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
@@ -49,6 +48,7 @@ vi.mock('../../src/providers/session-manager.js', () => ({
     stop: async () => { calls.push('stop'); },
     kill: () => { calls.push('kill'); },
     flushTail: () => {},
+    stopTail: () => {},
     startMonitoring: () => {},
     stopMonitoring: () => {},
     hasPipe: true,
@@ -67,6 +67,7 @@ vi.mock('../../src/utils/cwd-check.js', () => ({
 }));
 
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js';
+import * as tracker from '../../src/core/session-tracker.js';
 
 beforeEach(() => {
   calls.length = 0;
@@ -77,6 +78,9 @@ describe('spawn window — awaitSpawn() barrier', () => {
   it('a send during the spawn window waits instead of stopping the booting CLI', async () => {
     const session = new ClaudeCodeSession('task-spawn-window', 'Proj', 'claude');
     const preassignedSessionId = '11111111-2222-4333-8444-555555555555';
+    await tracker.createSessionRecord(preassignedSessionId, 'task-spawn-window', 'Proj', undefined, {
+      initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    });
 
     // Start a fresh session (fire-and-forget, like the real SESSION_START path).
     session.send(
@@ -109,6 +113,36 @@ describe('spawn window — awaitSpawn() barrier', () => {
     expect(calls).toContain('start:resolved');
     // Still exactly ONE spawn: the typed message rode the original process.
     expect(calls.filter((c) => c === 'start')).toHaveLength(1);
+    await session.sessionReady;
+    expect(await tracker.getSessionByClaudeId(preassignedSessionId)).toMatchObject({
+      pid: 4242, process_status: 'running', status_reason: 'session_started',
+    });
+    session.detach();
+  });
+
+  it('an init-only reserved spawn stays idle when the transport confirms its PID', async () => {
+    const session = new ClaudeCodeSession('task-spawn-parked', 'Proj', 'claude');
+    const preassignedSessionId = '33333333-4444-4555-8666-777777777777';
+    await tracker.createSessionRecord(preassignedSessionId, 'task-spawn-parked', 'Proj', undefined, {
+      initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    });
+    session.send(
+      '', '/tmp', undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, false, undefined, undefined, undefined,
+      undefined, { preassignedSessionId },
+    );
+    await vi.waitFor(() => expect(calls).toContain('start'));
+    releaseStart!();
+    await session.sessionReady;
+    try {
+      expect(await tracker.getSessionByClaudeId(preassignedSessionId)).toMatchObject({
+        pid: 4242, process_status: 'idle', status_reason: 'session_started',
+      });
+      expect(calls).not.toContain('stop');
+      expect(calls).not.toContain('kill');
+    } finally {
+      session.detach();
+    }
   });
 
   it('awaitSpawn() is a no-op once the transport is up', async () => {
