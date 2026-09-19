@@ -40,13 +40,45 @@ interface ReconcileState {
   lastFullPullCount: number;
   /** Last state file write. */
   updatedAt: string;
+  /** Full reconciles that threw since the last one that completed (absent on older files = 0). */
+  consecutiveFailures?: number;
+  /** ISO time of the most recent failed full reconcile; drives the retry backoff. */
+  lastFailureAt?: string;
 }
+
+/** What one `tick()` did, for the caller that owns the human's notifications. */
+export type ReconcileTickOutcome =
+  /** Not due this tick, or the plugin has no full pull. */
+  | { status: 'skipped' }
+  /** The pull came back but a safety guard refused to apply it. */
+  | { status: 'aborted'; reason: 'empty-result' | 'count-drop' }
+  /** Pulled, diffed and applied. `recovered` = this success ended a failure streak. */
+  | { status: 'completed'; recovered: boolean }
+  /** The pull or apply threw. `escalate` = the streak reached the human threshold. */
+  | { status: 'failed'; error: unknown; consecutiveFailures: number; escalate: boolean; retryInMs: number };
 
 // ── Scheduling config ──
 
 const FULL_RECONCILE_EPOCH = 60;       // After 60 deltas (~30 min at 30s interval)
 const FULL_RECONCILE_INTERVAL_MS = 30 * 60_000; // 30 minutes time-based fallback
 const DELTA_FAILURE_THRESHOLD = 3;     // Force full after 3 consecutive delta failures
+/**
+ * Consecutive failed full reconciles before the caller tells the human. One
+ * failed pull is almost always one Graph page timing out (2026-09-18: seven
+ * "full sync failed" cards in a week, each followed by a clean pull minutes
+ * later), and delta sync keeps running throughout, so the first failures are a
+ * warn in the log and nothing more. Same order as REFUSAL_ESCALATE_TICKS.
+ */
+export const FULL_RECONCILE_ESCALATE_FAILURES = 3;
+/** Retry wait after the 1st failure; doubles per failure, capped at the regular cadence. */
+const FULL_RECONCILE_RETRY_BASE_MS = 60_000;
+/** A fixture server may shrink the base (WALNUT_RECONCILE_RETRY_BASE_MS) so a test can
+ *  watch three failures land within seconds. Read per call, so a test that sets it
+ *  before its first tick is honoured even though this module loaded with the server. */
+function retryBaseMs(): number {
+  const override = Number(process.env.WALNUT_RECONCILE_RETRY_BASE_MS);
+  return Number.isFinite(override) && override > 0 ? override : FULL_RECONCILE_RETRY_BASE_MS;
+}
 const EMPTY_RESULT_MIN_RATIO = 0.1;    // Abort if result < 10% of last known count
 
 // ── Diff result types ──
@@ -181,6 +213,20 @@ interface ApplyOutcome {
  */
 const REFUSAL_ESCALATE_TICKS = 3;
 
+/** 2 min after the first failure, then 4, 8, 16, then the regular 30-min cadence. */
+export function failureBackoffMs(consecutiveFailures: number): number {
+  const doublings = Math.min(Math.max(consecutiveFailures, 1), 10);
+  return Math.min(FULL_RECONCILE_INTERVAL_MS, retryBaseMs() * 2 ** doublings);
+}
+
+function inFailureBackoff(state: ReconcileState, now: number = Date.now()): boolean {
+  const failures = state.consecutiveFailures ?? 0;
+  if (failures === 0 || !state.lastFailureAt) return false;
+  const failedAt = Date.parse(state.lastFailureAt);
+  if (Number.isNaN(failedAt)) return false;
+  return now - failedAt < failureBackoffMs(failures);
+}
+
 export class SyncReconciler {
   private stateCache = new Map<string, ReconcileState>();
   private isFirstTick = new Map<string, boolean>();
@@ -199,9 +245,9 @@ export class SyncReconciler {
     plugin: RegisteredPlugin,
     ctx: SyncPollContext,
     opts: { deltaFailed?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<ReconcileTickOutcome> {
     // Skip plugins that don't implement full reconciliation
-    if (!plugin.sync.fullPull || !plugin.sync.extractRemoteId) return;
+    if (!plugin.sync.fullPull || !plugin.sync.extractRemoteId) return { status: 'skipped' };
 
     const state = this.loadState(plugin.id);
 
@@ -218,7 +264,7 @@ export class SyncReconciler {
     const shouldReconcile = this.shouldRunFull(state, opts, first);
     if (!shouldReconcile) {
       this.saveState(plugin.id, state);
-      return;
+      return { status: 'skipped' };
     }
 
     log.web.info(`sync-reconciler: starting full reconcile`, { pluginId: plugin.id, trigger: this.getTriggerReason(state, opts, first) });
@@ -228,7 +274,7 @@ export class SyncReconciler {
       if (!pulled) {
         log.web.debug('sync-reconciler: fullPull returned null/undefined, skipping', { pluginId: plugin.id });
         this.saveState(plugin.id, state);
-        return;
+        return { status: 'skipped' };
       }
       // Retired `.metadata*` sentinel twins are dropped BEFORE the diff, not at
       // write time. addTasksBulk refuses them anyway, so leaving them in made
@@ -250,7 +296,7 @@ export class SyncReconciler {
           lastCount: state.lastFullPullCount,
         });
         this.saveState(plugin.id, state);
-        return;
+        return { status: 'aborted', reason: 'empty-result' };
       }
 
       // Safety guard: drastic drop in count
@@ -265,7 +311,7 @@ export class SyncReconciler {
           lastCount: state.lastFullPullCount,
         });
         this.saveState(plugin.id, state);
-        return;
+        return { status: 'aborted', reason: 'count-drop' };
       }
 
       // Run three-way diff
@@ -277,9 +323,12 @@ export class SyncReconciler {
       this.noteRefusals(plugin.id, outcome.refusals);
 
       // Update state on success
+      const recovered = (state.consecutiveFailures ?? 0) > 0;
       state.deltaEpoch = 0;
       state.lastFullReconcileAt = new Date().toISOString();
       state.lastFullPullCount = remoteItems.length;
+      state.consecutiveFailures = 0;
+      delete state.lastFailureAt;
       state.updatedAt = new Date().toISOString();
       this.saveState(plugin.id, state);
 
@@ -306,15 +355,42 @@ export class SyncReconciler {
         ...(refusedItems > 0
           ? { refusedItems, refusedProjects: [...outcome.refusals.keys()] }
           : {}),
+        ...(recovered ? { recoveredAfterFailures: true } : {}),
       });
+      return { status: 'completed', recovered };
     } catch (err) {
-      log.web.error('sync-reconciler: full reconcile failed', {
+      // The epoch is NOT reset (the reconcile is still owed); the streak and the
+      // failure time are, so the retry backs off instead of re-running an ~80-call
+      // full pull every 30s against a provider that just refused one.
+      const consecutiveFailures = (state.consecutiveFailures ?? 0) + 1;
+      state.consecutiveFailures = consecutiveFailures;
+      state.lastFailureAt = new Date().toISOString();
+      this.saveState(plugin.id, state);
+      const retryInMs = failureBackoffMs(consecutiveFailures);
+      const escalate = consecutiveFailures >= FULL_RECONCILE_ESCALATE_FAILURES;
+      // warn, never error: the log bridge turns every log.error into a card at
+      // once, which made a single timed-out page a red "full sync failed" card
+      // while the next pull, minutes later, was clean. The caller owns the card
+      // and raises it from `escalate`, on the same streak idea the delta loop uses.
+      log.web.warn('sync-reconciler: full reconcile failed', {
         pluginId: plugin.id,
         error: err instanceof Error ? err.message : String(err),
+        consecutiveFailures,
+        retryInMs,
+        ...(escalate ? { escalate } : {}),
       });
-      // Don't reset epoch — next tick will try again if threshold still met
-      this.saveState(plugin.id, state);
+      return { status: 'failed', error: err, consecutiveFailures, escalate, retryInMs };
     }
+  }
+
+  /**
+   * Whether this plugin's full reconcile is mid-streak: it failed and has not
+   * completed since (a tick skipped inside the backoff counts). The sync loop
+   * asks before retiring the plugin's cards on a delta-loop edge, so a full
+   * comparison that is still failing keeps its card up.
+   */
+  hasOpenFailureStreak(pluginId: string): boolean {
+    return (this.loadState(pluginId).consecutiveFailures ?? 0) > 0;
   }
 
   /** Reset state for a plugin (e.g. on server startup). */
@@ -329,7 +405,10 @@ export class SyncReconciler {
     opts: { deltaFailed?: boolean },
     isFirst: boolean,
   ): boolean {
+    // A fresh process tries at once: a restart is the one moment the backoff
+    // should not hold (it is how a deploy proves the fix).
     if (isFirst) return true;
+    if (inFailureBackoff(state)) return false;
     if (state.deltaEpoch >= FULL_RECONCILE_EPOCH) return true;
     if (opts.deltaFailed && state.deltaEpoch >= DELTA_FAILURE_THRESHOLD) return true;
 
@@ -345,6 +424,7 @@ export class SyncReconciler {
     isFirst: boolean,
   ): string {
     if (isFirst) return 'first_tick';
+    if ((state.consecutiveFailures ?? 0) > 0) return 'retry_after_failure';
     if (opts.deltaFailed && state.deltaEpoch >= DELTA_FAILURE_THRESHOLD) return 'delta_failures';
     if (state.deltaEpoch >= FULL_RECONCILE_EPOCH) return 'epoch_threshold';
     const elapsed = Date.now() - new Date(state.lastFullReconcileAt).getTime();

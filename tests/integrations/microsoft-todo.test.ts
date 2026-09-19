@@ -131,7 +131,14 @@ import {
   pushChecklistItem,
   deleteChecklistItem,
   clearListIdCache,
+  graphRequest,
+  graphRetryDelayMs,
+  parseRetryAfterMs,
+  fullPullAllTasks,
+  GRAPH_MAX_ATTEMPTS,
+  _setGraphRetrySleepForTesting,
 } from '../../src/integrations/microsoft-todo.js';
+import { afterEach } from 'vitest';
 
 // ── Helpers ──
 
@@ -2368,5 +2375,235 @@ describe('concurrent resolveListId dedup', () => {
     const task2 = makeTask({ id: 'task-2', project: 'Walnut-Idea' });
     await pushTask(task2);
     expect(fetchListsCount).toBe(2);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// graphRequest retry policy
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * One scripted transport step per https.request call. Unlike setupGraphResponses
+ * this can make a call hang until the socket timer fires, or fail at the socket,
+ * which is how the 2026-09-18 "full sync failed" cards were produced: one page
+ * of one list going quiet for 30s in an otherwise healthy ~80-call full pull.
+ */
+type TransportStep =
+  | { kind: 'response'; status?: number; body?: unknown; headers?: Record<string, string> }
+  | { kind: 'timeout' }
+  | { kind: 'socket-error'; code: string };
+
+/** Every socket-inactivity timer the transport armed (ms), for pinning the 30s. */
+const socketTimersArmed: number[] = [];
+
+function setupGraphTransport(steps: TransportStep[]) {
+  const calls: Array<{ method: string; path: string }> = [];
+  let idx = 0;
+  mockHttpsRequest.mockImplementation((options: { method: string; path: string }, callback: (res: EventEmitter & { statusCode: number; headers: Record<string, string> }) => void) => {
+    const step = steps[idx++] ?? { kind: 'response' as const, status: 200, body: {} };
+    calls.push({ method: options.method, path: options.path });
+    const handlers: Record<string, (...args: unknown[]) => void> = {};
+    const req = {
+      on: vi.fn((event: string, fn: (...args: unknown[]) => void) => { handlers[event] = fn; return req; }),
+      write: vi.fn(),
+      end: vi.fn(),
+      // The socket-inactivity timer: only a hanging step ever fires it.
+      setTimeout: vi.fn((ms: number, onTimeout: () => void) => {
+        socketTimersArmed.push(ms);
+        if (step.kind === 'timeout') process.nextTick(onTimeout);
+      }),
+      // destroy(err) surfaces as the request's 'error' event, as in node:https.
+      destroy: vi.fn((err: unknown) => { process.nextTick(() => handlers.error?.(err)); }),
+    };
+    if (step.kind === 'socket-error') {
+      process.nextTick(() => {
+        const err = new Error(step.code === 'ECONNRESET' ? 'socket hang up' : step.code) as Error & { code: string };
+        err.code = step.code;
+        handlers.error?.(err);
+      });
+    } else if (step.kind === 'response') {
+      process.nextTick(() => {
+        const res = new EventEmitter() as EventEmitter & { statusCode: number; headers: Record<string, string> };
+        res.statusCode = step.status ?? 200;
+        res.headers = step.headers ?? {};
+        callback(res);
+        res.emit('data', Buffer.from(JSON.stringify(step.body ?? {})));
+        res.emit('end');
+      });
+    }
+    return req;
+  });
+  return calls;
+}
+
+describe('graphRequest retry policy', () => {
+  let sleeps: number[];
+
+  beforeEach(() => {
+    sleeps = [];
+    socketTimersArmed.length = 0;
+    _setGraphRetrySleepForTesting(async (ms) => { sleeps.push(ms); });
+  });
+
+  afterEach(() => {
+    _setGraphRetrySleepForTesting(null);
+  });
+
+  it('a GET whose socket goes quiet is retried once the timer fires, and the second attempt answers', async () => {
+    const calls = setupGraphTransport([
+      { kind: 'timeout' },
+      { kind: 'response', body: { value: [{ id: 't1' }] } },
+    ]);
+
+    const out = await graphRequest<{ value: Array<{ id: string }> }>('tok', 'GET', '/me/todo/lists/L/tasks?$skip=100');
+
+    expect(out.value).toEqual([{ id: 't1' }]);
+    expect(calls).toHaveLength(2);
+    // https.request sees the versioned path: GRAPH_BASE carries `/v1.0`.
+    expect(calls.every((c) => c.method === 'GET' && c.path === '/v1.0/me/todo/lists/L/tasks?$skip=100')).toBe(true);
+    expect(sleeps).toEqual([1000]);
+    // Both attempts armed the 30s inactivity timer: the retry is a fresh request, not a longer wait.
+    expect(socketTimersArmed).toEqual([30_000, 30_000]);
+  });
+
+  it('retries a GET on a reset socket and on 502/503/504, backing off 1s then 3s', async () => {
+    const calls = setupGraphTransport([
+      { kind: 'socket-error', code: 'ECONNRESET' },
+      { kind: 'response', status: 503, body: { error: { code: 'UnknownError' } } },
+      { kind: 'response', body: { ok: true } },
+    ]);
+
+    await expect(graphRequest('tok', 'GET', '/me/todo/lists')).resolves.toEqual({ ok: true });
+    expect(calls).toHaveLength(3);
+    expect(sleeps).toEqual([1000, 3000]);
+  });
+
+  it('honours Retry-After on a 429 instead of the default backoff', async () => {
+    setupGraphTransport([
+      { kind: 'response', status: 429, body: {}, headers: { 'retry-after': '2' } },
+      { kind: 'response', body: { ok: true } },
+    ]);
+
+    await expect(graphRequest('tok', 'GET', '/me/todo/lists')).resolves.toEqual({ ok: true });
+    expect(sleeps).toEqual([2000]);
+  });
+
+  it('a Retry-After beyond the per-request cap fails fast: that wait belongs to the sync schedule', async () => {
+    const calls = setupGraphTransport([
+      { kind: 'response', status: 429, body: {}, headers: { 'retry-after': '120' } },
+    ]);
+
+    await expect(graphRequest('tok', 'GET', '/me/todo/lists')).rejects.toMatchObject({ status: 429, retryAfterMs: 120_000 });
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it('gives up after GRAPH_MAX_ATTEMPTS, keeping the original message and code and counting the attempts', async () => {
+    const calls = setupGraphTransport([
+      { kind: 'timeout' }, { kind: 'timeout' }, { kind: 'timeout' }, { kind: 'response', body: { never: true } },
+    ]);
+
+    const err = await graphRequest('tok', 'GET', '/me/todo/lists/L/tasks?$skip=100').catch((e: unknown) => e) as Error & { code?: string; attempts?: number };
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe(`Graph API GET /me/todo/lists/L/tasks?$skip=100 timed out after 30s (after ${GRAPH_MAX_ATTEMPTS} attempts)`);
+    expect(err.code).toBe('ETIMEDOUT');
+    expect(err.attempts).toBe(GRAPH_MAX_ATTEMPTS);
+    expect(calls).toHaveLength(GRAPH_MAX_ATTEMPTS);
+    expect(sleeps).toEqual([1000, 3000]);
+  });
+
+  it('a status error that exhausts its retries keeps status, body and Retry-After, and names the attempts AHEAD of the Graph body', async () => {
+    const body = { error: { code: 'ServiceUnavailable', message: 'try later' } };
+    setupGraphTransport([
+      { kind: 'response', status: 503, body, headers: { 'retry-after': '1' } },
+      { kind: 'response', status: 503, body, headers: { 'retry-after': '1' } },
+      { kind: 'response', status: 503, body, headers: { 'retry-after': '1' } },
+    ]);
+
+    const err = await graphRequest('tok', 'GET', '/me/todo/lists').catch((e: unknown) => e) as Error & { status?: number; body?: string; retryAfterMs?: number; attempts?: number };
+
+    // The card body is cut at 300 chars; a marker after a long Graph body would never be seen.
+    expect(err.message).toBe(`Graph API GET /me/todo/lists returned 503 (after 3 attempts): ${JSON.stringify(body)}`);
+    expect(err).toMatchObject({ status: 503, body: JSON.stringify(body), retryAfterMs: 1000, attempts: 3 });
+    expect(err.stack).toContain('Error: Graph API GET /me/todo/lists returned 503');
+    expect(sleeps).toEqual([1000, 1000]);
+  });
+
+  it('never retries a write: a POST that times out fails on the first attempt', async () => {
+    const calls = setupGraphTransport([{ kind: 'timeout' }, { kind: 'response', body: { id: 'created' } }]);
+
+    await expect(graphRequest('tok', 'POST', '/me/todo/lists', { displayName: 'X' })).rejects.toThrow(/timed out after 30s$/);
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it('definitive statuses are not retried and keep the exact message callers match on (404, 410, 401)', async () => {
+    for (const status of [404, 410, 401]) {
+      const calls = setupGraphTransport([{ kind: 'response', status, body: { error: { code: 'x' } } }]);
+      const err = await graphRequest('tok', 'GET', '/me/todo/lists/L/tasks/T').catch((e: unknown) => e) as Error & { status?: number };
+      expect(err.status).toBe(status);
+      expect(err.message).toBe(`Graph API GET /me/todo/lists/L/tasks/T returned ${status}: {"error":{"code":"x"}}`);
+      expect(calls).toHaveLength(1);
+    }
+    expect(sleeps).toEqual([]);
+  });
+
+  it('graphRetryDelayMs: the pure policy table', () => {
+    const timeout = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+    const status = (n: number, retryAfterMs?: number) => Object.assign(new Error('x'), { status: n, retryAfterMs });
+    expect(graphRetryDelayMs('GET', timeout, 1)).toBe(1000);
+    expect(graphRetryDelayMs('GET', timeout, 2)).toBe(3000);
+    expect(graphRetryDelayMs('GET', timeout, 3)).toBeNull();
+    expect(graphRetryDelayMs('PATCH', timeout, 1)).toBeNull();
+    expect(graphRetryDelayMs('DELETE', status(503), 1)).toBeNull();
+    expect(graphRetryDelayMs('GET', status(503), 1)).toBe(1000);
+    expect(graphRetryDelayMs('GET', status(429, 5000), 1)).toBe(5000);
+    expect(graphRetryDelayMs('GET', status(429, 0), 1)).toBe(250);
+    expect(graphRetryDelayMs('GET', status(429, 60_000), 1)).toBeNull();
+    expect(graphRetryDelayMs('GET', status(404), 1)).toBeNull();
+    expect(graphRetryDelayMs('GET', status(500), 1)).toBeNull();
+    expect(graphRetryDelayMs('GET', new Error('plain'), 1)).toBeNull();
+    expect(graphRetryDelayMs('GET', 'not an error', 1)).toBeNull();
+  });
+
+  it('parseRetryAfterMs reads delta-seconds and HTTP-dates, ignores junk', () => {
+    const now = Date.parse('2026-09-19T00:00:00Z');
+    expect(parseRetryAfterMs('7')).toBe(7000);
+    expect(parseRetryAfterMs(' 0 ')).toBe(0);
+    expect(parseRetryAfterMs('Sat, 19 Sep 2026 00:00:05 GMT', now)).toBe(5000);
+    expect(parseRetryAfterMs('Fri, 18 Sep 2026 23:59:00 GMT', now)).toBe(0);
+    expect(parseRetryAfterMs('soon')).toBeUndefined();
+    expect(parseRetryAfterMs(undefined)).toBeUndefined();
+  });
+
+  it('fullPullAllTasks survives one quiet page: the pull completes with every task of every list', async () => {
+    // The reported shape: list 1 pages, its second page (`$skip=100`) times out
+    // once; list 2 is fine. Before the retry this threw and the reconciler carded it.
+    const calls = setupGraphTransport([
+      { kind: 'response', body: { value: [
+        { id: 'list-a', displayName: 'Personal' },
+        { id: 'list-b', displayName: 'Work' },
+      ] } },
+      { kind: 'response', body: {
+        value: [makeMsTask({ id: 'a-1', title: 'A one' })],
+        '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/todo/lists/list-a/tasks?$skip=100',
+      } },
+      { kind: 'timeout' },
+      { kind: 'response', body: { value: [makeMsTask({ id: 'a-2', title: 'A two' })] } },
+      { kind: 'response', body: { value: [makeMsTask({ id: 'b-1', title: 'B one' })] } },
+    ]);
+
+    const pulled = await fullPullAllTasks();
+
+    expect(pulled.map((p) => p.remoteId).sort()).toEqual(['a-1', 'a-2', 'b-1']);
+    expect(calls.map((c) => c.path)).toEqual([
+      '/v1.0/me/todo/lists',
+      '/v1.0/me/todo/lists/list-a/tasks',
+      '/v1.0/me/todo/lists/list-a/tasks?$skip=100',
+      '/v1.0/me/todo/lists/list-a/tasks?$skip=100',
+      '/v1.0/me/todo/lists/list-b/tasks',
+    ]);
+    expect(sleeps).toEqual([1000]);
   });
 });

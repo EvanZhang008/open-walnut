@@ -380,6 +380,19 @@ describe('plugin sync families', () => {
     expect(out.message).toBe('7 sync attempts in a row have failed.');
   });
 
+  it('the full-comparison card the sync loop raises after repeated reconcile failures passes through whole', () => {
+    // server.ts publishes this from the reconciler's `escalate` outcome; the
+    // second sentence tells the human that regular sync is still running.
+    const out = humanizeErrorNotification({
+      title: 'Microsoft To-Do full sync keeps failing',
+      body: '3 full comparisons against Microsoft To-Do in a row did not finish: Graph API GET /me/todo/lists/L/tasks?$skip=100 timed out after 30s (after 3 attempts) Regular sync still runs; the full comparison retries on its own.',
+      recoveryKey: 'plugin:ms-todo',
+    });
+    expect(out.category).toBe('Ms Todo');
+    expect(out.title).toBe('Microsoft To-Do full sync keeps failing');
+    expect(out.message).toContain('Regular sync still runs; the full comparison retries on its own.');
+  });
+
   it('the sync loop\'s own connection notices pass through whole: title, and BOTH sentences of the body', () => {
     // publishErrorNotification path: recoveryKey names the plugin, no meta.
     const out = humanizeErrorNotification({

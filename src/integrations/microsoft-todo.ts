@@ -495,7 +495,117 @@ export async function getAccessToken(): Promise<string> {
 
 // -- HTTP helpers --
 
-export function graphRequest<T>(
+/**
+ * Transient failures a repeated GET is expected to get past. Microsoft's own
+ * guidance for Graph is to retry 429/503/504 with backoff and honour Retry-After;
+ * a socket that went quiet for 30s, or was reset mid-flight, is the same story at
+ * the transport layer. Only GETs retry here: a write that timed out may have
+ * landed, and the sync loop's retry schedule already owns re-pushing those.
+ *
+ * Why this exists: a full pull is one request per list plus one per extra page
+ * (~80 sequential calls on a 76-list account), so a per-request failure rate that
+ * is negligible for one call fails a third of full pulls (2026-09-18: seven "full
+ * sync failed" cards in a week, each a different `$skip` page timing out once,
+ * every one followed by a clean pull minutes later).
+ */
+const GRAPH_RETRY_STATUSES = new Set([429, 502, 503, 504]);
+const GRAPH_RETRY_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND']);
+const GRAPH_REQUEST_TIMEOUT_MS = 30_000;
+/** Attempts per GET, all told. */
+export const GRAPH_MAX_ATTEMPTS = 3;
+/** Wait before attempt 2, attempt 3 (a Retry-After header wins when Graph sends one). */
+const GRAPH_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000];
+/** A Retry-After longer than this is throttling for the caller's schedule to absorb,
+ *  not a per-request wait: hand the error back at once. */
+const GRAPH_RETRY_AFTER_CAP_MS = 20_000;
+/** A `Retry-After: 0` (or a past date) still gets a beat; a hot loop is never possible. */
+const GRAPH_RETRY_FLOOR_MS = 250;
+
+type GraphError = Error & { status?: number; body?: string; code?: string; retryAfterMs?: number; attempts?: number };
+
+let graphRetrySleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Tests only: observe or skip the waits between attempts. */
+export function _setGraphRetrySleepForTesting(sleep: ((ms: number) => Promise<void>) | null): void {
+  graphRetrySleep = sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+}
+
+/** `Retry-After` is either delta-seconds or an HTTP-date; anything unparseable is ignored. */
+export function parseRetryAfterMs(value: string | undefined, now: number = Date.now()): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, at - now);
+}
+
+/**
+ * How long to wait before trying `err` again, or null when it must not be retried:
+ * a non-GET, a definitive status (401/404/410/…), an unknown error shape, a
+ * Retry-After beyond the cap, or attempts exhausted.
+ */
+export function graphRetryDelayMs(method: string, err: unknown, attempt: number): number | null {
+  if (method !== 'GET' || attempt >= GRAPH_MAX_ATTEMPTS) return null;
+  if (!(err instanceof Error)) return null;
+  const e = err as GraphError;
+  const transient = (e.status !== undefined && GRAPH_RETRY_STATUSES.has(e.status))
+    || (e.status === undefined && e.code !== undefined && GRAPH_RETRY_CODES.has(e.code));
+  if (!transient) return null;
+  const fallback = GRAPH_RETRY_DELAYS_MS[Math.min(attempt - 1, GRAPH_RETRY_DELAYS_MS.length - 1)];
+  const wait = e.retryAfterMs ?? fallback;
+  if (wait > GRAPH_RETRY_AFTER_CAP_MS) return null;
+  return Math.max(wait, GRAPH_RETRY_FLOOR_MS);
+}
+
+/**
+ * Stamp the attempt count on the error about to escape, IN PLACE: the original
+ * keeps its stack, code, retryAfterMs and whatever a caller duck-types on it.
+ * The marker goes right after the status/timeout clause, ahead of a Graph error
+ * body that can run to hundreds of characters, so the human's card (cut at 300)
+ * still shows it. Callers' checks on ` 410` / `returned 404` are on statuses
+ * that never retry, so those messages are never touched.
+ */
+function markAttempts(err: GraphError, attempts: number): void {
+  err.attempts = attempts;
+  const marker = ` (after ${attempts} attempts)`;
+  const clause = /^(Graph API \S+ \S+ (?:returned \d+|timed out after \d+s))/.exec(err.message);
+  err.message = clause
+    ? `${clause[1]}${marker}${err.message.slice(clause[1].length)}`
+    : `${err.message}${marker}`;
+}
+
+export async function graphRequest<T>(
+  token: string,
+  method: string,
+  urlPath: string,
+  body?: unknown,
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await graphRequestOnce<T>(token, method, urlPath, body);
+    } catch (err) {
+      const delayMs = graphRetryDelayMs(method, err, attempt);
+      if (delayMs === null) {
+        if (attempt > 1 && err instanceof Error) markAttempts(err as GraphError, attempt);
+        throw err;
+      }
+      const e = err as GraphError;
+      log.web.warn('ms-todo: Graph request will be retried', {
+        method,
+        path: urlPath.replace(GRAPH_BASE, ''),
+        attempt,
+        maxAttempts: GRAPH_MAX_ATTEMPTS,
+        delayMs,
+        ...(e.status !== undefined ? { status: e.status } : {}),
+        ...(e.code !== undefined ? { code: e.code } : {}),
+      });
+      await graphRetrySleep(delayMs);
+    }
+  }
+}
+
+function graphRequestOnce<T>(
   token: string,
   method: string,
   urlPath: string,
@@ -539,16 +649,22 @@ export function graphRequest<T>(
           // missed in the first place.
           const err = new Error(
             `Graph API ${method} ${urlPath} returned ${res.statusCode}: ${data}`,
-          ) as Error & { status?: number; body?: string };
+          ) as GraphError;
           err.status = res.statusCode;
           err.body = data;
+          const retryAfter = res.headers?.['retry-after'];
+          const retryAfterMs = parseRetryAfterMs(Array.isArray(retryAfter) ? retryAfter[0] : retryAfter);
+          if (retryAfterMs !== undefined) err.retryAfterMs = retryAfterMs;
           reject(err);
         }
       });
     });
 
-    req.setTimeout(30_000, () => {
-      req.destroy(new Error(`Graph API ${method} ${urlPath} timed out after 30s`));
+    req.setTimeout(GRAPH_REQUEST_TIMEOUT_MS, () => {
+      // Tagged like the socket error it is, so the retry policy sees one shape.
+      const err = new Error(`Graph API ${method} ${urlPath} timed out after 30s`) as GraphError;
+      err.code = 'ETIMEDOUT';
+      req.destroy(err);
     });
     req.on('error', reject);
     if (postData) req.write(postData);

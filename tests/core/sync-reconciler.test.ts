@@ -24,7 +24,8 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 }));
 
 import { SYNC_DIR, WALNUT_HOME } from '../../src/constants.js';
-import { SyncReconciler } from '../../src/core/sync-reconciler.js';
+import { SyncReconciler, FULL_RECONCILE_ESCALATE_FAILURES, failureBackoffMs } from '../../src/core/sync-reconciler.js';
+import { log } from '../../src/logging/index.js';
 import {
   _resetForTesting,
   addTasksBulk,
@@ -769,6 +770,186 @@ describe('SyncReconciler', () => {
       const afterSecond = (await listTasks()).find((t) => t.id === 'stale-row')!;
       expect(afterSecond.title).toBe('New title');
       expect(afterSecond._syncedAt).toBe(remoteEditTime);
+    });
+  });
+
+  describe('failure policy', () => {
+    // One failed full pull is almost always one Graph page timing out; the log
+    // bridge cards every log.error at once, so the reconciler must stay at warn,
+    // keep the streak itself, back off, and hand the decision to the caller.
+    const stateFile = () => `${SYNC_DIR as string}/reconcile-test-plugin.json`;
+    const readState = () => JSON.parse(fs.readFileSync(stateFile(), 'utf-8'));
+    const graphTimeout = () => new Error('Graph API GET /me/todo/lists/L/tasks?$skip=100 timed out after 30s (after 3 attempts)');
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('a failed full pull is a warn-level outcome, not an error: the streak is persisted, escalate is off', async () => {
+      const warn = vi.spyOn(log.web, 'warn');
+      const error = vi.spyOn(log.web, 'error');
+      const plugin = makePlugin();
+      (plugin.sync.fullPull as any).mockRejectedValue(graphTimeout());
+
+      const outcome = await reconciler.tick(plugin, makeCtx([]));
+
+      expect(outcome).toMatchObject({ status: 'failed', consecutiveFailures: 1, escalate: false, retryInMs: failureBackoffMs(1) });
+      expect((outcome as any).error.message).toMatch(/timed out after 30s/);
+      expect(error).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith('sync-reconciler: full reconcile failed', expect.objectContaining({
+        pluginId: 'test-plugin', consecutiveFailures: 1, retryInMs: failureBackoffMs(1),
+      }));
+      expect(readState()).toMatchObject({ consecutiveFailures: 1, deltaEpoch: 1 });
+      expect(typeof readState().lastFailureAt).toBe('string');
+    });
+
+    it('after a failure the next tick backs off instead of re-running the pull, then retries once the wait has elapsed', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-19T00:00:00Z'));
+      const plugin = makePlugin();
+      (plugin.sync.fullPull as any).mockRejectedValue(graphTimeout());
+      const ctx = makeCtx([]);
+
+      await reconciler.tick(plugin, ctx);
+      expect(plugin.sync.fullPull).toHaveBeenCalledTimes(1);
+
+      // The old behaviour: lastFullReconcileAt is still epoch 0, so "time elapsed"
+      // would re-run the ~80-call pull 30s later, and again, and again.
+      vi.setSystemTime(new Date('2026-09-19T00:00:35Z'));
+      expect(await reconciler.tick(plugin, ctx)).toEqual({ status: 'skipped' });
+      vi.setSystemTime(new Date('2026-09-19T00:01:59Z'));
+      expect(await reconciler.tick(plugin, ctx)).toEqual({ status: 'skipped' });
+      expect(plugin.sync.fullPull).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(new Date('2026-09-19T00:02:01Z'));
+      const second = await reconciler.tick(plugin, ctx);
+      expect(plugin.sync.fullPull).toHaveBeenCalledTimes(2);
+      expect(second).toMatchObject({ status: 'failed', consecutiveFailures: 2, retryInMs: failureBackoffMs(2) });
+    });
+
+    it('escalates on the FULL_RECONCILE_ESCALATE_FAILURES-th consecutive failure, with a doubling wait each time', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      let now = Date.parse('2026-09-19T00:00:00Z');
+      vi.setSystemTime(now);
+      const plugin = makePlugin();
+      (plugin.sync.fullPull as any).mockRejectedValue(graphTimeout());
+      const ctx = makeCtx([]);
+
+      const outcomes = [];
+      for (let i = 1; i <= FULL_RECONCILE_ESCALATE_FAILURES; i++) {
+        outcomes.push(await reconciler.tick(plugin, ctx));
+        now += failureBackoffMs(i) + 1000;
+        vi.setSystemTime(now);
+      }
+
+      expect(outcomes.map((o: any) => [o.consecutiveFailures, o.escalate, o.retryInMs])).toEqual([
+        [1, false, 2 * 60_000],
+        [2, false, 4 * 60_000],
+        [3, true, 8 * 60_000],
+      ]);
+    });
+
+    it('a pull that completes after failures reports recovered and clears the streak', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-19T00:00:00Z'));
+      const plugin = makePlugin();
+      (plugin.sync.fullPull as any).mockRejectedValueOnce(graphTimeout()).mockResolvedValue([]);
+      const ctx = makeCtx([]);
+
+      await reconciler.tick(plugin, ctx);
+      vi.setSystemTime(new Date('2026-09-19T00:03:00Z'));
+      const outcome = await reconciler.tick(plugin, ctx);
+
+      expect(outcome).toEqual({ status: 'completed', recovered: true });
+      const state = readState();
+      expect(state.consecutiveFailures).toBe(0);
+      expect(state).not.toHaveProperty('lastFailureAt');
+      expect(state.deltaEpoch).toBe(0);
+
+      // A clean pull with no streak behind it is not a recovery.
+      const reconciler2 = new SyncReconciler();
+      expect(await reconciler2.tick(makePlugin({ fullPullResult: [] }), ctx)).toEqual({ status: 'completed', recovered: false });
+    });
+
+    it('a fresh process ignores the backoff on its first tick (a restart is how a deploy proves the fix)', async () => {
+      fs.writeFileSync(stateFile(), JSON.stringify({
+        deltaEpoch: 4,
+        lastFullReconcileAt: new Date(0).toISOString(),
+        lastFullPullCount: 0,
+        updatedAt: new Date().toISOString(),
+        consecutiveFailures: 2,
+        lastFailureAt: new Date().toISOString(),
+      }));
+      const reconciler2 = new SyncReconciler();
+      const plugin = makePlugin({ fullPullResult: [] });
+
+      expect(await reconciler2.tick(plugin, makeCtx([]))).toEqual({ status: 'completed', recovered: true });
+      expect(plugin.sync.fullPull).toHaveBeenCalledTimes(1);
+    });
+
+    it('state files written before the streak existed load as a clean streak', async () => {
+      fs.writeFileSync(stateFile(), JSON.stringify({
+        deltaEpoch: 0,
+        lastFullReconcileAt: new Date(0).toISOString(),
+        lastFullPullCount: 3,
+        updatedAt: new Date().toISOString(),
+      }));
+      const reconciler2 = new SyncReconciler();
+      const plugin = makePlugin({ fullPullResult: [makeRemoteItem({ remoteId: 'r1' }), makeRemoteItem({ remoteId: 'r2' }), makeRemoteItem({ remoteId: 'r3' })] });
+
+      expect(await reconciler2.tick(plugin, makeCtx([]))).toEqual({ status: 'completed', recovered: false });
+      expect(readState().consecutiveFailures).toBe(0);
+    });
+
+    it('outcomes name the other non-runs: skipped when not due, aborted when a guard refuses the pull', async () => {
+      const plugin = makePlugin({ fullPullResult: [] });
+      const ctx = makeCtx([]);
+      await reconciler.tick(plugin, ctx);
+      expect(await reconciler.tick(plugin, ctx)).toEqual({ status: 'skipped' });
+
+      fs.writeFileSync(stateFile(), JSON.stringify({
+        deltaEpoch: 0,
+        lastFullReconcileAt: new Date(0).toISOString(),
+        lastFullPullCount: 20,
+        updatedAt: new Date().toISOString(),
+      }));
+      const reconciler2 = new SyncReconciler();
+      const guarded = await reconciler2.tick(makePlugin({ fullPullResult: [] }), makeCtx(await seedStore([
+        makeTask({ id: 'guarded-1', ext: { 'test-plugin': { remote_id: 'r1' } } }),
+      ])));
+      expect(guarded).toEqual({ status: 'aborted', reason: 'empty-result' });
+      // A guard refusal is neither success nor failure for the streak.
+      expect(readState().consecutiveFailures ?? 0).toBe(0);
+    });
+
+    it('hasOpenFailureStreak holds from the first failure through skipped ticks until a completion, across processes', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-19T00:00:00Z'));
+      const plugin = makePlugin();
+      (plugin.sync.fullPull as any).mockRejectedValueOnce(graphTimeout()).mockResolvedValue([]);
+      const ctx = makeCtx([]);
+
+      expect(reconciler.hasOpenFailureStreak('test-plugin')).toBe(false);
+      await reconciler.tick(plugin, ctx);
+      expect(reconciler.hasOpenFailureStreak('test-plugin')).toBe(true);
+
+      // Inside the backoff: the tick skips, and the streak is still open.
+      vi.setSystemTime(new Date('2026-09-19T00:00:30Z'));
+      expect(await reconciler.tick(plugin, ctx)).toEqual({ status: 'skipped' });
+      expect(reconciler.hasOpenFailureStreak('test-plugin')).toBe(true);
+      // A fresh instance reads the same answer off the state file.
+      expect(new SyncReconciler().hasOpenFailureStreak('test-plugin')).toBe(true);
+
+      vi.setSystemTime(new Date('2026-09-19T00:03:00Z'));
+      expect(await reconciler.tick(plugin, ctx)).toEqual({ status: 'completed', recovered: true });
+      expect(reconciler.hasOpenFailureStreak('test-plugin')).toBe(false);
+    });
+
+    it('failureBackoffMs doubles from two minutes and caps at the regular cadence', () => {
+      expect([0, 1, 2, 3, 4, 5, 6, 50].map(failureBackoffMs)).toEqual([
+        2 * 60_000, 2 * 60_000, 4 * 60_000, 8 * 60_000, 16 * 60_000, 30 * 60_000, 30 * 60_000, 30 * 60_000,
+      ]);
     });
   });
 });

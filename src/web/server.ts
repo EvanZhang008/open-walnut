@@ -81,7 +81,7 @@ import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, getPl
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, type ConnectionWatch } from '../core/plugin-sync-health.js'
-import { syncReconciler } from '../core/sync-reconciler.js'
+import { syncReconciler, type ReconcileTickOutcome } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { createPluginSourcesRouter } from './routes/plugin-sources.js'
 import { createPluginRuntimeRouter, defaultLinkedCheckoutOps } from './routes/plugin-runtime.js'
@@ -4801,6 +4801,7 @@ function startPluginSyncPolling(): void {
 
         // Call the plugin's syncPoll (delta pull)
         let deltaFailed = false
+        let reconcile: ReconcileTickOutcome = { status: 'skipped' }
         try {
           await plugin.sync.syncPoll(ctx)
         } catch (deltaErr) {
@@ -4809,13 +4810,34 @@ function startPluginSyncPolling(): void {
         } finally {
           // Step 3: Full reconciliation check (runs even if delta succeeded)
           try {
-            await syncReconciler.tick(plugin, ctx, { deltaFailed })
+            reconcile = await syncReconciler.tick(plugin, ctx, { deltaFailed })
           } catch (reconcileErr) {
             log.web.debug(`${plugin.id} reconciler tick failed`, {
               error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
             })
           }
         }
+        // The full comparison failing while delta sync works is its own condition,
+        // and it reaches here only on that shape (a failing delta throws past this).
+        // The reconciler keeps the streak and backs off; it logs a warn, never an
+        // error, so the log bridge cannot card the first timed-out page. ONE scope
+        // for the whole condition: seven different `$skip` pages of one list used to
+        // be seven cards.
+        if (reconcile.status === 'failed' && reconcile.escalate) {
+          const firstLine = (reconcile.error instanceof Error ? reconcile.error.message : String(reconcile.error))
+            .split('\n')[0].slice(0, 300)
+          const published = await publishErrorNotification({
+            title: `${plugin.name} full sync keeps failing`,
+            body: `${reconcile.consecutiveFailures} full comparisons against ${plugin.name} in a row did not finish: ${firstLine} `
+              + 'Regular sync still runs; the full comparison retries on its own.',
+            dedupScope: `plugin:${plugin.id}:reconcile`,
+            recoveryKey: `plugin:${plugin.id}`,
+          })
+          log.web[published ? 'warn' : 'debug'](`${plugin.id} sync: full reconcile repeating`, {
+            pluginId: plugin.id, consecutiveFailures: reconcile.consecutiveFailures, retryInMs: reconcile.retryInMs, error: firstLine,
+          })
+        }
+        const reconcileRecovered = reconcile.status === 'completed' && reconcile.recovered
         // A sync that completed is proof the plugin's whole condition (auth,
         // network, remote API) is healthy again — so this is where its wall of
         // red retires. Gated on the failure→success EDGE, plus the FIRST success of
@@ -4827,7 +4849,17 @@ function startPluginSyncPolling(): void {
         // Every record under this key retires at once, including the ones the
         // log bridge wrote from the plugin's own subsystem (its http client, the
         // sync reconciler) — they all carry `plugin:<id>`.
-        const recovered = consecutiveFailures > 0 || !recoveredOnce
+        // A full comparison that completes after failing is the same proof for its
+        // own card (and the whole key retires at once, so the delta-loop cards go too).
+        // One that is MID-STREAK (failed this tick, or skipped inside its backoff)
+        // is the opposite: the plugin is not whole, so no edge may retire anything
+        // now; a restart mid-streak would otherwise publish the reconcile card and
+        // stamp it recovered in the same tick, and a delta edge during the backoff
+        // would turn the card green while the full pull is still failing. The
+        // delta edge consumed here is not lost: a streak only ends with a
+        // completion, which publishes for the whole key.
+        const reconcileFailing = syncReconciler.hasOpenFailureStreak(plugin.id)
+        const recovered = (consecutiveFailures > 0 || !recoveredOnce || reconcileRecovered) && !reconcileFailing
         consecutiveFailures = 0
         recoveredOnce = true
         recordSyncSuccess(plugin.id)
