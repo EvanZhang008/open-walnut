@@ -19,11 +19,18 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  fetchMailboxNow,
   fetchSelectedFolder,
   loadMailMessages,
   selectMailbox,
 } from '../../web/src/apps/mail/mail-actions';
-import { __resetMailStore, getMailSnapshot, patch, selectionKey } from '../../web/src/apps/mail/mail-store';
+import {
+  __resetMailStore,
+  folderFetchFor,
+  getMailSnapshot,
+  patch,
+  selectionKey,
+} from '../../web/src/apps/mail/mail-store';
 import { readUnreadOnly, writeUnreadOnly } from '../../web/src/apps/mail/mail-unread-filter';
 
 const ACCOUNT = 'fake:one';
@@ -82,6 +89,11 @@ function mailboxRows() {
   ];
 }
 
+/** What this console is saying about ONE folder, which is now a map entry and not a slot. */
+function noteFor(mailboxId: string) {
+  return folderFetchFor(getMailSnapshot(), selectionKey({ accountId: ACCOUNT, mailboxId }));
+}
+
 function mailboxOf(url: string): string {
   return new URL(url, 'http://localhost').searchParams.get('mailbox') ?? '';
 }
@@ -108,7 +120,7 @@ beforeEach(() => {
   }));
   // The mailbox list is what the trigger reads, so it is seeded rather than fetched: this file
   // grades the fetch rule, not the console's boot sequence.
-  patch({ loaded: true, mailboxes: { [ACCOUNT]: mailboxRows() } });
+  patch({ loaded: true, mailboxes: { [ACCOUNT]: mailboxRows() as never } });
 });
 
 afterEach(() => {
@@ -134,7 +146,7 @@ describe('a folder with a size and no cached mail', () => {
     expect(fetchCalls()[0]!.body).toEqual({ accountId: ACCOUNT, mailboxId: UNFETCHED });
     expect(getMailSnapshot().messages[0]!.messageId).toBe('s-1');
     // Nothing left saying "fetching" over a list that has arrived.
-    expect(getMailSnapshot().folderFetch).toBeNull();
+    expect(noteFor(UNFETCHED)).toBeNull();
   });
 
   it('asks once, however many times the empty page is read', async () => {
@@ -158,7 +170,7 @@ describe('a folder with a size and no cached mail', () => {
     // An empty folder that HAS been polled is simply empty. Asking again is a round trip for an
     // answer nobody is waiting for, once per visit.
     expect(fetchCalls()).toEqual([]);
-    expect(getMailSnapshot().folderFetch).toBeNull();
+    expect(noteFor(FETCHED)).toBeNull();
   });
 
   it('is not asked for by the unread filter finding nothing', async () => {
@@ -200,8 +212,10 @@ describe('the answer to a fetch', () => {
     release();
     await inFlight;
 
-    // Nothing about the folder that was left is drawn over the folder that is here now.
-    expect(getMailSnapshot().folderFetch).toBeNull();
+    // Nothing about the folder that is here now, and the entry for the one that was left describes
+    // that folder alone: the outcome is keyed by folder, which is what lets a sidebar row be fetched
+    // without ever being selected.
+    expect(noteFor(FETCHED)).toBeNull();
   });
 
   it('says what went wrong, in the provider words, and can be asked again', async () => {
@@ -213,9 +227,12 @@ describe('the answer to a fetch', () => {
     selectMailbox(ACCOUNT, UNFETCHED);
     await fetchSelectedFolder();
 
-    expect(getMailSnapshot().folderFetch).toEqual({
+    // The plugin's own reason word rides along with its detail: the five outcomes do not mean the
+    // same thing to a person, and only this one is worth pressing again.
+    expect(noteFor(UNFETCHED)).toEqual({
       key: selectionKey({ accountId: ACCOUNT, mailboxId: UNFETCHED }),
       state: 'failed',
+      reason: 'failed',
       detail: 'The server answered NO: over quota',
     });
 
@@ -223,7 +240,7 @@ describe('the answer to a fetch', () => {
     fetchAnswer = { status: 200, body: { ok: true, fetched: true, added: 2 } };
     await fetchSelectedFolder();
     expect(fetchCalls()).toHaveLength(2);
-    expect(getMailSnapshot().folderFetch).toBeNull();
+    expect(noteFor(UNFETCHED)).toBeNull();
   });
 
   it('keeps saying "fetching" on a 202, because the rows are still coming', async () => {
@@ -234,7 +251,10 @@ describe('the answer to a fetch', () => {
     selectMailbox(ACCOUNT, UNFETCHED);
     await fetchSelectedFolder();
 
-    expect(getMailSnapshot().folderFetch).toEqual({ key: selectionKey({ accountId: ACCOUNT, mailboxId: UNFETCHED }), state: 'running' });
+    expect(noteFor(UNFETCHED)).toEqual({
+      key: selectionKey({ accountId: ACCOUNT, mailboxId: UNFETCHED }),
+      state: 'running',
+    });
   });
 
   it('is never asked for the virtual Drafts row, which is no provider folder', async () => {
@@ -242,5 +262,60 @@ describe('the answer to a fetch', () => {
     await fetchSelectedFolder();
 
     expect(fetchCalls()).toEqual([]);
+  });
+});
+
+describe('two folders asked for from the sidebar', () => {
+  it('each keep their own outcome, because the answers are keyed by folder', async () => {
+    // One slot made the second ask overwrite the first one's outcome: two rows, one sentence,
+    // describing whichever folder answered last.
+    fetchAnswer = { status: 200, body: { ok: true, fetched: false, reason: 'stopped' } };
+    await fetchMailboxNow(ACCOUNT, UNFETCHED);
+    fetchAnswer = { status: 202, body: { ok: true, fetched: false, running: true } };
+    await fetchMailboxNow(ACCOUNT, 'Receipts');
+
+    expect(noteFor(UNFETCHED)).toEqual({
+      key: selectionKey({ accountId: ACCOUNT, mailboxId: UNFETCHED }),
+      state: 'failed',
+      reason: 'stopped',
+    });
+    expect(noteFor('Receipts')).toEqual({
+      key: selectionKey({ accountId: ACCOUNT, mailboxId: 'Receipts' }),
+      state: 'running',
+    });
+    // A folder nobody asked about has nothing said about it.
+    expect(noteFor(FETCHED)).toBeNull();
+    expect(fetchCalls()).toHaveLength(2);
+  });
+});
+
+describe('a fetch asked for on a replica', () => {
+  it('answers with the replica reason, not with a failure to press again', async () => {
+    // Every write is refused with the same 503 on a replica, and the pane has a sentence of its own
+    // for it ("This copy of Walnut only reads mail."). Reported as `failed` it read as something that
+    // went wrong, with the provider's words run on after it, and invited a second press that cannot
+    // work. `detail` is dropped for the same reason: the sentence is complete.
+    fetchAnswer = { status: 503, body: { error: 'primary_only', message: 'Mail runs on your primary Walnut box.' } };
+
+    await fetchMailboxNow(ACCOUNT, UNFETCHED);
+
+    expect(noteFor(UNFETCHED)).toEqual({
+      key: selectionKey({ accountId: ACCOUNT, mailboxId: UNFETCHED }),
+      state: 'failed',
+      reason: 'replica',
+    });
+  });
+
+  it('still reports an ordinary refusal as a failure, with the words the provider sent', async () => {
+    fetchAnswer = { status: 500, body: { error: 'io', message: 'The mail server closed the connection.' } };
+
+    await fetchMailboxNow(ACCOUNT, UNFETCHED);
+
+    expect(noteFor(UNFETCHED)).toEqual({
+      key: selectionKey({ accountId: ACCOUNT, mailboxId: UNFETCHED }),
+      state: 'failed',
+      reason: 'failed',
+      detail: 'The mail server closed the connection.',
+    });
   });
 });

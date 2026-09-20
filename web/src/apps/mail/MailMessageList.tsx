@@ -7,43 +7,37 @@
  * provider knows about mail the cache never saw). Which one answered is on screen, because
  * "no results" means something different in each case.
  */
-import { useEffect, useState } from 'react';
-import type { MailAccountDto, MailMessageDto } from '@/api/mail';
-import { formatCount, formatMailTime, isUnread, rowRecipientLabel, senderLabel } from './mail-format';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import type { MailMessageDto } from '@/api/mail';
+import { formatCount, isUnread } from './mail-format';
 import {
   clearMailSearch,
-  fetchSelectedFolder,
   loadOlderMailMessages,
-  openMailMessage,
-  requestMailRefresh,
   runMailSearch,
   setMailUnreadOnly,
 } from './mail-actions';
 import {
+  clearMailRowNote,
   DRAFTS_MAILBOX,
   SMART_DRAFTS,
   SMART_ROLE,
   isSmartSelection,
-  selectionKey,
+  pairKey,
   serverDraftsMailbox,
   type MailSnapshot,
   type SmartMailboxId,
 } from './mail-store';
+import { accountsNotSyncing, degradedLine } from './mail-smart';
 import {
-  SMART_LABEL,
-  accountsNotSyncing,
-  degradedLine,
-  draftsRowCount,
-  draftsTotalCount,
-  smartPairs,
-  smartTotal,
-  smartUnread,
-  type SmartRole,
-} from './mail-smart';
-import { readUnreadOnly } from './mail-unread-filter';
+  heldRowsSentence, isStickyRow, readUnreadOnly, subscribeUnreadOnly, unreadChipLabel,
+} from './mail-unread-filter';
+import { sectionOf } from './mail-list-section';
+import { coveredBy, EmptyFolder } from './MailListEmptyStates';
+import { isOpenRow, MailRow } from './MailMessageRow';
+import { useMailRowContextMenu, type MailRowMenuHandle } from './MailRowContextMenu';
 import { MailDraftsList } from './compose/MailDraftsList';
 import { GroupHeader, MailSmartDraftsSections } from './MailSmartDraftsSections';
-import { AttachmentIcon, BackIcon, SearchIcon } from './mail-icons';
+import { BackIcon, SearchIcon } from './mail-icons';
 
 interface Props {
   snapshot: MailSnapshot;
@@ -55,16 +49,29 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
   const [draft, setDraft] = useState('');
   const accountId = snapshot.selected?.accountId ?? '';
   const mailboxId = snapshot.selected?.mailboxId ?? '';
-  const [unreadOnly, setUnreadOnly] = useState(() => readUnreadOnly(accountId, mailboxId));
+  // SUBSCRIBED, never a copy: the sidebar's folder menu writes this same preference for this same
+  // pair, and a local `useState` resynced only on a selection change left the chip in the off state
+  // over a list the menu had already filtered (and with it the pane's filtered-empty state, so a
+  // folder with no unread mail printed the cache sentence about messages it was only hiding).
+  const unreadOnly = useSyncExternalStore(
+    subscribeUnreadOnly,
+    () => readUnreadOnly(accountId, mailboxId),
+  );
   // Switching mailbox drops the search MODE in the store, so leaving the words in the box would
   // show a query next to results that are not its results. The unread filter is REMEMBERED per
-  // mailbox instead of dropped, and this is also the first paint's answer: the console picks its
-  // mailbox after the accounts land, so the initial state above ran with nothing selected.
-  useEffect(() => {
-    setDraft('');
-    setUnreadOnly(readUnreadOnly(accountId, mailboxId));
-  }, [accountId, mailboxId]);
+  // mailbox instead of dropped.
+  useEffect(() => { setDraft(''); }, [accountId, mailboxId]);
   const search = snapshot.search;
+  // A search STARTED SOMEWHERE ELSE writes its words into the box. `Find mail from this sender` filtered
+  // the list, wrote "29 results" and left the field empty, so the filter was invisible: nothing on
+  // screen said what the list was showing, and it could not be edited or extended. Keyed on the store's
+  // query changing rather than on `active`, so typing here is never overwritten mid-word.
+  const seenQuery = useRef(search.query);
+  useEffect(() => {
+    if (search.query === seenQuery.current) return;
+    seenQuery.current = search.query;
+    setDraft(search.query);
+  }, [search.query]);
   const rows = search.active ? search.messages : snapshot.messages;
   const busy = search.active ? search.loading : snapshot.listLoading;
   // The role a merged selection stands for, and the only reason this pane behaves differently: it
@@ -96,10 +103,19 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
 
   const clear = () => { setDraft(''); clearMailSearch(); };
   const filtering = unreadOnly && !search.active && !draftsView;
-  // The server already answered with the unread set, so this only holds back the row that was read
-  // in this session and has not been left yet (see `keepWhileFiltering`), and gives the toggle an
+  // The message the reader was holding when a COMPOSER took its pane. `handOver` clears `open`, so
+  // replying from one row would take a different row (the one being read) off an unread-filtered
+  // list in the same click. Remembered here rather than flipped into `pendingSeen`: nothing was
+  // marked read, and a lie in that map is subtracted from the badge.
+  const lastOpen = useRef<string | null>(null);
+  const openPair = snapshot.open ? pairKey(snapshot.open.accountId, snapshot.open.messageId) : null;
+  if (openPair) lastOpen.current = openPair;
+  else if (!snapshot.composer) lastOpen.current = null;
+  const heldOpen = snapshot.composer ? lastOpen.current : null;
+  // The server already answered with the unread set, so this only holds back the rows this console
+  // has just acted on and has not left yet (see `keepWhileFiltering`), and gives the toggle an
   // instant answer while the new page is in flight.
-  const visible = filtering ? rows.filter((one) => keepWhileFiltering(one, snapshot)) : rows;
+  const visible = filtering ? rows.filter((one) => keepWhileFiltering(one, snapshot, heldOpen)) : rows;
   // Built from the rows ON SCREEN, so the header counts what is under it in both modes.
   const section = search.active
     ? null
@@ -109,12 +125,26 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
   const accountLabels = (smart || search.active) && snapshot.accounts.length > 1
     ? snapshot.accounts
     : null;
-  const toggleFilter = (next: boolean) => { setUnreadOnly(next); void setMailUnreadOnly(next); };
+  // No local echo: the write announces itself (`mail-unread-filter`) and this component is a
+  // subscriber like the folder menu is, so both controls change in the same commit.
+  const toggleFilter = (next: boolean) => { void setMailUnreadOnly(accountId, mailboxId, next); };
+  // ONE menu for the pane, and the rows only hand it the pair they carry: every item then acts on
+  // THAT row's account, which is the whole question a merged list asks.
+  const menu = useMailRowContextMenu({
+    snapshot,
+    outbound,
+    draftsView,
+    merged: accountLabels !== null,
+  });
   // How many rows ON SCREEN are unread. The header's chip is the MAILBOX's number, which is the one the
   // sidebar badge shows, and at real density the two are not the same: the provider counted 7 unread in
   // folders whose cached window holds 18 unread. Three numbers on one screen and no explanation is the
   // report this slice had to answer, so when they disagree the difference is said in a sentence.
   const unreadOnScreen = visible.filter((one) => isUnread(one.flags)).length;
+  // The rows a filtered list is HOLDING: read, and on screen anyway because this pass just dealt with
+  // them. Said in a sentence, because otherwise the chip's number and the rows under it contradict each
+  // other with nothing on screen to explain it.
+  const heldNote = filtering ? heldRowsSentence(visible.length - unreadOnScreen) : '';
   // Only where the disagreement is worth two lines. NOT in a sent or drafts scope: unread is not what such
   // a list is read for, and All Sent spent two lines on "These folders report 8 unread and 1 of the messages
   // loaded here are unread" above its first row (one live provider reports unread on its Sent folder, so
@@ -218,15 +248,18 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
               title={chipTitle(unreadOnly, section.unreadLoaded)}
               onClick={() => toggleFilter(!unreadOnly)}
             >
-              {formatCount(section.unread)} unread{unreadOnly ? ' · showing' : ''}
+              {unreadChipLabel(formatCount(section.unread), unreadOnly)}
             </button>
           )}
         </p>
       )}
 
-      {(degraded || unreadGap) && (
-        <p className="mail-list-note" data-testid="mail-list-note">
+      {/* The pane's own state lines, which are NOT answers to a gesture: they belong to the list and
+          stay in the flow. */}
+      {(degraded || unreadGap || heldNote) && (
+        <p className="mail-list-note" data-testid="mail-list-state-note">
           {degraded && <span data-testid="mail-degraded-line">{degraded}</span>}
+          {heldNote && <span data-testid="mail-held-rows-line">{heldNote}</span>}
           {unreadGap && section && (
             <span data-testid="mail-unread-gap">
               {`${smart ? 'These folders report' : 'This folder reports'} ${formatCount(section.unread)}`
@@ -251,6 +284,8 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
                 accounts={null}
                 outbound
                 selected={isOpenRow(snapshot, message)}
+                menu={menu}
+                flagFailed={snapshot.flagFailed}
               />
             )}
           />
@@ -259,6 +294,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
             snapshot={snapshot}
             serverName={serverDrafts ? serverDrafts.name : null}
             serverRows={serverDrafts ? rows : []}
+            menu={menu}
           />
         ) : !snapshot.selected && !search.active ? (
           <p className="mail-pane-empty" data-testid="mail-no-mailbox">
@@ -291,9 +327,15 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
             accounts={accountLabels}
             outbound={outbound}
             selected={isOpenRow(snapshot, message)}
+            menu={menu}
+            flagFailed={snapshot.flagFailed}
           />
         ))}
       </div>
+      {/* A SIBLING of the rows, never inside one: the menu portals to <body> for stacking, but React
+          events still bubble through the owning tree, so a press inside it would reach the row's own
+          click handler and open the message this menu exists to leave closed. */}
+      {menu.node}
 
       {!search.active && snapshot.nextBefore !== null && rows.length > 0 && (
         <button
@@ -306,157 +348,78 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           {snapshot.olderLoading ? 'Loading…' : 'Load older'}
         </button>
       )}
+
+      {/* The answer to ONE row action, as a strip the LIST gives up rather than a card painted over it.
+          It was a floated card at the foot of the pane, which kept the rows from moving (the thing a
+          triage pass cannot survive) but covered the last row of a full list: 50 rows loaded, an opaque
+          card over one row's snippet, clickable and unreadable. In the flow at the foot, the space comes
+          out of the scroller above, so no row moves and no row is hidden.
+          A success retires itself; a refusal waits (see `setMailRowNote`), so it gets a dismiss. */}
+      {snapshot.rowNote && (
+        <p className="mail-row-strip" data-testid="mail-row-toast" role="status">
+          <span data-testid="mail-row-note">{snapshot.rowNote.text}</span>
+          {/* The sentence names ONE row, and at 50 rows that row can be 620px up the column: this is the
+              way back to it, so the pair is never a scan of the whole list. Drawn only when the row it
+              names is actually in this list. */}
+          {snapshot.rowNote.pair && rowInList(visible, snapshot.rowNote.pair) && (
+            <button
+              type="button"
+              className="mail-row-strip-jump"
+              data-testid="mail-row-note-jump"
+              onClick={() => { showMailRow(snapshot.rowNote!.pair!); }}
+            >
+              Show the row
+            </button>
+          )}
+          {snapshot.rowNote.sticky && (
+            <button
+              type="button"
+              className="mail-pane-strip-close"
+              data-testid="mail-row-note-close"
+              title="Dismiss"
+              aria-label="Dismiss"
+              onClick={() => { clearMailRowNote(); }}
+            >
+              ×
+            </button>
+          )}
+        </p>
+      )}
     </section>
   );
 }
 
-/**
- * The accounts one merged list actually covers.
- *
- * Drafts is answered by the account list, not by folders: the Drafts row is Walnut's own and every
- * account has one whether or not its provider keeps such a folder.
- */
-function coveredBy(snapshot: MailSnapshot, role: SmartRole): MailAccountDto[] {
-  if (role === 'drafts') return snapshot.accounts;
-  const pairs = smartPairs(snapshot.mailboxes, snapshot.accounts, role);
-  return snapshot.accounts.filter((one) => pairs.some((pair) => pair.accountId === one.accountId));
+/** Is the row that note names one of the rows on screen? */
+function rowInList(rows: MailMessageDto[], pair: string): boolean {
+  return rows.some((one) => pairKey(one.accountId, one.messageId) === pair);
 }
 
 /**
- * A folder with nothing on screen, told apart from the other two things that look exactly like it.
+ * Bring the row a sentence names back under the eye, and mark it while the eye arrives.
  *
- * "No mail in this folder yet" used to be the answer to all three, and for a real Gmail account it
- * was the wrong one twice: the header said `SENT MAIL · 1,962 · 2 unread` (the mailbox list knows the
- * folder's true size) directly above a message list claiming the folder was empty. Nothing on screen
- * hinted that Walnut simply had not fetched it yet, so the only reading available was "Walnut lost my
- * sent mail".
- *
- * The three cases, and what makes them different:
- *
- * - NEVER FETCHED. `lastSyncAt` is absent, so no poll of this container has ever completed. It is
- *   fetched on the spot (see `fetchSelectedFolder`), and while that runs this says so.
- * - FETCHED AND KEPT NOTHING. The folder has messages on the server and none of them are inside the
- *   cache's window. The number is on screen, so the sentence has to account for it or it reads as a
- *   contradiction.
- * - ACTUALLY EMPTY. The only case the old sentence was right about.
+ * A DOM query rather than a ref map: the answer strip is written by the actions layer for a pair, and the
+ * row it names can live in the page list, in a merged list or in a search result. The mark is cleared on a
+ * timer and by the next call, so two answers in a row do not leave two lit rows.
  */
-function EmptyFolder({ snapshot, section, smart }: {
-  snapshot: MailSnapshot;
-  section: Section | null;
-  smart: SmartRole | null;
-}) {
-  const selection = snapshot.selected;
-  if (smart) return <SmartEmpty snapshot={snapshot} role={smart} />;
-  const mailbox = selection
-    ? (snapshot.mailboxes[selection.accountId] ?? []).find((one) => one.mailboxId === selection.mailboxId)
-    : undefined;
-  const fetch = selection && snapshot.folderFetch?.key === selectionKey(selection)
-    ? snapshot.folderFetch
-    : null;
-  const total = section?.count ?? mailbox?.total ?? 0;
+let flashTimer: ReturnType<typeof setTimeout> | null = null;
 
-  if (fetch?.state === 'fetching' || fetch?.state === 'running') {
-    return (
-      <p className="mail-pane-empty" data-testid="mail-folder-fetching">
-        Fetching this folder…
-      </p>
-    );
-  }
-  if (fetch?.state === 'failed') {
-    return (
-      <p className="mail-pane-empty mail-folder-unfetched" data-testid="mail-folder-fetch-failed">
-        <span>Walnut could not fetch this folder.</span>
-        {/* The provider's own sentence, on its OWN line rather than run on after that full stop. A
-            plugin writes this text and nothing here can promise it starts with a capital: joined
-            inline it read as "could not fetch this folder. this server will not open Aged", which
-            looks like the console broke its own sentence in half. */}
-        {fetch.detail && <span className="mail-folder-detail">{fetch.detail}</span>}
-        <button
-          type="button"
-          className="mail-text-btn"
-          data-testid="mail-folder-fetch"
-          onClick={() => { void fetchSelectedFolder(); }}
-        >
-          Try again
-        </button>
-      </p>
-    );
-  }
-  // The button is here for the second visit: the automatic fetch runs once per folder per tab, so a
-  // page reloaded after that would otherwise be a dead end with no way to ask.
-  if (mailbox && mailbox.lastSyncAt === undefined) {
-    return (
-      <p className="mail-pane-empty mail-folder-unfetched" data-testid="mail-folder-unfetched">
-        <span>Walnut has not fetched this folder yet.</span>
-        <button
-          type="button"
-          className="mail-text-btn"
-          data-testid="mail-folder-fetch"
-          onClick={() => { void fetchSelectedFolder(); }}
-        >
-          Fetch it now
-        </button>
-      </p>
-    );
-  }
-  if (total > 0) {
-    return (
-      <p className="mail-pane-empty" data-testid="mail-folder-outside-window">
-        {/* States what is OBSERVED (fetched, holding none of them) and then the rule that explains
-            it, rather than asserting that every one of those messages is old. Walnut can see the
-            first two things; the third is an inference, and it is the cache's rule that is worth
-            telling somebody anyway. */}
-        {`Walnut fetched this folder and kept none of its ${formatCount(total)} messages:`
-          + ' the mail cache only keeps recent mail.'}
-      </p>
-    );
-  }
-  return <p className="mail-pane-empty" data-testid="mail-list-empty">No mail in this folder yet.</p>;
-}
-
-/** What a merged list calls the folders it stands for. Drafts never reaches here (see draftsView). */
-const SMART_NOUN: Record<SmartRole, { many: string; each: string }> = {
-  inbox: { many: 'these inboxes', each: 'every inbox' },
-  sent: { many: 'these folders', each: 'every folder' },
-  drafts: { many: 'these folders', each: 'every folder' },
-};
-
-/**
- * The merged list with nothing on screen: an empty set of folders, or a set Walnut has not finished
- * fetching, which on a fresh install is most of them.
- *
- * A smart selection is NOT a folder, so there is nothing for `/mailboxes/fetch` to name here: one of
- * its mailboxes missing `lastSyncAt` is a statement about the sweep, and the sweep is what the button
- * asks for. Fetching one folder of the set would also leave the sentence true, which is the kind of
- * button that looks broken.
- */
-function SmartEmpty({ snapshot, role }: { snapshot: MailSnapshot; role: SmartRole }) {
-  const noun = SMART_NOUN[role];
-  const pairs = smartPairs(snapshot.mailboxes, snapshot.accounts, role);
-  const unfetched = pairs.some((pair) => {
-    const row = (snapshot.mailboxes[pair.accountId] ?? []).find((one) => one.mailboxId === pair.mailboxId);
-    return !row || row.lastSyncAt === undefined;
-  });
-  if (!unfetched) {
-    return (
-      <p className="mail-pane-empty" data-testid="mail-smart-empty">
-        {`No mail in ${noun.many} yet.`}
-      </p>
-    );
-  }
-  return (
-    <p className="mail-pane-empty mail-folder-unfetched" data-testid="mail-smart-unfetched">
-      <span>{`Walnut has not fetched ${noun.each} yet.`}</span>
-      <button
-        type="button"
-        className="mail-text-btn"
-        data-testid="mail-smart-refresh"
-        onClick={() => { void requestMailRefresh(); }}
-      >
-        Check for new mail
-      </button>
-    </p>
-  );
+function showMailRow(pair: string): void {
+  const [accountId, messageId] = JSON.parse(pair) as [string, string];
+  // Quotes and backslashes escaped for an ATTRIBUTE value, not `CSS.escape` (which escapes identifiers):
+  // a provider message id is an opaque string and one quote in it would end the selector early.
+  const quoted = (value: string) => value.replace(/["\\]/g, (one) => `\\${one}`);
+  const selector = `.mail-row[data-account-id="${quoted(accountId)}"]`
+    + `[data-message-id="${quoted(messageId)}"]`;
+  const row = document.querySelector(selector);
+  if (!row) return;
+  document.querySelectorAll('.mail-row.flash-target').forEach((one) => one.classList.remove('flash-target'));
+  if (flashTimer) clearTimeout(flashTimer);
+  row.scrollIntoView({ block: 'nearest' });
+  row.classList.add('flash-target');
+  flashTimer = setTimeout(() => {
+    flashTimer = null;
+    row.classList.remove('flash-target');
+  }, 2_000);
 }
 
 /**
@@ -479,21 +442,13 @@ function chipTitle(unreadOnly: boolean, unreadLoaded: boolean): string {
  * takes the reply and the make-a-task buttons with it and leaves no way back. It goes when they
  * select another row, which is the moment they are done with it.
  */
-function keepWhileFiltering(message: MailMessageDto, snapshot: MailSnapshot): boolean {
-  return isUnread(message.flags) || isOpenRow(snapshot, message);
-}
-
-/**
- * Whether this row is the message the reader is holding.
- *
- * The PAIR, never the id alone. A message's identity is (accountId, messageId), and the merged list
- * is the first place both halves are on screen at once: two providers hand out ids from their own
- * numbering, so the same id in two accounts is two different mails. Keyed on the id alone, opening
- * one of them highlighted both, and the filter kept both on screen.
- */
-function isOpenRow(snapshot: MailSnapshot, message: MailMessageDto): boolean {
-  const open = snapshot.open;
-  return !!open && open.accountId === message.accountId && open.messageId === message.messageId;
+function keepWhileFiltering(
+  message: MailMessageDto,
+  snapshot: MailSnapshot,
+  heldOpen: string | null,
+): boolean {
+  if (isUnread(message.flags) || isStickyRow(snapshot, message)) return true;
+  return heldOpen === pairKey(message.accountId, message.messageId);
 }
 
 /**
@@ -504,10 +459,11 @@ function isOpenRow(snapshot: MailSnapshot, message: MailMessageDto): boolean {
  * another device left in the server's Drafts folder and open in the reader like any other message.
  * With no drafts folder on the provider there is one section and nothing on screen says "server".
  */
-function DraftsSections({ snapshot, serverName, serverRows }: {
+function DraftsSections({ snapshot, serverName, serverRows, menu }: {
   snapshot: MailSnapshot;
   serverName: string | null;
   serverRows: MailMessageDto[];
+  menu: MailRowMenuHandle;
 }) {
   const drafts = snapshot.drafts[snapshot.selected!.accountId] ?? [];
   const local = (
@@ -534,191 +490,11 @@ function DraftsSections({ snapshot, serverName, serverRows }: {
           accounts={null}
           outbound
           selected={isOpenRow(snapshot, message)}
+          menu={menu}
+          flagFailed={snapshot.flagFailed}
         />
       ))}
     </>
   );
 }
 
-interface Section {
-  name: string;
-  count: number;
-  unread: number;
-  /** Whether `count` is the mailbox's size or only what has been loaded. Said on screen, in a title. */
-  countLoaded: boolean;
-  /** The same question for `unread`, which can only be page-derived before any mailbox list lands. */
-  unreadLoaded: boolean;
-  /** What `count` counts, for its title. A merged list is not "this folder". */
-  countTitle: string;
-  /**
-   * The one word that says, ON SCREEN, what the count is.
-   *
-   * `ALL INBOXES 62,972` is the sum of both inboxes as the provider declares them, while the cache this
-   * list pages holds a 180 day window of about four thousand: Load older ended at a few percent of the
-   * number in the header, and the only thing that said so was a title attribute, which never renders.
-   */
-  countWord: string;
-}
-
-/**
- * The folder header: which mailbox this column is, how big it is, and how much unread mail it holds.
- *
- * BOTH numbers are the MAILBOX ROW's, which is the same row the folder badge on the left is drawn
- * from, so the three figures a person sees for one folder cannot disagree. They used to be page
- * arithmetic, and the result was the report this header exists to answer: a folder row reading
- * "Inbox 99+" beside a header reading "INBOX 50" and "5 unread", none of which described the same
- * thing.
- *
- * The fallback to the loaded rows is for the FIRST PAINT, before any mailbox list has landed, and it
- * says so in a title rather than passing a page count off as the folder's size. The count falls back
- * one step further: a provider that declares fewer messages than this console is already holding has
- * told us something that cannot be true, and the honest number is then the one that can be counted on
- * screen. The unread figure has no such check on purpose, because it is what the badge shows and the
- * two have to stay the same number.
- *
- * Null when nothing is selected: there is no folder to name yet.
- */
-function sectionOf(
-  snapshot: MailSnapshot,
-  view: { draftsView: boolean; smart: SmartRole | null; filtering: boolean },
-  rows: MailMessageDto[],
-): Section | null {
-  const selected = snapshot.selected;
-  if (!selected) return null;
-  const { draftsView, smart, filtering } = view;
-  if (draftsView) {
-    // Both halves, so the header counts the rows below it: with a server section the local count alone
-    // would repeat "Written here" one line further up and describe a third of the list.
-    //
-    // The server half is the PAGE THIS VIEW HOLDS, not the folder size the mailbox row declares. That
-    // size counts drafts outside the cache's retention window, which no section here can list: it is how
-    // a header read 51 over a view whose sections added up to 8. The sidebar badge is the first section
-    // (see `draftsRowCount`), this is every row under the header, and both are countable on screen.
-    const written = smart
-      ? draftsTotalCount(snapshot.drafts, snapshot.accounts)
-      : draftsRowCount(snapshot.drafts[selected.accountId]);
-    const onServer = smart
-      ? snapshot.accounts.some((one) => !!serverDraftsMailbox(snapshot.mailboxes[one.accountId]))
-      : !!serverDraftsMailbox(snapshot.mailboxes[selected.accountId]);
-    return {
-      name: smart ? SMART_LABEL.drafts : 'Drafts',
-      count: written + rows.length,
-      unread: 0,
-      // A provider folder in the view means the second half is a page, so the word says `loaded`: the
-      // folder can hold drafts older than the window this cache keeps, and calling that `total` claims a
-      // number Load older can never reach.
-      countLoaded: onServer,
-      unreadLoaded: false,
-      countTitle: 'drafts written here and in the Drafts folder',
-      countWord: onServer ? 'loaded' : 'total',
-    };
-  }
-  if (smart) {
-    // The SUM of the same mailbox rows the sidebar badge adds up, so the two cannot disagree. The one
-    // exception is while the filter is on: the rows on screen are then the answer to a different
-    // question (what the cache holds unread) and the provider's own figure can be smaller, so the chip
-    // counts what is under it and its title says where that number came from.
-    const onScreen = rows.filter((one) => isUnread(one.flags)).length;
-    return {
-      name: SMART_LABEL[smart],
-      count: smartTotal(snapshot.mailboxes, smart),
-      countLoaded: false,
-      unread: filtering ? onScreen : smartUnread(snapshot.mailboxes, smart),
-      unreadLoaded: filtering,
-      countTitle: 'messages in these folders',
-      countWord: 'total',
-    };
-  }
-  const mailbox = (snapshot.mailboxes[selected.accountId] ?? [])
-    .find((one) => one.mailboxId === selected.mailboxId);
-  const total = mailbox ? countOf(mailbox.total) : 0;
-  const describesThePage = !!mailbox && total >= rows.length;
-  return {
-    name: mailbox?.name || selected.mailboxId,
-    count: describesThePage ? total : rows.length,
-    countLoaded: !describesThePage,
-    unread: mailbox ? countOf(mailbox.unread) : rows.filter((one) => isUnread(one.flags)).length,
-    unreadLoaded: !mailbox,
-    countTitle: 'messages in this folder',
-    countWord: describesThePage ? 'total' : 'loaded',
-  };
-}
-
-/** A provider-declared count, made safe to compare: no fractions, no negatives, no NaN. */
-function countOf(value: number): number {
-  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-}
-
-/**
- * One row. `accounts` non-null means this list mixes accounts, so the row says which one it is.
- *
- * That slot used to print the raw `mailboxId`, which on one provider here is a 90 character string:
- * a merged list would have been a column of noise, and the mailbox is not the question anyway (the
- * row is already under a header naming the role). It REPLACES the old slot rather than adding a line.
- */
-function MailRow({ message, selected, accounts, outbound }: {
-  message: MailMessageDto;
-  selected: boolean;
-  accounts: MailAccountDto[] | null;
-  /** A sent or drafts scope: the first column is the RECIPIENT, which is what such a list is scanned for. */
-  outbound?: boolean;
-}) {
-  const unread = isUnread(message.flags);
-  const account = accounts?.find((one) => one.accountId === message.accountId);
-  const who = account ? account.displayName || account.address : '';
-  // A MARK, not the name: measured on the same 50 rows at 1280x800, the name chip took 110px (more than
-  // the 102px left to the sender) and was itself cut on 19 of them, mid domain for an account whose
-  // display name is its address. One letter cannot truncate, costs the sender column nothing, and the
-  // full identity is on the row's own title, in the reader head and in the composer head (spec 6.9).
-  const mark = who.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 1).toLocaleUpperCase() || '?';
-  const recipient = outbound ? rowRecipientLabel(message.to) : '';
-  return (
-    <button
-      type="button"
-      className={`mail-row${unread ? ' unread' : ''}${selected ? ' selected' : ''}`}
-      data-testid="mail-row"
-      data-message-id={message.messageId}
-      data-account-id={message.accountId}
-      data-unread={unread}
-      onClick={() => { void openMailMessage(message.accountId, message.messageId); }}
-    >
-      <span className="mail-row-top">
-        {unread && <span className="mail-row-dot" aria-hidden="true" />}
-        <span className="mail-row-from" data-field={outbound ? 'to' : 'from'}>
-          {/* `To` only in front of somebody. A live sent folder does hold rows whose cached envelope never
-              carried recipients (they live in the provider's payload, not in a column), and the stand-in
-              has to say that WE do not know rather than that the mail had nobody: `No recipient` was a
-              claim about the message, `Unknown recipient` is a claim about the cache, which is the true one
-              and the same word `senderLabel` already uses for a missing sender. */}
-          {outbound && recipient && <span className="mail-row-to">To </span>}
-          {outbound ? recipient || 'Unknown recipient' : senderLabel(message.from)}
-        </span>
-        {account && (
-          <span
-            className="mail-row-account"
-            data-testid="mail-row-account"
-            data-account-id={account.accountId}
-            /* A stable tone per account, so two accounts whose names start with the same letter are
-               still two different marks. Index in the account list, not a hash: it is the order the
-               sidebar draws them in, so the mark and the pane agree. */
-            data-tone={String((accounts ?? []).findIndex((one) => one.accountId === account.accountId) % 4)}
-            title={who === account.address ? who : `${who} (${account.address})`}
-            aria-label={`Account ${who}`}
-          >
-            {mark}
-          </span>
-        )}
-        <span className="mail-row-time">{formatMailTime(message.sentAt)}</span>
-      </span>
-      <span className="mail-row-subject">
-        {/* Its own span, so the ellipsis has a block to happen in: the row's subject line is a flex
-            container, and a bare text node there is an anonymous item that clips without one. */}
-        <span className="mail-row-subject-text">{message.subject || '(no subject)'}</span>
-        {message.attachments.length > 0 && (
-          <span className="mail-row-clip" aria-label="has attachments"><AttachmentIcon /></span>
-        )}
-      </span>
-      <span className="mail-row-snippet">{message.snippet}</span>
-    </button>
-  );
-}

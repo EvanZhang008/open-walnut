@@ -17,6 +17,7 @@ import { openMailForwardComposer, openMailReplyComposer } from './compose/compos
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 import { attachmentLabel, formatMailDate, isUnread, recipientLabel, senderLabel } from './mail-format';
 import { mayOfferMarkRead } from './mail-providers';
+import { bodyQuoteText } from './mail-quote-text';
 import { attachmentKind, senderMark, type AttachmentKind } from './mail-reader-format';
 import { setOpenMessageRead } from './mail-read-flag';
 import { MailTaskButton } from './MailTaskButton';
@@ -209,7 +210,9 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       accountId: open.accountId,
       accountAddress: account?.address ?? '',
       message,
-      ...(open.body?.text ? { bodyText: open.body.text } : {}),
+      // The HTML half when there is no text half, the same rule the row menu's reply keeps
+      // (`bodyQuoteText`): an HTML-only message quoted as nothing at all.
+      ...(bodyQuoteText(open.body) ? { bodyText: bodyQuoteText(open.body) } : {}),
       all,
     });
   };
@@ -249,7 +252,9 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
           void openMailForwardComposer({
             accountId: open.accountId,
             message,
-            ...(open.body?.text ? { bodyText: open.body.text } : {}),
+            // The HTML half when there is no text half, the same rule the row menu's reply keeps
+      // (`bodyQuoteText`): an HTML-only message quoted as nothing at all.
+      ...(bodyQuoteText(open.body) ? { bodyText: bodyQuoteText(open.body) } : {}),
           });
         }}
       >

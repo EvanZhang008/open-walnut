@@ -440,7 +440,7 @@ async function unreadFilter(page: Page, theme: string): Promise<string[]> {
 
   await chip.click()
   await expect(chip).toHaveAttribute('data-on', 'true')
-  await expect(chip).toHaveText(`${mailboxUnread} unread · showing`)
+  await expect(chip).toHaveText(`${mailboxUnread} unread · showing unread only`)
   // A FULL page of unread rows, which is already more unread mail than the unfiltered page held at
   // all: no client-side filter over that page could produce this list.
   await expect(rows, 'the filtered first page is a full page of unread mail').toHaveCount(PAGE_SIZE)
@@ -482,7 +482,7 @@ async function unreadFilter(page: Page, theme: string): Promise<string[]> {
   await expect(rows, 'the list itself does not move under the filter').toHaveCount(PAGE_SIZE)
   // The chip and the folder badge follow the mailbox, which just lost one, in the same click: they are
   // the same number from the same row, so a human watching sees all three figures agree at every step.
-  await expect(page.getByTestId('mail-unread-filter')).toHaveText(`${mailboxUnread - 1} unread · showing`)
+  await expect(page.getByTestId('mail-unread-filter')).toHaveText(`${mailboxUnread - 1} unread · showing unread only`)
   await expect(unreadBadge(page, 'INBOX'), 'the badge dropped by one too')
     .toHaveText(grouped(mailboxUnread - 1))
   expect(await folderUnread(page, 'INBOX')).toBe(mailboxUnread - 1)
@@ -548,7 +548,7 @@ async function unreadEmptyState(page: Page, theme: string): Promise<string[]> {
   await expect(empty).toContainText('No unread messages')
   await expect(page.getByTestId('mail-list-empty'), 'not the "no mail in this folder" line').toHaveCount(0)
   await expect(rows).toHaveCount(0)
-  await expect(page.getByTestId('mail-unread-filter')).toHaveText('0 unread · showing')
+  await expect(page.getByTestId('mail-unread-filter')).toHaveText('0 unread · showing unread only')
   // Still the FOLDER's size, with none of it unread and so none of it on screen. The count answering
   // "0" here would say the folder is empty, which is a different thing and not true.
   await expect(sectionCount(page)).toHaveText(grouped(archiveTotal))

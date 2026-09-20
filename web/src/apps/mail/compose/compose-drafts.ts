@@ -5,9 +5,9 @@
  * about what is on screen: it owns the `drafts` map and nothing else, so the composer's lifecycle
  * and the send buttons can both lean on it without importing each other.
  */
-import { listMailDrafts, mailFailure, type MailDraftDto } from '@/api/mail';
+import { deleteMailDraft, listMailDrafts, mailFailure, type MailDraftDto } from '@/api/mail';
 import { log } from '@/utils/log';
-import { patch, run, store, onMailStoreReset } from '../mail-store';
+import { patch, run, setMailRowNote, store, onMailStoreReset } from '../mail-store';
 
 /** The plugin caps a draft list at 200, which is far more than a human has. */
 const DRAFT_PAGE = 200;
@@ -71,4 +71,33 @@ export function forgetDraft(accountId: string, draftId: string): void {
   const drafts = { ...store.state.drafts };
   drafts[accountId] = (drafts[accountId] ?? []).filter((one) => one.draftId !== draftId);
   patch({ drafts });
+}
+
+/**
+ * Throw away ONE draft row, from the list rather than from the composer.
+ *
+ * The same two steps the composer's own Discard takes (`discardMailComposerDraft`): forget it locally
+ * so an in-flight PATCH cannot put it back, then delete it. Never for the draft the composer is
+ * holding: that pane owns its own discard, with its own confirm, and its epoch bookkeeping.
+ */
+export function discardMailDraftRow(accountId: string, draftId: string): Promise<void> {
+  if (!draftId) return Promise.resolve();
+  if (store.state.composer?.draftId === draftId) return Promise.resolve();
+  const row = (store.state.drafts[accountId] ?? []).find((one) => one.draftId === draftId);
+  forgetDraft(accountId, draftId);
+  return deleteMailDraft(draftId)
+    .then(() => {
+      setMailRowNote(`Draft discarded${row?.subject ? ` ("${row.subject}")` : ''}.`);
+    })
+    .catch((error) => {
+      const failure = mailFailure(error);
+      // The row is put back, because it still exists: a list that quietly loses a draft the server
+      // still holds is the worse of the two answers. `forgotten` has to be cleared for that pair
+      // first, or the merge below is the no-op that guard exists to be.
+      forgotten.delete(draftId);
+      if (row) mergeDraft(row);
+      // STICKY, the same rule every refusal follows: it waits to be read.
+      setMailRowNote(`Walnut could not discard that draft. ${failure.message}`, null, { sticky: true });
+      log.warn('mail', 'draft discard failed', { draftId, error: failure.message });
+    });
 }

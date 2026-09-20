@@ -11,7 +11,19 @@
 import { mailFailure, markMailMessageRead, type MailMessageDto } from '@/api/mail';
 import { log } from '@/utils/log';
 import { providerFor } from './mail-providers';
-import { SEEN, pairKey, patch, publishBadge, store } from './mail-store';
+import { forgetFlipCounted, noteFlipCounted } from './mail-seen-clock';
+import {
+  SEEN,
+  clearMailRowNote,
+  mailRowLabel,
+  onMailStoreReset,
+  pairKey,
+  patch,
+  publishBadge,
+  run,
+  setMailRowNote,
+  store,
+} from './mail-store';
 
 /**
  * A MESSAGE's identity is (accountId, messageId), never the id alone.
@@ -105,6 +117,152 @@ export async function setOpenMessageRead(read: boolean): Promise<void> {
     });
 }
 
+/**
+ * Mark ONE ROW read or unread, from a list, without opening it.
+ *
+ * The reader's toggle above, aimed at a row instead of at `store.state.open`, which is why it shares
+ * `mayMarkRead`, `applySeen` and `replaceMessage` rather than repeating any of them: a second copy of
+ * this arithmetic in a component is how the badge and the row start disagreeing.
+ *
+ * Three things it needs that the reader's toggle does not, all of them because the human is working
+ * down a LIST and the row is not the thing they are looking at:
+ *
+ * - SERIALISED PER ROW (`run`), and the LAST INTENT WINS. Read then immediately unread used to land in
+ *   arrival order, and `replaceMessage` let whichever answer came back last win: the row said one
+ *   thing and the badge another. One key per pair means the second flip starts from the first one's
+ *   outcome. `run` is FORCED, so a flip arriving mid-flight queues exactly one more pass, and the
+ *   wanted state is read from `wantedSeen` inside that pass rather than captured: `run` keeps the
+ *   FIRST caller's closure, so a captured `read` would replay the intent the human has moved off.
+ * - THE COUNTS ARE PUT BACK, not un-deltaed. `applySeen` clamps at 0, so a mailbox that was already
+ *   at 0 swallowed the forward step and the rollback then added one unread that never existed. The
+ *   two numbers are recorded before the flip and written back verbatim.
+ * - A FAILURE IS SAID OUT LOUD, naming the row. A rolled-back row looks exactly like one nobody has
+ *   touched, and somebody right-clicking down fifteen rows reads that as a job done.
+ */
+export function setMailMessageRead(message: MailMessageDto, read: boolean): Promise<void> {
+  const pair = handle(message);
+  wantedSeen.set(pair, read);
+  return run(`read:${pair}`, async () => {
+    const want = wantedSeen.get(pair);
+    if (want === undefined) return;
+    if (!await mayMarkRead(message.accountId)) { forgetWanted(pair, want); return; }
+    // Re-read THAT row after the await, the same gate both paths above use: the menu was built from
+    // a payload snapshot taken at the right-click, and the row may have been flipped since (the
+    // other tab, a sync, the reader). Applying the badge arithmetic off a stale copy is what leaves
+    // the count short, so this returns without one `applySeen`.
+    const row = heldRow(message);
+    if (!row || row.flags.includes(SEEN) === want) { forgetWanted(pair, want); return; }
+    const before = countsOf(row);
+    markPending(pair, want);
+    applySeen(row, want);
+    try {
+      const answer = await markMailMessageRead(row.accountId, row.messageId, want);
+      // The server counts the flip from here on, so no later landing may subtract it again: that double
+      // subtraction is what left the sidebar badge one unread low after the next refresh.
+      noteFlipCounted(pair);
+      // The server's own row wins: it carries the provider's flags, not our guess.
+      //
+      // The overlay is deliberately NOT retired here. A 200 means the FLAG was written; a mailbox's
+      // unread count still comes from the provider's last refresh, and the `unread=1` page still
+      // comes from the plugin's cache. Retiring it on the answer took the row off the filtered list
+      // at the next `sync-completed` (two minutes) and bounced the badge back to the number that
+      // still counted this row. It is retired by `confirmedPendingSeen` when a page read shows the
+      // server agrees, and by a selection change or a filter toggle (`mail-actions.ts`), which is
+      // when the list it was protecting stops being on screen.
+      replaceMessage(answer.message);
+    } catch (error) {
+      const failure = mailFailure(error);
+      applySeen(row, !want, before);
+      clearPending(pair);
+      patch({ flagFailed: { ...store.state.flagFailed, [pair]: flagFailureTitle(want, failure) } });
+      // STICKY: a refusal is the one sentence somebody working down a list has to act on, and it used
+      // to retire itself 12 seconds in while they were still going. It goes when this row's flip is
+      // started again (`markPending`), when the selection changes, or when it is dismissed.
+      setMailRowNote(flagFailureNote(row, want, failure), pair, { sticky: true });
+      log.warn('mail', 'row read flag refused, rolling the badge back', {
+        accountId: row.accountId,
+        messageId: row.messageId,
+        code: failure.code,
+        error: failure.message,
+      });
+    }
+    forgetWanted(pair, want);
+    // Forced: a flip that arrives while this one is out queues exactly ONE more pass, which is what
+    // makes the second intent land at all (`run` hands a mid-flight caller the running promise).
+  }, true);
+}
+
+/**
+ * The state each row is being flipped TO, newest intent only.
+ *
+ * Read inside the `run` body rather than captured, because `run` keeps the first caller's closure: a
+ * captured `read` would make the queued second pass replay the intent the human has already moved
+ * off, so pressing Mark as read and then Mark as unread ended up read.
+ */
+const wantedSeen = new Map<string, boolean>();
+
+/**
+ * The pairs whose flip is still out there, for the two places that retire the overlay.
+ *
+ * A selection change and a filter toggle drop the rows the overlay was protecting, so they drop the
+ * overlay with them. An entry whose request has not answered yet is not theirs to drop: the rollback
+ * still has to find that row and put it back where it was.
+ */
+export function mailFlipsInFlight(): ReadonlySet<string> {
+  return new Set(wantedSeen.keys());
+}
+
+/** Forget an intent, unless a newer one has replaced it (that pass is already queued). */
+function forgetWanted(pair: string, want: boolean): void {
+  if (wantedSeen.get(pair) === want) wantedSeen.delete(pair);
+}
+
+// Module state the snapshot does not hold, so a reset has to clear it: an intent left behind would
+// make the next case's first flip run against the last case's wanted state.
+onMailStoreReset(() => { wantedSeen.clear(); });
+
+/** The row this console is holding for that message, from whichever list holds it. */
+function heldRow(message: MailMessageDto): MailMessageDto | null {
+  const state = store.state;
+  const key = handle(message);
+  return state.messages.find((one) => handle(one) === key)
+    ?? state.search.messages.find((one) => handle(one) === key)
+    ?? (state.open?.message && handle(state.open) === key ? state.open.message : null);
+}
+
+/** The two numbers a flip moves, as they stand now. Written back verbatim on a refusal. */
+function countsOf(message: MailMessageDto): { mailbox: number | null; account: number | null } {
+  const state = store.state;
+  const mailbox = (state.mailboxes[message.accountId] ?? [])
+    .find((one) => one.mailboxId === message.mailboxId);
+  const account = state.accounts.find((one) => one.accountId === message.accountId);
+  return {
+    mailbox: mailbox ? mailbox.unread : null,
+    account: account ? account.unread : null,
+  };
+}
+
+function markPending(pair: string, read: boolean): void {
+  const held = { ...store.state.flagFailed };
+  delete held[pair];
+  patch({ pendingSeen: { ...store.state.pendingSeen, [pair]: read }, flagFailed: held });
+  // The PREVIOUS answer about this row goes with the mark it retracted. A refused flip leaves a
+  // sentence that stays up (refusals do not retire, see `setMailRowNote`), so retrying the same row
+  // left "Walnut could not mark it read" standing over a row the retry had just marked read: the toast
+  // contradicted the row it was about. Only this row's own note, because a note about another row is
+  // still true.
+  const note = store.state.rowNote;
+  if (note && note.pair === pair) clearMailRowNote();
+}
+
+function clearPending(pair: string): void {
+  forgetFlipCounted(pair);
+  const held = { ...store.state.pendingSeen };
+  if (!(pair in held)) return;
+  delete held[pair];
+  patch({ pendingSeen: held });
+}
+
 /** Is the row this console is holding for that message already read? */
 function heldSeen(message: MailMessageDto): boolean {
   const state = store.state;
@@ -132,10 +290,24 @@ function mapMessage(
     : list;
 }
 
-/** The row, the open reader, the search results, the mailbox badge and the account total. */
-function applySeen(message: MailMessageDto, seen: boolean): void {
+/**
+ * The row, the open reader, the search results, the mailbox badge and the account total.
+ *
+ * The ONE place in this console that writes a `\Seen` flag, which is what keeps the four numbers
+ * moving together. `restore` is the exact pair of counts recorded before a flip: on a rollback the
+ * numbers are written back rather than un-deltaed, because the deltas clamp at 0 and a mailbox
+ * already at 0 would come back one unread heavier than it started.
+ */
+function applySeen(
+  message: MailMessageDto,
+  seen: boolean,
+  restore?: { mailbox: number | null; account: number | null },
+): void {
   const state = store.state;
   const delta = seen ? -1 : 1;
+  const unreadOf = (current: number, kept: number | null) => (
+    restore ? (kept ?? current) : Math.max(0, current + delta)
+  );
   const mailboxes = state.mailboxes[message.accountId];
   patch({
     messages: mapMessage(state.messages, message, (one) => withSeen(one, seen)),
@@ -151,18 +323,56 @@ function applySeen(message: MailMessageDto, seen: boolean): void {
         ...state.mailboxes,
         [message.accountId]: mailboxes.map((mailbox) => (
           mailbox.mailboxId === message.mailboxId
-            ? { ...mailbox, unread: Math.max(0, mailbox.unread + delta) }
+            ? { ...mailbox, unread: unreadOf(mailbox.unread, restore?.mailbox ?? null) }
             : mailbox
         )),
       },
     } : {}),
     accounts: state.accounts.map((account) => (
       account.accountId === message.accountId
-        ? { ...account, unread: Math.max(0, account.unread + delta) }
+        ? { ...account, unread: unreadOf(account.unread, restore?.account ?? null) }
         : account
     )),
   });
   publishBadge();
+}
+
+/**
+ * What the human is told when a flip did not stick, naming the ROW.
+ *
+ * "That message could not be marked read" is nobody, and somebody triaging a list has just touched
+ * a dozen rows. A replica's refusal gets its own sentence: it is not a fault and it will never
+ * answer differently, so wording it as something Walnut failed at invites a retry that cannot work.
+ */
+function flagFailureNote(
+  row: MailMessageDto,
+  read: boolean,
+  failure: { status: number; code: string; message: string },
+): string {
+  const named = mailRowLabel(row);
+  if (failure.status === 503 && failure.code === 'primary_only') {
+    return `This copy of Walnut only reads mail. ${named} is still ${read ? 'unread' : 'read'}.`;
+  }
+  // TWO SENTENCES, the same rule the folder fetch already follows (`folderFetchSentence`): Walnut's
+  // sentence ENDS, then the provider's own text follows as its own. A plugin writes that string and
+  // nothing here can promise it starts with a capital or ends with a stop, so run on after a colon it
+  // read as one broken sentence with no closing stop.
+  return `Walnut could not mark ${named} ${read ? 'read' : 'unread'}. ${failure.message}`;
+}
+
+/**
+ * The ROW's hover text for a refused flip.
+ *
+ * The provider's words alone were a fragment with no subject ("the provider refused"), hovering over a
+ * glyph whose meaning is the whole question. Walnut says what failed, the provider says why, two
+ * sentences, same rule as the note.
+ */
+function flagFailureTitle(
+  read: boolean,
+  failure: { status: number; code: string; message: string },
+): string {
+  const what = `Walnut could not mark this message ${read ? 'read' : 'unread'}.`;
+  return failure.message ? `${what} ${failure.message}` : what;
 }
 
 function replaceMessage(message: MailMessageDto): void {

@@ -23,6 +23,7 @@ import {
   SMART_INBOX,
   SMART_SENT,
   pairKey,
+  type MailFolderFetch,
   type MailSelection,
   type SmartMailboxId,
 } from './mail-store';
@@ -35,6 +36,8 @@ import {
   type SmartRole,
 } from './mail-smart';
 import type { SmartPrefId } from './mail-sidebar-prefs';
+import { folderFetchAnswerOf, folderFetchSentence } from './mail-folder-context-items';
+import { useMailFolderContextMenu } from './MailFolderContextMenu';
 import { TwistIcon } from './mail-icons';
 
 interface Props {
@@ -50,7 +53,11 @@ interface Props {
   draftsTotal: number;
   selected: MailSelection | null;
   expanded: Partial<Record<SmartPrefId, 1>>;
+  /** Every folder with an on-demand fetch to report, keyed by `pairKey`. A child row shows its own. */
+  folderFetch: Record<string, MailFolderFetch>;
   onToggle: (id: SmartPrefId, on: boolean) => void;
+  /** The pane's watcher for a fetch a child row's menu started. */
+  onFetchAsked: (accountId: string, mailboxId: string, answer: Promise<void>) => void;
   onPicked: () => void;
 }
 
@@ -73,7 +80,8 @@ function accountLabel(account: MailAccountDto): string {
 }
 
 export function MailSmartRows({
-  accounts, mailboxes, live, unread, draftsCounts, draftsTotal, selected, expanded, onToggle, onPicked,
+  accounts, mailboxes, live, unread, draftsCounts, draftsTotal, selected, expanded, folderFetch,
+  onToggle, onFetchAsked, onPicked,
 }: Props) {
   const shown = ROWS.filter((row) => smartRowVisible(mailboxes, accounts, row.role));
   // The group's hairline is this list's own border, so an install with no smart row has no hairline
@@ -95,7 +103,9 @@ export function MailSmartRows({
             draftsCounts={draftsCounts}
             selected={selected}
             open={expanded[row.pref] === 1}
+            folderFetch={folderFetch}
             onToggle={onToggle}
+            onFetchAsked={onFetchAsked}
             onPicked={onPicked}
           />
         ))}
@@ -104,7 +114,10 @@ export function MailSmartRows({
   );
 }
 
-function SmartRow({ spec, accounts, mailboxes, live, unread, draftsCounts, selected, open, onToggle, onPicked }: {
+function SmartRow({
+  spec, accounts, mailboxes, live, unread, draftsCounts, selected, open, folderFetch, onToggle,
+  onFetchAsked, onPicked,
+}: {
   spec: RowSpec;
   accounts: MailAccountDto[];
   mailboxes: Record<string, MailboxDto[]>;
@@ -113,9 +126,14 @@ function SmartRow({ spec, accounts, mailboxes, live, unread, draftsCounts, selec
   draftsCounts: Record<string, number>;
   selected: MailSelection | null;
   open: boolean;
+  folderFetch: Record<string, MailFolderFetch>;
   onToggle: (id: SmartPrefId, on: boolean) => void;
+  onFetchAsked: (accountId: string, mailboxId: string, answer: Promise<void>) => void;
   onPicked: () => void;
 }) {
+  // This row's and its children's right-click menu. The hook next door is `useContextMenu` plus the
+  // item lists; nothing about placement or dismissal is decided here.
+  const menu = useMailFolderContextMenu();
   // The Drafts row is Walnut's own on both levels: every account has one whether or not its provider
   // keeps a Drafts folder, so its children are the accounts and its numbers are the drafts waiting on a
   // human. Inbox and Sent take the (account, mailbox) PAIRS, because the same role has a different id in
@@ -136,7 +154,18 @@ function SmartRow({ spec, accounts, mailboxes, live, unread, draftsCounts, selec
   };
   return (
     <li>
-      <div className="mail-mailbox-line">
+      {/* The gesture is on the LINE, not on this `<li>`: the li also holds the expanded children
+          list, and each child owns its own gesture on its own `<li>`. The line is what the chevron
+          and the row share, so the 20px twist stops being a hole where the browser menu comes back. */}
+      <div
+        className="mail-mailbox-line"
+        /* The ring `mail.css` draws for an open menu, on the element that owns the gesture. */
+        {...(menu.openKey === pairKey(SMART_ACCOUNT, spec.id) ? { 'data-ctx-open': 'true' } : {})}
+        onContextMenu={(event) => menu.open(event, {
+          kind: 'smart',
+          smart: { id: spec.id, pref: spec.pref, label: SMART_LABEL[spec.role], open, onToggle },
+        })}
+      >
         <button
           type="button"
           className="mail-twist"
@@ -199,8 +228,47 @@ function SmartRow({ spec, accounts, mailboxes, live, unread, draftsCounts, selec
               : live[pairKey(pair.accountId, pair.mailboxId)]?.unread ?? 0;
             const childActive = selected?.accountId === pair.accountId
               && selected.mailboxId === pair.mailboxId;
+            const childFetch = folderFetch[pairKey(pair.accountId, pair.mailboxId)] ?? null;
+            const childName = live[pairKey(pair.accountId, pair.mailboxId)]?.name ?? pair.mailboxId;
+            const childWords = childFetch
+              ? folderFetchSentence(
+                folderFetchAnswerOf(childFetch.state, childFetch.reason), childName, childFetch.detail,
+              )
+              : [];
             return (
-              <li key={pair.accountId}>
+              <li
+                key={pair.accountId}
+                /* An All Drafts child IS a Drafts row (its pair is the reserved `__walnut_drafts__`),
+                   so it gets that menu and never a fetch. Every other child is a real folder in a real
+                   account, and its menu acts on THAT pair: the account a merged list happens to list
+                   first is never the answer. The account's own tail lives in its own section below, so
+                   the account-wide switch is not offered here. */
+                {...(menu.openKey === pairKey(pair.accountId, pair.mailboxId)
+                  ? { 'data-ctx-open': 'true' }
+                  : {})}
+                onContextMenu={(event) => menu.open(event, pair.mailboxId === DRAFTS_MAILBOX
+                  ? {
+                    kind: 'drafts',
+                    drafts: {
+                      accountId: pair.accountId,
+                      accountName: accountLabel(account),
+                      manyAccounts: accounts.length > 1,
+                    },
+                  }
+                  : {
+                    kind: 'folder',
+                    folder: {
+                      accountId: pair.accountId,
+                      mailboxId: pair.mailboxId,
+                      label: childName,
+                      accountName: accountLabel(account),
+                      manyAccounts: accounts.length > 1,
+                      hasTail: false,
+                      tailExpanded: false,
+                      onFetchAsked,
+                    },
+                  })}
+              >
                 <button
                   type="button"
                   /* `current`, NOT `active`. The mailbox this row points at is also drawn as that
@@ -218,7 +286,10 @@ function SmartRow({ spec, accounts, mailboxes, live, unread, draftsCounts, selec
                   /* The name is cut to about 124px at the pane's usual width, and two accounts whose
                      display names share a prefix truncate to the same string: the full address is the
                      only thing that tells them apart. */
-                  title={account.address || accountLabel(account)}
+                  title={[
+                    account.address || accountLabel(account),
+                    ...(childFetch?.state === 'failed' ? childWords : []),
+                  ].join(' ')}
                   /* NO `aria-current`, even when this row is the selected one. The same mailbox is also
                      drawn as that account's own role row further down the pane, and both rows carrying it
                      announced the current location twice to a screen reader. The row the person clicked
@@ -229,6 +300,17 @@ function SmartRow({ spec, accounts, mailboxes, live, unread, draftsCounts, selec
                   }}
                 >
                   <span className="mail-mailbox-name">{accountLabel(account)}</span>
+                  {/* The same per-row mark the account's own folder row carries, so a fetch started
+                      from here reports here rather than 400px further down the pane. */}
+                  {childFetch && (
+                    <span
+                      className="mail-mailbox-fetch"
+                      data-testid="mail-mailbox-fetch-dot"
+                      data-state={childFetch.state}
+                      aria-label={childWords.join(' ')}
+                      role="img"
+                    />
+                  )}
                   {childUnread > 0 && (
                     <span className="mail-unread-badge" data-testid="mail-smart-child-unread">
                       {formatCount(childUnread)}
@@ -240,6 +322,9 @@ function SmartRow({ spec, accounts, mailboxes, live, unread, draftsCounts, selec
           })}
         </ul>
       )}
+      {/* Outside the line and outside every child `<li>`, so a pointer event inside the menu cannot
+          reach the gesture that opened it. */}
+      {menu.node}
     </li>
   );
 }

@@ -26,25 +26,31 @@ import {
   readMailMessage,
   refreshMail,
   searchMail,
+  type MailAccountDto,
   type MailMessageDto,
+  type MailboxDto,
 } from '@/api/mail';
 import { log } from '@/utils/log';
 import { closeMailComposer, onMailDraftEvent } from './compose/compose-actions';
 import { loadMailDrafts } from './compose/compose-drafts';
 import { loadProviders } from './mail-providers';
-import { markReadIfAllowed } from './mail-read-flag';
+import { bodyQuoteText } from './mail-quote-text';
+import { mailFlipsInFlight, markReadIfAllowed } from './mail-read-flag';
+import { flipCountedBy, forgetFlipCounted, mailCountsClock } from './mail-seen-clock';
 import { noteRecentFolder, readSelectedPref, writeSelectedPref } from './mail-sidebar-prefs';
-import { arrivalsAfterOpen, smartPairs, smartRowVisible, type SmartRole } from './mail-smart';
+import { arrivalsAfterOpen, folderLabel, smartPairs, smartRowVisible, type SmartRole } from './mail-smart';
 import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
 import { keepOpenRow, readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
 import {
   DRAFTS_MAILBOX,
   EMPTY_SEARCH,
   PAGE_SIZE,
+  SEEN,
   SMART_ACCOUNT,
   SMART_DRAFTS,
   SMART_INBOX,
   SMART_ROLE,
+  SMART_SENT,
   isRunning,
   isSmartSelection,
   noteMailIdentity,
@@ -54,10 +60,15 @@ import {
   publishBadge,
   run,
   sameSelection,
+  clearMailRowNote,
+  mailRowLabel,
   selectionKey,
   serverDraftsMailbox,
+  setMailPaneNote,
+  setMailRowNote,
   standIn,
   store,
+  type MailFolderFetch,
   type MailSelection,
   type MailSnapshot,
   type SmartMailboxId,
@@ -65,11 +76,92 @@ import {
 
 // ── reads ──
 
+/**
+ * Flips this console has made that the server's numbers do not include yet, as deltas.
+ *
+ * Every server count lands WHOLESALE (`loadMailboxesFor` replaces an account's rows,
+ * `listMailAccounts` replaces the totals), and the provider's unread figure only moves on its next
+ * mailbox refresh. So a `sync-completed` arriving one second after somebody marked three rows read
+ * used to bounce the badge back to the number those three rows were still counted in, and the row
+ * they were looking at stayed read: two truths on one screen. Subtracting the flips still in flight
+ * is what makes the landing agree with the rows.
+ *
+ * Resolved through the rows this console holds, because a pending key names a MESSAGE and the count
+ * belongs to its mailbox. A flip whose row is no longer held still counts against the account total.
+ */
+function pendingSeenDeltas(
+  accountId: string,
+  since: number,
+): { byMailbox: Map<string, number>; account: number } {
+  const state = store.state;
+  const byMailbox = new Map<string, number>();
+  let account = 0;
+  const pending = Object.entries(state.pendingSeen);
+  if (pending.length === 0) return { byMailbox, account };
+  const rows = [...state.messages, ...state.search.messages, ...(state.open?.message ? [state.open.message] : [])];
+  for (const [pair, seen] of pending) {
+    // ALREADY IN THIS NUMBER. `since` is the clock as the request went out, so a flip the server had
+    // answered before then is part of the count that just landed and subtracting it again is what made
+    // the badge read one low after a refresh (see `mail-seen-clock.ts`).
+    if (flipCountedBy(pair, since)) continue;
+    const row = rows.find((one) => pairKey(one.accountId, one.messageId) === pair);
+    const ownerId = row ? row.accountId : (JSON.parse(pair) as [string, string])[0];
+    if (ownerId !== accountId) continue;
+    const delta = seen ? -1 : 1;
+    account += delta;
+    if (row) byMailbox.set(row.mailboxId, (byMailbox.get(row.mailboxId) ?? 0) + delta);
+  }
+  return { byMailbox, account };
+}
+
+/**
+ * The server's mailbox rows with this console's in-flight flips taken off them.
+ *
+ * `since` is the clock reading taken BEFORE the request that produced `rows` (see `mailCountsClock`):
+ * a flip the server had already counted by then is in these numbers and must not be subtracted.
+ */
+function withPendingSeen(accountId: string, rows: MailboxDto[], since: number): MailboxDto[] {
+  const { byMailbox } = pendingSeenDeltas(accountId, since);
+  if (byMailbox.size === 0) return rows;
+  return rows.map((row) => {
+    const delta = byMailbox.get(row.mailboxId);
+    return delta ? { ...row, unread: Math.max(0, (row.unread || 0) + delta) } : row;
+  });
+}
+
+/**
+ * The same subtraction on the accounts landing.
+ *
+ * `unreadInbox` moves with it: it is what the badge falls back to before an account's mailbox rows
+ * have loaded, so leaving it alone would blink the old number back in exactly that window. A flip is
+ * made on the folder somebody is reading, which is their inbox nearly every time.
+ */
+function accountsWithPendingSeen(accounts: MailAccountDto[], since: number): MailAccountDto[] {
+  return accounts.map((account) => {
+    const { account: delta } = pendingSeenDeltas(account.accountId, since);
+    if (!delta) return account;
+    return {
+      ...account,
+      unread: Math.max(0, (account.unread || 0) + delta),
+      ...(typeof account.unreadInbox === 'number'
+        ? { unreadInbox: Math.max(0, account.unreadInbox + delta) }
+        : {}),
+    };
+  });
+}
+
 function loadAccounts(force = false): Promise<void> {
   return run('accounts', async () => {
     try {
+      // Read the flip clock BEFORE the request: what the answer can possibly include is decided here.
+      const since = mailCountsClock();
       const answer = await listMailAccounts();
-      patch({ accounts: answer.accounts ?? [], stand: null, error: null, loaded: true });
+      patch({
+        accounts: accountsWithPendingSeen(answer.accounts ?? [], since),
+        stand: null,
+        error: null,
+        loaded: true,
+      });
       publishBadge();
     } catch (error) {
       const expected = standIn(error);
@@ -140,9 +232,15 @@ async function loadEveryMailboxList(force = false, pick = true): Promise<boolean
 function loadMailboxesFor(accountId: string, force = false): Promise<void> {
   return run(`mailboxes:${accountId}`, async () => {
     try {
+      // The clock as this request goes out (see `withPendingSeen`): a flip the server counted before
+      // now is already in the numbers this answer carries.
+      const since = mailCountsClock();
       const answer = await listMailboxes(accountId);
       patch({
-        mailboxes: { ...store.state.mailboxes, [accountId]: answer.mailboxes ?? [] },
+        mailboxes: {
+          ...store.state.mailboxes,
+          [accountId]: withPendingSeen(accountId, answer.mailboxes ?? [], since),
+        },
         ...drainArrivals(),
       });
       ensureSelection();
@@ -292,6 +390,20 @@ export function selectSmartMailbox(id: SmartMailboxId): void {
  */
 type SelectionSource = 'human' | 'restored' | 'auto';
 
+/** The overlay with every SETTLED flip forgotten, for the two moments its list goes away. */
+function settledFlipsDropped(): Record<string, boolean> {
+  const pending = store.state.pendingSeen;
+  const inFlight = mailFlipsInFlight();
+  const held: Record<string, boolean> = {};
+  for (const [pair, seen] of Object.entries(pending)) {
+    if (inFlight.has(pair)) held[pair] = seen;
+    // A dropped flip takes its "the server counts this" mark with it: the map would otherwise hold a
+    // pair nothing asks about again.
+    else forgetFlipCounted(pair);
+  }
+  return held;
+}
+
 function applySelection(accountId: string, mailboxId: string, source: SelectionSource): void {
   const selected = store.state.selected;
   if (selected && selected.accountId === accountId && selected.mailboxId === mailboxId) return;
@@ -320,9 +432,18 @@ function applySelection(accountId: string, mailboxId: string, source: SelectionS
     listError: null,
     open: null,
     search: EMPTY_SEARCH,
-    // A fetch note describes ONE folder. Carrying it across a selection would say "fetching" over
-    // the folder just opened while the request in flight is about the one just left.
-    folderFetch: null,
+    // A note about a row is about a row that is no longer on screen.
+    rowNote: null,
+    // Same for the flips this console is holding over the list it just left (G5/G6). They keep a
+    // read row on an unread page and keep the badge off it, and both of those are about THAT list;
+    // carried across a selection they would go on subtracting from every later landing, so the badge
+    // would drift low by the number of rows the human ever flipped. A flip still in flight stays:
+    // its rollback has to find the row.
+    pendingSeen: settledFlipsDropped(),
+    // `folderFetch` is deliberately NOT cleared here: it is keyed by folder, so each entry describes
+    // the folder it was asked for and a sidebar row can be fetched without ever being selected. It
+    // was a single slot, and then carrying it across a selection said "fetching" over the folder
+    // just opened while the request in flight was about the one just left.
   });
   void loadMailMessages();
 }
@@ -369,46 +490,88 @@ function smartRoleOf(selection: MailSelection): SmartRole | null {
  */
 export function fetchSelectedFolder(auto = false): Promise<void> {
   const selection = store.state.selected;
-  // The route takes a real (accountId, mailboxId). Both virtual rows return here, on the first line,
+  if (!selection) return Promise.resolve();
+  return fetchFolderPair(selection.accountId, selection.mailboxId, auto);
+}
+
+/**
+ * Fetch a named folder now, for a row that is not the selection.
+ *
+ * The same body as above with the pair passed in, and that is the whole difference: a sidebar row's
+ * own menu must not have to CHANGE the selection first, because selecting a folder replaces the
+ * message list, and "fetch this one" is not "take me there". Same `run` key, so the two cannot send
+ * two requests for one folder.
+ */
+export function fetchMailboxNow(accountId: string, mailboxId: string): Promise<void> {
+  return fetchFolderPair(accountId, mailboxId, false);
+}
+
+/** Every smart row's reserved mailbox id, which no fetch may ever be sent. */
+const SMART_IDS = new Set<string>([SMART_INBOX, SMART_SENT, SMART_DRAFTS]);
+
+function fetchFolderPair(accountId: string, mailboxId: string, auto: boolean): Promise<void> {
+  // The route takes a real (accountId, mailboxId). Every virtual row returns here, on the first line,
   // rather than sending a reserved id the provider would have to refuse.
-  if (!selection || selection.mailboxId === DRAFTS_MAILBOX || isSmartSelection(selection)) {
+  if (!accountId || !mailboxId) return Promise.resolve();
+  if (mailboxId === DRAFTS_MAILBOX || accountId === SMART_ACCOUNT || SMART_IDS.has(mailboxId)) {
     return Promise.resolve();
   }
+  const selection = { accountId, mailboxId };
   const key = selectionKey(selection);
   if (auto) {
     if (store.folderFetchAsked.has(key)) return Promise.resolve();
     store.folderFetchAsked.add(key);
   }
   return run(`folder-fetch:${key}`, async () => {
-    patch({ folderFetch: { key, state: 'fetching' } });
+    setFolderFetch(key, { key, state: 'fetching' });
     try {
-      const answer = await fetchMailbox(selection.accountId, selection.mailboxId);
-      if (!sameSelection(selection)) return;
+      const answer = await fetchMailbox(accountId, mailboxId);
       if (answer.running) {
         // A 202: still going, and `sync-completed` will bring the rows. Saying "fetching" is the
         // truth, and it is also what keeps the empty-folder sentence off the screen meanwhile.
-        patch({ folderFetch: { key, state: 'running' } });
+        setFolderFetch(key, { key, state: 'running' });
         return;
       }
       if (answer.fetched) {
-        patch({ folderFetch: null });
-        // The rows are in the cache now; this is the read that puts them on screen. The sync event
-        // does the same thing, and `run` collapses the two into one request.
-        await loadMailMessages(true);
+        setFolderFetch(key, null);
+        // The rows are in the cache now; this is the read that puts them on screen, and only when
+        // this folder is the one on screen: a fetch fired from a sidebar row must not replace the
+        // list somebody is reading. The sync event covers that case.
+        if (sameSelection(selection)) await loadMailMessages(true);
         return;
       }
-      patch({
-        folderFetch: {
-          key,
-          state: 'failed',
-          ...(answer.detail ? { detail: answer.detail } : {}),
-        },
+      // The plugin's own reason word and its own detail, stored and not rewritten: the words for a
+      // human belong to the pane that draws them, and every one of the five outcomes reads
+      // differently (a replica will never answer another way, `failed` is worth pressing again).
+      setFolderFetch(key, {
+        key,
+        state: 'failed',
+        ...(answer.reason ? { reason: answer.reason } : {}),
+        ...(answer.detail ? { detail: answer.detail } : {}),
       });
     } catch (error) {
-      if (!sameSelection(selection)) return;
-      patch({ folderFetch: { key, state: 'failed', detail: mailFailure(error).message } });
+      const failure = mailFailure(error);
+      // A replica refuses every write with the same 503, and that is not a fault: it will never answer
+      // differently and there is nothing to press again. It is one of the five answers the pane has a
+      // sentence for, and the read-flag path already tells it apart the same way, so a refusal here
+      // said "Walnut could not fetch X" and invited a retry that cannot work.
+      const replica = failure.status === 503 && failure.code === 'primary_only';
+      setFolderFetch(key, {
+        key,
+        state: 'failed',
+        reason: replica ? 'replica' : 'failed',
+        ...(replica ? {} : { detail: failure.message }),
+      });
     }
   }, !auto);
+}
+
+/** One folder's entry in the map, or its removal. */
+function setFolderFetch(key: string, value: MailFolderFetch | null): void {
+  const held = { ...store.state.folderFetch };
+  if (value) held[key] = value;
+  else delete held[key];
+  patch({ folderFetch: held });
 }
 
 /**
@@ -484,14 +647,99 @@ function unreadOnlyFor(selection: MailSelection): boolean {
  * read rows immediately) and the fuller answer replaces it. `nextBefore` is the one thing that must
  * go, because a cursor issued for the other set would page the wrong list from a click landing in
  * that window.
+ *
+ * The PAIR is passed in rather than read from the selection, because the sidebar's own row menu can
+ * turn the filter on for a folder that is not the one on screen, and reading `state.selected` here
+ * made every such click silently act on whatever the middle pane happened to be showing.
  */
-export function setMailUnreadOnly(on: boolean): Promise<void> {
-  const selection = store.state.selected;
-  if (!selection || !unreadFilterable(selection)) return Promise.resolve();
-  writeUnreadOnly(selection.accountId, selection.mailboxId, on);
-  patch({ nextBefore: null, listError: null });
+export function setMailUnreadOnly(accountId: string, mailboxId: string, on: boolean): Promise<void> {
+  const selection = { accountId, mailboxId };
+  if (!accountId || !mailboxId || !unreadFilterable(selection)) return Promise.resolve();
+  writeUnreadOnly(accountId, mailboxId, on);
+  // Only the folder on screen has a page to reload: the preference is what every later read of the
+  // other folder will carry.
+  //
+  // And a folder that is NOT on screen gets a sentence, in the same channel the pane's fetch answers
+  // use. Nothing else changed on screen (not one row, not the header, not a single number), so the
+  // click was indistinguishable from a miss: the only proof it landed was the item's own label on
+  // reopening the menu.
+  if (!sameSelection(selection)) {
+    setMailPaneNote(unreadOnlyAnswer(accountId, mailboxId, on));
+    return Promise.resolve();
+  }
+  // Toggling the filter is the other moment the overlay's job ends: the page it was holding a read
+  // row on is being rebuilt from the other question entirely (see `applySelection`).
+  patch({ nextBefore: null, listError: null, pendingSeen: settledFlipsDropped() });
   return loadMailMessages(true);
 }
+
+/**
+ * What the pane says about a preference written for a folder nobody is looking at.
+ *
+ * Names the FOLDER, from the live mailbox row, because the whole complaint is that the sentence about
+ * "this folder" would be read next to a list of another folder's mail. Falls back to the id, which is
+ * the only name a folder the console has not listed yet has.
+ */
+export function unreadOnlyAnswer(accountId: string, mailboxId: string, on: boolean): string {
+  const row = (store.state.mailboxes[accountId] ?? []).find((one) => one.mailboxId === mailboxId);
+  const name = row ? folderLabel(row) : mailboxId;
+  return on
+    ? `${name} now shows only unread messages.`
+    : `${name} now shows every message.`;
+}
+
+/**
+ * The plain text of one message, for a reply or a forward started from a LIST row.
+ *
+ * The quote builder falls back to the attribution line alone when it is handed no text, and the
+ * reader was its only caller (it always has the open body). From a row there is no body at all, so a
+ * reply would have saved a draft holding "On <date>, <sender> wrote:" and nothing underneath it, and
+ * a draft is written to the server as soon as it opens: the wrong thing would be stored before
+ * anybody typed. Null means the composer must not be opened.
+ *
+ * Deliberately NOT `markReadIfAllowed`, and it does not touch `state.open` or the selection: reading
+ * a body to quote it is not opening the message, and this whole menu exists so that a right-click
+ * does not mark anything read.
+ */
+export function loadMessageBodyForQuote(accountId: string, messageId: string): Promise<string | null> {
+  const pair = pairKey(accountId, messageId);
+  return run(`quote:${pair}`, async () => {
+    setMailRowNote('Fetching the message to quote.', pair);
+    try {
+      const answer = await readMailMessage(accountId, messageId);
+      // The HTML half is quoted when the provider sent no text half, which is most newsletters: the
+      // attribution line with nothing under it was being SAVED as a draft the moment the composer
+      // opened (see `bodyQuoteText`). '' stays null: there is genuinely nothing to quote.
+      quoted = { pair, text: bodyQuoteText(answer.body) || null };
+      clearMailRowNote();
+    } catch (error) {
+      const failure = mailFailure(error);
+      quoted = { pair, text: null };
+      log.warn('mail', 'body read for a quote failed', { accountId, messageId, error: failure.message });
+      const row = [...store.state.messages, ...store.state.search.messages]
+        .find((one) => one.accountId === accountId && one.messageId === messageId);
+      // Names the row: somebody working down a list has just touched several, and no draft was made.
+      // TWO SENTENCES, the folder-fetch rule (`folderFetchSentence`): Walnut's sentence ends, then the
+      // provider's own text follows as its own, because nothing here can promise its shape.
+      setMailRowNote(
+        `Walnut could not read ${row ? mailRowLabel(row) : 'that message'}, so no reply was started.`
+        + ` ${failure.message}`,
+        pair,
+      );
+    }
+  }).then(() => (quoted?.pair === pair ? quoted.text : null));
+}
+
+/**
+ * The body the last quote read produced, held for the caller that awaited it.
+ *
+ * `run` hands every caller the same promise and no value, which is what the coalescing is for (a
+ * double click on Reply is one read). ONE slot rather than a map, so a six-thousand-word mail is not
+ * kept alive by a cache nobody empties; two callers of the same read both see it.
+ */
+let quoted: { pair: string; text: string | null } | null = null;
+
+onMailStoreReset(() => { quoted = null; });
 
 export function loadMailMessages(force = false): Promise<void> {
   const selection = store.state.selected;
@@ -538,15 +786,21 @@ function loadMessagePage(selection: MailSelection, mailboxId: string | null, for
       const rows = page.messages ?? [];
       // Rows on screen retire the fetch note whatever it said: they are the outcome it was waiting
       // for, and a "fetching" line above a full list is the console describing its own past.
-      const fetching = store.state.folderFetch;
-      const settled = rows.length > 0 && fetching?.key === selectionKey(selection);
+      const key = selectionKey(selection);
+      const settled = rows.length > 0 && !!store.state.folderFetch[key];
+      const held = { ...store.state.folderFetch };
+      if (settled) delete held[key];
       patch({
         // The message being read is not in a fresh unread answer any more, because opening it is
-        // what marked it read. It stays until another row is selected; see `keepOpenRow`.
-        messages: unread ? keepOpenRow(rows, store.state.messages, store.state.open) : rows,
+        // what marked it read, and neither is a row this console has just flipped from a menu. Both
+        // stay until another row is selected; see `keepOpenRow`.
+        messages: unread
+          ? keepOpenRow(rows, store.state.messages, store.state.open, Object.keys(store.state.pendingSeen))
+          : rows,
         nextBefore: page.nextBefore ?? null,
         listLoading: false,
-        ...(settled ? { folderFetch: null } : {}),
+        ...(settled ? { folderFetch: held } : {}),
+        ...confirmedPendingSeen(rows),
       });
       // NOTHING CACHED AND NEVER FETCHED is not an empty folder, it is a folder whose turn in the
       // sweep has not come. On an account with 67 folders that turn is an hour away, so the folder
@@ -564,6 +818,30 @@ function loadMessagePage(selection: MailSelection, mailboxId: string | null, for
       });
     }
   }, force);
+}
+
+/**
+ * Pending flips the server has now agreed with, as a patch fragment that forgets them.
+ *
+ * A page read is the confirmation: the rows come from the plugin's own cache, so a row that arrives
+ * carrying the flag this console guessed means the overlay has nothing left to protect. Kept forever
+ * it would keep subtracting one from every later landing, and the badge would drift low by exactly
+ * the number of rows the human ever touched.
+ */
+function confirmedPendingSeen(rows: MailMessageDto[]): Partial<MailSnapshot> {
+  const pending = store.state.pendingSeen;
+  if (Object.keys(pending).length === 0) return {};
+  let changed = false;
+  const held = { ...pending };
+  for (const row of rows) {
+    const pair = pairKey(row.accountId, row.messageId);
+    const wanted = held[pair];
+    if (wanted === undefined || row.flags.includes(SEEN) !== wanted) continue;
+    delete held[pair];
+    forgetFlipCounted(pair);
+    changed = true;
+  }
+  return changed ? { pendingSeen: held } : {};
 }
 
 export function loadOlderMailMessages(): Promise<void> {

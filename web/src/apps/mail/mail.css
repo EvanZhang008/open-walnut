@@ -54,8 +54,70 @@
 /* Three tones, so the console has a shape before anything is in it: the folders and the reader are
    trays (`--bg-secondary`), the message column is the page. The reader's tone is what lets a mail
    body sit on white paper in the dark theme without looking like a hole in the app. */
-.mail-accounts-pane { background: var(--bg-secondary); }
-.mail-list-pane { background: var(--bg); }
+.mail-accounts-pane {
+  position: relative;
+  background: var(--bg-secondary);
+}
+
+/* The folder pane's ANSWER STRIP: what a fetch (or a preference written for a folder that is not on
+   screen) has to say, at the foot of the pane, IN THE FLOW.
+   Floated, these were up to three opaque cards with a shadow, and at 1280x800 they covered a whole
+   second account: its header and both its folder rows were invisible behind them, `pointer-events: none`
+   meant rows could be clicked but not read, and they stood there for 30 seconds. In the flow at the foot
+   the space comes out of the SCROLLER above (`flex: 1`), so no row moves and none is hidden.
+   One line each, ellipsed, with the full text in `title`: three sentences cannot grow into the list. */
+.mail-pane-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 8px 6px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.mail-pane-strip-lines {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mail-pane-strip .mail-refresh-note {
+  padding: 2px 0;
+  font-size: 11.5px;
+  /* ONE line per answer. The whole sentence is in `title`, and the folder name leads it, so the half
+     that identifies the answer is the half that survives the clip. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dismiss. A refusal now waits to be read rather than retiring on a timer, so there has to be a way to
+   say "read it" that is not waiting or changing folder. */
+.mail-pane-strip-close {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mail-pane-strip-close:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* `relative` is kept for the pane's own overlays; the row answer is no longer one of them (see
+   `.mail-row-strip`, which is a footer the list gives up rather than a card over a row). */
+.mail-list-pane {
+  position: relative;
+  background: var(--bg);
+}
 
 /* ── shared pane furniture ── */
 
@@ -571,6 +633,12 @@
 
 .mail-row:hover { background: var(--bg-hover); }
 
+/* The row is a `div role="button"` now (see MailMessageRow), so the keyboard ring is ours to draw. */
+.mail-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .mail-row.selected {
   background: var(--accent-subtle);
   box-shadow: inset 2px 0 0 var(--accent);
@@ -691,6 +759,97 @@
    is the column the eye scans) and the subject stays readable rather than shouting too. */
 .mail-row.unread .mail-row-from { font-weight: 700; color: var(--fg); }
 .mail-row.unread .mail-row-subject { font-weight: 600; color: var(--fg); }
+
+/* The row a context menu is open on. A full RING, deliberately not the selected row's
+   `inset 2px 0 0 var(--accent)` left bar: a right-click must not look like a selection, because the
+   whole point of this menu is that it does not open the message or move the selection. Inset, so the
+   row's height and its text's left edge do not move when the ring appears. Both kinds of row, one
+   rule, so a folder row and a message row answer a right-click the same way. */
+.mail-row[data-ctx-open],
+.mail-mailbox[data-ctx-open],
+/* A sidebar row's gesture lives on its LINE (the `<li>`, or the `.mail-mailbox-line` a smart row shares
+   with its chevron), because a menu that covers most of a line and hands the rest back to the browser is
+   the complaint this slice exists to fix. So the line is what gets marked, and the ring goes on the row
+   inside it: folder rows, the Drafts row, the smart rows and their account children, all four. */
+[data-ctx-open] > .mail-mailbox {
+  /* NEUTRAL, and with a tone of its own: the ring used to be `var(--accent)`, the selection bar's exact
+     colour, so its left edge was pixel identical to a selection and the mark said the wrong thing about
+     a gesture whose whole promise is that it selects nothing. */
+  box-shadow: inset 0 0 0 2px var(--border-strong);
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+
+/* BOTH at once. Two rules setting `box-shadow` at equal specificity meant the later one won outright, so
+   right-clicking the row you were reading REPLACED its selection bar with the ring: the row stopped
+   looking selected while it still was. One declaration carries both marks, the selection bar first
+   because the earliest shadow paints on top. */
+.mail-row.selected[data-ctx-open] {
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 0 0 2px var(--border-strong);
+  background: var(--accent-subtle);
+}
+
+.mail-mailbox.active[data-ctx-open],
+[data-ctx-open] > .mail-mailbox.active {
+  background: var(--accent-subtle);
+}
+
+/* A row whose message already has a task, and a row whose last read flip the provider refused. Both
+   are one glyph at the end of the subject line, in the row's own metadata colour: a row that has
+   been triaged and a row that failed to be must be tellable apart at a glance from the fifty that
+   have not, and the failed one carries the provider's own words in its `title`. */
+.mail-row-task {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.mail-row[data-flag-failed] .mail-row-flag-failed {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--warning);
+}
+
+/* The subject and the snippet are TEXT a person quotes into a reply or a search, and that is also what
+   decides whether the browser's own menu (Copy, Look Up, Translate) is the better answer to a
+   right-click: `keepNativeContextMenu` keeps it on a live selection, and there can be no selection in
+   text that cannot be selected. These two declarations only reach anything because the row is a
+   `div role="button"` and not a `<button>`: WebKit refuses a selection inside a form control whatever
+   this says, so while the row was a button the whole rule was Chromium-only (see MailMessageRow). */
+.mail-row-subject-text,
+.mail-row-snippet { user-select: text; }
+
+/* A folder whose on-demand fetch is in flight or did not work: one dot on the row, in place of the
+   sentence the message pane shows for the folder on screen. A folder fetched from the sidebar is
+   usually NOT the folder on screen, so the only place that outcome can be seen is the row itself. */
+.mail-mailbox-fetch {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.mail-mailbox-fetch[data-state='failed'] { background: var(--warning); opacity: 1; }
+
+/* A dot that means IN PROGRESS moves, so a still one cannot be mistaken for a permanent mark on the
+   folder. `fetching` is the request in flight; `running` is the plugin's 202, where the sweep finishes
+   the work and the answer comes later, which is still in progress. */
+.mail-mailbox-fetch[data-state='fetching'],
+.mail-mailbox-fetch[data-state='running'] {
+  animation: mail-fetch-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mail-fetch-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.95; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mail-mailbox-fetch[data-state='fetching'],
+  .mail-mailbox-fetch[data-state='running'] { animation: none; opacity: 0.75; }
+}
 
 .mail-load-older {
   padding: 10px;
@@ -1094,6 +1253,28 @@
 /* The line under the list header: an account of this merged list has stopped syncing, or the mailbox's
    unread count and the unread rows on screen are not the same number. Both used to live in title
    attributes, which is the same as not saying them. */
+/* The answer to one row action: a strip at the FOOT of the message pane, in the flow, below the rows.
+   Two shapes were wrong before this one. A line ABOVE the rows pushed every row down 20px (36px for a
+   refusal's two lines) and left them there, and the row a triage pass aims at next has to still be where
+   it was seen. A floated card at the foot kept the rows still but covered the last row of a full list:
+   an opaque card over one row's snippet, clickable and unreadable. Here the space comes out of the
+   scroller above it, so nothing moves and nothing is hidden. */
+.mail-row-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg-secondary);
+}
+
+.mail-row-strip > span { flex: 1; min-width: 0; }
+
 .mail-list-note {
   display: flex;
   flex-wrap: wrap;
@@ -1138,4 +1319,70 @@
 .mail-console[data-narrow-pane='accounts'] .mail-accounts-pane > .mail-pane-head,
 .mail-console[data-narrow-pane='accounts'] .mail-refresh-note {
   max-width: 428px;
+}
+
+/* ── Row marks, round 3 ───────────────────────────────────────────────────────
+   Nothing here styles the shared right-click primitive (rule 1, and a ratchet checks it): the fixed
+   measure the mail menus ask for is a modifier OF that primitive and lives beside it in globals.css.
+   What follows are marks on mail's own rows. */
+
+/* The provider refused this row's read flip, and the row was rolled back to look untouched. The amber
+   glyph alone was only explained on HOVER, with the sentence itself 620px away at the foot of the
+   column, so the state is said in words ON the row and the words are a BUTTON: pressing it brings the
+   provider's own reason back into the pane's answer strip. Inside the subject line, so the row keeps its
+   height and no row moves. */
+.mail-row-flag-failed {
+  gap: 4px;
+  align-items: center;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  color: var(--warning);
+}
+
+.mail-row-flag-failed-word {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.mail-row-flag-failed:hover {
+  text-decoration: underline;
+}
+
+/* The row the answer strip names, brought back under the eye. A short outline rather than a background,
+   because the row's own unread/selected tones already own its background. */
+.mail-row.flash-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* `Show the row`, in the answer strip: the sentence names a row that can be 620px up the column, and a
+   scan of the whole list is the cost this removes. */
+.mail-row-strip .mail-row-strip-jump {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  padding: 0 4px;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+/* A folder whose list is filtered to unread only. Without this the sidebar row of a filtered folder was
+   indistinguishable from an empty one: navigate away and back and the folder just looked like it had no
+   mail. */
+.mail-mailbox[data-unread-only='1'] .mail-mailbox-name::after {
+  content: 'unread only';
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 600;
+  white-space: nowrap;
 }

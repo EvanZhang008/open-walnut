@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import {
   keepNativeContextMenu,
   normalizeContextMenuItems,
+  selectionForGesture,
 } from '../../web/src/utils/context-menu.js'
 
 /**
@@ -110,5 +111,48 @@ describe('normalizeContextMenuItems', () => {
     ])
     expect(items).toHaveLength(3)
     expect(items[1].divider).toBe(true)
+  })
+})
+
+/**
+ * Rule 2 asks about a selection the HUMAN made, and WebKit hands the gesture one it made itself: the
+ * word under the pointer is selected as the right-press's default action, before `contextmenu` is
+ * dispatched. On a surface whose row text is selectable that made the row's own menu unreachable in the
+ * Mac app while Chromium, which does not pre-select, opened it every time.
+ */
+describe('a selection the right-press itself created', () => {
+  const NOW = 10_000
+
+  it('counts as no selection, so the row menu opens (WebKit)', () => {
+    // Nothing was selected when the button went down; the word appeared during the press.
+    expect(selectionForGesture('Timetable', { text: '', at: NOW - 5 }, NOW)).toBe('')
+  })
+
+  it('leaves a selection the human made alone, so Copy and Look Up stay reachable', () => {
+    // A right-click INSIDE a selection does not change it: the text is the same on both sides.
+    expect(selectionForGesture('two words', { text: 'two words', at: NOW - 5 }, NOW)).toBe('two words')
+  })
+
+  it('counts a selection the press REPLACED as gesture-made', () => {
+    // The human's selection was somewhere else and the press has already thrown it away, so keeping
+    // the browser menu would offer Copy for characters that are no longer selected.
+    expect(selectionForGesture('Timetable', { text: 'another row', at: NOW - 5 }, NOW)).toBe('')
+  })
+
+  it('takes the live selection at face value when no press belongs to this gesture', () => {
+    // The keyboard menu key fires `contextmenu` with no press at all, and a snapshot from a minute ago
+    // says nothing about it.
+    expect(selectionForGesture('two words', { text: '', at: NOW - 60_000 }, NOW)).toBe('two words')
+    expect(selectionForGesture('two words', null, NOW)).toBe('two words')
+  })
+
+  it('is empty whenever the live selection is, whatever the press held', () => {
+    expect(selectionForGesture('', { text: 'two words', at: NOW - 5 }, NOW)).toBe('')
+    expect(selectionForGesture('   ', null, NOW)).toBe('')
+    expect(selectionForGesture(null, null, NOW)).toBe('')
+  })
+
+  it('does not trust a snapshot stamped in the future (a clock that moved)', () => {
+    expect(selectionForGesture('two words', { text: '', at: NOW + 500 }, NOW)).toBe('two words')
   })
 })

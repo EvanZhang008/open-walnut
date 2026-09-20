@@ -308,7 +308,7 @@ test.describe('the merged lists at production density', () => {
     await expect(page.getByTestId('mail-list-count-word')).toHaveText('total')
     await headerUnread(page).click()
     await expect(rows(page)).toHaveCount(CACHED_UNREAD, { timeout: 60_000 })
-    await expect(headerUnread(page)).toHaveText(`${CACHED_UNREAD} unread · showing`)
+    await expect(headerUnread(page)).toHaveText(`${CACHED_UNREAD} unread · showing unread only`)
     // With the filter on the chip counts the rows under it, so there is nothing left to explain.
     await expect(page.getByTestId('mail-unread-gap')).toHaveCount(0)
     await expect(headerUnread(page)).toHaveAttribute('data-loaded', 'true')

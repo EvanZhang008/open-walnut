@@ -18,6 +18,7 @@
  */
 import { mailFailure, type MailAccountDto, type MailBodyDto, type MailDraftDto, type MailMessageDto, type MailProviderSummary, type MailboxDto } from '@/api/mail';
 import type { AddressChip } from './compose/mail-address';
+import { senderLabel } from './mail-format';
 import type { SendStatus } from './compose/send-status';
 
 /** One page of the list. The plugin caps a request at 200. */
@@ -230,13 +231,52 @@ export interface MailSnapshot {
   listError: string | null;
   search: MailSearchState;
   /**
-   * The first fetch of a folder the background sweep has never reached, and how it went.
+   * The first fetch of a folder the background sweep has never reached, and how each one went.
    *
-   * `key` is the selection it belongs to, so an answer that arrives after the human has moved on is
-   * dropped instead of describing the folder now on screen. Null means there is nothing to say:
-   * either the folder has been fetched before or this console has not asked.
+   * Keyed by `selectionKey`, one entry per folder, because the fetch is no longer only about the
+   * folder on screen: a sidebar row's own menu can ask for a folder nobody has selected, and a single
+   * slot made the second ask overwrite the first one's outcome (two rows, one sentence, describing
+   * whichever answered last). An absent key means there is nothing to say about that folder: it has
+   * been fetched before, or this console has not asked.
    */
-  folderFetch: MailFolderFetch | null;
+  folderFetch: Record<string, MailFolderFetch>;
+  /**
+   * ONE sentence about a row that is not the open message, and which row it is about.
+   *
+   * Everything that can fail from a LIST (a read flag the provider refused, a body that would not
+   * load, a task the server could not make) used to report itself through the open reader's own
+   * fields, which is a silent dead end for a row nobody opened. `pair` is `pairKey(accountId,
+   * messageId)` so the row itself can carry a mark as well as the sentence; null means the note is
+   * about no single row (a folder, a selection).
+   */
+  rowNote: { text: string; pair: string | null; sticky?: boolean } | null;
+  /**
+   * ONE sentence about a FOLDER, for the left pane.
+   *
+   * The pane already answers a fetch by naming the folder; a preference written for a folder that is
+   * not on screen had no answer at all, so the click was indistinguishable from a miss (the only proof
+   * was the label when the menu was reopened). Same channel, same wording rules, and the middle pane is
+   * deliberately not it: the folder being spoken about is usually not the one whose rows are showing.
+   */
+  paneNote: { text: string; sticky?: boolean } | null;
+  /**
+   * Read flips this console has made and the server has not confirmed yet, by `pairKey`, to the
+   * intended `seen`.
+   *
+   * Two things read it. The unread filter keeps a row this console just flipped on the page it is
+   * on (a row vanishing out from under the pointer is how a triage pass loses its place), and every
+   * server count that lands while a flip is in flight has these subtracted before it is published,
+   * because `loadMailboxesFor` replaces an account's mailbox rows wholesale: a `sync-completed`
+   * arriving mid-flight would otherwise bounce the badge back to the provider's older number.
+   */
+  pendingSeen: Record<string, boolean>;
+  /**
+   * Rows whose last flip the provider refused, by `pairKey`, holding the PROVIDER's own reason.
+   *
+   * A rolled-back row looks exactly like a row nobody has touched, so somebody working down a list
+   * reads their own failure as a job done. The row keeps a mark and this is its `title`.
+   */
+  flagFailed: Record<string, string>;
   open: MailOpenMessage | null;
   refreshing: boolean;
   /** What a 202 refresh left behind: a sentence, not an error. */
@@ -284,7 +324,110 @@ export interface MailSnapshot {
 export interface MailFolderFetch {
   key: string;
   state: 'fetching' | 'running' | 'failed';
+  /**
+   * The plugin's OWN reason word, never renamed here (`web/src/api/mail.ts`, `MailboxFetchResult`).
+   *
+   * The five outcomes do not mean the same thing to a person: a replica will never answer
+   * differently, an unknown mailbox is a folder the server has stopped listing, and only `failed` is
+   * worth pressing again. Renaming them in this layer is how the words drift from the plugin's.
+   */
+  reason?: 'replica' | 'stopped' | 'unknown-mailbox' | 'failed';
   detail?: string;
+}
+
+/** What this console knows about one folder's on-demand fetch, or null. */
+export function folderFetchFor(snapshot: MailSnapshot, key: string): MailFolderFetch | null {
+  return snapshot.folderFetch[key] ?? null;
+}
+
+/**
+ * Say one thing about one row.
+ *
+ * In the store rather than in the pane, because the failures it reports come from the actions layer
+ * and the pane that showed the row may be a merged list, a search result or nothing at all.
+ */
+export function setMailRowNote(
+  text: string,
+  pair: string | null = null,
+  options: { sticky?: boolean } = {},
+): void {
+  const sticky = options.sticky === true;
+  patch({ rowNote: { text, pair, ...(sticky ? { sticky: true } : {}) } });
+  // A SUCCESS is retired on a timer, which is half of why it can be an overlay: a sentence that answers
+  // one right-click has no business sitting over the list for the rest of the session, and the triage
+  // loop is dozens of right-clicks.
+  //
+  // A REFUSAL is not, and that difference is the rule both answer channels now share (see the pane's
+  // fetch notes): the one sentence somebody needs during a triage pass used to vanish on its own 12
+  // seconds in, while they were still working down the list. It goes when the same action is started on
+  // that row again, when the selection changes, or when it is dismissed.
+  if (rowNoteTimer) clearTimeout(rowNoteTimer);
+  rowNoteTimer = null;
+  if (sticky) return;
+  rowNoteTimer = setTimeout(() => {
+    rowNoteTimer = null;
+    if (store.state.rowNote?.text === text) patch({ rowNote: null });
+  }, ANSWER_MS);
+}
+
+/**
+ * Long enough to read two sentences, short enough that the next right-click has a clean pane.
+ *
+ * ONE constant for both channels: the row toast lived 12s and the pane's fetch sentences 30s, so two
+ * answers to the same gesture disagreed about how long an answer lasts.
+ */
+export const ANSWER_MS = 12_000;
+
+let rowNoteTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Say one thing about a FOLDER, in the left pane.
+ *
+ * Same two rules as the row note above: a plain answer retires itself, and anything the person may have
+ * to act on stays until they dismiss it or the console changes what is on screen.
+ */
+export function setMailPaneNote(text: string, options: { sticky?: boolean } = {}): void {
+  const sticky = options.sticky === true;
+  patch({ paneNote: { text, ...(sticky ? { sticky: true } : {}) } });
+  if (paneNoteTimer) clearTimeout(paneNoteTimer);
+  paneNoteTimer = null;
+  if (sticky) return;
+  paneNoteTimer = setTimeout(() => {
+    paneNoteTimer = null;
+    if (store.state.paneNote?.text === text) patch({ paneNote: null });
+  }, ANSWER_MS);
+}
+
+export function clearMailPaneNote(): void {
+  if (paneNoteTimer) { clearTimeout(paneNoteTimer); paneNoteTimer = null; }
+  if (store.state.paneNote) patch({ paneNote: null });
+}
+
+let paneNoteTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * How a sentence names one row: its subject, shortened, and who it is from.
+ *
+ * ONE wording, because every note about a row comes from a different file (a refused read flag, a
+ * body that would not load, a task the server could not make) and "that message" is nobody when the
+ * human has just right-clicked their way down fifteen rows.
+ */
+export function mailRowLabel(
+  message: Pick<MailMessageDto, 'subject' | 'from'>,
+  style: 'from' | 'paren' = 'from',
+): string {
+  const subject = (message.subject || '(no subject)').replace(/\s+/g, ' ').trim();
+  const short = subject.length > 48 ? `${subject.slice(0, 47)}…` : subject;
+  // `paren` is for a sentence that already spends a "from" on its own verb: `Task made from "X" from
+  // Keeper Reports.` put two of them in nine words.
+  return style === 'paren'
+    ? `"${short}" (${senderLabel(message.from)})`
+    : `"${short}" from ${senderLabel(message.from)}`;
+}
+
+export function clearMailRowNote(): void {
+  if (rowNoteTimer) { clearTimeout(rowNoteTimer); rowNoteTimer = null; }
+  if (store.state.rowNote) patch({ rowNote: null });
 }
 
 export const EMPTY_SEARCH: MailSearchState = {
@@ -308,7 +451,11 @@ function initialState(): MailSnapshot {
     olderLoading: false,
     listError: null,
     search: EMPTY_SEARCH,
-    folderFetch: null,
+    folderFetch: {},
+    rowNote: null,
+    paneNote: null,
+    pendingSeen: {},
+    flagFailed: {},
     open: null,
     refreshing: false,
     refreshNote: null,
@@ -532,7 +679,14 @@ export function setMailBadgeHandle(handle: MailBadgeHandle): void {
  * store that can never notify it again.
  */
 export function __resetMailStore(): void {
+  // `initialState()` is what clears the four cross-row maps (`folderFetch`, `rowNote`,
+  // `pendingSeen`, `flagFailed`): each one outlives a single row on purpose, so a case that leaked
+  // any of them would grade the next case's arithmetic against the last case's pending flip.
   store.state = initialState();
+  // The row note's retire timer is module state, so a case that left one armed would blank the next
+  // case's note mid-assertion.
+  if (rowNoteTimer) { clearTimeout(rowNoteTimer); rowNoteTimer = null; }
+  if (paneNoteTimer) { clearTimeout(paneNoteTimer); paneNoteTimer = null; }
   store.openSeq = 0;
   store.preferAccount = null;
   store.refreshNoteAccount = null;

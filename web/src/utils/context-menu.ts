@@ -46,6 +46,40 @@ export interface KeepNativeOptions {
   overrideLinks?: boolean;
 }
 
+/** The selection as it stood when the button went DOWN, with the time it was taken. */
+export interface PressSelection {
+  text: string;
+  at: number;
+}
+
+/**
+ * Which selection this gesture is allowed to be judged on (rule 2), which is not always the live one.
+ *
+ * WebKit selects the WORD UNDER THE POINTER as the default action of a right-press, before dispatching
+ * `contextmenu`. So on a surface whose row text is selectable (a mail row's subject and snippet are,
+ * on purpose) every right-click arrives already holding a selection the human never made, rule 2 fires
+ * on it, and the row's menu can never open in the Mac app: measured on all three points of a subject,
+ * `getSelection()` held the word and `menus` was 0, while the same gesture 8px off the glyphs opened
+ * the menu. Chromium does not pre-select, which is why the two engines disagreed.
+ *
+ * The rule: a selection that was not there before the press is the press's own doing and counts as no
+ * selection. One the human made is still theirs (the text is unchanged by a right-click inside it), so
+ * Copy / Look Up / Translate stay reachable. A press snapshot older than `freshMs` is not about this
+ * gesture at all (the keyboard menu key fires `contextmenu` with no press), and then the live selection
+ * is taken at face value.
+ */
+export function selectionForGesture(
+  current: string | null | undefined,
+  pressed: PressSelection | null | undefined,
+  now: number,
+  freshMs = 1500,
+): string {
+  const text = (current ?? '').trim();
+  if (!text) return '';
+  if (!pressed || now - pressed.at > freshMs || now < pressed.at) return text;
+  return pressed.text.trim() === text ? text : '';
+}
+
 export function keepNativeContextMenu(
   target: Element | null,
   { selectionText, selectionAnchor, scope, overrideLinks }: KeepNativeOptions = {},

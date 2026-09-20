@@ -12,10 +12,15 @@
  * arrived), only the geometry stands still, and the held shape lands on `pointerleave`, on the next
  * selection change, or after an idle gap. No flash, no "new mail" marker: the badges already said it.
  */
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
 import { ContextMenu } from '@/components/common/ContextMenu';
 import {
+  ANSWER_MS,
+  clearMailPaneNote,
   getMailSnapshot,
   isSmartSelection,
   pairKey,
@@ -34,6 +39,11 @@ import {
   sendableAccountFor,
   type SmartRole,
 } from './mail-smart';
+import {
+  folderFetchAnswerOf,
+  folderFetchSentence,
+  type FolderFetchAnswer,
+} from './mail-folder-context-items';
 import {
   readSidebarPrefs,
   writeSmartExpanded,
@@ -168,6 +178,77 @@ function useHeldRows(
   return held;
 }
 
+/**
+ * One sentence per folder this pane has fetched by hand, newest last.
+ *
+ * A LIST, not a string. Two fetches started a few seconds apart are two answers, and a single slot
+ * showed whichever landed last while the other row still carried a dot nobody could read. Capped,
+ * because this is a note and not a log.
+ *
+ * Deliberately NOT `refreshNote`: `clearRefreshNoteFor` wipes that on ANY account's sync-completed,
+ * and a successful fetch is immediately followed by exactly that event, so the sentence would blink
+ * out as it appeared (and an unrelated account's sync would take it down too).
+ */
+const FETCH_NOTES = 3;
+
+interface FetchNote {
+  key: string;
+  accountId: string;
+  mailboxId: string;
+  state: FolderFetchAnswer;
+  detail?: string;
+}
+
+/**
+ * How long a SETTLED fetch sentence stays up, and it is the row note's constant, not one of its own.
+ *
+ * The two answer channels used to disagree (a row's answer lived 12s, a folder's 30s) about how long
+ * an answer to the same gesture lasts. The same split applies in both: an answer retires itself, an
+ * outcome somebody may have to act on (`failed`, `replica`, `stopped`, `unknown-mailbox`) stays until
+ * it is dismissed or the selection changes.
+ */
+const FETCH_NOTE_MS = ANSWER_MS;
+
+/** Which answers wait to be dismissed rather than retiring on the clock. */
+function stickyAnswer(state: FolderFetchAnswer): boolean {
+  return state !== 'fetched' && state !== 'fetching';
+}
+
+function useFolderFetchNotes(selection: string): {
+  notes: FetchNote[];
+  watch: (accountId: string, mailboxId: string, answer: Promise<void>) => void;
+  dismiss: () => void;
+} {
+  const [notes, setNotes] = useState<FetchNote[]>([]);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => { for (const one of timers.current) clearTimeout(one); }, []);
+  // An answer about a folder is about the screen it was asked from: opening another folder is the
+  // person moving on, and a sentence that outlives that is a log.
+  useEffect(() => { setNotes([]); }, [selection]);
+  const watch = useCallback((accountId: string, mailboxId: string, answer: Promise<void>) => {
+    const key = pairKey(accountId, mailboxId);
+    const started: FetchNote = { key, accountId, mailboxId, state: 'fetching' };
+    setNotes((prev) => [...prev.filter((one) => one.key !== key), started].slice(-FETCH_NOTES));
+    // The store keeps an entry WHILE a fetch runs and removes it when the rows land, so success is a
+    // transition: read the map once the call settles, and an absent key is the one that worked.
+    void answer.then(() => {
+      const entry = getMailSnapshot().folderFetch[key] ?? null;
+      const state = entry ? folderFetchAnswerOf(entry.state, entry.reason) : 'fetched';
+      setNotes((prev) => prev.map((one) => (one.key === key ? {
+        ...one,
+        state,
+        ...(entry?.detail ? { detail: entry.detail } : {}),
+      } : one)));
+      if (stickyAnswer(state)) return;
+      timers.current.push(setTimeout(() => {
+        setNotes((prev) => prev.filter((one) => one.key !== key));
+      }, FETCH_NOTE_MS));
+    });
+  }, []);
+  const dismiss = useCallback(() => { setNotes([]); }, []);
+  return { notes, watch, dismiss };
+}
+
 export function MailAccountsPane({
   accounts, mailboxes, drafts, providers, selected, refreshing, refreshNote, onAddAccount, onPicked,
 }: Props) {
@@ -271,6 +352,15 @@ export function MailAccountsPane({
   // and needs it to be referentially stable across renders.
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(null);
 
+  // The fetch sentences, and the name each one needs. Names come from the LIVE mailbox rows, so a
+  // sentence says what the row above it says.
+  const fetchNotes = useFolderFetchNotes(selectedKey);
+  const paneNote = snapshot.paneNote;
+  const folderNameOf = (accountId: string, mailboxId: string): string => (
+    live[pairKey(accountId, mailboxId)]?.name ?? mailboxId
+  );
+  const manyAccounts = accounts.length > 1;
+
   return (
     <aside className="mail-accounts-pane" data-testid="mail-accounts-pane" {...aim.handlers}>
       {/* No pane title: the folders are directly below and name themselves, and the 232px head has
@@ -346,7 +436,9 @@ export function MailAccountsPane({
           draftsTotal={draftsTotal}
           selected={selected}
           expanded={prefs.smart}
+          folderFetch={snapshot.folderFetch}
           onToggle={toggleSmart}
+          onFetchAsked={fetchNotes.watch}
           onPicked={onPicked}
         />
         {accounts.map((account) => (
@@ -360,11 +452,66 @@ export function MailAccountsPane({
             arrivals={held.arrivals}
             recent={prefs.recent[account.accountId] ?? []}
             expanded={prefs.tail[account.accountId] === 1}
+            manyAccounts={manyAccounts}
+            folderFetch={snapshot.folderFetch}
             onToggleTail={toggleTail}
+            onFetchAsked={fetchNotes.watch}
             onPicked={onPicked}
           />
         ))}
       </div>
+
+      {/* The pane's ANSWER STRIP. One line per folder, each naming its folder: the row's dot says WHICH
+          row, this says what happened. `failed` is the only answer with a second sentence, which is the
+          provider's own words and is never run on after Walnut's full stop.
+          IN THE FLOW at the foot, and the space comes out of the scroller above it, so no folder row
+          moves (this pane's own rule) and none is covered either: floated, three of these hid a whole
+          second account behind opaque cards for 30 seconds. Dismissable, and cleared when the selection
+          changes, because an answer about a folder belongs to the screen it was asked from. */}
+      {(fetchNotes.notes.length > 0 || paneNote) && (
+        <div className="mail-pane-strip" data-testid="mail-pane-toast">
+          <div className="mail-pane-strip-lines">
+            {fetchNotes.notes.map((note) => {
+              const lines = folderFetchSentence(
+                note.state, folderNameOf(note.accountId, note.mailboxId), note.detail,
+              );
+              return (
+                <p
+                  key={note.key}
+                  className="mail-refresh-note"
+                  data-testid="mail-folder-fetch-note"
+                  data-account-id={note.accountId}
+                  data-mailbox-id={note.mailboxId}
+                  data-state={note.state}
+                  title={lines.join(' ')}
+                >
+                  <span>{lines[0]}</span>
+                  {lines[1] && <>{' '}<span className="mail-folder-detail">{lines[1]}</span></>}
+                </p>
+              );
+            })}
+            {paneNote && (
+              <p
+                className="mail-refresh-note"
+                data-testid="mail-pane-note"
+                title={paneNote.text}
+              >
+                {paneNote.text}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            className="mail-pane-strip-close"
+            data-testid="mail-pane-strip-close"
+            title="Dismiss"
+            aria-label="Dismiss"
+            onClick={() => { fetchNotes.dismiss(); clearMailPaneNote(); }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <button
         type="button"

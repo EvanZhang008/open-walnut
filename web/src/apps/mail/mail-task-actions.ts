@@ -18,7 +18,7 @@ import {
 } from '@/api/mail';
 import { markLettersStale } from '@/components/inbox/letter-store';
 import { log } from '@/utils/log';
-import { pairKey, patch, run, standIn, store } from './mail-store';
+import { mailRowLabel, pairKey, patch, run, setMailRowNote, standIn, store } from './mail-store';
 
 /**
  * The letter list is out of date, without making a request.
@@ -79,22 +79,59 @@ export function makeTaskFromMessage(accountId: string, messageId: string): Promi
     }
     try {
       const answer = await createMailMessageTask(accountId, messageId);
-      if (answer.taskId) { applyMessageTask(accountId, messageId, answer.taskId); return; }
+      if (answer.taskId) {
+        applyMessageTask(accountId, messageId, answer.taskId);
+        reportTaskMade(accountId, messageId);
+        return;
+      }
       // A 202: the write is still running. Saying so beats a spinner that never resolves, and the
       // retry is safe because the server answers the second ask with the task it made.
-      patchOpenTask(accountId, messageId, 'Still making the task. Try again in a moment.');
+      reportTaskTrouble(accountId, messageId, 'Still making the task. Try again in a moment.');
     } catch (error) {
       const failure = mailFailure(error);
       log.warn('mail', 'make task from message failed', { accountId, messageId, error: failure.message });
-      patchOpenTask(accountId, messageId, failure.message);
+      reportTaskTrouble(accountId, messageId, failure.message);
     }
   });
 }
 
-function patchOpenTask(accountId: string, messageId: string, taskError: string): void {
+/**
+ * A task WAS made, said in a sentence naming the row.
+ *
+ * The glyph on the row is the durable mark, and it is enough while the row is on screen: somebody
+ * right-clicking down a list has usually scrolled past by the time the write lands, and then the only
+ * answer to `Make a task` was a mark they could not see. The same slot the failure and the copied link
+ * write into, so success and failure are said in the same place.
+ */
+function reportTaskMade(accountId: string, messageId: string): void {
+  const row = [...store.state.messages, ...store.state.search.messages]
+    .find((one) => one.accountId === accountId && one.messageId === messageId);
+  setMailRowNote(
+    `Task made from ${row ? mailRowLabel(row, 'paren') : 'that message'}.`,
+    pairKey(accountId, messageId),
+  );
+}
+
+/**
+ * Where an outcome is said, which depends on WHICH message it is about.
+ *
+ * The open reader has a slot beside its own button and that is where somebody reading is looking.
+ * A row in the list has no such slot: this used to be `patchOpenTask` alone, so a task started from
+ * anywhere else failed in complete silence. The row note names the row, because a person right-
+ * clicking their way down a list has just asked for several.
+ */
+function reportTaskTrouble(accountId: string, messageId: string, detail: string): void {
   const open = store.state.open;
-  if (!open || open.accountId !== accountId || open.messageId !== messageId) return;
-  patch({ open: { ...open, taskBusy: false, taskError } });
+  if (open && open.accountId === accountId && open.messageId === messageId) {
+    patch({ open: { ...open, taskBusy: false, taskError: detail } });
+    return;
+  }
+  const row = [...store.state.messages, ...store.state.search.messages]
+    .find((one) => one.accountId === accountId && one.messageId === messageId);
+  setMailRowNote(
+    `No task was made from ${row ? mailRowLabel(row) : 'that message'}: ${detail}`,
+    pairKey(accountId, messageId),
+  );
 }
 
 // ── the digest ──

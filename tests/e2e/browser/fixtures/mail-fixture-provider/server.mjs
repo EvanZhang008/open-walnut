@@ -25,6 +25,11 @@
  * It is a flag rather than the default because the read spec counts the provider options in the
  * add-an-account dialog.
  *
+ * With `PW_MAIL_CTX=1` it registers BOTH of them with their setup forms removed, so the base adopts
+ * one account of each at registration: one that can mark read and send, and one that can do neither.
+ * That is the shape a row menu is graded against, since an item for something the provider cannot do
+ * must not be drawn at all. See the block above `MAILBOXES` for the folders it adds.
+ *
  * Addresses are `*.invalid` (RFC 2606) and nothing here resolves.
  */
 
@@ -193,9 +198,39 @@ if (dense && deep) MESSAGES.push(...deepTail());
  */
 const coldFolder = process.env.MAIL_FIXTURE_COLD_FOLDER === '1';
 
+/**
+ * `PW_MAIL_CTX=1`: the shape a ROW MENU has to be graded against.
+ *
+ * Two accounts adopted with no dialog (this provider, which can mark read and send, and the
+ * inbound-only one below, which can do neither), so the capability gate on a menu item is a real
+ * question with two real answers in one window. It also adds the folders a menu acts on that the
+ * small set had none of: a sent folder, the provider's own Drafts folder, and five folders with a
+ * size and no cached mail, one per outcome the on-demand fetch can answer with.
+ *
+ * The fetch OUTCOMES are canned by the fixture server, not by this provider: `stopped` and
+ * `unknown-mailbox` come from the plugin's own bookkeeping and `running` is a ten-second deadline,
+ * so producing them here would mean sleeping inside the sync queue and holding every other folder
+ * behind it. `ctx/fetch-ok` is the one that goes through the real path.
+ */
+const ctx = process.env.PW_MAIL_CTX === '1';
+
+const CTX_FETCH_FOLDERS = ['ctx-fetch-ok', 'ctx-fetch-running', 'ctx-fetch-unknown', 'ctx-fetch-stopped', 'ctx-fetch-failed'];
+
 const MAILBOXES = [
   { mailboxId: 'INBOX', name: 'Inbox', role: 'inbox' },
   { mailboxId: 'Archive', name: 'Archive', role: 'archive' },
+  ...(ctx ? [
+    { mailboxId: 'Sent', name: 'Sent', role: 'sent' },
+    { mailboxId: 'Drafts', name: 'Drafts', role: 'drafts' },
+    // A size the mailbox list knows and no mail in the cache: the state every folder past the
+    // sweep's budget is in, which is the only state "fetch this folder now" is about.
+    ...CTX_FETCH_FOLDERS.map((mailboxId) => ({
+      mailboxId,
+      name: mailboxId,
+      role: 'other',
+      declared: { total: 214, unread: 3 },
+    })),
+  ] : []),
   ...(dense ? [
     { mailboxId: 'Drafts', name: 'Drafts', role: 'drafts' },
     {
@@ -218,6 +253,62 @@ const MAILBOXES = [
 
 /** The folder above, and the only mailbox this server ever refuses. */
 const COLD_MAILBOX = 'Aged';
+
+/**
+ * The three rows the CTX shape adds, one per folder a menu item names.
+ *
+ * `Sent:1:9` is a row in a SENT list, where the read toggle is legal and Reply is the odd one: a
+ * menu built from a row in the wrong list is the mistake this row exists to catch. The one in
+ * `ctx-fetch-ok` is what makes a real on-demand fetch of that folder visibly add something.
+ */
+function ctxMessages() {
+  return [
+    {
+      messageId: 'Sent:1:9',
+      rfcMessageId: '<sent-9@example.invalid>',
+      mailboxId: 'Sent',
+      from: { name: 'Me', address: 'me@example.invalid' },
+      to: [{ name: 'Priya', address: 'priya@example.invalid' }],
+      subject: 'Pier repairs, dates',
+      snippet: 'Either of the first two weeks works.',
+      sentAt: now - 3 * HOUR,
+      attachments: [],
+      body: { format: 'text', text: 'Either of the first two weeks works.\n\nMe' },
+      unreadAtFirstSight: false,
+    },
+    {
+      // A draft the PROVIDER holds (another device wrote it), which is the fifth dimension of the row
+      // menu: no read toggle, no reply, `Continue editing` instead of `Open message`. The folder existed
+      // in this shape from the start and had no rows, so that branch could only be graded in unit tests.
+      messageId: 'Drafts:1:4',
+      rfcMessageId: '<draft-4@example.invalid>',
+      mailboxId: 'Drafts',
+      from: { name: 'Me', address: 'me@example.invalid' },
+      to: [{ name: 'Harbour office', address: 'office@example.invalid' }],
+      subject: 'Mooring renewal, unsent',
+      snippet: 'Left half written on the other machine.',
+      sentAt: now - 5 * HOUR,
+      attachments: [],
+      body: { format: 'text', text: 'Left half written on the other machine.' },
+      unreadAtFirstSight: false,
+    },
+    {
+      messageId: 'ctx-fetch-ok:1:2',
+      rfcMessageId: '<folder-2@example.invalid>',
+      mailboxId: 'ctx-fetch-ok',
+      from: { name: 'Ferry Notices', address: 'notices@example.invalid' },
+      to: [{ address: 'me@example.invalid' }],
+      subject: 'Timetable from the winter',
+      snippet: 'Kept for the record.',
+      sentAt: now - 30 * HOUR,
+      attachments: [],
+      body: { format: 'text', text: 'Kept for the record.' },
+      unreadAtFirstSight: true,
+    },
+  ];
+}
+
+if (ctx) MESSAGES.push(...ctxMessages());
 
 /** Read state, as a server holds it. Seeded from the canned envelopes. */
 const seen = new Set(MESSAGES.filter((one) => !one.unreadAtFirstSight).map((one) => one.messageId));
@@ -427,6 +518,46 @@ const spec = {
 const inboundAccounts = [];
 
 /**
+ * Rows for the account that can neither mark read nor send (`PW_MAIL_CTX=1`).
+ *
+ * One READ and one UNREAD, because the read toggle's label has to state what it would do to THAT row
+ * and a fixture with only one kind lets a fixed word pass. This provider declares `markRead: false`,
+ * so the item must not be drawn on either of them: the account is the control, not the subject.
+ *
+ * The unread one's body is refused, which is the case a reply started from a row has to survive: the
+ * quote has nothing to quote, so no draft may be written.
+ */
+const INBOUND_MESSAGES = [
+  {
+    messageId: 'INBOX:2:11',
+    rfcMessageId: '<notice-11@example.invalid>',
+    mailboxId: 'INBOX',
+    from: { name: 'Harbour Notices', address: 'harbour@example.invalid' },
+    to: [{ address: 'reader@example.invalid' }],
+    subject: 'Moorings closed on the sixth',
+    snippet: 'The north pontoon is closed for a day.',
+    sentAt: now - 4 * HOUR,
+    attachments: [],
+    text: 'The north pontoon is closed for a day.',
+    seen: true,
+  },
+  {
+    messageId: 'INBOX:2:12',
+    rfcMessageId: '<notice-12@example.invalid>',
+    mailboxId: 'INBOX',
+    from: { name: 'Tide Tables', address: 'tides@example.invalid' },
+    to: [{ address: 'reader@example.invalid' }],
+    subject: 'Spring tides this month',
+    snippet: 'Highest water is on the eleventh.',
+    sentAt: now - 6 * HOUR,
+    attachments: [],
+    // No text at all: `getBody` refuses this one.
+    text: null,
+    seen: false,
+  },
+];
+
+/**
  * A second provider that reads mail and cannot send: an IMAP account with no SMTP settings, which
  * is the case `capabilities.send` exists for. Everything else about it is deliberately minimal.
  */
@@ -469,13 +600,39 @@ const inboundSpec = {
     return { state: 'ok', checkedAt: Date.now() };
   },
   async listMailboxes() {
-    return [{ mailboxId: 'INBOX', name: 'Inbox', role: 'inbox', total: 0, unread: 0 }];
+    const held = ctx ? INBOUND_MESSAGES : [];
+    return [{
+      mailboxId: 'INBOX',
+      name: 'Inbox',
+      role: 'inbox',
+      total: held.length,
+      unread: held.filter((one) => !one.seen).length,
+    }];
   },
   async poll(_accountId, request) {
-    return { messages: [], cursor: `${request.mailbox}:1:end`, more: false };
+    const held = ctx && request.mailbox === 'INBOX' ? INBOUND_MESSAGES : [];
+    return {
+      messages: held.map((one) => ({
+        messageId: one.messageId,
+        rfcMessageId: one.rfcMessageId,
+        mailboxId: one.mailboxId,
+        from: one.from,
+        to: one.to,
+        subject: one.subject,
+        snippet: one.snippet,
+        sentAt: one.sentAt,
+        flags: one.seen ? ['\\Seen'] : [],
+        attachments: one.attachments,
+        bodyBytes: one.text ? Buffer.byteLength(one.text, 'utf8') : 0,
+      })),
+      cursor: `${request.mailbox}:1:end`,
+      more: false,
+    };
   },
-  async getBody() {
-    throw notFound('the inbound fixture caches no bodies');
+  async getBody(_accountId, messageId) {
+    const message = ctx ? INBOUND_MESSAGES.find((one) => one.messageId === messageId) : null;
+    if (!message || !message.text) throw notFound('the inbound fixture has no body for that message');
+    return { format: 'text', text: message.text, bytes: Buffer.byteLength(message.text, 'utf8') };
   },
   async send() {
     const error = new Error('this account has no outgoing mail configured');
@@ -864,8 +1021,52 @@ function longPlainBody() {
   return `Everything from the pier, written out.\n\n${paragraphs.join('\n\n')}\n\nPriya`;
 }
 
+/** The two accounts `PW_MAIL_CTX=1` adopts. Ids fixed, so a spec can name either one. */
+export const CTX_WRITER = 'fixture:ctx-writer@example.invalid';
+export const CTX_READER = 'inbound:ctx-reader@example.invalid';
+
+/**
+ * The same spec with no setup fields, which is what makes the base adopt its accounts at
+ * registration (`(spec.setup?.fields?.length ?? 0) === 0`).
+ *
+ * A row menu spec needs two accounts on screen, and driving the add-an-account dialog twice first is
+ * not what it is about. `listAccounts` is already the answer to adoption, so the accounts are seeded
+ * into the same arrays `submit` would have pushed them into.
+ */
+function adopted(one) {
+  // An EMPTY `fields` array, not a missing `setup`: the base requires the object itself
+  // (`provider-registry.ts` refuses a spec without `setup.fields` + `setup.submit`, so deleting it
+  // made registration throw and `PW_MAIL_CTX=1` install no accounts at all), and it is the empty
+  // `fields` that makes it adopt what `listAccounts` already answers with.
+  return {
+    ...one,
+    setup: {
+      fields: [],
+      submit: async () => { throw new Error('this fixture provider adopts its accounts instead'); },
+    },
+  };
+}
+
 export function activate(walnut) {
   const base = walnut.services.require('mail:base');
+  if (ctx) {
+    accounts.push({
+      accountId: CTX_WRITER,
+      providerId: 'fixture',
+      displayName: 'Fixture Mail',
+      address: 'ctx-writer@example.invalid',
+      state: 'active',
+    });
+    inboundAccounts.push({
+      accountId: CTX_READER,
+      providerId: 'inbound',
+      displayName: 'Fixture Mail (inbound only)',
+      address: 'ctx-reader@example.invalid',
+      state: 'active',
+    });
+    const both = [base.registerProvider(adopted(spec)), base.registerProvider(adopted(inboundSpec))];
+    return { dispose: () => { for (const handle of both) handle.dispose(); } };
+  }
   const handles = [base.registerProvider(spec)];
   if (process.env.PW_MAIL_INBOUND_PROVIDER === '1') handles.push(base.registerProvider(inboundSpec));
   // Returning the Disposable is how a provider hands ownership to the loader: turning this

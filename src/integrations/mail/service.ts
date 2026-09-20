@@ -476,9 +476,13 @@ export class MailService {
     const row = await this.requireMessage(accountId, messageId)
     const spec = this.provider(accountId)
     if (!spec.capabilities.markRead || !spec.markRead) {
+      // The person's own words for it: the ACCOUNT, and what it cannot do. The id (`imap`) is a
+      // plugin's internal name that nobody chose, and the old closing clause described this server's
+      // own intentions rather than the next step, so a console that shows the sentence verbatim (it
+      // does, in the row's note and its hover text) was quoting a token at the reader.
       throw new MailServiceError(
         'unsupported',
-        `The provider "${spec.id}" cannot change the read flag, so Walnut will not pretend it did.`,
+        `This account cannot change read flags (${spec.label}).`,
         409,
       )
     }

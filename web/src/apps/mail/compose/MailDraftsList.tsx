@@ -5,9 +5,12 @@
  * "the mail server refused this" look the same is a list that hides the two things a human has to
  * act on. A sent draft is not here at all: it is in Sent, which is the mailbox that means "gone".
  */
+import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
 import type { MailDraftDto } from '@/api/mail';
 import { formatMailTime } from '../mail-format';
+import { draftRowMenuItems } from '../mail-draft-context-items';
 import { openMailDraft } from './compose-actions';
+import { discardMailDraftRow } from './compose-drafts';
 import { DRAFT_STATE_LABEL } from './send-status';
 
 interface Props {
@@ -17,6 +20,10 @@ interface Props {
 }
 
 export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
+  // These rows carry `mail-row` and look exactly like message rows, so they owe the same gesture: the
+  // shared primitive, the shared native-menu rules, and a heading naming the draft (the menu covers the
+  // row it is about). See `mail-draft-context-items.ts` for why the items are not the message menu's.
+  const menu = useContextMenu<MailDraftDto>();
   if (drafts.length === 0) {
     return (
       <p className="mail-pane-empty" data-testid="mail-drafts-empty">
@@ -34,7 +41,9 @@ export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
           data-testid="mail-draft-row"
           data-draft-id={draft.draftId}
           data-state={draft.state}
+          data-ctx-open={menu.state?.payload.draftId === draft.draftId ? 'true' : undefined}
           onClick={() => { void openMailDraft(draft); }}
+          onContextMenu={(event) => { menu.open(event, draft); }}
         >
           <span className="mail-row-top">
             <span className="mail-row-from">
@@ -53,6 +62,30 @@ export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
           </span>
         </button>
       ))}
+      {menu.state && (
+        <ContextMenu
+          point={menu.state.point}
+          ariaLabel="Draft actions"
+          testId="mail-draft-ctx-menu"
+          onClose={menu.close}
+          items={draftRowMenuItems(
+            {
+              draftId: menu.state.payload.draftId,
+              subject: menu.state.payload.subject || '',
+              recipients: menu.state.payload.to
+                .map((one) => one.name || one.address).join(', '),
+              open: menu.state.payload.draftId === openDraftId,
+            },
+            {
+              onEdit: () => { void openMailDraft(menu.state!.payload); },
+              onDiscard: () => {
+                const row = menu.state!.payload;
+                void discardMailDraftRow(row.accountId, row.draftId);
+              },
+            },
+          )}
+        />
+      )}
     </>
   );
 }

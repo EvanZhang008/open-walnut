@@ -323,8 +323,9 @@ describe('a merged list is never treated as a folder', () => {
     await fetchSelectedFolder(true);
 
     expect(fetchFolderCalls()).toEqual([]);
-    // And nothing on screen claims a folder is being fetched, because no folder is.
-    expect(getMailSnapshot().folderFetch).toBeNull();
+    // And nothing on screen claims a folder is being fetched, because no folder is. The outcomes are
+    // keyed by folder now, so "nothing to say" is an empty map.
+    expect(getMailSnapshot().folderFetch).toEqual({});
   });
 
   it('sends neither account nor mailbox, only the scope (C54 page 1)', async () => {
@@ -362,7 +363,9 @@ describe('only unread, on the reserved pair', () => {
     selectSmartMailbox(SMART_INBOX);
     await loadMailMessages();
 
-    await setMailUnreadOnly(true);
+    // The PAIR is passed in now: the sidebar's own row menu can filter a folder that is not the one
+    // on screen, so this no longer reads the selection.
+    await setMailUnreadOnly(SMART_ACCOUNT, SMART_INBOX, true);
 
     // Remembered under the reserved pair, so a reload reads it back.
     expect(readUnreadOnly(SMART_ACCOUNT, SMART_INBOX)).toBe(true);
@@ -442,7 +445,7 @@ describe('All Drafts', () => {
     selectSmartMailbox(SMART_DRAFTS);
     await loadMailMessages();
 
-    await setMailUnreadOnly(true);
+    await setMailUnreadOnly(SMART_ACCOUNT, SMART_DRAFTS, true);
 
     expect(readUnreadOnly(SMART_ACCOUNT, SMART_DRAFTS)).toBe(false);
     expect(query(messageCalls().at(-1)!.url).get('unread')).toBeNull();

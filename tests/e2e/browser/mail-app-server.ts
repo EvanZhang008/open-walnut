@@ -94,7 +94,27 @@ await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ v
 // Install the canned provider the documented author way: a symlink in the data home's plugins/
 // directory, which is exactly what `walnut-plugin link` writes. It declares
 // `dependencies: { mail }`, so the loader activates it after the base.
-const withProvider = process.env.PW_MAIL_PROVIDER === '1'
+/**
+ * `PW_MAIL_CTX=1`: the row-menu shape. Implies the canned provider, since that is where the two
+ * accounts live (one that can mark read and send, one that can do neither).
+ *
+ * It also arms two seams below, both of them in THIS file rather than in the plugin:
+ *  - canned answers for four of the five folder-fetch outcomes, because `stopped` and
+ *    `unknown-mailbox` are the plugin's own bookkeeping and `running` is a ten second deadline;
+ *  - one real task, made through the real route, so a row that already has one is on screen.
+ */
+const withCtx = process.env.PW_MAIL_CTX === '1'
+
+/**
+ * `PW_MAIL_WRITES_503=1`: every WRITE to the mail plugin answers 503 `primary_only`, reads do not.
+ *
+ * Replica mode is the real thing this imitates, and it is useless here: the base steps aside
+ * completely, so there are no accounts, no folders and no rows to right-click. A menu whose items
+ * refuse themselves needs the rows present and the writes refused, which is this.
+ */
+const writes503 = process.env.PW_MAIL_WRITES_503 === '1'
+
+const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx
 if (withProvider) {
   const providerSource = path.join(repoRoot, 'tests/e2e/browser/fixtures/mail-fixture-provider')
   await fs.access(path.join(providerSource, 'server.mjs'))
@@ -127,9 +147,70 @@ const apiAddress = apiServer.address()
 if (!apiAddress || typeof apiAddress === 'string') throw new Error('Mail fixture did not bind a TCP port')
 const apiTarget = `http://127.0.0.1:${apiAddress.port}`
 
+/**
+ * The two seams, as ONE middleware in front of the proxy.
+ *
+ * Installed by calling `server.middlewares.use` inside `configureServer` (which mounts it BEFORE
+ * Vite's own middlewares, the proxy among them), so a request it answers never reaches the API at
+ * all. It only ever answers requests the flags asked for; everything else falls through untouched,
+ * which is what keeps the reads in a 503 run real.
+ */
+const CANNED_FETCH: Record<string, { status: number; body: Record<string, unknown> }> = {
+  'ctx-fetch-running': { status: 202, body: { ok: true, fetched: false, running: true } },
+  'ctx-fetch-unknown': { status: 200, body: { ok: true, fetched: false, reason: 'unknown-mailbox' } },
+  'ctx-fetch-stopped': { status: 200, body: { ok: true, fetched: false, reason: 'stopped' } },
+  'ctx-fetch-failed': {
+    status: 200,
+    body: { ok: true, fetched: false, reason: 'failed', detail: 'The folder refused to open.' },
+  },
+}
+
+function mailFixtureSeams() {
+  return {
+    name: 'walnut-mail-fixture-seams',
+    configureServer(server: { middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void } }) {
+      if (!writes503 && !withCtx) return
+      server.middlewares.use((req, res, next) => {
+        const url: string = req.url ?? ''
+        const method: string = (req.method ?? 'GET').toUpperCase()
+        if (!url.startsWith('/api/plugins/mail')) return next()
+        const answer = (status: number, body: unknown) => {
+          res.statusCode = status
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify(body))
+        }
+        if (writes503 && method !== 'GET' && method !== 'HEAD') {
+          return answer(503, { error: 'primary_only', message: 'Mail runs on your primary Walnut box.' })
+        }
+        if (!withCtx || method !== 'POST' || !url.startsWith('/api/plugins/mail/mailboxes/fetch')) return next()
+        // The body names the folder, so it has to be read here. A request that turns out NOT to be
+        // one of the canned folders cannot be handed back to the proxy (its body is consumed), so it
+        // is forwarded from here instead: `ctx-fetch-ok` really does go through the plugin.
+        let raw = ''
+        req.on('data', (chunk: Buffer) => { raw += chunk.toString('utf8') })
+        req.on('end', () => {
+          let mailboxId = ''
+          try { mailboxId = String((JSON.parse(raw || '{}') as { mailboxId?: string }).mailboxId ?? '') }
+          catch { mailboxId = '' }
+          const canned = CANNED_FETCH[mailboxId]
+          if (canned) { answer(canned.status, canned.body); return }
+          void fetch(`${apiTarget}${url}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: raw,
+          })
+            .then(async (upstream) => { answer(upstream.status, await upstream.json()) })
+            .catch((error: unknown) => answer(502, { error: 'fixture', message: String(error) }))
+        })
+      })
+    },
+  }
+}
+
 const { createServer: createViteServer } = await import('vite')
 const viteServer = await createViteServer({
   root: path.join(repoRoot, 'web'),
+  plugins: [mailFixtureSeams()],
   server: {
     host: '127.0.0.1',
     port,
@@ -143,6 +224,44 @@ const viteServer = await createViteServer({
 })
 await viteServer.listen()
 
+/**
+ * One row that already carries a task, made through the REAL route before the browser opens.
+ *
+ * `taskId` on a message is the plugin's own bookkeeping, so a fixture provider cannot seed it: the
+ * honest way is to ask the route that writes it. Straight at the API rather than through the proxy,
+ * so a `PW_MAIL_WRITES_503` run still gets its seeded row (the seam lives on the Vite server).
+ *
+ * Bounded and non-fatal: the first sweep has to land first, and a fixture that could not seed it
+ * reports `taskId: null` rather than hanging the run.
+ */
+async function seedRowWithTask(): Promise<{ accountId: string; messageId: string; taskId: string } | null> {
+  const accountId = 'fixture:ctx-writer@example.invalid'
+  const deadline = Date.now() + 30_000
+  const query = `account=${encodeURIComponent(accountId)}&mailbox=INBOX&limit=10`
+  while (Date.now() < deadline) {
+    const page = await fetch(`${apiTarget}/api/plugins/mail/messages?${query}`)
+      .then((one) => (one.ok ? one.json() as Promise<{ messages?: { messageId: string }[] }> : null))
+      .catch(() => null)
+    const rows = page?.messages ?? []
+    // The one canned message that starts READ, so the seeded task does not also change a read flag.
+    const target = rows.find((one) => one.messageId === 'INBOX:1:29')
+    if (target) {
+      const made = await fetch(
+        `${apiTarget}/api/plugins/mail/messages/${encodeURIComponent(accountId)}/${encodeURIComponent(target.messageId)}/task`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+      )
+        .then((one) => one.json() as Promise<{ taskId?: string }>)
+        .catch(() => ({} as { taskId?: string }))
+      if (made.taskId) return { accountId, messageId: target.messageId, taskId: made.taskId }
+      return null
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return null
+}
+
+const ctxTaskRow = withCtx ? await seedRowWithTask() : null
+
 // `outbox` is where the canned provider writes every message it was handed, so the write spec can
 // assert what went over the wire rather than what the console said about it.
 const fixture = {
@@ -151,6 +270,15 @@ const fixture = {
   provider: withProvider,
   dense: withDense,
   digestOff,
+  ctx: withCtx,
+  writes503,
+  /** The two accounts `PW_MAIL_CTX` adopts, and the row that already has a task. */
+  ctxWriter: withCtx ? 'fixture:ctx-writer@example.invalid' : null,
+  ctxReader: withCtx ? 'inbound:ctx-reader@example.invalid' : null,
+  ctxFetchFolders: withCtx
+    ? ['ctx-fetch-ok', 'ctx-fetch-running', 'ctx-fetch-unknown', 'ctx-fetch-stopped', 'ctx-fetch-failed']
+    : [],
+  ctxTaskRow,
   outbox: path.join(tmpBase, 'mail-fixture-sends.json'),
   denseOutbox: path.join(tmpBase, 'mail-dense-sends.json'),
 }

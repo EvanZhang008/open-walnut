@@ -18,14 +18,22 @@
  * `rows` is HELD by the pane while somebody is aiming at it (a promotion must not move the row under the
  * pointer); `live` is the current mailbox rows, so every badge is this frame's number.
  */
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import {
+  useEffect, useState, useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
+} from 'react';
 import type { MailAccountDto, MailboxDto } from '@/api/mail';
 import { formatCount } from './mail-format';
 import { selectMailbox } from './mail-actions';
-import { DRAFTS_MAILBOX, pairKey, serverDraftsMailbox, type MailSelection } from './mail-store';
+import {
+  DRAFTS_MAILBOX, pairKey, serverDraftsMailbox, type MailFolderFetch, type MailSelection,
+} from './mail-store';
 import {
   folderLabel, folderTitle, hiddenTail, importantFolders, tailClause, tailLabel, tailTitle,
 } from './mail-smart';
+import { folderFetchAnswerOf, folderFetchSentence } from './mail-folder-context-items';
+import { readUnreadOnly, subscribeUnreadOnly, unreadOnlyVersion } from './mail-unread-filter';
+import { useMailFolderContextMenu } from './MailFolderContextMenu';
 import { DraftsIcon, MailboxRoleIcon, TwistIcon } from './mail-icons';
 
 interface Props {
@@ -41,7 +49,13 @@ interface Props {
   arrivals: Record<string, number>;
   recent: string[];
   expanded: boolean;
+  /** More than one account is listed, so a row's menu says which account its folder belongs to. */
+  manyAccounts: boolean;
+  /** Every folder this console has an on-demand fetch to report, keyed by `pairKey`. */
+  folderFetch: Record<string, MailFolderFetch>;
   onToggleTail: (accountId: string, on: boolean) => void;
+  /** The pane's watcher for a fetch this pane's own menu started (see `onFetchAsked`). */
+  onFetchAsked: (accountId: string, mailboxId: string, answer: Promise<void>) => void;
   onPicked: () => void;
 }
 
@@ -75,9 +89,13 @@ const SECOND_TOGGLE_AT = 12;
 const QUIET_ROLES = new Set<MailboxDto['role']>(['archive', 'spam', 'trash']);
 
 export function MailAccountFolders({
-  account, rows, live, draftsCount, selected, arrivals, recent, expanded, onToggleTail, onPicked,
+  account, rows, live, draftsCount, selected, arrivals, recent, expanded, manyAccounts, folderFetch,
+  onToggleTail, onFetchAsked, onPicked,
 }: Props) {
   const [filter, setFilter] = useState('');
+  // The rows' right-click menu. One hook next door, which is `useContextMenu` plus the item lists:
+  // placement, the backdrop, Escape and the keep-the-native-menu rules are the shared primitive's.
+  const menu = useMailFolderContextMenu();
   // A filter is a way through one long list, not a preference: leaving the tail forgets it.
   useEffect(() => { if (!expanded) setFilter(''); }, [expanded]);
 
@@ -107,19 +125,52 @@ export function MailAccountFolders({
   const nothingMatched = filtering && tail.length === 0;
   const stateLabel = account.state === 'active' ? null : STATE_LABEL[account.state] ?? account.state;
 
+  const accountName = account.displayName || account.address;
+  const hasTail = folders.hidden.length > 0;
+  // Subscribed ONCE for the whole account rather than per row: the filter is written per folder (by this
+  // pane's own menu and by the list's chip), and a row that is filtered to unread only has to say so or a
+  // folder holding mail is indistinguishable from an empty one on the way back to it.
+  useSyncExternalStore(subscribeUnreadOnly, unreadOnlyVersion);
+
   const row = (mailbox: MailboxDto, promoted: boolean) => {
     const active = selectedMailboxId === mailbox.mailboxId;
+    const shown = live[pairKey(accountId, mailbox.mailboxId)] ?? mailbox;
     return (
-      <li key={mailbox.mailboxId}>
+      /* The gesture is on the `<li>`, which is the whole LINE: a folder row's badge is inside its
+         button, but the rows next door keep sibling buttons on the same line (the smart twist, the
+         collapse row), and a menu that covers most of a line and hands the rest back to the browser
+         is the complaint this slice exists to fix. */
+      <li
+        key={mailbox.mailboxId}
+        /* The ring `mail.css` draws for an open menu. On the line, because the line is what carries the
+           gesture; the rule picks the row inside it. */
+        {...(menu.openKey === pairKey(accountId, mailbox.mailboxId) ? { 'data-ctx-open': 'true' } : {})}
+        onContextMenu={(event) => menu.open(event, {
+          kind: 'folder',
+          folder: {
+            accountId,
+            mailboxId: mailbox.mailboxId,
+            label: folderLabel(shown),
+            accountName,
+            manyAccounts,
+            hasTail,
+            tailExpanded: expanded,
+            onToggleTail,
+            onFetchAsked,
+          },
+        })}
+      >
         <FolderRow
           accountId={accountId}
-          mailbox={live[pairKey(accountId, mailbox.mailboxId)] ?? mailbox}
+          mailbox={shown}
+          fetch={folderFetch[pairKey(accountId, mailbox.mailboxId)] ?? null}
           promoted={promoted}
           /* The mark belongs to a row that was LIFTED for new mail, and to nothing else: a role row that
              received mail is where mail always lands and its badge already moved, while the other two
              reasons to lift a row (it is selected, it was opened lately) are visible as themselves. It
              goes when the row is opened, which is what makes it about mail nobody has looked at. */
           arrived={promoted && !active && (arrivals[pairKey(accountId, mailbox.mailboxId)] ?? 0) > 0}
+          unreadOnly={readUnreadOnly(accountId, mailbox.mailboxId)}
           active={active}
           onPicked={onPicked}
         />
@@ -161,7 +212,16 @@ export function MailAccountFolders({
           /* ONE Drafts row for both kinds. Walnut's own drafts live in the plugin's database with
              their approval state, which a provider's Drafts folder knows nothing about; the folder
              holds what another device wrote. The row opens a list with a section for each. */
-          <li key="walnut-drafts">
+          <li
+            key="walnut-drafts"
+            /* The Drafts menu, not the folder one: this row is Walnut's own and its reserved id is
+               not a folder any provider has, so it never offers a fetch. */
+            {...(menu.openKey === pairKey(accountId, DRAFTS_MAILBOX) ? { 'data-ctx-open': 'true' } : {})}
+            onContextMenu={(event) => menu.open(event, {
+              kind: 'drafts',
+              drafts: { accountId, accountName, manyAccounts },
+            })}
+          >
             <DraftsRow
               accountId={accountId}
               count={draftsCount}
@@ -223,21 +283,43 @@ export function MailAccountFolders({
           />
         )}
       </ul>
+      {/* A SIBLING of the list, never inside a row: the menu portals to <body>, but its React events
+          still travel this tree and every row's `<li>` holds the gesture that opened it. */}
+      {menu.node}
     </section>
   );
 }
 
-function FolderRow({ accountId, mailbox, promoted, arrived, active, onPicked }: {
+function FolderRow({
+  accountId, mailbox, fetch, promoted, arrived, unreadOnly, active, onPicked,
+}: {
   accountId: string;
   mailbox: MailboxDto;
+  /** This folder's on-demand fetch, or null. Per FOLDER, so two at once each show their own. */
+  fetch: MailFolderFetch | null;
   promoted: boolean;
   /** This folder received mail during this session and has not been opened since. */
   arrived: boolean;
+  /** This folder's list is filtered to unread only (the menu item, or the header chip). */
+  unreadOnly: boolean;
   active: boolean;
   onPicked: () => void;
 }) {
   const label = folderLabel(mailbox);
   const role = folderTitle(mailbox);
+  // A fetch this row asked for reports ON THIS ROW: a dot while it runs, and the provider's own answer
+  // in the hover text when it came back with one. The pane writes the same answer as a sentence, which
+  // is the half that survives the row scrolling out of view.
+  const fetchWords = fetch
+    ? folderFetchSentence(folderFetchAnswerOf(fetch.state, fetch.reason), label, fetch.detail)
+    : [];
+  // EVERY fetch state, not just the failed one. The in-progress dot was the only mark with no words at
+  // all: `aria-label` and nothing else, while the pane's sentence retired on its own, so a folder row
+  // was left carrying a blue dot nobody could ask about.
+  // The filter is said in the hover text as well as drawn (see `data-unread-only` below): the row is a
+  // small target and the tag on it is three words long.
+  const title = [role, ...fetchWords, unreadOnly ? 'Showing unread only in this folder.' : '']
+    .filter(Boolean).join(' ');
   return (
     <button
       type="button"
@@ -247,6 +329,7 @@ function FolderRow({ accountId, mailbox, promoted, arrived, active, onPicked }: 
       data-unread={mailbox.unread}
       data-total={mailbox.total}
       data-promoted={promoted ? 'true' : undefined}
+      data-unread-only={unreadOnly ? '1' : undefined}
       data-arrived={arrived ? 'true' : undefined}
       /* WebKit does not put a `button` in its tab order by default, and the Mac app is WKWebView: without
          an explicit `tabindex` the whole pane is keyboard-unreachable there. Zero, so the order stays the
@@ -254,8 +337,10 @@ function FolderRow({ accountId, mailbox, promoted, arrived, active, onPicked }: 
       tabIndex={0}
       /* The ROLE this folder plays, on hover, where the provider's own name does not already say it (a
          folder called something else that the provider maps to Archive). The name on screen is the
-         provider's, which is the only name it has. */
-      title={role}
+         provider's, which is the only name it has. A finished fetch adds its answer after it. */
+      title={title || undefined}
+      data-fetch-state={fetch?.state}
+      data-fetch-reason={fetch?.reason}
       aria-current={active ? 'true' : undefined}
       onClick={() => {
         selectMailbox(accountId, mailbox.mailboxId);
@@ -264,6 +349,20 @@ function FolderRow({ accountId, mailbox, promoted, arrived, active, onPicked }: 
     >
       <MailboxRoleIcon role={mailbox.role} />
       <span className="mail-mailbox-name">{label}</span>
+      {/* One small dot, the row's own, so two fetches running at once are two marks and not one
+          sentence about whichever answered last. The words are in the hover text and in the pane. */}
+      {fetch && (
+        <span
+          className="mail-mailbox-fetch"
+          data-testid="mail-mailbox-fetch-dot"
+          data-state={fetch.state}
+          aria-label={fetchWords.join(' ')}
+          // The same words the row carries, on the mark itself: the dot is the smaller target and it is
+          // what somebody points at when they want to know what it means.
+          title={fetchWords.join(' ')}
+          role="img"
+        />
+      )}
       {/* A folder LIFTED out of the tail arrives looking like any other row, and the collapse row's own
           hover text claims that anything which just received mail is above the line: without this the
           claim cannot be checked on screen. The badge is the folder's unread, which is a different fact. */}

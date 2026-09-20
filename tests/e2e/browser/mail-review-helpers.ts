@@ -96,11 +96,42 @@ export class MailFixtureServer {
   }
 }
 
+/**
+ * The app shell, with ONE reload if the first paint came back blank, and the page's own words if not.
+ *
+ * Measured: in WebKit, one load in roughly thirty answers a completely white page against the fixture
+ * (the SPA is served through Vite in DEV mode here, so a first request that races a transform can end
+ * as a blank document). It hit a different case in each run, which is what says it is the load and not
+ * the case. A reload is what a person does with a blank tab and the second one has always mounted, so
+ * one retry is the honest repair; a shell that is still absent after it FAILS, carrying whatever the
+ * page reported, because a real mount crash must stay loud rather than become a retry that hides it.
+ */
+async function shellUp(page: Page, port: number): Promise<void> {
+  const said: string[] = []
+  const hear = (text: string): void => { if (said.length < 12) said.push(text) }
+  page.on('pageerror', (error) => hear(`[pageerror] ${error.message}`))
+  page.on('console', (message) => { if (message.type() === 'error') hear(`[console] ${message.text()}`) })
+  for (const attempt of [1, 2] as const) {
+    await page.goto(`http://127.0.0.1:${port}/`)
+    await page.waitForLoadState('domcontentloaded')
+    try {
+      // Generous even on the first pass: a cold fixture boot measures ~20s idle and ~70s on a loaded
+      // machine, and a reload of a shell that was merely slow costs a run more than it saves.
+      await expect(page.locator('.sidebar')).toBeVisible({ timeout: attempt === 1 ? 35_000 : 55_000 })
+      return
+    } catch {
+      if (attempt === 2) {
+        throw new Error(
+          `the app shell never mounted at :${port}, twice. The page said: ${said.join(' | ') || '(nothing)'}`,
+        )
+      }
+    }
+  }
+}
+
 /** Into the Mail console through the real UI: the sidebar app row, never a deep link. */
 export async function openMail(page: Page, port: number): Promise<void> {
-  await page.goto(`http://127.0.0.1:${port}/`)
-  await page.waitForLoadState('domcontentloaded')
-  await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
+  await shellUp(page, port)
   if (await page.locator('.sidebar.collapsed').count()) {
     await page.locator('.sidebar-collapse-btn').click()
     await expect(page.locator('.sidebar.collapsed')).toHaveCount(0)

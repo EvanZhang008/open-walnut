@@ -33136,7 +33136,10 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 .wn-context-menu {
   min-width: 180px;
-  max-width: 340px;
+  /* A fixed 340px is wider than a narrow window, and a menu opened near the right edge was clamped
+     by `useMenuPlacement` into a box whose own content could not fit: the labels wrapped or clipped.
+     The viewport is the ceiling, on the SHARED rule, so no surface needs a width rule of its own. */
+  max-width: min(340px, 100vw - 16px);
   background: var(--card-bg);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -33148,7 +33151,28 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   overscroll-behavior: contain;
 }
 
+/* ONE WIDTH for every object of one list, for a surface whose menu carries a TITLE.
+   A content-sized box is right for a menu whose rows are all labels; it is wrong once a row holds the
+   object's own name, because then the box changed width from one right-click to the next: four
+   right-clicks on adjacent rows of one mail list measured 186, 252, 280 and 291px, so the panel edge
+   jumped up to 105px inside a single triage pass and a flipped-left menu moved every item's x with it.
+   Opt-in (`className="wn-context-menu-titled"`), and still clamped in a narrow window. */
+.wn-context-menu.wn-context-menu-titled {
+  width: min(280px, 100vw - 16px);
+}
+
 .wn-context-menu:focus-visible { outline: none; }
+
+/* There is more below the fold. `useMenuPlacement` caps the height in a short window, and the capped
+   edge cut the last row flush with the border: no fade, no arrow, no scrollbar track, so a menu
+   missing four of its items read as a menu that does not have them. The fade is on the BOX rather
+   than a pseudo element, because the box is the scroll container and a child would scroll away with
+   the content. `data-more` is dropped once the bottom is reached, so it is an affordance and not
+   decoration. */
+.wn-context-menu[data-more='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
+}
 
 .wn-context-menu-item {
   display: flex;
@@ -33165,15 +33189,53 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   transition: background 0.1s;
 }
 
-.wn-context-menu-item:hover,
-.wn-context-menu-item.focused {   /* keyboard focus reads the same as hover */
+.wn-context-menu-item:hover {
   background: var(--accent-subtle);
+}
+
+/* The KEYBOARD highlight, which is louder than hover on purpose: it is the only indicator there is (DOM
+   focus stays on the container so a disabled row can hold it), and an 8% tint with no outline was not
+   findable at a glance. A RING rather than a solid accent fill, because the highlight also lands on
+   disabled rows and a solid fill there would claim the row is runnable. `transition: none` is
+   load-bearing too: with the row's 0.1s background transition a highlight taken right after a key press
+   was still transparent, so the frame somebody looks at showed no highlight at all. */
+.wn-context-menu-item.focused {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  transition: none;
 }
 
 .wn-context-menu-item:disabled {
   color: var(--fg-muted);
   cursor: default;
   background: none;
+}
+
+/* Why the group above is disabled, drawn as its OWN row rather than a second line inside the first row
+   of the group: inside one row it made that row 52px tall next to its 30px siblings, and its 22px indent
+   aligned it to an icon column this menu never draws. Left edge = the items' label edge. */
+.wn-context-menu-reason {
+  padding: 2px 12px 5px;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+/* A CLAMPED menu has to look clamped. The fade above is the soft half; this is the loud one, because on
+   macOS the overlay scrollbar is invisible until something scrolls, and the keyboard highlight can now
+   move the box on its own (see `ContextMenu`). Both engines honour one of these two rules. */
+.wn-context-menu {
+  scrollbar-width: thin;
+}
+
+.wn-context-menu::-webkit-scrollbar {
+  width: 8px;
+}
+
+.wn-context-menu::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
 }
 
 .wn-context-menu-item.danger { color: var(--error); }
@@ -33215,13 +33277,38 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   color: var(--fg-muted);
 }
 
+/* The heading that names what the menu acts on. LOAD BEARING, not decoration: while the menu is open the
+   backdrop freezes the row's hover tone, so this line is the only text on screen saying which row is
+   about to be written to. `--fg-muted` measured 3.62:1 on white at 11.5px, under AA; `--fg-secondary` is
+   the darkest muted token and clears it (light 10.9:1, dark 10.5:1). */
 .wn-context-menu-info {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 12px;
-  color: var(--fg-muted);
-  font-size: 11.5px;
+  padding: 4px 12px;
+  color: var(--fg-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  /* INERT, and it has to look it: a hoverless, click-swallowing row styled like the rows under it read
+     as a disabled item, and the one directly above the item people aim for in a fast triage pass. */
+  cursor: default;
+  user-select: none;
+}
+
+/* A second heading line (a mail row's account under its subject) is the block's subtitle: lighter and
+   smaller, so the only lines in this box that look like menu lines are the ones that do something. */
+.wn-context-menu-info + .wn-context-menu-info {
+  padding-top: 0;
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+/* The rule under the title block. The block used to end 1px above the first action with no separator,
+   while a rule WAS drawn between the first two actions, so the heading read as part of the list. */
+.wn-context-menu-info.heading-end {
+  padding-bottom: 5px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
 }
 
 /* ── Rich blocks: model-written HTML inside an assistant reply ───────────────
