@@ -4,6 +4,56 @@ All notable changes to Open Walnut are documented here. This project follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may include
 breaking changes).
 
+## [Unreleased]
+
+### Changed
+
+- **Search reaches the whole document, and a body match can outrank a bare title.** Every indexed
+  kind (task, session, note, memory, skill) is now split into passages that each fit the embedding
+  model's token limit, instead of a single passage that took only the first 1,400 characters of the
+  body. Before this the body was truncated out of the vector entirely for 26% of tasks, 64% of
+  sessions, 31% of notes, 74% of memory files and 84% of skills, so a three-month task whose note
+  says "iOS" 23 times could not be found by searching for iOS. Passage 0 carries a lead from the
+  body whenever there is one, so a document is discoverable by what is in it and not only by its
+  title.
+- **Ranking gained a body-coverage component**: 0.20 of the keyword score, taken from BM25, applied
+  only to queries of three terms or more. FTS5 normalises by whole-row length with constants that
+  are not configurable, so no column-weight setting makes a long body outrank an empty stub that has
+  the query words in its title, and the length-independent signal has to live outside BM25. Column
+  weights are unchanged (title 10, summary 3, note 1, meta 2): rebalancing them was measured and
+  cost more on single-word identifier queries than it gained.
+- **A search no longer pollutes its own index.** Each Ask Walnut search writes a task and a session
+  titled `Search query: <the query>`, which then matched that exact query on a 10x title weight and
+  took result slots from real documents. Both are kept out of the index now, and out of the
+  title-paraphrase lane, which reads live records rather than the index.
+- **A result snippet comes from the region that actually matched**, chosen by term density, instead
+  of from the earliest match in `title`, `summary` and `note` joined into one string, where a long
+  title always won. Chinese and Japanese queries get a real snippet at all now: snippet terms were
+  split on whitespace, so a CJK query matched nothing and fell back to showing the title.
+- **The order a search returns is reproducible from the fields it returns.** Results are ranked by
+  coverage tier first and score second, but the tier itself was not in the response, so a reader saw
+  a row scoring 0.658 sitting below one scoring 0.279 and concluded the ranking was arbitrary. The
+  tier the sort used is published as `coveredTermHits` on every row now.
+
+### Upgrade notes
+
+The passage layout is versioned, so the first launch after upgrading clears the stored vectors and
+re-embeds every document in the background. `search.sqlite` keeps its documents, so nothing has to
+be re-read from tasks, notes or transcripts.
+
+- Keyword search is unaffected and at full quality throughout.
+- Semantic rescore reports itself as cold, and semantic recall (the extra candidates behind
+  cross-lingual and paraphrase queries) is unavailable until the rebuild drains.
+- For ~12,000 documents (~85,000 passages) the rebuild took roughly 26 hours on a machine busy with
+  other work, measured at 0.93 passages per second, and is several times faster on an idle one.
+  Short documents are embedded first, so most of the index is better than it was before the upgrade
+  within the first hour.
+- Progress is in Settings → Search and in `GET /api/search-index/status`.
+
+Tasks and sessions are indexed on their own events, so an Ask Walnut `Search query: ...` row written
+before this upgrade stays in the index until something touches that task or session, or until a full
+rebuild.
+
 ## [0.4.5] - 2026-09-03
 
 ### Changed
