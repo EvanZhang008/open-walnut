@@ -19,7 +19,10 @@
  *     against it;
  *  6. Escape and an outside click close the menu;
  *  7. widening the column brings every pill back and removes the button, and
- *     narrowing it again collapses (no oscillation, no wrap at any width).
+ *     narrowing it again collapses (no oscillation, no stacking at any width);
+ *  8. a control whose picker is open is not hidden out from under it;
+ *  9. with the fit function bypassed the row still STAYS INSIDE the composer: the
+ *     pre-measurement frame stacks, it never paints over the mic/send cluster.
  */
 import { expect, type Locator, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
@@ -129,6 +132,24 @@ export async function expectMenuNamesHidden(panel: Locator, hidden: string[], na
       await expect(row.locator('.composer-overflow-item-value')).toHaveText(pillText);
     }
   }
+}
+
+/**
+ * The frame before the row has been measured shows every control, so the CSS
+ * fallback has to CONTAIN that row rather than let it spill. Forces all controls
+ * visible and reads the geometry in the same synchronous block (React resets it
+ * on the next measure), then reports whether the row stacked or ran under the
+ * mic/send cluster — the shape of the bug this whole change replaces.
+ */
+export async function forceAllVisibleGeometry(panel: Locator): Promise<{ lines: number; overhang: number }> {
+  const micBox = await panel.locator('.chat-input-controls .mic-btn-wrapper').first().boundingBox();
+  return barOf(panel).evaluate((bar, mic) => {
+    const items = [...bar.querySelectorAll<HTMLElement>('[data-control-id]')];
+    for (const el of items) el.dataset.hidden = 'false';
+    const box = bar.getBoundingClientRect();
+    const tops = new Set(items.map((el) => Math.round(el.getBoundingClientRect().top)));
+    return { lines: tops.size, overhang: mic ? Math.round(box.right - mic.x) : -1 };
+  }, micBox);
 }
 
 /** The names SessionPanel gives its five controls. */

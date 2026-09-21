@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
 import {
   CTRL_SESSION, CTRL_FILLER, mockControlsSession, openControlsSession,
   overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
-  expectMenuNamesHidden, CTRL_NAMES, type SettingsWrites,
+  expectMenuNamesHidden, CTRL_NAMES, forceAllVisibleGeometry, type SettingsWrites,
 } from './composer-controls-overflow-helpers';
 
 test('1. a wide column keeps every control on one row, with no overflow button', async ({ page }) => {
@@ -133,5 +133,27 @@ test('8. a pill whose picker is open is not hidden by a resize', async ({ page }
   await expect.poll(() => rowState(panel).then((s) => s.visible)).toContain('model');
   const box = await controlOf(panel, 'model').boundingBox();
   expect(box!.width, 'the pinned pill still has a real box for the picker to anchor to').toBeGreaterThan(0);
+  await expectSingleRow(panel);
+});
+
+test('9. with the fit function bypassed the row stacks instead of spilling over the send cluster', async ({ page }) => {
+  // The pre-measurement frame shows every control, so the CSS underneath has to
+  // contain that row. Wrapping is kept for exactly this: squeezed narrower than
+  // its pills, a non-wrapping row paints them on top of the mic/send buttons and
+  // past the panel's right edge.
+  await mockControlsSession(page, CTRL_SESSION);
+  await mockControlsSession(page, CTRL_FILLER);
+  const panel = await openControlsSession(page, { narrow: true });
+  await expect(overflowBtn(panel)).toBeVisible();
+  const forced = await forceAllVisibleGeometry(panel);
+  expect(forced.lines, 'five pills in a narrow column have to stack somewhere').toBeGreaterThan(1);
+  expect(forced.overhang, 'the row ran under the mic/send cluster').toBeLessThanOrEqual(1);
+  // The forced attributes outlive the next measure pass, and that is correct:
+  // React owns `data-hidden`, and a pass that reaches the same answer as the
+  // current state renders nothing. A real width change hands the row back.
+  await page.setViewportSize({ width: 2200, height: 800 });
+  await expect.poll(() => rowState(panel).then((s) => s.lines)).toBe(1);
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await expect(overflowBtn(panel)).toBeVisible({ timeout: 5_000 });
   await expectSingleRow(panel);
 });

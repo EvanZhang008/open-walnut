@@ -1,11 +1,11 @@
 /* Composer controls row with an overflow menu — owned by
    components/chat/ComposerControlsBar.tsx.
 
-   The row does NOT wrap any more. It used to (`.session-mode-bar`), and in a
-   narrow session column that turned five pills into four stacked rows above the
-   composer (2026-09-19). Controls that do not fit are hidden here and listed in
-   the "..." menu instead; a wide column fits everything and looks exactly as it
-   did, with no button.
+   The row no longer STACKS. It used to (`.session-mode-bar` wraps), and in a
+   narrow session column that turned five pills into four rows above the composer
+   (2026-09-19). Controls that do not fit are hidden here and listed in the "..."
+   menu instead; a wide column fits everything and looks exactly as it did, with
+   no button.
 
    A hidden control keeps its place in the DOM (see the component for why), so
    `display: none` is the hiding mechanism — never unmounting. */
@@ -14,7 +14,13 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  flex-wrap: nowrap;
+  /* The one-line guarantee is the fit function, NOT this declaration: wrapping
+     stays on as the containment fallback for the frame before the row has been
+     measured. `min-width: 0` lets this bar be squeezed narrower than its pills,
+     and under `nowrap` they then spill out of it and paint on top of the mic/send
+     cluster (the bug `.session-mode-bar`'s own comment records). Stacking for one
+     frame is the better failure. */
+  flex-wrap: wrap;
   flex: 0 1 auto;
   min-width: 0;
 }
