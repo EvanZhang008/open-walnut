@@ -38,6 +38,7 @@ import { canonicalJsonlPath } from '../session-file-reader.js';
 import { resolveAgentSearchRun } from '../task-search-agent.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID } from './ask-agent.js';
 import type { SessionProfile, SessionEffort, SessionRecord } from '../types.js';
+import { SEARCH_ASK_TAG } from '../task-junk.js';
 
 export class AdoptSearchSessionError extends Error {
   statusCode: number;
@@ -61,7 +62,7 @@ export interface AdoptedSearchSession {
 const TITLE_MAX = 80;
 /** Marks the asks this path creates, so a later press can find the SAME ask for
  *  a query whose search run has since aged out of the in-memory map. */
-export const SEARCH_ASK_TAG = 'walnut:ai-search-ask';
+export { SEARCH_ASK_TAG } from '../task-junk.js';
 
 /**
  * Says what the row IS. Bare search words ("unit test") read as a todo the user

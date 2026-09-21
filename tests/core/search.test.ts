@@ -51,6 +51,33 @@ describe('scoreMatch', () => {
 });
 
 describe('extractSnippet', () => {
+  it('picks the DENSEST matching region, not the earliest hit', () => {
+    // The failure this fixes: the text handed to the snippet is
+    // title + summary + note, so one query term inside a long title beat the
+    // real match 20KB into the body and the snippet explained nothing.
+    const title = 'Queue Drain Stalls · Watchdog False Settle · ops panel';
+    const body = `${'filler words here. '.repeat(200)}the iOS app ships to TestFlight ${'more filler. '.repeat(200)}`;
+    const snippet = extractSnippet(`${title}\n${body}`, 'ios app testflight', 40);
+    expect(snippet).toContain('iOS app');
+    expect(snippet).not.toContain('Watchdog');
+  });
+
+  it('segments a CJK query instead of falling back to the head of the doc', () => {
+    // A whitespace split cannot segment Chinese, so firstIndex was -1 and every
+    // CJK query got the first 80 characters — i.e. the title.
+    const title = 'Queue Drain Stalls';
+    const body = `${'x '.repeat(300)}\u4e91\u7aef\u8fc1\u79fb\u67b6\u6784\u8bbe\u8ba1\u5df2\u5b8c\u6210${' y'.repeat(300)}`;
+    const snippet = extractSnippet(`${title}\n${body}`, '\u8fc1\u79fb\u67b6\u6784', 40);
+    expect(snippet).toContain('\u8fc1\u79fb\u67b6\u6784');
+    expect(snippet).not.toContain('Watchdog');
+  });
+
+  it('is case-insensitive against the document', () => {
+    const snippet = extractSnippet(`${'z '.repeat(100)}The iOS Build Passed${' w'.repeat(100)}`, 'ios build', 30);
+    expect(snippet).toContain('iOS Build');
+  });
+
+
   it('returns snippet around matched term', () => {
     const content = 'The quick brown fox jumps over the lazy dog';
     const snippet = extractSnippet(content, 'fox', 10);
@@ -549,5 +576,67 @@ describe('termInText — word-boundary + stem-flex containment', () => {
   it('CJK terms keep substring semantics', async () => {
     const { termInText } = await import('../../src/core/cjk.js');
     expect(termInText('排查任务日期自动建议错位问题', '日期')).toBe(true);
+  });
+});
+
+describe('the AI search must not surface its own ask rows (2026-09-21)', () => {
+  beforeEach(() => { vi.resetModules(); });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../../src/core/search/wiring.js');
+    vi.doUnmock('../../src/core/task-manager.js');
+    vi.doUnmock('../../src/core/session-tracker.js');
+  });
+
+  const SEARCH_ASK_TAG = 'walnut:ai-search-ask';
+  const QUERY = 'walnut ios app';
+
+  /**
+   * Every AI search writes a task and an adopted session titled
+   * `Search query: <query>`, which then match that exact query on the highest
+   * weighted field. Three of eight result slots went to them on one observed run.
+   *
+   * Gating the index serializers is NOT enough, which is the point of this test:
+   * the title-paraphrase lane reads the LIVE task and session records, not the
+   * index, so it walks straight past every index-side gate.
+   */
+  function mockStoresWithAskRows() {
+    vi.doMock('../../src/core/task-manager.js', () => ({
+      listTasks: vi.fn().mockResolvedValue([
+        {
+          id: 'mtest001-0a01', title: `Search query: ${QUERY}`,
+          project: 'Ask Walnut', tags: [SEARCH_ASK_TAG],
+          updated_at: '2026-09-21T02:40:36.885Z',
+        },
+        {
+          id: 'mtest002-0a02', title: 'Walnut iOS app through TestFlight',
+          project: 'Walnut', tags: [],
+          updated_at: '2026-09-19T00:00:00.000Z',
+        },
+      ]),
+    }));
+    vi.doMock('../../src/core/session-tracker.js', () => ({
+      listSessions: vi.fn().mockResolvedValue([
+        {
+          claudeSessionId: 'ask-sess-1', taskId: 'mtest001-0a01',
+          title: `Search query: ${QUERY}`, project: 'Ask Walnut',
+          startedAt: '2026-09-21T02:40:25.646Z', lastActiveAt: '2026-09-21T02:40:36.885Z',
+        },
+      ]),
+      isLaneSession: () => false,
+    }));
+  }
+
+  it('drops the ask task and its session from the title lane, keeping real work', async () => {
+    mockStoresWithAskRows();
+    mockLane(() => []); // index returns nothing: only the title lane can fire
+    const { search } = await import('../../src/core/search.js');
+    const results = await search(QUERY);
+
+    expect(results.some((r) => r.taskId === 'mtest001-0a01')).toBe(false);
+    expect(results.some((r) => r.sessionId === 'ask-sess-1')).toBe(false);
+    // The lane must still be live — a test that passes because nothing matched
+    // would go green even with the gate removed.
+    expect(results.some((r) => r.taskId === 'mtest002-0a02')).toBe(true);
   });
 });

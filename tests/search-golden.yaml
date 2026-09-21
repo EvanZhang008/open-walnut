@@ -109,6 +109,197 @@ corpus:
     note: "Quarterly rotation."
     updated_at: 2025-09-01
 
+  # A long transcript, so the fixture's average row length resembles a real index
+  # (measured there: avgdl 1830 across 12,188 rows, 3,692 of them transcripts).
+  # bm25 normalizes by WHOLE-ROW length against that average, so a fixture made
+  # only of short rows over-penalizes long bodies and mismeasures ranking.
+  - kind: session
+    ref: s-dock-handover
+    title: "Loading dock shift handover"
+    note: >
+      The operator checked the rota and moved the ladder back to the rail. A second crate arrived
+      on the later round and went onto the middle shelf. The manifest was reconciled against the
+      printed labels and filed. The operator checked the rota and moved the ladder back to the
+      rail. A second crate arrived on the later round and went onto the middle shelf. The manifest
+      was reconciled against the printed labels and filed. The operator checked the rota and moved
+      the ladder back to the rail. A second crate arrived on the later round and went onto the
+      middle shelf. The manifest was reconciled against the printed labels and filed. The operator
+      checked the rota and moved the ladder back to the rail. A second crate arrived on the later
+      round and went onto the middle shelf. The manifest was reconciled against the printed labels
+      and filed. The operator checked the rota and moved the ladder back to the rail. A second
+      crate arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed. The operator checked the
+      rota and moved the ladder back to the rail. A second crate arrived on the later round and
+      went onto the middle shelf. The manifest was reconciled against the printed labels and
+      filed. The operator checked the rota and moved the ladder back to the rail. A second crate
+      arrived on the later round and went onto the middle shelf. The manifest was reconciled
+      against the printed labels and filed. The operator checked the rota and moved the ladder
+      back to the rail. A second crate arrived on the later round and went onto the middle shelf.
+      The manifest was reconciled against the printed labels and filed.
+    meta: "project:logistics"
+    updated_at: 2026-08-04
+
+  # -- long-body vs bare-title docs (2026-09-21 coverage/ranking regression) --
+  # A body that mentions the topic repeatedly among enough neutral prose to be
+  # length-penalized by bm25's row-level D, and a bare stub carrying two of the
+  # three query terms in its title and the third in meta. Modelled on a real
+  # 22KB task note that an empty task titled "Test <topic>" outranked.
+  - kind: task
+    ref: t-longbody-topic
+    title: "Warehouse label printer firmware"
+    note: >
+      The crate weighs less than the pallet it rides on, so the loading dock crew stacks them
+      three high before the morning round. Each label is printed on matte stock and checked
+      against the manifest by hand. Wooden shelving in the annex holds the older stock, and the
+      ladder is kept chained to the rail beside it. The night shift logs every pallet it moves.
+      The tablet reader app build for round 1 was signed and shipped. The crate weighs less than
+      the pallet it rides on, so the loading dock crew stacks them three high before the morning
+      round. Each label is printed on matte stock and checked against the manifest by hand. Wooden
+      shelving in the annex holds the older stock, and the ladder is kept chained to the rail
+      beside it. The night shift logs every pallet it moves. The tablet reader app build for round
+      2 was signed and shipped. The crate weighs less than the pallet it rides on, so the loading
+      dock crew stacks them three high before the morning round. Each label is printed on matte
+      stock and checked against the manifest by hand. Wooden shelving in the annex holds the older
+      stock, and the ladder is kept chained to the rail beside it. The night shift logs every
+      pallet it moves. The tablet reader app build for round 3 was signed and shipped. The crate
+      weighs less than the pallet it rides on, so the loading dock crew stacks them three high
+      before the morning round. Each label is printed on matte stock and checked against the
+      manifest by hand. Wooden shelving in the annex holds the older stock, and the ladder is kept
+      chained to the rail beside it. The night shift logs every pallet it moves. The tablet reader
+      app build for round 4 was signed and shipped.
+    meta: "project:logistics"
+    updated_at: 2026-08-05
+  - kind: task
+    ref: t-baretitle-topic
+    title: "Test tablet reader"
+    note: ""
+    meta: "project:app"
+    updated_at: 2026-08-06
+  # The only occurrence of a distinctive token sits past 1400 characters, i.e.
+  # outside the single truncated passage the old policy embedded.
+  - kind: task
+    ref: t-tailterm
+    title: "Loading dock rota"
+    note: >
+      The crate weighs less than the pallet it rides on, so the loading dock crew stacks them
+      three high before the morning round. Each label is printed on matte stock and checked
+      against the manifest by hand. Wooden shelving in the annex holds the older stock, and the
+      ladder is kept chained to the rail beside it. The night shift logs every pallet it moves.
+      The crate weighs less than the pallet it rides on, so the loading dock crew stacks them
+      three high before the morning round. Each label is printed on matte stock and checked
+      against the manifest by hand. Wooden shelving in the annex holds the older stock, and the
+      ladder is kept chained to the rail beside it. The night shift logs every pallet it moves.
+      The crate weighs less than the pallet it rides on, so the loading dock crew stacks them
+      three high before the morning round. Each label is printed on matte stock and checked
+      against the manifest by hand. Wooden shelving in the annex holds the older stock, and the
+      ladder is kept chained to the rail beside it. The night shift logs every pallet it moves.
+      The crate weighs less than the pallet it rides on, so the loading dock crew stacks them
+      three high before the morning round. Each label is printed on matte stock and checked
+      against the manifest by hand. Wooden shelving in the annex holds the older stock, and the
+      ladder is kept chained to the rail beside it. The night shift logs every pallet it moves.
+      The crate weighs less than the pallet it rides on, so the loading dock crew stacks them
+      three high before the morning round. Each label is printed on matte stock and checked
+      against the manifest by hand. Wooden shelving in the annex h The quokkabyte counter wrapped
+      at midnight. olds the older stock, and the ladder is kept chained to the rail beside it. The
+      night shift logs every pallet it moves. The crate weighs less than the pallet it rides on,
+      so the loading dock crew stacks them three high before the morning round. Each label is
+      printed on matte stock and checked against the manifest by hand. Wooden shelving in the ann
+    meta: "project:logistics"
+    updated_at: 2026-08-07
+  # Pure CJK, longer than one CJK passage budget, target term past character 480.
+  # At ~1 token per character a 1400-char CJK chunk was silently cut to ~512.
+  - kind: note
+    ref: n-cjk-longbody
+    title: "仓库运维手册"
+    note: "仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。灰度发布的开关由值班人员在交接时确认。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必须锁在栏杆旁边。仓库的货架按批次编号排列，夜班需要逐一核对清单并记录搬运数量。纸箱堆放不超过三层，梯子必"
+    updated_at: 2026-08-08
+
 queries:
   # ── family: identifier (exact reference lane) ──
   - id: ident-task-ref
@@ -232,4 +423,33 @@ queries:
     family: junk
     query: "message test"
     must_exclude: [task:t-junk-echo]
+    max_latency_ms: 200
+
+  # ── family: body-coverage (2026-09-21 regression: the reported bug) ──
+  - id: body-density-outranks-bare-title
+    family: body-coverage
+    query: "tablet reader app"
+    must_include: [task:t-longbody-topic]
+    # The substantive body must beat the empty stub. This FAILED before the
+    # 2026-09-21 weight rebalance: at title weight 10 a 12-character title
+    # reaches ~97% of bm25's per-phrase ceiling on one hit, so an empty task
+    # was arithmetically indistinguishable from a real match.
+    must_rank_above: [[task:t-longbody-topic, task:t-baretitle-topic]]
+    max_latency_ms: 200
+  - id: body-tail-term-reachable
+    family: body-coverage
+    # The term occurs once, past 1400 characters. The keyword lane always
+    # reached it (FTS indexes the whole column); the VECTOR did not, because
+    # the old passage policy embedded title + summary + note[:1400] and threw
+    # the rest away. Meaningful mainly under --semantic.
+    query: "quokkabyte counter"
+    must_include: [task:t-tailterm]
+    max_latency_ms: 200
+  - id: cjk-long-body
+    family: body-coverage
+    # Guards the half of the BUDGET invariant no other case touches: CJK costs
+    # ~1 token per character, so a 1400-char chunk breached the tokenizer's 512
+    # cap and the pooled vector described only the prefix.
+    query: "灰度发布"
+    must_include: [note:n-cjk-longbody]
     max_latency_ms: 200

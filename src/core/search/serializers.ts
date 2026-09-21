@@ -3,10 +3,13 @@
  * generic Doc shape. This is the ONLY layer that knows both walnut types and
  * the search core; the core never imports walnut code (boundary-tested).
  *
- * Field mapping philosophy (drives scoring — title 10x, summary 3x, meta 2x,
- * note 1x): the title column gets the human-named handle, summary gets curated
- * prose (descriptions, gists, plans), note gets the long body (task notes,
- * conversation transcripts, markdown bodies), meta gets project/tags/host.
+ * Field mapping philosophy (drives scoring — see BM25_FIELD_WEIGHTS in
+ * query.ts, currently title 10x, summary 3x, note 1x, meta 2x): the title column
+ * gets the human-named handle, summary gets curated prose (descriptions, gists,
+ * plans), note gets the long body (task notes, conversation transcripts,
+ * markdown bodies), meta gets project/tags/host. summary and note are the BODY
+ * streams `bodyCoverage` scores, so putting a handle in either of them would
+ * make an empty row look substantive.
  *
  * Junk filtering happens HERE (isJunkTask / isLaneSession), for the same
  * reasons the QMD sync filtered: test debris outranks real work on short
@@ -17,7 +20,7 @@
 import path from 'node:path';
 import type { Doc } from '../../lib/hybrid-search/index.js';
 import type { SessionRecord, Task } from '../types.js';
-import { isLedgerJunk } from '../task-junk.js';
+import { isLedgerJunk, isSearchArtifact } from '../task-junk.js';
 import { isLaneSession } from '../session-tracker.js';
 import { parseFrontmatter } from '../parse-frontmatter.js';
 
@@ -45,6 +48,10 @@ function joinParts(parts: Array<string | undefined | null>): string {
  *  from this index. */
 export function taskToDoc(task: Task): Doc | null {
   if (isLedgerJunk(task)) return null;
+  // A task that exists only because someone ran a search must never be indexed:
+  // it is titled with the query, so it wins the 10x title field for that exact
+  // query and evicts the real answer.
+  if (isSearchArtifact(task)) return null;
   const identifiers = [
     task.id,
     task.session_id,
@@ -88,6 +95,9 @@ export function sessionToDoc(input: SessionDocInput): Doc | null {
   const { session, task } = input;
   if (isLaneSession(session)) return null;
   if (isLedgerJunk({ project: session.project, title: session.title ?? '' })) return null;
+  // The session adopted for an AI search wears the query as its title too, so it
+  // is the same self-pollution one layer down. The owning task carries the tag.
+  if (task && isSearchArtifact(task)) return null;
   const identifiers = [
     session.claudeSessionId,
     ...(input.commitShas ?? session.commitShas ?? []),

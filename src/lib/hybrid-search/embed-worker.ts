@@ -93,6 +93,39 @@ function loadExtractor(): Promise<Extractor> {
 /** Last-token pooling via the low-level API: run the encoder, take each
  *  sequence's last attention-masked token, L2-normalize. Returns the same
  *  shape contract the pipeline path produces. */
+/**
+ * The tokenizer silently truncates at this length, and because this path pools
+ * on the LAST token a truncated passage produces a vector describing only its
+ * prefix — no error, no shorter output, nothing downstream can notice.
+ * chunk.ts sizes passages to stay under it; this is the check that the estimator
+ * actually succeeded, and it is the authoritative detector for that invariant.
+ */
+const TOKENIZER_MAX_LENGTH = 512;
+let truncatedPassages = 0;
+let truncationWarnedAt = 0;
+/** Throttle: one line per 100 truncations, so a systematic estimator failure is
+ *  loud once and never floods an hours-long backfill. */
+const TRUNCATION_WARN_EVERY = 100;
+
+function reportIfTruncated(inputs: unknown): void {
+  const ids = (inputs as { input_ids?: { dims?: number[] } }).input_ids;
+  const seqLen = ids?.dims?.[1];
+  // Padding makes every row in the batch the same length, so `seqLen` at the cap
+  // means AT LEAST one passage was truncated. Counting rows exactly would need
+  // the attention mask; "at least one" is what the invariant cares about.
+  if (typeof seqLen !== 'number' || seqLen < TOKENIZER_MAX_LENGTH) return;
+  truncatedPassages++;
+  if (truncatedPassages - truncationWarnedAt < TRUNCATION_WARN_EVERY
+    && truncationWarnedAt !== 0) return;
+  truncationWarnedAt = truncatedPassages;
+  console.warn(
+    `[embed-worker] passage hit the ${TOKENIZER_MAX_LENGTH}-token cap and was `
+    + `truncated (${truncatedPassages} batch(es) so far). The passage policy in `
+    + `chunk.ts is meant to prevent this — its token estimator is under-counting `
+    + `for some script, and those vectors describe only the start of their text.`,
+  );
+}
+
 async function loadLastTokenExtractor(
   transformers: typeof import('@huggingface/transformers'),
 ): Promise<Extractor> {
@@ -103,7 +136,8 @@ async function loadLastTokenExtractor(
     session_options: ORT_SESSION_OPTIONS,
   });
   return (async (texts: string[]) => {
-    const inputs = await tokenizer(texts, { padding: true, truncation: true, max_length: 512 });
+    const inputs = await tokenizer(texts, { padding: true, truncation: true, max_length: TOKENIZER_MAX_LENGTH });
+    reportIfTruncated(inputs);
     const out = await model(inputs);
     const hidden = out.last_hidden_state as { dims: number[]; data: Float32Array };
     const [batch, seq, dim] = hidden.dims;

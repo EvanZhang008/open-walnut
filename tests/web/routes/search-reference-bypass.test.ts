@@ -25,7 +25,11 @@ vi.mock('../../../src/core/search/wiring.js', () => ({
   isSearchV2Enabled: () => true,
   searchV2Lane: searchLaneMock,
 }));
-vi.mock('../../../src/core/session-tracker.js', () => ({
+// Partial mock: only listSessions is stubbed, so a new production call into
+// session-tracker cannot turn every request here into a 500 (isLaneSession did,
+// 2026-09-21).
+vi.mock('../../../src/core/session-tracker.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/core/session-tracker.js')>()),
   listSessions: listSessionsMock,
 }));
 

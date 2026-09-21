@@ -61,6 +61,28 @@ export interface Writer {
   reindexFtsFromDocs(): { reindexed: number };
   /** Replace a doc's vectors (seq = array index). No-op if the doc vanished. */
   writeVectors(docId: number, vectors: Int8Array[]): void;
+  /**
+   * Resumable write, for docs whose passages cannot all be embedded in one
+   * quiet window. `vectors` maps seq -> vec for the seqs computed in THIS
+   * attempt; `total` is the passage count under the current policy.
+   *
+   * Inserts those seqs, then writes seq 0 and drops seq >= total ONLY once every
+   * seq in 1..total-1 is present. Until seq 0 lands the doc still answers the
+   * `seq = 0` probe as missing, so the walk's predicate keeps its exact meaning
+   * and a half-embedded doc simply re-lists and resumes.
+   *
+   * This exists because the backfill used to discard every vector computed for
+   * the in-flight doc when a query arrived. With one chunked kind that wasted a
+   * session; with every kind chunked a 40-passage doc under intermittent
+   * searching could embed, discard and repeat forever.
+   */
+  writeVectorsResumable(
+    docId: number,
+    vectors: Map<number, Int8Array>,
+    total: number,
+  ): { complete: boolean };
+  /** Seqs already stored for a doc — the resume point. */
+  storedVecSeqs(docId: number): Set<number>;
   /** Docs with no vectors yet — the backfill work queue. upsert() drops a
    *  changed doc's vectors, so this walk also self-heals staleness.
    *
@@ -92,6 +114,17 @@ export interface MissingVecOptions {
   minUpdatedAt?: number;
   /** Hard cap on doc rows ONE call may examine. Default MISSING_VEC_SCAN_LIMIT. */
   scanLimit?: number;
+  /**
+   * Skip docs whose note is longer than this. The light phase of the two-phase
+   * backfill walk uses it so cheap single-passage docs are vectored before
+   * multi-passage whales — in plain updated_at order a few thousand short docs
+   * were starved for a DAY behind the expensive tail.
+   *
+   * This replaced an `excludeKinds` split by kind, which stopped meaning
+   * anything once every kind became chunked. Filtering here is free: the doc row
+   * is already materialized for embedding, so no extra read is paid.
+   */
+  maxNoteChars?: number;
 }
 
 export interface MissingVecPage {
@@ -276,6 +309,35 @@ export function createWriter(db: SearchDb): Writer {
     }
   });
 
+  const buf = (v: Int8Array): Buffer => Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+  const selectVecSeqs = db.prepare(`SELECT seq FROM doc_vec WHERE doc_id = ?`);
+  const deleteVecFrom = db.prepare(`DELETE FROM doc_vec WHERE doc_id = ? AND seq >= ?`);
+  const writeVectorsResumableTx = db.transaction((
+    docId: number,
+    vectors: Map<number, Int8Array>,
+    total: number,
+  ): { complete: boolean } => {
+    if (!docExists.get(docId)) return { complete: true };
+    // seq 0 is written LAST and only when complete, so it never appears on a
+    // partially embedded doc. Stash it until the end.
+    const seq0 = vectors.get(0);
+    for (const [seq, vec] of vectors) {
+      if (seq === 0) continue;
+      insertVec.run(docId, seq, buf(vec));
+    }
+    const present = new Set<number>();
+    for (const row of selectVecSeqs.all(docId) as Array<{ seq: number }>) present.add(row.seq);
+    for (let seq = 1; seq < total; seq++) {
+      if (!present.has(seq)) return { complete: false };
+    }
+    if (!seq0) return { complete: false };
+    insertVec.run(docId, 0, buf(seq0));
+    // Leftovers from a longer previous layout (same content, so upsert did not
+    // clear them) would otherwise linger and be rescored.
+    deleteVecFrom.run(docId, total);
+    return { complete: true };
+  });
+
   // The missing-vectors walk, in two bounded statements.
   //
   // Step 1 takes the next <= scanLimit ids in walk order. It is a COVERING read
@@ -367,9 +429,13 @@ export function createWriter(db: SearchDb): Writer {
           .map((row) => [row.id, row] as const),
       );
       const excluded = excludeKinds?.length ? new Set(excludeKinds) : null;
+      const maxNote = options?.maxNoteChars;
       for (const row of head) { // walk order, not the rowid order of the IN fetch
         const body = byId.get(row.id);
-        if (body && !excluded?.has(body.kind)) docs.push(body);
+        if (!body) continue;
+        if (excluded?.has(body.kind)) continue;
+        if (maxNote !== undefined && body.note.length > maxNote) continue;
+        docs.push(body);
       }
     }
     return {
@@ -403,6 +469,13 @@ export function createWriter(db: SearchDb): Writer {
     rebuildAll,
     reindexFtsFromDocs,
     writeVectors: (docId, vectors) => writeVectorsTx(docId, vectors),
+    writeVectorsResumable: (docId, vectors, total) =>
+      writeVectorsResumableTx(docId, vectors, total),
+    storedVecSeqs: (docId) => {
+      const out = new Set<number>();
+      for (const row of selectVecSeqs.all(docId) as Array<{ seq: number }>) out.add(row.seq);
+      return out;
+    },
     listDocsMissingVectors,
   };
 }

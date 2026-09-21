@@ -37,12 +37,29 @@ import {
   type KeywordHit,
 } from './query.js';
 import { cosineInt8, createEmbedder, type Embedder } from './embedder.js';
-import { passagesForDoc } from './chunk.js';
+import {
+  passagesForDoc,
+  DEFAULT_PASSAGE_POLICY,
+  PASSAGE_POLICY_VERSION,
+  type PassagePolicy,
+} from './chunk.js';
 
 export type { Doc, MissingVecCursor, UpsertResult, IndexStats, TokenStreams };
 export { tokenize, TOKENIZER_VERSION, DEFAULT_DF_THRESHOLD, MISSING_VEC_SCAN_LIMIT };
 export { cosineInt8, createEmbedder } from './embedder.js';
-export { passagesForDoc } from './chunk.js';
+export {
+  passagesForDoc,
+  estimateTokens,
+  clipToTokenBudget,
+  splitToBudget,
+  DEFAULT_PASSAGE_POLICY,
+  PASSAGE_POLICY_VERSION,
+  PASSAGE_TOKEN_BUDGET,
+  PASSAGE_MAX_CHARS,
+  MAX_CHUNKS_PER_DOC,
+  SEQ0_LEAD_SHARE,
+} from './chunk.js';
+export type { PassagePolicy, PassageSet, OverflowPolicy } from './chunk.js';
 
 export type LogFn = (
   level: 'debug' | 'info' | 'warn' | 'error',
@@ -53,8 +70,16 @@ export type LogFn = (
 export interface KindConfig {
   /** Final score multiplier for this kind (default 1.0). */
   weight?: number;
-  /** Chunk long docs into per-segment vectors (sessions). Default false. */
-  chunkVectors?: boolean;
+  /**
+   * Passage-layout override. Omit for `DEFAULT_PASSAGE_POLICY`, which spreads
+   * an over-cap body so both ends survive. Chronological bodies (session
+   * transcripts) should pass `{ overflow: 'tail' }`.
+   *
+   * Replaces the old `chunkVectors` boolean: EVERY kind is chunked now, because
+   * the unchunked branch embedded only a fixed prefix of the body and dropped
+   * the rest without telling anyone.
+   */
+  passages?: Partial<PassagePolicy>;
 }
 
 export interface EmbedderConfig {
@@ -118,6 +143,9 @@ export interface BackfillVectorsOptions {
   minUpdatedAt?: number;
   /** Doc rows ONE call may examine (see MISSING_VEC_SCAN_LIMIT). */
   scanLimit?: number;
+  /** Skip docs with a note longer than this — the light phase of a two-phase
+   *  walk, so cheap single-passage docs are not starved behind whales. */
+  maxNoteChars?: number;
 }
 
 export interface StoredDoc {
@@ -242,17 +270,27 @@ export interface SearchIndex {
   readonly db: SearchDb;
   /** True when a version gate wiped the index at open — re-feed all docs. */
   readonly needsRebuild: boolean;
+  /** True when doc_vec was emptied at open (embed-model swap or passage-policy
+   *  bump) while doc rows survived: the caller should force a full backfill pass
+   *  immediately instead of waiting for the periodic self-heal. */
+  readonly vectorsWiped: boolean;
 }
 
 const noopLog: LogFn = () => {};
 
 export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   const log = options.logger ?? noopLog;
-  const { db, needsRebuild, needsReindex } = openSearchDb({
+  const { db, needsRebuild, needsReindex, vectorsWiped } = openSearchDb({
     dbPath: options.dbPath,
     tokenizerVersion: TOKENIZER_VERSION,
     embedModel: options.embedder?.modelId,
   });
+  if (vectorsWiped) {
+    log('warn', 'hybrid-search: doc_vec wiped at open — vectors re-embed in the background', {
+      dbPath: options.dbPath,
+      passagePolicyVersion: PASSAGE_POLICY_VERSION,
+    });
+  }
   if (needsRebuild) {
     log('warn', 'hybrid-search: version gate wiped the index — re-feed all docs', {
       dbPath: options.dbPath,
@@ -269,10 +307,10 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   }
 
   const kindWeights: Record<string, number> = {};
-  const chunkedKinds = new Set<string>();
+  const kindPolicies = new Map<string, PassagePolicy>();
   for (const [kind, config] of Object.entries(options.kinds ?? {})) {
     if (typeof config.weight === 'number') kindWeights[kind] = config.weight;
-    if (config.chunkVectors) chunkedKinds.add(kind);
+    kindPolicies.set(kind, { ...DEFAULT_PASSAGE_POLICY, ...config.passages });
   }
 
   const embedder: Embedder | null = options.embedder
@@ -482,7 +520,10 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
               score: (kindWeights[row.kind] ?? 1)
                 * (W_RECALL_RANK * rankStrength + W_RECENCY * recency),
               components: {
-                bm25Strict: 0, bm25Relaxed: 0, coverage: 0,
+                // A recall-lane doc was found by VECTOR similarity alone: no
+                // keyword lane retrieved it, so every keyword component is
+                // genuinely zero rather than unmeasured.
+                bm25Strict: 0, bm25Relaxed: 0, coverage: 0, bodyCoverage: 0,
                 exactIdent: 0, selfIdent: 0, recency,
               },
             });
@@ -589,7 +630,11 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       const batchDocs = backfillOptions.batchDocs ?? 16;
       const { docs, cursor, drained, scanned } = writer.listDocsMissingVectors(
         batchDocs, backfillOptions.cursor, backfillOptions.excludeKinds,
-        { minUpdatedAt: backfillOptions.minUpdatedAt, scanLimit: backfillOptions.scanLimit },
+        {
+          minUpdatedAt: backfillOptions.minUpdatedAt,
+          scanLimit: backfillOptions.scanLimit,
+          maxNoteChars: backfillOptions.maxNoteChars,
+        },
       );
       // No docs does NOT mean done: a bounded window may hold only already-
       // vectorized docs (or only excluded kinds) while the walk still has range
@@ -598,7 +643,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       let embedded = 0;
       for (const doc of docs) {
         if (closed) return { embedded, drained: true, cursor, scanned };
-        const passages = passagesForDoc(doc, chunkedKinds.has(doc.kind));
+        const { passages } = passagesForDoc(doc, kindPolicies.get(doc.kind));
         if (passages.length === 0) {
           // Mark empty docs done with one zero vector (cosine 0 = no boost);
           // otherwise they reappear in every missing-vectors scan forever.
@@ -606,25 +651,50 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
           continue;
         }
         try {
-          const vectors: Int8Array[] = [];
           // ONE passage per inference call. CPU inference is linear in total
           // tokens (measured: 1×2KB ≈ 540ms, 32×2KB ≈ 22s), so batching buys
           // no throughput — it only builds a 22s head-of-line block in the
           // single worker, behind which every interactive query embed blew its
           // deadline and silently degraded to keyword order. Between calls,
-          // yield the worker to live queries: partial vectors are discarded
-          // (the doc stays missing and re-lists), which is the right trade —
-          // backfill wastes a little work only while a human is searching.
-          for (const passage of passages) {
+          // yield the worker to live queries.
+          if (passages.length === 1) {
+            // Single passage: nothing to resume, keep the simple path.
             if (Date.now() - lastQueryAt < BACKFILL_QUERY_QUIET_MS) {
               return { embedded, drained: false, cursor: backfillOptions.cursor ?? null };
             }
-            vectors.push(...await embedder.embedPassages([passage]));
+            const vectors = await embedder.embedPassages([passages[0]]);
+            if (closed) return { embedded, drained: true, cursor, scanned };
+            writer.writeVectors(doc.id, vectors);
+            vecFailures.delete(doc.id);
+            embedded++;
+            continue;
+          }
+          // Multi-passage: persist progress on every yield instead of throwing
+          // it away, and write seq 0 LAST so its presence still means "this doc
+          // is fully vectored under the current policy" — the invariant the
+          // missing-vectors probe and the recall lane both rely on.
+          const done = writer.storedVecSeqs(doc.id);
+          const computed = new Map<number, Int8Array>();
+          let yielded = false;
+          // Cover seqs first, digest last.
+          const order = [...passages.keys()].filter((s) => s !== 0).concat(0);
+          for (const seq of order) {
+            if (done.has(seq)) continue;
+            if (Date.now() - lastQueryAt < BACKFILL_QUERY_QUIET_MS) { yielded = true; break; }
+            const [vec] = await embedder.embedPassages([passages[seq]]);
+            computed.set(seq, vec);
           }
           if (closed) return { embedded, drained: true, cursor, scanned };
-          writer.writeVectors(doc.id, vectors);
-          vecFailures.delete(doc.id);
-          embedded++;
+          const { complete } = writer.writeVectorsResumable(
+            doc.id, computed, passages.length,
+          );
+          if (complete) {
+            vecFailures.delete(doc.id);
+            embedded++;
+          }
+          if (yielded) {
+            return { embedded, drained: false, cursor: backfillOptions.cursor ?? null };
+          }
         } catch (err) {
           // One poison doc (worker OOM/crash on its passages) must not stall
           // the walk: the cursor moves past it either way, and a second
@@ -681,5 +751,6 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     },
     db,
     needsRebuild,
+    vectorsWiped,
   };
 }

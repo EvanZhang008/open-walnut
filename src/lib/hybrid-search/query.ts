@@ -17,12 +17,17 @@
  * Scoring is a WEIGHTED SUM of [0,1] components — never multiplicative tiers
  * (a cov=0 long transcript once outranked the correct short doc that way):
  *
- *   0.45·bm25_strict + 0.25·bm25_relaxed + 0.20·coverage
- *   + 0.07·exact_ident + 0.03·recency  (+ 0.20·cosine, added by the caller)
- *   … all × per-kind weight.
+ *   0.30·bm25_strict + 0.20·bm25_relaxed + 0.20·coverage
+ *   + 0.20·body_coverage + 0.07·exact_ident + 0.03·recency
+ *   (+ 0.20·cosine, added by the caller) … all × per-kind weight.
  *
  * Coverage counts distinct query tokens present in ANY field (computing it on
  * title alone let long transcripts score high with zero real coverage).
+ * BODY coverage counts them in the summary/note streams only, and exists
+ * because bm25 cannot distinguish "this document discusses the query" from
+ * "this document is titled almost exactly the query and says nothing": FTS5
+ * normalizes by WHOLE-ROW length with b=0.75 hardcoded, so an empty task
+ * titled "Test <topic>" outscored a 22KB note mentioning the topic 23 times.
  * Every query term is escaped as `"…""…"` — raw interpolation broke on 11 of
  * 17 adversarial tokens (`acme-gateway-dev` parses as column-filter-minus-NOT).
  * Ranking uses the explicit bm25() function, ~3.7x faster than ORDER BY rank.
@@ -31,11 +36,52 @@
 import { tokenize } from './tokenizer.js';
 import type { SearchDb } from './db.js';
 
-/** FTS5 column weights: title, summary, note, meta orig streams, then their
- *  per-field sub streams at ~60% of the orig weight — a subword hit in the
- *  title must outrank a whole-word hit in a body. */
-const BM25_WEIGHTS = '10.0, 3.0, 1.0, 2.0, 6.0, 1.8, 0.6, 1.2';
+/**
+ * FTS5 column weights per field. Sub-stream weights are DERIVED at 60% of the
+ * orig weight, so "a subword hit in the title must outrank a whole-word hit in a
+ * body" cannot drift as the numbers change.
+ *
+ * These numbers are deliberately UNCHANGED by the 2026-09-21 ranking work, and
+ * that is a measured decision, not inertia. Lowering title 10 -> 6 and raising
+ * note 1 -> 2 was tried, to stop an empty task titled "Test <topic>" outranking a
+ * 22KB note that mentions the topic 23 times. On the golden set (75 queries, real
+ * 12,188-doc index, keyword only) it cost more than it bought:
+ *
+ *   field weights   components                    pass  recall@10   MRR     camel
+ *   10 / 1          .45 .25 .20  (before)          52      69%     0.5657   10/10
+ *    6 / 2          .35 .20 .20 .15                51      67%     0.5394    9/10
+ *   10 / 1          .30 .20 .20 .20  (shipped)     54      69%     0.5657   10/10
+ *
+ * The camel loss is the instructive one. On the single-token query
+ * "<Component>Name", raising note to 2 promoted documents that merely MENTION the
+ * component over documents TITLED after it, which is the opposite of what someone
+ * typing a bare component name wants. A field weight applies the same
+ * body-vs-title trade to a one-word handle lookup and to a three-word descriptive
+ * query, and those two want opposite things — so the trade belongs in a component
+ * that knows the query's shape. `bodyCoverage` below is gated on term count and
+ * therefore cannot touch the handle lookup at all. It fixed the reported bug with
+ * no family regressing.
+ *
+ * Keep src/lib/hybrid-search/README.md in step — tests/lib/hybrid-search-weights-doc.test.ts
+ * fails if it drifts.
+ */
+export const BM25_FIELD_WEIGHTS = {
+  title: 10.0,
+  summary: 3.0,
+  note: 1.0,
+  meta: 2.0,
+} as const;
+export const BM25_SUB_RATIO = 0.6;
+const BM25_WEIGHTS = [
+  ...Object.values(BM25_FIELD_WEIGHTS),
+  ...Object.values(BM25_FIELD_WEIGHTS).map((w) => w * BM25_SUB_RATIO),
+].map((w) => w.toFixed(1)).join(', ');
 const SUB_COLUMNS = '{tsub ssub nsub msub}';
+/** Body streams: the fields whose content is authored prose rather than a
+ *  handle. Title and meta are deliberately absent — the whole point of
+ *  `bodyCoverage` is to be blind to them. */
+const BODY_COLUMNS = '{summary note ssub nsub}';
+const BODY_SUB_COLUMNS = '{ssub nsub}';
 
 export const DEFAULT_DF_THRESHOLD = 0.15;
 const DEFAULT_CANDIDATES = 250;
@@ -45,10 +91,43 @@ export const RECENCY_HALF_LIFE_DAYS = 180;
  *  AFTER the lane query (see the JOIN note below), so fetch extra headroom. */
 const KIND_FILTER_OVERFETCH = 4;
 
-const W_STRICT = 0.45;
-const W_RELAXED = 0.25;
-const W_COVERAGE = 0.2;
-const W_IDENT = 0.07;
+/**
+ * The four match components sum to RELEVANCE_MASS (0.90); identifier and recency
+ * add the last 0.10, and cosine is added by the caller. That sum is load-bearing:
+ * the demotion cap, span confidence and recall slot cap in index.ts were all
+ * tuned against it. Moving mass BETWEEN these four is safe; changing the sum is
+ * not, and hybrid-search-weights-doc.test.ts fails if it moves.
+ *
+ * 0.20 moved out of bm25 into `bodyCoverage` on 2026-09-21. bm25 here is a
+ * reliable "did it match, in an important column" signal and an unreliable
+ * graded-relevance signal: `f` saturates at k1+1, so a one-token title reaches
+ * ~97% of the per-phrase ceiling on a single hit, while whole-row `D` penalizes
+ * the documents where substantive work lives by 6-28x. An empty task titled
+ * "Test <topic>" is therefore the bm25 BEST whatever the column weights are,
+ * which is why no weight vector fixed the reported bug and why score mass had to
+ * move to a component that row length cannot reach.
+ */
+export const RELEVANCE_MASS = 0.9;
+export const W_STRICT = 0.3;
+export const W_RELAXED = 0.2;
+export const W_COVERAGE = 0.2;
+/**
+ * Query terms present in the BODY streams (summary/note), as a fraction of the
+ * DISCRIMINATIVE terms. Length-independent by construction: presence, not count,
+ * so no row-length normalization can bury it.
+ *
+ * Only terms that passed the df gate count. Without that filter this component
+ * would degrade into "is this document long", because a long body contains every
+ * glue word in the language and would collect the full 0.15 on any verbose
+ * query. Reusing the df gate rather than a stopword list keeps it corpus-adaptive
+ * and language-agnostic — a hardcoded English list would do nothing for CJK.
+ */
+export const W_BODY_COVERAGE = 0.2;
+/** Below this, a query is a handle lookup ("<project> deploy"), where a bare
+ *  task legitimately outranks a transcript that merely mentions the words, so
+ *  body presence must not be demanded. Mirrors the ident-query gate below. */
+export const BODY_COVERAGE_MIN_TERMS = 3;
+export const W_IDENT = 0.07;
 export const W_RECENCY = 0.03;
 /** A doc matched by its OWN ref is the strongest possible signal: searching an
  *  exact id means the user wants THE doc, and its id usually appears nowhere
@@ -94,6 +173,9 @@ export interface KeywordHit {
     bm25Strict: number;
     bm25Relaxed: number;
     coverage: number;
+    /** Query terms present in summary/note, over the df-surviving terms.
+     *  0 when the query is too short to demand body presence. */
+    bodyCoverage: number;
     exactIdent: number;
     /** Matched by the doc's OWN ref (exact 1.0 / prefix-discounted). */
     selfIdent: number;
@@ -117,6 +199,8 @@ interface Term {
   strictExpr: string;
   /** Coverage/df expression (matches the term anywhere, sub included). */
   anyExpr: string;
+  /** Same match, restricted to the body streams (see BODY_COLUMNS). */
+  bodyExpr: string;
   /** Relaxed-lane OR members (orig + sub parts / bigrams). */
   relaxedExprs: string[];
 }
@@ -127,10 +211,12 @@ function compileTerm(token: string): Term {
     // the ordered bigram stream: phrase for precision, OR bag for recall.
     const bigrams = tokenize(token).sub;
     const phrase = `${SUB_COLUMNS}:"${bigrams.map((b) => b.replaceAll('"', '""')).join(' ')}"`;
+    const bigramPhrase = bigrams.map((b) => b.replaceAll('"', '""')).join(' ');
     return {
       token,
       strictExpr: phrase,
       anyExpr: phrase,
+      bodyExpr: `${BODY_SUB_COLUMNS}:"${bigramPhrase}"`,
       relaxedExprs: bigrams.map((b) => `${SUB_COLUMNS}:${ftsQuote(b)}`),
     };
   }
@@ -140,6 +226,7 @@ function compileTerm(token: string): Term {
     token,
     strictExpr: quoted,
     anyExpr: quoted,
+    bodyExpr: `${BODY_COLUMNS}:${quoted}`,
     relaxedExprs: [quoted, ...subParts.map((p) => ftsQuote(p))],
   };
 }
@@ -346,6 +433,24 @@ export function searchKeyword(
     }
   }
 
+  // ── body coverage sets, same bounded probe, restricted to summary/note ──
+  // Only the DISCRIMINATIVE terms participate: a term the df gate rejected is
+  // present in every long body, so counting it would turn this component into a
+  // document-length bonus, which is the exact bias it exists to cancel.
+  const bodyTerms = terms.length >= BODY_COVERAGE_MIN_TERMS
+    ? terms.filter((t) => !overDf(t))
+    : [];
+  const bodyTermSets = new Map<string, Set<number>>();
+  for (const term of bodyTerms) {
+    try {
+      bodyTermSets.set(term.token, new Set(
+        (coverStmt.all(term.bodyExpr) as Array<{ rowid: number }>).map((r) => r.rowid),
+      ));
+    } catch {
+      bodyTermSets.set(term.token, new Set());
+    }
+  }
+
   // ── score ──
   // Identifier-query detection: on a 1-2 token query the identifier IS the
   // intent, so ownership outweighs prose quoting it.
@@ -357,10 +462,18 @@ export function searchKeyword(
     for (const term of terms) {
       if (termSets.get(term.token)?.has(row.id)) covered++;
     }
+    let bodyCovered = 0;
+    for (const term of bodyTerms) {
+      if (bodyTermSets.get(term.token)?.has(row.id)) bodyCovered++;
+    }
     const components = {
       bm25Strict: norm(lanes.strict, bestStrict),
       bm25Relaxed: norm(lanes.relaxed, bestRelaxed),
       coverage: covered / terms.length,
+      // No discriminative term (every one over the df cap, or the query is a
+      // handle lookup) → 0 for EVERY candidate, so the component is neutral
+      // rather than arbitrary.
+      bodyCoverage: bodyTerms.length > 0 ? bodyCovered / bodyTerms.length : 0,
       exactIdent: identMatch.get(row.id) ?? 0,
       selfIdent: selfMatch.get(row.id) ?? 0,
       recency: Math.exp(-Math.max(0, now - row.updated_at) / (RECENCY_HALF_LIFE_DAYS * 86_400_000)),
@@ -370,6 +483,7 @@ export function searchKeyword(
       W_STRICT * components.bm25Strict
       + W_RELAXED * components.bm25Relaxed
       + W_COVERAGE * components.coverage
+      + W_BODY_COVERAGE * components.bodyCoverage
       + wIdent * components.exactIdent
       + W_SELF_IDENT * components.selfIdent
       + W_RECENCY * components.recency

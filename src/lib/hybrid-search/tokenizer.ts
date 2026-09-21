@@ -47,6 +47,24 @@ const enum Cls {
 const NON_ASCII_LETTER = /\p{L}/u;
 const NON_ASCII_DIGIT = /\p{N}/u;
 
+/**
+ * CJK: Han (incl. Ext A and Ext B..F), Hiragana/Katakana, Hangul syllables.
+ *
+ * Exported because `chunk.ts` needs the same notion of "one character is about
+ * one token" to size passages, and the boundary test forbids the library from
+ * importing walnut's own CJK helper. One definition, two callers — a second
+ * copy would drift and silently break the passage budget for CJK text.
+ *
+ * Reading this does NOT change tokenization, so TOKENIZER_VERSION stays put.
+ */
+export function isCjkCodePoint(code: number): boolean {
+  return (code >= 0x4e00 && code <= 0x9fff)
+    || (code >= 0x3400 && code <= 0x4dbf)
+    || (code >= 0x3040 && code <= 0x30ff)
+    || (code >= 0xac00 && code <= 0xd7af)
+    || (code >= 0x20000 && code <= 0x2ebef);
+}
+
 function classify(code: number): Cls {
   if (code < 128) {
     if (code >= 97 && code <= 122) return Cls.Lower; // a-z
@@ -55,14 +73,7 @@ function classify(code: number): Cls {
     if (code === 45 || code === 95 || code === 46 || code === 39) return Cls.Join; // - _ . '
     return Cls.Sep;
   }
-  // CJK: Han (incl. Ext A), Hiragana/Katakana, Hangul syllables.
-  if (
-    (code >= 0x4e00 && code <= 0x9fff)
-    || (code >= 0x3400 && code <= 0x4dbf)
-    || (code >= 0x3040 && code <= 0x30ff)
-    || (code >= 0xac00 && code <= 0xd7af)
-    || (code >= 0x20000 && code <= 0x2ebef)
-  ) return Cls.Cjk;
+  if (isCjkCodePoint(code)) return Cls.Cjk;
   const ch = String.fromCodePoint(code);
   if (NON_ASCII_LETTER.test(ch)) return Cls.Lower; // no case boundaries outside ASCII
   if (NON_ASCII_DIGIT.test(ch)) return Cls.Digit;

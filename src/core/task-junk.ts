@@ -45,6 +45,33 @@ export function isJunkTask(task: Pick<Task, 'project' | 'title'>): boolean {
 }
 
 /**
+ * Tag stamped on the task and session the AI-search flow creates for a query.
+ *
+ * It lives HERE, in the leaf module that owns "keep this out of ranked
+ * surfaces", rather than in the feature that writes it: task-junk.ts imports
+ * only ./types.js, while the writing side pulls in the event bus and the search
+ * agent, so the dependency has to point this way.
+ */
+export const SEARCH_ASK_TAG = 'walnut:ai-search-ask';
+
+/**
+ * A task (or the session adopted for it) that EXISTS ONLY BECAUSE someone ran a
+ * search. Indexing these makes the search feature poison its own results: the
+ * row is titled with the user's exact query, so it scores a perfect hit on the
+ * highest-weighted field for the very query that created it. Observed taking 3
+ * of 8 result slots on one query.
+ *
+ * Keyed on the tag, not the project: the project name is user-visible and
+ * renameable, and `source` is plain 'local' like any other local task.
+ *
+ * Deliberately separate from isLedgerJunk, whose contract is scoped to the
+ * recent-task ledger — this one must apply to the search index too.
+ */
+export function isSearchArtifact(task: Pick<Task, 'tags'>): boolean {
+  return task.tags?.includes(SEARCH_ASK_TAG) ?? false;
+}
+
+/**
  * Stricter check applied ONLY to the ledger (never the search index): recent
  * E2E probe tasks land in Inbox with test-ish titles and, being the newest
  * tasks, would sit at the very top of a recency-sorted ledger.

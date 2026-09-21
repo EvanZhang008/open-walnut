@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSearchIndex, type SearchIndex, type Doc } from '../../src/lib/hybrid-search/index.js';
 import { createWriter } from '../../src/lib/hybrid-search/writer.js';
+import { openSearchDb } from '../../src/lib/hybrid-search/db.js';
+import { PASSAGE_POLICY_VERSION } from '../../src/lib/hybrid-search/chunk.js';
 
 const open = (dbPath = ':memory:') => createSearchIndex({ dbPath });
 
@@ -199,6 +201,112 @@ describe('hybrid-search writer', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('passage-policy bump clears vectors, keeps docs + keyword index', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hybrid-search-test-'));
+    const dbPath = path.join(dir, 'search.sqlite');
+    try {
+      const first = track(createSearchIndex({ dbPath }));
+      const { docId } = first.upsert(doc());
+      first.db.prepare(`INSERT INTO doc_vec (doc_id, seq, vec) VALUES (?, 0, ?)`)
+        .run(docId, Buffer.alloc(4));
+      expect(first.stats().vectors).toBe(1);
+      // Pretend the stored vectors came from an older passage layout.
+      first.db.prepare(`UPDATE meta SET value = ? WHERE key = 'passage_policy_version'`)
+        .run(String(PASSAGE_POLICY_VERSION - 1));
+      first.close();
+
+      const reopened = track(createSearchIndex({ dbPath }));
+      expect(reopened.vectorsWiped).toBe(true);
+      expect(reopened.needsRebuild).toBe(false);   // doc rows are the re-embed source
+      expect(reopened.stats().docs).toBe(1);
+      expect(reopened.stats().vectors).toBe(0);
+      expect(ftsMatch(reopened, 'reconciler')).toHaveLength(1);
+      reopened.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('an index predating the policy gate is treated as v1, so the migration FIRES', () => {
+    // The whole migration hinges on this: reading an absent key as "fresh" on a
+    // POPULATED index would stamp the current version over old-layout vectors,
+    // and since the backfill only looks for docs with ZERO vectors those docs
+    // would keep their stale single vector forever.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hybrid-search-test-'));
+    const dbPath = path.join(dir, 'search.sqlite');
+    try {
+      const first = track(createSearchIndex({ dbPath }));
+      const { docId } = first.upsert(doc());
+      first.db.prepare(`INSERT INTO doc_vec (doc_id, seq, vec) VALUES (?, 0, ?)`)
+        .run(docId, Buffer.alloc(4));
+      first.db.prepare(`DELETE FROM meta WHERE key = 'passage_policy_version'`).run();
+      first.close();
+
+      const reopened = track(createSearchIndex({ dbPath }));
+      expect(reopened.vectorsWiped).toBe(true);
+      expect(reopened.stats().docs).toBe(1);
+      expect(reopened.stats().vectors).toBe(0);
+      reopened.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a FRESH index stamps the policy version without wiping', () => {
+    const fresh = track(open());
+    expect(fresh.vectorsWiped).toBe(false);
+    const stored = fresh.db
+      .prepare(`SELECT value FROM meta WHERE key = 'passage_policy_version'`)
+      .get() as { value: string };
+    expect(stored.value).toBe(String(PASSAGE_POLICY_VERSION));
+  });
+
+  it('resumable vectors: seq 0 lands only when the doc is complete', () => {
+    const index = track(open());
+    const { docId } = index.upsert(doc());
+    const writer = createWriter(index.db);
+    const vec = (n: number) => new Int8Array([n, n, n, n]);
+
+    // Partial attempt: cover seqs only. seq 0 must NOT appear, so the walk's
+    // `seq = 0` probe still reports this doc as missing and it resumes.
+    const partial = writer.writeVectorsResumable(docId, new Map([[1, vec(1)]]), 3);
+    expect(partial.complete).toBe(false);
+    expect([...writer.storedVecSeqs(docId)].sort()).toEqual([1]);
+    expect(writer.listDocsMissingVectors(10, null).docs.map((d) => d.ref)).toEqual(['t1']);
+
+    // Finish it: remaining cover seq plus the digest.
+    const done = writer.writeVectorsResumable(docId, new Map([[2, vec(2)], [0, vec(0)]]), 3);
+    expect(done.complete).toBe(true);
+    expect([...writer.storedVecSeqs(docId)].sort()).toEqual([0, 1, 2]);
+    expect(writer.listDocsMissingVectors(10, null).docs).toEqual([]);
+  });
+
+  it('resumable vectors drop seqs past the current passage count', () => {
+    const index = track(open());
+    const { docId } = index.upsert(doc());
+    const writer = createWriter(index.db);
+    const vec = (n: number) => new Int8Array([n, n, n, n]);
+    // A longer previous layout left seq 3 behind on identical content.
+    writer.writeVectors(docId, [vec(0), vec(1), vec(2), vec(3)]);
+    const done = writer.writeVectorsResumable(
+      docId, new Map([[0, vec(9)], [1, vec(9)]]), 2,
+    );
+    expect(done.complete).toBe(true);
+    expect([...writer.storedVecSeqs(docId)].sort()).toEqual([0, 1]);
+  });
+
+  it('missing-vectors walk honours maxNoteChars (short bodies before whales)', () => {
+    const index = track(open());
+    index.upsert(doc({ kind: 'note', ref: 'small', updatedAt: 3, note: 'tiny' }));
+    index.upsert(doc({ kind: 'session', ref: 'whale', updatedAt: 2, note: 'x'.repeat(50_000) }));
+    index.upsert(doc({ kind: 'note', ref: 'small2', updatedAt: 1, note: 'also tiny' }));
+    const writer = createWriter(index.db);
+    const light = writer.listDocsMissingVectors(10, null, undefined, { maxNoteChars: 2_800 });
+    expect(light.docs.map((d) => d.ref)).toEqual(['small', 'small2']);
+    const all = writer.listDocsMissingVectors(10, null);
+    expect(all.docs.map((d) => d.ref)).toEqual(['small', 'whale', 'small2']);
   });
 
   it('missing-vectors walk honours excludeKinds (light kinds before chunked whales)', () => {

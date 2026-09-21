@@ -181,7 +181,11 @@ async function loadSearchWithSpies() {
   vi.doMock('../../src/core/task-manager.js', () => ({
     listTasks: vi.fn().mockResolvedValue(TASKS),
   }));
-  vi.doMock('../../src/core/session-tracker.js', () => ({
+  vi.doMock('../../src/core/session-tracker.js', async (importOriginal) => ({
+    // Partial mock: only listSessions is stubbed. A mock that enumerated the
+    // exports broke the moment search.ts called one more of them (isLaneSession,
+    // 2026-09-21) — every such call became a thrown error in these tests only.
+    ...(await importOriginal<typeof import('../../src/core/session-tracker.js')>()),
     listSessions: vi.fn().mockResolvedValue(SESSIONS),
   }));
   vi.doMock('../../src/core/search/wiring.js', () => ({
@@ -270,7 +274,10 @@ describe('search() id lane', () => {
     vi.doMock('../../src/core/task-manager.js', () => ({
       listTasks: vi.fn().mockResolvedValue(TASKS),
     }));
-    vi.doMock('../../src/core/session-tracker.js', () => ({ listSessions }));
+    vi.doMock('../../src/core/session-tracker.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../../src/core/session-tracker.js')>()),
+      listSessions,
+    }));
     vi.doMock('../../src/core/search/wiring.js', () => ({
       searchV2Lane: vi.fn(async () => []),
     }));

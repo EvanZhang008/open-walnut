@@ -12,61 +12,175 @@ import {
   cosineInt8,
   passagesForDoc,
 } from '../../src/lib/hybrid-search/index.js';
-import { CHUNK_TARGET_CHARS, MAX_CHUNKS_PER_DOC } from '../../src/lib/hybrid-search/chunk.js';
+import {
+  MAX_CHUNKS_PER_DOC,
+  PASSAGE_MAX_CHARS,
+  PASSAGE_TOKEN_BUDGET,
+  SEQ0_LEAD_SHARE,
+  estimateTokens,
+  splitToBudget,
+} from '../../src/lib/hybrid-search/chunk.js';
 
 const KINDS = {
   task: { weight: 1.0 },
-  session: { weight: 0.9, chunkVectors: true },
+  session: { weight: 0.9, passages: { overflow: 'tail' as const } },
 };
 
+/** Non-whitespace characters, the unit the COVER invariant is stated in. */
+const dense = (s: string): string => s.replace(/\s+/g, '');
+
 describe('passagesForDoc', () => {
-  it('doc-level kinds produce one passage: title + summary + note head', () => {
-    const p = passagesForDoc(
-      { title: 'T', summary: 'S', note: 'N'.repeat(5000) },
-      false,
-    );
-    expect(p).toHaveLength(1);
-    expect(p[0].startsWith('T\nS')).toBe(true);
-    expect(p[0].length).toBeLessThanOrEqual(CHUNK_TARGET_CHARS + 4);
+  it('collapses a doc that fits one budget into a single passage', () => {
+    // coverFrom 0 means passages[0] IS the cover, so no near-duplicate vector
+    // is stored. Most docs in a real index take this path.
+    const r = passagesForDoc({ title: 'T', summary: 'S', note: 'short note' });
+    expect(r.passages).toHaveLength(1);
+    expect(r.coverFrom).toBe(0);
+    expect(r.droppedChars).toBe(0);
+    expect(dense(r.passages[0])).toBe(dense('TSshort note'));
   });
 
-  it('chunked kinds split the note on paragraph boundaries, head first', () => {
-    const para = 'word '.repeat(100).trim(); // ~500 chars
-    const p = passagesForDoc(
-      { title: 'Head', note: [para, para, para, para, para].join('\n\n') },
-      true,
-    );
-    expect(p[0]).toBe('Head');
-    expect(p.length).toBeGreaterThan(2);
-    for (const chunk of p.slice(1)) {
-      expect(chunk.length).toBeLessThanOrEqual(CHUNK_TARGET_CHARS + 2);
-    }
+  it('seq 0 is a digest that carries BODY text, not just title+summary', () => {
+    // RECALL invariant: the semantic recall lane reads only seq 0, so a head-only
+    // seq 0 would make a long doc undiscoverable by paraphrase.
+    const r = passagesForDoc({
+      title: 'Head',
+      summary: 'Summary',
+      note: `BODYLEAD ${'word '.repeat(2000)}`,
+    });
+    expect(r.coverFrom).toBe(1);
+    expect(r.passages[0].startsWith('Head\nSummary')).toBe(true);
+    expect(r.passages[0]).toContain('BODYLEAD');
+    expect(estimateTokens(r.passages[0])).toBeLessThanOrEqual(PASSAGE_TOKEN_BUDGET);
+  });
+
+  it('an oversized head cannot crowd the body out of seq 0', () => {
+    // A real task title+summary reached 14,390 chars. Clipping the head in the
+    // digest is what stops the original bug reappearing one field over.
+    const summary = 'S'.repeat(14_290);
+    const r = passagesForDoc({ title: 'T'.repeat(100), summary, note: `NOTESTART ${'b '.repeat(3000)}` });
+    expect(r.passages[0]).toContain('NOTESTART');
+    const leadTokens = estimateTokens(r.passages[0].slice(r.passages[0].indexOf('NOTESTART')));
+    expect(leadTokens).toBeGreaterThan(PASSAGE_TOKEN_BUDGET * SEQ0_LEAD_SHARE * 0.5);
+    // The clipped remainder of the summary is still covered by seq >= 1.
+    expect(dense(r.passages.slice(1).join('')).includes(dense(summary))).toBe(true);
+    expect(r.droppedChars).toBe(0);
+  });
+
+  it('covers every character of the body when inside the cap', () => {
+    const para = 'word '.repeat(100).trim();
+    const doc = { title: 'Head', summary: 'Sum', note: Array(5).fill(para).join('\n\n') };
+    const r = passagesForDoc(doc);
+    expect(r.droppedChars).toBe(0);
+    expect(dense(r.passages.slice(r.coverFrom).join('')))
+      .toBe(dense(doc.title + doc.summary + doc.note));
   });
 
   it('hard-splits an unbroken wall and respects the per-doc cap', () => {
-    const p = passagesForDoc(
-      { title: 'W', note: 'x'.repeat(CHUNK_TARGET_CHARS * (MAX_CHUNKS_PER_DOC + 10)) },
-      true,
-    );
-    expect(p.length).toBe(MAX_CHUNKS_PER_DOC);
+    const r = passagesForDoc({
+      title: 'W',
+      note: 'x'.repeat(PASSAGE_MAX_CHARS * (MAX_CHUNKS_PER_DOC + 10)),
+    });
+    expect(r.passages.length).toBe(MAX_CHUNKS_PER_DOC);
+    // Over the cap text IS lost — but it comes back as a number rather than
+    // disappearing, which is the whole point of droppedChars.
+    expect(r.droppedChars).toBeGreaterThan(0);
   });
 
   it('empty doc yields no passages', () => {
-    expect(passagesForDoc({ title: '', note: '' }, false)).toEqual([]);
+    const r = passagesForDoc({ title: '', note: '' });
+    expect(r.passages).toEqual([]);
+    expect(r.droppedChars).toBe(0);
   });
 
-  it('over the cap, keeps the TAIL of a chunked body (recent turns), not the head', () => {
-    // Distinct markers per chunk so we can see which side survived the cap.
-    const paras: string[] = [];
-    for (let i = 0; i < MAX_CHUNKS_PER_DOC + 20; i++) {
-      paras.push(`marker-${i} ${'x'.repeat(CHUNK_TARGET_CHARS)}`);
+  // Paragraphs comfortably under one budget, so they accumulate the way a real
+  // structured note does. Enough of them to blow the per-doc cap several times.
+  const MARKED_PARAS = 200;
+  const markedNote = (): string => Array.from(
+    { length: MARKED_PARAS },
+    (_, i) => `marker-${i} ${'word '.repeat(120)}`,
+  ).join('\n\n');
+
+  it('overflow "tail" keeps the newest chunks (chronological bodies)', () => {
+    const r = passagesForDoc({ title: 'Head', note: markedNote() }, { overflow: 'tail' });
+    expect(r.passages.length).toBe(MAX_CHUNKS_PER_DOC);
+    expect(r.passages[0].startsWith('Head')).toBe(true);
+    const body = r.passages.slice(1).join('\n');
+    expect(body).not.toContain('marker-0 ');
+    expect(body).toContain(`marker-${MARKED_PARAS - 1} `);
+    expect(r.droppedChars).toBeGreaterThan(0);
+  });
+
+  it('overflow "spread" keeps BOTH ends (structured bodies)', () => {
+    // A task note is goal-at-the-top plus log-at-the-bottom, so a tail-only cap
+    // would drop the plan — the half a "what was this task about" query needs.
+    const r = passagesForDoc({ title: 'Head', note: markedNote() }, { overflow: 'spread' });
+    expect(r.passages.length).toBe(MAX_CHUNKS_PER_DOC);
+    const body = r.passages.slice(1).join('\n');
+    expect(body).toContain('marker-0 ');
+    expect(body).toContain(`marker-${MARKED_PARAS - 1} `);
+    // And it samples across the middle rather than clustering at one end.
+    const kept = [...body.matchAll(/marker-(\d+) /g)].map((m) => Number(m[1]));
+    expect(Math.max(...kept) - Math.min(...kept)).toBeGreaterThan(MARKED_PARAS * 0.8);
+  });
+
+  it('budgets CJK by TOKENS, so a Chinese body is not silently halved', () => {
+    // CJK is ~1 token per char against the tokenizer's 512 cap, so the old
+    // 1400-char chunk lost ~63% of its content INSIDE the embedder, and the
+    // last-token pooling made the resulting vector describe only the prefix.
+    const note = `${'\u8fd9\u662f\u4e00\u6bb5\u4e2d\u6587\u6b63\u6587\u5185\u5bb9\u3002'.repeat(60)}\n\n`.repeat(10);
+    const r = passagesForDoc({ title: '\u6807\u9898', note });
+    for (const passage of r.passages) {
+      expect(estimateTokens(passage)).toBeLessThanOrEqual(PASSAGE_TOKEN_BUDGET);
+      expect(passage.length).toBeLessThanOrEqual(PASSAGE_MAX_CHARS);
     }
-    const p = passagesForDoc({ title: 'Head', note: paras.join('\n\n') }, true);
-    expect(p.length).toBeLessThanOrEqual(MAX_CHUNKS_PER_DOC);
-    expect(p[0]).toBe('Head');
-    const body = p.slice(1).join('\n');
-    expect(body).not.toContain('marker-0 ');           // oldest dropped
-    expect(body).toContain(`marker-${MAX_CHUNKS_PER_DOC + 19}`); // newest kept
+    // Chinese chunks land near the token budget in CHARS, well under 1400.
+    const coverLens = r.passages.slice(1).map((p) => p.length);
+    expect(Math.max(...coverLens)).toBeLessThan(PASSAGE_MAX_CHARS * 0.6);
+    expect(r.droppedChars).toBe(0);
+  });
+
+  it('property: no character of the body is unreachable, and every passage fits both caps', () => {
+    // The invariant the whole change exists to establish. Fuzzed across scripts,
+    // paragraph shapes and the degenerate cases that broke the old chunker.
+    let seed = 12345;
+    const rnd = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    const pieces = ['word ', '\u4e2d\u6587\u5b57 ', 'CamelCaseToken ', 'x', '\u3042\u304b ', '-_. '];
+    for (let i = 0; i < 200; i++) {
+      const paraCount = rnd(8) + 1;
+      const paras: string[] = [];
+      for (let j = 0; j < paraCount; j++) {
+        let para = '';
+        const len = rnd(2500) + 1;
+        while (para.length < len) para += pieces[rnd(pieces.length)];
+        paras.push(para);
+      }
+      if (rnd(5) === 0) paras.push('y'.repeat(3000));       // unbroken wall
+      const note = paras.join(rnd(2) === 0 ? '\n\n' : '\n\n\n\n\n');
+      const doc = {
+        title: rnd(4) === 0 ? '' : 'T'.repeat(rnd(120) + 1),
+        summary: rnd(3) === 0 ? '' : 'S'.repeat(rnd(1500)),
+        note: rnd(6) === 0 ? '' : note,
+      };
+      const r = passagesForDoc(doc, { overflow: rnd(2) === 0 ? 'tail' : 'spread' });
+      for (const passage of r.passages) {
+        expect(estimateTokens(passage)).toBeLessThanOrEqual(PASSAGE_TOKEN_BUDGET);
+        expect(passage.length).toBeLessThanOrEqual(PASSAGE_MAX_CHARS);
+      }
+      const want = dense(doc.title + doc.summary + doc.note);
+      const got = dense(r.passages.slice(r.coverFrom).join(''));
+      if (r.droppedChars === 0) {
+        expect(got).toBe(want);
+      } else {
+        // Only the cap may drop text, and it must account for every character.
+        expect(got.length + r.droppedChars).toBe(want.length);
+        const chunks = splitToBudget([doc.title, doc.summary, doc.note].filter((x) => x).join('\n\n'));
+        expect(chunks.length + 1).toBeGreaterThan(MAX_CHUNKS_PER_DOC);
+      }
+    }
   });
 });
 

@@ -6,7 +6,9 @@
  *            rebuilds (FTS is contentless and cannot return text)
  *   doc_fts  contentless FTS5 (`content=''` + `contentless_delete=1`) whose
  *            columns hold OUR pre-tokenized streams, not raw text
- *   doc_vec  int8 embedding blobs, (doc_id, seq) — seq>0 only for chunked kinds
+ *   doc_vec  int8 embedding blobs, (doc_id, seq) — seq 0 is the digest the
+ *            recall lane scans, seq>0 the passages that cover the body;
+ *            seq 0 is written LAST so its presence means "fully vectored"
  *   ident    exact-identifier lane (ids, ticket numbers, SHAs, URLs)
  *   meta     version stamps; mismatch forces a rebuild
  *
@@ -20,6 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { PASSAGE_POLICY_VERSION } from './chunk.js';
 
 export type SearchDb = Database.Database;
 
@@ -89,6 +92,9 @@ export interface OpenOptions {
   /** Embedding model id, once an embedder is configured. Changing it clears
    *  doc_vec (re-embed) but keeps the keyword index. */
   embedModel?: string;
+  /** Test seam only: override the passage-policy version being gated on.
+   *  Production always uses chunk.ts's PASSAGE_POLICY_VERSION. */
+  passagePolicyVersion?: number;
 }
 
 export interface OpenResult {
@@ -100,6 +106,10 @@ export interface OpenResult {
    *  doc rows survived, so re-tokenizing them locally rebuilds the index —
    *  createSearchIndex does this automatically. */
   needsReindex: boolean;
+  /** True when doc_vec was emptied (embed-model swap or passage-policy bump)
+   *  but doc rows survived. The caller should kick a full backfill pass at once
+   *  rather than waiting for the periodic self-heal to notice. */
+  vectorsWiped: boolean;
 }
 
 function getMeta(db: SearchDb, key: string): string | undefined {
@@ -168,15 +178,39 @@ export function openSearchDb(options: OpenOptions): OpenResult {
   setMeta(db, 'tokenizer_version', wantTokenizer);
   setMeta(db, 'fts_version', wantFts);
 
+  let vectorsWiped = false;
   if (options.embedModel !== undefined) {
     const storedModel = getMeta(db, 'embed_model');
     if (storedModel !== undefined && storedModel !== options.embedModel) {
       db.exec(`DELETE FROM doc_vec;`); // keyword index survives a model swap
+      vectorsWiped = true;
     }
     setMeta(db, 'embed_model', options.embedModel);
   }
 
-  return { db, needsRebuild, needsReindex };
+  // Passage policy governs the LAYOUT of a doc's vectors. After a policy change
+  // every stored vector describes text this policy would no longer produce, so
+  // it must re-embed. Only doc_vec is dropped: `doc` rows are the SOURCE the
+  // backfill re-embeds from, and the keyword index does not depend on passage
+  // layout. Same shape as the embed-model gate above, and for the same reason a
+  // wipeIndex() here would be wrong — task and session docs are fed by events
+  // only, so an emptied `doc` table would remove untouched tasks from search
+  // entirely until something happened to edit them.
+  const storedPolicy = getMeta(db, 'passage_policy_version')
+    // An index built before this gate existed holds v1 passages. Reading an
+    // absent key as "fresh" on an EXISTING index would stamp the current version
+    // over v1 vectors and make the whole migration a silent no-op: the backfill
+    // only looks for docs with ZERO vectors, so a doc holding one stale vector
+    // would never be revisited.
+    ?? (hasDocs ? '1' : undefined);
+  const wantPolicy = String(options.passagePolicyVersion ?? PASSAGE_POLICY_VERSION);
+  if (storedPolicy !== undefined && storedPolicy !== wantPolicy) {
+    db.exec(`DELETE FROM doc_vec;`);
+    vectorsWiped = true;
+  }
+  setMeta(db, 'passage_policy_version', wantPolicy);
+
+  return { db, needsRebuild, needsReindex, vectorsWiped };
 }
 
 export interface IndexStats {

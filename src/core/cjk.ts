@@ -106,8 +106,16 @@ export function lightStem(term: string): string {
  * and the FTS index already stems (porter) — coverage counting must not be
  * stricter than the match lanes it re-ranks.
  */
-export function termInText(text: string, term: string): boolean {
-  if (CJK_CHAR_RE.test(term)) return text.includes(term);
+/**
+ * The matcher `termInText` and `termIndexInText` share.
+ *
+ * One builder, two callers: snippet selection and coverage counting must agree
+ * on what "this term appears here" means. When they disagreed, a hit could be
+ * ranked for a term the snippet then failed to find, and the snippet silently
+ * fell back to the head of the document — which is the title.
+ */
+function termMatcher(term: string): { cjk: true } | { cjk: false; re: RegExp } {
+  if (CJK_CHAR_RE.test(term)) return { cjk: true };
   const stem = lightStem(term);
   const escaped = stem.replace(REGEX_ESCAPE_RE, '\\$&');
   // Flex must cover the LONGEST strippable suffix (6, "ations"): the text may
@@ -120,8 +128,45 @@ export function termInText(text: string, term: string): boolean {
   // Latin words directly against them ("云端Walnut迁移…") — an adjacent
   // ideograph IS a word boundary, not a continuation. The flex quantifier
   // stays Latin-only for the same reason.
-  return new RegExp(
-    `(?<![a-zA-Z0-9])${escaped}[a-zA-Z]{0,${flex}}(?![a-zA-Z0-9])`,
-    'u',
-  ).test(text);
+  return {
+    cjk: false,
+    re: new RegExp(
+      `(?<![a-zA-Z0-9])${escaped}[a-zA-Z]{0,${flex}}(?![a-zA-Z0-9])`,
+      'gu',
+    ),
+  };
+}
+
+export function termInText(text: string, term: string): boolean {
+  const m = termMatcher(term);
+  if (m.cjk) return text.includes(term);
+  m.re.lastIndex = 0;
+  return m.re.test(text);
+}
+
+/**
+ * Every offset in `text` where `term` matches, using the SAME rules as
+ * `termInText`. Empty when the term is absent.
+ *
+ * Snippet selection needs positions, not a boolean: picking the window by the
+ * earliest single occurrence meant any term appearing in a long title beat the
+ * real match 20KB into the body, so the snippet described nothing the reader was
+ * looking for.
+ */
+export function termIndexesInText(text: string, term: string): number[] {
+  const out: number[] = [];
+  const m = termMatcher(term);
+  if (m.cjk) {
+    let at = text.indexOf(term);
+    while (at !== -1) {
+      out.push(at);
+      at = text.indexOf(term, at + Math.max(1, term.length));
+    }
+    return out;
+  }
+  m.re.lastIndex = 0;
+  for (const match of text.matchAll(m.re)) {
+    if (match.index !== undefined) out.push(match.index);
+  }
+  return out;
 }

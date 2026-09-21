@@ -28,7 +28,9 @@ vi.mock('../../src/core/cheap-model.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/core/cheap-model.js')>()),
   backgroundAiDisabled: () => aiDisabledRef.value,
 }));
-vi.mock('../../src/core/session-tracker.js', () => ({
+// Partial mock: see the note in tests/web/routes/search-reference-bypass.test.ts.
+vi.mock('../../src/core/session-tracker.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/core/session-tracker.js')>()),
   listSessions: listSessionsMock,
 }));
 

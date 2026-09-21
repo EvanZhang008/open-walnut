@@ -81,10 +81,13 @@ const SEMANTIC = flag('--semantic');
 const MODEL = opt('--model', 'e5-small');
 
 /** Per-kind score multipliers (kept in sync with the walnut adapter). */
+// MUST mirror SEARCH_V2_KIND_WEIGHTS in src/core/search/wiring.ts. The eval is
+// the instrument used to prove a ranking or passage change; running it under a
+// different policy than production measures the wrong engine.
 const KIND_WEIGHTS = {
   task: { weight: 1.0 },
   memory: { weight: 1.1 },
-  session: { weight: 0.9, chunkVectors: true },
+  session: { weight: 0.9, passages: { overflow: 'tail' } },
   note: { weight: 1.0 },
   skill: { weight: 1.0 },
 };

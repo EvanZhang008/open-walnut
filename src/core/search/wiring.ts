@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createSearchIndex,
   MISSING_VEC_SCAN_LIMIT,
+  PASSAGE_MAX_CHARS,
   type Doc,
   type EmbedderConfig,
   type MissingVecCursor,
@@ -37,12 +38,32 @@ import { listSessions } from '../session-tracker.js';
 import { markdownToDoc, sessionToDoc, taskToDoc } from './serializers.js';
 import { iterateAllDocs, readSessionBody } from './build.js';
 
+/**
+ * Per-kind scoring weight and passage layout.
+ *
+ * EVERY kind is chunked now. The old `chunkVectors: true` on session alone meant
+ * every other kind embedded `title + summary + note[:1400]` and dropped the
+ * rest: measured on a real 12,188-doc index, 26% of tasks, 31% of notes, 74% of
+ * memories and 84% of skills had body text that no vector could ever reach.
+ *
+ * The overflow side is what differs. A session body is a chronological
+ * transcript and the serializer already feeds a tail window, so the newest turns
+ * are the ones a query is about. A task note, a vault note and a skill are
+ * structured documents: the goal sits at the top and the log at the bottom, so
+ * `spread` (the default) keeps both ends and strides the middle.
+ */
+/**
+ * Body-length bound of the vector backfill's LIGHT phase (see the two-phase walk
+ * below). Exported so tests key off the same number production does: when the
+ * light phase was keyed on kind instead, a policy change silently collapsed the
+ * two phases into one and nothing failed.
+ */
+export const LIGHT_PHASE_MAX_NOTE_CHARS = PASSAGE_MAX_CHARS * 2;
+
 export const SEARCH_V2_KIND_WEIGHTS = {
   task: { weight: 1.0 },
   memory: { weight: 1.1 },
-  // Transcripts get per-passage vectors: one 50KB mean-pool buries the 2% of
-  // the text that answers the query.
-  session: { weight: 0.9, chunkVectors: true },
+  session: { weight: 0.9, passages: { overflow: 'tail' as const } },
   note: { weight: 1.0 },
   skill: { weight: 1.0 },
 } as const;
@@ -144,6 +165,10 @@ export function getSearchV2Index(): SearchIndex {
       embedder: buildEmbedderConfig(),
       logger: (level, msg, data) => log.memory[level](msg, data),
     });
+    // A version gate emptied doc_vec (embed-model swap or passage-policy bump).
+    // Arm a FULL pass now: the periodic self-heal would otherwise take up to an
+    // hour to notice, during which the semantic lane has no vectors at all.
+    if (handle.vectorsWiped) vectorPass.requireFullPass();
   }
   return handle;
 }
@@ -593,13 +618,15 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   };
   let vecTotal = 0;
   let vecCursor: MissingVecCursor | null = null;
-  // Two-phase walk: single-vector kinds first, chunked whales after. In
-  // updated_at order alone, ten thousand chunked sessions (minutes of
-  // inference each batch) starved two thousand one-vector notes for a DAY —
-  // the cheap 95% of search quality was hostage to the expensive tail.
-  const chunkedKinds = Object.entries(SEARCH_V2_KIND_WEIGHTS)
-    .filter(([, cfg]) => (cfg as { chunkVectors?: boolean }).chunkVectors)
-    .map(([kind]) => kind);
+  // Two-phase walk: cheap docs first, multi-passage whales after. In updated_at
+  // order alone, ten thousand chunked sessions (minutes of inference each batch)
+  // starved two thousand one-vector notes for a DAY — the cheap 95% of search
+  // quality was hostage to the expensive tail.
+  //
+  // The split is on BODY LENGTH, not kind: every kind is chunked now, so a kind
+  // split would exclude nothing and silently collapse this back to one phase.
+  // The bound matches chunk.ts's per-passage character ceiling, so the light
+  // phase is exactly "docs whose body fits one or two passages".
   let vecPhase: 'light' | 'all' = 'light';
   /** Floor for the pass in flight. Both phases of one pass share it. */
   let vecFloor: number | null = null;
@@ -616,7 +643,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           }
           const { embedded, drained, cursor, scanned } = await index.backfillVectors({
             batchDocs: 16, cursor: vecCursor,
-            excludeKinds: vecPhase === 'light' ? chunkedKinds : undefined,
+            maxNoteChars: vecPhase === 'light' ? LIGHT_PHASE_MAX_NOTE_CHARS : undefined,
             minUpdatedAt: vecFloor ?? undefined,
             scanLimit: MISSING_VEC_SCAN_LIMIT,
           });
@@ -625,7 +652,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
           vecScanned += scanned ?? 0;
           if (drained) {
             if (vecPhase === 'light') {
-              // Light kinds done — move straight on to the chunked ones.
+              // Short bodies done — move straight on to the whales.
               vecPhase = 'all';
               vecCursor = null;
               scheduleVectorBackfill(vecBatchPauseMs());

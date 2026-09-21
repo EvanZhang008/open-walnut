@@ -1,11 +1,12 @@
 import { log } from '../logging/index.js';
 import { count, observe, timed } from './observability/metrics.js';
 import { CLOUD_MODE } from '../constants.js';
-import { contentQueryTerms, termInText } from './cjk.js';
+import { contentQueryTerms, termInText, termIndexesInText } from './cjk.js';
 import { bus, EventNames } from './event-bus.js';
 import { listTasks } from './task-manager.js';
-import { listSessions } from './session-tracker.js';
+import { listSessions, isLaneSession } from './session-tracker.js';
 import { matchIdQuery, parseIdQuery } from './search/id-lookup.js';
+import { isSearchArtifact } from './task-junk.js';
 import type { SessionRecord, Task } from './types.js';
 import type { QuerySegments } from '../lib/hybrid-search/index.js';
 
@@ -20,8 +21,10 @@ export interface SearchResult {
   isAutoExpanded?: boolean; // true if included because parent matched (not direct hit)
   score: number;
   matchField: string;   // field name of best keyword match
-  /** Whole-document query-term hit count from the index lane (reconstructed
-   *  from the hybrid coverage fraction). Merge-ranking input, not API surface. */
+  /** The coverage tier this row was SORTED by (distinct query terms matched,
+   *  halved for grab-bag lanes). Rows come back ordered by
+   *  (reference, coveredTermHits, score) — publishing the middle key is what
+   *  makes that order explainable instead of looking arbitrary. */
   coveredTermHits?: number;
 }
 
@@ -35,46 +38,104 @@ export function extractSnippet(
   query: string,
   contextChars: number = 40,
 ): string {
+  // Terms come from contentQueryTerms, not a whitespace split: that drops English
+  // glue words AND segments CJK, which a raw split cannot. Without it a Chinese
+  // query the FTS and semantic lanes had matched found nothing here and fell
+  // through to the head-of-document fallback below — i.e. the title.
+  const terms = contentQueryTerms(query);
+  // The emitted snippet spans focus +/- contextChars, so DENSITY MUST BE SCORED
+  // OVER EXACTLY THAT SPAN. Scoring over a wider one credited an anchor for terms
+  // that fall outside the text actually returned: on the task that motivated this,
+  // the head of the title won on the strength of an "app" and an "iOS" 280 and 330
+  // characters away, and the snippet it emitted contained neither.
+  const window = contextChars;
+  // contentQueryTerms lowercases; the matcher is case-SENSITIVE, so search a
+  // lowered copy and index back into the original (same convention as every
+  // other termInText caller).
   const lower = content.toLowerCase();
-  const terms = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((t) => t.length > 0);
 
-  let firstIndex = -1;
+  // Score every occurrence by how many DISTINCT query terms sit within a window
+  // of it, and take the densest. The old code took the earliest occurrence of any
+  // term, so a term inside a long title always beat the real match deep in the
+  // body: the row came back correct and its snippet explained nothing.
+  const hits: Array<{ at: number; term: string }> = [];
   for (const term of terms) {
-    const idx = lower.indexOf(term);
-    if (idx !== -1 && (firstIndex === -1 || idx < firstIndex)) {
-      firstIndex = idx;
+    for (const at of termIndexesInText(lower, term)) hits.push({ at, term });
+    if (hits.length > 400) break; // bounded work on a 250KB body
+  }
+
+  if (hits.length === 0) {
+    // No query term is present at all: fall back to the head, at the same width
+    // the matched path emits (focus +/- contextChars).
+    const budget = contextChars * 2;
+    const plain = content.replace(/\n/g, ' ').trim();
+    return plain.length > budget ? plain.slice(0, budget) + '...' : plain;
+  }
+
+  hits.sort((a, b) => a.at - b.at);
+  let best = hits[0]!;
+  let bestDistinct = 0;
+  let bestCount = 0;
+  // Span of the hits that justified the winning window. The word-boundary
+  // trimming below must not cut inside it: scoring a window for containing a term
+  // and then emitting text without that term is the same failure this function
+  // was rewritten to fix, one step later. A real case: the only "docx" in the
+  // text sat 3 characters inside the window and the trim removed it.
+  let bestFrom = hits[0]!.at;
+  let bestTo = hits[0]!.at + hits[0]!.term.length;
+  for (let i = 0; i < hits.length; i++) {
+    const anchor = hits[i]!;
+    const distinct = new Set<string>();
+    let count = 0;
+    let from = anchor.at;
+    let to = anchor.at + anchor.term.length;
+    // Both directions: the emitted window reaches BACKWARD from the anchor too, so
+    // a forward-only count undervalues an anchor that sits at the end of a dense
+    // run and makes the choice depend on which hit happens to be scanned first.
+    for (let j = i; j >= 0 && anchor.at - hits[j]!.at <= window; j--) {
+      distinct.add(hits[j]!.term);
+      count++;
+      from = Math.min(from, hits[j]!.at);
+    }
+    for (let j = i + 1; j < hits.length && hits[j]!.at - anchor.at <= window; j++) {
+      distinct.add(hits[j]!.term);
+      count++;
+      to = Math.max(to, hits[j]!.at + hits[j]!.term.length);
+    }
+    if (distinct.size > bestDistinct || (distinct.size === bestDistinct && count > bestCount)) {
+      bestDistinct = distinct.size;
+      bestCount = count;
+      best = anchor;
+      bestFrom = from;
+      bestTo = to;
     }
   }
 
-  if (firstIndex === -1) {
-    const plain = content.replace(/\n/g, ' ').trim();
-    return plain.length > contextChars * 2
-      ? plain.slice(0, contextChars * 2) + '...'
-      : plain;
-  }
+  const focus = best.at;
+  // contextChars is a soft budget; covering the matched span is the point. The
+  // hard cap alone sliced the final "docx" down to "doc" — a snippet that shows
+  // a term's prefix has not shown the term.
+  const start = Math.max(0, Math.min(focus - contextChars, bestFrom));
+  let end = Math.min(content.length, Math.max(focus + contextChars, bestTo));
+  let trimmedStart = start;
 
-  let start = Math.max(0, firstIndex - contextChars);
-  let end = Math.min(content.length, firstIndex + contextChars);
-
-  // Expand to word boundaries
+  // Snap to word boundaries, but never across a matched term: a trim that hides
+  // the evidence is worse than a snippet that starts mid-word.
   if (start > 0) {
     const spaceAfter = content.indexOf(' ', start);
-    if (spaceAfter !== -1 && spaceAfter < firstIndex) {
-      start = spaceAfter + 1;
+    if (spaceAfter !== -1 && spaceAfter < focus && spaceAfter + 1 <= bestFrom) {
+      trimmedStart = spaceAfter + 1;
     }
   }
   if (end < content.length) {
     const spaceBefore = content.lastIndexOf(' ', end);
-    if (spaceBefore > firstIndex) {
+    if (spaceBefore > focus && spaceBefore >= bestTo) {
       end = spaceBefore;
     }
   }
 
-  let snippet = content.slice(start, end).replace(/\n/g, ' ').trim();
-  if (start > 0) snippet = '...' + snippet;
+  let snippet = content.slice(trimmedStart, end).replace(/\n/g, ' ').trim();
+  if (trimmedStart > 0) snippet = '...' + snippet;
   if (end < content.length) snippet = snippet + '...';
 
   return snippet;
@@ -919,7 +980,12 @@ async function searchInner(
     // Title-paraphrase lane (see titleMatchScore). Runs before the index lane
     // so a task whose title the user is clearly rewording can't be displaced
     // by semantically-adjacent noise.
+    // The title lane reads LIVE task rows, so it bypasses every exclusion the
+    // index serializer applies. Without this filter an AI-search artifact still
+    // surfaces here — titled with the user's exact query — even though it is
+    // correctly absent from search.sqlite.
     const titleHits = allTasks
+      .filter((t) => !isSearchArtifact(t))
       .map((t) => ({ task: t, score: titleMatchScore(t.title, normalizedQuery) }))
       .filter((h) => h.score > 0)
       .sort((a, b) => b.score - a.score)
@@ -981,7 +1047,14 @@ async function searchInner(
 
     // Title-paraphrase lane, session leg (same rationale as the task leg).
     const seenForTitle = new Set(results.map((r) => r.sessionId).filter(Boolean));
+    // Same bypass as the task title lane, plus lane sessions: sessionToDoc drops
+    // those, so a side thread wearing a "Side: <query>" label must not reappear
+    // through this lane either.
+    const artifactTaskIds = new Set(
+      (await getTasks()).filter((t) => isSearchArtifact(t)).map((t) => t.id),
+    );
     const sessionTitleHits = (await getSessions())
+      .filter((s) => !isLaneSession(s) && !(s.taskId && artifactTaskIds.has(s.taskId)))
       .map((s) => ({ s, score: titleMatchScore(s.title, normalizedQuery) }))
       .filter((h) => h.score > 0 && !seenForTitle.has(h.s.claudeSessionId))
       .sort((a, b) => b.score - a.score)
@@ -1128,6 +1201,16 @@ async function searchInner(
     Number(isReference(b)) - Number(isReference(a))
     || effectiveCoverage(b) - effectiveCoverage(a)
     || b.score - a.score);
+
+  // Publish the coverage tier the sort ACTUALLY used, so the returned order is
+  // reproducible from the returned fields. Without this a reader sees a row
+  // scoring 0.658 sitting below one scoring 0.279 and concludes the ranking is
+  // arbitrary — which is how a correct top hit got skipped over by both a human
+  // and an agent reading the same result list.
+  for (const r of results) {
+    const eff = effectiveCoverage(r);
+    if (eff > 0 || r.coveredTermHits !== undefined) r.coveredTermHits = eff;
+  }
 
   // Per-type floor on the merged page. Lane scores are not comparable across
   // types, so one prolific lane can legally fill the whole page and blank

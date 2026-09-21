@@ -32,12 +32,14 @@ import {
   type SearchIndex,
 } from '../../src/lib/hybrid-search/index.js';
 import { createWriter } from '../../src/lib/hybrid-search/writer.js';
-import { createVectorPassPlanner, type VectorPassPlanner } from '../../src/core/search/wiring.js';
+import {
+  createVectorPassPlanner, LIGHT_PHASE_MAX_NOTE_CHARS, type VectorPassPlanner,
+} from '../../src/core/search/wiring.js';
 
 const KINDS = {
   task: { weight: 1.0 },
   note: { weight: 1.0 },
-  session: { weight: 0.9, chunkVectors: true },
+  session: { weight: 0.9, passages: { overflow: 'tail' as const } },
 };
 
 /** Deterministic stand-in for the embed worker (shared with the lib tests). */
@@ -47,8 +49,13 @@ const FAKE_EMBEDDER = {
   workerPath: new URL('../lib/fixtures/fake-embed-worker.cjs', import.meta.url).pathname,
 };
 
-/** Chunked kinds go second, exactly as the wiring orders them. */
-const CHUNKED_KINDS = ['session'];
+/**
+ * The light phase is bounded by BODY LENGTH, exactly as the wiring bounds it.
+ * It used to be bounded by kind (`excludeKinds: ['session']`), which stopped
+ * selecting anything once every kind became chunked — the two phases would have
+ * collapsed into one with no test failing.
+ */
+const LIGHT_MAX_NOTE_CHARS = LIGHT_PHASE_MAX_NOTE_CHARS;
 
 const temps: string[] = [];
 const opened: SearchIndex[] = [];
@@ -104,7 +111,7 @@ async function runPass(
     const result = await index.backfillVectors({
       batchDocs: 16,
       cursor,
-      excludeKinds: phase === 'light' ? CHUNKED_KINDS : undefined,
+      maxNoteChars: phase === 'light' ? LIGHT_MAX_NOTE_CHARS : undefined,
       minUpdatedAt: floor ?? undefined,
       scanLimit,
     });
@@ -190,7 +197,8 @@ describe('vector backfill walk cost', () => {
     const real = spied.prepare.bind(index.db);
     spied.prepare = (sql: string) => { prepared.push(sql); return real(sql); };
     try {
-      createWriter(index.db).listDocsMissingVectors(16, null, CHUNKED_KINDS);
+      createWriter(index.db)
+        .listDocsMissingVectors(16, null, undefined, { maxNoteChars: LIGHT_MAX_NOTE_CHARS });
     } finally {
       spied.prepare = real;
     }
@@ -372,5 +380,33 @@ describe('createVectorPassPlanner', () => {
     }
     clock += 10 * 60_000;
     expect(planner.beginPass()).toBeNull();
+  });
+});
+
+describe('two-phase walk by body length', () => {
+  it('the light phase skips whales, so short docs are never starved behind them', async () => {
+    const index = openTempIndex();
+    const now = Date.now();
+    // The whale is the NEWEST doc, so in plain updated_at order it is walked
+    // first and its passages are paid for before anything else gets a vector.
+    const whale = index.upsert({
+      kind: 'task', ref: 'whale', title: 'huge task',
+      note: 'w'.repeat(LIGHT_MAX_NOTE_CHARS + 1), updatedAt: now,
+    });
+    const short = index.upsert({
+      kind: 'note', ref: 'short', title: 'small note', note: 'body', updatedAt: now - 60_000,
+    });
+
+    const light = await index.backfillVectors({
+      batchDocs: 16, maxNoteChars: LIGHT_MAX_NOTE_CHARS,
+    });
+    expect(light.drained).toBe(true);
+    expect(vecCount(index, short.docId)).toBe(1);
+    expect(vecCount(index, whale.docId)).toBe(0);
+
+    // The unbounded phase then picks the whale up in the same pass, chunked.
+    const all = await index.backfillVectors({ batchDocs: 16 });
+    expect(all.drained).toBe(true);
+    expect(vecCount(index, whale.docId)).toBeGreaterThan(1);
   });
 });
