@@ -36,6 +36,16 @@
 # Environment:
 #   WALNUT_UITEST_SERVER  server the app is paired to. Default: a DEAD PORT (see below).
 #   WALNUT_UITEST_TOKEN   device token. Default: a throwaway string.
+#   WALNUT_UITEST_ROW_ID  throwaway task id the board tap test may toggle done.
+#   WALNUT_UITEST_ROW_QUERY
+#                         search text that narrows the board to that one row.
+#                         Both are injected below for the same reason as the rest:
+#                         an XCUITest runner never sees your shell's exports.
+#   WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH=1
+#                         opt into the one test SpringBoard cold-launches (see
+#                         below). Default unset. Exporting it alone is NOT enough —
+#                         like the two above it only reaches the runner through the
+#                         .xctestrun, which is why this script injects it.
 #   WALNUT_UITEST_UDID    simulator. Default: the booted one.
 #   WALNUT_UITEST_DD      derived data path. Default: /tmp/walnut-uitest-dd.
 #
@@ -55,6 +65,11 @@ PROJ="$IOS/Walnut.xcodeproj"
 BUNDLE=dev.openwalnut.ios
 DD="${WALNUT_UITEST_DD:-/tmp/walnut-uitest-dd}"
 SERVER="${WALNUT_UITEST_SERVER:-http://127.0.0.1:59999}"
+# Deliberately no default: this one must be opted into per run.
+ALLOW_SPRINGBOARD="${WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH:-}"
+# Also opt-in only: the tap test toggles a task DONE, so it must never guess a row.
+ROW_ID="${WALNUT_UITEST_ROW_ID:-}"
+ROW_QUERY="${WALNUT_UITEST_ROW_QUERY:-}"
 TOKEN="${WALNUT_UITEST_TOKEN:-ui-test-offline}"
 # Default to the whole target. Assigned before any `"${ONLY[@]}"` expansion so
 # this stays safe on macOS's stock bash 3.2, where expanding an empty array under
@@ -118,10 +133,16 @@ say "simulator lease held"
 # 1. Generate the .xctestrun WITH the runner env baked in. This is the step that
 #    has to carry TEST_RUNNER_*; a later `test` action cannot add them.
 say "build-for-testing → $DD"
-# WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH=1 (not passed here on purpose) opts into the
-# one test whose launch comes from SpringBoard and therefore CANNOT be pinned to
-# $SERVER — it runs against whatever server the simulator is paired to. Add it by hand
-# only on an unpaired / throwaway-paired simulator.
+# WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH=1 opts into the one test whose launch comes
+# from SpringBoard and therefore CANNOT be pinned to $SERVER — it runs against
+# whatever server the SIMULATOR is paired to. Set it only on an unpaired or
+# throwaway-paired simulator; check with
+#   plutil -p "$(xcrun simctl get_app_container <udid> dev.openwalnut.ios data)"/Library/Preferences/dev.openwalnut.ios.plist
+# and confirm `walnut.serverUrl` is absent or points somewhere disposable.
+#
+# It is injected into the .xctestrun below, NOT merely exported: exporting it does
+# exactly nothing, which cost one run to discover even with this file's own warning
+# already written down.
 xcodebuild build-for-testing \
   -project "$PROJ" -scheme Walnut \
   -destination "platform=iOS Simulator,id=$UDID" \
@@ -139,17 +160,31 @@ say "xctestrun $XCTESTRUN"
 
 # 3. PROVE the variable landed rather than trusting that it did. This check is the
 #    whole reason the recipe can't rot back into "it skipped and nobody knew why".
-if ! /usr/bin/plutil -p "$XCTESTRUN" | grep -q WALNUT_UITEST_SERVER; then
-  say "TEST_RUNNER_ did not reach the .xctestrun — injecting directly"
-  python3 - "$XCTESTRUN" "$SERVER" "$TOKEN" <<'PY' || die "xctestrun injection failed"
+# The opt-in flag has no TEST_RUNNER_ path at all, so when it is requested the
+# injector must run even if the server variables did arrive on their own.
+if [ -n "$ALLOW_SPRINGBOARD" ] || [ -n "$ROW_ID" ] || [ -n "$ROW_QUERY" ] \
+  || ! /usr/bin/plutil -p "$XCTESTRUN" | grep -q WALNUT_UITEST_SERVER; then
+  say "injecting runner environment into the .xctestrun directly"
+  python3 - "$XCTESTRUN" "$SERVER" "$TOKEN" "$ALLOW_SPRINGBOARD" "$ROW_ID" "$ROW_QUERY" <<'PY' || die "xctestrun injection failed"
 import plistlib, sys
-path, server, token = sys.argv[1:4]
+path, server, token, allow_springboard, row_id, row_query = sys.argv[1:7]
 with open(path, 'rb') as f: doc = plistlib.load(f)
 def inject(target):
     for key in ('EnvironmentVariables', 'TestingEnvironmentVariables'):
         env = dict(target.get(key) or {})
         env['WALNUT_UITEST_SERVER'] = server
         env['WALNUT_UITEST_TOKEN'] = token
+        # Absent, not empty: the test reads presence, and an empty string would
+        # opt a caller in who never asked.
+        for name, value in (
+            ('WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH', allow_springboard),
+            ('WALNUT_UITEST_ROW_ID', row_id),
+            ('WALNUT_UITEST_ROW_QUERY', row_query),
+        ):
+            if value:
+                env[name] = value
+            else:
+                env.pop(name, None)
         target[key] = env
 n = 0
 for cfg in doc.get('TestConfigurations', []):
@@ -168,6 +203,18 @@ PY
     || die "injection did not take — the runner will skip"
 fi
 say "verified: the runner will see WALNUT_UITEST_SERVER"
+if [ -n "$ALLOW_SPRINGBOARD" ]; then
+  /usr/bin/plutil -p "$XCTESTRUN" | grep -q WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH \
+    || die "WALNUT_UITEST_ALLOW_SPRINGBOARD_LAUNCH did not reach the .xctestrun — the SpringBoard test would skip and look fine"
+  say "verified: SpringBoard cold launch is OPTED IN (simulator must be unpaired or throwaway-paired)"
+fi
+for pair in "WALNUT_UITEST_ROW_ID:$ROW_ID" "WALNUT_UITEST_ROW_QUERY:$ROW_QUERY"; do
+  name=${pair%%:*}; value=${pair#*:}
+  [ -n "$value" ] || continue
+  /usr/bin/plutil -p "$XCTESTRUN" | grep -q "$name" \
+    || die "$name did not reach the .xctestrun — the board tap test would skip and look fine"
+  say "verified: the runner will see $name"
+done
 
 # 4. Microphone, for the voice tests. A denied mic reads as "the shortcut is
 #    broken", which is the wrong diagnosis for a permission nobody granted.
