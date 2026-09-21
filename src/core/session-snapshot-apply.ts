@@ -200,6 +200,15 @@ function shouldWarnDivergence(
   return { warn: false, count: prev.total, suppressed: prev.sinceLastWarn }
 }
 
+export function settledPhaseCutoff(record: SessionRecord): string {
+  let cutoff = record.last_status_change ?? ''
+  for (const entry of record.status_history ?? []) {
+    if (entry.process_status === 'running') break
+    if (Date.parse(entry.timestamp) < Date.parse(cutoff)) cutoff = entry.timestamp
+  }
+  return cutoff
+}
+
 export async function captureSnapshotReadGuard(sessionId: string): Promise<(current: Readonly<SessionRecord>) => boolean> {
   const { getSessionByClaudeId } = await import('./session-tracker.js')
   const { sessionRunner } = await import('../providers/claude-code-session.js')
@@ -404,24 +413,28 @@ export async function applySnapshot(
     }
   }
 
-  const settledTurn = projected === 'idle' && snapshot.cliState === 'idle'
-    && !snapshot.turnActive && !!snapshot.lastResult && !snapshot.lastResult.isError
+  const settledTurn = ((projected === 'idle' && snapshot.cliState === 'idle' && !snapshot.lastResult?.isError)
+    || (TERMINAL.has(projected) && snapshot.cliState === 'dead'))
+    && !snapshot.turnActive && !!snapshot.lastResult
     && !snapshot.pendingPermission && snapshot.gatingBgCount === 0
     && (snapshot.detachedBgCount ?? 0) === 0 && !snapshot.teamActive
     && !isWakeupArmed(snapshot.wakeupAt)
   const handbackTask = settledTurn && record.taskId
     ? await import('./task-manager.js').then(({ getTask }) => getTask(record.taskId!)).catch(() => null)
     : null
-  const handbackCutoff = actual === 'idle'
-    ? record.status_history?.find(entry => entry.process_status === 'idle')?.timestamp ?? record.last_status_change
-    : new Date().toISOString()
+  let handbackCutoff = new Date().toISOString()
+  // 空闲后的进程回收不是新回合，不能覆盖空闲后的人为阶段选择。
+  if (!epochChanged && (actual === 'idle' || TERMINAL.has(actual))) {
+    handbackCutoff = settledPhaseCutoff(record)
+  }
   const reconcileSettledPhase = async (settled: SessionRecord): Promise<void> => {
     const phaseAt = handbackTask?.phase_changed_at ?? handbackTask?.updated_at
     if (!handbackTask || handbackTask.phase !== 'IN_PROGRESS' || !handbackCutoff || !phaseAt
       || !Number.isFinite(Date.parse(phaseAt)) || !Number.isFinite(Date.parse(handbackCutoff))
       || Date.parse(phaseAt) > Date.parse(handbackCutoff)
-      || settled.process_status !== 'idle' || settled.status_reason !== 'snapshot_projection'
-      || settled.pendingPermission || settled.stopRequest || settled.consumedOffset !== snapshot.v) return
+      || settled.process_status !== projected || settled.status_reason !== 'snapshot_projection'
+      || settled.pendingPermission || settled.stopRequest || settled.consumedOffset !== snapshot.v
+      || (duplicate && canRecoverConnection && !canRecoverConnection(settled))) return
     const { withUndeliveredMessageGuard } = await import('./session-message-queue.js')
     const { getSessionsForTaskSync } = await import('./session-tracker.js')
     const { handBackTaskOnSessionEnd } = await import('./phase.js')
@@ -432,7 +445,8 @@ export async function applySnapshot(
             const latest = getSessionsForTaskSync(handbackTask.id).find(member => member.claudeSessionId === sessionId)
             return !!latest && sameTurn() && getAppliedV(sessionId) === snapshot.v
               && latest.statusRevision === settled.statusRevision
-              && latest.streamEpoch === settled.streamEpoch && latest.process_status === 'idle'
+              && latest.streamEpoch === settled.streamEpoch && latest.process_status === projected
+              && (!duplicate || !canRecoverConnection || canRecoverConnection(latest))
               && latest.consumedOffset === snapshot.v
               && !latest.pendingPermission && !latest.stopRequest
               && !getSessionsForTaskSync(handbackTask.id).some(member =>

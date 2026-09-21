@@ -5349,6 +5349,7 @@ function cmdGetState(ws, id, cmd) {
       snapshot: assembleSessionSnapshot(session),
     });
   }
+  if (cmd.memoryOnly === true) return sendOk(ws, id, { snapshotAvailable: false });
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
   if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false });
   const taskState = rebuildTaskStateFromJsonl(jsonlPath, Date.now());

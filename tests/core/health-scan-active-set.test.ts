@@ -24,6 +24,7 @@ import {
   createSessionRecord,
   updateSessionRecord,
   listSessionsForHealthScan,
+  listSessionsForTaskHandback,
   listOrphanCandidates,
 } from '../../src/core/session-tracker.js';
 import { runPeriodic } from '../../src/core/periodic-task.js';
@@ -80,6 +81,32 @@ describe('listSessionsForHealthScan (active set)', () => {
     expect(second[0].process_status).toBe('running');
   });
 });
+
+describe('listSessionsForTaskHandback', () => {
+  it('finds old terminal sessions only for the requested task set', async () => {
+    await seed('debt-stopped', 'stopped', 10 * DAY)
+    await seed('debt-error', 'error', 12 * DAY)
+    await seed('unrelated-history', 'stopped', 20 * DAY)
+    await seed('debt-archived', 'stopped', 10 * DAY, { archived: true })
+    await seed('debt-running', 'running', 10 * DAY)
+    const ids = ['debt-stopped', 'debt-error', 'debt-archived', 'debt-running'].map(id => `task-${id}`)
+    const found = await listSessionsForTaskHandback(ids)
+    expect(found.map(s => s.claudeSessionId).sort()).toEqual(['debt-error', 'debt-stopped'])
+    expect((await listSessionsForHealthScan()).map(s => s.claudeSessionId)).toEqual(['debt-running'])
+  })
+
+  it('handles an empty task set without admitting all history', async () => {
+    await seed('old-stopped', 'stopped', 30 * DAY)
+    expect(await listSessionsForTaskHandback([])).toEqual([])
+  })
+
+  it('batches a large task set without dropping sessions at the batch boundary', async () => {
+    await seed('first-task', 'stopped', 30 * DAY)
+    await seed('last-task', 'stopped', 30 * DAY)
+    const ids = ['task-first-task', ...Array.from({ length: 1100 }, (_, i) => `absent-${i}`), 'task-last-task']
+    expect((await listSessionsForTaskHandback(ids)).map(s => s.claudeSessionId).sort()).toEqual(['first-task', 'last-task'])
+  })
+})
 
 describe('listOrphanCandidates', () => {
   it('returns only recent terminal rows that still have a pid', async () => {

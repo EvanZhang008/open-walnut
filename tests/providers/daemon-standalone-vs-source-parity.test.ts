@@ -15,7 +15,8 @@
  * and this test will fail loudly when they diverge.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import ts from 'typescript'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -1005,6 +1006,39 @@ describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + ta
     expect(standaloneSrc).toMatch(/rebuildTaskStateFromJsonl\(jsonlPath,\s*Date\.now\(\)\)/)
     expect(templateSrc).toMatch(/rebuildTaskStateFromJsonl\(jsonlPath,\s*Date\.now\(\)\)/)
   })
+  it.each(['standalone', 'source'])('memory-only getState never probes disk in %s', (variant) => {
+    const src = variant === 'standalone' ? standaloneSrc : templateSrc
+    const start = src.indexOf('function cmdGetState(')
+    const end = src.indexOf('\n// ── Rename session files', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const code = ts.transpileModule(src.slice(start, end), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText
+    const diskRead = vi.fn(() => { throw new Error('Unexpected disk access') })
+    const sendOk = vi.fn((_ws, _id, body) => body)
+    const snapshot = { v: 600, cliState: 'dead' }
+    const sessions = new Map<string, unknown>()
+    const handler = new Function('sessions', 'sendOk', 'sendError', 'cronSupervisionStatus',
+      'assembleSessionSnapshot', 'deriveSessionProtection', 'fs', 'path', 'STREAMS_DIR',
+      `${code}; return cmdGetState`)(sessions, sendOk, vi.fn(), () => null,
+      () => snapshot, () => ({}), new Proxy({}, { get: () => diskRead }),
+      new Proxy({}, { get: () => diskRead }), '/unused')
+    expect(handler({}, 1, { sid: 'cold', memoryOnly: true })).toMatchObject({ snapshotAvailable: false })
+    expect(diskRead).not.toHaveBeenCalled()
+    sessions.set('known', { state: 'dead', taskState: {} })
+    expect(handler({}, 2, { sid: 'known', memoryOnly: true })).toMatchObject({ exists: true, alive: false, snapshot })
+    expect(diskRead).not.toHaveBeenCalled()
+  })
+
+  it('memory-only snapshots are optional rather than forcing daemon replacement', () => {
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const advertised = capsSrc.indexOf('export const ADVERTISED_DAEMON_CAPABILITIES')
+    const required = capsSrc.slice(capsSrc.indexOf('export const REQUIRED_DAEMON_CAPABILITIES'), capsSrc.indexOf('] as const'))
+    expect(required).not.toContain('snapshot-memory-v1')
+    expect(capsSrc.slice(advertised)).toContain('snapshot-memory-v1')
+  })
+
   it('getState is declared in REQUIRED_DAEMON_CAPABILITIES', () => {
     const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
     expect(capsSrc).toMatch(/['"]getState['"]/)

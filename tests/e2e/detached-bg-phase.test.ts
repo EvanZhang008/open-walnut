@@ -21,7 +21,7 @@ import { startServer, stopServer } from '../../src/web/server.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { sessionResultPhase } from '../../src/core/phase.js';
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js';
-import { createSessionRecord } from '../../src/core/session-tracker.js';
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { setSnapshotModeForTests, _resetSnapshotGateForTests } from '../../src/core/session-snapshot-gate.js';
 
 let server: HttpServer;
@@ -92,6 +92,66 @@ describe('snapshot-only handback reaches the task API', () => {
       await applySnapshot(sid, snapshot, 'pull-30s');
       expect((await getTask(taskId)).phase).toBe('IN_PROGRESS');
     } finally {
+      _resetSnapshotGateForTests();
+      setSnapshotModeForTests('off');
+    }
+  });
+});
+
+describe('terminal handback survives the health scan age window', () => {
+  it('pulls an old terminal session and serves its handback without another result event', async () => {
+    const { SessionHealthMonitor } = await import('../../src/core/session-health-monitor.js');
+    const connections = await import('../../src/providers/daemon-connection.js');
+    const { foldLine, initialFoldState, assembleSnapshot } = await import('../../src/providers/daemon-fold.js');
+    const { listSessionsForHealthScan } = await import('../../src/core/session-tracker.js');
+    const { getSessionAutoRecover } = await import('../../src/core/session-auto-recover.js');
+    const sid = 'old-terminal-http';
+    const { task } = await addTask({ title: 'Old terminal handback' });
+    await updateTaskRaw(task.id, { phase: 'IN_PROGRESS', session_id: sid });
+    await updateTaskRaw(task.id, { phase_changed_at: '2026-01-01T00:00:00Z' });
+    let state = initialFoldState();
+    let offset = 0;
+    for (const event of [
+      { type: 'system', subtype: 'session_state_changed', state: 'running' },
+      { type: 'result', is_error: false, num_turns: 8 },
+      { type: 'system', subtype: 'session_state_changed', state: 'idle' },
+    ]) {
+      const line = JSON.stringify(event);
+      offset += Buffer.byteLength(line) + 1;
+      state = foldLine(state, line, offset);
+    }
+    const snapshot = { ...assembleSnapshot({ foldState: state, pendingCtrl: null, dead: true, pid: null, exitCode: 0 }), streamEpoch: 'old-terminal-epoch' };
+    await createSessionRecord(sid, task.id, 'p', '/tmp/old-terminal', { host: 'devhost' });
+    await updateSessionRecord(sid, {
+      process_status: 'stopped', status_reason: 'snapshot_projection', status_changed_by: 'snapshot',
+      consumedOffset: snapshot.v, streamEpoch: snapshot.streamEpoch,
+      last_status_change: '2026-01-02T00:00:00Z',
+    });
+    const send = vi.fn(async () => ({ ok: true, exists: true, snapshot }));
+    const connection = vi.spyOn(connections, 'getPooledSnapshotConnection').mockReturnValue({ send, hasCapability: () => true } as never);
+    const recovery = getSessionAutoRecover();
+    const recoverySpy = recovery ? vi.spyOn(recovery, 'wouldAttempt').mockReturnValue({ ok: false, reason: 'not-recoverable' } as never) : null;
+    setSnapshotModeForTests('enforce');
+    try {
+      const healthScan = await listSessionsForHealthScan();
+      expect(healthScan.some(s => s.claudeSessionId === sid)).toBe(false);
+      const monitor = new SessionHealthMonitor();
+      await (monitor as unknown as { checkSnapshotPull(s: unknown[], ctx?: unknown, pool?: unknown[]): Promise<void> })
+        .checkSnapshotPull([], undefined, []);
+      expect(send).toHaveBeenCalledWith('getState', { sid, memoryOnly: true });
+      const address = server.address() as { port: number };
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/tasks/${task.id}`);
+      expect(response.ok).toBe(true);
+      const body = await response.json() as { task: { phase: string; session_status: { process_status: string } } };
+      expect(body.task.phase).toBe('AGENT_COMPLETE');
+      expect(body.task.session_status.process_status).toBe('stopped');
+      await updateTaskRaw(task.id, { phase: 'COMPLETE' });
+      await (monitor as unknown as { checkSnapshotPull(s: unknown[], ctx?: unknown, pool?: unknown[]): Promise<void> })
+        .checkSnapshotPull([], undefined, []);
+      expect((await getTask(task.id)).phase).toBe('COMPLETE');
+    } finally {
+      recoverySpy?.mockRestore();
+      connection.mockRestore();
       _resetSnapshotGateForTests();
       setSnapshotModeForTests('off');
     }

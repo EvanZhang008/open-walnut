@@ -955,10 +955,25 @@ export function getSessionsForTaskSync(taskId: string): SessionRecord[] {
 //     and the orphan sweeps; a real orphan only appears near its death window.
 const HEALTH_SCAN_RECENT_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Active session set for the health monitor's periodic tick.
- * Isolated rows (rowToSession builds fresh objects) — safe to mutate.
- */
+export async function listSessionsForTaskHandback(taskIds: string[]): Promise<SessionRecord[]> {
+  if (!taskIds.length) return [];
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return [];
+  const sessions: SessionRecord[] = [];
+  const ids = [...new Set(taskIds)];
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const batch = ids.slice(offset, offset + 500);
+    const rows = db.prepare(`
+      SELECT * FROM sessions INDEXED BY sessions_task_id
+      WHERE task_id IN (${batch.map(() => '?').join(',')})
+        AND archived IS NOT 1 AND process_status IN ('stopped', 'error')
+    `).all(...batch) as Record<string, any>[];
+    sessions.push(...rows.map(rowToSession));
+  }
+  return sessions;
+}
+
 export async function listSessionsForHealthScan(): Promise<SessionRecord[]> {
   await ensureSessionInit();
   const db = getDb();

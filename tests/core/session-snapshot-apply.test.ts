@@ -1491,6 +1491,96 @@ describe('applySnapshot — turn-start phase pullback', () => {
   })
 })
 
+describe('applySnapshot repeated terminal handback', () => {
+  async function seed(error = false) {
+    setSnapshotModeForTests('enforce')
+    const { task } = await addTask({ title: 'Terminal handback retry' })
+    await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' })
+    await updateTaskRaw(task.id, { phase_changed_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-03T00:00:00Z' })
+    const sid = `terminal-${task.id}`
+    await createSessionRecord(sid, task.id, 'proj', '/tmp/snap-apply', { host: 'devhost' })
+    await updateSessionRecord(sid, {
+      process_status: error ? 'error' : 'stopped', status_reason: 'snapshot_projection',
+      status_changed_by: 'snapshot', consumedOffset: 600, streamEpoch: 'terminal-epoch',
+      last_status_change: '2026-01-02T00:00:00Z',
+    })
+    const snapshot = snap({
+      v: 600, cliState: 'dead', turnActive: false, pid: null,
+      lastResult: { isError: error, endOffset: 580 }, streamEpoch: 'terminal-epoch',
+    })
+    return { taskId: task.id, sid, snapshot }
+  }
+
+  it.each([false, true])('repairs the unchanged terminal snapshot, error=%s', async (error) => {
+    const { taskId, sid, snapshot } = await seed(error)
+    expect(await applySnapshot(sid, snapshot, 'pull-30s')).toMatchObject({ outcome: 'noop' })
+    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+    expect((await getSessionByClaudeId(sid))?.last_status_change).toBe('2026-01-02T00:00:00Z')
+  })
+
+  it('retries terminal handback after the queue becomes readable', async () => {
+    const { taskId, sid, snapshot } = await seed()
+    await fsp.writeFile(SESSION_QUEUE_FILE, 'not-json')
+    await applySnapshot(sid, snapshot, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+    await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues: {} }))
+    await applySnapshot(sid, snapshot, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+  })
+
+  it.each(['TODO', 'COMPLETE', 'IN_PROGRESS'] as const)('preserves a later %s choice', async (phase) => {
+    const { taskId, sid, snapshot } = await seed()
+    await updateTaskRaw(taskId, { phase, phase_changed_at: '2099-01-01T00:00:00Z' })
+    await applySnapshot(sid, snapshot, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe(phase)
+  })
+
+  it('does not mistake process reaping for a new turn after a human choice', async () => {
+    const { taskId, sid, snapshot } = await seed()
+    await updateTaskRaw(taskId, { phase_changed_at: '2026-01-01T12:00:00Z' })
+    await updateSessionRecord(sid, { status_history: [
+      { timestamp: '2026-01-02T00:00:00Z', process_status: 'stopped', reason: 'snapshot_projection' },
+      { timestamp: '2026-01-01T00:00:00Z', process_status: 'idle', reason: 'snapshot_projection' },
+    ] })
+    await applySnapshot(sid, snapshot, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('preserves ambiguous legacy phase history', async () => {
+    const { taskId, sid, snapshot } = await seed()
+    await updateTaskRaw(taskId, { phase_changed_at: null as never })
+    await applySnapshot(sid, snapshot, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it.each(['pending', 'processing'])('respects a sibling queue written by another process: %s', async (status) => {
+    const { taskId, sid, snapshot } = await seed()
+    const sibling = `${sid}-sibling`
+    await createSessionRecord(sibling, taskId, 'proj', '/tmp/snap-apply')
+    await updateSessionRecord(sibling, { process_status: 'idle' })
+    await getQueue(sibling)
+    await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues: {
+      [sibling]: [{ id: 'next-input', sessionId: sibling, status, message: 'Continue' }],
+    } }))
+    await applySnapshot(sid, snapshot, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('rejects a snapshot whose read was superseded', async () => {
+    const { taskId, sid, snapshot } = await seed()
+    await applySnapshot(sid, snapshot, 'pull-30s', () => false)
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('does not re-mark read output on repeated death evidence', async () => {
+    const { taskId, sid, snapshot } = await seed()
+    await applySnapshot(sid, snapshot, 'pull-30s')
+    await updateTaskRaw(taskId, { unread: false })
+    await applySnapshot(sid, snapshot, 'pull-30s')
+    expect(await getTask(taskId)).toMatchObject({ phase: 'AGENT_COMPLETE', unread: false })
+  })
+})
+
 // ── detachedBgCount projection (user decision 2026-08-28, inc-1787893885321):
 // a live run_in_background command means the session is RUNNING even though
 // the CLI's turn settled around it. Absent field (pre-field daemon) = idle. ──

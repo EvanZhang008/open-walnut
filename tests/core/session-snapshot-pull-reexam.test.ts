@@ -21,7 +21,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-snap-reexam'))
 
 // ── controllable pool accessor ──
-type FakeConn = { send: ReturnType<typeof vi.fn> } | null
+type FakeConn = { send: ReturnType<typeof vi.fn>; hasCapability?: (name: string) => boolean } | null
 let pooledConn: FakeConn = null
 vi.mock('../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => false,
@@ -46,7 +46,13 @@ vi.mock('../../src/providers/claude-code-session.js', () => ({
 vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: async () => ({ session: {} }),
 }))
+let handbackTaskIds: string[] = []
+let handbackQueryFails = false
 vi.mock('../../src/core/task-manager.js', () => ({
+  queryTasksSlim: async () => {
+    if (handbackQueryFails) throw new Error('Task database unavailable')
+    return handbackTaskIds.map(id => ({ id, phase: 'IN_PROGRESS', phase_changed_at: '2025-01-01T00:00:00Z' }))
+  },
   clearSessionSlot: async (taskId: string, sessionId: string) => ({
     task: { id: taskId, session_id: sessionId, title: 'mock task' },
   }),
@@ -80,7 +86,7 @@ const IDLE_SNAP: SessionSnapshot = {
 }
 
 function fakeConn(snapshot: SessionSnapshot = IDLE_SNAP): NonNullable<FakeConn> {
-  return { send: vi.fn(async () => ({ ok: true, exists: true, snapshot })) }
+  return { send: vi.fn(async () => ({ ok: true, exists: true, snapshot })), hasCapability: () => true }
 }
 
 const MINUTE = 60_000
@@ -151,6 +157,8 @@ beforeEach(async () => {
   setSnapshotModeForTests('shadow')
   bus.clear()
   pooledConn = fakeConn()
+  handbackTaskIds = []
+  handbackQueryFails = false
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
 })
@@ -407,6 +415,87 @@ describe('checkSnapshotPull — the wedged record actually converges (real apply
     expect(after?.status_reason).toBe('snapshot_projection')
     expect(after?.errorMessage ?? null).toBeNull()
     expect(after?.errorKind ?? null).toBeNull()
+  })
+})
+
+describe('checkSnapshotPull pending task handback', () => {
+  async function oldTerminal(sid: string, taskId = `task-${sid}`) {
+    await createSessionRecord(sid, taskId, 'proj', '/tmp/reexam-debt', { host: 'devhost' })
+    return updateSessionRecord(sid, {
+      process_status: 'stopped', status_reason: 'snapshot_projection', status_changed_by: 'snapshot',
+      last_status_change: ago(10 * 24 * HOUR), consumedOffset: IDLE_SNAP.v,
+    })
+  }
+
+  it('checks an old terminal session for a task awaiting handback outside the health scan pool', async () => {
+    const record = await oldTerminal('old-handback')
+    handbackTaskIds = [record.taskId]
+    await pull(new SessionHealthMonitor(), [], undefined, [])
+    expect(pulledSids()).toEqual([record.claudeSessionId])
+  })
+
+  it('never asks an older daemon to rebuild historical snapshots', async () => {
+    const record = await oldTerminal('old-daemon')
+    handbackTaskIds = [record.taskId]
+    pooledConn!.hasCapability = () => false
+    await pull(new SessionHealthMonitor(), [], undefined, [])
+    expect(pulledSids()).toEqual([])
+  })
+
+  it('uses memory-only reads for historical task debt', async () => {
+    const record = await oldTerminal('memory-only')
+    handbackTaskIds = [record.taskId]
+    await pull(new SessionHealthMonitor(), [], undefined, [])
+    expect(pooledConn?.send).toHaveBeenCalledWith('getState', { sid: record.claudeSessionId, memoryOnly: true })
+  })
+
+  it('keeps live and recent recovery pulls working when the task query fails', async () => {
+    handbackQueryFails = true
+    await pull(new SessionHealthMonitor(), [rec('query-failure-live')], undefined, [wedged('query-failure-recent')])
+    expect(pulledSids()).toEqual(['query-failure-live', 'query-failure-recent'])
+  })
+
+  it('does not pull old completed history without a pending task', async () => {
+    await oldTerminal('old-complete')
+    await pull(new SessionHealthMonitor(), [], undefined, [])
+    expect(pulledSids()).toEqual([])
+  })
+
+  it('shares the bounded re-examination budget and rotates old task debt', async () => {
+    for (let i = 0; i < 7; i++) {
+      const record = await oldTerminal(`old-debt-${i}`)
+      handbackTaskIds.push(record.taskId)
+    }
+    const monitor = new SessionHealthMonitor()
+    await pull(monitor, [], undefined, [])
+    expect(pulledSids()).toHaveLength(5)
+    pooledConn = fakeConn()
+    await pull(monitor, [], undefined, [])
+    expect(pulledSids()).toEqual(['old-debt-5', 'old-debt-6'])
+  })
+
+  it('does not duplicate a recent terminal session already in the re-examination pool', async () => {
+    const record = await oldTerminal('existing-pool')
+    handbackTaskIds = [record.taskId]
+    await pull(new SessionHealthMonitor(), [], undefined, [record])
+    expect(pulledSids()).toEqual([record.claudeSessionId])
+  })
+
+  it('retains live capacity when old handback tasks exist', async () => {
+    const record = await oldTerminal('old-with-live')
+    handbackTaskIds = [record.taskId]
+    const live = Array.from({ length: 10 }, (_, i) => rec(`debt-live-${i}`))
+    await pull(new SessionHealthMonitor(), live, undefined, live)
+    expect(pulledSids().slice(0, 10)).toEqual(live.map(s => s.claudeSessionId))
+    expect(pulledSids()[10]).toBe(record.claudeSessionId)
+  })
+
+  it('keeps intentional stops out of the historical debt lane', async () => {
+    const record = await oldTerminal('intentional-stop')
+    await updateSessionRecord(record.claudeSessionId, { status_reason: 'user_stopped', status_changed_by: 'user' })
+    handbackTaskIds = [record.taskId]
+    await pull(new SessionHealthMonitor(), [], undefined, [])
+    expect(pulledSids()).toEqual([])
   })
 })
 

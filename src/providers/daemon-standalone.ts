@@ -4466,6 +4466,7 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
       snapshot: assembleSessionSnapshot(session),
     })
   }
+  if (cmd.memoryOnly === true) return sendOk(ws, id, { snapshotAvailable: false })
   // Unknown in memory — rebuild from the durable jsonl if it exists (post-restart PULL).
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
   if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false })

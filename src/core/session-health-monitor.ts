@@ -1211,23 +1211,6 @@ export class SessionHealthMonitor {
         })
         .sort(byPullAge(this.snapshotPullAt))
 
-      const reexam = reexamPool
-        .filter((s) => {
-          if (s.process_status !== 'error' && s.process_status !== 'stopped') return false
-          if (!pullable(s)) return false
-          // Structural classifier only: a positively terminal cause is settled
-          // truth, everything else is a claim the daemon's own fold can confirm.
-          if (classifySessionError(s) === 'terminal') return false
-          // Recency bound, same window and key as isRescuableStoppedRecord — an
-          // absent/unparsable stamp is settled history, not a fresh wedge, so
-          // months of finished rows are never probed.
-          const changedAt = s.last_status_change ? Date.parse(s.last_status_change) : NaN
-          if (!Number.isFinite(changedAt)) return false
-          if (now - changedAt > RESCUABLE_STOPPED_WINDOW_MS) return false
-          return now - (this.snapshotReexamPullAt.get(s.claudeSessionId) ?? 0) >= REEXAM_MIN_GAP_MS
-        })
-        .sort(byPullAge(this.snapshotReexamPullAt))
-
       let abandoned = false
       const runClass = async (
         candidates: SessionRecord[],
@@ -1246,6 +1229,9 @@ export class SessionHealthMonitor {
           }
           const conn = getPooledSnapshotConnection(s.host)
           if (!conn) continue // no pooled snapshot-capable connection — skip (never dial)
+          const memoryOnly = candidateClass === 'reexam'
+            && now - Date.parse(s.last_status_change ?? '') > RESCUABLE_STOPPED_WINDOW_MS
+          if (memoryOnly && !conn.hasCapability('snapshot-memory-v1')) continue
           if (pulled >= cap) {
             log.session.info('health monitor: snapshot pull capped this tick', {
               cap, sessionCount: sessions.length,
@@ -1260,7 +1246,7 @@ export class SessionHealthMonitor {
             // fan-out to a slow host would stack daemon RPCs on the tick budget.
             const canRecoverConnection = await captureSnapshotReadGuard(s.claudeSessionId)
             const resp = await probeWithTimeout(
-              conn.send('getState', { sid: s.claudeSessionId }),
+              conn.send('getState', { sid: s.claudeSessionId, ...(memoryOnly ? { memoryOnly: true } : {}) }),
               null as Record<string, unknown> | null,
               'snapshot-pull-getState', s.claudeSessionId,
             )
@@ -1276,6 +1262,36 @@ export class SessionHealthMonitor {
       }
 
       await runClass(live, MAX_PULLS_PER_TICK, this.snapshotPullAt, 'live')
+      let pendingSessions: SessionRecord[] = []
+      if (!abandoned && !ctx?.overBudget()) {
+        try {
+          const { queryTasksSlim } = await import('./task-manager.js')
+          const { listSessionsForTaskHandback } = await import('./session-tracker.js')
+          const { settledPhaseCutoff } = await import('./session-snapshot-apply.js')
+          const tasks = await queryTasksSlim({ phases: ['IN_PROGRESS'] }, { minimal: true })
+          const taskById = new Map(tasks.map(task => [task.id, task]))
+          const candidates = await listSessionsForTaskHandback([...taskById.keys()])
+          pendingSessions = candidates.filter(session => {
+            if (session.status_reason !== 'snapshot_projection' || session.stopRequest) return false
+            const task = taskById.get(session.taskId)
+            const phaseAt = Date.parse(task?.phase_changed_at ?? task?.updated_at ?? '')
+            return Number.isFinite(phaseAt) && phaseAt <= Date.parse(settledPhaseCutoff(session))
+          })
+        } catch (error) {
+          log.session.warn('health monitor: task handback candidate query failed', { error: String(error) })
+        }
+      }
+      const pendingSessionIds = new Set(pendingSessions.map(session => session.claudeSessionId))
+      const reexamCandidates = [...new Map([...reexamPool, ...pendingSessions]
+        .map(session => [session.claudeSessionId, session])).values()]
+      const reexam = reexamCandidates.filter(session => {
+        if (session.process_status !== 'error' && session.process_status !== 'stopped') return false
+        if (!pullable(session) || classifySessionError(session) === 'terminal') return false
+        const changedAt = Date.parse(session.last_status_change ?? '')
+        if (!Number.isFinite(changedAt)) return false
+        if (now - changedAt > RESCUABLE_STOPPED_WINDOW_MS && !pendingSessionIds.has(session.claudeSessionId)) return false
+        return now - (this.snapshotReexamPullAt.get(session.claudeSessionId) ?? 0) >= REEXAM_MIN_GAP_MS
+      }).sort(byPullAge(this.snapshotReexamPullAt))
       // A budget already spent belongs to the next tick, not to a second class —
       // and re-running the loop would only log the same abandonment twice.
       if (!abandoned) {
@@ -1290,7 +1306,7 @@ export class SessionHealthMonitor {
         }
       }
       if (this.snapshotReexamPullAt.size > 200) {
-        const poolIds = new Set(reexamPool.map((s) => s.claudeSessionId))
+        const poolIds = new Set(reexamCandidates.map((s) => s.claudeSessionId))
         for (const sid of this.snapshotReexamPullAt.keys()) {
           if (!poolIds.has(sid)) this.snapshotReexamPullAt.delete(sid)
         }

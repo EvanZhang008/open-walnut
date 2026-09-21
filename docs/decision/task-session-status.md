@@ -107,6 +107,16 @@ Require a clean result, trailing Idle, no active turn, no gating or detached wor
 
 Code: [`applySnapshot`](../../src/core/session-snapshot-apply.ts). Regression: the snapshot-only completion and duplicate-idle cases in [`session-snapshot-apply.test.ts`](../../tests/core/session-snapshot-apply.test.ts), with the normal result notification absent, plus task-edit and new-turn races.
 
+### Terminal session age must not erase pending task handback
+
+A task can remain In Progress after its session stopped, including when an older sync writer erased a successful handback. The active health scan expires terminal records after 24 hours, while duplicate terminal snapshots used to return before checking the task. Fixing the writer alone does not repair those records.
+
+Query terminal sessions through the task index for In Progress tasks separately from the active scan. Keep live pulls first, isolate task-query failures, and share the bounded, rotating re-examination budget. Historical checks require `snapshot-memory-v1` and `getState { memoryOnly: true }`: an absent in-memory fold means unavailable evidence, not a reason to synchronously rebuild a large transcript on every tick. Older daemons skip this optional lane without a forced redeploy.
+
+A repeated terminal snapshot may repair a missed handback only with result evidence, no active work, unchanged session and task identities, and no queued input or pending recovery. The cutoff is the earliest continuously settled status after the last Running edge, not the later process-reaping time. Later human phase choices stay intact. Legacy timestamps cannot establish who changed a phase; use retained history and an explicit, conditional single-row repair for proven historical damage rather than weakening the automatic guard.
+
+Code: [`listSessionsForTaskHandback`](../../src/core/session-tracker.ts), [`checkSnapshotPull`](../../src/core/session-health-monitor.ts), and [`settledPhaseCutoff` / `applySnapshot`](../../src/core/session-snapshot-apply.ts). Regressions: [`health-scan-active-set.test.ts`](../../tests/core/health-scan-active-set.test.ts), [`session-snapshot-pull-reexam.test.ts`](../../tests/core/session-snapshot-pull-reexam.test.ts), [`session-snapshot-apply.test.ts`](../../tests/core/session-snapshot-apply.test.ts), [`detached-bg-phase.test.ts`](../../tests/e2e/detached-bg-phase.test.ts), and the memory-only command tests in [`daemon-standalone-vs-source-parity.test.ts`](../../tests/providers/daemon-standalone-vs-source-parity.test.ts).
+
 ### FIFO markers must precede consumption, not merely acknowledgment
 
 Appending the user marker after a successful send lets a fast CLI answer before the turn-start marker exists. Appending first and truncating on failure is also unsafe: concurrent CLI output may already follow the marker, so truncation would delete real history.
