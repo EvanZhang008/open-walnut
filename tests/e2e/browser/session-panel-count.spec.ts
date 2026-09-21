@@ -445,7 +445,10 @@ for (const [viewport, expected] of [[1200, 1], [2560, 2]] as const) {
  * of the bar (measured 300px of content in a 123px box), landing on top of the mic/send
  * cluster and, in the worst column, 19px past the panel's own right edge. Width-driven,
  * not count-driven: it reproduced at 2 panels in a 1100px window (274px columns), so it
- * long predates this feature. Fixed by letting the bar wrap, like its container already does.
+ * long predates this feature. First fixed by letting the bar wrap; since 2026-09-19 the bar
+ * does not wrap at all (a wrapped row stacked four pills high over the composer) and hides
+ * what does not fit behind a "..." menu instead (ComposerControlsBar). The invariant this
+ * test guards is unchanged: nothing may spill out of the column or cover the send button.
  *
  * Guarded geometrically at BOTH ends — 5 columns on a big screen, and 2 columns in a small
  * window — because those are the two ways to arrive at a ~270px column.

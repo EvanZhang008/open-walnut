@@ -1,0 +1,108 @@
+/* Composer controls row with an overflow menu — owned by
+   components/chat/ComposerControlsBar.tsx.
+
+   The row does NOT wrap any more. It used to (`.session-mode-bar`), and in a
+   narrow session column that turned five pills into four stacked rows above the
+   composer (2026-09-19). Controls that do not fit are hidden here and listed in
+   the "..." menu instead; a wide column fits everything and looks exactly as it
+   did, with no button.
+
+   A hidden control keeps its place in the DOM (see the component for why), so
+   `display: none` is the hiding mechanism — never unmounting. */
+
+.composer-controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.composer-control {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.composer-control[data-hidden='true'] {
+  display: none;
+}
+
+.composer-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  /* The glyph is three dots, not a font-dependent ellipsis: it has to read as a
+     button at 11px in both engines. */
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 1px;
+}
+
+.composer-overflow-btn:hover,
+.composer-overflow-btn.is-open {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+/* Placed by useMenuPlacement (position: fixed + maxHeight), which requires the
+   menu to scroll its own content — see that hook's contract. */
+.composer-overflow-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 132px;
+  max-width: 260px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elevated, var(--bg-primary));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  overflow-y: auto;
+}
+
+.composer-overflow-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  /* A row names one control; a long model name wraps rather than running out of
+     the menu, and the menu's own max-width bounds it. */
+  overflow-wrap: anywhere;
+}
+
+.composer-overflow-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.composer-overflow-item-name {
+  flex: 0 0 auto;
+}
+
+/* What the pill says right now, pushed to the row's end and allowed to wrap: a
+   model name plus its context percentage is the longest thing here. */
+.composer-overflow-item-value {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-align: right;
+  min-width: 0;
+}

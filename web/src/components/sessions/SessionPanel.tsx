@@ -63,6 +63,7 @@ import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
 import { ComposerModelPill } from './ComposerModelPill';
+import { ComposerControlsBar, type ComposerControl } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -1470,6 +1471,110 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     );
   }
 
+  /**
+   * The composer's controls, as ONE list both composers render (the panel's own
+   * and the plan popover's). Priority is what leaves the row first when the
+   * column is narrow — the user's call on 2026-09-19: mode last, then model,
+   * then reply style, then the side-thread drawer, then the note pill. The two
+   * that open a surface anchored to themselves are flagged `anchored`, so a menu
+   * row pins them onto the row before clicking (see ComposerControlsBar).
+   */
+  const composerControls = (opts: { openNonce?: number } = {}): ComposerControl[] => {
+    if (!session) return [];
+    // Labels come from the ONE mode registry (core/types.ts) so a mode added
+    // there shows a real label instead of its raw id ('dontAsk'). planCompleted
+    // is a separate flag meaning "plan was produced" and must not lock the toggle.
+    const MODE_LABELS: Record<string, string> = SESSION_MODE_LABELS;
+    const currentMode = session.mode || 'default';
+    const isPlan = currentMode === 'plan';
+    const currentIdx = enabledModes.indexOf(currentMode);
+    const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
+    const label = MODE_LABELS[currentMode] ?? currentMode;
+    return [
+      {
+        id: 'mode',
+        name: 'Mode',
+        priority: 1,
+        node: engineUi.configModes ? (
+          <SessionControlPills
+            controls={sessionControls}
+            setControl={setSessionControl}
+            engineName={engineUi.displayName}
+            showModeShortcut
+          />
+        ) : (
+          <button
+            className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
+            onClick={() => setModeOptimistic(nextMode)}
+            title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
+          >
+            <span className="mode-toggle-pill-label">{label}</span>
+            <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
+          </button>
+        ),
+      },
+      {
+        id: 'model',
+        name: 'Model',
+        priority: 2,
+        anchored: true,
+        node: (
+          <ComposerModelPill
+            sessionId={sessionId}
+            session={session}
+            engineUi={engineUi}
+            onOptimistic={applyModelPillPatch}
+            fallbackAssistant={lastAssistant}
+            openNonce={opts.openNonce}
+          />
+        ),
+      },
+      {
+        id: 'output',
+        name: 'Reply style',
+        priority: 3,
+        node: (
+          <OutputModePill
+            sessionId={session.claudeSessionId}
+            mode={session.output_mode}
+            onOptimistic={(output_mode) => applySessionSettings(settingsSessionId, { output_mode })}
+          />
+        ),
+      },
+      {
+        id: 'btw',
+        name: 'Side thread',
+        priority: 4,
+        anchored: true,
+        node: (
+          <SideQuestionDrawer
+            sessionId={session.claudeSessionId}
+            engine={session.engine}
+            cwd={session.cwd}
+            host={session.host}
+            parentMode={session.mode}
+            parentModel={session.model}
+            parentEffort={session.effectiveEffort ?? session.effort}
+            parentOutputMode={session.output_mode}
+            onInjectToComposer={handleInjectFromThread}
+          />
+        ),
+      },
+      {
+        id: 'note',
+        name: 'Note',
+        priority: 5,
+        node: (
+          <SessionNotesPill
+            noteState={noteState}
+            expanded={notesOpen}
+            onToggleExpanded={() => setNotesOpen(o => !o)}
+          />
+        ),
+      },
+    ];
+  };
+
   return (
     <PlanContentContext.Provider value={planContentValue}>
     <SessionPinsContext.Provider value={pinsApi}>
@@ -1635,72 +1740,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           <ChatInput
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
-            controlsSlot={session ? (() => {
-              // Mode toggle uses session.mode only (not planCompleted) — planCompleted
-              // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
-              // Rendered INSIDE the composer card's controls row (D6), between the
-              // "+" and the mic/send cluster.
-              // Labels come from the ONE mode registry (core/types.ts) so a mode
-              // added there shows a real label instead of its raw id ('dontAsk').
-              const MODE_LABELS: Record<string, string> = SESSION_MODE_LABELS;
-              const currentMode = session.mode || 'default';
-              const isPlan = currentMode === 'plan';
-              const currentIdx = enabledModes.indexOf(currentMode);
-              const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
-              const toggleMode = () => setModeOptimistic(nextMode);
-              const label = MODE_LABELS[currentMode] ?? currentMode;
-              return (
-                <div className="session-mode-bar">
-                  {engineUi.configModes ? (
-                    <SessionControlPills
-                      controls={sessionControls}
-                      setControl={setSessionControl}
-                      engineName={engineUi.displayName}
-                      showModeShortcut
-                    />
-                  ) : (
-                    <button
-                      className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
-                      onClick={toggleMode}
-                      title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
-                    >
-                      <span className="mode-toggle-pill-label">
-                        {label}
-                      </span>
-                      <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
-                    </button>
-                  )}
-                  <OutputModePill
-                    sessionId={session.claudeSessionId}
-                    mode={session.output_mode}
-                    onOptimistic={(output_mode) => applySessionSettings(settingsSessionId, { output_mode })}
-                  />
-                  <SideQuestionDrawer
-                    sessionId={session?.claudeSessionId}
-                    engine={session?.engine}
-                    cwd={session?.cwd}
-                    host={session?.host}
-                    parentMode={session?.mode}
-                    parentModel={session?.model}
-                    parentEffort={session?.effectiveEffort ?? session?.effort}
-                    parentOutputMode={session?.output_mode}
-                    onInjectToComposer={handleInjectFromThread}
-                  />
-                  <SessionNotesPill
-                    noteState={noteState}
-                    expanded={notesOpen}
-                    onToggleExpanded={() => setNotesOpen(o => !o)}
-                  />
-                  <ComposerModelPill
-                    sessionId={sessionId}
-                    session={session}
-                    engineUi={engineUi}
-                    onOptimistic={applyModelPillPatch}
-                    fallbackAssistant={lastAssistant}
-                  />
-                </div>
-              );
-            })() : undefined}
+            controlsSlot={session ? (
+              <ComposerControlsBar className="session-mode-bar" controls={composerControls()} />
+            ) : undefined}
                           onSend={handleSend}
                           onInterruptSend={handleInterruptSend}
                           onStop={handleStopTurn}
@@ -2210,73 +2252,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             // Dictating into this box takes focus and so collapses the page's
             // selection: let the quote pill hold the passage first (holdDictationSelection).
             onDictationInsert={holdDictationSelection}
-            controlsSlot={session ? (() => {
-              // Mode toggle uses session.mode only (not planCompleted) — planCompleted
-              // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
-              // Rendered INSIDE the composer card's controls row (D6), between the
-              // "+" and the mic/send cluster.
-              // Labels come from the ONE mode registry (core/types.ts) so a mode
-              // added there shows a real label instead of its raw id ('dontAsk').
-              const MODE_LABELS: Record<string, string> = SESSION_MODE_LABELS;
-              const currentMode = session.mode || 'default';
-              const isPlan = currentMode === 'plan';
-              const currentIdx = enabledModes.indexOf(currentMode);
-              const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
-              const toggleMode = () => setModeOptimistic(nextMode);
-              const label = MODE_LABELS[currentMode] ?? currentMode;
-              return (
-                <div className="session-mode-bar">
-                  {engineUi.configModes ? (
-                    <SessionControlPills
-                      controls={sessionControls}
-                      setControl={setSessionControl}
-                      engineName={engineUi.displayName}
-                      showModeShortcut
-                    />
-                  ) : (
-                    <button
-                      className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
-                      onClick={toggleMode}
-                      title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
-                    >
-                      <span className="mode-toggle-pill-label">
-                        {label}
-                      </span>
-                      <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
-                    </button>
-                  )}
-                  <OutputModePill
-                    sessionId={session.claudeSessionId}
-                    mode={session.output_mode}
-                    onOptimistic={(output_mode) => applySessionSettings(settingsSessionId, { output_mode })}
-                  />
-                  <SideQuestionDrawer
-                    sessionId={session?.claudeSessionId}
-                    engine={session?.engine}
-                    cwd={session?.cwd}
-                    host={session?.host}
-                    parentMode={session?.mode}
-                    parentModel={session?.model}
-                    parentEffort={session?.effectiveEffort ?? session?.effort}
-                    parentOutputMode={session?.output_mode}
-                    onInjectToComposer={handleInjectFromThread}
-                  />
-                  <SessionNotesPill
-                    noteState={noteState}
-                    expanded={notesOpen}
-                    onToggleExpanded={() => setNotesOpen(o => !o)}
-                  />
-                  <ComposerModelPill
-                    sessionId={sessionId}
-                    session={session}
-                    engineUi={engineUi}
-                    onOptimistic={applyModelPillPatch}
-                    fallbackAssistant={lastAssistant}
-                    openNonce={modelPickerRequest}
-                  />
-                </div>
-              );
-            })() : undefined}
+            controlsSlot={session ? (
+              <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} />
+            ) : undefined}
             onSend={handleSend}
             onInterruptSend={handleInterruptSend}
             onStop={handleStopTurn}
