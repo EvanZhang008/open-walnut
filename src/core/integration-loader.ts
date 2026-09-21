@@ -18,7 +18,10 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
+import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import yaml from 'js-yaml';
 import { WALNUT_HOME, CONFIG_FILE } from '../constants.js';
 import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
@@ -137,6 +140,28 @@ export function setPluginCodeTimeoutForTesting(timeoutMs: number | null): void {
 const pluginManagers = new WeakMap<IntegrationRegistry, PluginManager>();
 const pluginSources = new WeakMap<IntegrationRegistry, Map<string, { dir: string; isBuiltin: boolean }>>();
 const pluginOperationTails = new WeakMap<IntegrationRegistry, Promise<unknown>>();
+interface LoadedPluginGeneration {
+  manifest: PluginManifest;
+  module: PluginModuleFunctions;
+  config: Record<string, unknown>;
+  web?: PluginWebModule;
+  webError?: string;
+}
+const pluginGenerations = new WeakMap<IntegrationRegistry, Map<string, LoadedPluginGeneration>>();
+const pendingRecoveries = new WeakMap<IntegrationRegistry, Map<string, LoadedPluginGeneration>>();
+
+function recoveries(registry: IntegrationRegistry): Map<string, LoadedPluginGeneration> {
+  let map = pendingRecoveries.get(registry);
+  if (!map) pendingRecoveries.set(registry, map = new Map());
+  return map;
+}
+
+function generations(registry: IntegrationRegistry): Map<string, LoadedPluginGeneration> {
+  let map = pluginGenerations.get(registry);
+  if (!map) pluginGenerations.set(registry, map = new Map());
+  return map;
+}
+
 /**
  * Every manifest this registry has seen, in load order.
  *
@@ -170,8 +195,12 @@ function restoreOptions(
 ): DependencyRestore {
   return {
     sources: pluginSources.get(registry) ?? new Map(),
-    loadOne: (source, manifest) =>
-      loadPlugin(source.dir, source.isBuiltin, pluginConfigs, registry, manager, false, manifest),
+    loadOne: (source, manifest) => {
+      const previous = generations(registry).get(manifest.id);
+      const { enabled: _enabled, ...config } = pluginConfigs[manifest.id] ?? {};
+      return loadPlugin(source.dir, source.isBuiltin, pluginConfigs, registry, manager, false, manifest, undefined,
+        previous ? { ...previous, config } : undefined);
+    },
   };
 }
 
@@ -192,6 +221,11 @@ export function getPluginLifecycleRecords(registry: IntegrationRegistry): Plugin
   return pluginManagers.get(registry)?.list() ?? [];
 }
 
+export function getPluginReloadIds(registry: IntegrationRegistry, pluginId: string): string[] {
+  const manager = pluginManagers.get(registry);
+  return manager ? [pluginId, ...dependentsToTearDown(dependencyGate(registry, manager), pluginId).live] : [pluginId];
+}
+
 async function refreshPluginDerivedState(registry: IntegrationRegistry): Promise<void> {
   setExtIndexes(registry.getAll().flatMap((plugin) => plugin.extIndex ? [plugin.extIndex] : []));
   try {
@@ -208,11 +242,13 @@ export function disposeLoadedPlugins(registry: IntegrationRegistry): Promise<voi
   return runPluginOperation(registry, async () => {
     const manager = pluginManagers.get(registry);
     if (!manager) return;
+    const ids = manager.list().map(record => record.id);
+    await manager.dispose();
     pluginManagers.delete(registry);
     pluginSources.delete(registry);
     pluginManifests.delete(registry);
-    const ids = manager.list().map(record => record.id);
-    await manager.dispose();
+    pluginGenerations.delete(registry);
+    pendingRecoveries.delete(registry);
     // Every plugin op and service is registered through context.own(), so a clean dispose
     // already withdrew them. A dispose that threw partway did not, and a survivor would
     // answer with a handler whose plugin is gone.
@@ -245,6 +281,7 @@ export function disableLoadedPlugin(
     // it goes down after the dependents do, they are parked with nothing on disk that will
     // ever bring them back.
     await updatePluginConfig(pluginId, { enabled: false });
+    recoveries(registry).delete(pluginId);
     if ((await blockDependents(gate, pluginId, all, live, 'disabled')).length > 0) {
       await refreshPluginDerivedState(registry);
     }
@@ -253,6 +290,101 @@ export function disableLoadedPlugin(
       return await manager.disable(pluginId);
     } finally {
       await refreshPluginDerivedState(registry);
+    }
+  });
+}
+
+export function reloadLoadedPlugins(
+  registry: IntegrationRegistry,
+  pluginIds: readonly string[],
+  beforeTeardown: (ids: string[]) => Promise<void>,
+): Promise<{ reloaded: string[]; skipped: string[] }> {
+  return runPluginOperation(registry, async () => {
+    const manager = pluginManagers.get(registry);
+    if (!manager) throw new Error('Plugin manager is unavailable');
+    const config = await getConfig();
+    const pluginConfigs = config.plugins ?? {};
+    const requested = [...new Set(pluginIds)];
+    const ids = requested.filter(id => id !== 'local' && manager.get(id)?.state === 'active' && pluginConfigs[id]?.enabled !== false);
+    const skipped = requested.filter(id => !ids.includes(id));
+    if (!ids.length) return { reloaded: [], skipped };
+    const gate = dependencyGate(registry, manager);
+    const previousManifests = new Map(gate.manifests);
+    const candidates = new Map<string, PluginManifest>();
+    const sources = pluginSources.get(registry)!;
+    for (const id of ids) {
+      const source = sources.get(id)!;
+      const unsafe = generations(registry).get(id)?.module.reloadUnsafeReason;
+      if (unsafe) throw new Error(unsafe);
+      const entry = await readPluginEntry(await fsp.realpath(source.dir), source.isBuiltin);
+      if (!entry || entry.manifest.id !== id) throw new Error(`Plugin "${id}" manifest is invalid or changed identity`);
+      candidates.set(id, entry.manifest);
+    }
+    const candidateManifests = new Map([...previousManifests, ...candidates]);
+    const candidateGate = { ...gate, manifests: candidateManifests };
+    const prepared = new Map<string, LoadedPluginGeneration>();
+    for (const [id, manifest] of candidates) {
+      const source = sources.get(id)!;
+      const { enabled: _enabled, ...settings } = pluginConfigs[id] ?? {};
+      preflightReload(manifest, settings, candidateGate, source.isBuiltin);
+      prepared.set(id, await prepareGeneration(await fsp.realpath(source.dir), source.isBuiltin, manifest, settings, true));
+    }
+    const affected = new Set(ids.flatMap(id => getPluginReloadIds(registry, id)));
+    const previous = new Map([...generations(registry)].filter(([id]) => affected.has(id)));
+    const ordered = (manifests: Map<string, PluginManifest>) => topoSortStable(buildDepGraph(
+      [...manifests.values()].map((manifest, index) => ({ id: manifest.id, index, deps: Object.keys(manifest.dependencies ?? {}) })),
+    )).order.filter(id => affected.has(id));
+    const oldOrder = ordered(previousManifests);
+    const newOrder = ordered(candidateManifests);
+    await beforeTeardown(oldOrder.slice().reverse());
+    let mutated = false;
+    try {
+      for (const id of oldOrder.slice().reverse()) {
+        mutated = true;
+        await manager.forget(id);
+        registry.unregister(id, 'unloaded');
+      }
+      for (const [id, manifest] of candidates) gate.manifests.set(id, manifest);
+      for (const id of newOrder) {
+        const source = sources.get(id)!;
+        const generation = prepared.get(id) ?? previous.get(id);
+        const { enabled: _enabled, ...settings } = pluginConfigs[id] ?? {};
+        await loadPlugin(source.dir, source.isBuiltin, pluginConfigs, registry, manager, false,
+          candidateManifests.get(id), undefined, generation ? { ...generation, config: settings } : undefined);
+        const record = manager.get(id);
+        if (record?.state !== 'active') throw new Error(record?.error ?? record?.reason ?? `Plugin "${id}" did not activate`);
+      }
+      for (const id of ids) await retryUnmetDependents(gate, id, restoreOptions(registry, manager, pluginConfigs));
+      return { reloaded: ids, skipped };
+    } catch (error) {
+      if (!mutated) throw error;
+      const recoveryErrors: string[] = [];
+      for (const id of newOrder.slice().reverse()) {
+        try { if (manager.get(id) && !manager.isStopping(id)) await manager.forget(id); }
+        catch (cleanupError) { recoveryErrors.push(String(cleanupError)); }
+      }
+      for (const [id, manifest] of previousManifests) gate.manifests.set(id, manifest);
+      const waiting = oldOrder.some(id => manager.isStopping(id));
+      for (const id of oldOrder) {
+        const source = sources.get(id)!;
+        const generation = previous.get(id);
+        try {
+          if (manager.isStopping(id)) throw new Error(`Plugin "${id}" is still stopping`);
+          if (manager.get(id)) await manager.forget(id);
+          await loadPlugin(source.dir, source.isBuiltin, pluginConfigs, registry, manager, false,
+            previousManifests.get(id), undefined, generation ? {
+              ...generation, config: Object.fromEntries(Object.entries(pluginConfigs[id] ?? {}).filter(([key]) => key !== 'enabled')),
+            } : undefined);
+          if (manager.get(id)?.state !== 'active') throw new Error(manager.get(id)?.error ?? `Plugin "${id}" recovery failed`);
+        } catch (restoreError) {
+          if (waiting && generation) recoveries(registry).set(id, generation);
+          recoveryErrors.push(String(restoreError));
+        }
+      }
+      throw new Error(`Plugin update failed; ${recoveryErrors.length ? `recovery incomplete: ${recoveryErrors.join('; ')}` : 'previous versions restored'}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      await refreshPluginDerivedState(registry);
+      bus.emit('plugin:runtime-changed', { action: 'reloaded' }, ['web-ui'], { source: 'plugin-loader' });
     }
   });
 }
@@ -286,31 +418,70 @@ export function reloadLoadedPlugin(
     if (!manifest || manifest.id !== pluginId) {
       throw new Error(`Plugin "${pluginId}" manifest is invalid or changed identity`);
     }
-    // The manifest on disk may declare different dependencies than the loaded copy, and
-    // the graph below has to be the new one.
-    manifestMap(registry).set(pluginId, manifest);
-
-    // A dependent holds handles from the instance about to be thrown away, so it goes
-    // down first and is brought back at the end. That is what keeps reload a
-    // single-node operation from the caller's point of view.
     const gate = dependencyGate(registry, manager);
-    const { all, live } = dependentsToTearDown(gate, pluginId);
-    if ((await blockDependents(gate, pluginId, all, live, 'reloading')).length > 0) {
-      await refreshPluginDerivedState(registry);
+    const config = await getConfig();
+    const pluginConfigs = { ...config.plugins, [pluginId]: { ...config.plugins?.[pluginId], enabled: true } };
+    const { enabled: _enabled, ...pluginConfig } = pluginConfigs[pluginId];
+    const lastKnown = generations(registry).get(pluginId);
+    const previous = manager.get(pluginId)?.state === 'active' ? lastKnown : undefined;
+    let prepared: LoadedPluginGeneration | undefined;
+    if (lastKnown?.module.reloadUnsafeReason) {
+      if (previous) throw new Error(lastKnown.module.reloadUnsafeReason);
+      manifest = lastKnown.manifest;
+      preflightReload(manifest, pluginConfig, gate, source.isBuiltin);
+      prepared = { ...lastKnown, config: pluginConfig };
+    } else if (previous) {
+      preflightReload(manifest, pluginConfig, gate, source.isBuiltin);
+      prepared = await prepareGeneration(dir, source.isBuiltin, manifest, pluginConfig, true);
+    }
+    if (manager.isStopping(pluginId)) {
+      throw new Error(`Plugin "${pluginId}" cannot reload yet: a previous instance is still stopping`);
     }
 
+    // Persist intent before stopping anything; a failed config write leaves the live graph alone.
     await updatePluginConfig(pluginId, { enabled: true });
-    await manager.forget(pluginId);
-    registry.unregister(pluginId, 'unloaded');
-    const config = await getConfig();
-    const pluginConfigs = config.plugins ?? {};
-    await loadPlugin(dir, source.isBuiltin, pluginConfigs, registry, manager, false, manifest);
-    // Runs even when the reload FAILED: a dependent that stays blocked still needs its
-    // reason rewritten from "is reloading" to whatever is now true.
-    const restored = await retryUnmetDependents(gate, pluginId, restoreOptions(registry, manager, pluginConfigs));
-    if (restored > 0) log.info('Dependents restored after reload', { id: pluginId, restored });
-    await refreshPluginDerivedState(registry);
-
+    const { all, live } = dependentsToTearDown(gate, pluginId);
+    let failure: unknown;
+    try {
+      await blockDependents(gate, pluginId, all, live, 'reloading');
+      const stopping = live.find(id => manager.isStopping(id));
+      if (stopping) throw new Error(`Dependent plugin "${stopping}" is still stopping`);
+      await manager.forget(pluginId);
+      registry.unregister(pluginId, 'unloaded');
+      manifestMap(registry).set(pluginId, manifest);
+      await loadPlugin(dir, source.isBuiltin, pluginConfigs, registry, manager, false, manifest, undefined, prepared);
+      const record = manager.get(pluginId);
+      if (previous && record?.state !== 'active') throw new Error(record?.error ?? record?.reason ?? 'Replacement did not activate');
+    } catch (error) {
+      failure = error;
+      if (previous && manager.isStopping(pluginId)) {
+        manifestMap(registry).set(pluginId, previous.manifest);
+        recoveries(registry).set(pluginId, previous);
+      }
+      if (previous && !manager.isStopping(pluginId) && manager.get(pluginId)?.state !== 'active') {
+        try {
+          if (manager.get(pluginId)) await manager.forget(pluginId);
+          registry.unregister(pluginId, 'unloaded');
+          manifestMap(registry).set(pluginId, previous.manifest);
+          await loadPlugin(dir, source.isBuiltin, pluginConfigs, registry, manager, false,
+            previous.manifest, undefined, { ...previous, config: pluginConfig });
+          const restored = manager.get(pluginId);
+          if (restored?.state !== 'active') throw new Error(restored?.error ?? restored?.reason ?? 'Recovery did not activate');
+          failure = new Error(`Plugin "${pluginId}" update failed; previous version restored: ${error instanceof Error ? error.message : String(error)}`);
+        } catch (restoreError) {
+          failure = new Error(`Plugin "${pluginId}" update failed: ${error instanceof Error ? error.message : String(error)}; recovery failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+        }
+      }
+    } finally {
+      try {
+        const restored = await retryUnmetDependents(gate, pluginId, restoreOptions(registry, manager, pluginConfigs));
+        if (restored > 0) log.info('Dependents restored after reload', { id: pluginId, restored });
+      } finally {
+        await refreshPluginDerivedState(registry);
+        bus.emit('plugin:runtime-changed', { pluginId, action: 'reloaded' }, ['web-ui'], { source: 'plugin-loader' });
+      }
+    }
+    if (failure) throw failure;
     const record = manager.get(pluginId);
     if (!record) throw new Error(`Plugin "${pluginId}" was not found after reload`);
     return record;
@@ -344,6 +515,8 @@ async function createPluginManager(registry: IntegrationRegistry): Promise<Plugi
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    const stopping = previous.list().find(record => previous.isStopping(record.id));
+    if (stopping) throw new Error(`Plugin "${stopping.id}" is still stopping; cannot replace the plugin manager`);
   }
 
   const interrupted = await bootSentinel.recoverInterruptedActivations();
@@ -371,6 +544,35 @@ async function createPluginManager(registry: IntegrationRegistry): Promise<Plugi
         { source: 'plugin-loader' },
       );
     },
+    onStoppingSettled: (pluginId) => runPluginOperation(registry, async () => {
+      if (pluginManagers.get(registry) !== manager) return;
+      const pluginConfigs = (await getConfig()).plugins ?? {};
+      const gate = dependencyGate(registry, manager);
+      const pending = recoveries(registry);
+      const order = topoSortStable(buildDepGraph([...gate.manifests.values()].map((manifest, index) => ({
+        id: manifest.id, index, deps: Object.keys(manifest.dependencies ?? {}),
+      })))).order;
+      for (const id of order) {
+        const previous = pending.get(id);
+        if (!previous || manager.isStopping(id)) continue;
+        if (pluginConfigs[id]?.enabled === false || manager.get(id)?.state === 'active') {
+          pending.delete(id);
+          continue;
+        }
+        if (resolveMissingDependencies(previous.manifest, gate).length) continue;
+        const source = pluginSources.get(registry)?.get(id);
+        pending.delete(id);
+        if (!source) continue;
+        if (manager.get(id)) await manager.forget(id);
+        const { enabled: _enabled, ...config } = pluginConfigs[id] ?? {};
+        await loadPlugin(source.dir, source.isBuiltin, pluginConfigs, registry, manager, false,
+          previous.manifest, undefined, { ...previous, config });
+      }
+      const roots = new Set([pluginId, ...Object.keys(gate.manifests.get(pluginId)?.dependencies ?? {})]);
+      for (const id of roots) await retryUnmetDependents(gate, id, restoreOptions(registry, manager, pluginConfigs));
+      await refreshPluginDerivedState(registry);
+      bus.emit('plugin:runtime-changed', { pluginId, action: 'recovered' }, ['web-ui'], { source: 'plugin-loader' });
+    }),
     onActivationStart: async (pluginId) => {
       try { await bootSentinel.begin(pluginId); }
       catch (error) {
@@ -432,8 +634,8 @@ async function bundleExternalPlugin(
     // and fails. esbuild's `nodePaths` option only affects build-time resolution —
     // Node ignores it at runtime, so the file's actual on-disk location matters.
     const cacheDir = path.join(tree.nodeModulesRoot, '.plugin-cache');
-    try { fs.mkdirSync(cacheDir, { recursive: true }); } catch { /* exists */ }
-    const outfile = path.join(cacheDir, `${pluginName}-${Date.now()}.mjs`);
+    await fsp.mkdir(cacheDir, { recursive: true });
+    const outfile = path.join(cacheDir, `${pluginName}-${randomUUID()}.mjs`);
 
     await build({
       entryPoints: [entryFile],
@@ -1127,31 +1329,75 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
 
 // ── Single plugin loader ──
 
-function pluginModuleFunctions(
-  mod: Record<string, any>,
-  unified: boolean,
-): {
-  activate: ((api: unknown) => unknown | Promise<unknown>) | null
-  deactivate: (() => void | Promise<void>) | null
-} {
-  if (!unified) {
-    return {
-      activate: typeof mod.default === 'function' ? mod.default : null,
-      deactivate: null,
+async function prepareGeneration(
+  dir: string,
+  builtin: boolean,
+  manifest: PluginManifest,
+  config: Record<string, unknown>,
+  strictWeb = false,
+): Promise<LoadedPluginGeneration> {
+  const module = await preparePluginModule({
+    dir, builtin, manifest, bundle: bundleExternalPlugin, deadline: withPluginCodeDeadline, replacement: strictWeb,
+  });
+  const artifactDir = module.sourceRoot ?? dir;
+  if (module.sourceRoot) {
+    const copied = await readPluginEntry(artifactDir, builtin);
+    if (!copied || JSON.stringify(copied.manifest) !== JSON.stringify(manifest)) {
+      await module.dispose?.();
+      throw new Error(`Plugin "${manifest.id}" changed while preparing its update`);
     }
   }
-  const defaultExport = mod.default
-  const activate = typeof mod.activate === 'function'
-    ? mod.activate
-    : typeof defaultExport?.activate === 'function'
-      ? defaultExport.activate.bind(defaultExport)
-      : null
-  const deactivate = typeof mod.deactivate === 'function'
-    ? mod.deactivate
-    : typeof defaultExport?.deactivate === 'function'
-      ? defaultExport.deactivate.bind(defaultExport)
-      : null
-  return { activate, deactivate }
+  let web: PluginWebModule | undefined;
+  let webError: string | undefined;
+  try {
+    if (manifest.apiVersion === 1 && manifest.web) {
+      web = await readPluginWebModule({
+        id: manifest.id, name: manifest.name, version: manifest.version,
+        apiVersion: 1, webEntry: manifest.web, pluginDir: artifactDir,
+      } as RegisteredPlugin);
+      const { transform } = await import('esbuild');
+      await transform(web.content.toString('utf8'), { loader: 'js', format: 'esm', logLevel: 'silent' });
+    }
+  } catch (error) {
+    if (strictWeb) {
+      await module.dispose?.();
+      throw error;
+    }
+    web = undefined;
+    webError = error instanceof Error ? error.message : String(error);
+  }
+  return { manifest, module, config, web, webError };
+}
+
+function preflightReload(
+  manifest: PluginManifest,
+  config: Record<string, unknown>,
+  gate: DependencyGate,
+  builtin: boolean,
+): void {
+  if (manifest.apiVersion !== undefined && manifest.apiVersion !== 1) {
+    throw new Error(`Unsupported Plugin API version ${manifest.apiVersion}`);
+  }
+  if (manifest.apiVersion === 1) {
+    const range = manifest.engines?.walnut;
+    if (!range || (!isVersionKnown() && !builtin) || (isVersionKnown() && !satisfiesSemVer(getVersion(), range))) {
+      throw new Error(`Plugin "${manifest.id}" requires Walnut ${range ?? '(unspecified)'}`);
+    }
+  }
+  const manifests = new Map(gate.manifests).set(manifest.id, manifest);
+  const graph = buildDepGraph([...manifests.values()].map((entry, index) => ({
+    id: entry.id, index, deps: Object.keys(entry.dependencies ?? {}),
+  })));
+  const missing = resolveMissingDependencies(manifest, { ...gate, manifests }, new Set(topoSortStable(graph).residue));
+  if (missing.length) throw new Error(`Missing dependencies: ${missing.map(describeMissingDependency).join(', ')}`);
+  for (const dependentId of dependentsToTearDown(gate, manifest.id).live) {
+    const dependent = manifests.get(dependentId)!;
+    const broken = resolveMissingDependencies(dependent, { ...gate, manifests }).filter(entry => entry.id === manifest.id);
+    if (broken.length) throw new Error(`Plugin "${dependentId}" would lose its dependency: ${broken.map(describeMissingDependency).join(', ')}`);
+  }
+  const required = (manifest.configSchema as { required?: string[] } | undefined)?.required ?? [];
+  const missingConfig = required.filter(field => !(field in config));
+  if (missingConfig.length) throw new Error(`Missing configuration: ${missingConfig.join(', ')}`);
 }
 
 /** A discovered plugin dir whose manifest reads and validates. No plugin code is imported. */
@@ -1187,6 +1433,7 @@ async function loadPlugin(
   // Ids the topological sort could not order. A member is loaded anyway so it lands as
   // a visible `needs-dependency` row instead of vanishing from the list.
   cycleMembers?: ReadonlySet<string>,
+  prepared?: LoadedPluginGeneration,
 ): Promise<void> {
   const manifest = prereadManifest ?? (await readPluginEntry(pluginDir, isBuiltin))?.manifest;
   if (!manifest) return;
@@ -1387,89 +1634,9 @@ async function loadPlugin(
     name: manifest.name,
     builtin: isBuiltin,
     activate: async (context) => {
-  // Dynamic import — find entry point and load it.
-  // For external .ts plugins, use esbuild to bundle on-the-fly (resolves parent imports).
-  // For built-in plugins, the compiled .js is already in dist/integrations/.
-  let registerFn: ((api: unknown) => unknown | Promise<unknown>) | null = null;
-  let deactivateFn: (() => void | Promise<void>) | null = null;
-  const candidates = unified
-    ? (manifest.server
-        ? [manifest.server, ...(isBuiltin && manifest.server.endsWith('.js')
-          ? [manifest.server.replace(/\.js$/, '.ts')]
-          : [])]
-        : [])
-    : ['index.ts', 'plugin.ts', 'index.js', 'plugin.js', 'index.mjs'];
-  let bundledFile: string | null = null;
-  // The bundler's own words for the entry that failed, so the activation error names the
-  // real cause instead of the generic "no valid entry point" the loop below ends on.
-  let bundleError: string | null = null;
-
-  for (const filename of candidates) {
-    const entryPath = path.join(pluginDir, filename);
-    try {
-      await fsp.access(entryPath, fs.constants.R_OK);
-
-      // External .ts plugins need esbuild bundling (parent imports break otherwise)
-      if (!isBuiltin && filename.endsWith('.ts')) {
-        const bundled = await bundleExternalPlugin(pluginDir, entryPath);
-        if (bundled.error) bundleError ??= `${filename}: ${bundled.error}`;
-        bundledFile = bundled.outfile ?? null;
-        if (bundledFile) {
-          const currentBundle = bundledFile;
-          try {
-            const mod = await withPluginCodeDeadline(
-              import(pathToFileURL(currentBundle).href),
-              pluginId,
-              'module evaluation',
-            );
-            const functions = pluginModuleFunctions(mod, unified);
-            if (functions.activate) {
-              registerFn = functions.activate;
-              deactivateFn = functions.deactivate;
-              break;
-            }
-          } finally {
-            try { await fsp.unlink(currentBundle); } catch { /* best-effort temp cleanup */ }
-            bundledFile = null;
-          }
-        }
-        // Bundling failed or no default export — try next candidate
-        continue;
-      }
-
-      // Built-in plugins or .js/.mjs: direct import
-      const moduleUrl = pathToFileURL(entryPath).href
-        + (!isBuiltin ? `?v=${(await fsp.stat(entryPath)).mtimeMs}-${Date.now()}` : '');
-      const mod = await withPluginCodeDeadline(
-        import(moduleUrl),
-        pluginId,
-        'module evaluation',
-      );
-      const functions = pluginModuleFunctions(mod, unified);
-      if (functions.activate) {
-        registerFn = functions.activate;
-        deactivateFn = functions.deactivate;
-        break;
-      }
-      // File loaded but no default export — try next candidate
-    } catch (err) {
-      if (err instanceof PluginCodeTimeoutError) throw err;
-      log.debug('plugin entry candidate failed', {
-        id: pluginId, filename,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  if (candidates.length > 0 && (!registerFn || typeof registerFn !== 'function')) {
-    log.warn('No valid entry point found', { id: pluginId, dir: pluginDir, tried: candidates, bundleError });
-    if (bundledFile) try { await fsp.unlink(bundledFile); } catch { /* non-critical cleanup */ }
-    throw new Error(bundleError
-      ? `Plugin "${pluginId}" could not be bundled: ${bundleError}`
-      : `Plugin "${pluginId}" has no valid entry point`);
-  }
-
-  const builder = createPluginApiBuilder(manifest, pluginConfig);
+  const generation = prepared ?? await prepareGeneration(pluginDir, isBuiltin, manifest, pluginConfig);
+  const { activate: registerFn, deactivate: deactivateFn } = generation.module;
+  const builder = createPluginApiBuilder(manifest, generation.config);
 
   try {
     if (registerFn) {
@@ -1486,6 +1653,7 @@ async function loadPlugin(
             lookupPluginState: (id) => manager.get(id)?.state,
           })
         : builder.api;
+      if (deactivateFn) context.onDispose(deactivateFn);
       const activation = Promise.resolve()
         .then(() => registerFn!(injectedApi))
         .then((value) => {
@@ -1494,8 +1662,8 @@ async function loadPlugin(
           }
           return value;
         });
-      await withPluginCodeDeadline(activation, pluginId, 'activation');
-      if (deactivateFn) context.onDispose(() => deactivateFn!());
+      await withPluginCodeDeadline(context.trackActivation(activation), pluginId, 'activation');
+      context.signal.throwIfAborted();
     }
   } catch (err) {
     log.error('Plugin registration threw an error', { id: pluginId, pluginId, error: String(err) });
@@ -1579,7 +1747,7 @@ async function loadPlugin(
     apiVersion: manifest.apiVersion,
     serverEntry: manifest.server,
     webEntry: manifest.web,
-    config: pluginConfig,
+    config: generation.config,
     get sync() { return builder.collected.sync ?? fallbackSync; },
     get hasSync() { return !!builder.collected.sync; },
     capabilities: effectiveCapabilities,
@@ -1602,11 +1770,17 @@ async function loadPlugin(
     get registeredSkills() { return listOwnedSkillDirRecords().some(r => r.owner === pluginId); },
   };
 
+  context.signal.throwIfAborted();
+  if (generation.web) retainPluginWebModule(registered, generation.web);
+  else if (generation.webError) retainPluginWebModule(registered, new Error(generation.webError));
   if (isLocal) registry.replace(pluginId, registered);
   else {
     registry.register(pluginId, registered);
-    context.onDispose(() => { registry.unregister(pluginId, 'unloaded'); });
+    context.onDispose(() => {
+      if (registry.get(pluginId) === registered) registry.unregister(pluginId, 'unloaded');
+    });
   }
+  generations(registry).set(pluginId, generation);
   log.info('Plugin loaded', {
     id: pluginId,
     name: manifest.name,
@@ -1664,6 +1838,8 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
   if (!additive) {
     pluginSources.set(registry, new Map());
     pluginManifests.set(registry, new Map());
+    pluginGenerations.set(registry, new Map());
+    pendingRecoveries.delete(registry);
     unconfiguredPlugins.length = 0;
     unsupportedPlugins.length = 0;
     resetUnmetDependencies();

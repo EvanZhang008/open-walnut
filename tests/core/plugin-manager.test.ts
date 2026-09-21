@@ -38,6 +38,14 @@ function definition(overrides: Partial<PluginDefinition> = {}): PluginDefinition
   }
 }
 
+/** A promise the test settles by hand — the only honest way to hold a cleanup open. */
+function deferred() {
+  let resolve!: () => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<void>((resolveFn, rejectFn) => { resolve = resolveFn; reject = rejectFn })
+  return { promise, resolve, reject }
+}
+
 describe('PluginManager', () => {
   it('tracks activation and disposes every owned registration', async () => {
     const order: string[] = []
@@ -360,7 +368,7 @@ describe('PluginManager', () => {
     })
   })
 
-  it('forgets a Plugin even when cleanup reports an error', async () => {
+  it('keeps a failed-cleanup record so the caller can retry forget', async () => {
     const manager = createManager()
     const plugin = definition({
       deactivate: () => { throw new Error('cleanup failed') },
@@ -368,25 +376,219 @@ describe('PluginManager', () => {
     manager.discover(plugin)
     await manager.activate(plugin.id)
 
+    // The record survives a failed teardown on purpose. Deleting it handed the caller's
+    // recovery step a 404 with nothing left to retry, while the id itself stayed refused.
     await expect(manager.forget(plugin.id)).rejects.toThrow('cleanup failed')
+    expect(manager.get(plugin.id)).toMatchObject({ state: 'disabled', error: 'cleanup failed' })
+
+    // The retry has no teardown left to fail, so it removes the record.
+    await expect(manager.forget(plugin.id)).resolves.toBeUndefined()
     expect(manager.get(plugin.id)).toBeUndefined()
     expect(() => manager.discover(plugin)).not.toThrow()
   })
 
-  it('bounds teardown, disposes owned resources, and releases queued mutations', async () => {
+  /**
+   * One instance per id, even when the old one's cleanup never comes back. Two generations
+   * would hold the same registry rows and the same outside account, and the loser's teardown
+   * would then withdraw the winner's registrations.
+   */
+  it('refuses a same-id activation while the previous instance is still stopping', async () => {
+    const hanging = deferred()
+    const started: string[] = []
+    const manager = createManager({ deactivationTimeoutMs: 10 })
+    const slow = definition({
+      id: 'slow',
+      activate(context) {
+        started.push('slow')
+        context.onDispose(() => hanging.promise)
+      },
+    })
+    const healthy = definition({
+      id: 'healthy',
+      activate(context) {
+        started.push('healthy')
+        context.onDispose(vi.fn())
+      },
+    })
+    manager.discover(slow)
+    manager.discover(healthy)
+    await manager.activate(slow.id)
+    await manager.activate(healthy.id)
+    // A plugin that is simply running is never "stopping".
+    expect(manager.isStopping(slow.id)).toBe(false)
+    expect(manager.isStopping(healthy.id)).toBe(false)
+
+    // The reload's teardown half reports its deadline and stops waiting...
+    await expect(manager.reload(slow.id)).rejects.toBeInstanceOf(AggregateError)
+    expect(manager.isStopping(slow.id)).toBe(true)
+
+    // ...so the retry is refused instead of building a second instance next to the first.
+    await expect(manager.activate(slow.id)).rejects.toThrow('a previous instance is still stopping')
+    await expect(manager.reload(slow.id)).rejects.toThrow('a previous instance is still stopping')
+    expect(started).toEqual(['slow', 'healthy'])
+    // A host-side "not yet" is not the plugin failing: no failure count, so no quarantine.
+    expect(manager.get(slow.id)).toMatchObject({ state: 'disabled', failureCount: 0 })
+
+    // One wedged plugin must never hold another id hostage.
+    expect(manager.isStopping(healthy.id)).toBe(false)
+    await expect(manager.reload(healthy.id)).resolves.toMatchObject({ state: 'active' })
+    expect(started).toEqual(['slow', 'healthy', 'healthy'])
+
+    hanging.resolve()
+    await hanging.promise
+
+    expect(manager.isStopping(slow.id)).toBe(false)
+    expect((await manager.reload(slow.id)).state).toBe('active')
+    expect(started).toEqual(['slow', 'healthy', 'healthy', 'slow'])
+  })
+
+  it('keeps refusing the id after a forget that gave up on cleanup', async () => {
+    const hanging = deferred()
+    const activate = vi.fn((context: PluginContext) => { context.onDispose(() => hanging.promise) })
+    const manager = createManager({ deactivationTimeoutMs: 10 })
+    const plugin = definition({ activate })
+    manager.discover(plugin)
+    await manager.activate(plugin.id)
+
+    await expect(manager.forget(plugin.id)).rejects.toBeInstanceOf(AggregateError)
+    expect(manager.get(plugin.id)).toMatchObject({ state: 'disabled' })
+    // The retry takes the record with it, which is exactly why the abandoned context cannot
+    // be remembered on the record.
+    await expect(manager.forget(plugin.id)).resolves.toBeUndefined()
+    expect(manager.get(plugin.id)).toBeUndefined()
+    expect(manager.isStopping(plugin.id)).toBe(true)
+
+    manager.discover(plugin)
+    await expect(manager.activate(plugin.id)).rejects.toThrow('a previous instance is still stopping')
+    expect(activate).toHaveBeenCalledOnce()
+
+    hanging.resolve()
+    await hanging.promise
+
+    expect((await manager.reload(plugin.id)).state).toBe('active')
+    expect(activate).toHaveBeenCalledTimes(2)
+  })
+
+  it('counts an activation that ignored its deadline as an instance still stopping', async () => {
+    const activation = deferred()
+    const manager = createManager({ activationTimeoutMs: 10 })
+    const plugin = definition({ activate: () => activation.promise })
+    manager.discover(plugin)
+
+    await expect(manager.activate(plugin.id)).rejects.toThrow('activation timed out after 10ms')
+    expect(manager.isStopping(plugin.id)).toBe(true)
+    await expect(manager.activate(plugin.id)).rejects.toThrow('a previous instance is still stopping')
+    // Still ONE failure: the refusal replaced a retry, it did not add a second failure.
+    expect(manager.get(plugin.id)).toMatchObject({ state: 'failed', failureCount: 1 })
+
+    activation.resolve()
+    await activation.promise
+
+    expect(manager.isStopping(plugin.id)).toBe(false)
+    expect((await manager.reload(plugin.id)).state).toBe('active')
+  })
+
+  /**
+   * The sibling of the `onDispose` path, and the one nothing else counts: an activation that
+   * RETURNS its lifetime past the deadline was never `own()`ed, so the manager disposes it by
+   * hand — outside the store. An async dispose there is still the old instance letting go.
+   */
+  it('counts the hand-disposed lifetime an abandoned activation returned', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandledRejection)
+    try {
+      const activation = deferred()
+      const lateDispose = deferred()
+      const disposed = vi.fn(() => lateDispose.promise)
+      const manager = createManager({ activationTimeoutMs: 10 })
+      const plugin = definition({
+        activate: () => activation.promise.then(() => ({ dispose: disposed })),
+      })
+      manager.discover(plugin)
+
+      await expect(manager.activate(plugin.id)).rejects.toThrow('activation timed out after 10ms')
+
+      activation.resolve()
+      await vi.waitFor(() => expect(disposed).toHaveBeenCalledOnce())
+
+      expect(manager.isStopping(plugin.id)).toBe(true)
+      await expect(manager.activate(plugin.id)).rejects.toThrow('a previous instance is still stopping')
+
+      lateDispose.reject(new Error('late dispose failed'))
+      await lateDispose.promise.catch(() => undefined)
+
+      expect(manager.isStopping(plugin.id)).toBe(false)
+      expect((await manager.reload(plugin.id)).state).toBe('active')
+      // Rejections are reported at the end of a turn, so judge after one.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
+  it('counts a disposable a late activation registers, and never leaves it unhandled', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandledRejection)
+    try {
+      const activation = deferred()
+      const lateCleanup = deferred()
+      let context!: PluginContext
+      const manager = createManager({ activationTimeoutMs: 10 })
+      const plugin = definition({
+        async activate(ctx) {
+          context = ctx
+          await activation.promise
+          // The host gave up long ago, so the store takes this over and disposes it at once.
+          ctx.onDispose(() => lateCleanup.promise)
+        },
+      })
+      manager.discover(plugin)
+      await expect(manager.activate(plugin.id)).rejects.toThrow('activation timed out after 10ms')
+
+      activation.resolve()
+      await vi.waitFor(() => expect(context.isCleanupPending).toBe(true))
+
+      expect(manager.isStopping(plugin.id)).toBe(true)
+      await expect(manager.activate(plugin.id)).rejects.toThrow('a previous instance is still stopping')
+
+      lateCleanup.reject(new Error('late cleanup failed'))
+      await lateCleanup.promise.catch(() => undefined)
+
+      expect(manager.isStopping(plugin.id)).toBe(false)
+      expect((await manager.reload(plugin.id)).state).toBe('active')
+      // Rejections are reported at the end of a turn, so judge after one.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
+  /**
+   * A `deactivate` past its deadline still owns the plugin module's own state, so the queued
+   * activation is RELEASED (it runs, it does not hang) and then REFUSED. The old contract here
+   * let it activate, which is how a reload ended up with two instances of one module.
+   */
+  it('bounds teardown, disposes owned resources, and refuses the queued activation until deactivate settles', async () => {
     const cleanup = vi.fn()
+    const deactivation = deferred()
+    const started = vi.fn()
     const manager = createManager({ deactivationTimeoutMs: 10 })
     const plugin = definition({
       activate(context) {
+        started()
         context.onDispose(cleanup)
       },
-      deactivate: () => new Promise<void>(() => undefined),
+      deactivate: () => deactivation.promise,
     })
     manager.discover(plugin)
     await manager.activate(plugin.id)
 
     const disableResult = manager.disable(plugin.id).catch((error: unknown) => error)
-    const queuedActivation = manager.activate(plugin.id)
+    const queuedActivation = manager.activate(plugin.id).catch((error: unknown) => error)
     const error = await disableResult
 
     expect(error).toBeInstanceOf(AggregateError)
@@ -394,7 +596,26 @@ describe('PluginManager', () => {
       expect.objectContaining({ message: expect.stringContaining('cleanup timed out during deactivate after 10ms') }),
     ])
     expect(cleanup).toHaveBeenCalledOnce()
-    await expect(queuedActivation).resolves.toMatchObject({ state: 'active' })
+
+    const queuedError = await queuedActivation
+    expect(queuedError).toBeInstanceOf(Error)
+    expect((queuedError as Error).message).toContain('a previous instance is still stopping')
+    expect(started).toHaveBeenCalledOnce()
+    expect(manager.isStopping(plugin.id)).toBe(true)
+
+    // A module wedged in its own `deactivate` is that module's problem, not the next plugin's.
+    const sibling = definition({ id: 'sibling', deactivate: vi.fn() })
+    manager.discover(sibling)
+    await expect(manager.activate(sibling.id)).resolves.toMatchObject({ state: 'active' })
+    await expect(manager.reload(sibling.id)).resolves.toMatchObject({ state: 'active' })
+    expect(manager.isStopping(sibling.id)).toBe(false)
+
+    deactivation.resolve()
+    await deactivation.promise
+
+    expect(manager.isStopping(plugin.id)).toBe(false)
+    expect((await manager.activate(plugin.id)).state).toBe('active')
+    expect(started).toHaveBeenCalledTimes(2)
   })
 
   it('bounds owned-resource cleanup and still reaches later disposables', async () => {

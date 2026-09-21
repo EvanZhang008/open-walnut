@@ -72,6 +72,45 @@ describe('DisposableStore', () => {
     expect(store.size).toBe(0)
   })
 
+  /**
+   * `disposeWithin` reports on a budget, so the promise it gave up on is still running. Losing
+   * track of it there is what let a reload start a second instance next to the first.
+   */
+  it('keeps counting a cleanup the deadline gave up on, until it settles', async () => {
+    let releaseCleanup!: () => void
+    const hanging = new Promise<void>((resolve) => { releaseCleanup = resolve })
+    const store = new DisposableStore()
+    store.add(toDisposable(() => hanging))
+    expect(store.isCleanupPending).toBe(false)
+
+    await expect(store.disposeWithin(10)).rejects.toBeInstanceOf(AggregateError)
+
+    // The store is done accepting AND still holding: two different questions.
+    expect(store.isDisposed).toBe(true)
+    expect(store.isCleanupPending).toBe(true)
+
+    releaseCleanup()
+    await hanging
+    expect(store.isCleanupPending).toBe(false)
+  })
+
+  it('counts a disposable that arrives after teardown, and swallows its late failure', async () => {
+    let failCleanup!: (error: Error) => void
+    const late = new Promise<void>((_, reject) => { failCleanup = reject })
+    const store = new DisposableStore()
+    await store.dispose()
+    expect(store.isCleanupPending).toBe(false)
+
+    store.add(toDisposable(() => late))
+
+    expect(store.isCleanupPending).toBe(true)
+    failCleanup(new Error('late cleanup failed'))
+    // No unhandled rejection: nobody is awaiting this promise any more, and the store is the
+    // only thing that ever attached a handler to it.
+    await late.catch(() => undefined)
+    expect(store.isCleanupPending).toBe(false)
+  })
+
   it('can remove an owned resource before store disposal', async () => {
     const disposed = vi.fn()
     const resource = toDisposable(disposed)
@@ -167,5 +206,47 @@ describe('PluginContext', () => {
     await Promise.all([context.dispose(), context.dispose()])
 
     expect(disposed).toHaveBeenCalledOnce()
+  })
+
+  it('reports cleanup the deadline gave up on as pending work', async () => {
+    let releaseCleanup!: () => void
+    const hanging = new Promise<void>((resolve) => { releaseCleanup = resolve })
+    const context = new PluginContext({ id: 'test-plugin', dataDir: '/tmp/test-plugin', logger })
+    context.onDispose(() => hanging)
+    expect(context.hasPendingWork).toBe(false)
+
+    await expect(context.disposeWithin(10)).rejects.toBeInstanceOf(AggregateError)
+
+    expect(context.isCleanupPending).toBe(true)
+    expect(context.hasPendingWork).toBe(true)
+
+    releaseCleanup()
+    await hanging
+    expect(context.hasPendingWork).toBe(false)
+  })
+
+  /**
+   * The host cannot cancel a plugin's activate, so the honest answer is to keep saying it is
+   * still running. Tracking has to keep working after disposal — that is the case it exists for.
+   */
+  it('tracks an activation promise, returns it unchanged, and survives disposal', async () => {
+    let failActivation!: (error: Error) => void
+    const activation = new Promise<void>((_, reject) => { failActivation = reject })
+    const context = new PluginContext({ id: 'test-plugin', dataDir: '/tmp/test-plugin', logger })
+
+    expect(context.trackActivation(activation)).toBe(activation)
+    // Registering the same promise twice must not double-count it.
+    context.trackActivation(activation)
+    expect(context.isActivationPending).toBe(true)
+    expect(context.isCleanupPending).toBe(false)
+
+    await context.dispose()
+    expect(context.isActivationPending).toBe(true)
+    expect(context.hasPendingWork).toBe(true)
+
+    failActivation(new Error('activation failed long after the host stopped waiting'))
+    await activation.catch(() => undefined)
+    expect(context.isActivationPending).toBe(false)
+    expect(context.hasPendingWork).toBe(false)
   })
 })

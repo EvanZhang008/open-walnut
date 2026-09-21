@@ -77,7 +77,7 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, getPluginLifecycleRecords, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, getPluginLifecycleRecords, getPluginReloadIds, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, type ConnectionWatch } from '../core/plugin-sync-health.js'
@@ -1411,11 +1411,20 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // ON, shared by the store's switch and its "install the missing dependency" path, so a
   // dependency is turned on through exactly the steps a manual switch takes.
   const reloadPlugin = (pluginId: string) => runPluginMutation(async () => {
-    await stopPluginSyncPolling(pluginId)
     try {
+      await Promise.all(getPluginReloadIds(registry, pluginId).map(id => stopPluginSyncPolling(id, 5_000)))
       const plugin = await reloadLoadedPlugin(registry, pluginId)
-      bus.emit('plugin:runtime-changed', { pluginId, action: 'reloaded' }, ['web-ui'], { source: 'plugin-runtime' })
+      if (plugin.state === 'active') await runPluginMigrations(registry)
       return plugin
+    } finally { startPluginSyncPolling() }
+  })
+  const reloadPlugins = (ids: string[]) => runPluginMutation(async () => {
+    try {
+      const result = await reloadLoadedPlugins(registry, ids, async affected => {
+        await Promise.all(affected.map(id => stopPluginSyncPolling(id, 5_000)))
+      })
+      if (result.reloaded.length) await runPluginMigrations(registry)
+      return result
     } finally { startPluginSyncPolling() }
   })
   // ONE update-status cache for the store: the batch route reads it, the per-row
@@ -1442,7 +1451,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const linkedCheckoutOps = defaultLinkedCheckoutOps()
   // Lazy indirection: pluginSoftReload is assigned later in startup, after the
   // initial loadPlugins — the router must call the CURRENT value, not capture it.
-  app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload(), { reloadPlugin, cache: pluginUpdateCache }))
+  app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload(), { reloadPlugin, reloadPlugins, cache: pluginUpdateCache }))
   app.use('/api/plugin-updates', createPluginUpdatesRouter({
     cache: pluginUpdateCache,
     linked: linkedCheckoutOps,
@@ -1468,6 +1477,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       return alreadyLoaded ? { ...plugin, alreadyLoaded: true } : plugin
     },
     reload: reloadPlugin,
+    reloadMany: reloadPlugins,
     disable: (pluginId, opts) => runPluginMutation(async () => {
       // A cascade also tears down the DEPENDENTS, and a poll timer whose plugin was just
       // unregistered keeps calling into code that is gone. The dependency graph lives in
@@ -4160,6 +4170,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   pluginSoftReload = loadInstalledPlugins
 
+  bus.subscribe('plugin-late-recovery', async (event) => {
+    if (event.name !== 'plugin:runtime-changed' || (event.data as { action?: string })?.action !== 'recovered') return
+    await runPluginMutation(async () => {
+      if (!httpServer?.listening) return
+      await runPluginMigrations(registry)
+      startPluginSyncPolling()
+    })
+  }, { global: true, interest: ['plugin:runtime-changed'] })
+
   // A config save may complete one or more needs-config Plugins. Reload only
   // those owners; rebuilding the whole manager would interrupt every active Plugin.
   bus.subscribe('plugin-config-reload', async (event) => {
@@ -4546,16 +4565,31 @@ function yieldToEventLoop(): Promise<void> {
  * so HTTP handlers, WS broadcasts, and session I/O don't starve while we await
  * dozens of serial plugin.sync.createTask() Graph calls.
  */
-async function stopPluginSyncPolling(pluginId?: string): Promise<void> {
-  if (pluginId) {
-    const stop = pluginSyncStops.get(pluginId)
-    pluginSyncStops.delete(pluginId)
-    if (stop) await stop().catch(() => { /* best-effort shutdown */ })
-    return
+async function stopPluginSyncPolling(pluginId?: string, timeoutMs?: number): Promise<void> {
+  const entries = [...pluginSyncStops].filter(([id]) => !pluginId || id === pluginId)
+  const stopped = Promise.all(entries.map(async ([id, stop]) => {
+    await stop()
+    if (pluginSyncStops.get(id) === stop) pluginSyncStops.delete(id)
+  }))
+  if (timeoutMs === undefined) { await stopped; return }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
+  try {
+    await Promise.race([
+      stopped,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true
+          reject(new Error('Plugin sync is still stopping; retry after the current sync finishes'))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (timedOut) void stopped.then(() => runPluginMutation(async () => {
+      if (httpServer?.listening) startPluginSyncPolling()
+    })).catch(() => undefined)
   }
-  const stops = [...pluginSyncStops.values()]
-  pluginSyncStops.clear()
-  await Promise.all(stops.map((stop) => stop().catch(() => { /* best-effort shutdown */ })))
 }
 
 function startPluginSyncPolling(): void {
@@ -5164,6 +5198,7 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('main-ai')
   bus.unsubscribe('heartbeat-config')
   bus.unsubscribe('plugin-config-reload')
+  bus.unsubscribe('plugin-late-recovery')
   bus.unsubscribe('embedding-sync')
   bus.unsubscribe('setup-health')
   stopTimeTracking()

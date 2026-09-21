@@ -41,7 +41,7 @@ import type { UpdateStatusCache } from '../../core/plugins/update-status-cache.j
 import {
   ROW_CHECK_DEADLINE_MS, ROW_TIMEOUT_REASON, describeGitFailure, fetchEnv, maskCredentials, sourceRowKey, withDeadline,
 } from '../../core/plugins/update-status.js';
-import { isRestartPending, markRestartPending } from '../../core/plugins/restart-pending.js';
+import { clearRestartPending, isRestartPending, markRestartPending } from '../../core/plugins/restart-pending.js';
 import { createSubsystemLogger } from '../../logging/index.js';
 import { markHandledFailure } from '../middleware/handled-failure.js';
 
@@ -86,6 +86,7 @@ export interface PluginSourcesRouterDeps {
    *  the path a manual switch takes (config write, loader lane, dependent restore).
    *  The lifecycle record it returns is CHECKED: activation can be refused. */
   reloadPlugin?(pluginId: string): Promise<{ state?: string } | undefined>;
+  reloadPlugins?(pluginIds: string[]): Promise<{ reloaded: string[]; skipped: string[] }>;
   /** Overridable so a test can point the catalog overlay at a temp home. */
   walnutHome?: string;
   /** The update-status cache check/update write into (shared with /api/plugin-updates). */
@@ -443,11 +444,39 @@ export function createPluginSourcesRouter(
           log.warn('soft reload after update failed', { error: String(err) });
         }
       }
-      const restartRequired = result.updated && loadedBefore.length > 0;
-      // The row badge says RESTART TO ACTIVATE from here on (registry + sources list), so the
-      // feedback line is not the only place that says it.
-      if (restartRequired) markRestartPending(loadedBefore.filter((id): id is string => !!id));
-      res.json({ ...result, restartRequired, ...(row ? { state: row.state, checkedAt: row.checkedAt } : {}) });
+      const reloaded: string[] = [];
+      const failed: Array<{ id: string; error: string }> = [];
+      const targets = loadedBefore.filter((id): id is string => !!id && registry.has(id) && (result.updated || isRestartPending(id)));
+      const skipped: string[] = [];
+      if (deps.reloadPlugins && targets.length) {
+        markRestartPending(targets);
+        try {
+          const operation = deps.reloadPlugins(targets).then(outcome => {
+            for (const id of [...outcome.reloaded, ...outcome.skipped]) clearRestartPending(id);
+            return outcome;
+          });
+          const outcome = await withDeadline(operation, SOURCE_UPDATE_DEADLINE_MS, () => { throw new Error('Plugin reload is still running; its status will update when it finishes'); });
+          reloaded.push(...outcome.reloaded);
+          skipped.push(...outcome.skipped);
+        } catch (error) {
+          failed.push(...targets.map(id => ({ id, error: error instanceof Error ? error.message : String(error) })));
+        }
+      } else if (deps.reloadPlugin) {
+        for (const id of targets) {
+          if (!registry.has(id)) { skipped.push(id); continue; }
+          markRestartPending([id]);
+          try {
+            const record = await deps.reloadPlugin(id);
+            if (record?.state !== 'active') throw new Error(`Plugin "${id}" is ${record?.state ?? 'unknown'}`);
+            clearRestartPending(id);
+            reloaded.push(id);
+          } catch (error) {
+            failed.push({ id, error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+      } else if (result.updated) markRestartPending(targets);
+      const restartRequired = targets.some(id => isRestartPending(id));
+      res.json({ ...result, restartRequired, reloaded, skipped, failed, ...(row ? { state: row.state, checkedAt: row.checkedAt } : {}) });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }

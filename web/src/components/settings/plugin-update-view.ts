@@ -365,6 +365,7 @@ export type UpdateButtonMode =
 export interface UpdateButtonOptions {
   /** Display names of the OTHER plugins served from the same checkout (N3-4). */
   siblingNames?: string[]
+  pendingActivation?: boolean
 }
 
 /** `Also updates Acme Notes (same checkout).`; two or more list every name. */
@@ -411,6 +412,9 @@ export function updateButtonMode(
       if (state.lastKnown !== 'available') return { render: false }
       return { render: true, disabled: true, label: 'Update', reason: state.cause === 'auth' ? REASON_AUTH : REASON_OFFLINE }
     case 'current':
+      return opts.pendingActivation
+        ? { render: true, primary: true, label: 'Update', title: 'Retry activating the installed update.' }
+        : { render: false }
     case 'unchecked':
     case 'checking':
     case 'unsupported':
@@ -465,20 +469,20 @@ export function successFeedback(
   body: LinkedUpdateBody & SourceUpdateBody,
   nameOf: (id: string) => string,
 ): Feedback {
-  if (kind === 'linked') {
-    const at = sha7(body.sha ?? body.toSha)
+  if (kind === 'linked' || body.failed?.length || (!body.restartRequired && Array.isArray(body.reloaded))) {
+    const at = kind === 'npm' ? (body.resolved ? `v${npmToVersion(body.resolved)}` : '') : sha7(body.sha ?? body.toSha)
     const failedNote = body.failed?.length
       ? ` · ${nameList(body.failed.map((f) => f.id), nameOf)} could not be reloaded.`
       : ''
     const detail = body.failed?.length ? body.failed.map((f) => `${f.id}: ${f.error}`).join('\n') : undefined
-    if (body.updated === false) {
-      return { kind: 'ok', text: `Already up to date at ${at}`.trim() + failedNote, ...(detail ? { detail } : {}) }
-    }
     const reloaded = body.reloaded ?? []
-    const tail = reloaded.length > 0 ? `reloaded ${nameList(reloaded, nameOf)}` : 'nothing was running from it'
+    if (body.updated === false && reloaded.length === 0 && !body.failed?.length) {
+      return { kind: 'ok', text: `Already up to date at ${at}`.trim() }
+    }
+    const tail = reloaded.length > 0 ? `reloaded ${nameList(reloaded, nameOf)}` : body.failed?.length ? 'new code is not running' : 'nothing was running from it'
     // "and 1 more" names the rest on hover: the sibling that was reloaded is never anonymous.
     const title = reloaded.length > 1 ? `Reloaded ${reloaded.map(nameOf).join(', ')}` : undefined
-    return { kind: 'ok', text: `Updated to ${at} · ${tail}${failedNote}`, ...(detail ? { detail } : {}), ...(title ? { title } : {}) }
+    return { kind: body.failed?.length ? 'error' : 'ok', text: `Updated to ${at} · ${tail}${failedNote}`, ...(detail ? { detail } : {}), ...(title ? { title } : {}) }
   }
   if (kind === 'npm') {
     const version = body.resolved ? `v${npmToVersion(body.resolved)}` : ''

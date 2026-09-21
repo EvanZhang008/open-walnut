@@ -50,7 +50,9 @@ import {
   loadPlugins,
   disposeLoadedPlugins,
   reloadLoadedPlugin,
+  reloadLoadedPlugins,
   getPluginLifecycleRecords,
+  setPluginCodeTimeoutForTesting,
   getUnmetDependencyPlugins,
   PluginDependentsError,
 } from '../../src/core/integration-loader.js';
@@ -149,6 +151,7 @@ async function load(registry: IntegrationRegistry): Promise<void> {
 }
 
 afterEach(async () => {
+  setPluginCodeTimeoutForTesting(null);
   bus.unsubscribe('p01-observer');
   delete (globalThis as unknown as { __p01?: Markers }).__p01;
   for (const one of loadedRegistries.splice(0)) await disposeLoadedPlugins(one);
@@ -480,22 +483,15 @@ describe('lifecycle cascade', () => {
     ]);
   });
 
-  it('never tells a dependent the dependency was turned off when a reload broke it', async () => {
-    // The disable wording used to be hardcoded into the shared teardown, so a reload whose
-    // new code throws left beta permanently claiming a user turned alpha off. Nobody did:
-    // alpha is installed, enabled, and failed.
+  it('restores the previous generation and its dependents when replacement activation fails', async () => {
     const registry = await loadPair();
 
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.2.0' }, 'throw new Error("alpha is broken");');
-    const reloaded = await reloadLoadedPlugin(registry, 'alpha');
+    await expect(reloadLoadedPlugin(registry, 'alpha')).rejects.toThrow('previous version restored');
 
-    expect(reloaded.state).toBe('failed');
-    const beta = record(registry, 'beta')!;
-    expect(beta.state).toBe('needs-dependency');
-    expect(beta.missingDependencies?.[0].note).not.toContain('turned off');
-    expect(beta.missingDependencies?.[0].note).not.toContain('reloading');
-    expect(beta.missingDependencies?.[0].note).toContain('failed');
-    expect(getUnmetDependencyPlugins().find((entry) => entry.id === 'beta')!.missing[0].note).toContain('failed');
+    expect(record(registry, 'alpha')?.state).toBe('active');
+    expect(record(registry, 'beta')?.state).toBe('active');
+    expect(getUnmetDependencyPlugins()).toEqual([]);
     // Still recoverable: fixing alpha and reloading brings both back.
     await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.2.0' });
     await reloadLoadedPlugin(registry, 'alpha');
@@ -560,5 +556,351 @@ describe('lifecycle cascade', () => {
 
     expect(['alpha', 'beta', 'gamma'].map((id) => record(registry, id)?.state)).toEqual(['active', 'active', 'active']);
     expect(marks().activated.filter((id) => id === 'gamma')).toHaveLength(2);
+  });
+});
+
+/** The restore pass once more than one dependent is involved: what it tries, in what order,
+ *  how many times, and what it must leave alone. */
+describe('restore pass over a dependent graph', () => {
+  /** Gamma refuses a SECOND activation, the way a plugin that never gave a handle back does.
+   *  The code never changes, so a restore from the generation that already worked still
+   *  fails — which is what makes "the reason is an activation failure" reachable at all. */
+  const GAMMA_FAILS_ON_RESTART =
+    'if (globalThis.__p01.activated.filter((one) => one === "gamma").length > 1) throw new Error("gamma cannot start twice");';
+
+  /** alpha ← beta ← gamma ← delta plus the SHORTCUT edge delta → alpha, which makes delta a
+   *  first-level dependent of alpha as well as the deepest one (dir names put it first, so
+   *  the discovery order agrees with that trap). `solo`/`orphan` are the unrelated control. */
+  async function writeDiamond(gammaBody = ''): Promise<void> {
+    await writePlugin('a-delta', { id: 'delta', name: 'delta', version: '1.0.0', dependencies: { alpha: '^1', gamma: '^1' } });
+    await writePlugin('b-gamma', { id: 'gamma', name: 'gamma', version: '1.0.0', dependencies: { beta: '^1' } }, gammaBody);
+    await writePlugin('c-beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^1' } });
+    await writePlugin('d-solo', { id: 'solo', name: 'solo', version: '1.0.0' });
+    await writePlugin('e-orphan', { id: 'orphan', name: 'orphan', version: '1.0.0', dependencies: { ghost: '^1' } });
+    await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.0.0' });
+  }
+
+  async function loadDiamond(gammaBody = ''): Promise<IntegrationRegistry> {
+    await writeDiamond(gammaBody);
+    const registry = new IntegrationRegistry();
+    await load(registry);
+
+    expect(['alpha', 'beta', 'gamma', 'delta', 'solo'].map((id) => record(registry, id)?.state))
+      .toEqual(['active', 'active', 'active', 'active', 'active']);
+    expect(record(registry, 'orphan')?.state).toBe('needs-dependency');
+    // The guard on the guard: discovered before the chain it ends, or the trap is not armed.
+    const dirs = await fsp.readdir(path.join(WALNUT_HOME, 'plugins'));
+    expect(dirs.indexOf('a-delta')).toBeLessThan(dirs.indexOf('b-gamma'));
+    return registry;
+  }
+
+  it('brings a shortcut diamond back, each dependent exactly once and in depth order', async () => {
+    const registry = await loadDiamond();
+    await disableLoadedPlugin(registry, 'alpha', { cascade: true });
+    // Deepest first on the way down; the shortcut edge does not promote delta out of that.
+    expect(marks().deactivated).toEqual(['delta', 'gamma', 'beta', 'alpha']);
+    dependencyEvents.length = 0;
+
+    await reloadLoadedPlugin(registry, 'alpha');
+
+    expect(['alpha', 'beta', 'gamma', 'delta'].map((id) => record(registry, id)?.state))
+      .toEqual(['active', 'active', 'active', 'active']);
+    for (const id of ['beta', 'gamma', 'delta']) {
+      expect(registry.has(id)).toBe(true);
+      // Boot plus this pass. Three would be a cascade storm; one means delta spent its
+      // attempt before gamma was back and stayed parked, which is the bug this case is for.
+      expect(marks().activated.filter((one) => one === id)).toHaveLength(2);
+    }
+    // Ancestors before descendants, in one pass — the order is the assertion.
+    expect(dependencyEvents).toEqual([
+      { pluginId: 'beta', dependencyId: 'alpha', action: 'restored' },
+      { pluginId: 'gamma', dependencyId: 'alpha', action: 'restored' },
+      { pluginId: 'delta', dependencyId: 'alpha', action: 'restored' },
+    ]);
+    expect(getUnmetDependencyPlugins().map((entry) => entry.id)).toEqual(['orphan']);
+  });
+
+  it('rewrites a descendant reason from what the plugin in between ended up as', async () => {
+    const registry = await loadDiamond();
+    await disableLoadedPlugin(registry, 'alpha', { cascade: true });
+    // What the cascade wrote for delta: gamma is down only because alpha is.
+    expect(record(registry, 'delta')?.missingDependencies).toEqual([
+      { id: 'alpha', range: '^1', found: '1.0.0', reason: 'inactive', note: expect.stringContaining('turned off') },
+      { id: 'gamma', range: '^1', found: '1.0.0', reason: 'inactive', note: expect.stringContaining('depends on "alpha"') },
+    ]);
+    // The user then turns gamma off while it is parked, so alpha coming back cannot help
+    // delta any more — and the reason it cannot has changed under it.
+    await disableLoadedPlugin(registry, 'gamma');
+    dependencyEvents.length = 0;
+
+    await reloadLoadedPlugin(registry, 'alpha');
+
+    expect(record(registry, 'beta')?.state).toBe('active');
+    expect(record(registry, 'gamma')?.state).toBe('disabled');
+    expect(marks().activated.filter((id) => id === 'gamma')).toHaveLength(1);
+    const delta = record(registry, 'delta')!;
+    expect(delta.state).toBe('needs-dependency');
+    // A walk that stops at gamma leaves delta saying gamma is `needs-dependency`, which is
+    // no longer true and points the user at the wrong row to fix.
+    expect(delta.missingDependencies).toEqual([
+      { id: 'gamma', range: '^1', found: '1.0.0', reason: 'inactive', note: expect.stringContaining('disabled') },
+    ]);
+    // The store reads the diagnostic list, not the record, so both have to move.
+    expect(getUnmetDependencyPlugins().find((entry) => entry.id === 'delta')!.missing[0].note).toContain('disabled');
+    expect(dependencyEvents).toEqual([
+      { pluginId: 'beta', dependencyId: 'alpha', action: 'restored' },
+    ]);
+
+    // Still recoverable from the middle: turning gamma back on restores delta with it.
+    await reloadLoadedPlugin(registry, 'gamma');
+
+    expect(['gamma', 'delta'].map((id) => record(registry, id)?.state)).toEqual(['active', 'active']);
+    expect(getUnmetDependencyPlugins().map((entry) => entry.id)).toEqual(['orphan']);
+  });
+
+  it('names a failed activation as the reason for the descendant under it', async () => {
+    const registry = await loadDiamond(GAMMA_FAILS_ON_RESTART);
+    await disableLoadedPlugin(registry, 'alpha', { cascade: true });
+    dependencyEvents.length = 0;
+
+    await reloadLoadedPlugin(registry, 'alpha');
+
+    expect(record(registry, 'beta')?.state).toBe('active');
+    // Gamma really was tried, from the same code as the first time, and threw.
+    expect(marks().activated.filter((id) => id === 'gamma')).toHaveLength(2);
+    expect(record(registry, 'gamma')?.state).toBe('failed');
+    const delta = record(registry, 'delta')!;
+    expect(delta.state).toBe('needs-dependency');
+    // A walk that stops at the failure leaves delta blaming alpha, which is back and fine.
+    expect(delta.missingDependencies).toEqual([
+      { id: 'gamma', range: '^1', found: '1.0.0', reason: 'inactive', note: expect.stringContaining('failed') },
+    ]);
+    expect(getUnmetDependencyPlugins().find((entry) => entry.id === 'delta')!.missing[0].note).toContain('failed');
+    expect(dependencyEvents).toEqual([
+      { pluginId: 'beta', dependencyId: 'alpha', action: 'restored' },
+    ]);
+  });
+
+  it('leaves a blocked plugin the user then turned off exactly where they left it', async () => {
+    await writePlugin('a-beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^1' } });
+    await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.0.0' });
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    await disableLoadedPlugin(registry, 'alpha', { cascade: true });
+
+    // Turning off something already down writes the flag without moving it out of
+    // `needs-dependency` — the exact pair the restore pass has to read correctly.
+    await disableLoadedPlugin(registry, 'beta');
+    expect(record(registry, 'beta')?.state).toBe('needs-dependency');
+    expect(await readConfigPlugins()).toEqual({ alpha: { enabled: false }, beta: { enabled: false } });
+    dependencyEvents.length = 0;
+
+    await reloadLoadedPlugin(registry, 'alpha');
+
+    expect(record(registry, 'alpha')?.state).toBe('active');
+    // The pass does reach beta, and the flag outranks it: disabled, not active.
+    expect(record(registry, 'beta')?.state).toBe('disabled');
+    expect(registry.has('beta')).toBe(false);
+    // Not restarted, in its strongest form: the flag is read before the import, so beta's
+    // module is not even EVALUATED a second time.
+    expect(marks().evaluated.filter((id) => id === 'beta')).toHaveLength(1);
+    expect(marks().activated.filter((id) => id === 'beta')).toHaveLength(1);
+    expect(dependencyEvents).toEqual([]);
+    // Its row stops claiming an unmet dependency, because that is no longer why it is down.
+    expect(getUnmetDependencyPlugins()).toEqual([]);
+    expect(await readConfigPlugins()).toEqual({ alpha: { enabled: true }, beta: { enabled: false } });
+  });
+
+  it('never touches a plugin outside the dependent set of the one that changed', async () => {
+    const registry = await loadDiamond();
+    await disableLoadedPlugin(registry, 'alpha', { cascade: true });
+    lifecycleEvents.length = 0;
+    dependencyEvents.length = 0;
+
+    await reloadLoadedPlugin(registry, 'alpha');
+
+    // No transition at all for `solo`: an event for it means the pass left its own graph.
+    expect(record(registry, 'solo')?.state).toBe('active');
+    expect(marks().activated.filter((id) => id === 'solo')).toHaveLength(1);
+    expect(lifecycleEvents.filter((event) => event.pluginId === 'solo')).toEqual([]);
+    // `orphan` waits on something never installed, which this pass has no news about.
+    expect(record(registry, 'orphan')?.missingDependencies).toEqual([
+      { id: 'ghost', range: '^1', reason: 'absent', note: expect.stringContaining('not installed') },
+    ]);
+    expect(lifecycleEvents.filter((event) => event.pluginId === 'orphan')).toEqual([]);
+    expect(dependencyEvents.map((event) => event.pluginId)).toEqual(['beta', 'gamma', 'delta']);
+  });
+});
+
+/** `reloadLoadedPlugins`: one lane, one preflight over the whole candidate graph, one recovery.
+ *  What a per-plugin reload cannot do is swap a dependency and its dependent across a major. */
+describe('batch reload of one source', () => {
+  /** Activations minus deactivations: one live instance, never a leaked second copy. */
+  const live = (id: string) =>
+    marks().activated.filter((one) => one === id).length - marks().deactivated.filter((one) => one === id).length;
+
+  /** alpha 1.0.0 with beta 1.0.0 on `^1` — the pair an upgrade has to move together. */
+  async function loadUpgradePair(): Promise<IntegrationRegistry> {
+    await writePlugin('a-beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^1' } });
+    await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.0.0' });
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    expect(['alpha', 'beta'].map((id) => record(registry, id)?.state)).toEqual(['active', 'active']);
+    return registry;
+  }
+
+  async function writeNextMajor(betaBody = ''): Promise<void> {
+    await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '2.0.0' });
+    await writePlugin('a-beta', { id: 'beta', name: 'beta', version: '2.0.0', dependencies: { alpha: '^2' } }, betaBody);
+  }
+
+  it('upgrades a dependency and its dependent across a major, in whatever order they are asked', async () => {
+    const registry = await loadUpgradePair();
+    await writeNextMajor();
+    const toldToTearDown: string[][] = [];
+    const deactivatedDuringCallback: string[] = [];
+
+    // Asked back to front on purpose: neither plugin alone satisfies the other's range, so a
+    // per-plugin reload leaves one of them blocked whichever end you start from.
+    const result = await reloadLoadedPlugins(registry, ['beta', 'alpha'], async (ids) => {
+      toldToTearDown.push(ids);
+      deactivatedDuringCallback.push(...marks().deactivated);
+    });
+
+    expect(result).toEqual({ reloaded: ['beta', 'alpha'], skipped: [] });
+    // The callback is where the download goes, so it runs while both are still live.
+    expect(toldToTearDown).toEqual([['beta', 'alpha']]);
+    expect(deactivatedDuringCallback).toEqual([]);
+    expect(marks().deactivated).toEqual(['beta', 'alpha']);
+    expect([registry.get('alpha')?.version, registry.get('beta')?.version]).toEqual(['2.0.0', '2.0.0']);
+    expect(['alpha', 'beta'].map((id) => record(registry, id)?.state)).toEqual(['active', 'active']);
+    expect([live('alpha'), live('beta')]).toEqual([1, 1]);
+    // Dependency first on the way up, dependent last, as at boot.
+    expect(marks().activated.lastIndexOf('alpha')).toBeLessThan(marks().activated.lastIndexOf('beta'));
+    expect(getUnmetDependencyPlugins()).toEqual([]);
+  });
+
+  it('puts both previous versions back when the new dependent cannot activate', async () => {
+    const registry = await loadUpgradePair();
+    await writeNextMajor('throw new Error("beta 2.0.0 is broken");');
+
+    const failure = await reloadLoadedPlugins(registry, ['alpha', 'beta'], async () => undefined)
+      .catch((error: unknown) => error);
+
+    expect(String(failure)).toContain('previous versions restored');
+    // The whole batch goes back, not just the half that threw: alpha must not be left at
+    // 2.0.0 with a beta that declares `^1`.
+    expect([registry.get('alpha')?.version, registry.get('beta')?.version]).toEqual(['1.0.0', '1.0.0']);
+    expect(['alpha', 'beta'].map((id) => record(registry, id)?.state)).toEqual(['active', 'active']);
+    expect(registry.has('beta')).toBe(true);
+    // Recovery re-activates, so the count only proves anything net of teardowns.
+    expect([live('alpha'), live('beta')]).toEqual([1, 1]);
+  });
+
+  it.each([false, true])('keeps a timed-out batch member controllable with disabled=%s', async disabled => {
+    const registry = await loadUpgradePair();
+    await writeNextMajor('return new Promise(resolve => { globalThis.__releaseBatch = resolve; });');
+    setPluginCodeTimeoutForTesting(50);
+    await expect(reloadLoadedPlugins(registry, ['alpha', 'beta'], async () => undefined))
+      .rejects.toThrow(/recovery incomplete/);
+    expect(record(registry, 'beta')).toBeDefined();
+    if (disabled) await disableLoadedPlugin(registry, 'beta');
+    (globalThis as any).__releaseBatch();
+    delete (globalThis as any).__releaseBatch;
+    if (disabled) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(record(registry, 'beta')?.state).toBe('disabled');
+      expect(registry.has('beta')).toBe(false);
+    } else {
+      await vi.waitFor(() => expect(record(registry, 'beta')?.state).toBe('active'));
+      expect(registry.get('beta')?.version).toBe('1.0.0');
+    }
+    expect(registry.get('alpha')?.version).toBe('1.0.0');
+  });
+
+  it('never starts a target the user turned off before the batch reached it', async () => {
+    // Turning it off INSIDE the callback would deadlock — the batch holds the loader's lane
+    // for its whole run — so the decision lands the only way it can, before the call.
+    await writePlugin('a-one', { id: 'one', name: 'one', version: '1.0.0' });
+    await writePlugin('b-two', { id: 'two', name: 'two', version: '1.0.0' });
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    await disableLoadedPlugin(registry, 'two');
+    const toldToTearDown: string[][] = [];
+
+    const result = await reloadLoadedPlugins(registry, ['one', 'two'], async (ids) => {
+      toldToTearDown.push(ids);
+    });
+
+    expect(result).toEqual({ reloaded: ['one'], skipped: ['two'] });
+    // It is not even in the teardown list, so nothing downstream can bring it up.
+    expect(toldToTearDown).toEqual([['one']]);
+    expect(record(registry, 'two')?.state).toBe('disabled');
+    expect(marks().activated.filter((id) => id === 'two')).toHaveLength(1);
+    expect(marks().evaluated.filter((id) => id === 'two')).toHaveLength(1);
+    expect(record(registry, 'one')?.state).toBe('active');
+    expect(live('one')).toBe(1);
+    // A batch reload records no decision of its own, so the user's flag is all there is.
+    expect(await readConfigPlugins()).toEqual({ two: { enabled: false } });
+  });
+
+  it.each([false, true])('settles a timed-out replacement with user disabled=%s', async (disabled) => {
+    await writePlugin('alpha', { id: 'alpha', name: 'alpha', version: '1.0.0' });
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    await writePlugin('alpha', { id: 'alpha', name: 'alpha', version: '2.0.0' },
+      'return new Promise(resolve => { globalThis.__releasePlugin = resolve; });');
+    setPluginCodeTimeoutForTesting(50);
+    await expect(reloadLoadedPlugin(registry, 'alpha')).rejects.toThrow(/timed out/);
+    if (disabled) await disableLoadedPlugin(registry, 'alpha');
+    (globalThis as any).__releasePlugin();
+    delete (globalThis as any).__releasePlugin;
+    await vi.waitFor(() => expect(lifecycleEvents.filter(e => e.pluginId === 'alpha').at(-1)?.state)
+      .toBe(disabled ? 'disabled' : 'active'));
+    if (!disabled) expect(registry.get('alpha')?.version).toBe('1.0.0');
+    else {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(registry.has('alpha')).toBe(false);
+      expect((await readConfigPlugins()).alpha.enabled).toBe(false);
+    }
+  });
+
+  it('restores a dependent after its slow cleanup settles using current settings', async () => {
+    await writePlugin('alpha', { id: 'alpha', name: 'alpha', version: '1.0.0' });
+    await writePlugin('beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^1' } });
+    const file = path.join(WALNUT_HOME, 'plugins/beta/dist/server.mjs');
+    await fsp.appendFile(file, '\nlet stopped = false;\ndeactivate = () => { if (stopped) return; stopped = true; return new Promise(resolve => { globalThis.__releaseDependent = resolve; }); };\n');
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    await expect(reloadLoadedPlugin(registry, 'alpha')).rejects.toThrow(/beta.*still stopping/);
+    expect(record(registry, 'alpha')?.state).toBe('active');
+    expect(record(registry, 'beta')?.state).toBe('needs-dependency');
+    await writeConfig({ beta: { sync_interval_ms: 900 } });
+    (globalThis as any).__releaseDependent();
+    delete (globalThis as any).__releaseDependent;
+    await vi.waitFor(() => expect(record(registry, 'beta')?.state).toBe('active'));
+    expect(registry.get('beta')?.config).toEqual({ sync_interval_ms: 900 });
+  });
+
+  it('brings a blocked dependent back on the config written while it waited', async () => {
+    await writePlugin('a-beta', { id: 'beta', name: 'beta', version: '1.0.0', dependencies: { alpha: '^2' } });
+    await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '1.0.0' });
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    expect(record(registry, 'beta')?.state).toBe('needs-dependency');
+
+    // Settings edited while beta was parked, then the dependency it needs arrives as a batch.
+    await writeConfig({ beta: { sync_interval_ms: 900 } });
+    await writePlugin('z-alpha', { id: 'alpha', name: 'alpha', version: '2.0.0' });
+    const result = await reloadLoadedPlugins(registry, ['alpha'], async () => undefined);
+
+    expect(result).toEqual({ reloaded: ['alpha'], skipped: [] });
+    expect(registry.get('alpha')?.version).toBe('2.0.0');
+    expect(record(registry, 'beta')?.state).toBe('active');
+    // The batch reads config fresh, so the restore runs on 900 rather than the boot settings
+    // a blocked plugin never got to read.
+    expect(registry.get('beta')?.config).toEqual({ sync_interval_ms: 900 });
+    expect(marks().activated.filter((id) => id === 'beta')).toHaveLength(1);
+    expect(getUnmetDependencyPlugins()).toEqual([]);
   });
 });

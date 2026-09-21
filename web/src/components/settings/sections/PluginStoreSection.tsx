@@ -709,7 +709,9 @@ export function PluginStoreSection({ config, onSave }: Props) {
         ) : (
           <div className="settings-row-list">
             {installed.map((row) => {
-              const status = ROW_STATUS[row.status] ?? UNKNOWN_ROW_STATUS;
+              const status = row.state === RESTART_PENDING_STATE
+                ? { label: 'update not active', className: 'badge badge-important' }
+                : ROW_STATUS[row.status] ?? UNKNOWN_ROW_STATUS;
               // A plugin whose files an update replaced is STILL running its old code: the
               // switch stays on next to the RESTART TO ACTIVATE badge (N7).
               const isOn = row.status === 'active' || row.state === RESTART_PENDING_STATE;
@@ -736,7 +738,7 @@ export function PluginStoreSection({ config, onSave }: Props) {
               // A source whose clone is gone (`missing`) is restored from its Sources card,
               // which owns Restore; this row keeps the chip and reserves the button's space.
               const buttonMode = isUpdatable && !cloudLinked && updateState?.kind !== 'missing'
-                ? updateButtonMode(updateState, rowBusy, Boolean(pressedRows[row.id]), { siblingNames: siblingNamesOf(row, rowKey) })
+                ? updateButtonMode(updateState, rowBusy, Boolean(pressedRows[row.id]), { siblingNames: siblingNamesOf(row, rowKey), pendingActivation: row.state === RESTART_PENDING_STATE })
                 : { render: false as const };
               return (
                 <div key={row.id} className="plugin-store-entry">

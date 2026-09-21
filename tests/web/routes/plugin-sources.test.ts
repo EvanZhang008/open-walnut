@@ -580,6 +580,44 @@ describe('Plugin source check/update and the update-status cache', () => {
     }
   })
 
+  it('hot reloads running plugins after an update and reports each failure without enabling disabled plugins', async () => {
+    const { registry } = await import('../../../src/core/integration-registry.js');
+    vi.mocked(registry.has).mockImplementation(id => id !== 'disabled');
+    sourceMocks.listSources.mockResolvedValue([source('hot-source', { plugins: ['good', 'broken', 'disabled'].map(id => ({ id, dir: `/tmp/${id}` })) })]);
+    sourceMocks.updateSource.mockResolvedValue({ updated: true, toSha: 'b'.repeat(40) });
+    const reloadPlugin = vi.fn(async (id: string) => {
+      if (id === 'broken') throw new Error('previous version restored');
+      return { state: 'active' };
+    });
+    try {
+      const response = await request(app({ reloadPlugin })).post('/api/plugin-sources/hot-source/update').expect(200);
+      expect(response.body).toMatchObject({ restartRequired: true, reloaded: ['good'], failed: [{ id: 'broken', error: 'previous version restored' }] });
+      expect(reloadPlugin.mock.calls.map(([id]) => id)).toEqual(['good', 'broken']);
+      reloadPlugin.mockClear();
+      sourceMocks.updateSource.mockResolvedValue({ updated: false });
+      await request(app({ reloadPlugin })).post('/api/plugin-sources/hot-source/update').expect(200);
+      expect(reloadPlugin.mock.calls.map(([id]) => id)).toEqual(['broken']);
+    } finally {
+      vi.mocked(registry.has).mockReturnValue(false);
+      const { clearRestartPendingForTesting } = await import('../../../src/core/plugins/restart-pending.js');
+      clearRestartPendingForTesting();
+    }
+  });
+
+  it('uses one batch reload after the download and honors a concurrent disable', async () => {
+    const { registry } = await import('../../../src/core/integration-registry.js');
+    const running = new Set(['alpha', 'beta']);
+    vi.mocked(registry.has).mockImplementation(id => running.has(id));
+    sourceMocks.listSources.mockResolvedValue([source('batch-source', { plugins: ['alpha', 'beta'].map(id => ({ id, dir: `/tmp/${id}` })) })]);
+    sourceMocks.updateSource.mockImplementation(async () => { running.delete('beta'); return { updated: true, toSha: 'c'.repeat(40) }; });
+    const reloadPlugins = vi.fn(async (ids: string[]) => ({ reloaded: ids, skipped: [] }));
+    try {
+      const response = await request(app({ reloadPlugins })).post('/api/plugin-sources/batch-source/update').expect(200);
+      expect(reloadPlugins).toHaveBeenCalledExactlyOnceWith(['alpha']);
+      expect(response.body).toMatchObject({ reloaded: ['alpha'], restartRequired: false });
+    } finally { vi.mocked(registry.has).mockReturnValue(false); }
+  });
+
   it('update answers 504 past its deadline and does not mark the row current', async () => {
     const cache = cacheFor()
     sourceMocks.listSources.mockResolvedValue([source('acme-plugins')])

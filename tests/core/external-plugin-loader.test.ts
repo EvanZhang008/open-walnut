@@ -64,6 +64,7 @@ import { IntegrationRegistry } from '../../src/core/integration-registry.js';
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getRunningPackageRoot, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
 import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js';
 import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
+import { readPluginWebModule } from '../../src/core/plugins/plugin-web-module.js';
 
 // ── Helpers ──
 
@@ -436,6 +437,102 @@ export default function register(api) {
       expect.objectContaining({ id: 'preflight', state: 'active' }),
     ]));
     expect(await readActivationCount('preflight')).toBe(1);
+  });
+
+  it('preserves a running plugin when replacement code cannot be parsed', async () => {
+    const dir = path.join(tmpDir, 'plugins', 'syntax-preflight');
+    await writeCountingUnifiedPlugin(dir, 'syntax-preflight');
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    const original = registry.get('syntax-preflight');
+    await fsp.writeFile(path.join(dir, 'dist/server.mjs'), 'export function activate( {');
+
+    await expect(reloadLoadedPlugin(registry, 'syntax-preflight')).rejects.toThrow();
+
+    expect(registry.get('syntax-preflight')).toBe(original);
+    expect(await readActivationCount('syntax-preflight')).toBe(1);
+  });
+
+  it('restores the loaded generation after replacement activation fails', async () => {
+    const dir = path.join(tmpDir, 'plugins', 'recover-loaded');
+    await writeCountingUnifiedPlugin(dir, 'recover-loaded');
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    await fsp.writeFile(path.join(dir, 'dist/server.mjs'), 'export function activate() { throw new Error("candidate failed"); }');
+
+    await expect(reloadLoadedPlugin(registry, 'recover-loaded')).rejects.toThrow('previous version restored');
+
+    expect(registry.has('recover-loaded')).toBe(true);
+    expect(getPluginLifecycleRecords(registry).find(p => p.id === 'recover-loaded')?.state).toBe('active');
+    expect(await readActivationCount('recover-loaded')).toBe(2);
+    await fsp.writeFile(path.join(dir, 'dist/server.mjs'), 'export function activate() {}');
+    expect((await reloadLoadedPlugin(registry, 'recover-loaded')).state).toBe('active');
+  });
+
+  it('keeps web bytes paired with the running generation through rejected reloads', async () => {
+    const dir = path.join(tmpDir, 'plugins', 'paired-web');
+    await writeCountingUnifiedPlugin(dir, 'paired-web');
+    const manifestFile = path.join(dir, 'manifest.json');
+    const manifest = JSON.parse(await fsp.readFile(manifestFile, 'utf8'));
+    await fsp.writeFile(manifestFile, JSON.stringify({ ...manifest, web: 'dist/web.mjs' }));
+    const webFile = path.join(dir, 'dist/web.mjs');
+    const original = 'export function activate() { return "generation-one" }';
+    await fsp.writeFile(webFile, original);
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    const first = await readPluginWebModule(registry.get('paired-web')!);
+    await fsp.writeFile(webFile, 'export function activate( {');
+
+    await expect(reloadLoadedPlugin(registry, 'paired-web')).rejects.toThrow();
+    expect(await readPluginWebModule(registry.get('paired-web')!)).toEqual(first);
+    expect(await readActivationCount('paired-web')).toBe(1);
+
+    await fsp.writeFile(webFile, 'export function activate() { return "generation-two" }');
+    await reloadLoadedPlugin(registry, 'paired-web');
+    expect((await readPluginWebModule(registry.get('paired-web')!)).hash).not.toBe(first.hash);
+  });
+
+  it('keeps server capabilities available when the initial web entry is missing', async () => {
+    const dir = path.join(tmpDir, 'plugins', 'missing-web');
+    await writeCountingUnifiedPlugin(dir, 'missing-web');
+    const manifestFile = path.join(dir, 'manifest.json');
+    const manifest = JSON.parse(await fsp.readFile(manifestFile, 'utf8'));
+    await fsp.writeFile(manifestFile, JSON.stringify({ ...manifest, web: 'dist/missing.mjs' }));
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    expect(registry.has('missing-web')).toBe(true);
+    expect(await readActivationCount('missing-web')).toBe(1);
+    await expect(readPluginWebModule(registry.get('missing-web')!)).rejects.toThrow('ENOENT');
+  });
+
+  it('reenables the loaded native generation without importing replacement code', async () => {
+    const dir = path.join(tmpDir, 'plugins', 'native-reenable');
+    await writeCountingUnifiedPlugin(dir, 'native-reenable');
+    await fsp.writeFile(path.join(dir, 'addon.node'), 'not a real addon');
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    await expect(reloadLoadedPlugin(registry, 'native-reenable')).rejects.toThrow(/native addon/);
+    await disableLoadedPlugin(registry, 'native-reenable');
+    await fsp.writeFile(path.join(dir, 'dist/server.mjs'), 'throw new Error("must not import new native code")');
+    expect((await reloadLoadedPlugin(registry, 'native-reenable')).state).toBe('active');
+    expect(await readActivationCount('native-reenable')).toBe(2);
+  });
+
+  it('reloads relative JavaScript imports instead of retaining Node module cache entries', async () => {
+    const dir = path.join(tmpDir, 'plugins', 'relative-code');
+    await writeCountingUnifiedPlugin(dir, 'relative-code');
+    await fsp.writeFile(path.join(dir, 'dist/value.mjs'), 'export const value = "one"');
+    await fsp.writeFile(path.join(dir, 'dist/server.mjs'), `
+import { value } from './value.mjs';
+export function activate(walnut) { walnut.http.route('GET', '/value', () => ({ json: { value } })); }
+`);
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    const app = express().use('/api/plugins', createPluginRouteDispatcher(registry));
+    expect((await request(app).get('/api/plugins/relative-code/value')).body).toEqual({ value: 'one' });
+    await fsp.writeFile(path.join(dir, 'dist/value.mjs'), 'export const value = "two"');
+    await reloadLoadedPlugin(registry, 'relative-code');
+    expect((await request(app).get('/api/plugins/relative-code/value')).body).toEqual({ value: 'two' });
   });
 
   it('a plugin whose activate keeps throwing stays `failed` with its error, and recovers on its own once fixed', async () => {

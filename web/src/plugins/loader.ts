@@ -1,57 +1,42 @@
-import { apiGet, apiGetText } from '@/api/client'
+import { apiGet } from '@/api/client'
 import { wsClient } from '@/api/ws'
 import { PLUGINS_CHANGED_EVENT } from '@/utils/plugin-events'
 import { coalesceRefresh } from '@/utils/coalesce-refresh'
 import { log } from '@/utils/log'
-import { appRegistry } from '@/apps/registry'
 import { refreshAppsCatalogue } from '@/hooks/useApps'
-import { createWebPluginApi } from './host-api'
-import { WebPluginContext, disposable } from './disposable'
-import { pluginUiRegistry } from './registry'
+import {
+  isLoaded,
+  loadedHash,
+  managedPluginIds,
+  setGenerationRefreshHandler,
+  resetGenerationsForTesting,
+  runningModules,
+  swapPlugin,
+  sweepUnownedRows,
+  unload,
+  type RefreshError,
+} from './generation'
 import {
   getWebPluginRuntimeSnapshot,
   publishWebPluginRuntime as publish,
   resetWebPluginRuntime,
   subscribeWebPluginRuntime,
 } from './runtime-store'
-import type {
-  Disposable,
-  PluginRuntimeResponse,
-  PluginWebModuleDescriptor,
-  WalnutWebApiHost,
-} from './types'
+import type { PluginRuntimeResponse, PluginWebModuleDescriptor } from './types'
 
 // The snapshot itself lives in the leaf store so a consumer that only needs "which plugins are
 // active" is not forced to import this module's whole view graph. Re-exported here because the
 // loader was the original home and every existing caller (and test) imports it from here.
 export { getWebPluginRuntimeSnapshot, subscribeWebPluginRuntime }
 export type { WebPluginRuntimeSnapshot } from './runtime-store'
+export {
+  setWebPluginActivationTimeoutForTesting,
+  setWebPluginCleanupBudgetForTesting,
+  setWebPluginImporterForTesting,
+} from './generation'
 
-interface WebPluginModule {
-  activate?: (api: WalnutWebApiHost) => void | Disposable | Promise<void | Disposable>
-  deactivate?: () => void | Promise<void>
-  default?:
-    | ((api: WalnutWebApiHost) => void | Disposable | Promise<void | Disposable>)
-    | {
-        activate(api: WalnutWebApiHost): void | Disposable | Promise<void | Disposable>
-        deactivate?(): void | Promise<void>
-      }
-}
-
-interface LoadedPlugin {
-  descriptor: PluginWebModuleDescriptor
-  context: WebPluginContext
-}
-
-type ModuleImporter = (
-  source: string,
-  descriptor: PluginWebModuleDescriptor,
-) => Promise<WebPluginModule>
-
-const loaded = new Map<string, LoadedPlugin>()
 let initialized = false
 let operationTail: Promise<void> = Promise.resolve()
-let activationTimeoutMs = 10_000
 
 /**
  * Backoff for a failed refresh, and why every failure retries.
@@ -74,7 +59,9 @@ let activationTimeoutMs = 10_000
  */
 const REFRESH_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000]
 let firstRefreshSettled = false
-let retriesUsed = 0
+/** Two budgets, because one bad plugin spending the ladder must not disarm the runtime's retry. */
+let runtimeRetries = 0
+let moduleRetries = 0
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 
 function cancelRefreshRetry(): void {
@@ -88,9 +75,11 @@ function cancelRefreshRetry(): void {
  * `refreshWebPlugins` appends to `operationTail`, and a refresh that awaited its own retry would
  * be waiting on a promise queued behind itself.
  */
-function scheduleRefreshRetry(): void {
-  const delay = REFRESH_BACKOFF_MS[retriesUsed] ?? REFRESH_BACKOFF_MS[REFRESH_BACKOFF_MS.length - 1]!
-  retriesUsed += 1
+function scheduleRefreshRetry(kind: 'runtime' | 'module'): void {
+  const used = kind === 'runtime' ? runtimeRetries : moduleRetries
+  const delay = REFRESH_BACKOFF_MS[used] ?? REFRESH_BACKOFF_MS[REFRESH_BACKOFF_MS.length - 1]!
+  if (kind === 'runtime') runtimeRetries += 1
+  else moduleRetries += 1
   cancelRefreshRetry()
   retryTimer = setTimeout(() => {
     retryTimer = null
@@ -98,108 +87,13 @@ function scheduleRefreshRetry(): void {
   }, delay)
 }
 
-const browserImporter: ModuleImporter = async (source, descriptor) => {
-  const blob = new Blob([
-    source,
-    `\n//# sourceURL=walnut-plugin://${descriptor.id}/${descriptor.hash}.mjs\n`,
-  ], { type: 'text/javascript' })
-  const url = URL.createObjectURL(blob)
-  try {
-    return await import(/* @vite-ignore */ url) as WebPluginModule
-  } finally {
-    URL.revokeObjectURL(url)
-  }
-}
-
-let moduleImporter: ModuleImporter = browserImporter
-
-function functionsFrom(module: WebPluginModule): {
-  activate: ((api: WalnutWebApiHost) => void | Disposable | Promise<void | Disposable>) | null
-  deactivate: (() => void | Promise<void>) | null
-} {
-  if (typeof module.activate === 'function') {
-    return {
-      activate: module.activate,
-      deactivate: typeof module.deactivate === 'function' ? module.deactivate : null,
-    }
-  }
-  if (typeof module.default === 'function') {
-    return { activate: module.default, deactivate: null }
-  }
-  if (module.default && typeof module.default.activate === 'function') {
-    return {
-      activate: module.default.activate.bind(module.default),
-      deactivate: typeof module.default.deactivate === 'function'
-        ? module.default.deactivate.bind(module.default)
-        : null,
-    }
-  }
-  return { activate: null, deactivate: null }
-}
-
-async function unload(pluginId: string): Promise<void> {
-  const current = loaded.get(pluginId)
-  if (!current) {
-    pluginUiRegistry.removeOwner(pluginId)
-    appRegistry.removeOwner(pluginId)
-    return
-  }
-  loaded.delete(pluginId)
-  try {
-    await current.context.dispose()
-  } finally {
-    pluginUiRegistry.removeOwner(pluginId)
-    appRegistry.removeOwner(pluginId)
-  }
-}
-
-async function activateWithDeadline(
-  activate: (api: WalnutWebApiHost) => void | Disposable | Promise<void | Disposable>,
-  api: WalnutWebApiHost,
-  pluginId: string,
-): Promise<void | Disposable> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      Promise.resolve(activate(api)),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(
-          `Web Plugin "${pluginId}" activation timed out after ${activationTimeoutMs}ms`,
-        )), activationTimeoutMs)
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
-async function load(descriptor: PluginWebModuleDescriptor): Promise<void> {
-  const context = new WebPluginContext()
-  try {
-    const source = await apiGetText(descriptor.url, undefined, { timeoutMs: 15_000 })
-    const module = await moduleImporter(source, descriptor)
-    const functions = functionsFrom(module)
-    if (!functions.activate) throw new Error('Web Plugin module must export activate(walnut)')
-    const activation = await activateWithDeadline(
-      functions.activate,
-      createWebPluginApi(descriptor.id, descriptor.name, context),
-      descriptor.id,
-    )
-    if (activation) context.own(activation)
-    if (functions.deactivate) context.own(disposable(functions.deactivate))
-    loaded.set(descriptor.id, { descriptor, context })
-  } catch (error) {
-    await context.dispose().catch(() => undefined)
-    pluginUiRegistry.removeOwner(descriptor.id)
-    appRegistry.removeOwner(descriptor.id)
-    throw error
-  }
-}
+/** Mid-reload states only. `needs-dependency` is a cascade disable, so its UI has to go. */
+const RELOADING_STATES = new Set(['activating', 'disposing'])
 
 async function refreshNow(): Promise<void> {
   const previous = getWebPluginRuntimeSnapshot()
   publish({ loading: true })
-  const errors: Array<{ id: string; error: string }> = []
+  const errors: RefreshError[] = []
   // Seeded from the LAST AUTHORITATIVE answer, not from empty. A failed fetch (a 15 s timeout,
   // a WS reconnect blip) must not read as "no plugins are installed": consumers gate on this
   // list, so an empty publish hides a plugin-gated app and can evict someone standing on its
@@ -209,58 +103,53 @@ async function refreshNow(): Promise<void> {
   let tombstones: Array<{ id: string; reason: string }> = previous.tombstones
   let modules: PluginWebModuleDescriptor[] = previous.modules
   let runtimeFailed = false
+  let moduleRetryWanted = false
   try {
     const response = await apiGet<PluginRuntimeResponse>('/api/plugin-runtime', undefined, { timeoutMs: 15_000 })
     plugins = response.plugins ?? []
     tombstones = response.tombstones ?? []
     modules = response.modules ?? []
-    errors.push(...(response.moduleErrors ?? []))
-    const expected = new Map(modules.map((descriptor) => [descriptor.id, descriptor]))
+    const moduleErrors = response.moduleErrors ?? []
+    errors.push(...moduleErrors)
+    const offered = new Set(modules.map((descriptor) => descriptor.id))
+    const states = new Map(plugins.map((entry) => [entry.id, entry.state]))
+    const failedToBuild = new Set(moduleErrors.map((entry) => entry.id))
 
-    for (const [pluginId, current] of [...loaded]) {
-      const next = expected.get(pluginId)
-      if (next && next.hash === current.descriptor.hash) continue
-      try {
-        await unload(pluginId)
-      } catch (error) {
-        errors.push({
-          id: pluginId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-        log.error('plugins', 'native Web Plugin cleanup failed', {
-          pluginId,
-          error: errors[errors.length - 1].error,
-        })
-      }
+    for (const pluginId of managedPluginIds()) {
+      if (offered.has(pluginId)) continue
+      const state = states.get(pluginId) ?? ''
+      // Keep the running UI only while the omission is explained: a reload in flight, or a build
+      // that failed. An active plugin offering no module and reporting no error dropped its web
+      // entry on purpose, so keeping the old one would pin a UI the plugin no longer ships.
+      if (RELOADING_STATES.has(state)) continue
+      if (state === 'active' && failedToBuild.has(pluginId)) continue
+      await unload(pluginId, errors)
     }
 
     for (const descriptor of modules) {
-      if (loaded.get(descriptor.id)?.descriptor.hash === descriptor.hash) continue
-      try {
-        await load(descriptor)
-      } catch (error) {
-        errors.push({
-          id: descriptor.id,
-          error: error instanceof Error ? error.message : String(error),
-        })
-        log.error('plugins', 'native Web Plugin activation failed', {
-          pluginId: descriptor.id,
-          error: errors[errors.length - 1].error,
-        })
-      }
+      if (loadedHash(descriptor.id) === descriptor.hash) continue
+      if (await swapPlugin(descriptor, errors)) moduleRetryWanted = true
     }
+
+    // Nothing is running under these ids, so their web entries go with them.
+    for (const descriptor of modules) {
+      if (!isLoaded(descriptor.id)) sweepUnownedRows(descriptor.id)
+    }
+    modules = runningModules(modules)
   } catch (error) {
     runtimeFailed = true
     errors.push({ id: 'runtime', error: error instanceof Error ? error.message : String(error) })
-    log.warn('plugins', 'failed to refresh native Web Plugins', { error: errors[0].error })
+    log.warn('plugins', 'failed to refresh native Web Plugins', { error: errors[errors.length - 1]!.error })
   } finally {
-    if (!runtimeFailed) {
-      // Any successful refresh, from any trigger, ends the retry loop.
-      firstRefreshSettled = true
-      retriesUsed = 0
-      cancelRefreshRetry()
-    }
-    const retrying = runtimeFailed && retriesUsed < REFRESH_BACKOFF_MS.length
+    // The runtime answer landing ends the initial unready window, whatever the modules did with it.
+    if (!runtimeFailed) firstRefreshSettled = true
+    // Each budget resets only on its own success, or a failure would never run out of tries.
+    if (!runtimeFailed) runtimeRetries = 0
+    if (!moduleRetryWanted) moduleRetries = 0
+    const runtimeRetrying = runtimeFailed && runtimeRetries < REFRESH_BACKOFF_MS.length
+    const moduleRetrying = moduleRetryWanted && moduleRetries < REFRESH_BACKOFF_MS.length
+    const retrying = runtimeRetrying || moduleRetrying
+    if (!retrying) cancelRefreshRetry()
     // `ready` never goes back to false once it has been true: consumers evict on an empty list.
     publish({
       ready: firstRefreshSettled || !retrying,
@@ -270,11 +159,12 @@ async function refreshNow(): Promise<void> {
       modules,
       errors,
     })
-    if (retrying) scheduleRefreshRetry()
+    if (retrying) scheduleRefreshRetry(runtimeRetrying ? 'runtime' : 'module')
   }
 }
 
 export function refreshWebPlugins(): Promise<void> {
+  setGenerationRefreshHandler(() => { void refreshWebPlugins() })
   operationTail = operationTail.catch(() => undefined).then(refreshNow)
   return operationTail
 }
@@ -316,7 +206,6 @@ export async function refreshWebPluginsWithCommands(): Promise<void> {
 export function initWebPlugins(): Promise<void> {
   if (initialized) return operationTail
   initialized = true
-  const refresh = () => { void refreshWebPlugins() }
   // A plugin came, went, or reloaded — its commands/skills changed with it. One update
   // announces itself several times within a second (a WS event per reloaded plugin, then
   // the client's own plugins-changed); they collapse into one catalogue read (N2-10).
@@ -331,20 +220,11 @@ export function initWebPlugins(): Promise<void> {
 }
 
 export async function disposeWebPluginsForTesting(): Promise<void> {
-  for (const pluginId of [...loaded.keys()]) await unload(pluginId)
+  await resetGenerationsForTesting()
   initialized = false
-  moduleImporter = browserImporter
-  activationTimeoutMs = 10_000
   cancelRefreshRetry()
   firstRefreshSettled = false
-  retriesUsed = 0
+  runtimeRetries = 0
+  moduleRetries = 0
   resetWebPluginRuntime()
-}
-
-export function setWebPluginImporterForTesting(importer: ModuleImporter): void {
-  moduleImporter = importer
-}
-
-export function setWebPluginActivationTimeoutForTesting(timeoutMs: number): void {
-  activationTimeoutMs = timeoutMs
 }

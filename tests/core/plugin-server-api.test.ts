@@ -30,6 +30,7 @@ import { activate as activateCalendar } from '../../src/integrations/calendar/in
 import { activate as activateMsTodo } from '../../src/integrations/ms-todo/index.js'
 import { activate as activateJira } from '../../src/integrations/jira/index.js'
 import { disposeCoreServices, publishCoreService } from '../../src/core/platform-services.js'
+import { getServiceEntry } from '../../src/core/plugins/service-registry.js'
 import { createMockCalendarSource } from '../helpers/mock-calendar-source.js'
 import { createMockPlugin, createTestPluginApi } from './plugin-test-utils.js'
 
@@ -324,6 +325,83 @@ describe('createServerPluginApi', () => {
 
     expect(seen).toEqual(['consumer-plugin'])
     expect(api.services.caller()).toBeUndefined()
+  })
+
+  /**
+   * The reload bug in one test. `publishService` REPLACES whatever holds the key and `own()`
+   * only notices the context is gone afterwards, so a late publish from the REPLACED
+   * generation used to overwrite the live instance's row and then delete it by token — a
+   * reload that ended with no service at all and a consumer told the running plugin is down.
+   */
+  it('refuses a late publish from a replaced generation instead of overwriting the live one', async () => {
+    const first = setup()
+    first.api.services.publish('greeter', { greet: () => 'first' })
+    await first.context.dispose()
+
+    const second = setup()
+    second.api.services.publish('greeter', { greet: () => 'second' })
+    expect(getServiceEntry('sample-plugin:greeter')?.api.greet()).toBe('second')
+
+    expect(() => first.api.services.publish('greeter', { greet: () => 'late first' }))
+      .toThrow('was disposed')
+
+    expect(getServiceEntry('sample-plugin:greeter')?.api.greet()).toBe('second')
+  })
+
+  it('refuses every registration from a disposed context before it touches the host', async () => {
+    const { api, context, collected } = setup()
+    const timerHandler = vi.fn()
+    await context.dispose()
+
+    const refused = [
+      () => api.registry.tool({ name: 'inspect', description: 'Inspect', execute: async () => 'ok' }),
+      () => api.registry.cronAction('collect', 'Collect', async () => ({ status: 'ok' as const })),
+      () => api.registry.wsMethod('ping', async () => ({})),
+      () => api.registry.agent({ id: 'helper', name: 'Helper', runner: 'embedded' as const }),
+      () => api.registry.provider('custom', {
+        sendMessage: async () => ({ content: [], stopReason: 'end_turn' }),
+        sendMessageStream: async () => ({ content: [], stopReason: 'end_turn' }),
+      }),
+      () => api.registry.agentContext('Sample Plugin is available.'),
+      () => api.http.route('GET', '/status', async () => ({ json: {} })),
+      () => api.events.on('task:', vi.fn()),
+      () => api.config.onChange(vi.fn()),
+      () => api.services.onChange(vi.fn()),
+      () => api.letters.onAnswered(vi.fn()),
+      () => api.timers.timeout(timerHandler, 1),
+      () => api.timers.interval(timerHandler, 1),
+    ]
+    for (const attempt of refused) expect(attempt).toThrow('was disposed')
+
+    // Nothing landed, and no timer was armed: the guard runs before the write, not after it.
+    expect(collected.tools).toEqual([])
+    expect(collected.httpRoutes).toEqual([])
+    expect(collected.agentContext).toBeNull()
+    expect(getAction('sample-plugin:collect')).toBeUndefined()
+    expect(_getRpcMethodForTesting('sample-plugin:ping')).toBeUndefined()
+    await expect(getAgent('sample-plugin:helper')).resolves.toBeUndefined()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(timerHandler).not.toHaveBeenCalled()
+  })
+
+  it('keeps a teardown able to log and persist while refusing new registrations', async () => {
+    const { api, context, collected } = setup()
+    const observed: { wrote?: boolean; refused?: string } = {}
+    context.onDispose(async () => {
+      // The signal is already aborted here, and this is exactly when a plugin flushes state.
+      // Storage is owned by the api bag and disposed LAST, so it is still open.
+      await api.storage.writeJson('final.json', { flushed: true })
+      observed.wrote = true
+      api.log.info('plugin flushed its state')
+      try { api.registry.tool({ name: 'late', description: 'Late', execute: async () => 'x' }) }
+      catch (error) { observed.refused = error instanceof Error ? error.message : String(error) }
+    })
+
+    await context.dispose()
+
+    expect(observed.wrote).toBe(true)
+    expect(observed.refused).toContain('was disposed')
+    expect(collected.tools).toEqual([])
   })
 
   it('logs unsafe access once', () => {

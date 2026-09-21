@@ -92,6 +92,7 @@ export interface PluginManagerOptions {
   activationTimeoutMs?: number
   deactivationTimeoutMs?: number
   onStateChange?(record: PluginLifecycleRecord): void
+  onStoppingSettled?(pluginId: string): void | Promise<void>
   onActivationStart?(pluginId: string): void | Promise<void>
   onActivationEnd?(
     pluginId: string,
@@ -103,6 +104,8 @@ export interface PluginManagerOptions {
 export class PluginManager implements Disposable {
   private readonly plugins = new Map<string, ManagedPlugin>()
   private readonly operationTails = new Map<string, Promise<unknown>>()
+  /** Contexts whose teardown the host stopped waiting for. Survives `forget()`'s record delete on purpose — a reinstall must not run next to the old copy, and nothing else remembers. */
+  private readonly stoppingContexts = new Map<string, Set<PluginContext>>()
   private readonly activationOrder: string[] = []
   private readonly safeMode: boolean
   private readonly quarantineAfter: number
@@ -181,6 +184,20 @@ export class PluginManager implements Disposable {
     return plugin ? this.toRecord(plugin) : undefined
   }
 
+  /** Is a torn-down instance of `id` still finishing? Pruned lazily on read (only its own promise can un-stick it), never waits, never sees another id. */
+  isStopping(id: string): boolean {
+    const abandoned = this.stoppingContexts.get(id)
+    if (!abandoned) return false
+    for (const context of abandoned) {
+      if (!context.hasPendingWork) abandoned.delete(context)
+    }
+    if (abandoned.size === 0) {
+      this.stoppingContexts.delete(id)
+      return false
+    }
+    return true
+  }
+
   list(): PluginLifecycleRecord[] {
     return Array.from(this.plugins.values(), (plugin) => this.toRecord(plugin))
   }
@@ -217,12 +234,16 @@ export class PluginManager implements Disposable {
     return this.runExclusive(id, async () => {
       this.assertUsable()
       const plugin = this.require(id)
-      try {
-        await this.disableManaged(plugin)
-      } finally {
-        this.plugins.delete(id)
-        this.forgetActivation(id)
-      }
+      // A teardown that FAILED keeps its record, which reverses the old always-delete: the
+      // caller's recovery step looks the plugin up (the loader's reload preflight does), and
+      // deleting here handed it a 404 with nothing left to retry while the id stayed refused.
+      // `disableManaged` already parked it in `disabled` with the error, so retrying `forget`
+      // is a no-op teardown that then removes it.
+      await this.disableManaged(plugin)
+      // `stoppingContexts` deliberately survives this delete: the reinstalled copy must wait
+      // for the old teardown, and nothing else remembers it once the record is gone.
+      this.plugins.delete(id)
+      this.forgetActivation(id)
     })
   }
 
@@ -269,7 +290,7 @@ export class PluginManager implements Disposable {
         if (liveState && context !== null && !plugin.deactivateInvoked) {
           // The lifecycle queue is wedged; invoke deactivate once without extending shutdown.
           try {
-            const deactivation = this.invokeDeactivate(plugin)
+            const deactivation = this.invokeDeactivate(plugin, context)
             if (deactivation && typeof deactivation.catch === 'function') {
               void deactivation.catch((deactivationError) => {
                 const message = `deactivate failed after shutdown timeout: ${deactivationError instanceof Error ? deactivationError.message : String(deactivationError)}`
@@ -286,6 +307,7 @@ export class PluginManager implements Disposable {
         }
         if (liveState) {
           plugin.context = null
+          this.rememberStopping(plugin.definition.id, context)
           this.forgetActivation(plugin.definition.id)
           plugin.error = shutdownErrors.map((item) => item instanceof Error ? item.message : String(item)).join('; ')
           plugin.reason = 'Plugin manager disposal did not settle'
@@ -334,6 +356,12 @@ export class PluginManager implements Disposable {
   private async activateManaged(plugin: ManagedPlugin): Promise<PluginLifecycleRecord> {
     this.assertUsable()
     if (plugin.state === 'active') return this.toRecord(plugin)
+    // Before any state mutation, so this never spends the plugin's failure budget: two generations under one id share every registry row, timer and outside account, and the loser's teardown withdraws the winner's.
+    if (this.isStopping(plugin.definition.id)) {
+      throw new Error(
+        `Plugin "${plugin.definition.id}" cannot activate yet: a previous instance is still stopping`,
+      )
+    }
     if (this.safeMode && !plugin.definition.builtin) {
       throw new Error(`Plugin "${plugin.definition.id}" cannot activate while Safe Mode is enabled`)
     }
@@ -382,6 +410,8 @@ export class PluginManager implements Disposable {
         plugin.error = plugin.error ? `${plugin.error}; ${cleanupMessage}` : cleanupMessage
       }
       plugin.context = null
+      // The likeliest leftover: an activation that blew its deadline is still running, and so may its disposables.
+      this.rememberStopping(plugin.definition.id, context)
       this.forgetActivation(plugin.definition.id)
       if (cancelled) {
         plugin.reason ??= 'Plugin manager disposed during activation'
@@ -418,12 +448,16 @@ export class PluginManager implements Disposable {
       settledActivationDisposed = true
       try {
         const result = settledActivation.dispose()
-        if (result && typeof result.catch === 'function') void result.catch(() => undefined)
+        // Disposed BY HAND, outside the store (a timed-out activation's lifetime was never
+        // `own()`ed), so this is the one cleanup promise nothing else would count.
+        if (result && typeof result.then === 'function') context.trackCleanup(result)
       } catch {
         // A timed-out activation can only be cleaned up best-effort.
       }
     }
     const pending = Promise.resolve(plugin.definition.activate(context))
+    // The deadline below abandons this promise without cancelling it, so the context keeps counting it and the next activation of this id refuses instead of racing it.
+    context.trackActivation(pending)
     void pending.then((activation) => {
       settledActivation = activation
       disposeAbandonedActivation()
@@ -450,10 +484,14 @@ export class PluginManager implements Disposable {
     }
   }
 
-  private invokeDeactivate(plugin: ManagedPlugin): void | Promise<void> {
+  private invokeDeactivate(plugin: ManagedPlugin, context: PluginContext | null): void | Promise<void> {
     if (plugin.deactivateInvoked) return
     plugin.deactivateInvoked = true
-    return plugin.definition.deactivate?.()
+    const deactivation = plugin.definition.deactivate?.()
+    // The REAL promise, not the deadline race that wraps it: a `deactivate` still running owns
+    // the plugin module's own state, which is the one thing a second instance cannot share.
+    if (deactivation && context) context.trackCleanup(deactivation)
+    return deactivation
   }
 
   private async teardownManaged(
@@ -471,7 +509,7 @@ export class PluginManager implements Disposable {
           plugin.definition.id,
           'deactivate',
           deadline,
-          () => this.invokeDeactivate(plugin),
+          () => this.invokeDeactivate(plugin, context),
           errors,
         )
       : false
@@ -589,8 +627,11 @@ export class PluginManager implements Disposable {
     const entries = missing.map((entry) => ({ ...entry }))
     if (plugin.state === 'active' || plugin.state === 'activating') {
       this.setState(plugin, 'disposing')
-      const errors = await this.teardownManaged(plugin, plugin.context)
+      // Captured before the teardown clears it: `block` exists so the loader brings the plugin back, so a hung teardown here matters as much as `disable`'s.
+      const context = plugin.context
+      const errors = await this.teardownManaged(plugin, context)
       plugin.context = null
+      this.rememberStopping(plugin.definition.id, context)
       this.forgetActivation(plugin.definition.id)
       plugin.error = errors.length > 0
         ? errors.map((error) => error instanceof Error ? error.message : String(error)).join('; ')
@@ -619,8 +660,10 @@ export class PluginManager implements Disposable {
     }
 
     this.setState(plugin, 'disposing')
-    const errors = await this.teardownManaged(plugin, plugin.context)
+    const context = plugin.context
+    const errors = await this.teardownManaged(plugin, context)
     plugin.context = null
+    this.rememberStopping(plugin.definition.id, context)
     this.forgetActivation(plugin.definition.id)
     plugin.reason = undefined
     plugin.error = errors.length > 0
@@ -654,6 +697,18 @@ export class PluginManager implements Disposable {
     } catch {
       // Observability must not change lifecycle outcomes.
     }
+  }
+
+  /** Called at the END of every teardown with the context captured BEFORE it (teardown clears `plugin.context`); a teardown that really finished stores nothing. */
+  private rememberStopping(id: string, context: PluginContext | null): void {
+    if (!context || !context.hasPendingWork) return
+    const abandoned = this.stoppingContexts.get(id) ?? new Set<PluginContext>()
+    if (abandoned.has(context)) return
+    abandoned.add(context)
+    this.stoppingContexts.set(id, abandoned)
+    void context.quiet().then(async () => {
+      if (!this.disposed && !this.isStopping(id)) await this.options.onStoppingSettled?.(id)
+    }).catch(() => undefined)
   }
 
   private rememberActivation(id: string): void {

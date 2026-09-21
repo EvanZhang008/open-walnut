@@ -19,12 +19,19 @@
  * - A blocked plugin's stated reason is refreshed on every restore pass, including the
  *   passes that fail. A row that still says "not installed" after the user installed the
  *   thing (at the wrong version) is worse than no row at all.
+ * - A restore pass visits transitive dependents in LOAD order, never outward from the
+ *   changed plugin: see `retryUnmetDependents`.
  */
 
 import type { IntegrationRegistry } from '../integration-registry.js'
 import type { PluginManifest } from '../integration-types.js'
 import { bus } from '../event-bus.js'
-import { buildDepGraph, dependentsOf, dependentsTeardownOrder, type DepGraph } from './dep-graph.js'
+import {
+  buildDepGraph,
+  dependentsTeardownOrder,
+  topoSortStable,
+  type DepGraph,
+} from './dep-graph.js'
 import { isFullVersion, satisfiesDependencyRange } from './semver.js'
 import type { MissingDependency, PluginManager } from './plugin-manager.js'
 
@@ -265,9 +272,11 @@ export async function blockDependents(
  *
  * Only ever upgrades `needs-dependency` → active: a plugin that is off, broken or
  * unconfigured is left exactly where it is, so this can never grow into a cascade that
- * restarts half the process. `visited` makes a diamond (two paths to the same dependent)
- * cost one attempt instead of two, and the queue only grows with plugins that came back,
- * so the whole walk is bounded by the plugin count.
+ * restarts half the process. The walk is ORDERED, not outward: taken breadth-first from
+ * `changedId`, a shortcut edge (a dependent of both `alpha` and the `gamma` between them)
+ * makes a deep dependent a first-level one, so its single attempt is spent while `gamma` is
+ * still down and it is never reconsidered — and descendants of a dependent that did not come
+ * back keep naming `alpha` when the thing in their way is now `gamma`'s own state.
  */
 export async function retryUnmetDependents(
   gate: DependencyGate,
@@ -275,37 +284,36 @@ export async function retryUnmetDependents(
   restore: DependencyRestore,
 ): Promise<number> {
   const graph = buildRegistryDepGraph(gate.manifests)
-  const visited = new Set<string>([changedId])
-  const queue = [changedId]
+  // Teardown order reversed: the same transitive set, ancestors before descendants.
+  const ids = dependentsTeardownOrder(graph, changedId).reverse()
+  if (ids.length === 0) return 0
+  // A cycle member has to be told it is in a cycle, exactly as at boot.
+  const cycleMembers = new Set(topoSortStable(graph).residue)
   let restored = 0
 
-  while (queue.length > 0) {
-    const currentId = queue.shift()!
-    for (const dependentId of dependentsOf(graph, currentId)) {
-      if (visited.has(dependentId)) continue
-      visited.add(dependentId)
-      if (gate.manager.get(dependentId)?.state !== 'needs-dependency') continue
-      const manifest = gate.manifests.get(dependentId)
-      const source = restore.sources.get(dependentId)
-      if (!manifest || !source) continue
-      const stillMissing = resolveMissingDependencies(manifest, gate)
-      if (stillMissing.length > 0) {
-        // Re-block rather than skip: the plugin stays exactly where it is, but its reason
-        // now describes what is true. `block` skips teardown for a plugin that is not
-        // running, so this costs one state notification.
-        const record = await gate.manager.block(dependentId, stillMissing)
-        recordUnmetDependencies(dependentId, record.name, stillMissing)
-        continue
-      }
-      // Same single-node path as a reload, minus the config write: nothing about the
-      // dependent's own enabled flag changed, so nothing about it should be rewritten.
-      await gate.manager.forget(dependentId)
-      await restore.loadOne(source, manifest)
-      if (gate.manager.get(dependentId)?.state !== 'active') continue
-      restored++
-      emitDependencyChanged(dependentId, currentId, 'restored')
-      queue.push(dependentId)
+  for (const dependentId of ids) {
+    if (gate.manager.get(dependentId)?.state !== 'needs-dependency') continue
+    const manifest = gate.manifests.get(dependentId)
+    if (!manifest) continue
+    const stillMissing = resolveMissingDependencies(manifest, gate, cycleMembers)
+    if (stillMissing.length > 0) {
+      // Re-block rather than skip: the plugin stays exactly where it is, but its reason
+      // now describes what is true. `block` skips teardown for a plugin that is not
+      // running, so this costs one state notification.
+      const record = await gate.manager.block(dependentId, stillMissing)
+      recordUnmetDependencies(dependentId, record.name, stillMissing)
+      continue
     }
+    // Satisfied but unloadable from here: leave it parked rather than forget it.
+    const source = restore.sources.get(dependentId)
+    if (!source) continue
+    if (gate.manager.isStopping(dependentId)) continue
+    await gate.manager.forget(dependentId)
+    await restore.loadOne(source, manifest)
+    if (gate.manager.get(dependentId)?.state !== 'active') continue
+    restored++
+    // Keyed by the plugin whose change started this, matching `blockDependents`.
+    emitDependencyChanged(dependentId, changedId, 'restored')
   }
   return restored
 }

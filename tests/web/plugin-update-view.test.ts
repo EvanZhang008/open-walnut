@@ -276,6 +276,11 @@ describe('feedback sentences (spec 7) use display names, never ids', () => {
     expect(successFeedback('linked', { sha, updated: false, reloaded: [] }, nameOf).text).toBe('Already up to date at a1b2c3d')
   })
 
+  it('keeps Update available when current files have not activated', () => {
+    expect(updateButtonMode({ kind: 'current' }, null, true, { pendingActivation: true }))
+      .toEqual({ render: true, primary: true, label: 'Update', title: 'Retry activating the installed update.' })
+  })
+
   it('linked: a reload failure is named and its raw error goes to detail', () => {
     const fb = successFeedback('linked', { sha, updated: true, reloaded: ['acme-notes'], failed: [{ id: 'acme-tracker', error: 'Error: boom\n  at x' }] }, nameOf)
     expect(fb.text).toBe('Updated to a1b2c3d · reloaded Acme Notes · Acme Tracker could not be reloaded.')
@@ -291,6 +296,19 @@ describe('feedback sentences (spec 7) use display names, never ids', () => {
       .toBe('Updated to v1.3.0 · restart Walnut to run the new code')
     expect(successFeedback('npm', { updated: false, resolved: '@acme/plugin@1.3.0' }, nameOf).text).toBe('Already up to date at v1.3.0')
   })
+
+  it.each(['git', 'npm'] as const)('reports %s hot reload success and partial failure honestly', (kind) => {
+    const body = { updated: true, toSha: sha, resolved: '@acme/plugin@1.3.0', restartRequired: false };
+    expect(successFeedback(kind, { ...body, reloaded: ['acme-notes'] }, nameOf).text).toContain('reloaded Acme Notes');
+    const failed = successFeedback(kind, { ...body, reloaded: [], failed: [{ id: 'acme-mail', error: 'previous version restored' }] }, nameOf);
+    expect(failed.kind).toBe('error');
+    expect(failed.text).toContain('new code is not running');
+    expect(failed.detail).toContain('previous version restored');
+    const retried = successFeedback(kind, { ...body, updated: false, reloaded: [], failed: [{ id: 'acme-mail', error: 'still broken' }] }, nameOf);
+    expect(retried.kind).toBe('error');
+    expect(retried.text).toContain('new code is not running');
+    expect(successFeedback(kind, { ...body, updated: false, reloaded: ['acme-notes'] }, nameOf).text).toContain('reloaded Acme Notes');
+  });
 
   it('failures: 409 codes, timeout, and a capped scrubbed sentence with Details (C16, C17)', () => {
     expect(failureFeedback(409, { error: 'The checkout has uncommitted changes', code: 'dirty' }))

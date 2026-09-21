@@ -37,7 +37,7 @@ import {
   type PluginRegistryResult,
 } from '../../core/plugins/plugin-catalog.js'
 import type { PluginLifecycleRecord } from '../../core/plugins/plugin-manager.js'
-import { RESTART_PENDING_STATE, clearRestartPending, isRestartPending } from '../../core/plugins/restart-pending.js'
+import { RESTART_PENDING_STATE, clearRestartPending, isRestartPending, markRestartPending } from '../../core/plugins/restart-pending.js'
 import {
   listPluginWebModules,
   readPluginWebModule,
@@ -78,6 +78,7 @@ export interface PluginRuntimeRouterDeps {
   list(): PluginLifecycleRecord[]
   discover?(pluginId: string): Promise<DiscoveredPluginRecord>
   reload(pluginId: string): Promise<PluginLifecycleRecord>
+  reloadMany?(pluginIds: string[]): Promise<{ reloaded: string[]; skipped: string[] }>
   /** `cascade` blocks the plugins that depend on this one instead of refusing. */
   disable(pluginId: string, opts?: { cascade?: boolean }): Promise<PluginLifecycleRecord>
   clearQuarantine(pluginId: string): Promise<void>
@@ -255,7 +256,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
           name: record.name,
           // A source update replaced this plugin's files while it was loaded: the process
           // still runs the old code, so the row reads RESTART TO ACTIVATE, not ON.
-          state: isRestartPending(record.id) ? RESTART_PENDING_STATE : record.state,
+          state: isRestartPending(record.id) && record.state === 'active' ? RESTART_PENDING_STATE : record.state,
           builtin: record.builtin,
           ...(live?.version ?? tombstone?.version ? { version: live?.version ?? tombstone?.version } : {}),
           ...(live?.description ? { description: live.description } : {}),
@@ -421,7 +422,10 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         ? (await managePrimary(pluginId, 'reload')).plugin
         : await deps.reload(pluginId)
       if (!plugin) throw new PluginRuntimeRelayError('Primary did not return the reloaded Plugin', 502)
-      // The reload imported the files on disk, so the update that marked this row is live now.
+      if (plugin.state !== 'active') {
+        res.status(409).json({ plugin, error: plugin.error ?? plugin.reason ?? `Plugin "${pluginId}" is ${plugin.state}` })
+        return
+      }
       if (!cloudMode) clearRestartPending(pluginId)
       publishCloudChange(pluginId, 'reloaded')
       res.json({ plugin })
@@ -579,7 +583,21 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
       const reloaded: string[] = []
       const skipped: string[] = []
       const failed: Array<{ id: string; error: string }> = []
-      for (const id of [pluginId, ...siblings]) {
+      if (deps.reloadMany) {
+        const targets = [pluginId, ...siblings];
+        markRestartPending(targets.filter(id => live.get(id) === 'active'));
+        try {
+          const operation = deps.reloadMany(targets).then(outcome => {
+            for (const id of [...outcome.reloaded, ...outcome.skipped]) clearRestartPending(id);
+            return outcome;
+          });
+          const outcome = await withDeadline(operation, updateDeadlineMs, () => { throw new Error('Plugin reload is still running; its status will update when it finishes'); });
+          reloaded.push(...outcome.reloaded);
+          skipped.push(...outcome.skipped);
+        } catch (error) {
+          failed.push(...targets.filter(id => live.get(id) === 'active').map(id => ({ id, error: error instanceof Error ? error.message : String(error) })));
+        }
+      } else for (const id of [pluginId, ...siblings]) {
         const state = live.get(id)
         if (state !== 'active' && state !== 'activating') {
           skipped.push(id)

@@ -25,6 +25,11 @@ interface CachedModule {
 }
 
 const cache = new Map<string, CachedModule>()
+const retained = new WeakMap<RegisteredPlugin, PluginWebModule | Error>()
+
+export function retainPluginWebModule(plugin: RegisteredPlugin, module: PluginWebModule | Error): void {
+  retained.set(plugin, module)
+}
 
 function validateWebEntry(entry: string): string {
   const normalized = entry.trim().replace(/\\/g, '/')
@@ -41,6 +46,9 @@ function validateWebEntry(entry: string): string {
 }
 
 export async function readPluginWebModule(plugin: RegisteredPlugin): Promise<PluginWebModule> {
+  const loaded = retained.get(plugin)
+  if (loaded instanceof Error) throw loaded
+  if (loaded) return loaded
   if (plugin.apiVersion !== 1 || !plugin.webEntry || !plugin.pluginDir) {
     throw new Error(`Plugin "${plugin.id}" has no native Web entry`)
   }

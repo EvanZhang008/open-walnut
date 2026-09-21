@@ -401,6 +401,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
 
   const own = <T extends Disposable>(registration: T): T => context.own(registration)
 
+  /** Refuse a registration BEFORE it writes: `own()` notices too late, so a late publish from a replaced generation lands on the live row and the dispose that follows deletes it. Reads, logging, storage and config stay open for the teardown itself. */
+  const assertLive = (registration: string): void => {
+    if (!context.signal.aborted) return
+    context.logger.warn('Plugin registration refused after disposal', { registration })
+    context.signal.throwIfAborted()
+  }
+
   // Declared as consts, not methods on the bag: a plugin may destructure
   // `const { require } = walnut.services`, which would strip `this`.
   const serviceHandle = <T>(key: string, assertNow: boolean): T => {
@@ -547,6 +554,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         bus.emit(EventNames.CONFIG_CHANGED, { config: { plugins: { [pluginId]: next } } } as never, ['web-ui'], { source: `plugin/${pluginId}` })
       },
       onChange(handler: (config: Record<string, unknown>) => void | Promise<void>) {
+        assertLive('config.onChange')
         const subscriber = `plugin:${pluginId}:config:${++subscriberSequence}`
         bus.subscribe(subscriber, async (event) => {
           if (event.name !== EventNames.CONFIG_CHANGED) return
@@ -660,6 +668,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }
       },
       onAnswered(handler: (event: HumanInboxAnsweredEvent) => void | Promise<void>) {
+        assertLive('letters.onAnswered')
         const subscriber = `plugin:${pluginId}:letters:${++subscriberSequence}`
         bus.subscribe(subscriber, async (event) => {
           const payload = event.data as HumanInboxAnsweredEvent | undefined
@@ -698,6 +707,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
 
     services: {
       publish(name: string, api: ServiceApi) {
+        // The one that matters most: publish REPLACES the key, so a late one lands on the live row.
+        assertLive(`services.publish("${name}")`)
         return own(publishService(pluginId, name, api))
       },
       // Lazy: nothing is resolved until the first call, so a plugin may take a handle to a
@@ -716,6 +727,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return currentServiceCaller()
       },
       onChange(handler: (change: ServiceChange) => void | Promise<void>) {
+        assertLive('services.onChange')
         const subscriber = `plugin:${pluginId}:services:${++subscriberSequence}`
         bus.subscribe(subscriber, async (event) => {
           // A subscriber that throws must not reach the emitter: publish and teardown
@@ -733,6 +745,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
 
     events: {
       on(namesInput: string | string[], handler: (event: BusEvent) => void | Promise<void>) {
+        assertLive('events.on')
         const names = Array.isArray(namesInput) ? namesInput : [namesInput]
         if (names.length === 0 || names.some((name) => typeof name !== 'string' || !name)) {
           throw new Error('Plugin event subscription requires at least one event prefix')
@@ -757,6 +770,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
 
     http: {
       route(method: string, routePath: string, handler: PluginRouteHandler) {
+        assertLive(`http.route(${method} ${routePath})`)
         const route = createPluginHttpRoute(method, routePath, handler)
         contributions.httpRoutes.push(route)
         return own(toDisposable(() => removeIdentity(contributions.httpRoutes, route)))
@@ -777,6 +791,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
 
     timers: {
       timeout(handler: () => void | Promise<void>, delayMs: number) {
+        assertLive('timers.timeout')
         const timer = setTimeout(() => {
           void Promise.resolve(handler()).catch((error) => notifyError('Timer callback failed', error))
         }, Math.max(0, delayMs))
@@ -784,6 +799,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return own(toDisposable(() => clearTimeout(timer)))
       },
       interval(handler: () => void | Promise<void>, intervalMs: number) {
+        assertLive('timers.interval')
         let stopped = false
         let timer: ReturnType<typeof setTimeout> | null = null
         const tick = async () => {
@@ -802,6 +818,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
 
     registry: {
       sync(adapter: unknown) {
+        assertLive('registry.sync')
         const internal = adapter as IntegrationSync
         legacyApi.registerSync(internal)
         return own(toDisposable(() => {
@@ -809,6 +826,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }))
       },
       sourceClaim(claim: ProjectClaimFn, options?: { priority?: number }) {
+        assertLive('registry.sourceClaim')
         legacyApi.registerSourceClaim(claim, options)
         const registered = contributions.claim
         return own(toDisposable(() => {
@@ -816,6 +834,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }))
       },
       display(meta: unknown) {
+        assertLive('registry.display')
         const internal = meta as DisplayMeta
         legacyApi.registerDisplay(internal)
         return own(toDisposable(() => {
@@ -823,6 +842,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }))
       },
       connection(link: unknown) {
+        assertLive('registry.connection')
         const internal = link as PluginConnection
         legacyApi.registerConnection(internal)
         return own(toDisposable(() => {
@@ -830,11 +850,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }))
       },
       migration(migrate: unknown) {
+        assertLive('registry.migration')
         const internal = migrate as MigrateFn
         legacyApi.registerMigration(internal)
         return own(toDisposable(() => removeIdentity(contributions.migrations, internal)))
       },
       extIndex(spec: unknown) {
+        assertLive('registry.extIndex')
         const internal = spec as ExtIndexSpec
         legacyApi.registerExtIndex(internal)
         return own(toDisposable(() => {
@@ -842,6 +864,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }))
       },
       tool(spec: { name: string; description: string; inputSchema?: Record<string, unknown>; execute(input: Record<string, unknown>): unknown | Promise<unknown> }) {
+        assertLive(`registry.tool("${spec.name}")`)
         const before = contributions.tools.length
         legacyApi.registerTool({
           name: spec.name,
@@ -857,6 +880,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return own(toDisposable(() => { if (tool) removeIdentity(contributions.tools, tool) }))
       },
       op(spec: PluginOpSpec) {
+        assertLive(`registry.op("${spec.name}")`)
         const name = pluginOpName(pluginId, spec.name)
         const title = spec.title?.trim()
         const description = spec.description?.trim()
@@ -890,14 +914,17 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return own(definePluginOp(pluginId, op))
       },
       wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>) {
+        assertLive(`registry.wsMethod("${id}")`)
         const name = namespacePluginId(pluginId, id)
         return own(registerOwnedMethod(pluginId, name, async (payload) => handler(payload)))
       },
       agent(spec: PluginAgentSpec) {
+        assertLive(`registry.agent("${spec.id}")`)
         const id = namespacePluginId(pluginId, spec.id)
         return own(registerOwnedAgent(pluginId, { ...spec, id }))
       },
       provider(id: string, adapter: PluginProviderAdapter) {
+        assertLive(`registry.provider("${id}")`)
         const protocol = namespacePluginId(pluginId, id)
         const wrapped: ProtocolAdapter = {
           protocol,
@@ -917,9 +944,11 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return own(registerOwnedProviderAdapter(pluginId, protocol, wrapped))
       },
       cronAction(id: string, description: string, handler: (params: Record<string, unknown>) => Promise<ActionResult>) {
+        assertLive(`registry.cronAction("${id}")`)
         return own(registerOwnedAction(pluginId, namespacePluginId(pluginId, id), handler, description))
       },
       hook(definition: PluginHookSpec) {
+        assertLive(`registry.hook("${definition.id}")`)
         const points = [...new Set([
           ...(definition.point ? [definition.point] : []),
           ...(definition.points ?? []),
@@ -951,6 +980,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return own(toDisposable(() => dispatcher.removeHook(id)))
       },
       agentContext(text: string) {
+        assertLive('registry.agentContext')
         if (!text.trim()) throw new Error('Plugin agent context must not be empty')
         // Collected, then read by nothing: a session gets its instructions from
         // skills. Warned once per plugin because only the author can fix it.
@@ -967,9 +997,11 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }))
       },
       command(definition: PluginCommandDefinition) {
+        assertLive(`registry.command("${definition.id}")`)
         return own(registerOwnedCommand(pluginId, definition))
       },
       skill(definition: PluginSkillDefinition) {
+        assertLive(`registry.skill("${definition.id}")`)
         const registration = registerOwnedSkillDir(pluginId, definition)
         // The skills index + prompt are cached until explicitly invalidated, so both
         // edges of a registration have to clear it — otherwise a newly installed

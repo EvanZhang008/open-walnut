@@ -231,6 +231,13 @@ describe('plugin runtime routes', () => {
     expect(deps.reload).toHaveBeenCalledWith('sample')
   })
 
+  it('does not report a successful reload when activation is blocked or failed', async () => {
+    const { app } = setup({ reload: async () => record({ state: 'failed', error: 'activation failed' }) });
+    const response = await request(app).post('/api/plugin-runtime/sample/reload').expect(409);
+    expect(response.body.error).toBe('activation failed');
+    expect(response.body.plugin.state).toBe('failed');
+  });
+
   it('disables and clears quarantine through owner-scoped callbacks', async () => {
     const { app, deps } = setup()
 
