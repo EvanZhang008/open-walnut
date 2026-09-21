@@ -29,6 +29,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { gitChildEnv } from '../../lib/git-env.js'
 import zlib from 'node:zlib'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isSafeGroupPid } from '../../core/process-group-kill.js'
@@ -146,7 +147,9 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
   const gzipped = /\bgzip\b/i.test(String(req.headers['content-encoding'] ?? ''))
 
   const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
+    // gitChildEnv first: an inherited GIT_DIR outranks GIT_PROJECT_ROOT, so
+    // http-backend would serve (and accept pushes into) the launcher's repo.
+    ...(gitChildEnv() as Record<string, string>),
     GIT_PROJECT_ROOT: repoRoot,
     GIT_HTTP_EXPORT_ALL: '1',
     PATH_INFO: `/${HUB_REPO_NAME}${pathInfo}`,
@@ -289,7 +292,7 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
         '-C', path.join(repoRoot, HUB_REPO_NAME),
         '-c', 'gc.auto=6700', '-c', 'gc.autoPackLimit=8', '-c', 'repack.writeBitmaps=true',
         'gc', '--auto', '--quiet',
-      ], { stdio: 'ignore', detached: true })
+      ], { stdio: 'ignore', detached: true, env: gitChildEnv() })
       gc.on('error', (err) => log.web.warn('git-http: hub gc --auto failed to spawn', { error: err.message }))
       gc.unref()
     }

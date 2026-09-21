@@ -24,7 +24,7 @@ export default defineConfig({
     environment: 'node',
     // Paths are relative to `root` (web/).
     globalSetup: ['../tests/setup/global-setup.ts'],
-    setupFiles: ['../tests/setup/worker-watchdog.ts', '../tests/web/notes-roundtrip/dom-setup.ts'],
+    setupFiles: ['../tests/setup/git-env-isolation.ts', '../tests/setup/worker-watchdog.ts', '../tests/web/notes-roundtrip/dom-setup.ts'],
     include: ['../tests/web/notes-roundtrip/**/*.test.ts'],
     testTimeout: 30_000,
     pool: 'forks',

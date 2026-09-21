@@ -20,6 +20,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { gitChildEnv } from '../../lib/git-env.js';
 import { CLOUD_MODE, WALNUT_INSTALL_DIR, WALNUT_REPO_URL } from '../../constants.js';
 import { getConfig } from '../config-manager.js';
 import { log } from '../../logging/index.js';
@@ -175,7 +176,7 @@ async function cloneUpstream(timeoutMs: number): Promise<WalnutSource> {
       execFile(
         'git', ['clone', '--quiet', WALNUT_REPO_URL, staging],
         // No credential prompt can be answered here; fail fast instead of hanging.
-        { timeout: timeoutMs, maxBuffer: 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } },
+        { timeout: timeoutMs, maxBuffer: 1024 * 1024, env: gitChildEnv({ GIT_TERMINAL_PROMPT: '0' }) },
         (err, _stdout, stderr) => {
           if (!err) { resolve(); return; }
           const why = (typeof stderr === 'string' && stderr.trim()) || err.message;

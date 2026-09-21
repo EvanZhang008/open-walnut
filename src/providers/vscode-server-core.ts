@@ -37,6 +37,7 @@ import http from 'node:http'
 import crypto from 'node:crypto'
 import net from 'node:net'
 import { spawn, execFile } from 'node:child_process'
+import { gitChildEnv } from '../lib/git-env.js'
 
 /** Pinned release — bump deliberately. */
 export const CODE_SERVER_VERSION = '4.98.2'
@@ -451,7 +452,7 @@ function expandHome(p: string): string {
 async function findGitRootLocal(cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
     execFile('git', ['-C', cwd, 'rev-parse', '--show-toplevel'],
-      { timeout: GIT_TIMEOUT_MS, encoding: 'utf-8' },
+      { timeout: GIT_TIMEOUT_MS, encoding: 'utf-8', env: gitChildEnv() },
       (err, stdout) => resolve(err ? null : (stdout.trim() || null)))
   })
 }

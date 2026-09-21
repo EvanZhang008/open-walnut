@@ -335,7 +335,7 @@ death).
 | Plugins | `src/core/integration-*.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Chat history | `src/core/chat-history.ts` | skill `walnut-core-internals` |
 | Usage tracking | `src/core/usage/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| Git sync (data hub) | `src/integrations/git-sync.ts` | Mac ⇄ EC2 data plane; secrets NEVER ride it |
+| Git sync (data hub) | `src/integrations/git-sync.ts` | Mac ⇄ EC2 data plane; secrets NEVER ride it; every git spawn takes `gitChildEnv()` (`src/lib/git-env.ts`), because an inherited `GIT_DIR` outranks `cwd` and git exports one while running hooks |
 | Logging & ops | `src/logging/` | skill `walnut-ops` + [src/logging/AGENTS.md](./src/logging/AGENTS.md) |
 | Testing | `tests/` | skill `walnut-testing` + [tests/AGENTS.md](./tests/AGENTS.md) |
 

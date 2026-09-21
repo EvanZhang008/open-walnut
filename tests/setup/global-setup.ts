@@ -28,6 +28,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { acquireTestSlot, releaseTestSlot } from './test-gate';
 import { sweepStaleTmpDirs } from './stale-tmp';
+import { stripGitRedirectEnv } from './git-env-isolation';
 
 /**
  * Fail fast when the running Node can't load better-sqlite3.
@@ -66,6 +67,13 @@ function assertNativeAbiMatches(): void {
 }
 
 export async function setup(): Promise<void> {
+  // Before anything spawns git: an inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE
+  // outranks the `cwd` every git test passes, so the runner and its children would
+  // address the launcher's repo (2026-09-20: a stray commit landed on main that way).
+  // Workers get the same strip from the setupFile, which is the only channel that
+  // reaches an already-forked one.
+  stripGitRedirectEnv();
+
   assertNativeAbiMatches();
 
   // Machine-wide gate: a second concurrent vitest run queues instead of

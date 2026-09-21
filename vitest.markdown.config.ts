@@ -27,7 +27,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/web/markdown/**/*.test.ts'],
     globalSetup: ['tests/setup/global-setup.ts'],
-    setupFiles: ['tests/setup/worker-watchdog.ts', 'tests/web/markdown/dom-setup.ts'],
+    setupFiles: ['tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts', 'tests/web/markdown/dom-setup.ts'],
     testTimeout: 30_000,
     pool: 'forks',
     // Machine-memory caps — see vitest.config.ts (2026-07-25 swap incident).

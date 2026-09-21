@@ -21,6 +21,20 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   count.** Run the touched file in isolation, then diff against a clean HEAD baseline (cp files
   aside → `git checkout HEAD -- <src>` → rerun → restore; `git stash` is banned). Identical
   failure names on HEAD = pre-existing, not yours. The known-failures list is in the skill.
+- **Never launch a run with git env vars exported.** `GIT_DIR`, `GIT_WORK_TREE` and
+  `GIT_INDEX_FILE` outrank the `cwd` that ~20 git suites pass to `execSync`, and execSync
+  inherits `process.env`, so an inherited one aims every one of those tests at the launcher's
+  repo. On 2026-09-20 a candidate-tree run did exactly that: `git init` rewrote the real repo's
+  identity and `core.worktree`, and one `git add -A && git commit -m init` put the candidate
+  snapshot on main (af34664d), deleting 35 paths a peer had just committed. Nothing was pushed;
+  main needed a reset and the config a repair. `tests/setup/git-env-isolation.ts` (a setupFile,
+  plus the same strip in `global-setup.ts`) now deletes those vars and warns when it had to,
+  and the ratchet is `tests/setup/git-env-isolation.test.ts`. A tier config that declares its
+  own `setupFiles` REPLACES the base list, so add the strip there too (the ratchet checks every
+  config). Building an archive or candidate tree that needs a repo view? Give that tree its own
+  real git metadata; never point the run at the real repo. The production half of the same class
+  lives in `src/lib/git-env.ts` (`gitChildEnv()`), pinned by
+  `tests/integrations/git-sync-env-redirect.test.ts`.
 - **Browser tier is serialized machine-wide.** One Chromium per worker (~385 MB), `workers`
   capped at 4, and an exclusive lease on :3457 so a second `npx playwright test` queues instead
   of colliding (specs hardcode that port; `reuseExistingServer` would otherwise let two runs

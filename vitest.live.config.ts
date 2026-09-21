@@ -11,7 +11,7 @@ export default defineConfig({
     environment: 'node',
     globalSetup: ['tests/setup/global-setup.ts'],
     // Per-worker parent-liveness watchdog — see vitest.config.ts.
-    setupFiles: ['tests/setup/worker-watchdog.ts'],
+    setupFiles: ['tests/setup/git-env-isolation.ts', 'tests/setup/worker-watchdog.ts'],
     include: ['tests/**/*.live.test.ts'],
     testTimeout: 300_000,
     hookTimeout: 120_000,

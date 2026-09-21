@@ -1,4 +1,5 @@
 import { execSync, exec, spawn } from 'node:child_process';
+import { gitChildEnv } from '../lib/git-env.js';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -190,6 +191,7 @@ export function credentialGuardArgs(cwd?: string): string[] {
       timeout: LOCAL_TIMEOUT,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: gitChildEnv(),
     });
     // https://ANYTHING@host — userinfo present means embedded credentials
     if (/https?:\/\/[^/\s]+@/.test(urls)) return ['-c', 'credential.helper='];
@@ -223,6 +225,7 @@ export async function credentialGuardArgsAsync(cwd?: string): Promise<string[]> 
       cwd: dir,
       timeout: LOCAL_TIMEOUT,
       encoding: 'utf-8',
+      env: gitChildEnv(),
     });
     if (/https?:\/\/[^/\s]+@/.test(stdout)) args = ['-c', 'credential.helper='];
   } catch {
@@ -239,7 +242,10 @@ export function git(args: string, options?: { cwd?: string; timeout?: number; en
     timeout: options?.timeout ?? LOCAL_TIMEOUT,
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: options?.env ? { ...process.env, ...options.env } : undefined,
+    // gitChildEnv, never a bare inherit: an inherited GIT_DIR / GIT_WORK_TREE
+    // outranks the cwd above, so a process launched from a git hook (git exports
+    // those while running one) would auto-commit the data repo into that repo.
+    env: gitChildEnv(options?.env),
   }).trim();
 }
 
@@ -286,7 +292,10 @@ export async function execGitGroup(
   return new Promise<string>((resolve, reject) => {
     const child = spawn('/bin/sh', ['-c', command], {
       cwd: opts.cwd,
-      env: opts.env,
+      // Strip here, not only in gitAsync: git-maintenance and the plugin paths call
+      // this helper directly without an env, and `git branch -D` under an inherited
+      // GIT_DIR would delete branches in whatever repo the launcher was holding.
+      env: gitChildEnv(opts.env),
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -337,7 +346,7 @@ export async function execGitArgsGroup(
   return new Promise<string>((resolve, reject) => {
     const child = spawn('git', args, {
       cwd: opts.cwd,
-      env: opts.env,
+      env: gitChildEnv(opts.env),
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -381,7 +390,7 @@ export async function gitAsync(args: string, options?: { cwd?: string; timeout?:
   const stdout = await execGitGroup(`git ${guard ? `${guard} ` : ''}${args}`, {
     cwd: options?.cwd ?? WALNUT_HOME,
     timeout: options?.timeout ?? LOCAL_TIMEOUT,
-    env: options?.env ? { ...process.env, ...options.env } : undefined,
+    env: gitChildEnv(options?.env),
   });
   return stdout.trim();
 }

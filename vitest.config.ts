@@ -29,7 +29,15 @@ export default defineConfig({
     // (they otherwise leak forever with ppid=1). See the file for the incident.
     // tmp-reaper: the harness removes every temp dir a test file creates directly
     // under $TMPDIR and forgot to clean (2,700 per full run before it existed).
-    setupFiles: ['tests/setup/runtime-dir-isolation.ts', 'tests/setup/tmp-reaper.ts', 'tests/setup/worker-watchdog.ts'],
+    // git-env-isolation: GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE override the
+    // `cwd` every git test passes, so an inherited one aims the whole suite at
+    // whatever repo the launcher was holding (2026-09-20: a stray commit on main).
+    setupFiles: [
+      'tests/setup/runtime-dir-isolation.ts',
+      'tests/setup/git-env-isolation.ts',
+      'tests/setup/tmp-reaper.ts',
+      'tests/setup/worker-watchdog.ts',
+    ],
     include: ['tests/**/*.test.ts'],
     // notes-roundtrip runs under its own DOM-shimmed config (its deps live in
     // web/node_modules); exclude it from the node-env base/coverage runs so it

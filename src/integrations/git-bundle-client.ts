@@ -44,6 +44,7 @@ import http from 'node:http'
 import https from 'node:https'
 import os from 'node:os'
 import path from 'node:path'
+import { gitChildEnv } from '../lib/git-env.js'
 import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 
@@ -200,7 +201,7 @@ export function bundleEndpointFromRemote(remoteUrl: string): { base: string; aut
 /** Run git (list-args, no shell) in repoDir; resolve stdout or reject. */
 function runGit(repoDir: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd: repoDir, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+    const child = spawn('git', args, { cwd: repoDir, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env: gitChildEnv() })
     let out = ''
     let err = ''
     const timer = setTimeout(() => {

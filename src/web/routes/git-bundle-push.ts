@@ -61,6 +61,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { gitChildEnv } from '../../lib/git-env.js'
 import { Router, type Request, type Response } from 'express'
 import { isDiskWriteBlocked } from '../../core/disk-watermark.js'
 import { log } from '../../logging/index.js'
@@ -325,7 +326,8 @@ async function makeRoomForLease(now: number): Promise<boolean> {
 /** Run a git command against the hub repo; resolve stdout, reject on nonzero. */
 function gitHub(args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['-C', hubRepo(), ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    // env: `-C` does not beat an inherited GIT_DIR, so strip it explicitly.
+    const child = spawn('git', ['-C', hubRepo(), ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: gitChildEnv() })
     let out = ''
     let err = ''
     const timer = setTimeout(() => {
@@ -660,7 +662,7 @@ gitBundlePushRouter.post('/bundle/finish', async (req: Request, res: Response) =
       '-C', hubRepo(),
       '-c', 'gc.auto=6700', '-c', 'gc.autoPackLimit=8', '-c', 'repack.writeBitmaps=true',
       'gc', '--auto', '--quiet',
-    ], { stdio: 'ignore', detached: true })
+    ], { stdio: 'ignore', detached: true, env: gitChildEnv() })
     gc.on('error', () => {})
     gc.unref()
   } catch (err) {
