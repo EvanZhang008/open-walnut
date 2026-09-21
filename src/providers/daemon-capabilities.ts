@@ -200,6 +200,17 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * engine-settings route answers 501 daemon_needs_upgrade, which self-heals on the
  * next auto-deploy.
  *
+ * 'git-exclude-v1' — git.ensureExcluded {cwd, path}: when a file Walnut just created
+ * inside a checkout (a project's .claude/settings.local.json) is not already ignored,
+ * append it to .git/info/exclude, the per-repo ignore list that is never committed.
+ * Why: Claude Code keeps that file out of git with a rule in ~/.config/git/ignore,
+ * which git reads only while core.excludesFile is unset; a user who points that at
+ * their own file (common) has the rule silently disabled and the local settings show
+ * up untracked in every repo. Answers 'already' | 'added' | 'not-a-repo'; never
+ * touches a tracked file or any .gitignore. Same bridge rule as the file-history
+ * family: NOT reachable from the cloud box. Optional: without it the write still
+ * lands and the response says gitExclude 'unavailable'.
+ *
  * 'grep-v1' — host-local symbol search (fs.grep), backing "find references" in
  * the Files viewer. The daemon runs `git grep` (or a pruned `grep -r` outside a
  * repo) next to the files and returns only the small match list, never the
@@ -259,6 +270,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs-write-atomic-v1',
+  'git-exclude-v1',
   'fs.readBounded',
   // 'skill-sync-v2' — walnut-skill distribution (skills.sync command). The
   // server pushes the current walnut SKILL.md at connect; the daemon keeps

@@ -7204,8 +7204,13 @@ select {
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* Caller-defined row that is off for now: aria-disabled, not `disabled`, so the
+   row stays hoverable and its title can still say why. No hover highlight. */
+.chat-plus-menu-item.is-disabled { opacity: 0.5; cursor: default; }
+.chat-plus-menu-item.is-disabled:hover { background: transparent; }
 .chat-plus-menu-item svg { color: var(--fg-muted); flex-shrink: 0; }
 .chat-send-menu-item.danger { color: var(--error); }
+
 /* "+" menu on/off row (role=menuitemcheckbox). The switch is a plain span, not a
    native checkbox: a native control inside a styled menu looks foreign AND its
    macOS popup swallows pointerup (see web/src/AGENTS.md → Menus & overlays).

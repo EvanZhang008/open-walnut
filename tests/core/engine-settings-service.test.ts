@@ -11,6 +11,7 @@ import {
   readEngineSettings,
   resolveSettingsFilePath,
   sha256Hex,
+  validateCwd,
   writeEngineSettings,
   type SettingsFileTransport,
 } from '../../src/core/agents/engine-settings-service.js'
@@ -28,6 +29,8 @@ class FakeHost implements SettingsFileTransport {
   raceOnWrite: Array<(path: string) => void> = []
   /** Make the read-back after a write fail, to simulate a tunnel that died after the rename. */
   failReadsAfterWrite = false
+  /** Absent by default, like a daemon without 'git-exclude-v1'; tests install one to observe the call. */
+  ensureGitExcluded?: SettingsFileTransport['ensureGitExcluded']
   env?: Record<string, string | undefined>
 
   constructor(files: Record<string, string | Buffer> = {}, env?: Record<string, string | undefined>) {
@@ -391,5 +394,184 @@ describe('resolveSettingsFilePath', () => {
     expect(resolveSettingsFilePath(file, { CLAUDE_CONFIG_DIR: '' })).toBe('~/.claude/settings.json')
     expect(resolveSettingsFilePath(file, { CLAUDE_CONFIG_DIR: '/cfg/' })).toBe('/cfg/settings.json')
     expect(resolveSettingsFilePath({ ...file, homeEnv: { name: 'CLAUDE_CONFIG_DIR', replaces: '~/.other' } }, { CLAUDE_CONFIG_DIR: '/cfg' })).toBe('~/.claude/settings.json')
+  })
+})
+
+describe('resolveSettingsFilePath: project files', () => {
+  const local = { id: 'project-local', path: '<cwd>/.claude/settings.local.json', format: 'json' as const, label: 'x', scope: 'project' as const }
+  it('needs a working directory and never a homeEnv', () => {
+    expect(resolveSettingsFilePath(local)).toBeUndefined()
+    expect(resolveSettingsFilePath(local, { CLAUDE_CONFIG_DIR: '/cfg' })).toBeUndefined()
+    expect(resolveSettingsFilePath(local, undefined, '/work/repo')).toBe('/work/repo/.claude/settings.local.json')
+    expect(resolveSettingsFilePath(local, undefined, '/work/repo/')).toBe('/work/repo/.claude/settings.local.json')
+  })
+})
+
+describe('validateCwd', () => {
+  it('accepts absolute or ~-relative paths without traversal and nothing else', () => {
+    expect(validateCwd('/work/repo')).toBe('/work/repo')
+    expect(validateCwd('  ~/code/app ')).toBe('~/code/app')
+    expect(validateCwd('~')).toBe('~')
+    for (const bad of ['', 'relative/dir', '/work/../etc', '/a/..', 'C:\\x', '/x\0y', 42, null]) {
+      expect(validateCwd(bad), String(bad)).toBeNull()
+    }
+  })
+})
+
+const CWD = '/work/repo'
+const PROJECT = `${CWD}/.claude/settings.json`
+const PROJECT_LOCAL = `${CWD}/.claude/settings.local.json`
+
+describe('engine settings service: project layers', () => {
+  it('says when a change is felt from the engine data, never from a client-side engine table', async () => {
+    const claude = await readEngineSettings('claude', '__local__', new FakeHost({}))
+    expect(claude.appliesOn).toBe('next-turn')
+    expect(claude.groups.flatMap((g) => g.items).every((i) => i.appliesOn === 'next-turn')).toBe(true)
+    const codex = await readEngineSettings('codex', '__local__', new FakeHost({}))
+    expect(codex.appliesOn).toBe('new-session')
+    expect(codex.groups.flatMap((g) => g.items).every((i) => i.appliesOn === 'new-session')).toBe(true)
+  })
+
+  it("refuses 'this project only' for a key kept in the global config, and marks that row so the UI can lock it", async () => {
+    const host = new FakeHost({ [USER]: '{}' })
+    const view = await readEngineSettings('claude', '__local__', host, { cwd: CWD, scope: 'project' })
+    const rows = view.groups.flatMap((g) => g.items)
+    const workflow = rows.find((i) => i.key === 'workflowSizeGuideline')!
+    // ~/.claude.json has no per-project layer: the target stays that file, and the row says so.
+    expect(workflow).toMatchObject({ file: 'global', projectLayer: false, writeTarget: { file: 'global', holds: false } })
+    expect(rows.find((i) => i.key === 'verbose')).not.toHaveProperty('projectLayer')
+    expect(rows.find((i) => i.key === 'verbose')!.writeTarget.file).toBe('project-local')
+    // Without a cwd nothing is marked: the project scope does not exist there.
+    const hostWide = await readEngineSettings('claude', '__local__', new FakeHost({ [USER]: '{}' }))
+    expect(hostWide.groups.flatMap((g) => g.items).every((i) => !('projectLayer' in i))).toBe(true)
+    // The write is refused before any byte moves; a settings.json key in the same patch is refused with it.
+    await expect(writeEngineSettings('claude', '__local__', { set: { workflowSizeGuideline: 'large', verbose: true } }, host, { cwd: CWD, scope: 'project' }))
+      .rejects.toMatchObject({ status: 400, message: expect.stringContaining('no per-project layer'), outcome: 'not-written' })
+    expect(host.text(PROJECT_LOCAL)).toBeUndefined()
+  })
+
+  it('marks the rows whose stored value Walnut outranks at launch, and only those', async () => {
+    const view = await readEngineSettings('claude', '__local__', new FakeHost({}))
+    const rows = view.groups.flatMap((g) => g.items)
+    const notHonored = rows.filter((i) => i.honoredHere === false).map((i) => [i.key, i.launchOverride])
+    expect(notHonored).toEqual([
+      ['permissions.defaultMode', '--permission-mode'],
+      ['fileCheckpointingEnabled', 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING'],
+    ])
+    // The model is forwarded only when the picker chose one; on Auto the file's value is honoured.
+    expect(rows.find((i) => i.key === 'model')).not.toHaveProperty('honoredHere')
+  })
+
+  it('without a cwd the project files are not consulted and project scope is unavailable', async () => {
+    const host = new FakeHost({ [USER]: JSON.stringify({ outputStyle: 'Explanatory' }) })
+    const view = await readEngineSettings('claude', '__local__', host)
+    expect(view.files.map((f) => f.id)).toEqual(['user', 'global'])
+    expect(view).toMatchObject({ scope: 'default', projectScopeAvailable: false })
+    expect(view.cwd).toBeUndefined()
+    // A key the CLI's own screen writes locally still targets the user file here.
+    expect(itemOf(view, 'outputStyle').writeTarget).toEqual({ file: 'user', path: USER, holds: true })
+    await expect(readEngineSettings('claude', '__local__', host, { scope: 'project' }))
+      .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/needs a cwd/) })
+  })
+
+  it('attributes a value to the highest project layer that holds it, and names the file', async () => {
+    const host = new FakeHost({
+      [USER]: JSON.stringify({ alwaysThinkingEnabled: true, verbose: false, outputStyle: 'Explanatory', language: 'Chinese' }),
+      [PROJECT]: JSON.stringify({ verbose: true, language: 'English' }),
+      [PROJECT_LOCAL]: JSON.stringify({ language: 'Japanese' }),
+    })
+    const view = await readEngineSettings('claude', '__local__', host, { cwd: CWD })
+    expect(view).toMatchObject({ cwd: CWD, scope: 'default', projectScopeAvailable: true })
+    expect(view.files.map((f) => [f.id, f.scope, f.readOnly, f.exists])).toEqual([
+      ['user', 'user', false, true], ['global', 'user', false, false],
+      ['project', 'project', true, true], ['project-local', 'project', false, true],
+    ])
+    expect(itemOf(view, 'language')).toMatchObject({ value: 'Japanese', source: 'overlay', overlay: { file: 'project-local', path: PROJECT_LOCAL } })
+    expect(itemOf(view, 'verbose')).toMatchObject({ value: true, source: 'overlay', overlay: { file: 'project', path: PROJECT } })
+    expect(itemOf(view, 'alwaysThinkingEnabled')).toMatchObject({ value: true, source: 'file' })
+    expect(itemOf(view, 'alwaysThinkingEnabled').overlay).toBeUndefined()
+  })
+
+  it("default scope writes where the engine's screen would, or where a project layer already holds the key", async () => {
+    const host = new FakeHost({
+      [USER]: JSON.stringify({ alwaysThinkingEnabled: true, verbose: false }),
+      [PROJECT]: JSON.stringify({ verbose: true }),
+      [PROJECT_LOCAL]: JSON.stringify({ language: 'Japanese' }),
+    })
+    const view = await readEngineSettings('claude', '__local__', host, { cwd: CWD })
+    // Plain key, only in the user file: the user file.
+    expect(itemOf(view, 'alwaysThinkingEnabled').writeTarget).toEqual({ file: 'user', path: USER, holds: true })
+    // The CLI writes output style to the project's local file: so does the default scope.
+    expect(itemOf(view, 'outputStyle').writeTarget).toEqual({ file: 'project-local', path: PROJECT_LOCAL, holds: false })
+    // Held by the local file: edited there.
+    expect(itemOf(view, 'language').writeTarget).toEqual({ file: 'project-local', path: PROJECT_LOCAL, holds: true })
+    // Held by the SHARED (read-only) project file: overridden through the local file, not edited in place.
+    expect(itemOf(view, 'verbose').writeTarget).toEqual({ file: 'project-local', path: PROJECT_LOCAL, holds: false })
+    expect(itemOf(view, 'verbose').overriddenBy).toBeUndefined()
+  })
+
+  it("'project' scope sends every key to the local project file, creating it, and keeps it out of git", async () => {
+    const host = new FakeHost({ [USER]: JSON.stringify({ alwaysThinkingEnabled: true }) })
+    const excluded: Array<[string, string]> = []
+    host.ensureGitExcluded = async (cwd, path) => { excluded.push([cwd, path]); return 'added' }
+    const result = await writeEngineSettings('claude', '__local__', { set: { alwaysThinkingEnabled: false, verbose: true } }, host, { cwd: CWD, scope: 'project' })
+    expect(JSON.parse(host.text(PROJECT_LOCAL)!)).toEqual({ alwaysThinkingEnabled: false, verbose: true })
+    // The user file is untouched: project scope never reaches it.
+    expect(JSON.parse(host.text(USER)!)).toEqual({ alwaysThinkingEnabled: true })
+    expect(excluded).toEqual([[CWD, PROJECT_LOCAL]])
+    expect(result.gitExclude).toEqual({ path: PROJECT_LOCAL, outcome: 'added' })
+    expect(result.scope).toBe('project')
+    expect(itemOf(result, 'alwaysThinkingEnabled')).toMatchObject({ value: false, source: 'overlay', writeTarget: { file: 'project-local', holds: true } })
+    // A second write into the existing file asks git nothing.
+    await writeEngineSettings('claude', '__local__', { set: { language: 'English' } }, host, { cwd: CWD, scope: 'project' })
+    expect(excluded).toHaveLength(1)
+  })
+
+  it('reports the git exclusion as unavailable without the ability and as failed with the reason when it throws; the save never fails for it', async () => {
+    const host = new FakeHost({})
+    const result = await writeEngineSettings('claude', '__local__', { set: { verbose: true } }, host, { cwd: CWD, scope: 'project' })
+    expect(result.gitExclude).toEqual({ path: PROJECT_LOCAL, outcome: 'unavailable' })
+    const throwing = new FakeHost({})
+    throwing.ensureGitExcluded = async () => { throw new Error('git.ensureExcluded failed: file is outside the repository') }
+    const result2 = await writeEngineSettings('claude', '__local__', { set: { verbose: true } }, throwing, { cwd: CWD, scope: 'project' })
+    expect(result2.gitExclude).toEqual({ path: PROJECT_LOCAL, outcome: 'failed', error: 'git.ensureExcluded failed: file is outside the repository' })
+    expect(JSON.parse(throwing.text(PROJECT_LOCAL)!)).toEqual({ verbose: true })
+  })
+
+  it('default scope overrides a shared project value through the local file and edits a local value in place', async () => {
+    const host = new FakeHost({
+      [USER]: JSON.stringify({ verbose: false }),
+      [PROJECT]: JSON.stringify({ verbose: true, hooks: { PreToolUse: [] } }),
+      [PROJECT_LOCAL]: JSON.stringify({ language: 'Japanese' }),
+    })
+    const result = await writeEngineSettings('claude', '__local__', { set: { verbose: false, language: 'English' } }, host, { cwd: CWD })
+    expect(JSON.parse(host.text(PROJECT_LOCAL)!)).toEqual({ language: 'English', verbose: false })
+    // The committed shared file is never written.
+    expect(host.text(PROJECT)).toBe(JSON.stringify({ verbose: true, hooks: { PreToolUse: [] } }))
+    expect(itemOf(result, 'verbose')).toMatchObject({ value: false, source: 'overlay', overlay: { file: 'project-local' } })
+    expect(result.gitExclude).toBeUndefined()
+  })
+
+  it("reset in 'project' scope removes the key from the local file only; the user value shows through", async () => {
+    const host = new FakeHost({
+      [USER]: JSON.stringify({ language: 'Chinese' }),
+      [PROJECT_LOCAL]: JSON.stringify({ language: 'Japanese', verbose: true }),
+    })
+    const result = await writeEngineSettings('claude', '__local__', { unset: ['language'] }, host, { cwd: CWD, scope: 'project' })
+    expect(JSON.parse(host.text(PROJECT_LOCAL)!)).toEqual({ verbose: true })
+    expect(JSON.parse(host.text(USER)!)).toEqual({ language: 'Chinese' })
+    expect(itemOf(result, 'language')).toMatchObject({ value: 'Chinese', source: 'file', writeTarget: { file: 'project-local', holds: false } })
+  })
+
+  it('refuses project scope for an engine that declares no project file, and a cwd with traversal', async () => {
+    const host = new FakeHost({ '~/.codex/config.toml': 'model = "x"\n' })
+    const view = await readEngineSettings('codex', '__local__', host, { cwd: CWD })
+    expect(view.projectScopeAvailable).toBe(false)
+    expect(view.files.map((f) => f.id)).toEqual(['config'])
+    await expect(writeEngineSettings('codex', '__local__', { set: { model: 'y' } }, host, { cwd: CWD, scope: 'project' }))
+      .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/no project-scoped settings file/) })
+    await expect(readEngineSettings('claude', '__local__', new FakeHost({}), { cwd: '/work/../etc' }))
+      .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/cwd must be/) })
+    expect(host.writes).toHaveLength(0)
   })
 })

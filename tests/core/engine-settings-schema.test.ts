@@ -55,6 +55,21 @@ describe('engine settings schema: registry data', () => {
     }
   })
 
+  it("claude declares the project layers the way the CLI reads them: local over shared, shared never written", () => {
+    const byId = new Map(CLAUDE_SETTINGS.files.map((f) => [f.id, f]))
+    expect(byId.get('project')).toMatchObject({ path: '<cwd>/.claude/settings.json', scope: 'project', readOnly: true })
+    expect(byId.get('project-local')).toMatchObject({ path: '<cwd>/.claude/settings.local.json', scope: 'project' })
+    expect(byId.get('project-local')!.readOnly).toBeUndefined()
+    // The layers belong to the settings.json family only; ~/.claude.json has none.
+    expect(byId.get('user')!.overlays).toEqual(['project-local', 'project'])
+    expect(byId.get('global')!.overlays).toBeUndefined()
+    // The four rows the CLI's own screen writes to the project's local file.
+    const local = schemaItems(CLAUDE_SETTINGS).filter((i) => i.cliWritesTo !== undefined).map((i) => [i.key, i.cliWritesTo])
+    expect(local).toEqual([['outputStyle', 'project-local'], ['spinnerTipsEnabled', 'project-local'], ['prefersReducedMotion', 'project-local'], ['defaultView', 'project-local']])
+    // Codex has no project layer at all, so "this project only" is not offered for it.
+    expect(CODEX_SETTINGS.files.every((f) => f.overlays === undefined)).toBe(true)
+  })
+
   it('claude\'s permission mode row says Walnut sessions are unaffected (they pass --permission-mode)', () => {
     const item = findSchemaItem(CLAUDE_SETTINGS, 'permissions.defaultMode')!
     expect(item.help).toMatch(/--permission-mode/)
@@ -130,6 +145,36 @@ describe('engine settings schema: validateSettingValue', () => {
       expect.stringContaining("item 'nohelp' has no help text"),
       expect.stringContaining("item 'badpath' has an empty path segment"),
       expect.stringContaining("duplicate group id 'g'"),
+    ]))
+  })
+
+  it('schemaProblems pins the project-layer rules', () => {
+    const problems = schemaProblems({
+      files: [
+        { id: 'user', path: '~/x.json', format: 'json', label: 'u', overlays: ['ro', 'ghost', 'other'] },
+        { id: 'other', path: '~/y.json', format: 'json', label: 'o' },
+        { id: 'proj', path: '~/not-cwd.json', format: 'json', label: 'p', scope: 'project', homeEnv: { name: 'X', replaces: '~' }, overlays: ['ro'] },
+        { id: 'ro', path: '<cwd>/.x/ro.json', format: 'json', label: 'r', scope: 'project', readOnly: true },
+      ],
+      groups: [{ id: 'g', title: 'G', help: 'h', items: [
+        { ...bool, key: 'intoproject', file: 'proj' },
+        { ...bool, key: 'badcli', file: 'user', cliWritesTo: 'nowhere' },
+        { ...bool, key: 'rocli', file: 'user', cliWritesTo: 'ro' },
+        { ...bool, key: 'othercli', file: 'other', cliWritesTo: 'ro' },
+      ] }],
+    })
+    expect(problems).toEqual(expect.arrayContaining([
+      expect.stringContaining("project file 'proj' path must start with <cwd>/"),
+      expect.stringContaining("project file 'proj' cannot declare homeEnv"),
+      expect.stringContaining("project file 'proj' cannot declare overlays of its own"),
+      expect.stringContaining("file 'user' overlays reference unknown file 'ghost'"),
+      expect.stringContaining("file 'user' overlay 'other' is not project-scoped"),
+      expect.stringContaining("file 'user' has no writable overlay"),
+      expect.stringContaining("item 'intoproject' must be written to a user-scoped file"),
+      expect.stringContaining("item 'badcli' cliWritesTo 'nowhere' is not an overlay of 'user'"),
+      expect.stringContaining("item 'rocli' cliWritesTo 'ro' is read-only"),
+      // A CLI target must layer over the item's OWN file, not just any file's.
+      expect.stringContaining("item 'othercli' cliWritesTo 'ro' is not an overlay of 'other'"),
     ]))
   })
 })

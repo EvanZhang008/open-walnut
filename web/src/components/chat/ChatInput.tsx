@@ -20,6 +20,8 @@ import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
+import { PlusMenuActionRows } from './PlusMenuActionRows';
+import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 5;
@@ -176,9 +178,20 @@ interface ChatInputProps {
      */
     onMenuOpen?: () => void;
   }>;
+  /**
+   * Command rows for the "+" menu, under their own divider between Shortcuts
+   * and the toggles. Same split as `plusMenuToggles`: ChatInput owns the ROW
+   * (look, menu rules, close-on-select) and the caller owns the MEANING, so this
+   * component never learns what any action does. Selecting an enabled row
+   * closes the menu FIRST and then calls `onSelect` with the "+" button as the
+   * anchor, so whatever the caller opens can be placed against it on the same
+   * frame the menu goes away. A disabled row still renders (its title says
+   * why); its click is a no-op and the menu stays open.
+   */
+  plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange, plusMenuToggles }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange, plusMenuToggles, plusMenuActions }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -234,7 +247,12 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const [plusOpen, setPlusOpen] = useState(false);
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   const plusGroupRef = useRef<HTMLDivElement>(null);
+  // The "+" button itself: handed to a caller-defined action as its anchor.
+  const plusBtnRef = useRef<HTMLButtonElement>(null);
   const sendGroupRef = useRef<HTMLDivElement>(null);
+  // The "+" button promises only an attachment until the caller adds rows.
+  const hasCallerRows = !!plusMenuActions?.length || !!plusMenuToggles?.length;
+  const plusLabel = plusButtonLabel(hasCallerRows);
 
   // Draft persistence: debounce save to localStorage
   const draftTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -1398,6 +1416,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         {/* "+" attach menu — anchors a small popover of attachment actions */}
         <div className="chat-plus-group" ref={plusGroupRef}>
           <button
+            ref={plusBtnRef}
             className={`chat-plus-btn${plusOpen ? ' active' : ''}`}
             onClick={() => {
               // Opening: let each toggle load its value, so the switch is right by the
@@ -1410,10 +1429,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             }}
             type="button"
             disabled={disabled}
-            aria-label="Add attachment"
+            aria-label={plusLabel}
             aria-haspopup="menu"
             aria-expanded={plusOpen}
-            title="Add attachment"
+            title={plusLabel}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" />
@@ -1490,6 +1509,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                   )}
                 </>
               )}
+              {/* Caller-defined command rows. Close FIRST, then hand over the
+                  anchor: the caller's popover opens on the frame the menu leaves,
+                  and the outside-click closer above never sees the new surface
+                  as a click inside a menu that is already gone. */}
+              <PlusMenuActionRows
+                actions={plusMenuActions ?? []}
+                onSelect={(action) => selectPlusMenuAction(
+                  action, plusBtnRef.current, () => setPlusOpen(false), plusBtnRef.current?.closest<HTMLElement>('.chat-input-box'),
+                )}
+              />
               {/* On/off rows. `menuitemcheckbox` + aria-checked is the role a
                   toggle has in a menu; a native checkbox is banned here (its
                   macOS popup swallows pointerup — see web/src/AGENTS.md). The

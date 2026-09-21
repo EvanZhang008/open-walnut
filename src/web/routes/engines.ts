@@ -19,7 +19,9 @@ import { probeEngines, type EngineAvailability } from '../../core/agents/engine-
 import {
   EngineSettingsError,
   readEngineSettings,
+  validateCwd,
   writeEngineSettings,
+  type EngineSettingsContext,
   type EngineSettingsPatch,
   type SettingsFileTransport,
 } from '../../core/agents/engine-settings-service.js'
@@ -104,8 +106,12 @@ enginesRouter.get('/:id/models', async (req: Request, res: Response) => {
 
 // ── Engine settings: the engine's OWN config files on a host ──
 //
-// GET  /api/engines/:id/settings?host=   → EngineSettingsView
-// PATCH /api/engines/:id/settings?host=  {set, unset} → EngineSettingsView + changed
+// GET  /api/engines/:id/settings?host=&cwd=&sessionId=&scope=   → EngineSettingsView
+// PATCH /api/engines/:id/settings?host=&cwd=&sessionId=&scope=  {set, unset} → EngineSettingsView + changed
+//
+// `sessionId` names a Walnut session: its host and working directory become the
+// defaults (a composer asks about the session it sits in). `cwd` unlocks the
+// project layers; `scope` ('default' | 'project') picks where a write goes.
 //
 // The daemon on the host does the file I/O (host-local work belongs to the
 // daemon); the service owns parsing and the read-modify-write. This route only
@@ -124,11 +130,46 @@ async function resolveHostParam(raw: unknown): Promise<string | null> {
   return Object.hasOwn(config.hosts ?? {}, host) ? host : null
 }
 
+type SettingsTarget = { host: string; ctx: EngineSettingsContext }
+
+/**
+ * Host + working directory + scope for one request. A `sessionId` supplies the
+ * session's own host and cwd, so the composer never has to know either; explicit
+ * `host` / `cwd` params still win (a Settings page that picks a host by hand).
+ * Returns the 400 text instead of a target when a param is unusable.
+ */
+async function resolveSettingsTarget(query: Request['query']): Promise<SettingsTarget | { error: string }> {
+  let sessionHost: string | undefined
+  let sessionCwd: string | undefined
+  const sessionId = typeof query.sessionId === 'string' ? query.sessionId.trim().slice(0, 200) : ''
+  if (sessionId) {
+    const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+    const session = await getSessionByClaudeId(sessionId)
+    if (!session) return { error: `unknown session '${sessionId}'` }
+    sessionHost = session.host || undefined
+    sessionCwd = session.cwd || undefined
+  }
+  const hostRaw = typeof query.host === 'string' && query.host.trim() ? query.host.trim() : sessionHost
+  const host = await resolveHostParam(hostRaw)
+  if (!host) return { error: `unknown host '${String(hostRaw)}'` }
+  const cwdRaw = typeof query.cwd === 'string' && query.cwd.trim() ? query.cwd.trim() : sessionCwd
+  let cwd: string | undefined
+  if (cwdRaw !== undefined) {
+    const valid = validateCwd(cwdRaw)
+    if (!valid) return { error: 'cwd must be an absolute path without ".." segments' }
+    cwd = valid
+  }
+  const scopeRaw = typeof query.scope === 'string' && query.scope.trim() ? query.scope.trim() : 'default'
+  if (scopeRaw !== 'default' && scopeRaw !== 'project') return { error: "scope must be 'default' or 'project'" }
+  return { host, ctx: { ...(cwd ? { cwd } : {}), scope: scopeRaw } }
+}
+
 function daemonTransport(host: string): SettingsFileTransport {
   const reader = new DaemonFileReader(host)
   return {
     read: (p, maxBytes) => reader.readFileBytes(p, maxBytes),
     writeAtomic: (p, text, expectSha256) => reader.writeFileAtomic(p, text, expectSha256),
+    ensureGitExcluded: (cwd, p) => reader.ensureGitExcluded(cwd, p),
     // The local daemon inherits this process's environment, so overrides such
     // as DISABLE_AUTOUPDATER can be reported truthfully. A remote host's
     // environment is not visible from here; the view says so (envChecked:false).
@@ -172,32 +213,34 @@ function answerEngineSettingsError(res: Response, err: unknown, ctx: Record<stri
 
 enginesRouter.get('/:id/settings', async (req: Request, res: Response) => {
   const engine = String(req.params.id)
-  const host = await resolveHostParam(req.query.host)
-  if (!host) {
-    res.status(400).json({ error: `unknown host '${String(req.query.host)}'` })
+  const target = await resolveSettingsTarget(req.query)
+  if ('error' in target) {
+    res.status(400).json({ error: target.error, outcome: 'not-written' })
     return
   }
+  const { host, ctx } = target
   try {
-    const view = await withDeadline(readEngineSettings(engine, host, daemonTransport(host)), ENGINE_SETTINGS_DEADLINE_MS, `the daemon on ${host}`)
+    const view = await withDeadline(readEngineSettings(engine, host, daemonTransport(host), ctx), ENGINE_SETTINGS_DEADLINE_MS, `the daemon on ${host}`)
     res.json(view)
   } catch (err) {
-    answerEngineSettingsError(res, err, { engine, host, op: 'read' })
+    answerEngineSettingsError(res, err, { engine, host, cwd: ctx.cwd, op: 'read' })
   }
 })
 
 enginesRouter.patch('/:id/settings', async (req: Request, res: Response) => {
   const engine = String(req.params.id)
-  const host = await resolveHostParam(req.query.host)
-  if (!host) {
-    res.status(400).json({ error: `unknown host '${String(req.query.host)}'` })
+  const target = await resolveSettingsTarget(req.query)
+  if ('error' in target) {
+    res.status(400).json({ error: target.error, outcome: 'not-written' })
     return
   }
+  const { host, ctx } = target
   const body = (req.body ?? {}) as EngineSettingsPatch
   try {
-    const view = await withDeadline(writeEngineSettings(engine, host, body, daemonTransport(host)), ENGINE_SETTINGS_DEADLINE_MS, `the daemon on ${host}`)
-    log.web.info('engine settings updated', { engine, host, changed: view.changed })
+    const view = await withDeadline(writeEngineSettings(engine, host, body, daemonTransport(host), ctx), ENGINE_SETTINGS_DEADLINE_MS, `the daemon on ${host}`)
+    log.web.info('engine settings updated', { engine, host, cwd: ctx.cwd, scope: ctx.scope, changed: view.changed, gitExclude: view.gitExclude })
     res.json(view)
   } catch (err) {
-    answerEngineSettingsError(res, err, { engine, host, op: 'write' })
+    answerEngineSettingsError(res, err, { engine, host, cwd: ctx.cwd, scope: ctx.scope, op: 'write' })
   }
 })

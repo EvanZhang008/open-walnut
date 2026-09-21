@@ -21,8 +21,17 @@ export const LOCAL_HOST = '__local__';
 
 export type EngineSettingType = 'boolean' | 'select' | 'text' | 'number';
 export type EngineSettingValue = boolean | string | number;
-/** Where the value being used comes from. `legacy` = an older file location the engine still falls back to. */
-export type EngineSettingSource = 'file' | 'legacy' | 'default';
+/**
+ * Where the value being used comes from: the row's own file, a project overlay
+ * (`overlay` names it), an older file location the engine still falls back to
+ * (`legacy` names it), or the engine's built-in default.
+ */
+export type EngineSettingSource = 'file' | 'overlay' | 'legacy' | 'default';
+/** Where a write goes: 'default' follows the engine's own config screen; 'project' targets the project's local file only. */
+export type EngineSettingsWriteScope = 'default' | 'project';
+export type GitExcludeOutcome = 'added' | 'already' | 'not-a-repo' | 'unavailable' | 'failed';
+/** When a saved value is felt: a running session's next turn, or only sessions started after the save. */
+export type EngineSettingAppliesOn = 'next-turn' | 'new-session';
 export type EngineSettingScope = 'sessions' | 'terminal' | 'updates';
 export type EngineSettingsFileFormat = 'json' | 'toml-top-level';
 
@@ -38,6 +47,10 @@ export interface EngineSettingsFileView {
   path: string;
   label: string;
   format: EngineSettingsFileFormat;
+  /** 'project' = lives under the session's working directory and applies there only. */
+  scope: 'user' | 'project';
+  /** Read for attribution, never written (a project's shared, committed file). */
+  readOnly: boolean;
   exists: boolean;
   /** Parse error. The file's items read as unset and writes to it are refused. */
   error?: string;
@@ -71,6 +84,35 @@ export interface EngineSettingView {
   envOverride?: { name: string; value: string };
   /** The file holds something the schema cannot represent, or the file is unreadable. */
   invalid?: string;
+  /** Set when `source` is 'overlay': the project file the value was read from. */
+  overlay?: { file: string; path: string };
+  /**
+   * Where a write for this row goes under the requested scope, and whether that
+   * file holds the key today (a Reset removes it from there). Shown so a save is
+   * never a surprise about which file changed.
+   */
+  writeTarget: { file: string; path: string; holds: boolean };
+  /**
+   * A layer above the write target holds the key (a read-only shared project file
+   * with nothing writable over it): saving here would not change what the engine
+   * uses. The row says which file to edit by hand instead.
+   */
+  overriddenBy?: { file: string; path: string };
+  /** When a change to this row is felt, when the engine's data says. */
+  appliesOn?: EngineSettingAppliesOn;
+  /**
+   * False when Walnut's own launch (`launchOverride` names the flag or variable)
+   * outranks the stored value for the sessions it drives: the row still edits the
+   * file, but only terminal sessions feel it.
+   */
+  honoredHere?: false;
+  launchOverride?: string;
+  /**
+   * False when the view offers the project scope but this key's file has no
+   * per-project layer the engine would read: "this project only" cannot apply to
+   * it and the server refuses such a write.
+   */
+  projectLayer?: false;
   /**
    * The older location a `legacy` value is being read from, when the server names
    * it. Optional: a server that does not send it leaves the row saying "an older
@@ -95,6 +137,14 @@ export interface EngineSettingsView {
   note?: string;
   /** Environment overrides were evaluated (the host's runtime env was known). */
   envChecked: boolean;
+  /** The working directory whose project layers were consulted, when one was given. */
+  cwd?: string;
+  /** The write scope every row's `writeTarget` was computed for. */
+  scope: EngineSettingsWriteScope;
+  /** The engine declares a writable project file AND a working directory is known. */
+  projectScopeAvailable: boolean;
+  /** Engine-wide answer to "when does a change apply"; rows may carry their own. */
+  appliesOn?: EngineSettingAppliesOn;
   files: EngineSettingsFileView[];
   groups: EngineSettingsGroupView[];
 }
@@ -105,8 +155,40 @@ export interface EngineSettingsPatch {
   unset?: string[];
 }
 
-/** A write answers with a FRESH read plus the keys it touched. Render this, never the optimistic value. */
-export type EngineSettingsWriteResult = EngineSettingsView & { changed: string[] };
+/**
+ * A write answers with a FRESH read plus the keys it touched. Render this, never
+ * the optimistic value. `gitExclude` is set when the write created a project file:
+ * whether the host kept it out of the repo ('added' / 'already'), the directory is
+ * not a checkout, the host's daemon predates the ability ('unavailable'), or the
+ * step itself failed ('failed', with `error` saying why). The settings write
+ * landed in every case.
+ */
+export type EngineSettingsWriteResult = EngineSettingsView & {
+  changed: string[];
+  gitExclude?: { path: string; outcome: GitExcludeOutcome; error?: string };
+};
+
+/**
+ * Which files a request is about. `host` alone reads the host-wide files (the
+ * Settings page); `sessionId` takes the session's own host and working directory
+ * (the composer popover) and `cwd` names one directly. `scope` picks where a
+ * write goes and is echoed in the view's `writeTarget`s.
+ */
+export interface EngineSettingsTarget {
+  host?: string;
+  sessionId?: string;
+  cwd?: string;
+  scope?: EngineSettingsWriteScope;
+}
+
+function targetParams(target: EngineSettingsTarget): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (target.host) params.host = target.host;
+  if (target.sessionId) params.sessionId = target.sessionId;
+  if (target.cwd) params.cwd = target.cwd;
+  if (target.scope && target.scope !== 'default') params.scope = target.scope;
+  return params;
+}
 
 /**
  * Statuses these routes return BY DESIGN, so they are warned rather than logged
@@ -131,10 +213,11 @@ function settingsPath(engine: string): string {
 
 export function fetchEngineSettings(
   engine: string,
-  host: string,
+  target: string | EngineSettingsTarget,
   opts?: { signal?: AbortSignal },
 ): Promise<EngineSettingsView> {
-  return apiGet<EngineSettingsView>(settingsPath(engine), { host }, {
+  const params = targetParams(typeof target === 'string' ? { host: target } : target);
+  return apiGet<EngineSettingsView>(settingsPath(engine), params, {
     signal: opts?.signal,
     timeoutMs: READ_TIMEOUT_MS,
     quietStatuses: QUIET_READ_STATUSES,
@@ -143,11 +226,12 @@ export function fetchEngineSettings(
 
 export function patchEngineSettings(
   engine: string,
-  host: string,
+  target: string | EngineSettingsTarget,
   patch: EngineSettingsPatch,
 ): Promise<EngineSettingsWriteResult> {
-  // apiPatch takes no params bag, so the host rides the query string here.
-  const url = `${settingsPath(engine)}?host=${encodeURIComponent(host)}`;
+  // apiPatch takes no params bag, so the target rides the query string here.
+  const query = new URLSearchParams(targetParams(typeof target === 'string' ? { host: target } : target)).toString();
+  const url = query ? `${settingsPath(engine)}?${query}` : settingsPath(engine);
   return apiPatch<EngineSettingsWriteResult>(url, patch, {
     timeoutMs: WRITE_TIMEOUT_MS,
     quietStatuses: QUIET_WRITE_STATUSES,

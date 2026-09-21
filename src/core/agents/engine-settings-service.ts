@@ -23,11 +23,15 @@ import { createHash } from 'node:crypto'
 import type { SessionEngine } from '../types.js'
 import { engineCaps, isKnownEngine } from './engine-registry.js'
 import {
+  CWD_PLACEHOLDER,
+  type EngineSettingAppliesOn,
   type EngineSettingItem,
   type EngineSettingsFile,
   type EngineSettingsSchema,
   type EngineSettingValue,
+  fileNeedsCwd,
   findSchemaItem,
+  schemaHasProjectScope,
   validateSettingValue,
 } from './engine-settings-schema.js'
 import {
@@ -60,8 +64,36 @@ export interface SettingsFileTransport {
    * 'EMODIFIED' when the guard fails.
    */
   writeAtomic(path: string, text: string, expectSha256: string): Promise<void>
+  /**
+   * Keep a file Walnut just created inside a git checkout out of the repo
+   * (`.git/info/exclude`, never a tracked file). Optional: a host without it
+   * reports 'unavailable' and the caller says so instead of pretending.
+   */
+  ensureGitExcluded?(cwd: string, path: string): Promise<GitExcludeOutcome>
   /** Runtime environment of the engine's processes on this host, when known (local host). */
   env?: Readonly<Record<string, string | undefined>>
+}
+
+export type GitExcludeOutcome = 'added' | 'already' | 'not-a-repo' | 'unavailable'
+
+/**
+ * What happened to a project file the write created: the daemon's answer, or
+ * 'failed' with the reason when the exclude step itself threw. Never fatal: the
+ * settings write already landed, and the UI says which of the two it is.
+ */
+export interface GitExcludeReport {
+  path: string
+  outcome: GitExcludeOutcome | 'failed'
+  error?: string
+}
+
+/** Where a write goes: 'default' follows the engine's own config screen; 'project' targets the project's local file only. */
+export type EngineSettingsWriteScope = 'default' | 'project'
+
+export interface EngineSettingsContext {
+  /** Working directory of the session being configured; unlocks the project layers. */
+  cwd?: string
+  scope?: EngineSettingsWriteScope
 }
 
 /**
@@ -72,7 +104,12 @@ export interface SettingsFileTransport {
  */
 export const MAX_SETTINGS_FILE_BYTES = 4 * 1024 * 1024
 
-export type EngineSettingSource = 'file' | 'legacy' | 'default'
+/**
+ * Where the value in force comes from: the item's own file, a project overlay
+ * (`overlay` names it), an older location the engine still reads (`legacy`
+ * names it), or the engine's built-in default.
+ */
+export type EngineSettingSource = 'file' | 'overlay' | 'legacy' | 'default'
 
 export interface EngineSettingView {
   key: string
@@ -93,12 +130,41 @@ export interface EngineSettingView {
   /** The value the engine will use; null when unset and the default cannot be named. */
   value: EngineSettingValue | null
   source: EngineSettingSource
+  /** Set when `source` is 'overlay': the project file the value was read from (path as resolved on the host). */
+  overlay?: { file: string; path: string }
   /** Set when `source` is 'legacy': the older file the value was actually read from (path as resolved on the host). */
   legacy?: { file: string; path: string }
+  /**
+   * Where a write for this row goes under the requested scope, and whether that
+   * file holds the key today (a Reset removes it from there). The client shows
+   * this so a save is never a surprise about which file changed.
+   */
+  writeTarget: { file: string; path: string; holds: boolean }
+  /**
+   * A layer ABOVE the write target holds the key (a read-only shared project
+   * file with nothing writable over it), so saving here would not change what
+   * the engine uses. The sentence says which file to edit by hand.
+   */
+  overriddenBy?: { file: string; path: string }
   /** Set when an environment variable overrides the stored value. */
   envOverride?: { name: string; value: string }
   /** Set when the file holds something the schema cannot represent (wrong type, unreadable file). */
   invalid?: string
+  /** When a change to this row is felt, when the engine's data says. */
+  appliesOn?: EngineSettingAppliesOn
+  /**
+   * False when Walnut's own launch (`launchOverride` names the flag or variable)
+   * outranks the stored value for the sessions it drives: the row still edits
+   * the file, but only terminal sessions feel it.
+   */
+  honoredHere?: false
+  launchOverride?: string
+  /**
+   * False when the view offers the project scope (`projectScopeAvailable`) but
+   * this key's file has no per-project layer the engine would read, so "this
+   * project only" cannot apply to it and such a write is refused.
+   */
+  projectLayer?: false
 }
 
 export interface EngineSettingsFileView {
@@ -107,6 +173,8 @@ export interface EngineSettingsFileView {
   path: string
   label: string
   format: EngineSettingsFile['format']
+  scope: 'user' | 'project'
+  readOnly: boolean
   exists: boolean
   /** Parse error; the file's items are shown as unset and writes to it are refused. */
   error?: string
@@ -126,6 +194,14 @@ export interface EngineSettingsView {
   note?: string
   /** True when environment overrides were evaluated (the host's runtime env was known). */
   envChecked: boolean
+  /** The working directory whose project layers were consulted, when one was given. */
+  cwd?: string
+  /** The write scope the `writeTarget` of every row was computed for. */
+  scope: EngineSettingsWriteScope
+  /** The engine declares a writable project file AND a working directory is known. */
+  projectScopeAvailable: boolean
+  /** Engine-wide answer to "when does a change apply"; rows may carry their own. */
+  appliesOn?: EngineSettingAppliesOn
   files: EngineSettingsFileView[]
   groups: EngineSettingsGroupView[]
 }
@@ -170,14 +246,37 @@ const isTooLargeError = (err: unknown) => err instanceof Error && /EFBIG/.test(e
  */
 const isUpgradeError = (err: unknown) => err instanceof Error && err.name === 'DaemonNeedsUpgradeError'
 
-/** The path the engine resolves on this host: `homeEnv` relocation applied when that variable is set. */
-export function resolveSettingsFilePath(file: EngineSettingsFile, env?: Readonly<Record<string, string | undefined>>): string {
+/**
+ * The path the engine resolves on this host: `homeEnv` relocation applied when
+ * that variable is set; `<cwd>` replaced by the session's working directory.
+ * A project file with no working directory has no path (undefined).
+ */
+export function resolveSettingsFilePath(
+  file: EngineSettingsFile,
+  env?: Readonly<Record<string, string | undefined>>,
+  cwd?: string,
+): string | undefined {
+  if (fileNeedsCwd(file)) {
+    if (!cwd) return undefined
+    return cwd.replace(/\/+$/, '') + file.path.slice(CWD_PLACEHOLDER.length)
+  }
   const relocation = file.homeEnv
   const dir = relocation ? env?.[relocation.name] : undefined
   if (!relocation || !dir || dir.trim() === '') return file.path
   const prefix = relocation.replaces + '/'
   if (!file.path.startsWith(prefix)) return file.path
   return dir.replace(/\/+$/, '') + '/' + file.path.slice(prefix.length)
+}
+
+/** A working directory the daemon can use as a path: absolute (or `~`-relative), no traversal. */
+export function validateCwd(cwd: unknown): string | null {
+  if (typeof cwd !== 'string') return null
+  const trimmed = cwd.trim()
+  if (!trimmed || trimmed.length > 4096) return null
+  if (!(trimmed.startsWith('/') || trimmed === '~' || trimmed.startsWith('~/'))) return null
+  if (trimmed.split('/').some((seg) => seg === '..')) return null
+  if (trimmed.includes('\0')) return null
+  return trimmed
 }
 
 function schemaFor(engine: string): { engine: SessionEngine; displayName: string; schema: EngineSettingsSchema } {
@@ -203,8 +302,7 @@ interface LoadedFile {
   error?: string
 }
 
-async function loadFile(decl: EngineSettingsFile, transport: SettingsFileTransport): Promise<LoadedFile> {
-  const path = resolveSettingsFilePath(decl, transport.env)
+async function loadFile(decl: EngineSettingsFile, transport: SettingsFileTransport, path: string): Promise<LoadedFile> {
   let bytes: Buffer | null
   try {
     bytes = await transport.read(path, MAX_SETTINGS_FILE_BYTES)
@@ -258,7 +356,61 @@ function envOverrideFor(item: EngineSettingItem, env?: Readonly<Record<string, s
   return undefined
 }
 
-function viewItem(item: EngineSettingItem, files: Map<string, LoadedFile>, env?: SettingsFileTransport['env']): EngineSettingView {
+/** The loaded project overlays of ONE file, highest precedence first (only those a path resolved for). */
+function loadedOverlays(fileId: string, files: Map<string, LoadedFile>): LoadedFile[] {
+  return (files.get(fileId)?.decl.overlays ?? []).map((id) => files.get(id)).filter((f): f is LoadedFile => f !== undefined)
+}
+
+/** The first writable project overlay of a file, when it declares one and a working directory resolved it. */
+function writableOverlay(fileId: string, files: Map<string, LoadedFile>): LoadedFile | undefined {
+  return loadedOverlays(fileId, files).find((f) => !f.decl.readOnly)
+}
+
+function projectScopeAvailable(schema: EngineSettingsSchema, cwd: string | undefined): boolean {
+  return cwd !== undefined && schemaHasProjectScope(schema)
+}
+
+/** A working directory resolved at least one writable project overlay in this load. */
+function loadedOverlaysExist(files: Map<string, LoadedFile>): boolean {
+  for (const f of files.values()) if (f.decl.scope === 'project' && !f.decl.readOnly) return true
+  return false
+}
+
+/**
+ * The file a write for `item` goes to. 'project' scope: the writable project
+ * overlay, always. 'default' scope follows the engine's own screen, with one
+ * rule on top: a key that a project layer already holds is edited (or
+ * overridden) THERE, so flipping the control changes what the engine uses
+ * rather than a user-wide value the project keeps hiding.
+ */
+function writeTargetFor(
+  item: EngineSettingItem, schema: EngineSettingsSchema, files: Map<string, LoadedFile>, scope: EngineSettingsWriteScope,
+): LoadedFile {
+  const primary = files.get(item.file)!
+  const writable = writableOverlay(item.file, files)
+  if (scope === 'project') {
+    if (!writable) throw new EngineSettingsError(400, `'${item.key}' is kept in ${primary.decl.label}, which has no per-project layer`)
+    return writable
+  }
+  if (!writable) return primary
+  for (const overlay of loadedOverlays(item.file, files)) {
+    if (storedValue(overlay, item.path) !== undefined) return overlay.decl.readOnly ? writable : overlay
+  }
+  if (item.cliWritesTo !== undefined) {
+    const declared = files.get(item.cliWritesTo)
+    if (declared && !declared.decl.readOnly) return declared
+  }
+  return primary
+}
+
+function viewItem(
+  item: EngineSettingItem, schema: EngineSettingsSchema, files: Map<string, LoadedFile>,
+  scope: EngineSettingsWriteScope, env?: SettingsFileTransport['env'],
+): EngineSettingView {
+  // A key whose file has no project layer keeps its own file as the target even
+  // under the project scope (a write there is refused; the view still renders).
+  const projectLayer = writableOverlay(item.file, files) !== undefined
+  const target = writeTargetFor(item, schema, files, projectLayer ? scope : 'default')
   const view: EngineSettingView = {
     key: item.key, label: item.label, help: item.help, type: item.type,
     ...(item.options ? { options: item.options } : {}),
@@ -273,23 +425,40 @@ function viewItem(item: EngineSettingItem, files: Map<string, LoadedFile>, env?:
     file: item.file,
     value: item.default,
     source: 'default',
+    writeTarget: { file: target.decl.id, path: target.path, holds: storedValue(target, item.path) !== undefined },
+    ...(item.appliesOn ?? schema.appliesOn ? { appliesOn: item.appliesOn ?? schema.appliesOn } : {}),
+    ...(item.launchOverride ? { honoredHere: false as const, launchOverride: item.launchOverride } : {}),
+    // Only meaningful where the project scope exists at all (a cwd resolved some overlay).
+    ...(!projectLayer && loadedOverlaysExist(files) ? { projectLayer: false as const } : {}),
   }
   const primary = files.get(item.file)
   if (primary?.error) view.invalid = `file unreadable: ${primary.error}`
+  if (target.error && target !== primary) view.invalid = `file unreadable: ${target.error}`
 
-  const raw = storedValue(primary, item.path)
-  if (raw !== undefined) {
-    view.source = 'file'
+  // Precedence: project overlays (highest first), then the item's own file, then
+  // the legacy fallback, then the default. The first layer holding the key wins.
+  const layers: Array<{ file: LoadedFile; path: string; source: EngineSettingSource }> = [
+    ...loadedOverlays(item.file, files).map((file) => ({ file, path: item.path, source: 'overlay' as const })),
+    ...(primary ? [{ file: primary, path: item.path, source: 'file' as const }] : []),
+  ]
+  if (item.legacy) {
+    const legacyFile = files.get(item.legacy.file)
+    if (legacyFile) layers.push({ file: legacyFile, path: item.legacy.path, source: 'legacy' })
+  }
+  for (const layer of layers) {
+    const raw = storedValue(layer.file, layer.path)
+    if (raw === undefined) continue
+    if (layer.source === 'legacy' && !typeMatches(item, raw)) continue
+    view.source = layer.source
+    if (layer.source === 'overlay') view.overlay = { file: layer.file.decl.id, path: layer.file.path }
+    if (layer.source === 'legacy') view.legacy = { file: layer.file.decl.id, path: layer.file.path }
     if (typeMatches(item, raw)) view.value = raw
     else { view.value = item.default; view.invalid = `stored value is ${Array.isArray(raw) ? 'an array' : typeof raw}, expected ${item.type}` }
-  } else if (item.legacy) {
-    const legacyFile = files.get(item.legacy.file)
-    const legacyRaw = storedValue(legacyFile, item.legacy.path)
-    if (legacyRaw !== undefined && typeMatches(item, legacyRaw)) {
-      view.source = 'legacy'
-      view.value = legacyRaw
-      view.legacy = { file: item.legacy.file, path: legacyFile!.path }
+    // A layer above the write target that holds the key makes a write here inert.
+    if (layer.file !== target && layers.indexOf(layer) < layers.findIndex((l) => l.file === target)) {
+      view.overriddenBy = { file: layer.file.decl.id, path: layer.file.path }
     }
+    break
   }
   const override = envOverrideFor(item, env)
   if (override) view.envOverride = override
@@ -299,34 +468,61 @@ function viewItem(item: EngineSettingItem, files: Map<string, LoadedFile>, env?:
 function buildView(
   engine: SessionEngine, displayName: string, host: string, schema: EngineSettingsSchema,
   files: Map<string, LoadedFile>, env: SettingsFileTransport['env'],
+  ctx: { cwd: string | undefined; scope: EngineSettingsWriteScope },
 ): EngineSettingsView {
   return {
     engine, displayName, host,
     ...(schema.note ? { note: schema.note } : {}),
     envChecked: env !== undefined,
-    files: schema.files.map((decl) => {
-      const f = files.get(decl.id)!
-      return {
-        id: decl.id, path: f.path, label: decl.label, format: decl.format, exists: f.exists,
+    ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+    scope: ctx.scope,
+    projectScopeAvailable: projectScopeAvailable(schema, ctx.cwd),
+    ...(schema.appliesOn ? { appliesOn: schema.appliesOn } : {}),
+    // Only the files that resolved to a path: project files drop out without a cwd.
+    files: schema.files.flatMap((decl) => {
+      const f = files.get(decl.id)
+      if (!f) return []
+      return [{
+        id: decl.id, path: f.path, label: decl.label, format: decl.format,
+        scope: decl.scope ?? 'user', readOnly: decl.readOnly === true, exists: f.exists,
         ...(f.error ? { error: f.error } : {}),
-      }
+      }]
     }),
     groups: schema.groups.map((g) => ({
       id: g.id, title: g.title, help: g.help,
-      items: g.items.map((item) => viewItem(item, files, env)),
+      items: g.items.map((item) => viewItem(item, schema, files, ctx.scope, env)),
     })),
   }
 }
 
-async function loadAll(schema: EngineSettingsSchema, transport: SettingsFileTransport): Promise<Map<string, LoadedFile>> {
-  const loaded = await Promise.all(schema.files.map((decl) => loadFile(decl, transport)))
+/** Every declared file that resolves to a path here: project files only when a working directory is known. */
+async function loadAll(schema: EngineSettingsSchema, transport: SettingsFileTransport, cwd: string | undefined): Promise<Map<string, LoadedFile>> {
+  const targets = schema.files
+    .map((decl) => ({ decl, path: resolveSettingsFilePath(decl, transport.env, cwd) }))
+    .filter((t): t is { decl: EngineSettingsFile; path: string } => t.path !== undefined)
+  const loaded = await Promise.all(targets.map((t) => loadFile(t.decl, transport, t.path)))
   return new Map(loaded.map((f) => [f.decl.id, f]))
 }
 
-export async function readEngineSettings(engineId: string, host: string, transport: SettingsFileTransport): Promise<EngineSettingsView> {
+function normalizeContext(ctx: EngineSettingsContext | undefined): { cwd: string | undefined; scope: EngineSettingsWriteScope } {
+  const cwd = ctx?.cwd === undefined ? undefined : validateCwd(ctx.cwd) ?? undefined
+  if (ctx?.cwd !== undefined && cwd === undefined) throw new EngineSettingsError(400, 'cwd must be an absolute path without ".." segments')
+  const scope = ctx?.scope ?? 'default'
+  if (scope !== 'default' && scope !== 'project') throw new EngineSettingsError(400, "scope must be 'default' or 'project'")
+  if (scope === 'project' && !cwd) throw new EngineSettingsError(400, "scope 'project' needs a cwd")
+  return { cwd, scope }
+}
+
+export async function readEngineSettings(
+  engineId: string, host: string, transport: SettingsFileTransport, ctx?: EngineSettingsContext,
+): Promise<EngineSettingsView> {
   const { engine, displayName, schema } = schemaFor(engineId)
-  const files = await loadAll(schema, transport)
-  return buildView(engine, displayName, host, schema, files, transport.env)
+  const { cwd, scope } = normalizeContext(ctx)
+  if (scope === 'project' && !projectScopeAvailable(schema, cwd)) {
+    throw new EngineSettingsError(400, `engine '${engineId}' has no project-scoped settings file`)
+  }
+  const files = await loadAll(schema, transport, cwd)
+  return buildView(engine, displayName, host, schema, files, transport.env, { cwd, scope })
 }
 
 // ── Writes ──
@@ -393,24 +589,43 @@ function applyToFile(file: LoadedFile, changes: PlannedChange[]): string {
   }
 }
 
-export async function writeEngineSettings(
-  engineId: string, host: string, patch: EngineSettingsPatch, transport: SettingsFileTransport,
-): Promise<EngineSettingsView & { changed: string[] }> {
-  const { engine, displayName, schema } = schemaFor(engineId)
-  const changes = planChanges(schema, patch)
+export interface EngineSettingsWriteResult extends EngineSettingsView {
+  changed: string[]
+  /**
+   * Set when this write CREATED a project-scoped file inside a git checkout:
+   * whether it was kept out of the repo. The engine's own screen relies on a
+   * global ignore rule that a custom `core.excludesFile` silently disables, so
+   * Walnut pins the exclusion per repo (.git/info/exclude) and reports it.
+   */
+  gitExclude?: GitExcludeReport
+}
 
-  const byFile = new Map<string, PlannedChange[]>()
+export async function writeEngineSettings(
+  engineId: string, host: string, patch: EngineSettingsPatch, transport: SettingsFileTransport, ctx?: EngineSettingsContext,
+): Promise<EngineSettingsWriteResult> {
+  const { engine, displayName, schema } = schemaFor(engineId)
+  const { cwd, scope } = normalizeContext(ctx)
+  const changes = planChanges(schema, patch)
+  if (scope === 'project' && !projectScopeAvailable(schema, cwd)) {
+    throw new EngineSettingsError(400, `engine '${engineId}' has no project-scoped settings file`)
+  }
+
+  // Which file each key goes to depends on what the layers hold right now, so
+  // everything is read once up front and the plan is grouped by TARGET file.
+  const before = await loadAll(schema, transport, cwd)
+  const byFile = new Map<string, { decl: EngineSettingsFile; path: string; changes: PlannedChange[] }>()
   for (const c of changes) {
-    const list = byFile.get(c.item.file) ?? []
-    list.push(c)
-    byFile.set(c.item.file, list)
+    const target = writeTargetFor(c.item, schema, before, scope)
+    const group = byFile.get(target.decl.id) ?? { decl: target.decl, path: target.path, changes: [] }
+    group.changes.push(c)
+    byFile.set(target.decl.id, group)
   }
 
   // True once any file in this patch has been replaced on disk: from then on a
   // failure is reported as 'written', never as a refusal the client may undo.
   let written = false
-  for (const [fileId, fileChanges] of byFile) {
-    const decl = schema.files.find((f) => f.id === fileId)!
+  let created: { decl: EngineSettingsFile; path: string } | null = null
+  for (const { decl, path, changes: fileChanges } of byFile.values()) {
     // One retry: the engine rewrote the file between our read and our write
     // (running CLIs do this on their own schedule). A second loss is reported,
     // never overwritten.
@@ -418,7 +633,9 @@ export async function writeEngineSettings(
       let current: LoadedFile
       let next: string
       try {
-        current = await loadFile(decl, transport)
+        // The bytes read for the plan are the ones the write guard must quote;
+        // only the retry after a concurrent change needs a fresh read.
+        current = attempt === 0 && before.has(decl.id) ? before.get(decl.id)! : await loadFile(decl, transport, path)
         // Removing keys from a file that does not exist is already done; creating
         // an empty `{}` to prove it would be a write the user never asked for.
         if (!current.exists && fileChanges.every((c) => c.value === undefined)) break
@@ -432,6 +649,7 @@ export async function writeEngineSettings(
       try {
         await transport.writeAtomic(current.path, next, current.sha)
         written = true
+        if (!current.exists && decl.scope === 'project') created = { decl, path: current.path }
         break
       } catch (err) {
         if (isModifiedError(err) && attempt === 0) continue
@@ -446,13 +664,33 @@ export async function writeEngineSettings(
     }
   }
 
+  // A project file that did not exist a moment ago may now be an untracked file
+  // in the user's repo. Best effort and never fatal: the settings write landed.
+  let gitExclude: GitExcludeReport | undefined
+  if (created && cwd) {
+    gitExclude = { path: created.path, outcome: 'unavailable' }
+    if (transport.ensureGitExcluded) {
+      try {
+        gitExclude.outcome = await transport.ensureGitExcluded(cwd, created.path)
+      } catch (err) {
+        // A daemon that has the command but could not run it is a different
+        // story from one that lacks it; the UI tells the two apart.
+        gitExclude = { path: created.path, outcome: 'failed', error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  }
+
   let files: Map<string, LoadedFile>
   try {
-    files = await loadAll(schema, transport)
+    files = await loadAll(schema, transport, cwd)
   } catch (err) {
     if (!written || isUpgradeError(err)) throw err
     const message = err instanceof Error ? err.message : String(err)
     throw new EngineSettingsError(502, `saved, but reading the file back failed: ${message}`, 'written')
   }
-  return { ...buildView(engine, displayName, host, schema, files, transport.env), changed: changes.map((c) => c.item.key) }
+  return {
+    ...buildView(engine, displayName, host, schema, files, transport.env, { cwd, scope }),
+    changed: changes.map((c) => c.item.key),
+    ...(gitExclude ? { gitExclude } : {}),
+  }
 }

@@ -90,6 +90,27 @@ export interface MenuPlacementOptions {
    */
   align?: 'right' | 'left' | 'center' | 'start';
   /**
+   * What happens when a 'left' or 'start' aligned menu would run off the right
+   * edge. Default 'flip': fall back to right-aligned at the anchor (a small
+   * flyout stays glued to its trigger). 'clamp': keep the side and slide the
+   * menu left only as far as the viewport margin needs, so a wide panel opened
+   * from a narrow column's button stays over THAT column instead of jumping
+   * across the neighbouring one (measured: a 480px popover from a 298px
+   * rightmost session column flipped to x 551..1031 and covered the column to
+   * its left, composer and "+" included; clamped it sits at 788..1268).
+   */
+  edgeOverflow?: 'flip' | 'clamp';
+  /**
+   * Take the anchor's TOP and BOTTOM from this element instead of the trigger
+   * (left/right still come from the trigger). For a menu that belongs to one
+   * button of a toolbar but must clear the whole toolbar: the session engine
+   * settings popover opens upward from the composer's "+" and, anchored to the
+   * button alone, sat on top of the textarea the user would want to click next.
+   * Anchored to the composer box it floats above the whole composer. Falls back
+   * to the trigger when the element is missing or not connected.
+   */
+  verticalAnchorRef?: RefObject<HTMLElement | null>;
+  /**
    * Which side to PREFER when both fit. Default 'down' (the classic dropdown
    * expectation). 'up' inverts it — open upward unless it doesn't fit above
    * AND below has more room. Used by the draft launch bar, whose triggers sit
@@ -99,6 +120,14 @@ export interface MenuPlacementOptions {
    */
   preferSide?: 'up' | 'down';
 }
+
+/**
+ * How long a trigger that is still in the document may measure 0x0 before the
+ * menu treats it as gone. Long enough to survive a re-layout of the surface it
+ * belongs to, short enough that a row hidden by a live filter still takes its
+ * menu with it while the user is looking at the same screen.
+ */
+const ANCHOR_LOST_GRACE_MS = 600;
 
 /** Which side the menu opens toward. `null` = decide from the geometry. */
 export type OpenSide = 'up' | 'down' | null;
@@ -131,6 +160,8 @@ export interface PlacementInput {
   forceSide?: OpenSide;
   /** See MenuPlacementOptions.align. */
   align?: 'right' | 'left' | 'center' | 'start';
+  /** See MenuPlacementOptions.edgeOverflow. */
+  edgeOverflow?: 'flip' | 'clamp';
   /** See MenuPlacementOptions.preferSide. */
   preferSide?: 'up' | 'down';
 }
@@ -195,7 +226,8 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
         : input.align === 'start' && menuWidth > 0
           ? viewportWidth - anchorLeft - menuWidth
           : viewportWidth - anchor.right;
-  if ((input.align === 'left' || input.align === 'start') && menuWidth > 0 && right < margin) {
+  if ((input.align === 'left' || input.align === 'start') && menuWidth > 0 && right < margin
+      && input.edgeOverflow !== 'clamp') {
     right = viewportWidth - anchor.right;
   }
   if (menuWidth > 0) {
@@ -218,7 +250,10 @@ export function useMenuPlacement(
   menuRef: RefObject<HTMLElement | null>,
   options: MenuPlacementOptions = {},
 ): MenuPlacement | null {
-  const { gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', preferSide = 'down', onAnchorLost } = options;
+  const {
+    gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', preferSide = 'down',
+    edgeOverflow = 'flip', verticalAnchorRef, onAnchorLost,
+  } = options;
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   // The side is decided ONCE per open and then latched — see PlacementInput.forceSide.
   const sideRef = useRef<OpenSide>(null);
@@ -226,6 +261,8 @@ export function useMenuPlacement(
   // would otherwise tear down and re-run the whole effect every render).
   const onAnchorLostRef = useRef(onAnchorLost);
   onAnchorLostRef.current = onAnchorLost;
+  /** When the trigger first measured 0x0 while still in the document; null while it has a box. */
+  const lostSinceRef = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     // Reset the latch on close AND on a new anchor: a second right-click at a
@@ -236,14 +273,20 @@ export function useMenuPlacement(
     sideRef.current = null;
     if (!open) { setPlacement(null); return; }
 
+    let lostTimer: ReturnType<typeof setTimeout> | undefined;
     const place = () => {
       const menu = menuRef.current;
       // A cursor anchor is a zero-size rect at the click point; otherwise use
       // the trigger button's box.
       const trigger = triggerRef.current;
+      const triggerRect = trigger?.getBoundingClientRect();
+      const vertical = verticalAnchorRef?.current;
+      // Vertical anchor: the element's own top/bottom, the trigger's left/right.
       const r = anchorPoint
         ? { top: anchorPoint.y, bottom: anchorPoint.y, right: anchorPoint.x }
-        : trigger?.getBoundingClientRect();
+        : triggerRect && vertical && vertical.isConnected && vertical.offsetHeight > 0
+          ? (() => { const v = vertical.getBoundingClientRect(); return { top: v.top, bottom: v.bottom, left: triggerRect.left, right: triggerRect.right }; })()
+          : triggerRect;
       if (!r) return;
 
       // A trigger that was unmounted or display:none'd while the menu is open
@@ -252,11 +295,27 @@ export function useMenuPlacement(
       // right: 1280px on a 1280px viewport, i.e. fully off-screen left) and no
       // scroll can recover it. Cursor anchors are exempt — they're legitimately
       // zero-HEIGHT, and they don't depend on the trigger still existing.
-      if (!anchorPoint && trigger
-          && (trigger.offsetWidth === 0 || trigger.offsetHeight === 0 || !trigger.isConnected)) {
-        onAnchorLostRef.current?.();
+      //
+      // A trigger that is still IN the document but momentarily 0x0 is a
+      // different story, and telling the two apart matters: a panel that
+      // re-lays-out under load (a session column resizing, a collapsed column
+      // painting) can measure 0x0 for a frame or two, and closing a dialog the
+      // user opened because of that loses whatever they were doing in it. So a
+      // connected-but-empty trigger is given ANCHOR_LOST_GRACE_MS to come back,
+      // re-checked by a timer (a hidden trigger fires no scroll, resize or
+      // mutation of its own), while a disconnected one is lost immediately.
+      const empty = trigger && (trigger.offsetWidth === 0 || trigger.offsetHeight === 0);
+      if (!anchorPoint && trigger && (empty || !trigger.isConnected)) {
+        if (!trigger.isConnected) { onAnchorLostRef.current?.(); return; }
+        if (lostSinceRef.current === null) lostSinceRef.current = Date.now();
+        if (Date.now() - lostSinceRef.current >= ANCHOR_LOST_GRACE_MS) { onAnchorLostRef.current?.(); return; }
+        clearTimeout(lostTimer);
+        lostTimer = setTimeout(place, ANCHOR_LOST_GRACE_MS);
+        // Keep the last placement: the menu stays where it was rather than
+        // jumping to the corner while the trigger is measuring 0x0.
         return;
       }
+      lostSinceRef.current = null;
 
       // Natural (unconstrained) height. Two subtleties, both load-bearing:
       //  · scrollHeight ignores our own max-height cap, so re-measuring on every
@@ -288,7 +347,7 @@ export function useMenuPlacement(
         menuWidth: menu ? menu.offsetWidth : 0,
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
-        gap, margin, minHeight, align, preferSide,
+        gap, margin, minHeight, align, preferSide, edgeOverflow,
         forceSide: sideRef.current,
       });
       // Latch on the first pass only — but not before the menu has been measured,
@@ -314,7 +373,10 @@ export function useMenuPlacement(
     const onScrollOrResize = (e?: Event) => {
       // A scroll INSIDE the menu is the user reading a capped menu — don't
       // reposition (and re-measuring mid-scroll would fight the scrollbar).
-      if (e && menuRef.current?.contains(e.target as Node)) return;
+      // A window `resize` targets the Window, which is not a Node: `contains`
+      // throws on it, and that exception used to abort every re-placement on
+      // resize (an open menu stayed where the old viewport put it).
+      if (e && e.target instanceof Node && menuRef.current?.contains(e.target)) return;
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(place);
     };
@@ -341,6 +403,7 @@ export function useMenuPlacement(
       // the menu can see — so nothing would re-run place(), and the anchor-lost
       // check inside it would never get a chance to close the menu.
       if (triggerRef.current) ro.observe(triggerRef.current);
+      if (verticalAnchorRef?.current) ro.observe(verticalAnchorRef.current);
     }
     // Rows appearing/disappearing changes the child LIST, which no
     // ResizeObserver reports — re-observe the new children and re-place.
@@ -365,12 +428,14 @@ export function useMenuPlacement(
     return () => {
       cancelAnimationFrame(raf);
       cancelAnimationFrame(moRaf);
+      clearTimeout(lostTimer);
+      lostSinceRef.current = null;
       ro?.disconnect();
       mo?.disconnect();
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
     };
-  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide]);
+  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef]);
 
   return placement;
 }

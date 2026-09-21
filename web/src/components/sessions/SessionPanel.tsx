@@ -80,6 +80,7 @@ import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { useEngineSettingsEntry } from './useEngineSettingsEntry';
 import { engineCaps } from '@/utils/engine-capabilities';
 import { taskNeedsAction } from '@/utils/session-status';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
@@ -983,6 +984,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     enterFullscreen();
   }, [enterFullscreen]);
 
+  // "Engine settings" row in the composer's "+" menu and the popover it opens;
+  // ChatInput only renders the generic action row, this hook owns the feature.
+  const engineSettingsEntry = useEngineSettingsEntry({ sessionId, session, engineUi, onOpenPath: handleFileOpen });
+
   // Open the Inbox tab (optionally on one letter) — the arrival half of the
   // `/sessions?id=…&tab=inbox&letter=…` deep link.
   //
@@ -1740,6 +1745,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           <ChatInput
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
+            plusMenuActions={engineSettingsEntry.plusMenuActions}
             controlsSlot={session ? (
               <ComposerControlsBar className="session-mode-bar" controls={composerControls()} />
             ) : undefined}
@@ -2269,6 +2275,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onControlCommand={handleControlCommand}
             mentionCwd={session?.cwd}
             mentionHost={session?.host}
+            plusMenuActions={engineSettingsEntry.plusMenuActions}
             enableEntityMention
             sessionMentionSelfId={sessionId}
             draftKey={`draft:session:${sessionId}`}
@@ -2291,6 +2298,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         </div>
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}
+        {engineSettingsEntry.popover}
       </div>
     </SessionPanelErrorBoundary>
     </SessionRewindContext.Provider>

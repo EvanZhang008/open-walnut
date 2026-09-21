@@ -94,6 +94,43 @@ describe("computePlacement: align 'start' (plugin provenance flyout, N15)", () =
   });
 });
 
+describe("computePlacement: edgeOverflow 'clamp' (session engine settings popover)", () => {
+  // The measured case: two home columns at 1280 wide, the rightmost column's
+  // "+" at x 997 (column spans 982..1280), a 480px popover, margin 12.
+  const anchor = { top: 700, bottom: 728, left: 997, right: 1025 };
+  const wide = { anchor, menuWidth: 480, viewportWidth: 1280, viewportHeight: 800, margin: 12, align: 'start' as const };
+
+  it("default 'flip' falls back to right-aligned at the anchor (over the neighbouring column)", () => {
+    const { out } = place(wide);
+    const left = 1280 - out.right - 480;
+    expect(left).toBeLessThan(982); // reaches into the column to the left
+    expect(1280 - out.right).toBe(1025); // right edge at the anchor's right
+  });
+
+  it("'clamp' keeps the start side and stops at the viewport margin: the box stays over its own column", () => {
+    const { out } = place({ ...wide, edgeOverflow: 'clamp' });
+    expect(out.right).toBe(12);
+    const left = 1280 - out.right - 480;
+    expect(left).toBe(788);
+    expect(left).toBeLessThanOrEqual(anchor.left); // still covers the "+" it belongs to
+    expect(left + 480).toBeLessThanOrEqual(1280 - 12);
+  });
+
+  it("'clamp' changes nothing when the start-aligned box fits", () => {
+    const fits = { ...wide, anchor: { top: 700, bottom: 728, left: 300, right: 328 } };
+    expect(place({ ...fits, edgeOverflow: 'clamp' }).out.right).toBe(place(fits).out.right);
+    expect(1280 - place({ ...fits, edgeOverflow: 'clamp' }).out.right - 480).toBe(300);
+  });
+
+  it("a single column that fills x >= 490 in a 900px window: the box ends at the right margin, not over the sidebar", () => {
+    const narrow = { anchor: { top: 600, bottom: 628, left: 505, right: 533 }, menuWidth: 480, viewportWidth: 900, viewportHeight: 700, margin: 12, align: 'start' as const };
+    const flipped = 900 - place(narrow).out.right - 480;
+    expect(flipped).toBeLessThan(490); // the old behaviour: over the sidebar
+    const clamped = 900 - place({ ...narrow, edgeOverflow: 'clamp' }).out.right - 480;
+    expect(clamped).toBe(900 - 12 - 480);
+  });
+});
+
 describe('computePlacement: the reported bug — tall menu, short window', () => {
   // The reported geometry: an 800px-tall viewport, the kebab in the session
   // header (bottom ≈ 90), and a two-section menu (task actions + inline date

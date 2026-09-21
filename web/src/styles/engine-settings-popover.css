@@ -1,0 +1,389 @@
+/* Engine settings popover (composer "+" menu → Engine settings).
+   Portalled to <body>, position:fixed, placed by useMenuPlacement.
+
+   Height is FIXED per open: min(720px, the space the hook measured). Only the
+   rows area scrolls, so the root's scrollHeight never follows the content and
+   the header never jumps when the list goes skeleton → dense → filtered.
+   Every colour is a theme variable; the only literals are rgba shadows.
+   Part one of three: shell, header, About overlay, scope switch, filter. The
+   rows are in engine-settings-popover-rows.css, the footer and the non-row
+   states in engine-settings-popover-footer.css. */
+
+.engine-settings-popover {
+  position: fixed;
+  z-index: 10020;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100vw - 24px);
+  height: min(720px, var(--menu-max-height, 720px));
+  padding: 0;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-lg, 10px);
+  /* The raised surface, not the page's. In the light theme both are
+     white; in the dark theme --bg-elevated is one step lighter than the
+     near-black panel under it, so the popover reads as a layer. */
+  background: var(--bg-elevated, var(--bg));
+  color: var(--fg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.12);
+  font-size: 12px;
+  line-height: 1.45;
+  outline: none;
+}
+
+/* Dark theme: a deeper shadow and a hairline of light on the edge,
+   so the overlap over a neighbouring column is visible. */
+:root[data-theme="dark"] .engine-settings-popover {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .engine-settings-popover {
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* No focus ring on the root itself: the dialog takes programmatic focus on
+   open so its name is announced, and WebKit paints:focus-visible for that too,
+   which drew a 2px accent ring around the whole popover on every mouse open.
+   Keyboard users see the ring on the control they reach with Tab. */
+.engine-settings-popover:focus-visible {
+  outline: none;
+}
+
+/* ── Header ── */
+
+/* Right padding clears the two corner buttons ((i) About and Close). */
+.engine-settings-popover-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 74px 8px 14px;
+  flex: 0 0 auto;
+}
+
+.engine-settings-popover-heading {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.engine-settings-popover-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--fg);
+}
+
+/* The head (host, the path up to the last slash) is what shrinks; the
+   tail (the repo segment) keeps its width, so two sessions never read alike.
+   The tail's own shrink is a last resort for a segment wider than the box. */
+.engine-settings-popover-subtitle {
+  display: flex;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.engine-settings-subtitle-head {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.engine-settings-subtitle-tail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.engine-settings-popover-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.engine-settings-popover-close:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* "About these settings" is an (i) glyph in the header corner next to Close
+, after the switch in DOM order, and opens an OVERLAY over the rows
+   instead of growing the flow. */
+.engine-settings-about {
+  position: absolute;
+  top: 10px;
+  right: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.engine-settings-about:hover,
+.engine-settings-about[aria-expanded="true"] { background: var(--bg-hover); color: var(--fg); }
+
+/* top = the header's height (12 + 18.2 title + 2 + 17.4 subtitle + 8). */
+.engine-settings-about-panel {
+  position: absolute;
+  top: 58px;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  max-height: calc(100% - 58px - 48px);
+  overflow-y: auto;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong, var(--border));
+  background: var(--bg-elevated, var(--bg));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+}
+
+.engine-settings-about:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.engine-settings-about:disabled:hover { background: transparent; color: var(--fg-muted); }
+
+.engine-settings-about-scope,
+.engine-settings-about-body {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-secondary, var(--fg));
+}
+
+.engine-settings-about-scope {
+  color: var(--fg);
+}
+
+.engine-settings-about-close {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.engine-settings-about-close:hover { background: var(--bg-hover); }
+
+/* ── Alert (a failed save): rendered inside the footer status slot ── */
+
+/* A bounded flex row. The text wraps (the server's sentence is shown in
+   full, an error may take the lines it needs); Dismiss never shrinks and never
+   leaves the popover. */
+.engine-settings-popover-alert {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  color: var(--error, var(--priority-immediate));
+}
+
+.engine-settings-popover-alert > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.engine-settings-popover-alert button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* ── Scope switch ── */
+
+.engine-settings-popover-scope-block {
+  padding: 0 14px 6px;
+  flex: 0 0 auto;
+}
+
+/* Label and switch share one line: every pixel of chrome is a row not shown. */
+.engine-settings-scope-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.engine-settings-scope-label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.engine-settings-scope {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-secondary);
+}
+
+.engine-settings-scope-option {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--fg-secondary, var(--fg));
+  font-size: 12px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.engine-settings-scope-option:hover { color: var(--fg); }
+
+.engine-settings-scope-option[aria-checked="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* aria-disabled, never the disabled attribute: the option keeps its tooltip and
+   its reason for a screen reader. Locked for a moment (a save in flight):
+   dimmed, no hover change. */
+.engine-settings-scope-option.is-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.engine-settings-scope-option.is-disabled:hover { color: var(--fg-secondary, var(--fg)); }
+
+/* Unavailable for good (no project file for this session) is a different
+   state from "not the one picked": a lock glyph, struck text, a dotted edge and
+   a not-allowed cursor, readable before any click. */
+.engine-settings-scope-option.is-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.7;
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-muted);
+  outline: 1px dotted var(--fg-muted);
+  outline-offset: -3px;
+  cursor: not-allowed;
+}
+
+.engine-settings-scope-lock { flex: 0 0 auto; }
+
+/* The sentences under the switch keep ONE height whichever scope is on and
+   whether the view has landed: the scope note reserves three lines
+   (both sentences need three at this width), the applies-on sentence two. A
+   remote host's environment warning adds its own lines, present from the load. */
+.engine-settings-popover-notes {
+  position: relative;
+  /* 3 lines + 6 + 2 lines = 93px (the note's own top margin
+     collapses out of the block); held while loading too, when the applies-on
+     line is not there yet. */
+  min-height: 94px;
+}
+
+.engine-settings-popover-notes .engine-settings-scope-note {
+  min-height: calc(3 * 1.45em);
+}
+
+.engine-settings-popover-notes .engine-settings-applies-on {
+  min-height: calc(2 * 1.45em);
+}
+
+/* The draft guard is drawn OVER the note's first line, right under
+   the switch it answers, on the popover's own surface so the line under it does
+   not show through; the rest of the note dims instead of vanishing, so the
+   block shows no blank band. */
+.engine-settings-popover-notes.has-guard .engine-settings-scope-note {
+  opacity: 0.35;
+}
+
+/* top 0, not 6px: the note's 6px top margin collapses through the block (no
+   padding or border), so the note's box starts at the block's top. */
+.engine-settings-popover-notes .engine-settings-draft-guard {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  background: var(--bg-elevated, var(--bg));
+}
+
+.engine-settings-scope-reason,
+.engine-settings-scope-note,
+.engine-settings-applies-on,
+.engine-settings-group-help {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+
+/* The group's help sentence, shown in the About overlay. */
+.engine-settings-group-help {
+  font-size: 11px;
+  margin: 0 0 8px;
+}
+
+.engine-settings-env-unchecked {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--warning, var(--priority-important));
+}
+
+.engine-settings-draft-guard {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--warning, var(--priority-important));
+}
+
+/* ── Filter ── */
+
+.engine-settings-filter-bar {
+  padding: 0 14px 6px;
+  flex: 0 0 auto;
+}
+
+.engine-settings-filter {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.engine-settings-filter:focus { outline: none; border-color: var(--accent); }
+

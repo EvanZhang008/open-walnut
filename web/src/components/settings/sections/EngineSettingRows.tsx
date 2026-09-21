@@ -16,7 +16,7 @@
  *     really disables its controls (keyboard included) without teaching every
  *     shared input a `disabled` prop.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { NumberInput } from '../inputs/NumberInput';
@@ -38,7 +38,8 @@ function fileLabel(files: EngineSettingsFileView[], id: string): string {
 }
 
 /**
- * The one status line under a row's help text.
+ * The one status line under a row's help text: which layer the value in force
+ * comes from.
  *
  * The legacy case deliberately degrades: the view names the older location only
  * when the server sends it, and inventing a path from the file list would
@@ -46,12 +47,39 @@ function fileLabel(files: EngineSettingsFileView[], id: string): string {
  */
 export function settingStatusLine(item: EngineSettingView, files: EngineSettingsFileView[]): string {
   if (item.source === 'file') return `Set in ${fileLabel(files, item.file)}`;
+  if (item.source === 'overlay') {
+    const id = item.overlay?.file;
+    const file = id ? files.find((f) => f.id === id) : undefined;
+    const label = file?.label ?? id ?? 'this project';
+    return file?.readOnly ? `Set in ${label}, committed with the repo` : `Set in ${label}`;
+  }
   if (item.source === 'legacy') {
     return item.legacy?.path
       ? `From ${item.legacy.path} (older location, still read)`
       : 'From an older location that the engine still reads';
   }
   return item.defaultLabel && item.value === null ? `Default: ${item.defaultLabel}` : 'Default';
+}
+
+/**
+ * Which file a change to this row lands in, when that is not the row's own
+ * (user-wide) file. A project-scoped save, or a key the engine's own config
+ * screen keeps per project, says so before the user commits to it.
+ */
+export function settingWriteTargetLine(item: EngineSettingView, files: EngineSettingsFileView[]): string | null {
+  const target = item.writeTarget;
+  if (!target || target.file === item.file) return null;
+  return `Saves to ${fileLabel(files, target.file)}`;
+}
+
+/** The write target holds the key today, so a Reset takes it back out of that file. */
+export function settingRemovable(item: EngineSettingView): boolean {
+  return item.writeTarget ? item.writeTarget.holds : item.source === 'file';
+}
+
+/** The file whose parse error would refuse a write for this row. */
+export function settingWriteFileId(item: EngineSettingView): string {
+  return item.writeTarget?.file ?? item.file;
 }
 
 interface ControlProps {
@@ -203,9 +231,12 @@ function SelectSettingControl({ id, item, onSet }: ControlProps) {
  */
 function TriStateBooleanControl({ id, item, onSet, onReset }: ControlProps & { onReset: (key: string) => void }) {
   const current = item.value === true ? 'true' : item.value === false ? 'false' : '';
-  // A value read from an older file cannot be "removed" from the file this row
-  // writes; On/Off still work because the newer file wins over the older one.
-  const legacy = item.source === 'legacy';
+  // A value held by a layer this row does not write (an older file, a shared
+  // project file, the user file under a project-only scope) cannot be "removed"
+  // from here; On/Off still work when the write target outranks that layer.
+  const removable = settingRemovable(item);
+  const elsewhere = !removable && item.source !== 'default';
+  const heldIn = item.overriddenBy?.path ?? item.legacy?.path ?? item.overlay?.path ?? 'another file';
   return (
     <select
       id={id}
@@ -214,14 +245,14 @@ function TriStateBooleanControl({ id, item, onSet, onReset }: ControlProps & { o
       onChange={(e) => {
         const next = e.target.value;
         if (next === current) return;
-        if (next === '') { if (item.source === 'file') onReset(item.key); return; }
+        if (next === '') { if (removable) onReset(item.key); return; }
         onSet(item.key, next === 'true');
       }}
     >
       <option
         value=""
-        disabled={legacy}
-        title={legacy ? `Set in ${item.legacy?.path ?? 'an older file'}; remove it there to use the default` : undefined}
+        disabled={elsewhere}
+        title={elsewhere ? `Set in ${heldIn}; remove it there to use the default` : undefined}
       >
         {item.defaultLabel ? `Default (${item.defaultLabel})` : 'Default'}
       </option>
@@ -254,29 +285,38 @@ export interface EngineSettingRowProps {
   saving: boolean;
   onSet: (key: string, value: EngineSettingValue) => void;
   onReset: (key: string) => void;
+/**
+   * Optional: drawn right after the status line, inside the row (a caller's own
+   * sentence about this row, such as "Does not change this session."). Nothing
+   * renders when absent; the Settings page passes none.
+ */
+  statusExtra?: ReactNode;
 }
 
-export function EngineSettingRow({ engine, item, files, saving, onSet, onReset }: EngineSettingRowProps) {
+export function EngineSettingRow({ engine, item, files, saving, onSet, onReset, statusExtra }: EngineSettingRowProps) {
   const id = controlId(engine, item.key);
   // A file the server could not parse refuses every write; a live control on
   // such a row would only collect a 409. (A wrong-TYPE value keeps its control:
   // setting it is exactly how the user repairs that.)
-  const fileUnreadable = Boolean(files.find((f) => f.id === item.file)?.error);
+  const writeFile = settingWriteFileId(item);
+  const fileUnreadable = Boolean(files.find((f) => f.id === writeFile)?.error);
+  const writeTargetLine = settingWriteTargetLine(item, files);
   return (
     <SettingsRow
       className="engine-setting-row"
       data-testid={`engine-setting-row-${item.key}`}
       data-source={item.source}
+      data-write-target={writeFile}
       actions={(
         <fieldset className="engine-setting-control" disabled={saving || fileUnreadable} aria-busy={saving || undefined}>
           <EngineSettingControl id={id} item={item} onSet={onSet} onReset={onReset} />
-          {/* Only a value stored in the file can be taken back out of it. */}
-          {item.source === 'file' && (
+          {/* Only a value stored in the file a save would touch can be taken back out of it. */}
+          {settingRemovable(item) && (
             <button
               type="button"
               className="engine-setting-reset"
               data-testid={`engine-setting-reset-${item.key}`}
-              title={`Remove ${item.key} from ${fileLabel(files, item.file)} and use the default again`}
+              title={`Remove ${item.key} from ${fileLabel(files, writeFile)} and use the default again`}
               onClick={() => onReset(item.key)}
             >
               Reset
@@ -288,6 +328,13 @@ export function EngineSettingRow({ engine, item, files, saving, onSet, onReset }
       <strong><label htmlFor={id}>{item.label}</label></strong>
       <span className="engine-setting-help">{item.help}</span>
       <span className="engine-setting-status">{settingStatusLine(item, files)}</span>
+      {statusExtra}
+      {writeTargetLine && <span className="engine-setting-target">{writeTargetLine}</span>}
+      {item.overriddenBy && (
+        <span className="engine-setting-env">
+          Overridden by {item.overriddenBy.path}, a shared project file; a change here would not take effect until that entry is removed
+        </span>
+      )}
       {item.envOverride && (
         <span className="engine-setting-env">
           Overridden by {item.envOverride.name}={item.envOverride.value} in the environment

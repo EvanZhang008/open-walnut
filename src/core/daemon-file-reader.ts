@@ -271,6 +271,24 @@ export class DaemonFileReader implements SessionFileReader {
     }
   }
 
+  /**
+   * Keep a file Walnut created inside a git checkout out of the repo, via the
+   * daemon's `git.ensureExcluded` ('git-exclude-v1'): appends it to
+   * .git/info/exclude unless git already ignores it. 'unavailable' on a daemon
+   * that predates the command, so the caller can say so instead of assuming.
+   */
+  async ensureGitExcluded(cwd: string, filePath: string): Promise<'added' | 'already' | 'not-a-repo' | 'unavailable'> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    if (!conn.capabilitiesKnown || !conn.hasCapability('git-exclude-v1')) return 'unavailable'
+    const result = await conn.send('git.ensureExcluded', { cwd, path: filePath })
+    if (!result.ok) {
+      throw new Error('git.ensureExcluded failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+    const outcome = result.outcome
+    return outcome === 'added' || outcome === 'already' || outcome === 'not-a-repo' ? outcome : 'unavailable'
+  }
+
   // ── Mutation family ('fs-mutate-v1') ──
   //
   // Every one of these is HOST work: the daemon owns the file descriptors and

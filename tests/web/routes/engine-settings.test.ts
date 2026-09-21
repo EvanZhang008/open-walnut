@@ -42,9 +42,21 @@ vi.mock('../../../src/core/daemon-file-reader.js', () => {
       writes.push({ path: p, expectSha256 })
       files.set(p, text)
     }
+    async ensureGitExcluded(cwd: string, p: string): Promise<'added' | 'already' | 'not-a-repo' | 'unavailable'> {
+      excluded.push({ cwd, path: p })
+      return 'added'
+    }
   }
   return { DaemonFileReader, DaemonNeedsUpgradeError }
 })
+
+const excluded: Array<{ cwd: string; path: string }> = []
+
+vi.mock('../../../src/core/session-tracker.js', () => ({
+  getSessionByClaudeId: async (id: string) => (id === 'sess-1'
+    ? { claude_session_id: 'sess-1', host: 'devbox', cwd: '/work/repo' }
+    : id === 'sess-local' ? { claude_session_id: 'sess-local', host: null, cwd: '/Users/me/app' } : null),
+}))
 
 vi.mock('../../../src/core/config-manager.js', () => ({
   getConfig: async () => ({ hosts: { devbox: { hostname: 'devbox.example', enabled: true } } }),
@@ -71,6 +83,7 @@ const envBefore = process.env.DISABLE_AUTOUPDATER
 beforeEach(() => {
   files.clear()
   writes.length = 0
+  excluded.length = 0
   readImpl = null
   writeImpl = null
   delete process.env.DISABLE_AUTOUPDATER
@@ -210,6 +223,56 @@ describe('PATCH /api/engines/:id/settings', () => {
     const res = await request(app).patch('/api/engines/claude/settings?host=devbox').send({ set: { verbose: true } })
     expect(res.status).toBe(501)
     expect(res.body).toMatchObject({ code: 'daemon_needs_upgrade', outcome: 'not-written' })
+  })
+
+  it('takes host and cwd from a session, lets explicit params win, and refuses an unknown session or a bad cwd', async () => {
+    const bySession = await request(app).get('/api/engines/claude/settings?sessionId=sess-1')
+    expect(bySession.status).toBe(200)
+    expect(bySession.body).toMatchObject({ host: 'devbox', cwd: '/work/repo', scope: 'default', projectScopeAvailable: true, envChecked: false })
+    expect((bySession.body.files as Array<{ id: string; path: string }>).map((f) => [f.id, f.path])).toEqual([
+      ['user', USER], ['global', '~/.claude.json'],
+      ['project', '/work/repo/.claude/settings.json'], ['project-local', '/work/repo/.claude/settings.local.json'],
+    ])
+    const local = await request(app).get('/api/engines/claude/settings?sessionId=sess-local')
+    expect(local.body).toMatchObject({ host: '__local__', cwd: '/Users/me/app', envChecked: true })
+    const overridden = await request(app).get('/api/engines/claude/settings?sessionId=sess-1&host=__local__&cwd=/elsewhere')
+    expect(overridden.body).toMatchObject({ host: '__local__', cwd: '/elsewhere' })
+    expect((await request(app).get('/api/engines/claude/settings?sessionId=nope')).status).toBe(400)
+    expect((await request(app).get('/api/engines/claude/settings?cwd=relative/dir')).status).toBe(400)
+    expect((await request(app).get('/api/engines/claude/settings?cwd=/a/../b')).status).toBe(400)
+    expect((await request(app).get('/api/engines/claude/settings?cwd=/a&scope=global')).status).toBe(400)
+    expect((await request(app).get('/api/engines/claude/settings?scope=project')).status).toBe(400)
+  })
+
+  it("scope=project writes the session's local project file, creates it, and keeps it out of git", async () => {
+    files.set(USER, JSON.stringify({ verbose: false }))
+    const res = await request(app).patch('/api/engines/claude/settings?sessionId=sess-1&scope=project').send({ set: { verbose: true } })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(files.get('/work/repo/.claude/settings.local.json')!)).toEqual({ verbose: true })
+    expect(JSON.parse(files.get(USER)!)).toEqual({ verbose: false })
+    expect(excluded).toEqual([{ cwd: '/work/repo', path: '/work/repo/.claude/settings.local.json' }])
+    expect(res.body.gitExclude).toEqual({ path: '/work/repo/.claude/settings.local.json', outcome: 'added' })
+    const items = (res.body.groups as Array<{ items: Array<Record<string, unknown>> }>).flatMap((g) => g.items)
+    expect(items.find((i) => i.key === 'verbose')).toMatchObject({
+      value: true, source: 'overlay', overlay: { file: 'project-local' },
+      writeTarget: { file: 'project-local', path: '/work/repo/.claude/settings.local.json', holds: true },
+    })
+  })
+
+  it('default scope with a cwd follows the CLI: output style lands in the local project file, thinking in the user file', async () => {
+    files.set(USER, JSON.stringify({ alwaysThinkingEnabled: true }))
+    const res = await request(app).patch('/api/engines/claude/settings?cwd=/work/repo').send({ set: { outputStyle: 'Learning', alwaysThinkingEnabled: false } })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(files.get('/work/repo/.claude/settings.local.json')!)).toEqual({ outputStyle: 'Learning' })
+    expect(JSON.parse(files.get(USER)!)).toEqual({ alwaysThinkingEnabled: false })
+    expect(res.body.gitExclude).toMatchObject({ outcome: 'added' })
+    // Without a cwd the same key stays user-wide and no git question is asked.
+    excluded.length = 0
+    const noCwd = await request(app).patch('/api/engines/claude/settings').send({ set: { outputStyle: 'Explanatory' } })
+    expect(noCwd.status).toBe(200)
+    expect(JSON.parse(files.get(USER)!)).toEqual({ alwaysThinkingEnabled: false, outputStyle: 'Explanatory' })
+    expect(noCwd.body.gitExclude).toBeUndefined()
+    expect(excluded).toEqual([])
   })
 
   it('edits codex config.toml top-level keys through the same route', async () => {

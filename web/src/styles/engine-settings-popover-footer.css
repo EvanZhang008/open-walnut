@@ -1,0 +1,278 @@
+/* Engine settings popover, part two: the rows area's non-row states (skeleton,
+   error, empty, no match) and the footer (status slot, link, Files list).
+   Part one (shell, header, About overlay, scope switch, filter, rows) lives in
+   engine-settings-popover.css; both are imported by EngineSettingsPopover.tsx. */
+
+/* ── Loading, error, empty ── */
+
+.engine-settings-skeleton {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.engine-settings-slow-note {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.engine-settings-skeleton-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-secondary);
+}
+
+.engine-settings-skeleton-bar {
+  display: block;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  animation: engine-settings-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.engine-settings-skeleton-bar.is-label { width: 38%; }
+.engine-settings-skeleton-bar.is-help { width: 88%; height: 8px; }
+.engine-settings-skeleton-bar.is-control { width: 120px; height: 20px; justify-self: end; }
+@keyframes engine-settings-skeleton-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+.engine-settings-popover-error-block,
+.engine-settings-popover-empty,
+.engine-settings-popover-nomatch {
+  margin: 8px 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-secondary, var(--fg));
+}
+
+.engine-settings-popover-error {
+  margin: 0 0 8px;
+  color: var(--error, var(--priority-immediate));
+}
+
+.engine-settings-retry {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.engine-settings-retry:hover { background: var(--bg-hover); }
+
+/* ── Footer ── */
+
+/* minmax(0, 1fr): an `auto` track sizes to its content's min-content width, so
+   a nowrap sentence grew the track to 1100px and the popover's overflow:hidden
+   cut it instead of the ellipsis. */
+.engine-settings-popover-footer {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  padding: 8px 14px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+/* The status slot: one line reserved at rest; a landed sentence
+   may take up to three (the footer grows from the BOTTOM, the rows' top and
+   every control above stay put), which is what "saved to this project (local),
+   <cwd> only, created <file>, kept out of git" needs with a 48-character cwd;
+   a longer one is clamped there with a visible More/Less control. The whole
+   text rides in `title` too. */
+.engine-settings-status-slot {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  min-height: 18px;
+  line-height: 1.45;
+}
+
+.engine-settings-status-slot > .engine-settings-saved,
+.engine-settings-status-slot > .engine-settings-popover-alert {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.engine-settings-status-slot:not(.is-expanded) .engine-settings-saved {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.engine-settings-saved {
+  margin: 0;
+  color: var(--fg);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.engine-settings-saved:empty {
+  display: block;
+  min-height: 18px;
+}
+
+.engine-settings-status-more {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.engine-settings-status-more:hover { text-decoration: underline; }
+
+/* The link and the Files disclosure on ONE line. The details spans both
+   columns (its list, when open, wraps under both); its summary is right-aligned
+   into the second column, whose width is reserved so the link never runs under
+   it. Both share the first grid row, so they sit on one baseline. */
+.engine-settings-footer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 68px;
+  align-items: start;
+  column-gap: 6px;
+}
+
+.engine-settings-more-link {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  text-decoration: none;
+  line-height: 1.45;
+}
+
+.engine-settings-more-link:hover { text-decoration: underline; }
+
+/* The details box spans the row and is painted over the link; only its summary
+   and its list take the pointer, so the link under the empty part stays clickable. */
+.engine-settings-popover .engine-settings-files {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  margin-top: 0;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.engine-settings-popover .engine-settings-files > summary,
+.engine-settings-popover .engine-settings-files-list {
+  pointer-events: auto;
+}
+
+/* Shrink-to-fit at the right end of the first line: the summary's box is its
+   text, so the link next to it (grid column one) is never under it. */
+.engine-settings-popover .engine-settings-files > summary {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: max-content;
+  max-width: 100%;
+  margin-left: auto;
+  cursor: pointer;
+  color: var(--fg-muted);
+  line-height: 1.45;
+  white-space: nowrap;
+  list-style: none;
+}
+
+.engine-settings-popover .engine-settings-files > summary::-webkit-details-marker { display: none; }
+
+/* A 12px chevron says the line unfolds; it points down while the list is open. */
+.engine-settings-files-chevron {
+  flex: 0 0 auto;
+  transition: transform 120ms ease;
+}
+
+.engine-settings-popover .engine-settings-files[open] > summary .engine-settings-files-chevron {
+  transform: rotate(90deg);
+}
+
+.engine-settings-popover .engine-settings-files > summary:hover { color: var(--fg); }
+
+/* The list shows its entries (four paths, two lines each at most) and
+   takes that room from the rows only while it is open; the cap is a guard for
+   an engine with many more files. */
+.engine-settings-files-list {
+  max-height: 200px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.engine-settings-popover .engine-settings-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.engine-settings-file-label::after {
+  content: ':';
+}
+
+/* Paths break after a slash (<wbr>), never inside a file name; `anywhere` is
+   the fallback for one segment wider than the box. */
+.engine-settings-popover .engine-settings-file code {
+  font-size: 11px;
+  color: var(--fg-secondary, var(--fg));
+  overflow-wrap: anywhere;
+}
+
+/* A clickable path reads as a link at rest, not only on hover. */
+.engine-settings-file-open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.engine-settings-file-open code {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.engine-settings-file-open:hover code {
+  text-decoration-color: var(--accent);
+}
+
+.engine-settings-file-created {
+  color: var(--success, var(--accent));
+}
+
+.engine-settings-file-error {
+  color: var(--error, var(--priority-immediate));
+}
+
+.engine-settings-copy-path {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+}

@@ -11,10 +11,18 @@
  *   - A handful of terminal-only preferences are still written to
  *     `~/.claude.json` ("global config"), declared with `file: 'global'`.
  *   - Four rows (tips, reduce motion, output style, default view) are written
- *     by the CLI's screen to the PROJECT's `.claude/settings.local.json`.
- *     Every settings source shares one schema, so the user file is a valid
- *     home for them too; Walnut writes them there as the user-wide default,
- *     and a project's own file still wins when it sets the key.
+ *     by the CLI's screen to the PROJECT's `.claude/settings.local.json`; they
+ *     declare that with `cliWritesTo`, so Walnut's default scope follows the
+ *     CLI whenever a session's working directory is known. Every settings
+ *     source shares one schema, so the user file is a valid home for them too;
+ *     with no working directory (the Settings page) they go there as the
+ *     user-wide default.
+ *   - Project files: `.claude/settings.json` (shared, committed with the repo)
+ *     and `.claude/settings.local.json` (per-checkout) override the user file
+ *     for the same key, local over shared. Walnut reads both for attribution
+ *     and writes only the local one; a running CLI watches the project's
+ *     `.claude/` directory (even before it exists) and applies changes on its
+ *     next turn.
  *   - `--permission-mode` (which Walnut passes on every launch) and
  *     `--dangerously-skip-permissions` beat `permissions.defaultMode`, so that
  *     row governs the user's terminal sessions, not Walnut's. Its help says so.
@@ -28,6 +36,8 @@ import type { EngineSettingsSchema, EngineSettingItem, EngineSettingOption } fro
 
 const USER = 'user'
 const GLOBAL = 'global'
+const PROJECT = 'project'
+const PROJECT_LOCAL = 'project-local'
 
 const legacyGlobal = (path: string) => ({ file: GLOBAL, path })
 
@@ -62,18 +72,18 @@ const SESSION_ITEMS: readonly EngineSettingItem[] = [
   },
   {
     key: 'permissions.defaultMode', label: 'Default permission mode', type: 'select', default: 'default',
-    options: PERMISSION_MODES, file: USER, path: 'permissions.defaultMode', scope: 'sessions',
+    options: PERMISSION_MODES, file: USER, path: 'permissions.defaultMode', scope: 'sessions', launchOverride: '--permission-mode',
     help: 'Mode a session starts in when nothing else picks one. Walnut passes --permission-mode on every launch, so this changes terminal sessions only; use the mode pill in a Walnut session instead.',
   },
   {
-    key: 'outputStyle', label: 'Output style', type: 'select', default: 'default', allowCustom: true,
+    key: 'outputStyle', label: 'Output style', type: 'select', default: 'default', allowCustom: true, cliWritesTo: PROJECT_LOCAL,
     options: [
       opt('default', 'Default', 'Plain, task-focused replies'),
       opt('Explanatory', 'Explanatory', 'Adds short educational insights about the code'),
       opt('Learning', 'Learning', 'Teaches by asking you to write small pieces'),
     ],
     file: USER, path: 'outputStyle', scope: 'sessions',
-    help: 'How replies are written: a built-in style or the name of a custom one from ~/.claude/output-styles. Saved as your user-wide default; a project\'s own .claude/settings.local.json wins when it sets one.',
+    help: 'How replies are written: a built-in style or the name of a custom one from ~/.claude/output-styles. Claude Code keeps this per project, so with a working directory known the save lands in that project\'s .claude/settings.local.json; without one it becomes your user-wide default.',
   },
   {
     key: 'language', label: 'Language', type: 'text', default: '', placeholder: 'English',
@@ -95,6 +105,7 @@ const SESSION_ITEMS: readonly EngineSettingItem[] = [
   {
     key: 'fileCheckpointingEnabled', label: 'Rewind code (checkpoints)', type: 'boolean', default: true,
     file: USER, path: 'fileCheckpointingEnabled', legacy: legacyGlobal('fileCheckpointingEnabled'), scope: 'sessions',
+    launchOverride: 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING',
     help: 'Snapshot files each turn so a session can be rewound. Walnut turns this on for its own sessions with CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING; the switch here covers terminal sessions.',
   },
   {
@@ -182,12 +193,12 @@ const UPDATE_ITEMS: readonly EngineSettingItem[] = [
 
 const TERMINAL_ITEMS: readonly EngineSettingItem[] = [
   {
-    key: 'spinnerTipsEnabled', label: 'Show tips', type: 'boolean', default: true,
+    key: 'spinnerTipsEnabled', label: 'Show tips', type: 'boolean', default: true, cliWritesTo: PROJECT_LOCAL,
     file: USER, path: 'spinnerTipsEnabled', scope: 'terminal',
     help: 'Show usage tips next to the spinner while the model works.',
   },
   {
-    key: 'prefersReducedMotion', label: 'Reduce motion', type: 'boolean', default: false,
+    key: 'prefersReducedMotion', label: 'Reduce motion', type: 'boolean', default: false, cliWritesTo: PROJECT_LOCAL,
     file: USER, path: 'prefersReducedMotion', scope: 'terminal',
     help: 'Tone down spinner and transition animations.',
   },
@@ -292,7 +303,7 @@ const TERMINAL_ITEMS: readonly EngineSettingItem[] = [
     help: 'Pressing the left arrow on an empty prompt opens the agents view. Stored in ~/.claude.json.',
   },
   {
-    key: 'defaultView', label: 'Default view', type: 'select', default: null, defaultLabel: 'transcript',
+    key: 'defaultView', label: 'Default view', type: 'select', default: null, defaultLabel: 'transcript', cliWritesTo: PROJECT_LOCAL,
     options: [opt('chat', 'Chat'), opt('transcript', 'Transcript')],
     file: USER, path: 'defaultView', scope: 'terminal',
     help: 'Which view a session opens in.',
@@ -363,10 +374,21 @@ export const CLAUDE_SETTINGS: EngineSettingsSchema = {
   files: [
     // CLAUDE_CONFIG_DIR relocates BOTH files: settings.json lives inside it, and
     // the CLI resolves .claude.json as join(CLAUDE_CONFIG_DIR || homedir, '.claude.json').
-    { id: USER, path: '~/.claude/settings.json', format: 'json', label: 'user settings', homeEnv: { name: 'CLAUDE_CONFIG_DIR', replaces: '~/.claude' } },
+    {
+      id: USER, path: '~/.claude/settings.json', format: 'json', label: 'user settings', homeEnv: { name: 'CLAUDE_CONFIG_DIR', replaces: '~/.claude' },
+      // The settings.json family layers per project; ~/.claude.json does not.
+      overlays: [PROJECT_LOCAL, PROJECT],
+    },
     { id: GLOBAL, path: '~/.claude.json', format: 'json', label: 'global config', homeEnv: { name: 'CLAUDE_CONFIG_DIR', replaces: '~' } },
+    // Project layers, consulted only when a session's working directory is known.
+    // The shared file is the team's, committed with the repo: read, never written.
+    { id: PROJECT, path: '<cwd>/.claude/settings.json', format: 'json', label: 'this project (shared)', scope: 'project', readOnly: true },
+    { id: PROJECT_LOCAL, path: '<cwd>/.claude/settings.local.json', format: 'json', label: 'this project (local)', scope: 'project' },
   ],
   note: 'The same keys the claude CLI\'s /config screen edits, saved to ~/.claude/settings.json on the selected host (a few terminal preferences live in ~/.claude.json). Running sessions reload the file on their own; a project\'s .claude/settings.json can override any of these.',
+  // Verified on 2.1.258: the CLI watches every settings layer, including a
+  // project file created after it started, and reads these keys per request.
+  appliesOn: 'next-turn',
   groups: [
     {
       id: 'sessions', title: 'Sessions',

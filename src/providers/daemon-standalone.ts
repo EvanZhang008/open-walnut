@@ -1497,6 +1497,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // it reads arbitrary host paths, which the cloud bridge must never reach.
     case 'git.fileLog': return cmdGitFileLog(ws, id as number, cmd)
     case 'git.fileShow': return cmdGitFileShow(ws, id as number, cmd)
+    // 'git-exclude-v1': writes ONLY .git/info/exclude; same bridge rule as above.
+    case 'git.ensureExcluded': return cmdGitEnsureExcluded(ws, id as number, cmd)
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
@@ -5685,6 +5687,52 @@ async function cmdGitFileShow(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
     sendOk(ws, id, { content: res.stdout })
   } catch (err: unknown) {
     sendError(ws, id, 'git.fileShow failed: ' + (err as Error).message)
+  }
+}
+
+// ── Keep a generated file out of the repo (host-local — capability 'git-exclude-v1') ──
+// For a file Walnut just created inside a checkout (a project's
+// .claude/settings.local.json): if git does not already ignore it, append it to
+// .git/info/exclude, the per-repo ignore list that is never committed. Nothing
+// tracked is touched, and an already-tracked file is left alone (excluding it
+// would change nothing). The path resolves through `git rev-parse --git-path`,
+// so a worktree whose .git is a file still lands in the right place.
+async function cmdGitEnsureExcluded(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const rawCwd = cmd.cwd as string
+  const rawPath = cmd.path as string
+  if (!rawCwd || typeof rawCwd !== 'string') return sendError(ws, id, 'git.ensureExcluded: missing cwd')
+  if (!rawPath || typeof rawPath !== 'string') return sendError(ws, id, 'git.ensureExcluded: missing path')
+  const cwd = gitFileExpandHome(rawCwd)
+  const filePath = gitFileExpandHome(rawPath)
+  try {
+    const top = await gitFileExec(['git', 'rev-parse', '--show-toplevel'], cwd, 64 * 1024)
+    if (top.code !== 0 || !top.stdout.trim()) return sendOk(ws, id, { outcome: 'not-a-repo' })
+    // git answers with symlinks resolved (/private/var on macOS for a /var cwd),
+    // so the file's directory is resolved the same way before the two are
+    // compared; otherwise every checkout under /tmp or /var reads as "outside".
+    const repoRoot = await fs.promises.realpath(top.stdout.trim())
+    const realDir = await fs.promises.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath))
+    const rel = path.relative(repoRoot, path.join(realDir, path.basename(filePath))).split(path.sep).join('/')
+    if (!rel || rel === '..' || rel.startsWith('../')) return sendError(ws, id, 'git.ensureExcluded failed: file is outside the repository')
+    // Exit 0 = already ignored (by any rule, global ones included); 1 = not ignored.
+    const ignored = await gitFileExec(['git', 'check-ignore', '-q', '--', rel], repoRoot, 64 * 1024)
+    if (ignored.code === 0) return sendOk(ws, id, { outcome: 'already' })
+    const tracked = await gitFileExec(['git', 'ls-files', '--error-unmatch', '--', rel], repoRoot, 64 * 1024)
+    if (tracked.code === 0) return sendOk(ws, id, { outcome: 'already' })
+    const excludeFile = await gitFileExec(['git', 'rev-parse', '--git-path', 'info/exclude'], repoRoot, 64 * 1024)
+    if (excludeFile.code !== 0 || !excludeFile.stdout.trim()) return sendError(ws, id, 'git.ensureExcluded failed: cannot locate info/exclude')
+    const excludePath = path.resolve(repoRoot, excludeFile.stdout.trim())
+    await fs.promises.mkdir(path.dirname(excludePath), { recursive: true })
+    let existing = ''
+    try { existing = await fs.promises.readFile(excludePath, 'utf-8') } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
+    const line = '/' + rel
+    const sep = existing.length === 0 || existing.endsWith('\n') ? '' : '\n'
+    await fs.promises.appendFile(excludePath, sep + line + '\n')
+    sendOk(ws, id, { outcome: 'added', excludeFile: excludePath })
+  } catch (err: unknown) {
+    sendError(ws, id, 'git.ensureExcluded failed: ' + (err as Error).message)
   }
 }
 

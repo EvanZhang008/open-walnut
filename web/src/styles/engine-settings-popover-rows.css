@@ -1,0 +1,206 @@
+/* Engine settings popover, part three: the rows area (the only scroller), the
+   row wrapper and what the popover adds around the shared EngineSettingRow (the
+   not-honoured and saving cues, the environment line, the help match, the
+   project-scope lock). Parts one and two: engine-settings-popover.css and
+   engine-settings-popover-footer.css; all three are imported by
+   EngineSettingsPopover.tsx. */
+
+/* ── Rows area: the ONLY scroller ── */
+
+.engine-settings-popover-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.engine-settings-popover-rows[aria-busy="true"] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Rows stack: copy on top at full width, controls below, right-aligned.
+   The shared .settings-row lays copy and controls side by side, which leaves
+   the help about 170px wide inside a 480px popover. */
+/* Specificity beats `.engine-setting-row .settings-row` from engine-settings.css
+   whatever the stylesheet order in the bundle. */
+.engine-settings-popover .engine-setting-row.settings-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 4px 10px;
+}
+
+.engine-settings-popover .engine-setting-row .settings-row-copy {
+  gap: 1px;
+}
+
+.engine-settings-popover .settings-row-actions {
+  justify-content: flex-end;
+}
+
+.engine-settings-popover .engine-setting-row:hover {
+  background: var(--bg-hover);
+}
+
+/* The off track (bg-tertiary on a 1px border) all but vanished on the
+   hovered row's bg-hover in the light theme; keep it a visible control. */
+.engine-settings-popover .engine-setting-row:hover .toggle-switch:not(.toggle-on) {
+  background: var(--bg);
+  border-color: var(--border-strong, var(--fg-muted));
+}
+
+/* Help reads in full: the second sentence of some rows is the only place that
+   says the row does not change a running Walnut session. */
+.engine-settings-popover .engine-setting-help {
+  max-width: none;
+  overflow: visible;
+  white-space: normal;
+  display: block;
+  line-height: 1.35;
+}
+
+/* The control's left edge stays put when Reset appears: the Reset slot is a
+   fixed 48px, reserved by an empty pseudo-element when the row has no Reset. */
+.engine-settings-popover .engine-setting-control {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.engine-settings-popover .engine-setting-reset {
+  flex: 0 0 48px;
+  width: 48px;
+  padding: 2px 0;
+  text-align: right;
+}
+
+.engine-settings-popover .engine-setting-control:not(:has(.engine-setting-reset))::after {
+  content: '';
+  display: block;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 1px;
+}
+
+/* The row's own environment line speaks of "the environment"; in a popover for
+   one session that would read as the CLI's, so the popover says whose it is. */
+.engine-settings-popover .engine-setting-env {
+  display: none;
+}
+
+.engine-settings-popover-row {
+  display: grid;
+  gap: 2px;
+}
+
+.engine-setting-env-walnut,
+.engine-setting-help-match {
+  padding: 0 10px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.engine-setting-env-walnut {
+  color: var(--warning, var(--priority-important));
+}
+
+/* Inside the card, right under the status line, in the status line's own
+   11px muted type; italic marks it as a verdict, not a source. */
+.engine-setting-not-honored {
+  display: block;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+/* The in-flight cue. In the DOM from the first frame of a save, invisible
+   for 300ms, then shown: a fast toggle save (about 170ms) never flashes it, a
+   project-scope select save (1 to 2s) or a remote host names what is going on. */
+.engine-setting-saving {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  opacity: 0;
+  animation: engine-setting-saving-in 0s linear 300ms forwards;
+}
+
+.engine-setting-saving::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--fg-muted);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: engine-setting-saving-spin 0.8s linear infinite;
+}
+
+@keyframes engine-setting-saving-in { to { opacity: 1; } }
+@keyframes engine-setting-saving-spin { to { transform: rotate(360deg); } }
+
+/* The value in force already comes from the write target (the status
+   line names it); "Saves to <the same file>" would say it twice. */
+.engine-settings-popover-row[data-target-is-source] .engine-setting-target {
+  display: none;
+}
+
+/* A control focused by the program after a mouse action carries no ring
+   until the keyboard is used (the class is removed on keydown or blur). */
+.engine-settings-popover .engine-setting-quiet-focus:focus,
+.engine-settings-popover .engine-setting-quiet-focus:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Nothing to filter yet (loading, a failed first load, an empty group). */
+.engine-settings-filter:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* A help-only filter hit shows the sentence ONCE, marked: the row's own
+   help line steps aside while the marked copy is on screen, and the copy takes
+   the help line's own type so the row reads the same as its neighbours. */
+.engine-settings-popover-row.has-help-match .engine-setting-help {
+  display: none;
+}
+
+.engine-setting-help-match {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--fg-secondary, var(--fg-muted));
+}
+
+.engine-setting-help-match mark {
+  background: var(--accent-soft, var(--bg-hover));
+  color: var(--fg);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* The in-place mark for a help-only filter hit (CSS Custom Highlight API). */
+::highlight(engine-settings-help-match) {
+  background-color: var(--accent-soft, rgba(99, 102, 241, 0.25));
+  color: var(--fg);
+}
+
+/* A global-only file has no per-project layer; the row is shown locked
+   and its "Saves to" line, which would be wrong, is hidden. */
+.engine-settings-row-lock {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.engine-settings-row-lock:disabled { opacity: 0.6; }
+.is-global-only .engine-setting-target { display: none; }

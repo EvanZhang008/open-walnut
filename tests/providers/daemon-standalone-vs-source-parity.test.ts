@@ -926,6 +926,51 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       .not.toContain("'fs-write-atomic-v1'")
   })
 
+  // git.ensureExcluded ('git-exclude-v1'): a project settings file Walnut just
+  // created must not show up as an untracked file in the user's repo. Behavior
+  // is covered on the SOURCE twin (daemon-git-ensure-excluded.test.ts); this
+  // pins the bun binary to the same decision order, which is what keeps it from
+  // ever touching a tracked file or a .gitignore.
+  it('both twins dispatch git.ensureExcluded with the same check order and keep it off the bridge', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/case 'git\.ensureExcluded': return cmdGitEnsureExcluded/)
+      const start = src.search(/async function cmdGitEnsureExcluded/)
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      // ORDER: repo root first (not-a-repo is an answer, not an error), the file
+      // must sit inside it, an ignored or tracked file is left alone, and only
+      // then is the exclude file located and appended to.
+      const steps = [
+        "'rev-parse', '--show-toplevel'",
+        "'not-a-repo'",
+        'outside the repository',
+        "'check-ignore', '-q', '--', rel",
+        "'ls-files', '--error-unmatch', '--', rel",
+        "'rev-parse', '--git-path', 'info/exclude'",
+        "'/' + rel",
+        "'added'",
+      ]
+      const positions = steps.map((s) => body.indexOf(s))
+      for (let i = 0; i < steps.length; i++) {
+        expect(positions[i], `${steps[i]} missing from cmdGitEnsureExcluded`).toBeGreaterThan(-1)
+        if (i > 0) expect(positions[i], `${steps[i]} must come after ${steps[i - 1]}`).toBeGreaterThan(positions[i - 1])
+      }
+      // Never a .gitignore edit: that file is the user's, and often committed.
+      expect(body).not.toContain('.gitignore')
+      // Off the bridge: a cloud client must not be able to write into a repo's .git.
+      const allowStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+      expect(src.slice(allowStart, src.indexOf('])', allowStart))).not.toContain("'git.ensureExcluded'")
+    }
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart))).not.toMatch(/'git-exclude-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart))).toMatch(/'git-exclude-v1'/)
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart))).not.toContain("'git-exclude-v1'")
+  })
+
   it("'fs-mutate-v1' is advertised but NOT required (old daemons must stay usable)", () => {
     const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
     const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')

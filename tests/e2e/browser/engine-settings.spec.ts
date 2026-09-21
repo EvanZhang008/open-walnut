@@ -10,6 +10,7 @@ import { test, expect } from '@playwright/test'
 import {
   control,
   fixtureHome,
+  lockUserSettingsFile,
   openEnginesSection,
   readClaudeSettings,
   readCodexConfig,
@@ -21,6 +22,15 @@ test.describe.configure({ mode: 'serial' })
 // A cold SPA navigation under machine load has eaten 27s of the default 30s
 // budget when another browser loaded the dev bundle at the same time.
 test.setTimeout(90_000)
+
+// The popover specs flip the same seeded keys in the same fixture HOME; run
+// together, the files take turns on the user file instead of racing on it.
+let releaseUserFile: (() => Promise<void>) | null = null
+test.beforeAll(async ({ request }) => {
+  test.setTimeout(300_000) // the hook may queue behind sibling spec files
+  releaseUserFile = await lockUserSettingsFile(await fixtureHome(request))
+})
+test.afterAll(async () => { await releaseUserFile?.() })
 
 test.describe('Settings → Engines', () => {
   test('claude: toggles, selects, text and reset change only their key; hooks and allowlists survive', async ({ page, request }) => {

@@ -78,6 +78,7 @@ export const CODEX_SETTINGS: EngineSettingsSchema = {
     { id: CONFIG, path: '~/.codex/config.toml', format: 'toml-top-level', label: 'config.toml', homeEnv: { name: 'CODEX_HOME', replaces: '~/.codex' } },
   ],
   note: 'The top-level keys of ~/.codex/config.toml on the selected host. Tables such as [projects] and [model_providers] are left untouched; a change is picked up by the next codex session.',
+  appliesOn: 'new-session',
   groups: [
     { id: 'sessions', title: 'Sessions', help: 'Read by codex on every start, including the sessions Walnut runs.', items: SESSION_ITEMS },
     { id: 'updates', title: 'Updates', help: 'The CLI\'s own update check.', items: UPDATE_ITEMS },

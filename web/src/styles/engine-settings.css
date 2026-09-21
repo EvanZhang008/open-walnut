@@ -115,7 +115,8 @@
   max-width: 72ch;
 }
 
-.engine-setting-status {
+.engine-setting-status,
+.engine-setting-target {
   font-size: 11px;
   color: var(--fg-muted, var(--text-muted));
 }

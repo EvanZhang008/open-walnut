@@ -58,8 +58,18 @@ const PENDING_AVAILABILITY_REASONS: ReadonlySet<string> = new Set([
   'availability check unavailable',
 ]);
 
-let catalog: EngineCatalog = loadFromStorage() ?? DEFAULT_ENGINE_CATALOG;
+const seeded = loadFromStorage();
+let catalog: EngineCatalog = seeded ?? DEFAULT_ENGINE_CATALOG;
 const listeners = new Set<() => void>();
+/**
+ * Whether `catalog` is an answer or the compiled-in placeholder. A surface that
+ * must not act on the placeholder (the composer's engine-settings row: the
+ * fallback says "no settings" for every engine) reads this instead of guessing
+ * from the rows. 'failed' only while no answer has ever landed; a later success
+ * flips it back.
+ */
+export type EngineCatalogHydration = 'pending' | 'hydrated' | 'failed';
+let hydration: EngineCatalogHydration = seeded ? 'hydrated' : 'pending';
 let lastHydrateAt = 0;
 let hydrating: Promise<void> | null = null;
 /** A refresh asked for while a hydrate chain was already running: the chain may
@@ -163,6 +173,12 @@ function notify(): void {
   for (const l of listeners) l();
 }
 
+function setHydration(next: EngineCatalogHydration): void {
+  if (hydration === next) return;
+  hydration = next;
+  notify();
+}
+
 /** `persistIt=false` applies the rows in memory only (a PENDING answer is
  *  correct for this paint but must not seed the next page load). */
 function replace(next: EngineCatalog, persistIt = true): void {
@@ -209,8 +225,14 @@ async function hydrate(): Promise<void> {
         }
         if (applied) replace(applied, !pending);
         if (pending) schedulePendingRepull();
+        // Capabilities are static, so even a pending (availability-wise) answer
+        // is a real answer about what each engine supports. An answer with no
+        // usable row is a failure for the same purpose, unless one landed before.
+        if (applied) setHydration('hydrated');
+        else if (hydration !== 'hydrated') setHydration('failed');
       })
       .catch((err) => {
+        if (hydration !== 'hydrated') setHydration('failed');
         // The compiled-in default is a correct answer for the engines that
         // shipped with this build, so this is not user-facing. An OLD server
         // (404) will keep answering that way: start the TTL so we stop asking.
@@ -244,6 +266,11 @@ export function useEngineCatalog(): EngineCatalogEntry[] {
   return useSyncExternalStore(subscribe, () => catalog);
 }
 
+/** Reactive read of whether the catalog is an answer yet (see EngineCatalogHydration). Subscribing hydrates. */
+export function useEngineCatalogHydration(): EngineCatalogHydration {
+  return useSyncExternalStore(subscribe, () => hydration);
+}
+
 /** Imperative read for non-hook call sites (launch payload assembly, api layer). */
 export function getEngineCatalog(): EngineCatalogEntry[] {
   return catalog;
@@ -272,6 +299,7 @@ export function _subscribeEngineCatalogForTests(cb: () => void): () => void {
 /** Test hook — back to the compiled-in default, nothing hydrated. */
 export function _resetEngineCatalogStore(): void {
   catalog = DEFAULT_ENGINE_CATALOG;
+  hydration = 'pending';
   lastHydrateAt = 0;
   hydrating = null;
   refreshRequested = false;

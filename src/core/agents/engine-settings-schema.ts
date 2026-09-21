@@ -24,10 +24,17 @@
 
 export type EngineSettingsFileFormat = 'json' | 'toml-top-level'
 
+/** Placeholder in a project-scoped file's path, replaced by the session's working directory. */
+export const CWD_PLACEHOLDER = '<cwd>'
+
 export interface EngineSettingsFile {
   /** Stable id items reference (e.g. 'user', 'global', 'config'). */
   readonly id: string
-  /** Posix path with a leading `~`; the daemon expands it on the target host. */
+  /**
+   * Posix path: a leading `~` (the daemon expands it on the target host) or, for
+   * a project-scoped file, a leading `<cwd>` (replaced by the working directory
+   * of the session being configured; without one the file is not consulted).
+   */
   readonly path: string
   readonly format: EngineSettingsFileFormat
   /** Short human label ("user settings"). */
@@ -38,6 +45,26 @@ export interface EngineSettingsFile {
    * prefix of `path`) is swapped for its value before any read or write.
    */
   readonly homeEnv?: { readonly name: string; readonly replaces: string }
+  /**
+   * 'project' = lives under the working directory and applies to that project
+   * only. Absent = 'user': one file per host, every directory.
+   */
+  readonly scope?: 'user' | 'project'
+  /**
+   * Read for attribution, never written. A project's SHARED settings file is
+   * committed with the repo; Walnut overrides it through the local file instead
+   * of editing a teammate's checked-in choices.
+   */
+  readonly readOnly?: boolean
+  /**
+   * Project-scoped files that layer over THIS file for the same keys, highest
+   * precedence first (Claude: local before shared). Declared on the file, not
+   * the schema, because a layer is a property of one file family: a key kept in
+   * `~/.claude.json` has no project file the engine would read it from, so a
+   * "this project only" write for it must be refused rather than land somewhere
+   * the engine never looks. The first writable overlay is where such a write goes.
+   */
+  readonly overlays?: readonly string[]
 }
 
 /**
@@ -82,6 +109,23 @@ export interface EngineSettingItem {
   /** Environment variables that override the stored value when set. */
   readonly env?: readonly string[]
   readonly scope: EngineSettingScope
+  /**
+   * The engine's OWN config screen writes this key to a project-scoped file (one
+   * of `file`'s `overlays`) rather than to `file`. With a working directory
+   * known, Walnut's default scope follows it; without one the key goes to `file`
+   * as the user-wide default.
+   */
+  readonly cliWritesTo?: string
+  /** Overrides the schema's `appliesOn` for a key the engine reads only at startup. */
+  readonly appliesOn?: EngineSettingAppliesOn
+  /**
+   * What Walnut itself passes at launch that outranks the stored value for the
+   * sessions it drives (a CLI flag such as `--permission-mode`, an environment
+   * variable it sets). Such a row still edits the engine's file, but the change
+   * is felt by terminal sessions only; the UI says so instead of offering a
+   * switch that changes nothing for the session it sits in.
+   */
+  readonly launchOverride?: string
   /** `text` only: completions offered by the input (not an allowlist). */
   readonly suggestions?: readonly string[]
   readonly placeholder?: string
@@ -97,11 +141,38 @@ export interface EngineSettingsGroup {
   readonly items: readonly EngineSettingItem[]
 }
 
+/**
+ * When a saved value is felt: 'next-turn' = a running session of this engine
+ * reloads its files and honours the change on its next turn; 'new-session' =
+ * only sessions started after the save see it.
+ */
+export type EngineSettingAppliesOn = 'next-turn' | 'new-session'
+
 export interface EngineSettingsSchema {
   readonly files: readonly EngineSettingsFile[]
   readonly groups: readonly EngineSettingsGroup[]
   /** One plain sentence shown under the engine's tab (where the file lives, how it is picked up). */
   readonly note?: string
+  /** Engine-wide answer to "when does a change apply"; an item may override it. */
+  readonly appliesOn?: EngineSettingAppliesOn
+}
+
+/** The overlays declared on a file, as file declarations, highest precedence first. */
+export function fileOverlays(schema: EngineSettingsSchema, fileId: string): EngineSettingsFile[] {
+  const file = schema.files.find((f) => f.id === fileId)
+  return (file?.overlays ?? [])
+    .map((id) => schema.files.find((f) => f.id === id))
+    .filter((f): f is EngineSettingsFile => f !== undefined)
+}
+
+/** Whether any file of the schema has a writable project overlay (the "this project only" scope exists at all). */
+export function schemaHasProjectScope(schema: EngineSettingsSchema): boolean {
+  return schema.files.some((f) => fileOverlays(schema, f.id).some((o) => o.scope === 'project' && !o.readOnly))
+}
+
+/** Whether a file's path needs a working directory to resolve. */
+export function fileNeedsCwd(file: EngineSettingsFile): boolean {
+  return file.path.startsWith(CWD_PLACEHOLDER + '/')
 }
 
 /** Every item of a schema, in declaration order. */
@@ -155,10 +226,28 @@ export function validateSettingValue(item: EngineSettingItem, value: unknown): s
 export function schemaProblems(schema: EngineSettingsSchema): string[] {
   const problems: string[] = []
   const fileIds = new Set<string>()
+  const byId = new Map<string, EngineSettingsFile>()
   for (const file of schema.files) {
     if (fileIds.has(file.id)) problems.push(`duplicate file id '${file.id}'`)
     fileIds.add(file.id)
-    if (!file.path.startsWith('~/')) problems.push(`file '${file.id}' path must start with ~/ (got '${file.path}')`)
+    byId.set(file.id, file)
+    const project = file.scope === 'project'
+    if (project && !fileNeedsCwd(file)) problems.push(`project file '${file.id}' path must start with ${CWD_PLACEHOLDER}/ (got '${file.path}')`)
+    if (!project && !file.path.startsWith('~/')) problems.push(`file '${file.id}' path must start with ~/ (got '${file.path}')`)
+    if (project && file.homeEnv) problems.push(`project file '${file.id}' cannot declare homeEnv`)
+  }
+  for (const file of schema.files) {
+    const overlays = file.overlays ?? []
+    if (overlays.length === 0) continue
+    if (file.scope === 'project') problems.push(`project file '${file.id}' cannot declare overlays of its own`)
+    for (const id of overlays) {
+      const f = byId.get(id)
+      if (!f) problems.push(`file '${file.id}' overlays reference unknown file '${id}'`)
+      else if (f.scope !== 'project') problems.push(`file '${file.id}' overlay '${id}' is not project-scoped`)
+    }
+    if (!overlays.some((id) => byId.get(id)?.scope === 'project' && !byId.get(id)!.readOnly)) {
+      problems.push(`file '${file.id}' has no writable overlay, so "this project only" could never save its keys`)
+    }
   }
   const keys = new Set<string>()
   const groupIds = new Set<string>()
@@ -169,7 +258,13 @@ export function schemaProblems(schema: EngineSettingsSchema): string[] {
       if (keys.has(item.key)) problems.push(`duplicate item key '${item.key}'`)
       keys.add(item.key)
       if (!fileIds.has(item.file)) problems.push(`item '${item.key}' references unknown file '${item.file}'`)
+      else if (byId.get(item.file)!.scope === 'project') problems.push(`item '${item.key}' must be written to a user-scoped file, not '${item.file}'`)
       if (item.legacy && !fileIds.has(item.legacy.file)) problems.push(`item '${item.key}' legacy references unknown file '${item.legacy.file}'`)
+      if (item.cliWritesTo !== undefined) {
+        const own = byId.get(item.file)?.overlays ?? []
+        if (!own.includes(item.cliWritesTo)) problems.push(`item '${item.key}' cliWritesTo '${item.cliWritesTo}' is not an overlay of '${item.file}'`)
+        else if (byId.get(item.cliWritesTo)?.readOnly) problems.push(`item '${item.key}' cliWritesTo '${item.cliWritesTo}' is read-only`)
+      }
       if (!item.path || item.path.split('.').some((seg) => seg.length === 0)) problems.push(`item '${item.key}' has an empty path segment`)
       if (item.type === 'select') {
         if (!item.options || item.options.length === 0) problems.push(`select '${item.key}' has no options`)

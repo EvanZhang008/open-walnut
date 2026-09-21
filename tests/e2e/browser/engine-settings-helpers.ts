@@ -54,3 +54,42 @@ export async function waitForEngineRows(section: ReturnType<Page['locator']>, en
   const first = engine === 'claude' ? 'alwaysThinkingEnabled' : 'model_reasoning_effort'
   await expect(row(section, first)).toBeVisible({ timeout: 15_000 })
 }
+
+/**
+ * Serialise the spec FILES that write the fixture's one user file.
+ *
+ * `fullyParallel` puts every spec file in its own worker, and five files
+ * (Settings page, its WebKit pin, and the three popover files) all flip keys in
+ * the same `HOME/.claude/settings.json`. Run together, one file's toggle lands
+ * mid-assertion in another (seen: alwaysThinkingEnabled read back false right
+ * after a fresh open). The lock is a directory inside the fixture HOME, taken
+ * in `beforeAll` and released in `afterAll`, so these files queue behind each
+ * other while every other spec keeps running in parallel. A holder whose worker
+ * process is gone (a crash, a killed run) is reclaimed instead of waited on.
+ */
+export async function lockUserSettingsFile(home: string, timeoutMs = 240_000): Promise<() => Promise<void>> {
+  const dir = path.join(home, '.engine-settings-spec.lock')
+  const pidFile = path.join(dir, 'pid')
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      await fs.mkdir(dir)
+      await fs.writeFile(pidFile, String(process.pid))
+      break
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      const holder = Number(await fs.readFile(pidFile, 'utf-8').catch(() => '0'))
+      if (holder > 0 && holder !== process.pid && !processAlive(holder)) {
+        await fs.rm(dir, { recursive: true, force: true })
+        continue
+      }
+      if (Date.now() > deadline) throw new Error(`engine settings spec lock held by pid ${holder} for over ${timeoutMs}ms: ${dir}`)
+      await new Promise((r) => setTimeout(r, 250))
+    }
+  }
+  return async () => { await fs.rm(dir, { recursive: true, force: true }) }
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
