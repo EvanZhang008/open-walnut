@@ -36,6 +36,10 @@ struct TimelineHost: UIViewControllerRepresentable {
     /// yet.
     var scope: String
     var showLoadEarlier: Bool = false
+    /// Where each banked message is in its life (see
+    /// `TimelineInput.queuedMessageStates`). Defaulted: a surface with no queue
+    /// passes nothing and renders exactly as before.
+    var queuedMessageStates: [String: QueuedSend.Status] = [:]
     /// Bumped by the store when a layout-shifting mutation should re-assert
     /// the pinned bottom (send, turn-end, streaming re-assert).
     var scrollToBottomSignal: Int
@@ -97,6 +101,7 @@ struct TimelineHost: UIViewControllerRepresentable {
             showLoadEarlier: showLoadEarlier,
             width: 0, // stamped in resubmit()
             expandedRowIDs: coordinator.expandedRowIDs,
+            queuedMessageStates: queuedMessageStates,
             scope: TimelineScope.sanitize(scope)
         )
         coordinator.resubmit()

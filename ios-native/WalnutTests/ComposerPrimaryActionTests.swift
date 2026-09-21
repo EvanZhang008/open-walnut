@@ -17,7 +17,7 @@ final class ComposerPrimaryActionTests: XCTestCase {
 
     func testIdleWithTypedTextSends() {
         XCTAssertEqual(
-            ComposerPrimaryAction.decide(busy: false, hasContent: true, pendingQuestion: false),
+            ComposerPrimaryAction.decide(busy: false, hasContent: true, pendingQuestion: false, busyAcceptsSend: true),
             .send
         )
     }
@@ -26,26 +26,36 @@ final class ComposerPrimaryActionTests: XCTestCase {
     /// seat is dead.
     func testIdleAndEmptyIsDisabled() {
         XCTAssertEqual(
-            ComposerPrimaryAction.decide(busy: false, hasContent: false, pendingQuestion: false),
+            ComposerPrimaryAction.decide(busy: false, hasContent: false, pendingQuestion: false, busyAcceptsSend: true),
             .disabled
         )
     }
 
-    /// A turn is running, so the button stops it — the typed text stays in the
-    /// draft rather than being sent into a 409.
-    func testBusyWithTypedTextStops() {
+    /// Every row below is the CHAT composer, whose store banks a send made mid-turn
+    /// (`busyAcceptsSend: true`). The other answer has its own case at the bottom.
+    ///
+    /// A turn is running AND something is typed: the seat is a SEND, because the
+    /// store banks a mid-turn send and delivers it when the turn settles.
+    ///
+    /// This row shipped the other way round, and the report was exactly that: eight
+    /// tool rows streaming, a long dictated paragraph in the composer, and a red
+    /// stop where the send arrow belongs — "he is talking and I have no way to
+    /// send". Stop cannot outrank content, because an empty composer has nothing to
+    /// send while typed text always has somewhere to go.
+    func testBusyWithTypedTextStillSends() {
         XCTAssertEqual(
-            ComposerPrimaryAction.decide(busy: true, hasContent: true, pendingQuestion: false),
-            .stop
+            ComposerPrimaryAction.decide(busy: true, hasContent: true, pendingQuestion: false, busyAcceptsSend: true),
+            .send
         )
     }
 
     /// The case the old shape could not express at all: the send button was
     /// mounted only when something was typed, so mid-turn with an empty draft
-    /// there was no button to stop with.
+    /// there was no button to stop with. An empty composer is also the ONLY state
+    /// stop takes the seat in, now that content outranks it.
     func testBusyAndEmptyStillStops() {
         XCTAssertEqual(
-            ComposerPrimaryAction.decide(busy: true, hasContent: false, pendingQuestion: false),
+            ComposerPrimaryAction.decide(busy: true, hasContent: false, pendingQuestion: false, busyAcceptsSend: true),
             .stop
         )
     }
@@ -55,7 +65,7 @@ final class ComposerPrimaryActionTests: XCTestCase {
     /// Answering outranks stopping.
     func testAPendingQuestionSendsTheAnswerEvenMidTurn() {
         XCTAssertEqual(
-            ComposerPrimaryAction.decide(busy: true, hasContent: true, pendingQuestion: true),
+            ComposerPrimaryAction.decide(busy: true, hasContent: true, pendingQuestion: true, busyAcceptsSend: true),
             .send
         )
     }
@@ -64,7 +74,7 @@ final class ComposerPrimaryActionTests: XCTestCase {
     /// turn is waiting on this field, not running away with the context.
     func testAPendingQuestionWithNothingTypedIsDisabled() {
         XCTAssertEqual(
-            ComposerPrimaryAction.decide(busy: true, hasContent: false, pendingQuestion: true),
+            ComposerPrimaryAction.decide(busy: true, hasContent: false, pendingQuestion: true, busyAcceptsSend: true),
             .disabled
         )
     }
@@ -74,6 +84,34 @@ final class ComposerPrimaryActionTests: XCTestCase {
     func testStopFallsBackToGreyedSendWithoutAStopHandler() {
         XCTAssertEqual(ComposerPrimaryAction.stop.availableWithStop(false), .disabled)
         XCTAssertEqual(ComposerPrimaryAction.stop.availableWithStop(true), .stop)
+    }
+
+    /// A composer whose owner CANNOT hold a send made while it is busy keeps the old
+    /// behaviour, and the new-session launcher is exactly that: it is `busy` while it
+    /// CREATES a session, and a second send there creates a second session. With no
+    /// stop handler behind it the seat ends up greyed, which is where it was before
+    /// content started outranking stop.
+    func testAComposerThatCannotHoldABusySendFallsThroughToStop() {
+        XCTAssertEqual(
+            ComposerPrimaryAction.decide(busy: true, hasContent: true,
+                                         pendingQuestion: false, busyAcceptsSend: false),
+            .stop
+        )
+        XCTAssertEqual(
+            ComposerPrimaryAction.decide(busy: true, hasContent: true,
+                                         pendingQuestion: false, busyAcceptsSend: false)
+                .availableWithStop(false),
+            .disabled
+        )
+        // Not busy: the flag is irrelevant, a typed message always sends.
+        for accepts in [true, false] {
+            XCTAssertEqual(
+                ComposerPrimaryAction.decide(busy: false, hasContent: true,
+                                             pendingQuestion: false,
+                                             busyAcceptsSend: accepts),
+                .send
+            )
+        }
     }
 
     /// The fallback touches ONLY stop: a composer without a stop handler still

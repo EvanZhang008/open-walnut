@@ -67,11 +67,19 @@ final class TimelineHostedHeightParityTests: XCTestCase {
                     kind: kind, source: source)
     }
 
-    private func rows(_ messages: [ChatMessage], expanded: Set<String> = []) async -> [TimelineRow] {
+    /// `queued` and `category` are what let this gate reach a row it could not build
+    /// before: a banked-send row only exists when the store says a message is queued,
+    /// and its height is derived from FONTS, so it can only be judged at a stated
+    /// text size (the actor measures at `sizeCategory`, the cell renders at the
+    /// environment's — see `renderedHeight`).
+    private func rows(_ messages: [ChatMessage], expanded: Set<String> = [],
+                      queued: [String: QueuedSend.Status] = [:],
+                      category: UIContentSizeCategory = .unspecified) async -> [TimelineRow] {
         let actor = TimelineLayoutActor()
         let snapshot = await actor.buildSnapshot(TimelineInput(
             messages: messages, streaming: false, liveText: "", liveTextTruncated: false,
-            activity: nil, showLoadEarlier: false, width: pageWidth, expandedRowIDs: expanded
+            activity: nil, showLoadEarlier: false, width: pageWidth, expandedRowIDs: expanded,
+            queuedMessageStates: queued, sizeCategory: category
         ))
         return snapshot.rows
     }
@@ -79,16 +87,25 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     /// Which row kinds this gate is responsible for (everything hosted).
     private static let hostedKinds: Set<String> = [
         "toolChip", "thinking", "chip", "notification", "image", "localImages", "table",
-        "truncationChip", "activity", "failedNotice", "loadEarlier",
+        "truncationChip", "activity", "failedNotice", "queuedNotice", "loadEarlier",
     ]
 
     /// Kinds whose height is pure arithmetic over one or two lines, so the row may
-    /// also be held to a TIGHT upper bound. The two kinds left out are known,
-    /// measured gaps rather than oversights: `failedNotice` is a fixed 24pt row for
-    /// 13.3pt of content, and an EXPANDED notification measures its body with
+    /// also be held to a TIGHT upper bound.
+    ///
+    /// `queuedNotice` belongs here: its height is `max(capsule, button)` while the
+    /// two sit side by side and their SUM once an accessibility size stacks them,
+    /// over two fonts it reads at build time, one line each by construction, so it
+    /// has nothing to round up by beyond the shared per-line cushion.
+    ///
+    /// The two kinds left out are known, measured gaps rather than oversights:
+    /// `failedNotice` is a fixed 24pt constant for 13.3pt of content (unchanged in
+    /// this pass, deliberately), and an EXPANDED notification measures its body with
     /// TextKit while SwiftUI renders it, which over-measures by 15 to 24pt on long
     /// bodies. Both only cost empty space; neither can shave ink.
-    private static let tightKinds: Set<String> = ["chip", "toolChip", "thinking", "table"]
+    private static let tightKinds: Set<String> = [
+        "chip", "toolChip", "thinking", "table", "queuedNotice",
+    ]
 
     /// Extra round-up allowance for a row that models SEVERAL independent text
     /// blocks. Each block's height is its own line-count model of SwiftUI's
@@ -140,6 +157,60 @@ final class TimelineHostedHeightParityTests: XCTestCase {
             }
         }
         return checked
+    }
+
+    /// The banked-send row, whose height used to be a 30pt CONSTANT while its content
+    /// is a `.caption2` capsule beside a `.caption` button. At the default size the
+    /// constant happened to be right; at accessibility-XXXL both controls clip, and a
+    /// hosted row that needs more height than it was given does not truncate, it draws
+    /// over its neighbour. Both states and both ends of the Dynamic Type range,
+    /// because the badge swaps to a longer word once delivery starts.
+    func testQueuedNoticeRowsFitAtEveryTextSize() async {
+        var message = ChatMessage(id: "queued-1", role: "user", text: "waiting to send",
+                                  createdAt: "2026-09-03T06:00:00Z", kind: nil)
+        message.pending = true
+        var checked = 0
+        for status in [QueuedSend.Status.pending, .processing] {
+            for category in [UIContentSizeCategory.large,
+                             .accessibilityExtraExtraExtraLarge] {
+                let built = await rows([message], queued: ["queued-1": status],
+                                       category: category)
+                XCTAssertTrue(built.contains { $0.content.reuseKind == "queuedNotice" },
+                              "\(status) produced no queuedNotice row to check")
+                checked += assertFits(built, "queuedNotice \(status) at \(category.rawValue)",
+                                      category: category)
+                // Printed for the same reason the two fixed constants below are: the
+                // numbers in a follow-up should be measured, not derived twice.
+                if let row = built.first(where: { $0.content.reuseKind == "queuedNotice" }) {
+                    print("[height-report] queuedNotice \(status) at \(category.rawValue): "
+                        + "row=\(row.height)pt rendered=\(renderedHeight(row, category: category))pt")
+                }
+            }
+        }
+        XCTAssertGreaterThanOrEqual(checked, 4, "gate checked nothing (n=\(checked))")
+    }
+
+    /// The measurements the review asked for on the two PRE-EXISTING fixed constants.
+    /// Deliberately not a pass/fail on them (they are unchanged in this pass, and the
+    /// activity row is on every turn's hot path) — it PRINTS what they are, so the
+    /// numbers in the follow-up are measured rather than guessed.
+    func testReportsWhatTheFixedNoticeConstantsMeasureAtTheLargestTextSize() async {
+        var failedMessage = ChatMessage(id: "f-1", role: "user", text: "not sent",
+                                        createdAt: "2026-09-03T06:00:00Z", kind: nil)
+        failedMessage.failed = true
+        for category in [UIContentSizeCategory.large,
+                         .accessibilityExtraExtraExtraLarge] {
+            let built = await rows([failedMessage], category: category)
+            if let row = built.first(where: { $0.content.reuseKind == "failedNotice" }) {
+                print("[height-report] failedNotice at \(category.rawValue): "
+                    + "row=\(row.height)pt rendered=\(renderedHeight(row, category: category))pt")
+            }
+            let activity = TimelineRow(id: "a-1", revision: 0,
+                                       content: .activity("Bash · npm run test:quick"),
+                                       height: TimelineMetrics.activityHeight)
+            print("[height-report] activity at \(category.rawValue): "
+                + "row=\(activity.height)pt rendered=\(renderedHeight(activity, category: category))pt")
+        }
     }
 
     // MARK: - The kinds a real transcript is full of

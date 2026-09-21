@@ -44,6 +44,10 @@ struct ChatTimelineBody: View {
                 // between two conversations of the same length.
                 scope: TimelineScope.sanitize(chat.activeID),
                 showLoadEarlier: chat.hasOlder,
+                // Which bubbles are still waiting behind the running turn, and
+                // which are already being delivered. Store state, not a message
+                // field: it changes without the message changing.
+                queuedMessageStates: chat.queuedRowStates,
                 scrollToBottomSignal: chat.scrollToBottomSignal + repinSignal,
                 isPinned: { chat.bottomPinned },
                 setPinned: { chat.bottomPinned = $0 },
@@ -58,6 +62,8 @@ struct ChatTimelineBody: View {
                         if let message = chat.messages.first(where: { $0.id == messageID }) {
                             chat.discardFailed(message)
                         }
+                    case .withdrawQueued(let messageID):
+                        chat.withdrawQueued(messageID)
                     case .loadEarlier:
                         Task { await chat.loadOlder() }
                     case .openActivity(let detail):

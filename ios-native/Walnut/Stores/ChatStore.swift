@@ -17,6 +17,24 @@ protocol ChatMessagesTransport {
 
 extension WalnutAPI: ChatMessagesTransport {}
 
+/// The two WRITES the send flow makes, behind a seam for the same reason reads
+/// have one: the send queue's whole promise is "nothing reaches the server until
+/// the running turn ends", and a claim about what did NOT go out cannot be made
+/// against a live URLSession. A scripted transport is also the only way to stage
+/// the 409 race the drain has to survive (a turn starting between the settle and
+/// the POST).
+protocol ChatSendTransport {
+    func createConversation(agentID: String, title: String?) async throws -> String
+    func sendMessage(
+        conversationID: String, agentID: String, text: String, images: [ImagePayload]
+    ) async throws -> String
+    /// Behind the seam for the queue's sake: a STOP is one of the moments that has to
+    /// drain (see `stopTurn`), and a stop that cannot succeed cannot be shown to.
+    func stopConversation(id: String, agentID: String) async throws -> ConversationStopped
+}
+
+extension WalnutAPI: ChatSendTransport {}
+
 /// Chat state — conversation list, active conversation's messages, one live
 /// SSE stream, and the send flow (POST → 202 → deltas over SSE).
 ///
@@ -30,11 +48,13 @@ final class ChatStore {
     /// same object, and a hosted test can script the ordering (see
     /// `ChatMessagesTransport`).
     @ObservationIgnored private let transport: ChatMessagesTransport
+    /// Writes go through their own seam — see `ChatSendTransport`.
+    @ObservationIgnored private let sendTransport: ChatSendTransport
     private var sse: SSEClient?
     @ObservationIgnored private var trackedTasks: [UUID: Task<Void, Never>] = [:]
     /// In-flight send()s. Kept separate from `trackedTasks` only because they
     /// return a value; they are cancelled by the same teardown path.
-    @ObservationIgnored private var trackedSends: [UUID: Task<Bool, Never>] = [:]
+    @ObservationIgnored private var trackedSends: [UUID: Task<SendAttempt, Never>] = [:]
     private var isActive = true
     weak var connection: ConnectionStore?
 
@@ -122,8 +142,45 @@ final class ChatStore {
     /// because there is genuinely nothing to paint yet.
     private(set) var firstPageInFlight = false
     var sending = false
-    /// A turn is running on the active conversation (composer disabled).
-    var streaming = false
+    /// A turn is running on the active conversation.
+    ///
+    /// THE DRAIN IS TRIGGERED EXPLICITLY, AND THIS OBSERVER IS ONLY A NET.
+    ///
+    /// Six places in this file put the flag down and they are not one choke point:
+    /// `message-end`, the SSE `error` arm, the stall WATCHDOG reconciling a lost
+    /// `message-end`, an explicit stop, a conversation switch, and teardown. A queue
+    /// drained from the `message-end` handler alone sits stuck forever on exactly
+    /// the turn whose `message-end` never arrived, which is the turn a user is most
+    /// likely to have queued behind — so every one of those sites, plus foreground
+    /// resume and stream reconnect (neither of which touches this flag at all),
+    /// calls `scheduleQueueDrain()` for itself.
+    ///
+    /// THE CONSTRAINT THIS COMMENT EXISTS FOR: nothing may depend on `didSet` firing
+    /// for a SAME-VALUE write. It does fire for one today, and an earlier cut leaned
+    /// on that (`select` writing false over false was the only thing that delivered a
+    /// queue banked in a conversation the user came back to) — which put it in direct
+    /// conflict with `setStreaming`'s equality gate below, so anyone obeying that
+    /// comment, or adding `guard streaming != newValue` here, silently stopped
+    /// delivering the user's messages. The explicit calls are the contract; this
+    /// observer only catches a FUTURE site that forgets one.
+    var streaming = false {
+        didSet { if !streaming { scheduleQueueDrain() } }
+    }
+    /// Messages banked while a turn was running, oldest first. Delivered one at a
+    /// time as turns settle; persisted so an app kill cannot eat them.
+    ///
+    /// Written only through `setQueue` (which keeps `queuedRowStates` and the disk
+    /// copy in step); internal rather than private so WalnutTests can read it.
+    private(set) var queuedSends: [QueuedSend] = []
+    /// Where each banked bubble is in its life, for the timeline's badge. A stored
+    /// mirror of `queuedSends` rather than a computed map: the timeline reads it on
+    /// every update pass, and a queued row must not cost a rebuild per frame.
+    private(set) var queuedRowStates: [String: QueuedSend.Status] = [:]
+    /// Convenience for the paths that only ask "is this row banked at all".
+    var queuedRowIDs: Set<String> { Set(queuedRowStates.keys) }
+    /// Single-flight drain. Two settles landing together must not both start
+    /// posting the same head of the queue.
+    @ObservationIgnored private var queueDrainTask: Task<Void, Never>?
     /// Accumulated live assistant text for the in-flight turn. Bounded like
     /// SessionConversationStore.liveText (LiveMarkdownWindow.boundedTail in
     /// flushPendingDelta) — retaining an unbounded reply makes every append +
@@ -202,15 +259,20 @@ final class ChatStore {
     /// end (`loadMessages` from the turn-end path), so it is a per-turn cost on
     /// cellular, not a one-time open cost.
     private static let pageSize = 200
+    /// Rows per page of `/conversations`. Spelled here rather than left to the
+    /// API's default because the queue's prune has to know whether the answer it is
+    /// judging was TRUNCATED (see `ChatSendQueueRules.pruned`).
+    private static let conversationListLimit = 50
     private static let cacheTail = 60
 
     // MARK: - Lifecycle
 
-    /// `transport` nil (production) = this store's own `WalnutAPI` instance.
-    /// WalnutTests pass a scripted one to drive the real conversation-switch
-    /// ordering without a network.
-    init(transport: ChatMessagesTransport? = nil) {
+    /// `transport` / `sendTransport` nil (production) = this store's own
+    /// `WalnutAPI` instance. WalnutTests pass scripted ones to drive the real
+    /// conversation-switch ordering and the real queue drain without a network.
+    init(transport: ChatMessagesTransport? = nil, sendTransport: ChatSendTransport? = nil) {
         self.transport = transport ?? api
+        self.sendTransport = sendTransport ?? api
         LifecycleHub.shared.register(self)
     }
 
@@ -251,6 +313,10 @@ final class ChatStore {
             guard isActive else { return }
             conversations = cachedList
         }
+        guard isActive else { return }
+        // Before anything is selected: a queue restored after the first `select`
+        // would have no bubbles until the next switch.
+        await restoreQueuedSendsFromDisk()
         guard isActive else { return }
         // New chat is the resting state — no saved-conversation restore, no
         // fall-through to the most recent thread.
@@ -326,12 +392,15 @@ final class ChatStore {
         defer { loadingList = false }
         do {
             let agentID = activeAgentID
-            let fetched = try await api.conversations(agentID: agentID)
+            let fetched = try await api.conversations(
+                agentID: agentID, limit: Self.conversationListLimit
+            )
             guard isActive, !Task.isCancelled else { return }
             connection?.reportReachability(true, source: "chat-rest")
             guard agentID == activeAgentID else { return }
             conversations = fetched
             DiskCache.save(conversations, key: conversationsCacheKey)
+            pruneQueue(against: fetched)
         } catch {
             reportIfNetwork(error)
         }
@@ -371,7 +440,14 @@ final class ChatStore {
         // map is what tells a later merge that a leftover echo is not ours, and
         // an entry whose row is gone would be a lie about the next conversation.
         localRowConversation.removeAll()
+        // Banked sends outlive a conversation switch (they are the user's words,
+        // not a view state), so the rows that picture them are rebuilt here — the
+        // wipe above removed the bubbles, never the queue.
+        restoreQueuedBubbles(for: id)
         connectStream()
+        // Explicit, not via the flag above: the conversation being opened may have
+        // messages banked from a previous visit and there is no turn here to end.
+        scheduleQueueDrain()
         if let id {
             // Cached tail hydrates OFF-MAIN (P0-1) and only wins while nothing
             // canonical has landed for this conversation yet — loadMessages runs
@@ -601,6 +677,7 @@ final class ChatStore {
         func key(_ m: ChatMessage) -> String { "\(m.role)|\(m.text)" }
         let isEcho: (ChatMessage) -> Bool = {
             $0.id.hasPrefix("local-") || $0.id.hasPrefix("turn-")
+                || $0.id.hasPrefix("queued-")
         }
         func lastPlainAssistant(_ rows: [ChatMessage], skipEchoes: Bool) -> ChatMessage? {
             rows.last(where: {
@@ -702,26 +779,69 @@ final class ChatStore {
     /// voice transcript — its audio is already deleted) must rescue it on the first
     /// and must not on the second, or the same sentence exists twice and can be
     /// sent twice. See `ComposerBar.voiceRescueReason`.
+    ///
+    /// NOTE it is no longer the whole answer to "will my words survive this
+    /// send": a turn in flight now BANKS them (`SendOutcome.queued`) instead of
+    /// refusing, so the only refusal that keeps nothing is a store that cannot
+    /// take words at all. Ask `sendReportingOutcome` for that distinction.
     var acceptsNewTurn: Bool { isActive && !sending && !streaming }
+
+    /// What happened to the WORDS — which is not the same question as whether a
+    /// turn started, and conflating the two is how a dictated sentence ends up
+    /// either deleted or sent twice.
+    enum SendOutcome: Equatable {
+        /// A turn was attempted for them. `accepted` is the server's answer; false
+        /// still means the words are SAFE, as a retryable failed bubble.
+        case started(accepted: Bool)
+        /// Banked behind the running turn, with a bubble on screen. Delivered at
+        /// the next settle.
+        case queued
+        /// Nothing anywhere is holding them: the store is torn down, there is no
+        /// conversation to bank them against, or the queue is at its ceiling.
+        case refusedKeepingNothing
+
+        /// Did anything at all keep these words? The question a caller holding the
+        /// only copy has to ask (see `ComposerBar.voiceRescueReason`).
+        var keptTheWords: Bool { self != .refusedKeepingNothing }
+    }
 
     @discardableResult
     func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
+        // Preserved exactly: "did the server take this turn", which is what every
+        // existing caller of this Bool asks.
+        if case .started(let accepted) = await sendReportingOutcome(text, images: images) {
+            return accepted
+        }
+        return false
+    }
+
+    func sendReportingOutcome(_ text: String, images: [SelectedImage] = []) async -> SendOutcome {
         // Agent blocked on a structured question: route the composer text to
         // the answer endpoint (mirrors the web chat's interception — posting
         // a new message would 409 turn_active and deadlock the flow).
         if pendingQuestion, !text.isEmpty {
-            return await answerQuestion(text)
+            return .started(accepted: await answerQuestion(text))
         }
-        guard acceptsNewTurn else { return false }
+        // A turn is in flight and the store is otherwise healthy: bank the words.
+        // The composer's primary button is a SEND again in this state, so refusing
+        // here would be offering a seat that leads nowhere.
+        // A turn is in flight, or something is already waiting here. Both bank: the
+        // second is the ORDERING INVARIANT (`hasQueuedSendsHere`), without which a
+        // send made between one turn settling and the next starting overtakes
+        // messages the user typed earlier.
+        if isActive, sending || streaming || hasQueuedSendsHere {
+            return enqueue(text, images: images) ? .queued : .refusedKeepingNothing
+        }
+        guard acceptsNewTurn else { return .refusedKeepingNothing }
         let id = UUID()
         let task = Task { @MainActor [weak self] in
-            guard let self else { return false }
+            guard let self else { return SendAttempt.failed(provenNeverArrived: true, refused: false) }
             return await self.performSend(text, images: images)
         }
         trackedSends[id] = task
-        let ok = await task.value
+        let attempt = await task.value
         trackedSends[id] = nil
-        return ok
+        return .started(accepted: attempt == .accepted)
     }
 
     /// Mark the optimistic bubble as a failed one (tap to retry) — the text and
@@ -732,12 +852,45 @@ final class ChatStore {
         messages[idx].failed = true
     }
 
-    private func performSend(_ text: String, images: [SelectedImage]) async -> Bool {
+    /// How far a single POST got. Three answers rather than a Bool because the
+    /// drain has to treat a 409 differently from every other failure: a turn that
+    /// started in the gap between the settle and the POST is not the message's
+    /// fault, so the entry goes BACK to the front of the queue instead of becoming
+    /// a failed bubble.
+    enum SendAttempt: Equatable {
+        case accepted
+        /// The POST did not land. The two flags are everything the drain needs to
+        /// know about the error, classified here where the error still exists (an
+        /// `Error` is not `Sendable`, so it cannot ride the result):
+        /// `provenNeverArrived` decides whether the entry may be re-banked, and
+        /// `refused` says the server read THIS message and declined it, so the
+        /// failure is the message's own and the entries behind it are unaffected.
+        case failed(provenNeverArrived: Bool, refused: Bool)
+        case turnActive
+    }
+
+    /// This send is a DRAINED queue entry. Its bubble already exists (so nothing
+    /// is appended, and the row the user has been looking at since they typed is
+    /// the one that solidifies), and a 409 leaves it alone for the caller to
+    /// re-bank.
+    private struct DrainContext {
+        let rowID: String
+    }
+
+    private func performSend(
+        _ text: String, images: [SelectedImage], drain: DrainContext? = nil
+    ) async -> SendAttempt {
         sending = true
         errorMessage = nil
 
         let jpegDatas = images.map(\.jpegData)
         var convID = activeID
+        // THE AGENT IS CAPTURED HERE, beside the conversation, and for the same
+        // reason: everything below runs after at least one suspension point, and the
+        // user can switch console agent in that gap. Reading `activeAgentID` at POST
+        // time sent conversation A's message under agent B, which is a message
+        // delivered to a persona that never saw the thread.
+        let agentID = activeAgentID
         // The conversation this send belongs to, captured BEFORE the first
         // suspension point (nil = the lazy new chat, whose id only exists once
         // createConversation answers). A POST easily outlives a drawer tap, so
@@ -747,7 +900,7 @@ final class ChatStore {
         // adopting a stale fetch.
         let target = convID
         var optimistic = ChatMessage(
-            id: "local-\(Date().timeIntervalSince1970)",
+            id: drain?.rowID ?? "local-\(Date().timeIntervalSince1970)",
             role: "user", text: text, createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
         )
         optimistic.pending = true
@@ -755,12 +908,14 @@ final class ChatStore {
         // send retains them for retry (the store owns no-loss preservation).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
 
-        // Append FIRST — even payload preparation or createConversation failure
-        // must leave the text + images on screen as a failed bubble, never lose them.
-        messages.append(optimistic)
-        // Tag the echo with its conversation (a new chat has none yet — tagged
-        // below, once createConversation names it).
-        if let target { localRowConversation[optimistic.id] = target }
+        if drain == nil {
+            // Append FIRST — even payload preparation or createConversation failure
+            // must leave the text + images on screen as a failed bubble, never lose them.
+            messages.append(optimistic)
+            // Tag the echo with its conversation (a new chat has none yet — tagged
+            // below, once createConversation names it).
+            if let target { localRowConversation[optimistic.id] = target }
+        }
         // Sending explicitly accepts a re-pin: the user wants to see their own
         // message land even if they were reading history.
         bottomPinned = true
@@ -772,17 +927,21 @@ final class ChatStore {
             // that teardown is exactly what leaves the composer frozen on
             // resume, so bail out at each hop instead — the bubble stays as a
             // retryable failed one.
+            // Nothing has left the device at these three exits, so a drained entry
+            // may safely be re-banked from them.
             guard isActive, !Task.isCancelled else {
                 sending = false
                 markSendFailed(optimistic.id)
-                return false
+                return .failed(provenNeverArrived: true, refused: false)
             }
             if convID == nil {
-                let created = try await api.createConversation(agentID: activeAgentID)
+                let created = try await sendTransport.createConversation(
+                    agentID: agentID, title: nil
+                )
                 guard isActive, !Task.isCancelled else {
                     sending = false
                     markSendFailed(optimistic.id)
-                    return false
+                    return .failed(provenNeverArrived: true, refused: false)
                 }
                 convID = created
                 // Adopt the new conversation as the active one ONLY while the
@@ -801,16 +960,18 @@ final class ChatStore {
             guard let convID else {
                 sending = false
                 markSendFailed(optimistic.id)
-                return false
+                return .failed(provenNeverArrived: true, refused: false)
             }
-            _ = try await api.sendMessage(conversationID: convID, agentID: activeAgentID, text: text, images: payloads)
+            _ = try await sendTransport.sendMessage(
+                conversationID: convID, agentID: agentID, text: text, images: payloads
+            )
             // Accepted by the server. If the store went inactive meanwhile the
             // turn is genuinely running — do NOT mark it failed (that would
             // duplicate the message on retry); just skip the local UI state,
             // which resumeStream() rebuilds from canonical history.
             guard isActive, !Task.isCancelled else {
                 sending = false
-                return true
+                return .accepted
             }
             connection?.reportReachability(true, source: "chat-rest")
             rememberSentImages(text: text, datas: jpegDatas)
@@ -821,7 +982,7 @@ final class ChatStore {
             // the new conversation's composer with no message-end coming to
             // release it, and the watchdog would be armed against a conversation
             // nobody is watching. Report success and write nothing.
-            guard stillViewing(convID) else { return true }
+            guard stillViewing(convID) else { return .accepted }
             // Solidify the bubble; message-start arrives on SSE shortly.
             if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
                 messages[idx].pending = false
@@ -832,7 +993,7 @@ final class ChatStore {
             activity = nil
             watchedUserText = text
             startTurnWatchdog(conversationID: convID)
-            return true
+            return .accepted
         } catch {
             sending = false
             // Is the failure still about the conversation on screen? If the user
@@ -845,29 +1006,38 @@ final class ChatStore {
             // Cancelled/suspended sends settle silently but must NOT leave a
             // forever-pending bubble: the draft is already cleared, so the
             // failed bubble (tap to retry) is the only copy of the text.
+            // A cancelled or suspended send is INCONCLUSIVE: the request was on its
+            // way out and nothing came back to say whether it arrived.
             if !isActive || (error as? APIError)?.isCancelled == true {
                 markSendFailed(optimistic.id)
-                return false
+                return .failed(provenNeverArrived: false, refused: false)
             }
             if let apiError = error as? APIError, apiError.isTurnActive {
-                // Another turn is running — keep the text as a failed bubble
-                // (the draft is already cleared) so it can be retried after
-                // message-end, and gate sends until then.
-                markSendFailed(optimistic.id)
-                guard mine else { return false }
+                // Another turn is running. A DRAINED entry keeps its bubble pending
+                // and goes back to the front of the queue (the caller re-banks it),
+                // because it already carries a promise of delivery and a turn that
+                // started in the gap is not a reason to break it. An ordinary send
+                // has made no such promise, so it keeps today's behaviour: the text
+                // survives as a failed bubble to retry after message-end.
+                if drain == nil { markSendFailed(optimistic.id) }
+                guard mine else { return .turnActive }
                 streaming = true
                 watchedUserText = nil
                 if let convID { startTurnWatchdog(conversationID: convID) }
-                errorMessage = "The assistant is already replying — tap the message to retry when it finishes."
-            } else {
-                // KEEP the bubble, marked failed — the user's text must never
-                // vanish on a network error. Tap to retry / copy / delete.
-                markSendFailed(optimistic.id)
-                reportIfNetwork(error)
-                guard mine else { return false }
-                errorMessage = error.localizedDescription
+                if drain == nil {
+                    errorMessage = "The assistant is already replying. Tap the message to retry when it finishes."
+                }
+                return .turnActive
             }
-            return false
+            // KEEP the bubble, marked failed — the user's text must never
+            // vanish on a network error. Tap to retry / copy / delete.
+            markSendFailed(optimistic.id)
+            reportIfNetwork(error)
+            let neverArrived = ChatSendQueueRules.earnsAutomaticRetry(error)
+            let refused = ChatSendQueueRules.isConclusiveRefusal(error)
+            guard mine else { return .failed(provenNeverArrived: neverArrived, refused: refused) }
+            errorMessage = error.localizedDescription
+            return .failed(provenNeverArrived: neverArrived, refused: refused)
         }
     }
 
@@ -921,6 +1091,10 @@ final class ChatStore {
         let images = (message.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
         messages.removeAll { $0.id == message.id }
         localRowConversation[message.id] = nil
+        // The user has taken charge of this row. If it was still a queue entry (an
+        // `undecided` one, restored from a POST that died in flight), it must leave
+        // the disk with the bubble, or it reappears on the next conversation switch.
+        dropQueueEntry(message.id)
         errorMessage = nil
         await send(message.text, images: images)
     }
@@ -928,6 +1102,316 @@ final class ChatStore {
     func discardFailed(_ message: ChatMessage) {
         messages.removeAll { $0.id == message.id }
         localRowConversation[message.id] = nil
+        dropQueueEntry(message.id)
+    }
+
+    // MARK: - Send queue (mid-turn sends)
+
+    /// The composer's ceiling row, or nil. Derived rather than latched, so it
+    /// appears while a ceiling is reached (before a tap is refused) and clears
+    /// itself the moment a message goes out.
+    var queueFullNotice: String? {
+        ChatSendQueueRules.ceilingNotice(
+            queuedSends, conversationID: activeID, agentID: activeAgentID
+        )
+    }
+
+    /// Is anything already waiting for the conversation on screen?
+    ///
+    /// The ORDERING INVARIANT, and the reason it is a property rather than a
+    /// detail of the send path: while a queue exists for this conversation, a new
+    /// send must join the BACK of it rather than post immediately, or a send made
+    /// in the window between one turn settling and the next starting jumps the line
+    /// and the agent reads the user's instructions out of order. The web console
+    /// gets this for free by holding `isStreaming` true until its queue empties;
+    /// asking the queue directly is the same invariant without a flag that lies.
+    var hasQueuedSendsHere: Bool {
+        queuedSends.contains {
+            $0.status != .undecided && $0.conversationID == activeID
+                && $0.agentID == activeAgentID
+        }
+    }
+
+    /// Bank a message behind the running turn. Returns false only when nothing
+    /// kept it, which is the answer a caller holding the only copy of the text
+    /// acts on (see `SendOutcome.keptTheWords`).
+    private func enqueue(_ text: String, images: [SelectedImage]) -> Bool {
+        let jpegDatas = images.map(\.jpegData)
+        guard ChatSendQueueRules.hasContent(text: text, images: jpegDatas) else { return false }
+        let bytes = jpegDatas.reduce(0) { $0 + $1.count }
+        if let refusal = ChatSendQueueRules.refusal(
+            toEnqueueInto: queuedSends, conversationID: activeID,
+            agentID: activeAgentID, newBytes: bytes
+        ) {
+            AppLog.info("chat", "send refused rather than banked", [
+                "reason": String(describing: refusal),
+                "conversationID": activeID ?? "-", "queued": "\(queuedSends.count)",
+            ])
+            return false
+        }
+        guard let conversationID = activeID else { return false }
+        let rowID = "queued-\(UUID().uuidString)"
+        let createdAt = ISO8601DateFormatter().string(from: .now)
+        let entry = QueuedSend(
+            id: rowID, conversationID: conversationID, agentID: activeAgentID,
+            text: text, images: jpegDatas, createdAt: createdAt
+        )
+        // DISK FIRST. The composer clears its draft on the strength of this answer,
+        // so "banked" has to mean the words are somewhere that survives a kill. A
+        // write that did not land is a refusal, and the composer puts the text back.
+        guard setQueue(queuedSends + [entry]) else {
+            AppLog.error("chat", "refused a send because it could not be persisted", [
+                "conversationID": conversationID,
+            ])
+            return false
+        }
+        messages.append(bubble(for: entry))
+        localRowConversation[rowID] = conversationID
+        bottomPinned = true
+        if isActive { scrollToBottomSignal += 1 }
+        return true
+    }
+
+    /// The optimistic bubble for a banked message: the SAME shape `performSend`
+    /// appends, so nothing downstream has to know the difference. It keeps the id
+    /// it was created with all the way through delivery, so a message can never be
+    /// on screen twice.
+    ///
+    /// `localImages` here is NOT a second copy of the photo. `Data` is
+    /// copy-on-write, so this array and the queue entry's reference the same bytes.
+    private func bubble(for entry: QueuedSend) -> ChatMessage {
+        var bubble = ChatMessage(
+            id: entry.id, role: "user", text: entry.text,
+            createdAt: entry.createdAt, kind: nil
+        )
+        // An `undecided` entry is one whose POST was in flight when the process
+        // died: it renders as the retryable failed bubble, never as a promise.
+        if entry.status == .undecided {
+            bubble.failed = true
+        } else {
+            bubble.pending = true
+        }
+        if !entry.images.isEmpty { bubble.localImages = entry.images }
+        return bubble
+    }
+
+    /// The ONE writer. Keeps the status mirror and the disk copy in step, and
+    /// reports whether the DISK copy landed — the callers that are about to stop
+    /// holding the words elsewhere check it.
+    @discardableResult
+    private func setQueue(_ queue: [QueuedSend]) -> Bool {
+        let landed = ChatSendQueueStore.persist(queue, previous: queuedSends)
+        queuedSends = queue
+        queuedRowStates = Dictionary(uniqueKeysWithValues: queue.map { ($0.id, $0.status) })
+        return landed
+    }
+
+    /// Take a banked message back.
+    ///
+    /// Only a `pending` entry: once a POST is out the server may already have the
+    /// message, so there is nothing here that could take it back. The control is
+    /// removed from the row at the same moment (`queuedRowStates` drives the badge),
+    /// because a Withdraw button that silently does nothing is worse than no button.
+    func withdrawQueued(_ rowID: String) {
+        guard queuedRowStates[rowID] == .pending else { return }
+        setQueue(queuedSends.filter { $0.id != rowID })
+        messages.removeAll { $0.id == rowID }
+        localRowConversation[rowID] = nil
+    }
+
+    /// Forget a queue entry whose bubble the user has taken charge of (a retry, a
+    /// discard). Without this an `undecided` row would come back on the next
+    /// conversation switch, after the user had already dealt with it.
+    private func dropQueueEntry(_ rowID: String) {
+        guard queuedRowStates[rowID] != nil else { return }
+        setQueue(queuedSends.filter { $0.id != rowID })
+    }
+
+    /// Re-materialise the bubbles for a conversation's banked messages.
+    ///
+    /// `select` empties `messages`, and a restored queue has no bubbles at all, so
+    /// the rows are DERIVED from the queue rather than being the thing that
+    /// survives. The queue is the record; the bubble is a picture of it.
+    private func restoreQueuedBubbles(for conversationID: String?) {
+        guard let conversationID else { return }
+        for entry in queuedSends where entry.conversationID == conversationID
+            && entry.agentID == activeAgentID {
+            // Idempotent: the launch path and a conversation switch can both ask,
+            // and a second bubble for one entry would be the same words twice.
+            guard !messages.contains(where: { $0.id == entry.id }) else { continue }
+            messages.append(bubble(for: entry))
+            localRowConversation[entry.id] = entry.conversationID
+        }
+    }
+
+    /// Adopt a queue persisted by an earlier run. Separate from the disk read so a
+    /// test can hand over a queue without depending on cache timing.
+    func adoptQueuedSends(_ restored: [QueuedSend]) {
+        guard !restored.isEmpty || !queuedSends.isEmpty else { return }
+        setQueue(ChatSendQueueRules.restored(restored))
+        restoreQueuedBubbles(for: activeID)
+    }
+
+    private func restoreQueuedSendsFromDisk() async {
+        guard queuedSends.isEmpty else { return }
+        let restored = await ChatSendQueueStore.restore()
+        guard !restored.isEmpty, isActive else { return }
+        AppLog.info("chat", "restored banked sends", [
+            "count": "\(restored.count)",
+            "undecided": "\(restored.filter { $0.status == .processing }.count)",
+        ])
+        adoptQueuedSends(restored)
+    }
+
+    /// Drop banked messages whose conversation the server no longer lists.
+    ///
+    /// Only ever called with a list that LANDED (see `refreshConversations`): an
+    /// empty set from a failed read means "we could not ask", and acting on it
+    /// would delete the user's words on an offline launch. Internal rather than
+    /// private so WalnutTests drive the real prune instead of a copy of it.
+    func pruneQueue(against fetched: [ConversationSummary]) {
+        guard !queuedSends.isEmpty else { return }
+        let pruned = ChatSendQueueRules.pruned(
+            queuedSends, listedConversations: Set(fetched.map(\.id)),
+            agentID: activeAgentID,
+            listWasTruncated: fetched.count >= Self.conversationListLimit
+        )
+        guard pruned.count != queuedSends.count else { return }
+        let dropped = Set(queuedSends.map(\.id)).subtracting(pruned.map(\.id))
+        AppLog.info("chat", "dropped banked sends for conversations that are gone", [
+            "count": "\(dropped.count)",
+        ])
+        setQueue(pruned)
+        messages.removeAll { dropped.contains($0.id) }
+        for id in dropped { localRowConversation[id] = nil }
+    }
+
+    /// Start a drain if this is a moment one belongs in.
+    ///
+    /// Called explicitly from every path that can END a turn or RESTORE the app's
+    /// ability to talk to the server; the `didSet` on `streaming` is only a net for
+    /// a future site that forgets (see that property's comment).
+    ///
+    /// Each guard is a state some caller really is in: teardown (`closeStream`
+    /// clears `isActive` first, which is what makes it distinguishable), a POST
+    /// still in flight, a turn still running, a conversation with nothing banked,
+    /// and OFFLINE — draining with no network turns ten banked messages into ten
+    /// red bubbles in a tight loop, which is the queue destroying exactly what it
+    /// exists to protect.
+    private func scheduleQueueDrain() {
+        guard isActive, !sending, !streaming, !queuedSends.isEmpty else { return }
+        guard connection?.online != false else { return }
+        guard ChatSendQueueRules.nextDeliverable(
+            queuedSends, conversationID: activeID, agentID: activeAgentID
+        ) != nil else { return }
+        guard queueDrainTask == nil else { return }
+        queueDrainTask = Task { @MainActor [weak self] in
+            await self?.drainQueue()
+            self?.queueDrainTask = nil
+        }
+    }
+
+    /// Deliver banked messages, one at a time, each as an ordinary new turn. The
+    /// server contract is untouched: nothing here batches, merges, or interleaves.
+    ///
+    /// STOPS ON THE FIRST FAILURE. Marching on turned one network blip into a wall
+    /// of red bubbles; the entries left behind keep their promise instead, and the
+    /// next settle, reconnect or foreground tries again.
+    private func drainQueue() async {
+        while true {
+            guard isActive, !sending, !streaming, !Task.isCancelled else { return }
+            guard connection?.online != false else { return }
+            guard let index = ChatSendQueueRules.nextDeliverable(
+                queuedSends, conversationID: activeID, agentID: activeAgentID
+            ) else { return }
+            let entry = queuedSends[index]
+            // `processing`, ON DISK, before the POST goes out. Removing it here (the
+            // first cut did) opens a window where a kill leaves the words in no
+            // queue, no cache and possibly no server: the pending bubble is never
+            // persisted, because the message cache only holds server rows.
+            var marked = queuedSends
+            marked[index] = entry.with(status: .processing)
+            setQueue(marked)
+            let images = entry.images.compactMap { SelectedImage(jpegData: $0) }
+            let attempt = await performSend(
+                entry.text, images: images, drain: DrainContext(rowID: entry.id)
+            )
+            switch attempt {
+            case .accepted:
+                // Known landed: only now may it leave the disk.
+                dropQueueEntry(entry.id)
+                continue
+            case .turnActive:
+                // A turn started between the settle and the POST. That answer PROVES
+                // the message was refused, so it goes back to the front of the queue
+                // rather than becoming a failure the user has to notice.
+                requeueAtFront(entry)
+                return
+            case .failed(let provenNeverArrived, let refused):
+                let reBanked = settleFailedDrain(entry, provenNeverArrived: provenNeverArrived)
+                // Stop on a failure that says something about the NETWORK or the
+                // server (re-banked, or an inconclusive outcome): the next entry would
+                // meet the same fate, and ten of those is a wall of red. A refusal is
+                // about this one message, and the entry behind it is a different
+                // message, so that one still gets its turn.
+                if reBanked || !refused { return }
+                continue
+            }
+        }
+    }
+
+    /// A drained POST failed. Decide between the two honest outcomes, and report
+    /// which: true when the entry went back to the queue.
+    ///
+    /// The rule is `ChatSendQueueRules.earnsAutomaticRetry`: this endpoint takes no
+    /// client-minted message id, so an automatic re-send of a request that MIGHT
+    /// have arrived can hand the agent the same instruction twice, and a re-send of
+    /// one the server already REFUSED just earns the same refusal while blocking
+    /// the queue behind it. Only a failure that proves nothing arrived AND that a
+    /// later identical attempt can clear buys another automatic attempt; anything
+    /// else becomes the retryable failed bubble a human decides about.
+    @discardableResult
+    private func settleFailedDrain(_ entry: QueuedSend, provenNeverArrived: Bool) -> Bool {
+        // THE BUBBLE, NOT THE CONVERSATION, is the question. `markSendFailed` is an
+        // id lookup, so it is a silent no-op once the row is gone — and the row can
+        // be gone while the conversation is back on screen (switch to B, switch back
+        // to A: `restoreQueuedBubbles` cannot rebuild a row whose entry has left the
+        // queue). Asking whether the row is actually there is the only judge that
+        // does not lose the words to a proxy.
+        let bubbleSurvived = messages.contains { $0.id == entry.id }
+        if provenNeverArrived || !bubbleSurvived {
+            AppLog.info("chat", "re-banked a drained send", [
+                "reason": provenNeverArrived ? "never-arrived" : "bubble-gone",
+                "conversationID": entry.conversationID,
+            ])
+            requeueAtFront(entry)
+            return true
+        }
+        // Inconclusive or refused, and the row is on screen: leave it as the failed
+        // bubble `performSend` already made, and take the entry off the disk so
+        // nothing automatic can send it a second time.
+        dropQueueEntry(entry.id)
+        return false
+    }
+
+    private func requeueAtFront(_ entry: QueuedSend) {
+        let others = queuedSends.filter { $0.id != entry.id }
+        setQueue([entry.with(status: .pending)] + others)
+        // The row may have been rebuilt or removed while the POST was out; either
+        // way it must read as banked again, not as failed.
+        if let idx = messages.firstIndex(where: { $0.id == entry.id }) {
+            messages[idx].failed = false
+            messages[idx].pending = true
+        } else if entry.conversationID == activeID, entry.agentID == activeAgentID {
+            messages.append(bubble(for: entry.with(status: .pending)))
+            localRowConversation[entry.id] = entry.conversationID
+        }
+    }
+
+    /// Test seam: await whatever drain the last trigger started. Production code
+    /// never needs this — the drain is fire-and-forget.
+    func awaitQueueDrainForTesting() async {
+        await queueDrainTask?.value
     }
 
     // MARK: - SSE
@@ -959,6 +1443,9 @@ final class ChatStore {
             }
         )
         sse?.start()
+        // A reconnect is the other moment the app can talk again after not being
+        // able to (offline, a dropped stream), and the drain refuses to run offline.
+        scheduleQueueDrain()
     }
 
     func closeStream() {
@@ -984,6 +1471,12 @@ final class ChatStore {
         if let id = activeID {
             trackTask { [weak self] in await self?.loadMessages(id) }
         }
+        // Nothing here assigns `streaming`, so a message banked mid-turn and left
+        // while the turn ended off-screen has no flag transition to ride: the badge
+        // kept promising "delivers when the current reply finishes" with no reply to
+        // finish. `connectStream()` above is what delivers it (it drains on every
+        // reconnect, this one included); the refetch then settles `streaming` from
+        // canonical history as the second trigger.
     }
 
     private struct DeltaPayload: Codable { let delta: String }
@@ -1081,6 +1574,7 @@ final class ChatStore {
             activity = nil
             pendingQuestion = false
             errorMessage = Self.readableTurnError(payload?.message)
+            scheduleQueueDrain()
         default:
             break
         }
@@ -1213,15 +1707,25 @@ final class ChatStore {
     /// death itself is SSEClient's watchdog's job — this one only reconciles
     /// STATE: if no SSE event lands for 30s during a turn, ask REST history
     /// whether the turn already finished, and adopt the result if so.
-    private func startTurnWatchdog(conversationID: String) {
+    /// How often the watchdog looks, and how long a stream has to be silent before
+    /// it reconciles. Named so a test can drive the REAL loop on a short clock
+    /// instead of replacing it (see `startTurnWatchdogForTesting`).
+    private static let watchdogPoll: Duration = .seconds(15)
+    private static let watchdogSilence: TimeInterval = 30
+
+    private func startTurnWatchdog(
+        conversationID: String,
+        poll: Duration = ChatStore.watchdogPoll,
+        silentFor: TimeInterval = ChatStore.watchdogSilence
+    ) {
         turnWatchdog?.cancel()
         lastSSEEventAt = Date()
         turnWatchdog = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: poll)
                 guard let self, self.isActive, !Task.isCancelled else { return }
                 guard self.streaming, self.activeID == conversationID else { return }
-                guard Date().timeIntervalSince(self.lastSSEEventAt) > 30 else { continue }
+                guard Date().timeIntervalSince(self.lastSSEEventAt) > silentFor else { continue }
                 // Silent too long: reconcile against server history. What counts
                 // as proof lives in `turnSettled` (the server's `inFlight` flag
                 // first, the older-server heuristic behind it) and is banked by
@@ -1237,17 +1741,45 @@ final class ChatStore {
                         "conversationID": conversationID,
                         "silentFor": "\(Int(Date().timeIntervalSince(self.lastSSEEventAt)))s",
                     ])
-                    self.streaming = false
-                    self.streamText = ""
-                    self.streamTextTruncated = false
-                    // Canonical history already landed just above, so the
-                    // reasoning's handoff is complete — retire the live region.
-                    self.clearLiveThinking()
-                    self.activity = nil
+                    self.adoptLostTurnEnd()
                     return
                 }
             }
         }
+    }
+
+    /// Put the turn down after the watchdog proved it already ended.
+    ///
+    /// Factored out of the watchdog loop so the transition is reachable without
+    /// waiting on the 15-second poll. It matters that the SAME code runs: a queue
+    /// drained only from the `message-end` handler would strand on exactly the turn
+    /// whose `message-end` was lost, and this is that turn.
+    private func adoptLostTurnEnd() {
+        streaming = false
+        streamText = ""
+        streamTextTruncated = false
+        // Canonical history already landed, so the reasoning's handoff is
+        // complete — retire the live region.
+        clearLiveThinking()
+        activity = nil
+        scheduleQueueDrain()
+    }
+
+    /// Test seam: the watchdog's settle, run directly. Production code must reach
+    /// it only through `startTurnWatchdog`.
+    func adoptLostTurnEndForTesting() {
+        adoptLostTurnEnd()
+    }
+
+    /// Test seam: the REAL watchdog loop, with only its two CLOCKS shortened.
+    ///
+    /// Production waits 15s between looks and wants 30s of silence, which no test
+    /// can sit through — and replacing the loop would prove nothing about the loop,
+    /// which is exactly the gap that let "the watchdog does not drain" ship once.
+    func startTurnWatchdogForTesting(
+        conversationID: String, silentFor: TimeInterval, poll: Duration
+    ) {
+        startTurnWatchdog(conversationID: conversationID, poll: poll, silentFor: silentFor)
     }
 
     /// Watchdog reconcile verdict: does fetched history PROVE the watched turn
@@ -1367,6 +1899,7 @@ final class ChatStore {
         // Live row → provisional row shifts layout; keep the reader glued to
         // the end of the reply they were watching.
         if isActive && wasAtBottom { scrollToBottomSignal += 1 }
+        scheduleQueueDrain()
         // Reconcile with server history (real ids + tool/thinking rows).
         trackTask { [weak self] in
             await self?.loadMessages(conversationID)
@@ -1383,7 +1916,9 @@ final class ChatStore {
     func stopTurn() async {
         guard let id = activeID else { return }
         do {
-            let result = try await api.stopConversation(id: id, agentID: activeAgentID)
+            let result = try await sendTransport.stopConversation(
+                id: id, agentID: activeAgentID
+            )
             AppLog.info("chat", "turn stopped", ["conversationID": id, "stopped": String(result.stopped)])
             streaming = false
             streamText = ""
@@ -1392,6 +1927,15 @@ final class ChatStore {
             pendingQuestion = false
             turnWatchdog?.cancel()
             turnWatchdog = nil
+            // A STOP STILL DELIVERS THE QUEUE, one turn at a time, and that is a
+            // DELIBERATE divergence from the web console, which clears its queue on
+            // stop (`useChat.ts` `clearQueue`). Stop is aimed at the turn that is
+            // running; the banked messages are separate instructions the user typed
+            // and asked for, and deleting someone's instructions without saying so is
+            // the worse failure. Stranding them would be worse still: the drain's
+            // triggers are turn ends and reconnects, so a queue not drained here has
+            // no trigger left until the user happens to send something else.
+            scheduleQueueDrain()
             // Reconcile: the interrupted turn's partial output persists at abort.
             trackTask { [weak self] in await self?.loadMessages(id) }
         } catch {
@@ -1521,6 +2065,14 @@ final class ChatStore {
         trackedTasks.removeAll()
         for task in trackedSends.values { task.cancel() }
         trackedSends.removeAll()
+        // The drain belongs here too, and its absence was a second entrance to the
+        // lost-bubble bug: `closeStream` clears `isActive` but an already-running
+        // drain does not re-check it before its POST, so a backgrounded drain
+        // finished its round trip and then marked a row in a timeline that had been
+        // emptied underneath it. Cancelling is safe because a cancelled drain leaves
+        // its entry on disk (`processing`), and the next launch decides.
+        queueDrainTask?.cancel()
+        queueDrainTask = nil
     }
 }
 

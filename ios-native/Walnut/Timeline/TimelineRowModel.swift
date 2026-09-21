@@ -133,6 +133,16 @@ enum TimelineRowContent {
     /// automatic retry is still pending ("Waiting for Mac… retrying"); nil =
     /// the terminal "Not sent — tap to retry". Either way tapping retries now.
     case failedNotice(notice: String?)
+    /// Banked-send row under a queued bubble: the `Queued` badge plus a way to
+    /// take it back. Its own row rather than an adornment inside the bubble, for
+    /// the reason `failedNotice` is one: the bubble cell is TextKit-measured from
+    /// its text alone, and a control inside it would have no height of its own.
+    ///
+    /// `delivering` is a POST already out for this message. The badge changes and
+    /// the Withdraw control is GONE — not disabled, gone — because there is nothing
+    /// left that could take it back, and a control that silently does nothing is
+    /// worse than no control.
+    case queuedNotice(delivering: Bool, stacked: Bool)
     /// Code fence: monospace, horizontal scroll, no wrapping.
     case code(text: String, contentSize: CGSize)
     /// Inline image (assistant output or historical user image send).
@@ -230,6 +240,7 @@ extension TimelineRowContent {
         case .text: return "text"
         case .userBubble: return "bubble"
         case .failedNotice: return "failedNotice"
+        case .queuedNotice: return "queuedNotice"
         case .code: return "code"
         case .image: return "image"
         case .localImages: return "localImages"
@@ -267,6 +278,11 @@ extension TimelineRowContent {
             hasher.combine(pending)
         case .failedNotice(let notice):
             hasher.combine(notice)
+        case .queuedNotice(let delivering, let stacked):
+            hasher.combine(delivering)
+            // Drawn AND measured: a text-size change that only flips this must still
+            // reload the cell.
+            hasher.combine(stacked)
         case .code(let text, _):
             hasher.combine(text)
         case .image(let raw, let alt):
@@ -397,6 +413,13 @@ struct TimelineInput {
     /// Row ids whose expandable content is currently open (tool chips,
     /// notification cards) — owned by the controller, echoed through builds.
     var expandedRowIDs: Set<String>
+    /// Where each banked message is in its life, by message id.
+    ///
+    /// An input rather than a flag on `ChatMessage`: queue membership is store state
+    /// that changes without the message changing, and it is the store that owns the
+    /// answer. Defaulted empty, so every surface that has no queue (the session
+    /// transcript, the DEBUG harness) is unaffected.
+    var queuedMessageStates: [String: QueuedSend.Status] = [:]
     /// Which conversation these messages belong to (see `TimelineScope`). Every
     /// UI surface passes one; the default is the unscoped id space, for direct
     /// builder/actor use in tests and the DEBUG harness.
@@ -598,6 +621,8 @@ enum TimelineChipLayout {
 enum TimelineRowAction {
     case retry(messageID: String)
     case discard(messageID: String)
+    /// Take a banked message back before it is posted. Nothing goes on the wire.
+    case withdrawQueued(messageID: String)
     case copyText(String)
     case openURL(URL)
     case tapImage(UIImage)

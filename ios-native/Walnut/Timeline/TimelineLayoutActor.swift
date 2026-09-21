@@ -104,18 +104,37 @@ actor TimelineLayoutActor {
         if input.showLoadEarlier {
             rows.append(builder.loadEarlierRow(scope: input.scope))
         }
+        func memoizedRows(for message: ChatMessage,
+                          queued: QueuedSend.Status?) -> [TimelineRow] {
+            let key = cacheKey(message, expandedRowIDs: input.expandedRowIDs,
+                               scope: input.scope, queued: queued)
+            if let cached = rowCache[key], cached.message == message { return cached.rows }
+            let built = builder.rows(for: message, width: input.width,
+                                     expandedRowIDs: input.expandedRowIDs,
+                                     scope: input.scope, queued: queued)
+            rowCache[key] = (message, built)
+            let identities = TimelineRowBuilder.richIdentities(in: built)
+            if !identities.isEmpty { richEntryIdentities[key] = identities }
+            return built
+        }
+        // A BANKED SEND SITS AFTER THE LIVE REGION, not where it happens to be in
+        // `messages`. The store appends its bubble to the end of the message list,
+        // but the live rows are appended after ALL of them, so an in-order build put
+        // the queued bubble ABOVE the reply that is still streaming — as if it had
+        // been sent before the agent started. Worse, the enqueue re-pins to the
+        // bottom, so the one row that confirms "I took your message" was the one row
+        // scrolled off. Held back and appended last, it lands where the user is
+        // looking and reads as what it is: next in line.
+        var queuedRows: [TimelineRow] = []
         for message in input.messages {
-            let key = cacheKey(message, expandedRowIDs: input.expandedRowIDs, scope: input.scope)
-            if let cached = rowCache[key], cached.message == message {
-                rows.append(contentsOf: cached.rows)
+            let queued = input.queuedMessageStates[message.id]
+            // An `undecided` entry renders as an ordinary FAILED bubble in place: it
+            // is not waiting for anything, so holding it back would move a row the
+            // user has to act on away from where they left it.
+            if let queued, queued != .undecided {
+                queuedRows.append(contentsOf: memoizedRows(for: message, queued: queued))
             } else {
-                let built = builder.rows(for: message, width: input.width,
-                                         expandedRowIDs: input.expandedRowIDs,
-                                         scope: input.scope)
-                rowCache[key] = (message, built)
-                let identities = TimelineRowBuilder.richIdentities(in: built)
-                if !identities.isEmpty { richEntryIdentities[key] = identities }
-                rows.append(contentsOf: built)
+                rows.append(contentsOf: memoizedRows(for: message, queued: queued))
             }
         }
         if rowCache.count > Self.rowCacheLimit {
@@ -146,6 +165,7 @@ actor TimelineLayoutActor {
             rows.append(contentsOf: builder.liveThinkingRows(
                 liveThinking: input.liveThinking, width: input.width, scope: input.scope))
         }
+        rows.append(contentsOf: queuedRows)
         return TimelineSnapshot(rows: rows, width: input.width, generation: generation)
     }
 
@@ -216,9 +236,13 @@ actor TimelineLayoutActor {
     /// is why the stale transcript survived even a full reload: the snapshot
     /// itself carried the previous conversation's content.
     private func cacheKey(_ m: ChatMessage, expandedRowIDs: Set<String>,
-                          scope: String) -> String {
+                          scope: String, queued: QueuedSend.Status? = nil) -> String {
         let namespace = TimelineScope.namespace(scope, m.id)
         var key = namespace
+        // Part of the key for the same reason `pending` is: the badge appears,
+        // changes to "Delivering…" and disappears while the message itself never
+        // changes a byte, so a memo that ignored it would serve the stale badge.
+        if let queued { key += "|q\(queued.rawValue)" }
         if m.pending == true { key += "|p" }
         if m.failed == true { key += "|f" }
         if let images = m.localImages, !images.isEmpty { key += "|i\(images.count)" }

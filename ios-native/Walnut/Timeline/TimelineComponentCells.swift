@@ -197,6 +197,68 @@ enum TimelineHostedCell {
                 .accessibilityIdentifier("chat.retryFailed")
             }
             .padding(.horizontal, TimelineMetrics.hMargin)
+        case .queuedNotice(let delivering, let stacked):
+            // An HStack (or, at accessibility sizes, a VStack), NOT a `Label`: a Label
+            // merges its content into ONE accessibility element, which swallows the
+            // button next to it and leaves UI automation with nothing to tap.
+            //
+            // `lineLimit(1)` on BOTH, and it is load-bearing rather than cosmetic: the
+            // row's height is arithmetic over one line of each font, so a wrapped word
+            // would draw past the row it was given (a hosted cell does not clip to a
+            // scroll view, it paints over its neighbour). Truncation at the largest
+            // accessibility size costs a few characters of a one-word label whose
+            // accessibility text stays complete.
+            let badge = Text(delivering ? ChatSendQueueRules.deliveringBadge
+                                        : ChatSendQueueRules.badge)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, TimelineMetrics.chipHPad)
+                .padding(.vertical, TimelineMetrics.chipVPad)
+                .background(Color(.tertiarySystemFill), in: Capsule())
+                .accessibilityIdentifier("chat.queuedBadge")
+                .accessibilityLabel(delivering
+                    ? ChatSendQueueRules.deliveringAccessibilityLabel
+                    : ChatSendQueueRules.badgeAccessibilityLabel)
+            // GONE once a POST is out, not disabled: the server may already have the
+            // message, so there is nothing left to take back, and a control that
+            // silently does nothing is worse than no control.
+            //
+            // Padded like the capsule beside it and given a rectangular hit shape: a
+            // `.plain` button's target is otherwise its glyphs alone, a 14pt-tall word
+            // that a thumb misses and that UI automation reports as not hittable.
+            let withdrawButton = Button {
+                delegate?.timelineCell(didRequest: .withdrawQueued(
+                    messageID: TimelineRow.messageID(fromRowID: row.id)
+                ))
+            } label: {
+                Text(ChatSendQueueRules.withdraw)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .padding(.horizontal, TimelineMetrics.chipHPad)
+                    .padding(.vertical, TimelineMetrics.chipVPad)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.tint)
+            .accessibilityIdentifier("chat.withdrawQueued")
+            .accessibilityLabel(ChatSendQueueRules.withdrawAccessibilityLabel)
+            Group {
+                if stacked {
+                    VStack(alignment: .trailing, spacing: TimelineMetrics.chipStackSpacing) {
+                        badge
+                        if !delivering { withdrawButton }
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Spacer(minLength: TimelineMetrics.bubbleLeadingGap)
+                        badge
+                        if !delivering { withdrawButton }
+                    }
+                }
+            }
+            .padding(.horizontal, TimelineMetrics.hMargin)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         case .loadEarlier:
             Button("Load earlier messages") {
                 delegate?.timelineCell(didRequest: .loadEarlier)

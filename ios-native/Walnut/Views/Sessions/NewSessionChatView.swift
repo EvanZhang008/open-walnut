@@ -79,6 +79,12 @@ struct NewSessionChatView: View {
                     busy: creating,
                     disabled: !canLaunch,
                     disabledNotice: canLaunch ? nil : "Choose the folder this session runs in.",
+                    // Nothing here can HOLD a send made during the create call, and a
+                    // second one would create a second session, so the button stays
+                    // greyed while `creating` (see `ComposerPrimaryAction`). A create
+                    // that fails still returns the words to the draft, because
+                    // `launch` answers false and the composer restores on false.
+                    busyAcceptsSend: false,
                     // Draft is keyed to the DRAFT, not to a session id that
                     // doesn't exist yet, so text typed before launching survives
                     // a path change and a backgrounding.

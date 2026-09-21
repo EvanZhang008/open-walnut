@@ -277,50 +277,55 @@ final class VoiceQuickActionTests: XCTestCase {
     func testDeliveryRouteAlwaysHasSomewhereToPutTheWords() {
         XCTAssertEqual(
             ComposerBar.voiceDeliveryRoute(
-                autoSendArmed: true, offline: false, busy: false, transcript: "ship it"),
+                autoSendArmed: true, offline: false, transcript: "ship it"),
             .send,
             "an armed quick action on a free, online composer is the whole feature"
         )
         XCTAssertEqual(
             ComposerBar.voiceDeliveryRoute(
-                autoSendArmed: false, offline: false, busy: false, transcript: "ship it"),
+                autoSendArmed: false, offline: false, transcript: "ship it"),
             .draft(reason: "not-armed"),
             "an ordinary mic tap composes into the draft"
         )
         XCTAssertEqual(
             ComposerBar.voiceDeliveryRoute(
-                autoSendArmed: true, offline: true, busy: false, transcript: "ship it"),
+                autoSendArmed: true, offline: true, transcript: "ship it"),
             .draft(reason: "offline"),
             "recording offline is allowed, so the transcript has to wait in the draft"
         )
         XCTAssertEqual(
             ComposerBar.voiceDeliveryRoute(
-                autoSendArmed: true, offline: false, busy: false, transcript: "   \n "),
+                autoSendArmed: true, offline: false, transcript: "   \n "),
             .draft(reason: "empty"),
             "a silent take must not fire an empty turn at the agent"
         )
     }
 
-    /// THE LOSS PATH (verifier finding F1). Online, armed, and a turn already
-    /// streaming: `ChatStore.send` opens with `guard isActive, !sending, !streaming`
-    /// and returns false BEFORE appending any bubble, so a send attempted here
-    /// keeps nothing at all. The offline sibling was guarded; this one was not, and
-    /// the docstring claimed otherwise.
-    func testBusyComposerRoutesToTheDraftInsteadOfLosingTheTranscript() {
+    /// WHAT USED TO BE THE LOSS PATH (verifier finding F1), and why it no longer
+    /// diverts. A turn in flight once made `ChatStore.send` refuse while keeping
+    /// nothing, so the draft was the only place a transcript could go; the store now
+    /// BANKS it (`ChatStore.SendOutcome.queued`) with a queued bubble on screen,
+    /// which is what the quick action promised all along ("stop to send").
+    ///
+    /// The no-loss guarantee did not move, it changed hands: the remaining way to
+    /// keep nothing is a store that refuses outright (torn down, or its queue at the
+    /// ceiling), and that is decided later, by `voiceRescueReason`, at the moment
+    /// the send is actually attempted.
+    func testARunningTurnNoLongerDivertsATranscriptToTheDraft() {
         XCTAssertEqual(
             ComposerBar.voiceDeliveryRoute(
-                autoSendArmed: true, offline: false, busy: true, transcript: "the words"),
-            .draft(reason: "busy"),
-            "a turn in flight is not a licence to delete what the user just said"
+                autoSendArmed: true, offline: false, transcript: "the words"),
+            .send,
+            "the store has somewhere to put these words now, so they go"
         )
-        // And it stays a draft even when everything else is perfect, i.e. `busy`
-        // is not shadowed by an earlier guard returning `.send`.
-        for offline in [true, false] {
-            if case .send = ComposerBar.voiceDeliveryRoute(
-                autoSendArmed: true, offline: offline, busy: true, transcript: "x") {
-                XCTFail("busy must never resolve to .send (offline=\(offline))")
-            }
-        }
+        // Offline is still a diversion, and still ahead of everything else: recording
+        // works with no network, and whether the words can LEAVE is a different
+        // question from whether the agent is busy.
+        XCTAssertEqual(
+            ComposerBar.voiceDeliveryRoute(
+                autoSendArmed: true, offline: true, transcript: "the words"),
+            .draft(reason: "offline")
+        )
     }
 
     // MARK: - The rescue must fire ONCE, and only when the words are homeless
@@ -345,12 +350,18 @@ final class VoiceQuickActionTests: XCTestCase {
     }
 
     /// …and the Bool that feeds it must actually mean "kept", which is where the
-    /// distinction lives. A streaming turn makes `ChatStore.send` refuse BEFORE
-    /// appending anything, and this asserts both halves of that: the answer is
-    /// false, and the timeline really is untouched (which is WHY it is false).
-    func testAStreamingStoreRefusesTheTurnWithoutKeepingAnything() async {
+    /// distinction lives. A streaming turn with NO conversation behind it has
+    /// nothing to bank the words against (a queued message belongs to one
+    /// conversation for its whole life), so this is still a refusal that keeps
+    /// nothing — and this asserts both halves: the answer is false, and the timeline
+    /// really is untouched, which is WHY it is false.
+    ///
+    /// The ordinary mid-turn case now QUEUES instead, and must NOT be rescued:
+    /// see `ChatSendQueueTests.testAQueuedDictationIsNotAlsoRescuedIntoTheComposer`.
+    func testAStreamingStoreWithNoConversationRefusesWithoutKeepingAnything() async {
         let chat = ChatStore()
         chat.streaming = true
+        XCTAssertNil(chat.activeID)
         XCTAssertFalse(chat.acceptsNewTurn)
 
         let kept = await ComposerView.sendKeepingWords(chat, "the only copy", [])
@@ -422,9 +433,10 @@ final class VoiceQuickActionTests: XCTestCase {
     /// because `sending` and `streaming` are set at different moments (POST in
     /// flight vs SSE deltas arriving) and a guard that lost either one would leave a
     /// real window where the transcript vanishes.
-    func testASendingStoreAlsoRefusesWithoutKeepingAnything() async {
+    func testASendingStoreWithNoConversationAlsoRefusesWithoutKeepingAnything() async {
         let chat = ChatStore()
         chat.sending = true
+        XCTAssertNil(chat.activeID)
         XCTAssertFalse(chat.acceptsNewTurn)
         let kept = await ComposerView.sendKeepingWords(chat, "the only copy", [])
         XCTAssertFalse(kept)

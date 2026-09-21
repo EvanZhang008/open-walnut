@@ -166,7 +166,8 @@ final class TimelineRowBuilder {
     /// id alone is NOT unique across conversations (see `TimelineScope`).
     func rows(for message: ChatMessage, width: CGFloat,
               expandedRowIDs: Set<String>,
-              scope: String = TimelineScope.unscoped) -> [TimelineRow] {
+              scope: String = TimelineScope.unscoped,
+              queued: QueuedSend.Status? = nil) -> [TimelineRow] {
         let namespace = TimelineScope.namespace(scope, message.id)
         switch message.kind {
         case .tool:
@@ -178,7 +179,7 @@ final class TimelineRowBuilder {
                                     expandedRowIDs: expandedRowIDs)]
         case nil:
             return message.isUser
-                ? userRows(message, namespace: namespace, width: width)
+                ? userRows(message, namespace: namespace, width: width, queued: queued)
                 : assistantRows(message, width: width, idPrefix: namespace)
         }
     }
@@ -186,7 +187,7 @@ final class TimelineRowBuilder {
     // MARK: - User bubble
 
     private func userRows(_ message: ChatMessage, namespace: String,
-                          width: CGFloat) -> [TimelineRow] {
+                          width: CGFloat, queued: QueuedSend.Status? = nil) -> [TimelineRow] {
         var rows: [TimelineRow] = []
         var index = 0
         func nextID() -> String { defer { index += 1 }; return "\(namespace)#\(index)" }
@@ -231,6 +232,23 @@ final class TimelineRowBuilder {
                 id: nextID(), revision: message.retryNotice == nil ? 0 : 1,
                 content: .failedNotice(notice: message.retryNotice),
                 height: TimelineMetrics.failedNoticeHeight
+            ))
+        } else if let queued, queued != .undecided {
+            // Never both. A banked message has not been posted, so it cannot also
+            // have failed to post — and an `undecided` entry is the failed bubble
+            // above, which is why it is excluded here rather than badged.
+            let delivering = queued == .processing
+            // Side by side at ordinary text sizes, stacked once the user asks for
+            // accessibility text: MEASURED on the pinned simulator, one row could not
+            // hold both controls at accessibility-XXXL (the two of them want ~410pt of
+            // a 313pt track) and SwiftUI answered by wrapping to 104pt against a row
+            // reserving 58pt, which on a hosted cell is 46pt of ink drawn over the
+            // next message.
+            let stacked = TimelineTextStyler.adoptedCategory.isAccessibilityCategory
+            rows.append(TimelineRow(
+                id: nextID(), revision: (delivering ? 1 : 0) + (stacked ? 2 : 0),
+                content: .queuedNotice(delivering: delivering, stacked: stacked),
+                height: Self.queuedNoticeHeight(delivering: delivering, stacked: stacked)
             ))
         }
         return rows
@@ -658,6 +676,50 @@ final class TimelineRowBuilder {
             : 0
         return max(line, badged ? badge : 0) + second
             + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
+    }
+
+    /// Badge + withdraw row under a banked bubble.
+    ///
+    /// DERIVED FROM THE FONTS, not a constant, for the reason `capsuleRowHeight` is:
+    /// the row is a `.caption2` capsule beside a `.caption` button, and both move
+    /// with Dynamic Type while a constant does not. Measured on the pinned simulator,
+    /// the shipped constant (30pt) was right at the default size and short by ~26pt
+    /// at accessibility-XXXL, where the badge and the withdraw control both clip —
+    /// and a hosted row that needs more height than the row it was given does not
+    /// truncate, it draws over its neighbour.
+    ///
+    /// `max` of the two while they sit side by side, their SUM once the row stacks
+    /// (see the `stacked` comment at the call site). A delivering row has no button
+    /// at all, so it is the capsule either way.
+    ///
+    /// Which line constant applies follows the rule the two above state: the row
+    /// that IS one line takes `hostedLineHeight`'s cushion, and a line that is one
+    /// term of a SUM takes the tight line, or the cushion is counted twice and the
+    /// row reserves a band of nothing (measured on the pinned simulator: 113.05
+    /// reserved against 108.33 laid out at accessibility-XXXL, which is outside the
+    /// parity gate's upper bound).
+    ///
+    /// Both terms are ONE line by construction: the cell caps the badge and the
+    /// button at `lineLimit(1)`, which is what makes this arithmetic exact instead of
+    /// a guess about where SwiftUI would break a word.
+    static func queuedNoticeHeight(delivering: Bool, stacked: Bool) -> CGFloat {
+        guard !delivering else {
+            return TimelineMetrics.hostedLineHeight(TimelineTextStyler.caption2Font)
+                + TimelineMetrics.chipVPad * 2
+        }
+        guard stacked else {
+            let capsule = TimelineMetrics.hostedLineHeight(TimelineTextStyler.caption2Font)
+                + TimelineMetrics.chipVPad * 2
+            // The button is padded like the capsule, so it is the taller of the two.
+            let button = TimelineMetrics.hostedLineHeight(TimelineTextStyler.captionFont)
+                + TimelineMetrics.chipVPad * 2
+            return max(capsule, button)
+        }
+        return TimelineMetrics.hostedTightLine(TimelineTextStyler.caption2Font)
+            + TimelineMetrics.chipVPad * 2
+            + TimelineMetrics.chipStackSpacing
+            + TimelineMetrics.hostedTightLine(TimelineTextStyler.captionFont)
+            + TimelineMetrics.chipVPad * 2
     }
 
     /// History thinking row: ONE capsule reading the fixed word "Thinking", with

@@ -73,6 +73,17 @@ struct ComposerBar: View {
     var onStop: (() async -> Void)? = nil
     var disabled: Bool = false
     var disabledNotice: String? = nil
+    /// A sentence the OWNER wants in the composer's notice row (today: the send
+    /// queue's ceiling). Derived from store state rather than latched here, so it
+    /// appears while the limit is reached and clears itself when it is not.
+    var ownerNotice: String? = nil
+    /// Can this composer's owner HOLD a send made while it is busy?
+    ///
+    /// True for the chat composer, whose store banks the message and delivers it
+    /// when the turn settles. FALSE BY DEFAULT, and the default is the load-bearing
+    /// half: the new-session launcher is `busy` while it creates a session, and a
+    /// second send there creates a SECOND session.
+    var busyAcceptsSend: Bool = false
     /// Identity of the thread this composer writes into ("chat:<conversation>",
     /// "session:<id>"). Scopes the durable draft.
     ///
@@ -177,6 +188,10 @@ struct ComposerBar: View {
     /// "images were skipped" line cannot clobber the one row that tells the user
     /// how to fix it.
     @State private var cameraNotice: String?
+    /// A send the owner would not keep, so the words are back in the field. Local
+    /// (not owner-supplied) because the owner that refused may have nothing to say
+    /// about it — see `send()`.
+    @State private var refusedNotice: String?
 
     /// Not private: `attach` is the shared rule and its tests assert against the
     /// real ceiling rather than re-declaring a 5.
@@ -212,13 +227,33 @@ struct ComposerBar: View {
     private var trimmed: String { draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var hasContent: Bool { !trimmed.isEmpty || !selectedImages.isEmpty }
     /// A turn is running AND this composer is not the field it is waiting on.
-    /// Everything that used to read `busy` reads this: for every composer but
-    /// the chat's blocked-question case the two are identical.
+    /// Now read by ONE thing, the field's placeholder: it is the honest caption
+    /// for an EMPTY composer mid-turn, and an empty composer is the only time a
+    /// placeholder is visible.
     private var waitingForReply: Bool { busy && !pendingQuestion }
-    private var canSend: Bool { !waitingForReply && !disabled && hasContent }
+    /// Blind to whether a turn is running only where the owner can HOLD the words.
+    /// A chat send mid-turn is banked by the store and delivered when the turn
+    /// settles, so gating on `waitingForReply` there refused words that had
+    /// somewhere to go and left a user who had just dictated a paragraph with no way
+    /// to send it. A composer whose owner cannot hold them keeps the old gate.
+    private var canSend: Bool {
+        Self.canSend(hasContent: hasContent, disabled: disabled,
+                     waitingForReply: waitingForReply, busyAcceptsSend: busyAcceptsSend)
+    }
+
+    /// Whether a tap on the send button is ACCEPTED, as a pure rule.
+    ///
+    /// Static because the button's appearance and its action have to agree, and the
+    /// two used to be decided in different places: `ComposerPrimaryAction` said
+    /// "send" while this said no, so the seat looked live and the tap did nothing.
+    static func canSend(hasContent: Bool, disabled: Bool, waitingForReply: Bool,
+                        busyAcceptsSend: Bool) -> Bool {
+        hasContent && !disabled && (!waitingForReply || busyAcceptsSend)
+    }
     private var primaryAction: ComposerPrimaryAction {
         ComposerPrimaryAction
-            .decide(busy: busy, hasContent: hasContent, pendingQuestion: pendingQuestion)
+            .decide(busy: busy, hasContent: hasContent, pendingQuestion: pendingQuestion,
+                    busyAcceptsSend: busyAcceptsSend)
             .availableWithStop(onStop != nil)
     }
 
@@ -226,6 +261,14 @@ struct ComposerBar: View {
         VStack(spacing: 0) {
             if disabled, let notice = disabledNotice {
                 noticeRow(notice, icon: Symbol.offlineNotice)
+            }
+            // The owner's sentence when it has one (it names the actual ceiling), the
+            // generic refusal otherwise. Never both: two rows about one refused tap
+            // is noise, and the specific one is always the more useful.
+            if let notice = ownerNotice ?? refusedNotice {
+                noticeRow(notice, icon: Symbol.queueFullNotice) {
+                    refusedNotice = nil
+                }
             }
             if let voiceError = voice.errorMessage {
                 noticeRow(voiceError, icon: Symbol.voiceErrorNotice) {
@@ -717,6 +760,9 @@ struct ComposerBar: View {
         /// (only `camera.macro.slash`), and the padlock is the honest subject
         /// anyway — the camera works, the permission is off.
         static let cameraDeniedNotice = "lock.slash"
+        /// The send queue is full. A tray, not a warning triangle: nothing is
+        /// wrong, there is simply no more room until one goes out.
+        static let queueFullNotice = "tray.full"
         static let voicePending = "waveform.badge.exclamationmark"
         static let voiceFailed = "waveform.slash"
         static let discard = "trash"
@@ -724,7 +770,7 @@ struct ComposerBar: View {
         static let all = [
             plus, photo, camera, mic, send, stop, confirm, cancel, removeImage,
             offlineNotice, voiceErrorNotice, imageNotice, cameraDeniedNotice,
-            voicePending, voiceFailed, discard,
+            queueFullNotice, voicePending, voiceFailed, discard,
         ]
     }
 
@@ -1223,20 +1269,95 @@ struct ComposerBar: View {
 
     // MARK: - Actions
 
+    /// Hand the composed message to the owner, and keep the field's contents alive
+    /// unless the owner says it KEPT the words.
     private func send() {
         let text = trimmed
         let images = selectedImages
         guard !text.isEmpty || !images.isEmpty else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        pickerItems = []
+        refusedNotice = nil
+        Task {
+            let disposition = await Self.deliver(
+                text: text, images: images, draftKey: draftKey, drafts: drafts,
+                onSend: onSend
+            )
+            // Silent when the owner already has a sentence on screen (`ownerNotice`
+            // names the real ceiling); this covers every other refusal, where the
+            // text reappearing with no explanation reads as a bug.
+            if disposition == .returnedToDraft { refusedNotice = Self.refusedNotice }
+        }
+    }
+
+    enum SendDisposition: Equatable {
+        /// The owner is holding the words (a turn, a bubble, or its queue).
+        case kept
+        /// Nothing kept them, so they are back in the composer.
+        case returnedToDraft
+    }
+
+    /// THE DRAFT IS THE LAST COPY, and this is the rule that decides whether it
+    /// survives.
+    ///
+    /// Clearing the field up front and discarding `onSend`'s answer (which is what
+    /// this did) deleted the text outright on every path where nothing kept it: the
+    /// queue at its ceiling, a store with no conversation to bank against, a
+    /// launcher whose create call failed. No bubble, no draft, no disk record — the
+    /// message simply stopped existing, which is the exact harm the queue was built
+    /// to prevent. The voice path has answered this question correctly for a while
+    /// (`voiceRescueReason`); this is the keyboard reaching the same guarantee.
+    ///
+    /// The field still clears IMMEDIATELY, because that is the feel and because a
+    /// composer still holding the text it just sent invites a second send. A refusal
+    /// puts the words BACK. Only a refusal: the store's own contract is that a
+    /// failed round trip already keeps them as a retryable bubble, so restoring on
+    /// any false would put the same sentence in two places.
+    ///
+    /// Static, with the draft store passed in, so the decision is assertable without
+    /// a hosted view — a tap handler is not a place to keep a no-loss rule.
+    @MainActor
+    static func deliver(
+        text: String, images: [SelectedImage], draftKey: String,
+        drafts: ComposerDrafts, onSend: (String, [SelectedImage]) async -> Bool
+    ) async -> SendDisposition {
         FreezeContext.shared.note("send", text.utf8.count)
         FreezeContext.shared.setDraftChars(0)
         drafts.clear(draftKey)
-        pickerItems = []
-        // Failure keeps the text AND images as a failed bubble in the timeline
-        // (store's contract) — nothing restored here, so new typing/picking is
-        // never clobbered.
-        Task { _ = await onSend(text, images) }
+        if await onSend(text, images) { return .kept }
+        restoreRefusedDraft(text, images, draftKey: draftKey, drafts: drafts)
+        return .returnedToDraft
     }
+
+    /// Put a refused message back in the composer.
+    ///
+    /// MERGES rather than overwrites, because the round trip is not instant and the
+    /// user may have started typing again in the window: the refused text goes
+    /// FIRST (it was typed first) and whatever is in the field follows it. Images go
+    /// back through the shared `attach` rule, so the 5-image ceiling and the
+    /// aggregate byte budget are enforced on the restored set exactly as on a pick.
+    @MainActor
+    static func restoreRefusedDraft(
+        _ text: String, _ images: [SelectedImage], draftKey: String, drafts: ComposerDrafts
+    ) {
+        let current = drafts.draft(draftKey)
+        let merged = current.isEmpty ? text : text + " " + current
+        drafts.setDraft(merged, key: draftKey)
+        FreezeContext.shared.setDraftChars(merged.utf8.count)
+        if !images.isEmpty {
+            let restored = attach(images.map { .ok($0) }, to: drafts.images(draftKey))
+            drafts.setImages(restored.images, key: draftKey)
+        }
+        AppLog.info("composer", "a refused send was returned to the draft", [
+            "chars": "\(text.count)", "images": "\(images.count)", "key": draftKey,
+        ])
+    }
+
+    /// The generic "it is back in the composer" line. Deliberately does not
+    /// speculate about WHY: the owner supplies a specific sentence whenever it has
+    /// one, and guessing here would sometimes be wrong.
+    static let refusedNotice =
+        "That message was not sent. It is back in the composer, ready to try again."
 
     /// Raise the library picker. Lowers the camera cover first — see the two
     /// flags' comment: they must never both be true.
@@ -1427,22 +1548,22 @@ struct ComposerBar: View {
     /// the one path that deletes), so this string is the only remaining copy: any
     /// route that neither sends nor drafts is data loss.
     ///
-    /// `busy` is the case the first cut missed. `ChatStore.send` opens with
-    /// `guard isActive, !sending, !streaming else { return false }` and returns
-    /// false BEFORE appending anything, so an auto-send attempted while a turn is
-    /// streaming is refused with no bubble and no draft: the transcript simply
-    /// ceased to exist. Offline was guarded, its sibling was not.
+    /// A RUNNING TURN IS NO LONGER A DIVERSION. It used to be: the store refused a
+    /// send while one was streaming and kept nothing, so the draft was the only
+    /// place the transcript could go. The store now banks it instead
+    /// (`ChatStore.SendOutcome.queued`), which is what the quick action promised
+    /// all along, so the only remaining reasons to park a take are that nobody
+    /// asked for a send, that there is nothing to say, or that the words cannot
+    /// leave this device at all. A store that still refuses (its queue is full) is
+    /// caught on the other side, by `voiceRescueReason`.
     static func voiceDeliveryRoute(
-        autoSendArmed: Bool, offline: Bool, busy: Bool, transcript: String
+        autoSendArmed: Bool, offline: Bool, transcript: String
     ) -> VoiceDeliveryRoute {
         guard autoSendArmed else { return .draft(reason: "not-armed") }
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .draft(reason: "empty")
         }
         if offline { return .draft(reason: "offline") }
-        // A turn is in flight, so the store would refuse this send and keep
-        // nothing. The draft is where words wait for a free turn.
-        if busy { return .draft(reason: "busy") }
         return .send
     }
 
@@ -1470,7 +1591,7 @@ struct ComposerBar: View {
         // flag (a second read would always say "not armed").
         let route = Self.voiceDeliveryRoute(
             autoSendArmed: quickAction.takeAutoSend(),
-            offline: disabled, busy: waitingForReply, transcript: text
+            offline: disabled, transcript: text
         )
         if case .draft(let reason) = route {
             if reason != "not-armed" {
@@ -1486,10 +1607,10 @@ struct ComposerBar: View {
         FreezeContext.shared.note("voice-quick-send", trimmedText.utf8.count)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Task { @MainActor in
-            // Not merged into `voiceDeliveryRoute`'s `busy` check: they catch
-            // different moments. The route reads `busy` when the take STOPS, this
-            // reads the store's answer when the send is actually attempted, and a
-            // turn can start in the gap (transcription takes seconds).
+            // The route is decided when the take STOPS; this reads the store's
+            // answer when the send is actually attempted, and the two are seconds
+            // apart. A turn starting in the gap is fine now (it banks the words);
+            // a queue that filled up in the gap is not, and only this can see it.
             let reason = Self.voiceRescueReason(
                 storeKeptTheWords: await onSend(trimmedText, [])
             )
@@ -1682,9 +1803,9 @@ private struct RecordingIndicator: View {
 }
 
 /// Chat tab's composer — a thin ChatStore wrapper around ComposerBar.
-/// `busy` turns the send button into a STOP while a turn runs (contract: 409
-/// turn_active, so a second send could not be taken anyway); typing stays
-/// available the whole time.
+/// `busy` turns the trailing button into a STOP while a turn runs AND the
+/// composer is empty; the moment anything is typed it is a send again, and that
+/// send is banked by the store until the turn settles.
 struct ComposerView: View {
     @Environment(ChatStore.self) private var chat
     @Environment(ConnectionStore.self) private var connection
@@ -1704,6 +1825,12 @@ struct ComposerView: View {
             onStop: { await chat.stopTurn() },
             disabled: !connection.online,
             disabledNotice: connection.online ? nil : "Offline — reconnecting…",
+            // The send queue's ceiling. Nothing latches it: it is on screen while
+            // the queue is full and gone as soon as one message goes out.
+            ownerNotice: chat.queueFullNotice,
+            // The store banks a send made mid-turn, so this composer's send button
+            // stays live while a turn runs (see `ComposerPrimaryAction`).
+            busyAcceptsSend: true,
             // Per-conversation draft. A brand-new (unsaved) conversation shares
             // the agent-scoped key so text typed before the server assigns an id
             // isn't orphaned when it does.
@@ -1746,8 +1873,12 @@ struct ComposerView: View {
     /// timeline.
     ///
     /// Two legs keep nothing and therefore answer false:
-    ///  - `ChatStore.acceptsNewTurn` is false (a turn is already streaming): the
-    ///    store returns before appending any bubble.
+    ///  - the store refuses to hold the words at all
+    ///    (`ChatStore.SendOutcome.refusedKeepingNothing`): it is torn down, or its
+    ///    send queue is already at the ceiling. A turn merely being IN FLIGHT is no
+    ///    longer one of these: the store banks the message and shows a queued
+    ///    bubble, so a rescue there would put the same sentence in the timeline AND
+    ///    the composer, where it could be sent twice.
     ///  - an ANSWER to a blocked structured question is not DELIVERED: the answer
     ///    endpoint has no optimistic bubble at all, so anything short of delivery
     ///    leaves the text nowhere. Note that this is stricter than "did it throw" —
@@ -1755,9 +1886,10 @@ struct ComposerView: View {
     ///    question and a total loss for these words, and reading
     ///    `answerQuestion`'s Bool here dropped them silently.
     ///
-    /// Everything else is safe by the store's own contract: past that guard every
-    /// `return false` in `performSend` runs `markSendFailed` first, keeping the
-    /// full text and its images as a retryable red bubble.
+    /// Everything else is safe by the store's own contract: past its acceptance
+    /// guard every `return .failed` in `performSend` runs `markSendFailed` first,
+    /// keeping the full text and its images as a retryable red bubble — which is
+    /// why this deliberately does NOT read whether the POST succeeded.
     @MainActor
     static func sendKeepingWords(
         _ chat: ChatStore, _ text: String, _ images: [SelectedImage]
@@ -1765,9 +1897,7 @@ struct ComposerView: View {
         if chat.pendingQuestion, !text.isEmpty {
             return await chat.answerQuestionReportingOutcome(text) == .delivered
         }
-        guard chat.acceptsNewTurn else { return false }
-        _ = await chat.send(text, images: images)
-        return true
+        return await chat.sendReportingOutcome(text, images: images).keptTheWords
     }
 }
 
