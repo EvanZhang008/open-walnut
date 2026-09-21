@@ -17,7 +17,13 @@
  *     new Latest row and the overview it did not replace;
  *  4. an event for ANOTHER session changes nothing;
  *  5. a record from before the overview existed shows the Latest row alone;
- *  6. 300-char rows wrap in full (never ellipsize) and stay clear of the \u00d7.
+ *  6. 300-char rows wrap in full (never ellipsize) and stay clear of the \u00d7;
+ *  7. an event that beats the record fetch is kept;
+ *  8. layout (2026-09-19 report: the label column and the icon cost a narrow
+ *     column a third of its width, the card stacked ten lines high): no icon,
+ *     labels inline at the start of their paragraph, the body capped at a few
+ *     lines and scrolling past that in a NARROW column, uncapped content that
+ *     fits, the \u00d7 fixed outside the scroll box.
  */
 import { expect, type Locator, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
@@ -35,6 +41,13 @@ export const OTHER_SESSION = 'pw-recap-tip-other';
 export const OVERVIEW_ZH = '\u91cd\u505a composer \u5e03\u5c40\uff0c\u8ba9\u6eda\u52a8\u6761\u6b62\u4e8e\u6700\u540e\u4e00\u884c\uff1b\u4fee\u590d\u5df2\u63d0\u4ea4\u3002';
 export const RECAP_ZH = '\u5df2\u90e8\u7f72\u5230 3456\uff0cWebKit \u4e0e Chromium \u9a8c\u8bc1\u901a\u8fc7\u3002';
 export const RECAP_NEXT = '\u65b0\u7684\u4e00\u8f6e\uff1a\u52a0\u4e86\u5173\u95ed\u6309\u94ae\u3002';
+/** Real-density pair (the 2026-09-19 screenshot ran ~100 and ~75 CJK characters):
+ *  the same sentences repeated, so a narrow column has to cap them. */
+export const OVERVIEW_ZH_LONG = OVERVIEW_ZH.repeat(4);
+export const RECAP_ZH_LONG = RECAP_ZH.repeat(3);
+/** One line each even in a narrow column ("deployed." / "verified."). */
+export const OVERVIEW_ZH_SHORT = '\u5df2\u90e8\u7f72\u3002';
+export const RECAP_ZH_SHORT = '\u9a8c\u8bc1\u901a\u8fc7\u3002';
 
 export interface TipRecord {
   recap?: string;
@@ -89,7 +102,24 @@ export async function openTipSession(page: Page, id = TIP_SESSION): Promise<Loca
   return panel;
 }
 
+/** Two columns in an 1100px window: ~274px each, the reported narrow case. Both
+ *  sessions must be mocked; the second is only there to take the width. */
+export async function openNarrowTipSession(page: Page, id = TIP_SESSION, filler = OTHER_SESSION): Promise<Locator> {
+  await page.addInitScript(([sid, other]) => {
+    sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: sid, locked: false }, { id: other, locked: false }]));
+  }, [id, filler] as const);
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await page.goto('/');
+  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${id}"]`);
+  await expect(panel).toBeVisible({ timeout: 20_000 });
+  await expect(panel.locator('.session-history')).toContainText('Answer 5.', { timeout: 20_000 });
+  const box = await panel.boundingBox();
+  expect(box!.width, 'the column must actually be narrow for this scenario to mean anything').toBeLessThan(340);
+  return panel;
+}
+
 export const tipOf = (panel: Locator) => panel.getByTestId('session-recap-tip');
+export const bodyOf = (panel: Locator) => tipOf(panel).locator('.session-recap-tip-body');
 
 /** Crop the composer block (tip + input card) so the shot stays small and on
  *  point. Named by the engine that actually rendered it: a spec runs under
@@ -121,24 +151,92 @@ export async function expectTwoRows(panel: Locator, overview: string, recap: str
   // The overview reads first: "where are we" before "what just happened".
   const [o, l] = await Promise.all([overviewRow.boundingBox(), latestRow.boundingBox()]);
   expect(o!.y).toBeLessThan(l!.y);
-  // The two texts start on one column: the labels differ in width ("Overall" is
-  // the wider), and a per-row label box used to shift the second text left.
-  const [ot, lt] = await Promise.all([
-    overviewRow.locator('.session-recap-tip-text').boundingBox(),
-    latestRow.locator('.session-recap-tip-text').boundingBox(),
-  ]);
-  expect(Math.abs(ot!.x - lt!.x)).toBeLessThanOrEqual(0.5);
+  await expectInlineLabels(tip);
 }
 
-/** Every row's text is fully laid out (no clipping) and ends left of the \u00d7. */
+/** No icon, and each label is an inline run: the text's first glyph sits on the
+ *  label's own line, right after it, instead of in a column of its own. */
+export async function expectInlineLabels(tip: Locator): Promise<void> {
+  await expect(tip.locator('.session-recap-tip-icon')).toHaveCount(0);
+  expect((await tip.innerText()).includes('\u{1F4AC}'), 'no speech-balloon icon in the card').toBe(false);
+  const rows = tip.locator('.session-recap-tip-row');
+  const n = await rows.count();
+  expect(n).toBeGreaterThan(0);
+  for (let i = 0; i < n; i++) {
+    const m = await rows.nth(i).evaluate((row) => {
+      const label = row.querySelector('.session-recap-tip-label')!.getBoundingClientRect();
+      const textNode = row.querySelector('.session-recap-tip-text')!.firstChild as Text;
+      const range = document.createRange();
+      range.setStart(textNode, 0);
+      range.setEnd(textNode, 1);
+      const glyph = range.getBoundingClientRect();
+      return { labelTop: label.top, labelRight: label.right, glyphTop: glyph.top, glyphLeft: glyph.left, glyphHeight: glyph.height };
+    });
+    // Same line: the glyph's box overlaps the label's line vertically...
+    expect(Math.abs(m.glyphTop - m.labelTop), `row ${i}: label and text are not on one line`).toBeLessThan(m.glyphHeight);
+    // ...and it starts to the label's right, not under it.
+    expect(m.glyphLeft, `row ${i}: text does not follow the label inline`).toBeGreaterThanOrEqual(m.labelRight - 0.5);
+  }
+}
+
+/** The body's cap. `scrollable` = whether this content, at this width, must
+ *  overflow: then the body scrolls (class + real overflow), stays at or under
+ *  N lines, and scrolling to the end reaches the last paragraph in full (the
+ *  text is never ellipsized, only scrolled). Otherwise nothing is clipped and no
+ *  scroll track is switched on. Either way the \u00d7 sits clear of the body. */
+export async function expectBodyCap(panel: Locator, scrollable: boolean, maxLines: number): Promise<void> {
+  const body = bodyOf(panel);
+  await expect(body).toHaveAttribute('data-scrollable', String(scrollable));
+  const m = await body.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return {
+      overflowY: cs.overflowY, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
+      lineHeight: parseFloat(cs.lineHeight), padY: parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom),
+      rect: el.getBoundingClientRect().toJSON() as DOMRect,
+    };
+  });
+  const lines = (m.clientHeight - m.padY) / m.lineHeight;
+  if (scrollable) {
+    // A CAPPED box must end on a LINE boundary in whichever engine is running: a
+    // cap computed from a ratio (1.35 x 11px) is 14.85px in Chromium but floored
+    // to 14px in WebKit, which showed four lines plus a sliced fifth in the Mac
+    // app. (An UNCAPPED box is as tall as its content, which carries a stray
+    // pixel per paragraph, so this only holds here.)
+    expect(Math.abs(lines - Math.round(lines)), `the cap cuts a line in half (${lines} lines)`).toBeLessThan(0.1);
+    expect(m.overflowY).toBe('auto');
+    expect(m.scrollHeight).toBeGreaterThan(m.clientHeight + 1);
+    expect(lines, 'the body shows more lines than its cap').toBeLessThanOrEqual(maxLines + 0.15);
+    // Scroll to the end: the last paragraph's bottom is inside the box.
+    const reached = await body.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      const last = el.lastElementChild!.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      const pb = parseFloat(getComputedStyle(el).paddingBottom);
+      return { lastBottom: last.bottom, boxBottom: box.bottom - pb, scrollTop: el.scrollTop };
+    });
+    expect(reached.scrollTop).toBeGreaterThan(0);
+    expect(reached.lastBottom).toBeLessThanOrEqual(reached.boxBottom + 1);
+    await body.evaluate((el) => { el.scrollTop = 0; });
+  } else {
+    expect(m.overflowY).toBe('hidden');
+    expect(m.scrollHeight, 'content that fits must not be clipped').toBeLessThanOrEqual(m.clientHeight + 1);
+  }
+  const close = await tipOf(panel).getByRole('button', { name: 'Dismiss recap' }).boundingBox();
+  expect(close, 'the dismiss button is visible').toBeTruthy();
+  expect(m.rect.right, 'the body (and so its scrollbar) runs under the dismiss button').toBeLessThanOrEqual(close!.x + 0.5);
+}
+
+/** Every paragraph is fully laid out across (no horizontal clipping), wraps when
+ *  long, and ends left of the \u00d7. Vertical capping is the body's business
+ *  (expectBodyCap). */
 export async function expectWrappedClearOfClose(panel: Locator): Promise<void> {
   const tip = tipOf(panel);
   const close = await tip.getByRole('button', { name: 'Dismiss recap' }).boundingBox();
-  const texts = tip.locator('.session-recap-tip-text');
-  const n = await texts.count();
+  const rows = tip.locator('.session-recap-tip-row');
+  const n = await rows.count();
   expect(n).toBeGreaterThan(0);
   for (let i = 0; i < n; i++) {
-    const el = texts.nth(i);
+    const el = rows.nth(i);
     const metrics = await el.evaluate((node) => {
       const r = node.getBoundingClientRect();
       const lineHeight = parseFloat(getComputedStyle(node).lineHeight);

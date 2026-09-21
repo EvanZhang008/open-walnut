@@ -6,8 +6,9 @@
 import { test, expect } from '@playwright/test';
 import {
   TIP_SESSION, OTHER_SESSION, OVERVIEW_ZH, RECAP_ZH, RECAP_NEXT,
-  mockTipSession, openTipSession, captureWs, injectEvent, tipOf, shootComposer,
-  expectTwoRows, expectWrappedClearOfClose, type TipRecord,
+  OVERVIEW_ZH_LONG, RECAP_ZH_LONG, OVERVIEW_ZH_SHORT, RECAP_ZH_SHORT,
+  mockTipSession, openTipSession, openNarrowTipSession, captureWs, injectEvent, tipOf, shootComposer,
+  expectTwoRows, expectWrappedClearOfClose, expectInlineLabels, expectBodyCap, type TipRecord,
 } from './session-recap-tip-helpers';
 
 const BOTH: TipRecord = {
@@ -141,4 +142,81 @@ test('7. an event that lands before the record fetch resolves is kept, and the o
   // did not carry: the newer recap stays, the overview appears.
   await expect.poll(() => recordServed, { timeout: 10_000 }).toBeGreaterThan(0);
   await expectTwoRows(panel, OVERVIEW_ZH, RECAP_NEXT);
+});
+
+test('8a. narrow column, real-density text: no icon, inline labels, body capped at 4 lines and scrollable, × clear', async ({ page }) => {
+  await mockTipSession(page, TIP_SESSION, { current: {
+    overview: OVERVIEW_ZH_LONG, overviewAt: '2026-09-18T09:00:00.000Z',
+    recap: RECAP_ZH_LONG, recapAt: '2026-09-18T09:00:00.000Z',
+  } });
+  await mockTipSession(page, OTHER_SESSION, { current: {} });
+  const panel = await openNarrowTipSession(page);
+  await expect(tipOf(panel)).toBeVisible();
+  await expectInlineLabels(tipOf(panel));
+  await expectWrappedClearOfClose(panel);
+  await expectBodyCap(panel, true, 4);
+  await shootComposer(panel, 'narrow-capped');
+});
+
+test('8b. narrow column, short text: nothing to scroll, no scroll track switched on', async ({ page }) => {
+  await mockTipSession(page, TIP_SESSION, { current: {
+    overview: OVERVIEW_ZH_SHORT, overviewAt: '2026-09-18T09:00:00.000Z',
+    recap: RECAP_ZH_SHORT, recapAt: '2026-09-18T09:00:00.000Z',
+  } });
+  await mockTipSession(page, OTHER_SESSION, { current: {} });
+  const panel = await openNarrowTipSession(page);
+  await expectTwoRows(panel, OVERVIEW_ZH_SHORT, RECAP_ZH_SHORT);
+  await expectBodyCap(panel, false, 4);
+  await shootComposer(panel, 'narrow-short');
+});
+
+test('8c. wide column, real-density text fits under the 6-line cap; the 300-char pair scrolls', async ({ page }) => {
+  const tip = { current: {
+    overview: OVERVIEW_ZH_LONG, overviewAt: '2026-09-18T09:00:00.000Z',
+    recap: RECAP_ZH_LONG, recapAt: '2026-09-18T09:00:00.000Z',
+  } as TipRecord };
+  await mockTipSession(page, TIP_SESSION, tip);
+  const panel = await openTipSession(page);
+  await expectTwoRows(panel, OVERVIEW_ZH_LONG, RECAP_ZH_LONG);
+  await expectBodyCap(panel, false, 6);
+  await shootComposer(panel, 'wide-real-density');
+
+  // The server-side maximum (two 300-char fields) is the one wide case that has
+  // to scroll: still whole, never ellipsized.
+  const long = (seed: string) => `${seed} `.repeat(40).slice(0, 300).trim();
+  tip.current = {
+    overview: long('overview words'), overviewAt: '2026-09-18T09:10:00.000Z',
+    recap: long('recap words'), recapAt: '2026-09-18T09:10:00.000Z',
+  };
+  await page.reload();
+  await expect(panel.locator('.session-history')).toContainText('Answer 5.', { timeout: 20_000 });
+  await expect(tipOf(panel)).toBeVisible();
+  await expectWrappedClearOfClose(panel);
+  await expectBodyCap(panel, true, 6);
+});
+
+test('8d. the cap follows the CARD, not the window: widening the same two columns turns the scroll off', async ({ page }) => {
+  // Deliberately the two-column case, because a narrow column in a WIDE window
+  // is the reported one: shrinking the window instead gives ONE column, whose
+  // card is wider than the two-column card and so scrolls less, not more.
+  await mockTipSession(page, TIP_SESSION, { current: {
+    overview: OVERVIEW_ZH_LONG, overviewAt: '2026-09-18T09:00:00.000Z',
+    recap: RECAP_ZH_LONG, recapAt: '2026-09-18T09:00:00.000Z',
+  } });
+  await mockTipSession(page, OTHER_SESSION, { current: {} });
+  const panel = await openNarrowTipSession(page);
+  await expectBodyCap(panel, true, 4);
+  // Measured on both engines (2026-09-19): two columns give the card 214px at a
+  // 1100px window, 409px at 1900px (already past the 380px narrow threshold, so
+  // the cap is 6 lines but this text still needs 7) and 580px at 2600px, where
+  // the same pair finally fits.
+  await page.setViewportSize({ width: 1900, height: 760 });
+  await expect(tipOf(panel).locator('.session-recap-tip-body')).toHaveAttribute('data-scrollable', 'true', { timeout: 5_000 });
+  await expectBodyCap(panel, true, 6);
+  await page.setViewportSize({ width: 2600, height: 760 });
+  await expect(tipOf(panel).locator('.session-recap-tip-body')).toHaveAttribute('data-scrollable', 'false', { timeout: 5_000 });
+  await expectBodyCap(panel, false, 6);
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await expect(tipOf(panel).locator('.session-recap-tip-body')).toHaveAttribute('data-scrollable', 'true', { timeout: 5_000 });
+  await expectBodyCap(panel, true, 4);
 });

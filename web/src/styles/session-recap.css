@@ -3,51 +3,73 @@
    .session-recap-tip is load-bearing: the composer layout specs locate the
    row by it.
 
-   Both rows show in FULL, wrapping as needed — each is a short sentence
-   (≤300 chars, capped server-side in session-hooks/builtins.ts) and the whole
-   point is re-orienting without opening anything, so never ellipsize. Explicit
-   user decision (2026-07-19); the dense LIST rows (SessionRow, TodoPanel) keep
-   single-line truncate on purpose — don't "unify" either direction. */
+   Shape (2026-09-19): no icon, and each label is an inline run at the start of
+   its paragraph rather than a column. The first version had a leading emoji
+   plus a label column; in a narrow session column that pair took a third of the
+   width and the two texts stacked ten lines high. Text still shows in FULL,
+   never ellipsized (explicit user decision, 2026-07-19), but the body is capped
+   at --recap-tip-max-lines and scrolls past that, so a narrow column keeps its
+   composer. The dense LIST rows (SessionRow, TodoPanel) keep single-line
+   truncate on purpose — don't "unify" either direction.
+
+   The line height is an INTEGER number of pixels on purpose: a ratio (1.35 on
+   11px = 14.85px) is honoured as 14.85px by Chromium but FLOORED to 14px by
+   WebKit, so a cap computed from the ratio cut the last line in half in the Mac
+   app while looking exact in Chromium. With an integer both engines agree and
+   the cap lands on a line boundary. Measured 2026-09-19: WebKit reported 8 rows
+   of CJK text as 112px (14px/line) against a computed line-height of 14.85px. */
 
 .session-recap-tip {
+  /* Wide card: both paragraphs (a real pair runs 4-5 lines) show whole. The
+     narrow cap below is what the 2026-09-19 report asked for. */
+  --recap-tip-max-lines: 6;
+  --recap-tip-line: 15px;
   position: relative;
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
+  /* Size container so the body can pick its cap from the CARD's width, not the
+     window's: a narrow column on a wide monitor is the reported case. */
+  container-type: inline-size;
   margin: 4px 12px 0;
-  /* Right padding reserves the × so a long row never runs under it. */
-  padding: 4px 26px 4px 10px;
   border-radius: 6px;
   background: var(--bg-tertiary);
   color: var(--fg-muted);
   font-size: 11px;
-  line-height: 1.4;
+  line-height: var(--recap-tip-line);
   min-width: 0;
 }
 
-.session-recap-tip-icon {
-  flex-shrink: 0;
-  /* Sit on the first row's baseline, like the old single-line tip did. */
-  line-height: 1.4;
-}
-
-/* A two-column grid the rows join through subgrid, so both labels share the
-   widest label's column and the two texts start on one line, whatever the font. */
-.session-recap-tip-rows {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  row-gap: 2px;
-  flex: 1;
+/* The body is the scroll box. Its right margin leaves the × its own column, so
+   the scrollbar (which sits at the body's right edge) and the × never overlap,
+   and no line of text runs under either. `overflow: hidden` until the component
+   measures an overflow: with macOS "always show scroll bars", WebKit paints an
+   `auto` track even when nothing overflows, and an empty track on a two-line
+   card is the clutter this card is trying to lose. The cap is N whole lines plus
+   this box's own vertical padding — nothing else, so the Nth line is never a
+   sliver of the N+1th. */
+.session-recap-tip-body {
+  max-height: calc(var(--recap-tip-max-lines) * var(--recap-tip-line) + 8px);
+  overflow: hidden;
+  padding: 4px 4px 4px 8px;
+  margin-right: 22px;
   min-width: 0;
 }
 
+@container (width < 380px) {
+  .session-recap-tip-body {
+    --recap-tip-max-lines: 4;
+  }
+}
+
+.session-recap-tip-body.is-scrollable {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* No margin between the two paragraphs: their labels already separate them, and
+   any gap would eat into the capped budget and clip the last line by its height. */
 .session-recap-tip-row {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  column-gap: 6px;
-  align-items: baseline;
-  min-width: 0;
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .session-recap-tip-label {
@@ -56,18 +78,13 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   opacity: 0.72;
-}
-
-.session-recap-tip-text {
-  white-space: normal;
-  overflow-wrap: break-word;
-  min-width: 0;
+  margin-right: 5px;
 }
 
 .session-recap-tip-close {
   position: absolute;
-  top: 3px;
-  right: 4px;
+  top: 2px;
+  right: 3px;
   width: 18px;
   height: 18px;
   border: none;

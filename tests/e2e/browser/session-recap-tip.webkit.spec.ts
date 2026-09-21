@@ -5,9 +5,10 @@
  */
 import { test, expect } from '@playwright/test';
 import {
-  TIP_SESSION, OVERVIEW_ZH, RECAP_ZH, RECAP_NEXT,
-  mockTipSession, openTipSession, captureWs, injectEvent, tipOf, shootComposer,
-  expectTwoRows, expectWrappedClearOfClose, type TipRecord,
+  TIP_SESSION, OTHER_SESSION, OVERVIEW_ZH, RECAP_ZH, RECAP_NEXT, OVERVIEW_ZH_LONG, RECAP_ZH_LONG,
+  OVERVIEW_ZH_SHORT, RECAP_ZH_SHORT,
+  mockTipSession, openTipSession, openNarrowTipSession, captureWs, injectEvent, tipOf, shootComposer,
+  expectTwoRows, expectWrappedClearOfClose, expectInlineLabels, expectBodyCap, type TipRecord,
 } from './session-recap-tip-helpers';
 
 test.use({ browserName: 'webkit' });
@@ -48,4 +49,41 @@ test('300-char rows wrap in full and stay clear of the ×', async ({ page }) => 
   await expect(tipOf(panel)).toBeVisible();
   await expectWrappedClearOfClose(panel);
   await shootComposer(panel, 'long-rows');
+});
+
+test('narrow column, real-density text: no icon, inline labels, 4-line cap with a scroll, × clear', async ({ page }) => {
+  await mockTipSession(page, TIP_SESSION, { current: {
+    overview: OVERVIEW_ZH_LONG, overviewAt: '2026-09-18T09:00:00.000Z',
+    recap: RECAP_ZH_LONG, recapAt: '2026-09-18T09:00:00.000Z',
+  } });
+  await mockTipSession(page, OTHER_SESSION, { current: {} });
+  const panel = await openNarrowTipSession(page);
+  await expect(tipOf(panel)).toBeVisible();
+  await expectInlineLabels(tipOf(panel));
+  await expectWrappedClearOfClose(panel);
+  await expectBodyCap(panel, true, 4);
+  await shootComposer(panel, 'narrow-capped');
+});
+
+test('narrow column, short text: fits, no scroll track', async ({ page }) => {
+  await mockTipSession(page, TIP_SESSION, { current: {
+    overview: OVERVIEW_ZH_SHORT, overviewAt: '2026-09-18T09:00:00.000Z',
+    recap: RECAP_ZH_SHORT, recapAt: '2026-09-18T09:00:00.000Z',
+  } });
+  await mockTipSession(page, OTHER_SESSION, { current: {} });
+  const panel = await openNarrowTipSession(page);
+  await expectTwoRows(panel, OVERVIEW_ZH_SHORT, RECAP_ZH_SHORT);
+  await expectBodyCap(panel, false, 4);
+  await shootComposer(panel, 'narrow-short');
+});
+
+test('wide column, real-density text fits under the 6-line cap', async ({ page }) => {
+  await mockTipSession(page, TIP_SESSION, { current: {
+    overview: OVERVIEW_ZH_LONG, overviewAt: '2026-09-18T09:00:00.000Z',
+    recap: RECAP_ZH_LONG, recapAt: '2026-09-18T09:00:00.000Z',
+  } });
+  const panel = await openTipSession(page);
+  await expectTwoRows(panel, OVERVIEW_ZH_LONG, RECAP_ZH_LONG);
+  await expectBodyCap(panel, false, 6);
+  await shootComposer(panel, 'wide-real-density');
 });
