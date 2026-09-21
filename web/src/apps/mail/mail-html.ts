@@ -65,14 +65,11 @@ export function mailFrameCsp(allowRemoteImages: boolean): string {
  * repo bans. `walnut-cid-image` is the chip an attachment-referencing image becomes, because this
  * console has no route that serves attachment bytes, so the picture can never arrive.
  *
- * And the table rule is a WEBKIT rule, which is to say it is a Mac app rule. Newsletters are built
- * as tables with a fixed pixel width (`<table width="720">` is the classic shape). Chromium clamps
- * those with `max-width: 100%`; WebKit does not apply max-width to a table box at all, so the same
- * mail overflowed the paper and the last two columns were cut off with an overlay scrollbar nobody
- * sees. Measured at a 432px paper: WebKit laid the table out at 720px and the document scrolled to
- * 744, while Chromium reflowed it to 384. Dropping the declared width lets the auto table algorithm
- * fit the paper in both engines. It is scoped to a NON-percentage width on purpose: `width="100%"`
- * is a shell table asking to fill the paper, which is already the right answer.
+ * Tables get no margin of their own. HTML mail is LAID OUT in tables: a card is a stack of
+ * one-row tables whose cells carry the card's side borders, and a bottom margin on `table` opened a
+ * gap between every two rows, so the borders read as a column of separate boxes (a real account
+ * notice, 143 nested tables). Fixed pixel widths on those tables are handled by `fitFixedTables`,
+ * in the string pass, not here: see that function for the WebKit reason.
  */
 const FRAME_RESET = `<style>
   :root { color-scheme: light; }
@@ -82,9 +79,8 @@ const FRAME_RESET = `<style>
   img { height: auto; }
   pre { overflow-x: auto; white-space: pre-wrap; }
   table { border-collapse: collapse; }
-  table[width]:not([width$='%']) { width: auto !important; }
   h1, h2, h3, h4 { line-height: 1.25; margin: 1.2em 0 0.5em; }
-  p, ul, ol, table { margin: 0 0 1em; }
+  p, ul, ol { margin: 0 0 1em; }
   blockquote { margin: 0 0 1em 12px; padding-left: 12px; border-left: 2px solid rgba(60,60,67,0.22); color: #4b4b50; }
   a { color: #0a5bd5; }
   a:not([href]) { color: inherit; text-decoration: none; cursor: default; }
@@ -172,6 +168,68 @@ function attrValue(assignment: string | undefined): string {
   return raw;
 }
 
+/** A pixel width as an attribute (`600`, `600px`) or as a CSS declaration value. */
+const PX_WIDTH = /^\s*(\d+(?:\.\d+)?)(?:px)?\s*$/i;
+/** Every `width` declaration in an inline style, so it can be read and then replaced. */
+const CSS_WIDTH_DECL = /(^|;)\s*width\s*:\s*([^;!]*?)\s*(?:!important)?\s*(?=;|$)/gi;
+
+/**
+ * The fixed pixel width a table declares, and its inline style without any width declaration.
+ *
+ * `null` when the table declares no width, or a percentage one: `width="100%"` is a shell table
+ * asking to fill the paper, which is already the right answer and must not be touched.
+ */
+export function fixedTableWidth(attrs: string): { px: number; style: string } | null {
+  let px: number | null = null;
+  let style = '';
+  for (const match of attrs.matchAll(ATTR)) {
+    const key = match[1].toLowerCase();
+    if (key === 'width') {
+      const found = PX_WIDTH.exec(attrValue(match[2]));
+      if (found) px = Number(found[1]);
+    } else if (key === 'style') {
+      style = attrValue(match[2]);
+    }
+  }
+  // The inline declaration is what the engine honours, so it outranks the attribute when both exist.
+  const rest = style.replace(CSS_WIDTH_DECL, (_whole, lead: string, value: string) => {
+    const found = PX_WIDTH.exec(value);
+    if (found) px = Number(found[1]);
+    else if (/%\s*$/.test(value)) px = null;
+    return lead;
+  });
+  if (px === null || !(px > 0)) return null;
+  return { px, style: rest.replace(/^\s*;+\s*/, '').replace(/\s*;+\s*$/, '') };
+}
+
+/**
+ * A table's fixed width becomes `min(<width>, 100%)`.
+ *
+ * A WEBKIT rule, which is to say a Mac app rule. Newsletters are built as tables with a fixed pixel
+ * width (`<table width="720">` is the classic shape). Chromium clamps those with `max-width: 100%`;
+ * WebKit does not apply max-width to a table box at all, so the same mail overflowed the paper and
+ * the last two columns were cut off behind an overlay scrollbar nobody sees. Measured at a 432px
+ * paper: WebKit laid the table out at 720px and the document scrolled to 744, while Chromium
+ * reflowed it to 384.
+ *
+ * The first answer was a stylesheet rule dropping the declared width altogether (`width: auto`),
+ * which fits any paper and broke every card: a card is a stack of one-row 610px tables whose cells
+ * carry the side borders, and `auto` shrank each row to its own content, so the borders became a
+ * column of boxes of eighteen different widths (measured 82 to 977px on one account notice). A
+ * `min()` keeps the declared width wherever it fits and yields only where it would not, in both
+ * engines, because it is a plain width value rather than a max-width. `!important` because a
+ * sender's own `width: 600px !important` would otherwise win, and the attribute stays for the
+ * (older) engines that map it to a hint and ignore the function.
+ */
+function fitFixedTable(attrs: string, kept: string): string | null {
+  const fixed = fixedTableWidth(attrs);
+  if (!fixed) return null;
+  const withoutStyle = kept.replace(ATTR, (attr, key: string) => (key.toLowerCase() === 'style' ? '' : attr)).trim();
+  const width = `width:min(${fixed.px}px,100%) !important`;
+  const style = fixed.style ? `${stripRemoteCssUrls(fixed.style)};${width}` : width;
+  return `${withoutStyle}${withoutStyle ? ' ' : ''}style="${style.replace(/"/g, '&quot;')}"`;
+}
+
 /**
  * Strip what a mail body must never carry, without a DOM.
  *
@@ -182,10 +240,11 @@ function attrValue(assignment: string | undefined): string {
  * is a whole `<html>` document, nested inside the frame's own document, gets silently
  * rearranged by the parser, and the policy meta can end up after the content it governs.
  *
- * The last pass is not about safety at all: an image that points at an attachment part is turned
- * into a chip, because nothing can serve those bytes (see `replaceCidImages`).
+ * Two passes are not about safety at all: an image that points at an attachment part is turned
+ * into a chip, because nothing can serve those bytes (see `replaceCidImages`), and a table with a
+ * fixed pixel width is told to fit the paper (see `fitFixedTable`).
  *
- * A body that carries nothing hostile comes back byte-identical.
+ * A body that carries nothing hostile and no fixed-width table comes back byte-identical.
  */
 export function hardenMailHtml(raw: string): string {
   if (!raw) return '';
@@ -203,7 +262,7 @@ export function hardenMailHtml(raw: string): string {
       if (DROP_TAG.has(tag)) return '';
       if (!attrs) return whole;
       let changed = false;
-      const kept = attrs.replace(ATTR, (attr, key: string, assignment: string | undefined) => {
+      let kept = attrs.replace(ATTR, (attr, key: string, assignment: string | undefined) => {
         const lower = key.toLowerCase();
         // A handler is an execution path; the rest are fetches the image count cannot see.
         if (lower.startsWith('on') || ALWAYS_STRIP_ATTRS.has(lower)) { changed = true; return ''; }
@@ -224,6 +283,10 @@ export function hardenMailHtml(raw: string): string {
         }
         return attr;
       });
+      if (tag === 'table' && !whole.startsWith('</')) {
+        const fitted = fitFixedTable(attrs, kept);
+        if (fitted !== null) { kept = fitted; changed = true; }
+      }
       if (!changed) return whole;
       // Only the ENDS are trimmed. Collapsing inner whitespace would reach inside a kept
       // attribute's value (`alt="two  spaces"`, a multi-declaration `style`), and a double

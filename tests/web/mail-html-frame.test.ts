@@ -20,6 +20,7 @@ import {
   MAIL_IFRAME_SANDBOX,
   buildMailSrcdoc,
   countRemoteImages,
+  fixedTableWidth,
   hardenMailHtml,
   mailFrameCsp,
   replaceCidImages,
@@ -131,15 +132,22 @@ describe('buildMailSrcdoc', () => {
    * A fixed-width newsletter table has to fit the paper in WEBKIT too, which is the engine the Mac
    * app renders in. `max-width: 100%` is enough for Chromium and does nothing for a table box in
    * WebKit, so the same mail lost its last two columns behind an overlay scrollbar. Measured at a
-   * 432px paper: 720px wide in WebKit against 384px in Chromium, and 384px in both once the declared
-   * width is dropped.
+   * 432px paper: 720px wide in WebKit against 384px in Chromium.
+   *
+   * The first answer, a stylesheet rule dropping every declared width (`width: auto !important`),
+   * fitted the paper and broke every card: a card is a stack of one-row 610px tables whose cells
+   * carry the side borders, and `auto` shrank each row to its own content (measured 82 to 977px on
+   * one account notice, eighteen tables, one intended width). So the frame carries no table width
+   * rule and no table margin at all; the fit is `fitFixedTable`'s `min()` in the string pass,
+   * tested below.
    */
-  it('lets a fixed-width table shrink to the paper, and leaves a full-width shell alone', () => {
+  it('carries no table width rule and no table margin of its own', () => {
     const document = buildMailSrcdoc('<table width="720"><tr><td>x</td></tr></table>', { allowRemoteImages: false });
-    expect(document).toContain("table[width]:not([width$='%'])");
-    expect(document).toContain('width: auto !important');
-    // The scope is the point: a percentage width is a shell asking to fill the paper.
-    expect(document).not.toContain('table[width] {');
+    expect(document).not.toContain('table[width]');
+    expect(document).not.toContain('width: auto');
+    // A bottom margin on `table` opened a gap between every two rows of a card.
+    expect(document).not.toMatch(/,\s*table\s*\{[^}]*margin/);
+    expect(document).not.toMatch(/\btable\s*\{[^}]*margin/);
   });
 
   it('adds nothing of its own that reads like a dangerous URL', () => {
@@ -228,6 +236,62 @@ describe('hardenMailHtml', () => {
     expect(kept).toContain('color: #333');
     expect(kept).toContain('margin: 0');
     expect(kept).toContain('background-image: none');
+  });
+});
+
+/**
+ * A table with a fixed pixel width is told to fit the paper with `min(<width>, 100%)`, in the
+ * string pass, because WebKit ignores `max-width` on a table box and a stylesheet `width: auto`
+ * broke every card built from stacked fixed-width tables (see the frame test above).
+ */
+describe('a fixed-width table fits the paper without losing its width', () => {
+  it('turns a width attribute into an inline min() and keeps the attribute for old engines', () => {
+    const kept = hardenMailHtml('<table width="720" cellpadding="8"><tr><td>x</td></tr></table>');
+    expect(kept).toContain('<table width="720" cellpadding="8" style="width:min(720px,100%) !important">');
+    // Only the opening tag changes; a `</table>` has no width to fit.
+    expect(kept).toContain('</table>');
+  });
+
+  it('reads a pixel width from the inline style, and wins over a sender !important', () => {
+    const kept = hardenMailHtml('<table style="width:640px !important; color: red"><tr><td>x</td></tr></table>');
+    expect(kept).toContain('<table style="color: red;width:min(640px,100%) !important">');
+    expect(kept).not.toContain('width:640px !important');
+  });
+
+  it('lets the inline declaration outrank the attribute when both are present', () => {
+    expect(fixedTableWidth('width="600" style="width: 300px"')).toEqual({ px: 300, style: '' });
+    expect(fixedTableWidth(' width=600px')).toEqual({ px: 600, style: '' });
+  });
+
+  it('leaves a percentage width alone: a shell table asking to fill the paper is already right', () => {
+    const shell = '<table width="100%"><tr><td>x</td></tr></table>';
+    expect(hardenMailHtml(shell)).toBe(shell);
+    const styledShell = '<table style="width: 100%"><tr><td>x</td></tr></table>';
+    expect(hardenMailHtml(styledShell)).toBe(styledShell);
+    // A percentage in the style overrides a pixel attribute, so there is nothing to fit.
+    expect(fixedTableWidth('width="600" style="width:100%"')).toBeNull();
+  });
+
+  it('leaves a table with no width, and a non-table with a width, byte-identical', () => {
+    const bare = '<table><tr><td width="600">x</td></tr></table>';
+    expect(hardenMailHtml(bare)).toBe(bare);
+    const image = '<img src="cid:a" width="600">';
+    expect(hardenMailHtml(image)).toContain('walnut-cid-image');
+    expect(fixedTableWidth('')).toBeNull();
+    expect(fixedTableWidth('width="0"')).toBeNull();
+    expect(fixedTableWidth('width="wide"')).toBeNull();
+  });
+
+  it('still strips a remote css url from the style it rewrites', () => {
+    const kept = hardenMailHtml('<table width="610" style="background: url(https://t.invalid/p.png); color: #333"><tr><td>x</td></tr></table>');
+    expect(kept).toContain('background: none; color: #333;width:min(610px,100%) !important');
+    expect(kept).not.toContain('t.invalid');
+  });
+
+  it('keeps the count of remote images honest on a table-heavy body', () => {
+    const body = '<table width="610"><tr><td><img src="https://cdn.invalid/a.png" height="40"></td></tr></table>'
+      + '<table width="610"><tr><td><img src="https://cdn.invalid/b.png" width="60%"></td></tr></table>';
+    expect(countRemoteImages(hardenMailHtml(body))).toBe(2);
   });
 });
 
