@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="460" viewBox="0 0 900 460" role="img" aria-labelledby="title description">
   <title id="title">EvanZhang008/open-walnut star history</title>
-  <desc id="description">32 cumulative GitHub stars since Feb 2026</desc>
+  <desc id="description">31 cumulative GitHub stars since Feb 2026</desc>
   <defs>
     <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#2f81f7" stop-opacity="0.32" />
@@ -32,7 +32,7 @@
   <rect class="border" x="0.5" y="0.5" width="899" height="459" rx="8" />
   <text class="chart-title" x="72" y="42">EvanZhang008/open-walnut</text>
   <text class="chart-caption" x="72" y="64">GitHub star history</text>
-  <text class="chart-total" x="858" y="44" text-anchor="end">32</text>
+  <text class="chart-total" x="858" y="44" text-anchor="end">31</text>
   <text class="chart-caption" x="858" y="64" text-anchor="end">stars</text>
   <line class="grid" x1="72" y1="396" x2="858" y2="396" />
   <text class="axis-label" x="58" y="400" text-anchor="end">0</text>
@@ -56,7 +56,7 @@
   <text class="axis-label" x="661.5" y="424" text-anchor="middle">Jul 2026</text>
   <line class="tick" x1="858" y1="396" x2="858" y2="402" />
   <text class="axis-label" x="858" y="424" text-anchor="middle">Sep 2026</text>
-  <path d="M 72 396 H 72 V 389.8 H 72 V 383.6 H 75.05 V 377.4 H 131.15 V 371.2 H 252.68 V 365 H 285.46 V 358.8 H 538.78 V 352.6 H 543.86 V 346.4 H 544 V 340.2 H 545.27 V 334 H 550.32 V 327.8 H 560.02 V 321.6 H 573.06 V 315.4 H 585.87 V 309.2 H 585.97 V 303 H 588.34 V 296.8 H 590.3 V 290.6 H 602.33 V 284.4 H 628.39 V 278.2 H 666.7 V 272 H 672.59 V 265.8 H 676 V 259.6 H 676.13 V 253.4 H 676.53 V 247.2 H 676.6 V 241 H 676.87 V 234.8 H 708.32 V 228.6 H 723.85 V 222.4 H 800.36 V 216.2 H 800.7 V 210 H 810.67 V 203.8 H 820.67 V 197.6 H 858 V 396 H 72 Z" fill="url(#area)" />
-  <path class="line" d="M 72 396 H 72 V 389.8 H 72 V 383.6 H 75.05 V 377.4 H 131.15 V 371.2 H 252.68 V 365 H 285.46 V 358.8 H 538.78 V 352.6 H 543.86 V 346.4 H 544 V 340.2 H 545.27 V 334 H 550.32 V 327.8 H 560.02 V 321.6 H 573.06 V 315.4 H 585.87 V 309.2 H 585.97 V 303 H 588.34 V 296.8 H 590.3 V 290.6 H 602.33 V 284.4 H 628.39 V 278.2 H 666.7 V 272 H 672.59 V 265.8 H 676 V 259.6 H 676.13 V 253.4 H 676.53 V 247.2 H 676.6 V 241 H 676.87 V 234.8 H 708.32 V 228.6 H 723.85 V 222.4 H 800.36 V 216.2 H 800.7 V 210 H 810.67 V 203.8 H 820.67 V 197.6 H 858" />
+  <path d="M 72 396 H 72 V 389.8 H 72 V 383.6 H 74.95 V 377.4 H 129.17 V 371.2 H 246.65 V 365 H 278.34 V 358.8 H 523.21 V 352.6 H 528.13 V 346.4 H 528.26 V 340.2 H 529.48 V 334 H 534.37 V 327.8 H 543.74 V 321.6 H 556.35 V 315.4 H 568.74 V 309.2 H 568.83 V 303 H 571.12 V 296.8 H 573.01 V 290.6 H 584.64 V 284.4 H 609.84 V 278.2 H 646.87 V 272 H 652.56 V 265.8 H 655.86 V 259.6 H 655.98 V 253.4 H 656.37 V 247.2 H 656.43 V 241 H 656.7 V 234.8 H 687.1 V 228.6 H 702.11 V 222.4 H 776.06 V 216.2 H 776.39 V 210 H 795.71 V 203.8 H 858 V 396 H 72 Z" fill="url(#area)" />
+  <path class="line" d="M 72 396 H 72 V 389.8 H 72 V 383.6 H 74.95 V 377.4 H 129.17 V 371.2 H 246.65 V 365 H 278.34 V 358.8 H 523.21 V 352.6 H 528.13 V 346.4 H 528.26 V 340.2 H 529.48 V 334 H 534.37 V 327.8 H 543.74 V 321.6 H 556.35 V 315.4 H 568.74 V 309.2 H 568.83 V 303 H 571.12 V 296.8 H 573.01 V 290.6 H 584.64 V 284.4 H 609.84 V 278.2 H 646.87 V 272 H 652.56 V 265.8 H 655.86 V 259.6 H 655.98 V 253.4 H 656.37 V 247.2 H 656.43 V 241 H 656.7 V 234.8 H 687.1 V 228.6 H 702.11 V 222.4 H 776.06 V 216.2 H 776.39 V 210 H 795.71 V 203.8 H 858" />
   <text class="chart-caption" x="858" y="442" text-anchor="end">Updated from the GitHub API</text>
 </svg>
