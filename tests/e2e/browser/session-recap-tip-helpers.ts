@@ -148,6 +148,7 @@ export async function expectTwoRows(panel: Locator, overview: string, recap: str
   await expect(latestRow.locator('.session-recap-tip-label')).toHaveText('Latest');
   await expect(latestRow.locator('.session-recap-tip-text')).toHaveText(recap);
   await expect(tip.getByRole('button', { name: 'Dismiss recap' })).toBeVisible();
+  await expectFirstLineClearOfClose(panel);
   // The overview reads first: "where are we" before "what just happened".
   const [o, l] = await Promise.all([overviewRow.boundingBox(), latestRow.boundingBox()]);
   expect(o!.y).toBeLessThan(l!.y);
@@ -183,7 +184,9 @@ export async function expectInlineLabels(tip: Locator): Promise<void> {
  *  overflow: then the body scrolls (class + real overflow), stays at or under
  *  N lines, and scrolling to the end reaches the last paragraph in full (the
  *  text is never ellipsized, only scrolled). Otherwise nothing is clipped and no
- *  scroll track is switched on. Either way the \u00d7 sits clear of the body. */
+ *  scroll track is switched on. Either way NO scrollbar may take layout width
+ *  (the visible bar collided with the \u00d7 in the reported screenshot) and the
+ *  first line stops short of the \u00d7. */
 export async function expectBodyCap(panel: Locator, scrollable: boolean, maxLines: number): Promise<void> {
   const body = bodyOf(panel);
   await expect(body).toHaveAttribute('data-scrollable', String(scrollable));
@@ -191,10 +194,13 @@ export async function expectBodyCap(panel: Locator, scrollable: boolean, maxLine
     const cs = getComputedStyle(el);
     return {
       overflowY: cs.overflowY, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
+      clientWidth: el.clientWidth, offsetWidth: (el as HTMLElement).offsetWidth,
       lineHeight: parseFloat(cs.lineHeight), padY: parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom),
       rect: el.getBoundingClientRect().toJSON() as DOMRect,
     };
   });
+  // A scroll track would show up as layout width the content cannot use.
+  expect(m.offsetWidth - m.clientWidth, 'a scrollbar is taking layout width').toBeLessThanOrEqual(1);
   const lines = (m.clientHeight - m.padY) / m.lineHeight;
   if (scrollable) {
     // A CAPPED box must end on a LINE boundary in whichever engine is running: a
@@ -216,18 +222,41 @@ export async function expectBodyCap(panel: Locator, scrollable: boolean, maxLine
     });
     expect(reached.scrollTop).toBeGreaterThan(0);
     expect(reached.lastBottom).toBeLessThanOrEqual(reached.boxBottom + 1);
+    // At the end of the scroll the fade is gone, so the last line reads at full
+    // strength; before that it marks "there is more".
+    await expect(body).toHaveAttribute('data-more', 'false');
     await body.evaluate((el) => { el.scrollTop = 0; });
+    await expect(body).toHaveAttribute('data-more', 'true');
+    await expect(body).toHaveJSProperty('tabIndex', 0);
   } else {
     expect(m.overflowY).toBe('hidden');
     expect(m.scrollHeight, 'content that fits must not be clipped').toBeLessThanOrEqual(m.clientHeight + 1);
+    // Nothing to reveal: no fade, and the box is not a tab stop.
+    await expect(body).toHaveAttribute('data-more', 'false');
+    await expect(body).toHaveJSProperty('tabIndex', -1);
   }
-  const close = await tipOf(panel).getByRole('button', { name: 'Dismiss recap' }).boundingBox();
-  expect(close, 'the dismiss button is visible').toBeTruthy();
-  expect(m.rect.right, 'the body (and so its scrollbar) runs under the dismiss button').toBeLessThanOrEqual(close!.x + 0.5);
+  await expectFirstLineClearOfClose(panel);
 }
 
-/** Every paragraph is fully laid out across (no horizontal clipping), wraps when
- *  long, and ends left of the \u00d7. Vertical capping is the body's business
+/** The opening line stops short of the \u00d7; later lines may run past it,
+ *  because the button carries the card's background and the text scrolls
+ *  behind it. Measured on the first line's own client rect, not the paragraph's. */
+export async function expectFirstLineClearOfClose(panel: Locator): Promise<void> {
+  const close = await tipOf(panel).getByRole('button', { name: 'Dismiss recap' }).boundingBox();
+  expect(close, 'the dismiss button is visible').toBeTruthy();
+  const firstLineRight = await tipOf(panel).locator('.session-recap-tip-row').first().evaluate((row) => {
+    const range = document.createRange();
+    range.selectNodeContents(row);
+    const rects = [...range.getClientRects()];
+    const top = Math.min(...rects.map((r) => r.top));
+    return Math.max(...rects.filter((r) => r.top <= top + 1).map((r) => r.right));
+  });
+  expect(firstLineRight, 'the first line runs under the dismiss button').toBeLessThanOrEqual(close!.x + 0.5);
+}
+
+/** Every paragraph is fully laid out across (no horizontal clipping) and wraps
+ *  when long. Only the FIRST line has to clear the \u00d7 (see
+ *  expectFirstLineClearOfClose); vertical capping is the body's business
  *  (expectBodyCap). */
 export async function expectWrappedClearOfClose(panel: Locator): Promise<void> {
   const tip = tipOf(panel);
@@ -244,6 +273,7 @@ export async function expectWrappedClearOfClose(panel: Locator): Promise<void> {
     });
     expect(metrics.scrollWidth, `row ${i} clipped horizontally`).toBeLessThanOrEqual(metrics.clientWidth + 1);
     if (metrics.text.length >= 200) expect(metrics.lines, `row ${i} should wrap onto several lines`).toBeGreaterThan(1);
-    expect(metrics.right, `row ${i} runs under the dismiss button`).toBeLessThanOrEqual(close!.x + 0.5);
+    expect(metrics.right, `row ${i} overflows the card`).toBeLessThanOrEqual(close!.x + close!.width + 4);
   }
+  await expectFirstLineClearOfClose(panel);
 }

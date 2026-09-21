@@ -15,7 +15,11 @@ import '@/styles/session-recap.css';
  * label column and a leading icon cost a narrow session column a third of its
  * width and stacked the card ten lines high (2026-09-19 report). The body is
  * capped at a few lines and scrolls past that, so the full text stays reachable
- * (never ellipsized) without the card swallowing the column.
+ * (never ellipsized) without the card swallowing the column. Nothing is drawn
+ * for that scroll: a visible bar landed in the same top-right corner as the
+ * dismiss button and read as two controls fighting over one spot (same report),
+ * so the bar is hidden and the cue is the bottom line fading out while there is
+ * more below.
  *
  * Both texts are written in the user's display language (config.agent.language);
  * the server owns that. The labels are UI chrome and stay English like every
@@ -37,25 +41,31 @@ interface SessionRecapTipProps {
 }
 
 /**
- * Whether the body's content is taller than its capped box, re-measured when
- * the column resizes. The scrollbar is switched on only then: on macOS with
- * "always show scroll bars", WebKit paints an `overflow: auto` track even when
- * nothing overflows (see the Slack composer, 2026-09-16), and an empty track on
- * a two-line card is exactly the clutter this card is trying to lose.
+ * Does the body overflow its capped box, and is it currently scrolled to the
+ * end? Both drive the fade that stands in for the hidden scrollbar, and
+ * `scrollable` also gates `overflow-y` itself: on macOS with "always show scroll
+ * bars", WebKit treats `overflow: auto` as `scroll` even when nothing overflows
+ * (see the Slack composer, 2026-09-16), which on a two-line card is exactly the
+ * clutter this card is trying to lose.
  */
-function useOverflows(ref: React.RefObject<HTMLElement | null>, deps: readonly unknown[]): boolean {
-  const [overflows, setOverflows] = useState(false);
+function useScrollState(ref: React.RefObject<HTMLElement | null>, deps: readonly unknown[]) {
+  const [state, setState] = useState({ scrollable: false, atEnd: false });
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const measure = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    const measure = () => setState((prev) => {
+      const scrollable = el.scrollHeight > el.clientHeight + 1;
+      // A box that cannot scroll is "at its end" — there is nothing to fade.
+      const atEnd = !scrollable || el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      return prev.scrollable === scrollable && prev.atEnd === atEnd ? prev : { scrollable, atEnd };
+    });
     measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
+    el.addEventListener('scroll', measure, { passive: true });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    ro?.observe(el);
+    return () => { el.removeEventListener('scroll', measure); ro?.disconnect(); };
   }, deps);
-  return overflows;
+  return state;
 }
 
 export function SessionRecapTip({ sessionId, session, hidden = false }: SessionRecapTipProps) {
@@ -67,15 +77,19 @@ export function SessionRecapTip({ sessionId, session, hidden = false }: SessionR
   // `shown` is a dep too: the body only exists while shown, and a tip hidden
   // during streaming comes back with the same text, so the texts alone would
   // never re-measure it.
-  const scrollable = useOverflows(bodyRef, [overview, recap, shown]);
+  const { scrollable, atEnd } = useScrollState(bodyRef, [overview, recap, shown]);
   if (!shown) return null;
 
   return (
     <div className="session-recap-tip" role="note" aria-label="Session recap" data-testid="session-recap-tip">
       <div
         ref={bodyRef}
-        className={`session-recap-tip-body${scrollable ? ' is-scrollable' : ''}`}
+        className={`session-recap-tip-body${scrollable ? ' is-scrollable' : ''}${scrollable && !atEnd ? ' has-more' : ''}`}
         data-scrollable={scrollable ? 'true' : 'false'}
+        data-more={scrollable && !atEnd ? 'true' : 'false'}
+        // A hidden scrollbar still needs a keyboard route to the rest of the
+        // text; tabIndex makes the box focusable so arrows scroll it.
+        tabIndex={scrollable ? 0 : undefined}
       >
         {overview && (
           <p className="session-recap-tip-row" data-testid="session-recap-overview">

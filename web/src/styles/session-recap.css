@@ -37,20 +37,39 @@
   min-width: 0;
 }
 
-/* The body is the scroll box. Its right margin leaves the × its own column, so
-   the scrollbar (which sits at the body's right edge) and the × never overlap,
-   and no line of text runs under either. `overflow: hidden` until the component
-   measures an overflow: with macOS "always show scroll bars", WebKit paints an
-   `auto` track even when nothing overflows, and an empty track on a two-line
-   card is the clutter this card is trying to lose. The cap is N whole lines plus
-   this box's own vertical padding — nothing else, so the Nth line is never a
-   sliver of the N+1th. */
+/* The body is the scroll box, and it draws NO scrollbar: a visible bar landed in
+   the same top-right corner as the × and read as two controls fighting over one
+   spot in a narrow column (2026-09-19). Scrolling still works by wheel, trackpad
+   and (thanks to tabIndex) arrow keys; the cue that there is more is the last
+   line fading out, which costs no corner and no pixels of width. Only the ×
+   needs reserving, and just for the FIRST line. `overflow: hidden` until the
+   component measures an overflow: with macOS "always show scroll bars", WebKit
+   treats `auto` as `scroll` even when nothing overflows, and a stray track on a
+   two-line card is the clutter this card is trying to lose. The cap is N whole
+   lines plus this box's own vertical padding — nothing else, so the Nth line is
+   never a sliver of the N+1th. */
 .session-recap-tip-body {
   max-height: calc(var(--recap-tip-max-lines) * var(--recap-tip-line) + 8px);
   overflow: hidden;
-  padding: 4px 4px 4px 8px;
-  margin-right: 22px;
+  padding: 4px 8px;
   min-width: 0;
+}
+
+/* Reserve the ×'s corner on the FIRST line only: a float in the text flow, so the
+   opening line stops short of the button while every later line runs the card's
+   full width. The float scrolls away with the content, which is why the button
+   carries the card's own background (below) — scrolled text passes behind it
+   instead of colliding with it. */
+.session-recap-tip-body::before {
+  content: "";
+  float: right;
+  width: 18px;
+  height: var(--recap-tip-line);
+}
+
+.session-recap-tip-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 @container (width < 380px) {
@@ -62,6 +81,21 @@
 .session-recap-tip-body.is-scrollable {
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-width: none; /* Firefox / spec; ::-webkit-scrollbar covers the rest. */
+}
+
+/* More below: fade the last line out. `mask` is on the scroll CONTAINER, so the
+   fade stays pinned to the bottom edge while the content moves under it, and it
+   is removed at the end of the scroll so the final line reads at full strength. */
+.session-recap-tip-body.has-more {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+}
+
+.session-recap-tip-body:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 6px;
 }
 
 /* No margin between the two paragraphs: their labels already separate them, and
@@ -83,12 +117,13 @@
 
 .session-recap-tip-close {
   position: absolute;
-  top: 2px;
-  right: 3px;
+  top: 3px;
+  right: 2px;
   width: 18px;
   height: 18px;
   border: none;
-  background: none;
+  /* The card's own colour, not `none`: the body scrolls UNDER this button. */
+  background: var(--bg-tertiary);
   border-radius: 4px;
   color: var(--fg-muted);
   cursor: pointer;
