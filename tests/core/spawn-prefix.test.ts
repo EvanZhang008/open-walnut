@@ -121,6 +121,84 @@ describe('readParentSpawnPrefix', () => {
     expect(p).toEqual({ appendSystemPrompt: null, source: 'unknown' })
   })
 
+  // ── The 2026-09-21 "btw is slow" regression ─────────────────────────────────
+  // A live session can switch model/effort without respawning, so its argv keeps
+  // the LAUNCH values forever. Both are prompt-cache keys, so a fork built from
+  // argv pays a full prefix rewrite (and the CLI strips the history's signed
+  // thinking as another model's). Argv must lose here.
+  describe('model and effort come from current settings, never argv', () => {
+    it('the live CLI wins over both argv and the record', async () => {
+      const p = await readParentSpawnPrefix(
+        parent({ cliModel: 'record-is-also-stale', effort: 'low' }),
+        {
+          readLiveArgs: async () => LIVE_ARGS,
+          liveAppliedSettings: async () => ({
+            model: 'global.anthropic.claude-fable-5-1[1m]', effort: 'medium',
+          }),
+        },
+      )
+      expect(p.model).toBe('global.anthropic.claude-fable-5-1[1m]')
+      expect(p.effort).toBe('medium')
+      // The immutable half still comes from argv, byte-exact.
+      expect(p.appendSystemPrompt).toBe(LIVE_ARGS[LIVE_ARGS.indexOf('--append-system-prompt') + 1])
+      expect(p.permissionMode).toBe('bypassPermissions')
+    })
+
+    it('the record wins over argv when no live reader is injected', async () => {
+      const p = await readParentSpawnPrefix(
+        parent({ cliModel: 'global.anthropic.claude-fable-5-1[1m]', effort: 'medium' }),
+        { readLiveArgs: async () => LIVE_ARGS },
+      )
+      expect(p.model).toBe('global.anthropic.claude-fable-5-1[1m]')
+      expect(p.effort).toBe('medium')
+    })
+
+    it('an unreachable CLI means unknown, not cleared — the record still applies', async () => {
+      for (const liveAppliedSettings of [
+        async () => null,
+        async () => { throw new Error('control_request timeout') },
+      ]) {
+        const p = await readParentSpawnPrefix(
+          parent({ cliModel: 'global.anthropic.claude-fable-5-1[1m]', effort: 'medium' }),
+          { readLiveArgs: async () => LIVE_ARGS, liveAppliedSettings },
+        )
+        expect(p.model).toBe('global.anthropic.claude-fable-5-1[1m]')
+        expect(p.effort).toBe('medium')
+      }
+    })
+
+    it('argv is the LAST resort, never dropped — a fork with no --model is worse', async () => {
+      const p = await readParentSpawnPrefix(parent({}), { readLiveArgs: async () => LIVE_ARGS })
+      expect(p.model).toBe('global.anthropic.claude-fable-5[1m]')
+      expect(p.effort).toBe('max')
+      expect(p.appendSystemPrompt).toContain('opened by Walnut')
+    })
+
+    it('a partial answer only overrides the half it knows', async () => {
+      const p = await readParentSpawnPrefix(parent({}), {
+        readLiveArgs: async () => LIVE_ARGS,
+        liveAppliedSettings: async () => ({ model: null, effort: 'medium' }),
+      })
+      expect(p.effort).toBe('medium')
+      expect(p.model).toBe('global.anthropic.claude-fable-5[1m]')
+    })
+
+    it('the record path (dead parent) also carries current model and effort', async () => {
+      const p = await readParentSpawnPrefix(
+        parent({
+          appliedAppendSystemPrompt: 'stored',
+          cliModel: 'global.anthropic.claude-fable-5-1[1m]',
+          effort: 'medium',
+        }),
+        { readLiveArgs: async () => null },
+      )
+      expect(p).toEqual({
+        appendSystemPrompt: 'stored', source: 'record',
+        model: 'global.anthropic.claude-fable-5-1[1m]', effort: 'medium',
+      })
+    })
+  })
+
   it('local sessions probe the __local__ daemon', async () => {
     const seen: string[] = []
     await readParentSpawnPrefix(parent({ host: undefined }), {

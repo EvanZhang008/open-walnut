@@ -143,7 +143,13 @@ describe('forkSideThreadSession', () => {
     expect(started[0]!.profile).toEqual({ systemPrompt: 'be terse' })
   })
 
-  it('copies the parent LIVE argv prefix (append prompt, model, effort) and backfills the record', async () => {
+  it('copies the append prompt from argv but the model/effort the parent runs NOW', async () => {
+    // The 2026-09-21 "btw is slow" regression, pinned. argv is frozen at spawn
+    // while model/effort are switchable mid-session (apply_flag_settings, no
+    // respawn), and both are prompt-cache keys — so a fork built from argv asks
+    // for the launch model at the launch effort, pays a full prefix write, and
+    // has the history's signed thinking stripped as another model's.
+    // The append prompt is the opposite: immutable, so argv stays its truth.
     await seedParent({ effort: 'high' })
     liveArgs = [
       'claude', '-p', '--model', 'global.anthropic.claude-fable-5[1m]', '--effort', 'max',
@@ -152,9 +158,8 @@ describe('forkSideThreadSession', () => {
     await forkSideThreadSession(PARENT, 'sth-live')
     const start = started[0]!
     expect(start.appendSystemPromptExact).toBe('the parent exact bytes')
-    // Live argv wins over the record's cliModel/effort: it IS the running prefix.
-    expect(start.model).toBe('global.anthropic.claude-fable-5[1m]')
-    expect(start.effort).toBe('max')
+    expect(start.model).toBe('opus[1m]')
+    expect(start.effort).toBe('high')
     const thread = await getSessionByClaudeId(start.preassignedSessionId!)
     expect(thread?.appliedAppendSystemPrompt).toBe('the parent exact bytes')
     for (let i = 0; i < 20; i++) await Promise.resolve()
@@ -204,11 +209,24 @@ describe('forkSideThreadSession', () => {
     expect(record?.effort).toBe('low')
   })
 
-  it('ignores a blank model pick and keeps inheriting the live argv', async () => {
+  it('ignores a blank model pick and keeps inheriting the parent settings', async () => {
     await seedParent({ effort: 'high' })
     liveArgs = ['claude', '-p', '--model', 'opus[1m]', '--effort', 'max', '--resume', PARENT]
     await forkSideThreadSession(PARENT, 'sth-blank', { model: '   ' })
     expect(started[0]!.model).toBe('opus[1m]')
+    expect(started[0]!.effort).toBe('high')
+  })
+
+  it('uses argv model/effort only when the record has neither (unreachable parent)', async () => {
+    await seedParent()
+    await (await import('../../src/core/session-tracker.js')).updateSessionRecord(
+      PARENT, { cliModel: '', effort: undefined },
+    )
+    liveArgs = ['claude', '-p', '--model', 'global.anthropic.claude-fable-5[1m]', '--effort', 'max', '--resume', PARENT]
+    await forkSideThreadSession(PARENT, 'sth-argv-last')
+    // Dropping argv here would spawn with no --model and land the thread on the
+    // CLI's default model — a worse miss than a stale one.
+    expect(started[0]!.model).toBe('global.anthropic.claude-fable-5[1m]')
     expect(started[0]!.effort).toBe('max')
   })
 

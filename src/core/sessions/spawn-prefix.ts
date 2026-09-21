@@ -14,6 +14,18 @@
  * Source order: the daemon's registry for the live process (host-local truth,
  * `status` with `includeArgs`) → the record's stored spawn-time prompt → none.
  * A fork NEVER falls back to a fresh build.
+ *
+ * MODEL AND EFFORT ARE NOT READ FROM ARGV. They are the only two parts of the
+ * prefix a live session can CHANGE after spawn (`applyModel`/`applyEffort` push
+ * `apply_flag_settings`, no respawn), so the argv is frozen at whatever the
+ * process launched with. A parent switched to Fable 5.1 at medium still shows
+ * `--model …fable-5 --effort xhigh` in its argv, and a fork built from that argv
+ * launches under the OLD model and effort — both of which are part of the
+ * prompt-cache key, so the thread pays a full prefix write and the CLI also
+ * strips the history's signed thinking as belonging to another model. That is the
+ * 2026-09-21 "btw is slow" root cause. Authority here, most→least trusted:
+ * the live CLI's applied settings (`refreshAppliedSettings`) → the record (Walnut
+ * writes it on every switch) → argv (last resort, a process nobody can reach).
  */
 
 import type { SessionEffort, SessionRecord } from '../types.js';
@@ -72,6 +84,44 @@ async function defaultLiveArgsReader(hostKey: string, sessionId: string): Promis
 }
 
 /**
+ * What the live CLI says it is CURRENTLY running, or null when unreachable.
+ * There is NO default implementation on purpose: the only holder of live applied
+ * settings is the session runner, and importing it here would drag the whole
+ * provider graph into every unit test that touches a prefix. Callers that can
+ * reach a live session inject `liveAppliedSettings` (side-thread-fork does);
+ * everyone else gets the record, which Walnut writes on every switch.
+ */
+export type AppliedSettingsReader = (
+  sessionId: string,
+) => Promise<{ model: string | null; effort: SessionEffort | null } | null>;
+
+/**
+ * Current model/effort for a fork of `parent`. Never argv (see the file header).
+ * A `null` from the CLI means "unreachable", NOT "unset": fall through to the
+ * record rather than treating it as an explicit clear.
+ */
+async function currentModelAndEffort(
+  parent: SessionRecord,
+  read?: AppliedSettingsReader,
+): Promise<{ model?: string; effort?: SessionEffort; source: 'live-settings' | 'record' }> {
+  let applied: Awaited<ReturnType<AppliedSettingsReader>> = null;
+  try {
+    applied = (await read?.(parent.claudeSessionId)) ?? null;
+  } catch (err) {
+    log.session.debug('spawn prefix: applied-settings read threw', {
+      sessionId: parent.claudeSessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  const model = applied?.model || parent.cliModel;
+  const effort = applied?.effort ?? parent.effort;
+  return {
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    source: applied?.model || applied?.effort ? 'live-settings' : 'record',
+  };
+}
+
+/**
  * Resolve the prefix a fork of `parent` must reproduce. When the live process
  * answers, its prompt is also written back to the parent record so the parent's
  * own next cold resume keeps the same prefix (and so a later fork can answer
@@ -79,10 +129,15 @@ async function defaultLiveArgsReader(hostKey: string, sessionId: string): Promis
  */
 export async function readParentSpawnPrefix(
   parent: SessionRecord,
-  deps: { readLiveArgs?: LiveArgsReader; persist?: (sid: string, prompt: string) => Promise<unknown> } = {},
+  deps: {
+    readLiveArgs?: LiveArgsReader;
+    liveAppliedSettings?: AppliedSettingsReader;
+    persist?: (sid: string, prompt: string) => Promise<unknown>;
+  } = {},
 ): Promise<SpawnPrefix> {
   const readLiveArgs = deps.readLiveArgs ?? defaultLiveArgsReader;
   const hostKey = parent.host || '__local__';
+  const current = await currentModelAndEffort(parent, deps.liveAppliedSettings);
   let live: string[] | null = null;
   try {
     live = await readLiveArgs(hostKey, parent.claudeSessionId);
@@ -92,9 +147,32 @@ export async function readParentSpawnPrefix(
     });
   }
   if (live && live.length > 0) {
-    const prefix = parseSpawnPrefixFromArgs(live);
+    const fromArgs = parseSpawnPrefixFromArgs(live);
+    // Argv owns the immutable half (append prompt, permission mode) outright and
+    // is only the LAST resort for model/effort: dropping it when nothing else
+    // answered would spawn the fork with no --model at all, landing it on the
+    // CLI's default model — a worse miss than a stale one.
+    const model = current.model ?? fromArgs.model;
+    const effort = current.effort ?? fromArgs.effort;
+    const prefix: SpawnPrefix = {
+      appendSystemPrompt: fromArgs.appendSystemPrompt,
+      ...(fromArgs.permissionMode ? { permissionMode: fromArgs.permissionMode } : {}),
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
+      source: 'live-process',
+    };
+    if (fromArgs.model !== model || fromArgs.effort !== effort) {
+      // Loud on purpose: this line IS the bug's fingerprint. A fork built from
+      // argv here would have paid a full prefix rewrite.
+      log.session.info('spawn prefix: argv model/effort superseded by current settings', {
+        sessionId: parent.claudeSessionId,
+        argvModel: fromArgs.model ?? null, currentModel: model ?? null,
+        argvEffort: fromArgs.effort ?? null, currentEffort: effort ?? null,
+        currentSource: current.source,
+      });
+    }
     const remembered = parent.appliedAppendSystemPrompt ?? undefined;
-    const actual = prefix.appendSystemPrompt ?? '';
+    const actual = fromArgs.appendSystemPrompt ?? '';
     if (remembered !== actual) {
       const persist = deps.persist ?? (async (sid, prompt) => {
         const { updateSessionRecord } = await import('../session-tracker.js');
@@ -110,5 +188,12 @@ export async function readParentSpawnPrefix(
     }
     return prefix;
   }
-  return spawnPrefixFromRecord(parent);
+  // No live process: the record is the only source, and it also carries the
+  // current model/effort (Walnut persists both on every switch).
+  const fromRecord = spawnPrefixFromRecord(parent);
+  return {
+    ...fromRecord,
+    ...(current.model ? { model: current.model } : {}),
+    ...(current.effort ? { effort: current.effort } : {}),
+  };
 }

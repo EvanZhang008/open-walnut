@@ -138,7 +138,16 @@ export async function forkSideThreadSession(
   // parent's LIVE process argv when the daemon can tell us, else from the
   // record. Never rebuilt: see spawn-prefix.ts for the measured cost.
   const { readParentSpawnPrefix } = await import('./spawn-prefix.js');
-  const prefix = await readParentSpawnPrefix(parent);
+  const prefix = await readParentSpawnPrefix(parent, {
+    // The live CLI outranks the record for model/effort: the record is written
+    // optimistically before the CLI acknowledges a switch, so a refused switch
+    // would otherwise send the thread off under a model the parent isn't using.
+    liveAppliedSettings: async (sid) => {
+      const { sessionRunner } = await import('../../providers/claude-code-session.js');
+      const session = sessionRunner.findSessionByClaudeId(sid);
+      return session ? session.refreshAppliedSettings('fork-prefix') : null;
+    },
+  });
   // An explicit pick OVERRIDES the copied prefix, and the cost is real: the model
   // and the effort are both part of the prompt-cache key, so an override forfeits
   // the parent's cache and this thread's FIRST turn pays a full prefix write
@@ -147,6 +156,9 @@ export async function forkSideThreadSession(
   // default, is exactly what makes a side thread cheap.
   const modelOverride = opts?.model?.trim() || undefined;
   const effortOverride = opts?.effort || undefined;
+  // `prefix.model`/`prefix.effort` are the parent's CURRENT applied settings, not
+  // its spawn argv (spawn-prefix.ts explains why that distinction is the whole
+  // ballgame for cache reuse). The record is the fallback for a dead parent.
   const cliModel = modelOverride ?? prefix.model ?? parent.cliModel;
   const effort = effortOverride ?? prefix.effort ?? parent.effort;
   // Reply style is per-record and applied per send, so it costs the cache nothing.
