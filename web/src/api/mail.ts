@@ -181,6 +181,28 @@ export interface MailMessageDto {
    * set, and `plugin:mail:message-tasked` is what fills it in without a refetch.
    */
   taskId?: string;
+  /**
+   * How this message can be unsubscribed from, and whether it already was.
+   *
+   * ABSENT means the server captured nothing, which reads exactly as `available: 'none'`: no
+   * `List-Unsubscribe` header, or a message cached before Walnut asked for one and never opened
+   * since. Read it as `message.unsubscribe?.available ?? 'none'` and never as "the field is missing,
+   * something is wrong".
+   *
+   * `available` costs the server nothing (it is derived from what the poll already stored);
+   * `done`/`pending` are derived per read from its own ledger, so a stale `done` is impossible.
+   */
+  unsubscribe?: MailUnsubscribeDto;
+}
+
+export type MailUnsubscribeAvailability = 'one-click' | 'mailto' | 'link' | 'none';
+
+export interface MailUnsubscribeDto {
+  available: MailUnsubscribeAvailability;
+  /** Set when this message, or another of the same list, was already unsubscribed from. */
+  done?: { method: string; at: number; scope: 'message' | 'list' };
+  /** An attempt is on the wire right now. */
+  pending?: boolean;
 }
 
 export interface MailBodyDto {
@@ -388,6 +410,55 @@ export function createMailMessageTask(
   input?: { title?: string; project?: string; note?: boolean },
 ): Promise<MailMessageTask> {
   return apiPost(`${messagePath(accountId, messageId)}/task`, input ?? {}, QUIET);
+}
+
+/**
+ * What the unsubscribe route answers with, in one shape for every outcome.
+ *
+ * `message` is always present and is always the sentence to show: the server knows whether a page
+ * asked for a confirmation, whether its guard refused the link, or whether the sender's endpoint said
+ * no, and inventing local wording for those would drift from what actually happened.
+ *
+ * A `failed` outcome arrives as an HTTP 200 with `ok: false`, deliberately: it is not a fault of the
+ * request, so it resolves rather than throwing, and the console prints `message`. The two real
+ * refusals throw an `ApiError`: 409 `already` / `in-flight` (with the ledger row on the error body)
+ * and 409 `unsupported` (nothing to open at all).
+ */
+export interface MailUnsubscribeResult {
+  ok: boolean;
+  status: 'done' | 'needs-human' | 'failed' | 'in-flight';
+  method: 'one-click' | 'mailto' | 'link' | 'manual';
+  at?: number;
+  /** `confirm-form`, `unclear`, `http-403`, `timeout`, `blocked-host`, `mailto-pending`, … */
+  reason?: string;
+  detail?: string;
+  /** The page a human still has to finish, on anything other than `done`. */
+  url?: string;
+  /** False on the 202: the ladder outlived the response and settles on its own. */
+  completed?: boolean;
+  message: string;
+}
+
+/**
+ * Leave the mailing list this message came from.
+ *
+ * `method` is optional and omitting it is the normal call: the server picks the best rung the message
+ * offers. Naming one the message does not have is a 400 rather than a silent fallback, because "I
+ * asked for the one-click and got a mail draft" is not a thing a console should have to guess about.
+ *
+ * Every 409 is quiet: `already` (the human is off this list), `in-flight` (their own second click) and
+ * `unsupported` (nothing to open) are all STATES the console renders in words, not faults.
+ */
+export function unsubscribeMailMessage(
+  accountId: string,
+  messageId: string,
+  input?: { method?: 'one-click' | 'mailto' | 'link'; confirm?: boolean },
+): Promise<MailUnsubscribeResult> {
+  return apiPost(
+    `${messagePath(accountId, messageId)}/unsubscribe`,
+    input ?? {},
+    { quietStatuses: [409, 503] },
+  );
 }
 
 export interface MailDigestResult {

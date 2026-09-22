@@ -36,6 +36,7 @@ import { mailDatabaseForTesting } from '../../src/integrations/mail/db.js';
 import { registerMailRoutes } from '../../src/integrations/mail/routes.js';
 import { MailSync, type MailSyncHost } from '../../src/integrations/mail/sync.js';
 import { mailSyncForTesting } from '../../src/integrations/mail/sync.js';
+import type { MailListUnsubscribe } from '../../src/integrations/mail/types.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 
 const FIXTURE_ID = 'mail-sync-fixture';
@@ -55,6 +56,10 @@ interface FixtureMessage {
   bodyFrom?: { name?: string; address: string };
   bodyCc?: Array<{ name?: string; address: string }>;
   bodyReplyTo?: Array<{ name?: string; address: string }>;
+  /** The `List-*` headers as a LISTING carries them. */
+  listUnsubscribe?: MailListUnsubscribe;
+  /** The same, revealed only by a BODY read: the backfill path for mail cached before the field. */
+  bodyListUnsubscribe?: MailListUnsubscribe;
 }
 
 /** Everything the test controls, and everything the fixture records, in one place. */
@@ -191,6 +196,10 @@ function envelopeOf(mailbox, uidValidity, message) {
     // it and hands it back as getBody's sizeHint, so a provider can refuse an over-cap message
     // before it downloads anything.
     bodyBytes: Buffer.byteLength(message.text ?? '') + Buffer.byteLength(message.html ?? ''),
+    // The parsed \`List-*\` headers, for a transport whose LISTING carries them (IMAP asks for them
+    // in the same FETCH). A transport that cannot leaves this unset and the base falls back to the
+    // body read.
+    ...(message.listUnsubscribe ? { listUnsubscribe: message.listUnsubscribe } : {}),
   };
 }
 
@@ -294,6 +303,8 @@ export function activate(walnut) {
         ...(message.bodyFrom ? { from: message.bodyFrom } : {}),
         ...(message.bodyCc ? { cc: message.bodyCc } : {}),
         ...(message.bodyReplyTo ? { replyTo: message.bodyReplyTo } : {}),
+        // And the headers only a raw source reveals, for mail cached before the poll asked for them.
+        ...(message.bodyListUnsubscribe ? { listUnsubscribe: message.bodyListUnsubscribe } : {}),
       };
     },
     markRead: async (accountId, messageId, read) => { S().markRead.push([messageId, read]); },
@@ -1238,6 +1249,116 @@ describe('a listing that cannot name an address', () => {
   }, 60_000);
 });
 
+/*
+ * `List-Unsubscribe` from a provider's listing, through the cache, to the field the row menu reads —
+ * and, the point of this block, WITHOUT the upgrade costing a single write.
+ *
+ * `envelopeHashOf` deliberately does not hash the field, so a provider that starts reporting it does
+ * not mark every row it has ever cached as "updated": that would be thousands of writes, an FTS
+ * re-index each and a sync event per container, for news nobody asked for. The second half of the
+ * first case is that assertion end to end: the same page offered again, and the poller says nothing.
+ *
+ * In `Projects/2026` (role `archive`) so the tick's inbox prefetch never touches these rows, and at
+ * uids above the container's cursor so nothing the blocks above cached is re-polled.
+ */
+describe('a newsletter that says how to leave the list', () => {
+  const FILED = 'Projects/2026';
+  const HEADERS: MailListUnsubscribe = {
+    https: ['https://lists.example.invalid/u/abc'],
+    mailto: ['mailto:leave@lists.example.invalid'],
+    oneClick: true,
+    listId: 'weekly.lists.example.invalid',
+  };
+
+  function filedList() {
+    return getJson<{ messages: Array<{ messageId: string; unsubscribe?: { available: string } }> }>(
+      `/messages?account=${encodeURIComponent(ACCOUNT_ID)}&mailbox=${encodeURIComponent(FILED)}`,
+    );
+  }
+
+  async function payloadOf(messageId: string): Promise<Record<string, unknown>> {
+    const held = await rows<{ payload: string }>(
+      `SELECT payload FROM messages WHERE message_id = '${messageId}'`,
+    );
+    return JSON.parse(held[0]!.payload) as Record<string, unknown>;
+  }
+
+  /** Rewind the container's cursor to just below `uid`, so the next poll re-offers exactly that page. */
+  function rewindTo(uid: number): Promise<unknown> {
+    return mailDatabaseForTesting()!.run(
+      'UPDATE mailboxes SET cursor = ? WHERE account_id = ? AND mailbox_id = ?',
+      [`900:${uid - 1}`, ACCOUNT_ID, FILED],
+    );
+  }
+
+  // The container outlives this block and retention downstream counts rows, so it goes back to the
+  // one message the rest of the file expects to find in it.
+  afterAll(() => {
+    marks().messages[FILED] = [message(1, 'Filed away')];
+  });
+
+  it('reaches the DTO as a one-click rung, and re-polling the same page costs nothing', async () => {
+    marks().messages[FILED] = [
+      message(1, 'Filed away'),
+      message(11, 'Marina Weekly, issue 42', { listUnsubscribe: HEADERS }),
+    ];
+    events.length = 0;
+    const first = await sendJson<{ added: number; updated: number }>('POST', '/refresh', { accountId: ACCOUNT_ID });
+    expect(first.body).toMatchObject({ added: 1, updated: 0 });
+
+    const newsletter = `${FILED}:900:11`;
+    const listed = await filedList();
+    expect(listed.body.messages.find((one) => one.messageId === newsletter)!.unsubscribe)
+      .toEqual({ available: 'one-click' });
+    // The message beside it offers nothing, and says so by carrying NO key at all: absent and
+    // `'none'` are the same answer, and a key on every row of every page is bytes for nothing.
+    expect(listed.body.messages.find((one) => one.messageId === `${FILED}:900:1`)!.unsubscribe)
+      .toBeUndefined();
+
+    // In the payload BLOB, which is why this needed no migration.
+    expect(await payloadOf(newsletter)).toMatchObject({ listUnsubscribe: HEADERS });
+
+    // The same page, offered again: no write, no event. This is the whole cost model of the field.
+    events.length = 0;
+    await rewindTo(11);
+    const again = await sendJson<{ added: number; updated: number }>('POST', '/refresh', { accountId: ACCOUNT_ID });
+    expect(again.body).toMatchObject({ added: 0, updated: 0 });
+    expect(events).toEqual([]);
+  }, 60_000);
+
+  it('learns it from a body fetch when the listing never carried it, and answers that read with it', async () => {
+    marks().messages[FILED] = [
+      message(1, 'Filed away'),
+      message(12, 'Marina Weekly, issue 43', {
+        // A listing that says nothing (an external read-only transport, or mail cached before Walnut
+        // asked for the headers) and a raw source that does.
+        bodyListUnsubscribe: { mailto: ['mailto:leave@lists.example.invalid'], oneClick: false },
+      }),
+    ];
+    await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+    const issue43 = `${FILED}:900:12`;
+    expect((await filedList()).body.messages.find((one) => one.messageId === issue43)!.unsubscribe)
+      .toBeUndefined();
+
+    const read = await getJson<{ message: { unsubscribe?: { available: string } } }>(
+      `/messages/${encodeURIComponent(ACCOUNT_ID)}/${encodeURIComponent(issue43)}`,
+    );
+    // The response that FETCHED the body already carries it: the row was read before the body
+    // arrived, so without this the console that just opened the newsletter would still offer nothing.
+    expect(read.body.message.unsubscribe).toEqual({ available: 'mailto' });
+    expect((await filedList()).body.messages.find((one) => one.messageId === issue43)!.unsubscribe)
+      .toEqual({ available: 'mailto' });
+
+    // And an ordinary envelope update does not erase what that body taught.
+    marks().messages[FILED]![1]!.subject = 'Marina Weekly, issue 43 (edited)';
+    await rewindTo(12);
+    await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+    expect(await payloadOf(issue43)).toMatchObject({
+      listUnsubscribe: { mailto: ['mailto:leave@lists.example.invalid'], oneClick: false },
+    });
+  }, 60_000);
+});
+
 describe('a delete that lands in the middle of a tick', () => {
   it('leaves no account row, no message rows and no FTS rows behind', async () => {
     marks().uidvalidity = 800;
@@ -1521,6 +1642,10 @@ describe('on a replica', () => {
       // second copy of the same digest.
       messageTasks: { link: explode('the task ledger') } as never,
       digest: { sendNow: explode('the letter path') } as never,
+      // The one route here that opens a url a STRANGER wrote. A replica doing that would be a second
+      // box making egress on the user's behalf, out of a network they never chose, and its ledger row
+      // would be written where the account does not live.
+      unsubscribe: { run: explode('the unsubscribe ladder') } as never,
     });
 
     expect(handlers.length).toBeGreaterThanOrEqual(20);

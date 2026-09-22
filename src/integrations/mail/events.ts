@@ -27,6 +27,7 @@ export const MAIL_EVENT = {
   sendSettled: 'send-settled',
   messageTasked: 'message-tasked',
   digestSent: 'digest-sent',
+  unsubscribed: 'unsubscribed',
 } as const
 
 /** At most this many subject lines ride a `messages-received`. */
@@ -89,6 +90,23 @@ export interface MailMessageTaskedEvent {
   accountId: string
   messageId: string
   taskId: string
+}
+
+/**
+ * One unsubscribe attempt settled, whichever way it went.
+ *
+ * Carries `listKey` because that is what the console needs to decide which OTHER rows on screen just
+ * changed: leaving a list marks every cached message from it, and without the key a console would
+ * have to refetch the page to find out. Not coalesced and not suppressed, for the same reason
+ * `draftChanged` is not: the whole volume here is bounded by the human's own clicks, and the one
+ * screen where a missed event reads as "did that work or not" is exactly this one.
+ */
+export interface MailUnsubscribedEvent {
+  accountId: string
+  messageId: string
+  listKey: string
+  method: string
+  status: string
 }
 
 /** The daily digest went out. `unread` is what it counted, so a log line reads on its own. */
@@ -166,6 +184,11 @@ export class MailEvents {
   /** Bounded by the human's own clicks (or an agent's), so it is never coalesced. */
   messageTasked(accountId: string, messageId: string, taskId: string): void {
     this.emit(MAIL_EVENT.messageTasked, { accountId, messageId, taskId } satisfies MailMessageTaskedEvent)
+  }
+
+  /** One per settled attempt. Bounded by human clicks, so never coalesced. */
+  unsubscribed(event: MailUnsubscribedEvent): void {
+    this.emit(MAIL_EVENT.unsubscribed, event)
   }
 
   /** At most once a day, or once per "send it now". No suppression to do. */

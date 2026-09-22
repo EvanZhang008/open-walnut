@@ -543,7 +543,7 @@ describe('through a real server, an ambient mailbox is simply there', () => {
     // The provider that never answers was asked, and its plugin activated anyway.
     expect(marks().listed).toContain('stuck');
     expect(getPluginLifecycleRecords(registry).find((entry) => entry.id === FIXTURE_ID)?.state).toBe('active');
-    expect(marks().base?.version()).toBe('1.9.0');
+    expect(marks().base?.version()).toBe('1.10.0');
   }, 120_000);
 
   it('leaves the mirrored row alone when the provider lists it again with other values', async () => {

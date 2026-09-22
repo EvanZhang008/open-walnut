@@ -144,6 +144,35 @@ export interface MailAttachmentMeta {
   bytes?: number
 }
 
+/**
+ * How a message says it can be unsubscribed from: the three `List-*` headers, parsed and bounded.
+ *
+ * Every field is derived from text the SENDER wrote, and (from the unsubscribe ladder on) a url
+ * here is one the server will fetch, so a provider must apply the caps rather than pass the header
+ * through: `https` holds `https:` urls only, at most 4, each at most 2048 characters; `mailto` at
+ * most 2, each a single shape-checked address; `listId` lowercased and at most 200 characters. The
+ * IMAP provider's `parseListUnsubscribe` is the reference implementation of all of it.
+ *
+ * Absent means the message offered nothing usable, which is a different fact from "this message
+ * was cached before the field existed" only to the base, and neither offers the human a button.
+ */
+export interface MailListUnsubscribe {
+  /** `https:` targets from `List-Unsubscribe`, in header order. */
+  https?: string[]
+  /** `mailto:` targets from `List-Unsubscribe`, in header order, each with a usable address. */
+  mailto?: string[]
+  /**
+   * RFC 8058: `List-Unsubscribe-Post: List-Unsubscribe=One-Click` arrived WITH a `List-Unsubscribe`.
+   *
+   * The permission the sender is granting is specific: one POST, no confirmation page, no human.
+   * The companion header alone means nothing, so a provider that sees it without a `List-Unsubscribe`
+   * reports `false`.
+   */
+  oneClick: boolean
+  /** `List-Id`, lowercased: what "the other mail from this list" is keyed on, when there is one. */
+  listId?: string
+}
+
 export interface MailEnvelope {
   /** The provider's fetch coordinate (IMAP: `mailbox:uidvalidity:uid`). Not durable. */
   messageId: string
@@ -174,6 +203,15 @@ export interface MailEnvelope {
   references?: string[]
   attachments?: MailAttachmentMeta[]
   bodyBytes?: number
+  /**
+   * The parsed `List-*` headers, when the listing carried them.
+   *
+   * Deliberately NOT part of `envelopeHashOf`: adding it would mark every cached row "updated" on
+   * the first poll after a provider starts reporting it, ride the bus, and refresh every open
+   * console for nothing. The consequence is the honest one: new mail carries it from the first
+   * tick, and old mail learns it the first time its body is fetched (`MailBody.listUnsubscribe`).
+   */
+  listUnsubscribe?: MailListUnsubscribe
 }
 
 export interface OutgoingMail {
@@ -297,6 +335,17 @@ export interface MailBody {
   to?: MailAddress[]
   cc?: MailAddress[]
   replyTo?: MailAddress[]
+  /**
+   * The `List-*` headers, for a message whose LISTING did not carry them.
+   *
+   * Same gap-fill contract as the four addresses above, and it exists for the same reason in a
+   * different shape: the field arrived after the cache was full of mail, and the envelope hash
+   * deliberately ignores it, so a re-poll will never rewrite those rows. A body read is the one
+   * moment an old message can learn how to unsubscribe. The base takes this ONLY when the row holds
+   * no header-derived answer already, so a body that reports a different `List-Unsubscribe` than the
+   * listing did cannot overwrite it, and a body that reports none cannot erase it.
+   */
+  listUnsubscribe?: MailListUnsubscribe
 }
 
 export interface MailSendResult {

@@ -21,6 +21,7 @@ import type { MailSends } from './sends.js'
 import type { MailService } from './service.js'
 import type { MailStore } from './store.js'
 import type { MailSync } from './sync.js'
+import type { MailUnsubscribe } from './unsubscribe.js'
 
 /**
  * The plugin's own HTTP surface, mounted by the host at `/api/plugins/mail/*`.
@@ -62,6 +63,8 @@ import type { MailSync } from './sync.js'
  * POST   /messages/:accountId/:messageId/read { read } -> { ok: true, message } | 409 unsupported
  * POST   /messages/:accountId/:messageId/task {...}    -> 201 { taskId, created: true }
  *        { title?, project?, note? }                      | 200 { taskId, created: false }
+ * POST   /messages/:a/:m/unsubscribe { method?, confirm? } (in routes-write.ts: it makes network
+ *                                                          egress, and one rung sends mail)
  * GET    /search?account=&q=&limit=                    -> { messages, source: 'provider'|'cache' }
  * POST   /digest/send-now                              -> { letterId | null, unread, accounts }
  * POST   /refresh         { accountId? }               -> { ok: true, completed, ...counts }
@@ -137,9 +140,13 @@ export function registerMailRoutes(
     sends: MailSends
     messageTasks: MailMessageTasks
     digest: MailDigest
+    unsubscribe: MailUnsubscribe
   },
 ): void {
-  const { store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest } = deps
+  const {
+    store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest,
+    unsubscribe,
+  } = deps
   const primaryOnly = (): boolean => walnut.replica
 
   walnut.http.route('get', '/providers', () => {
@@ -452,7 +459,7 @@ export function registerMailRoutes(
     }
   })
 
-  registerMailWriteRoutes(walnut, { service, drafts, approvals, sends })
+  registerMailWriteRoutes(walnut, { service, drafts, approvals, sends, unsubscribe })
 
   walnut.http.route('get', '/health', async () => {
     if (primaryOnly()) return PRIMARY_ONLY

@@ -21,9 +21,11 @@ import { keyOfMessage } from './message-tasks.js'
 import {
   bodyBelongsTo,
   fillAddressesFromBody,
+  fillUnsubscribeFromBody,
   filledAddresses,
   payloadForRetiredBody,
   senderForUpdate,
+  unsubscribeForUpdate,
   type BodyAddressFill,
 } from './service-body.js'
 import {
@@ -31,8 +33,12 @@ import {
   parseJson,
   sizeHintOf,
   toDto,
+  unsubscribeAvailability,
+  unsubscribeListKey,
   type MessagePayload,
+  type StoredListUnsubscribe,
 } from './service-dto.js'
+import { unsubscribeFromBodyHtml } from './unsubscribe-link.js'
 import {
   callProvider,
   encodeMessageCursor,
@@ -46,12 +52,14 @@ import {
   type MailAccountDto,
   type MailBodyDto,
   type MailMessageDto,
+  type MailUnsubscribeAvailability,
   type MailboxDto,
   type MessagePageCursor,
 } from './contract.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import type { MessageScopeRole } from './scope.js'
 import type { MailStore, MessageRow, MessageWrite } from './store.js'
+import type { UnsubscribeRow } from './store-write.js'
 import type {
   MailAccount,
   MailAddress,
@@ -81,6 +89,21 @@ const UNREAD_LIST_DEADLINE_MS = 8_000
 /** The `sent_at` column an envelope writes: one definition, so the row and the retire check agree. */
 function sentAtOf(envelope: MailEnvelope): number {
   return Number.isFinite(envelope.sentAt) ? envelope.sentAt : 0
+}
+
+/**
+ * One message, as the unsubscribe ladder needs it: which rung it can be handed to, what the ledger
+ * keys it under, and the sender's own links. See `MailService.unsubscribeSubject`.
+ */
+export interface UnsubscribeSubject {
+  /** Canonical ids: a caller may name a message by its RFC Message-ID, the ledger may not. */
+  accountId: string
+  messageId: string
+  listKey: string
+  available: MailUnsubscribeAvailability
+  held?: StoredListUnsubscribe
+  fromAddr: string
+  subject: string
 }
 
 export class MailService {
@@ -262,10 +285,116 @@ export class MailService {
     })
   }
 
+  /**
+   * Whether each message of a page has already been unsubscribed from, in ONE query.
+   *
+   * Derived on every read for the same reason `taskId` is (see `MailMessageDto.unsubscribe`): the
+   * human can change their mind, the ledger is the only truth about it, and a copy on the message row
+   * would be a second one that nothing invalidates. Batched for the same reason too — a fifty-row page
+   * must not cost fifty worker round trips to decorate an answer it already holds.
+   *
+   * Two answers come out of the one statement. A row for THIS message is `scope: 'message'`. A `done`
+   * row for any message sharing this one's `list_key` is `scope: 'list'`, which is what lets a
+   * newsletter nobody ever clicked say "you left this list on Tuesday" — the person unsubscribed from
+   * a list, not from one mail.
+   *
+   * Takes the ROWS as well as the DTOs because the list key is derived from the stored payload and the
+   * sender column, neither of which survives into the DTO: `List-Id` is not a field a client has any
+   * use for, and putting it on the wire to let the browser re-derive a server key would be the same
+   * second truth in a different place.
+   */
+  private async withUnsubscribes(
+    rows: MessageRow[],
+    messages: MailMessageDto[],
+  ): Promise<MailMessageDto[]> {
+    if (messages.length === 0) return messages
+    const keys = rows.map((row) => unsubscribeListKey(
+      parseJson<MessagePayload>(row.payload, {}).listUnsubscribe,
+      row.from_addr,
+      row.message_id,
+    ))
+    const groups = new Map<string, { accountId: string; messageIds: Set<string>; listKeys: Set<string> }>()
+    rows.forEach((row, index) => {
+      const group = groups.get(row.account_id)
+        ?? { accountId: row.account_id, messageIds: new Set<string>(), listKeys: new Set<string>() }
+      group.messageIds.add(row.message_id)
+      group.listKeys.add(keys[index]!)
+      groups.set(row.account_id, group)
+    })
+    const ledger = await this.deps.store.write.unsubscribesFor(
+      [...groups.values()].map((group) => ({
+        accountId: group.accountId,
+        messageIds: [...group.messageIds],
+        listKeys: [...group.listKeys],
+      })),
+    )
+    if (ledger.length === 0) return messages
+
+    const own = new Map<string, UnsubscribeRow>()
+    const doneByList = new Map<string, UnsubscribeRow>()
+    for (const row of ledger) {
+      own.set(`${row.account_id}\u0000${row.message_id}`, row)
+      // Ordered newest first by the query, so the first `done` seen for a key is the newest one.
+      const listKey = `${row.account_id}\u0000${row.list_key}`
+      if (row.status === 'done' && !doneByList.has(listKey)) doneByList.set(listKey, row)
+    }
+
+    return messages.map((message, index) => {
+      const row = rows[index]!
+      const mine = own.get(`${row.account_id}\u0000${row.message_id}`)
+      const list = doneByList.get(`${row.account_id}\u0000${keys[index]!}`)
+      const done = mine?.status === 'done'
+        ? { method: mine.method, at: mine.at, scope: 'message' as const }
+        : list
+          ? { method: list.method, at: list.at, scope: 'list' as const }
+          : undefined
+      const pending = mine?.status === 'in-flight'
+      if (!done && !pending) return message
+      return {
+        ...message,
+        unsubscribe: {
+          // A row with no capture carries no key, which a client reads as `'none'`; the ledger can
+          // still have something to say about it through the list key, so the key is added here.
+          available: message.unsubscribe?.available ?? 'none',
+          ...(done ? { done } : {}),
+          ...(pending ? { pending: true } : {}),
+        },
+      }
+    })
+  }
+
+  /** One page of rows as the wire shows them: the task backlink and the unsubscribe ledger. */
+  private async decorate(rows: MessageRow[]): Promise<MailMessageDto[]> {
+    return this.withUnsubscribes(rows, await this.withTaskIds(rows.map((row) => toDto(row))))
+  }
+
   /** One row, decorated. The single-message read paths all go through this. */
   private async oneWithTaskId(row: MessageRow): Promise<MailMessageDto> {
-    const [message] = await this.withTaskIds([toDto(row)])
+    const [message] = await this.decorate([row])
     return message!
+  }
+
+  /**
+   * What the unsubscribe ladder needs to know about one message before it touches the network.
+   *
+   * Here rather than in `unsubscribe.ts` so the ladder never writes SQL and never parses a payload
+   * blob: it is handed the rung this message can be given, the key the ledger is written under, and
+   * the sender's own links, all derived by the same pure functions the DTO uses. The message id that
+   * comes back is the CANONICAL one, because a caller is allowed to name a message by its RFC
+   * Message-ID and the ledger has to be keyed on one thing.
+   */
+  async unsubscribeSubject(accountId: string, messageId: string): Promise<UnsubscribeSubject> {
+    const row = await this.requireMessage(accountId, messageId)
+    const held = parseJson<MessagePayload>(row.payload, {}).listUnsubscribe
+    return {
+      accountId: row.account_id,
+      messageId: row.message_id,
+      listKey: unsubscribeListKey(held, row.from_addr, row.message_id),
+      available: unsubscribeAvailability(held),
+      ...(held ? { held } : {}),
+      fromAddr: row.from_addr,
+      subject: row.subject,
+    }
   }
 
   /**
@@ -309,7 +438,7 @@ export class MailService {
         .map((row) => ({ accountId: row.account_id, mailboxId: row.mailbox_id }))
       : undefined
     const rows = await this.deps.store.listMessages({ ...query, ...(pairs ? { pairs } : {}) })
-    const messages = await this.withTaskIds(rows.map((row) => toDto(row)))
+    const messages = await this.decorate(rows)
     // `nextBefore` is only offered when the page filled: handing one back on a short page
     // makes a console ask for an empty page every time it reaches the end. It carries the
     // whole sort key, so the next page resumes exactly where this one stopped even when
@@ -341,7 +470,7 @@ export class MailService {
    */
   async threadMessages(accountId: string, threadId: string, limit: number): Promise<MailMessageDto[]> {
     const rows = await this.deps.store.threadMessages(accountId, threadId, limit)
-    return this.withTaskIds(rows.map((row) => toDto(row)))
+    return this.decorate(rows)
   }
 
   /**
@@ -379,7 +508,23 @@ export class MailService {
       // ride this answer explicitly or the response that learned it would still not carry it.
       return {
         message: {
-          ...message, hasBody: true, snippet: stored.snippet, ...filledAddresses(stored.filled),
+          ...message,
+          hasBody: true,
+          snippet: stored.snippet,
+          ...filledAddresses(stored.filled),
+          // Same reason as the addresses: the console opens a newsletter, this read is what learns
+          // it has an unsubscribe link, and without this the very response that learned it would
+          // still say there is none until the next list. Only `available` is restated — `done` and
+          // `pending` came from the ledger query above and replacing the whole object would throw
+          // away the "already unsubscribed" this very read just looked up.
+          ...(stored.unsubscribe
+            ? {
+              unsubscribe: {
+                ...message.unsubscribe,
+                available: unsubscribeAvailability(stored.unsubscribe),
+              },
+            }
+            : {}),
         },
         body: stored.body,
       }
@@ -468,7 +613,7 @@ export class MailService {
     const match = ftsMatchFor(query.q)
     if (!match) return { source: 'cache', messages: [] }
     const rows = await this.deps.store.searchMessages(match, query.accountId ?? '', query.limit)
-    return { source: 'cache', messages: await this.withTaskIds(rows.map((row) => toDto(row))) }
+    return { source: 'cache', messages: await this.decorate(rows) }
   }
 
   /** `unsupported` is a 409, not a silent local-only flip: the mailbox would drift. */
@@ -637,6 +782,8 @@ export class MailService {
     body: MailBodyDto
     snippet: string
     filled: BodyAddressFill
+    /** What the body taught about leaving the list, when this row held nothing. */
+    unsubscribe?: StoredListUnsubscribe
   }> {
     const declared = body.bytes ?? Buffer.byteLength(body.text ?? body.html ?? '')
     if (declared > MAX_BODY_BYTES) throw new MailBodyTooLargeError(declared)
@@ -655,8 +802,19 @@ export class MailService {
         accountId: row.account_id, messageId: row.message_id, fields: filled.dropped.join(', '),
       })
     }
+    // A message cached before the poll asked for the `List-*` headers learns them here, and only
+    // when the row holds no header-derived answer already: gap fill, never a correction.
+    const unsubscribed = fillUnsubscribeFromBody(filled.payload, body)
+    // And the footer, for mail whose headers name no url at all — the only path an account whose
+    // transport hands over no headers ever has (see `unsubscribeFromBodyHtml` for when it scans).
+    // It reads the html that was just STORED, because what it finds describes those bytes: a retired
+    // body takes the link with it.
+    const held = unsubscribeFromBodyHtml(unsubscribed.payload.listUnsubscribe, stored.storedHtml)
+    const learned = held && held !== unsubscribed.payload.listUnsubscribe ? held : undefined
+    const taught = learned ?? unsubscribed.filled
     const payload: MessagePayload = {
-      ...filled.payload,
+      ...unsubscribed.payload,
+      ...(held ? { listUnsubscribe: held } : {}),
       bodyFormat: stored.format,
       bodyTruncated: stored.truncated,
     }
@@ -681,6 +839,11 @@ export class MailService {
     return {
       snippet: stored.snippet,
       filled,
+      // Either the body's own headers or the link found in its markup: both are things THIS read
+      // taught, and the response that fetched the body has to carry them or the console that just
+      // opened the newsletter would still say there is no way out until the next list. `learned`
+      // wins when both happened, because it is the fuller value (the headers WITH the link).
+      ...(taught ? { unsubscribe: taught } : {}),
       body: {
         format: stored.format,
         ...(stored.storedText !== undefined ? { text: stored.storedText } : {}),
@@ -734,6 +897,7 @@ export class MailService {
     // Carried forward like the body fields below, and for the same reason: an envelope that cannot
     // name an address must not blank one a body already named. See `senderForUpdate`.
     const from = senderForUpdate(envelope.from, stored)
+    const listUnsubscribe = unsubscribeForUpdate(envelope.listUnsubscribe, stored)
     const payload: MessagePayload = {
       from,
       ...(envelope.to ? { to: envelope.to } : {}),
@@ -746,6 +910,10 @@ export class MailService {
       ...(stored.bodyFormat ? { bodyFormat: stored.bodyFormat } : {}),
       ...(stored.bodyTruncated !== undefined ? { bodyTruncated: stored.bodyTruncated } : {}),
       ...(envelope.bodyBytes ? { bodyBytesHint: envelope.bodyBytes } : {}),
+      // Carried forward too, and it has to be: the envelope hash ignores this field, so the poll
+      // that rewrites a row is never ABOUT it, and rebuilding the blob from the envelope alone
+      // erased what a body read had taught. See `unsubscribeForUpdate`.
+      ...(listUnsubscribe ? { listUnsubscribe } : {}),
     }
     return {
       accountId,

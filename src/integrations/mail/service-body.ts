@@ -1,5 +1,6 @@
 /**
- * Addresses a BODY can teach the cache, for a listing that could not name them.
+ * What a BODY can teach the cache that the listing could not say: the addresses, and how to leave
+ * the mailing list.
  *
  * Split out of `service.ts` because it is pure: given what is stored and what the body said, these
  * functions decide what may be written, so every interesting rule here is checkable without a
@@ -16,8 +17,8 @@
  *   thread's own participant list was.
  */
 import { ADDRESS_SHAPE } from './agent-format.js'
-import type { MessagePayload } from './service-dto.js'
-import type { MailAddress, MailBody } from './types.js'
+import type { MessagePayload, StoredListUnsubscribe } from './service-dto.js'
+import type { MailAddress, MailBody, MailListUnsubscribe } from './types.js'
 
 /** The address fields of one cached row: the column, and the blob the rest of them live in. */
 export interface StoredAddresses {
@@ -95,6 +96,72 @@ export function fillAddressesFromBody(stored: StoredAddresses, body: MailBody): 
 }
 
 /**
+ * Did this capture come from the HEADERS, rather than only from the html on disk?
+ *
+ * The question the two rules below both turn on: header fields describe the message and outlive its
+ * body, while a link scraped out of the stored markup describes bytes that can be unlinked.
+ */
+function hasHeaderSignal(held: StoredListUnsubscribe | undefined): boolean {
+  return !!(held?.https?.length || held?.mailto?.length || held?.listId)
+}
+
+export interface BodyUnsubscribeFill {
+  /** The payload with the gap filled, ready to be written back. */
+  payload: MessagePayload
+  /** What the fill wrote, so the response that FETCHED the body can carry it. Absent = nothing. */
+  filled?: StoredListUnsubscribe
+}
+
+/**
+ * What a body read may add about leaving this list, and nothing more.
+ *
+ * The same "GAP FILL, never a correction" contract as `fillAddressesFromBody`, and it exists for a
+ * reason the address version does not have: `envelopeHashOf` ignores `listUnsubscribe` on purpose,
+ * so no re-poll will ever rewrite the rows that predate the field. A body read is the ONLY moment an
+ * old message can learn how to unsubscribe, and it must not become a second authority on mail that
+ * already answered the question.
+ *
+ * So: a row that already holds a HEADER-derived answer is left exactly as it is, however different
+ * the body's headers are (same bytes read twice can disagree — a list rotates its opaque token per
+ * send, and the stored one is the one the console has been showing). A row that holds only a
+ * body-scraped link keeps that link and gains the header fields around it.
+ */
+export function fillUnsubscribeFromBody(stored: MessagePayload, body: MailBody): BodyUnsubscribeFill {
+  const offered = body.listUnsubscribe
+  if (!offered || hasHeaderSignal(stored.listUnsubscribe)) return { payload: stored }
+  const filled: StoredListUnsubscribe = {
+    ...offered,
+    ...(stored.listUnsubscribe?.bodyLink ? { bodyLink: stored.listUnsubscribe.bodyLink } : {}),
+    ...(stored.listUnsubscribe?.bodyCandidates !== undefined
+      ? { bodyCandidates: stored.listUnsubscribe.bodyCandidates }
+      : {}),
+  }
+  return { payload: { ...stored, listUnsubscribe: filled }, filled }
+}
+
+/**
+ * What to store about leaving this list when an envelope is rewritten, which happens on every poll
+ * that changes anything at all about the row.
+ *
+ * The envelope's HEADERS win when it carries them: they were just re-read from the server, and a
+ * list that moved its unsubscribe endpoint says so there. What survives either way is the link the
+ * base found in the stored html, because an envelope knows nothing about the body on disk — and
+ * without this the next flag change erased it. Same shape of problem as `senderForUpdate`.
+ */
+export function unsubscribeForUpdate(
+  offered: MailListUnsubscribe | undefined,
+  stored: MessagePayload,
+): StoredListUnsubscribe | undefined {
+  const held = stored.listUnsubscribe
+  if (!offered) return held
+  return {
+    ...offered,
+    ...(held?.bodyLink ? { bodyLink: held.bodyLink } : {}),
+    ...(held?.bodyCandidates !== undefined ? { bodyCandidates: held.bodyCandidates } : {}),
+  }
+}
+
+/**
  * The sender to store for an envelope that STILL cannot name one, when a body already could.
  *
  * Every poll that changes anything about a message (a flag, an edited subject) rewrites `from` from
@@ -155,10 +222,18 @@ export function bodyBelongsTo(
  * pair one person's name with another's address, and Reply would aim there. The listing's own word
  * is restored by `senderForUpdate` reading an empty `from`, and the next body read fills the gap
  * again, this time for the right message.
+ *
+ * `listUnsubscribe` is the one field that is only PARTLY dropped. `bodyLink` and `bodyCandidates`
+ * were read out of the markup being unlinked, so they go; the header fields came from the envelope
+ * (or from a body read of a message that really did carry them) and stay, because a mailing list is
+ * still the same mailing list after a newer message lands in the row. A capture that was nothing but
+ * a scraped link has nothing left to keep, so the whole field goes rather than a hollow object.
  */
 export function payloadForRetiredBody(stored: MessagePayload): MessagePayload {
-  const { bodyFormat: _format, bodyTruncated: _truncated, from: _from, ...rest } = stored
-  return rest
+  const { bodyFormat: _format, bodyTruncated: _truncated, from: _from, listUnsubscribe, ...rest } = stored
+  if (!hasHeaderSignal(listUnsubscribe)) return rest
+  const { bodyLink: _link, bodyCandidates: _candidates, ...fromHeaders } = listUnsubscribe!
+  return { ...rest, listUnsubscribe: fromHeaders }
 }
 
 /**

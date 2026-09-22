@@ -1,10 +1,14 @@
 /**
- * The write half of the plugin database: the `drafts` and `sends` tables, and nothing else.
+ * The write half of the plugin database: `drafts`, `sends` and `unsubscribes`, and nothing else.
  *
- * Split from store.ts because the two tables are the approval ledger, and the ledger is the one
- * part of this plugin where a statement's exact WHERE clause IS the safety property. Reading them
- * together, in a file whose only subject is those transitions, is worth more than the convenience
- * of one class.
+ * Split from store.ts because these tables are the ledgers, and a ledger is the one part of this
+ * plugin where a statement's exact WHERE clause IS the safety property. Reading them together, in a
+ * file whose only subject is those transitions, is worth more than the convenience of one class.
+ *
+ * The unsubscribe ledger lives here rather than in a third SQL file so that this directory keeps its
+ * rule: `store.ts` and `store-write.ts` are the only two files in it that write SQL. It belongs on
+ * this side of the split for the same reason `sends` does — its claim statement is an exactly-once
+ * gate, and its WHERE clause is the whole of that guarantee.
  *
  * The rules every statement below is written to, each of which is a bug somebody could otherwise
  * introduce in a one-line change:
@@ -28,6 +32,31 @@ const DRAFT_COLUMNS =
 const SEND_COLUMNS =
   'send_id, draft_id, account_id, idempotency_key, approval_kind, approval_ref, state,'
   + ' provider_message_id, error, revision, created_at, attempted_at, settled_at'
+
+const UNSUBSCRIBE_COLUMNS =
+  'account_id, message_id, list_key, method, status, reason, detail, ref, at'
+
+/** One row of the unsubscribe ledger. See SCHEMA_V8 for what `list_key` is keyed on and why. */
+export interface UnsubscribeRow extends Record<string, unknown> {
+  account_id: string
+  message_id: string
+  list_key: string
+  method: string
+  status: string
+  reason: string | null
+  detail: string | null
+  ref: string | null
+  at: number
+}
+
+/** The statuses a fresh attempt is allowed to replace outright: both are settled and both failed. */
+const RETRYABLE_UNSUBSCRIBE_STATES = ['failed', 'needs-human'] as const
+
+/** How long an `in-flight` row is believed before it is treated as a process that died. */
+export const UNSUBSCRIBE_RECLAIM_MS = 60_000
+
+/** How much of a verdict or a transport error is kept next to the row. */
+const UNSUBSCRIBE_DETAIL_CHARS = 300
 
 /** States a draft may still be edited, discarded or offered for approval from. */
 export const EDITABLE_DRAFT_STATES = ['composing', 'pending_approval', 'failed', 'unknown'] as const
@@ -336,6 +365,144 @@ export class MailWriteStore {
       + " WHERE state = 'sending' AND attempted_at IS NOT NULL AND attempted_at < ?"
       + ' ORDER BY attempted_at ASC LIMIT ?',
       [cutoff, limit],
+    )
+  }
+
+  // ── unsubscribes (the leave-this-list ledger) ──
+
+  /**
+   * CLAIM THE ONE ATTEMPT this message is allowed. The statement "only once at a time" rests on.
+   *
+   * One statement, deliberately, because there is no transaction in the plugin database: reading the
+   * row and then writing it is a window two clicks fit inside, and both would then reach the network.
+   * The upsert's WHERE clause is the whole gate, and it names exactly three situations a fresh
+   * attempt may start in:
+   *
+   * - no row at all (the INSERT half);
+   * - `failed` or `needs-human` — settled, and settled unsuccessfully, so a human clicking again is
+   *   the retry this plugin allows itself;
+   * - `in-flight` but older than the reclaim window, which is the crash-recovery path and the only
+   *   automatic transition in the ledger.
+   *
+   * `done` is deliberately absent: a message the human already left the list from answers 409
+   * `already` with the row, and the console renders that as "you unsubscribed on Tuesday" rather than
+   * quietly doing it again.
+   *
+   * Returns the number of rows changed. `0` means the caller must read the row and refuse.
+   */
+  async claimUnsubscribe(claim: {
+    accountId: string
+    messageId: string
+    listKey: string
+    method: string
+    now: number
+    reclaimBefore: number
+  }): Promise<number> {
+    const result = await this.db.run(
+      'INSERT INTO unsubscribes (account_id, message_id, list_key, method, status, at)'
+      + " VALUES (?, ?, ?, ?, 'in-flight', ?)"
+      + ' ON CONFLICT(account_id, message_id) DO UPDATE SET'
+      + "   status = 'in-flight', method = excluded.method, list_key = excluded.list_key,"
+      + '   at = excluded.at, reason = NULL, detail = NULL, ref = NULL'
+      + ` WHERE unsubscribes.status IN (${placeholders(RETRYABLE_UNSUBSCRIBE_STATES.length)})`
+      + "    OR (unsubscribes.status = 'in-flight' AND unsubscribes.at < ?)",
+      [
+        claim.accountId, claim.messageId, claim.listKey, claim.method, claim.now,
+        ...RETRYABLE_UNSUBSCRIBE_STATES, claim.reclaimBefore,
+      ],
+    )
+    return result.changes
+  }
+
+  /**
+   * Record the outcome, ONLY on the attempt that was claimed.
+   *
+   * Conditional on `at` and on the row still being `in-flight`, which is the same guard `settleSend`
+   * carries and it is here for the same reason: two writers can reach one row (the attempt that is
+   * running it, and whoever reclaimed it after the window), and a late loser must not overwrite a
+   * newer claim's verdict with its own stale one.
+   *
+   * `method` is rewritten because the ladder may have started on one rung and finished on another: the
+   * claim records what it MEANT to do, and this records what actually happened. The console prints that
+   * word ("unsubscribed via the unsubscribe page"), so a row that still said `one-click` after the
+   * one-click POST failed and the page finished the job would be telling the human the wrong story.
+   */
+  async settleUnsubscribe(settle: {
+    accountId: string
+    messageId: string
+    claimedAt: number
+    status: string
+    method: string
+    reason?: string
+    detail?: string
+    ref?: string
+    now: number
+  }): Promise<number> {
+    const result = await this.db.run(
+      'UPDATE unsubscribes SET status = ?, method = ?, reason = ?, detail = ?, ref = ?, at = ?'
+      + " WHERE account_id = ? AND message_id = ? AND status = 'in-flight' AND at = ?",
+      [
+        settle.status,
+        settle.method,
+        settle.reason ?? null,
+        settle.detail ? settle.detail.slice(0, UNSUBSCRIBE_DETAIL_CHARS) : null,
+        settle.ref ?? null,
+        settle.now,
+        settle.accountId,
+        settle.messageId,
+        settle.claimedAt,
+      ],
+    )
+    return result.changes
+  }
+
+  getUnsubscribe(accountId: string, messageId: string): Promise<UnsubscribeRow | undefined> {
+    return this.db.get<UnsubscribeRow>(
+      `SELECT ${UNSUBSCRIBE_COLUMNS} FROM unsubscribes WHERE account_id = ? AND message_id = ?`,
+      [accountId, messageId],
+    )
+  }
+
+  /**
+   * Everything the ledger knows about ONE PAGE of messages, in ONE statement.
+   *
+   * A page is decorated with "was this already unsubscribed" on every read (the field is derived,
+   * never stored on the message row), so the alternative shape here is a lookup per row: fifty worker
+   * round trips to decorate an answer the caller already had. Both halves of the question ride the
+   * same statement — this message's own row, and any row for the same `list_key`, which is what lets a
+   * mail nobody ever clicked say "you left this list on Tuesday".
+   *
+   * Grouped by account rather than flattened, because a cross-account page (`scope=role:inbox`) must
+   * not let one account's list key match another account's message.
+   */
+  unsubscribesFor(
+    groups: Array<{ accountId: string; messageIds: string[]; listKeys: string[] }>,
+  ): Promise<UnsubscribeRow[]> {
+    const clauses: string[] = []
+    const params: unknown[] = []
+    for (const group of groups) {
+      const parts: string[] = []
+      // Parameters are pushed in the order the placeholders appear in the finished statement, which is
+      // account first and then each IN list. Building the clause and the values out of step is how a
+      // statement like this silently answers about the wrong account.
+      const values: unknown[] = []
+      if (group.messageIds.length > 0) {
+        parts.push(`message_id IN (${placeholders(group.messageIds.length)})`)
+        values.push(...group.messageIds)
+      }
+      if (group.listKeys.length > 0) {
+        parts.push(`list_key IN (${placeholders(group.listKeys.length)})`)
+        values.push(...group.listKeys)
+      }
+      if (parts.length === 0) continue
+      clauses.push(`(account_id = ? AND (${parts.join(' OR ')}))`)
+      params.push(group.accountId, ...values)
+    }
+    if (clauses.length === 0) return Promise.resolve([])
+    return this.db.all<UnsubscribeRow>(
+      `SELECT ${UNSUBSCRIBE_COLUMNS} FROM unsubscribes WHERE ${clauses.join(' OR ')}`
+      + ' ORDER BY at DESC',
+      params,
     )
   }
 }

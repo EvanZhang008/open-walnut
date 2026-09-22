@@ -11,7 +11,13 @@
  * reads a mail body (a CLI invocation, a loader test, an install with no account) should not
  * pay for loading a MIME parser and its dependency tree.
  */
-import { ADDRESS_SHAPE, type MailAddress, type MailAttachmentMeta, type MailEnvelope } from '../mail/api.js'
+import {
+  ADDRESS_SHAPE,
+  type MailAddress,
+  type MailAttachmentMeta,
+  type MailEnvelope,
+  type MailListUnsubscribe,
+} from '../mail/api.js'
 import type { ImapFetchedMessage } from './client.js'
 import { encodeMessageId } from './coords.js'
 
@@ -29,6 +35,14 @@ export interface ParsedBody {
   text?: string
   html?: string
   attachments: MailAttachmentMeta[]
+  /**
+   * The `List-*` headers of this message, ONLY, in `parseHeaders` shape.
+   *
+   * Capped to `LIST_HEADERS` deliberately: a body parse touches every read, and a mail carrying
+   * four hundred headers must not ride all of them into the base. Absent when the message carried
+   * none of the three.
+   */
+  headers?: Record<string, string>
 }
 
 type SimpleParser = typeof import('mailparser').simpleParser
@@ -46,6 +60,15 @@ export function setMimeParserForTesting(fake: SimpleParser | null): void {
 }
 
 /**
+ * The headers that say how to leave a mailing list.
+ *
+ * ONE list, exported, because both paths to the same answer must ask for the same three: the POLL
+ * adds them to its `WANTED_HEADERS` (provider.ts) and a BODY parse carries exactly these out of
+ * mailparser. A list that drifted would mean new mail learned a field old mail never could.
+ */
+export const LIST_HEADERS = ['list-unsubscribe', 'list-unsubscribe-post', 'list-id'] as const
+
+/**
  * Parse one raw message.
  *
  * `skipTextToHtml` and `skipImageLinks` are off because nothing here wants a generated HTML
@@ -55,6 +78,7 @@ export function setMimeParserForTesting(fake: SimpleParser | null): void {
 export async function parseMime(source: Buffer): Promise<ParsedBody> {
   const simpleParser = await loadParser()
   const parsed = await simpleParser(source, { skipTextToHtml: true, skipImageLinks: true })
+  const headers = listHeadersOf(parsed.headerLines)
   return {
     ...(parsed.text ? { text: parsed.text } : {}),
     ...(parsed.html ? { html: parsed.html } : {}),
@@ -64,7 +88,31 @@ export async function parseMime(source: Buffer): Promise<ParsedBody> {
       ...(one.contentType ? { mimeType: one.contentType } : {}),
       ...(typeof one.size === 'number' ? { bytes: one.size } : {}),
     })),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
   }
+}
+
+/**
+ * The `List-*` headers of a parsed message, from `headerLines` and NOT from `headers`.
+ *
+ * `parsed.headers` looks like the obvious source and is the wrong one: mailparser folds every
+ * `List-*` header into ONE structured `list` entry that keeps a single url and a single mail
+ * address (measured: a header carrying an https target and a mailto target comes back as
+ * `{unsubscribe: {url, mail}}`), so a list offering two http mirrors and one https link loses the
+ * one that matters. `headerLines` is mailparser's own raw record, folding included, which is the
+ * same thing the POLL path reads — so both paths hand `parseListUnsubscribe` identical input and
+ * the header rules live in exactly one place.
+ */
+function listHeadersOf(lines: Array<{ key?: string; line?: string }> | undefined): Record<string, string> {
+  const wanted = new Set<string>(LIST_HEADERS)
+  const kept: string[] = []
+  for (const one of lines ?? []) {
+    if (typeof one?.line !== 'string' || !wanted.has((one.key ?? '').toLowerCase())) continue
+    kept.push(one.line)
+  }
+  // Through `parseHeaders`, so the folding rule (a continuation line is part of the value) and the
+  // last-value-wins rule are the tested ones rather than a second implementation of both.
+  return kept.length > 0 ? parseHeaders(kept.join('\r\n')) : {}
 }
 
 interface StructureNode {
@@ -225,6 +273,114 @@ export function replyToList(value: string | undefined): MailAddress[] {
   return out
 }
 
+// ── how to leave a mailing list, from three headers ──
+//
+// Every cap below exists because this value is written by whoever sent the mail, it is stored in a
+// payload blob that is read on every list page, and a url taken from it is one the SERVER will
+// fetch when a human asks to leave the list. So: https only, a bounded number of targets, a bounded
+// length each, and a mailto that is not a real address is not kept at all.
+
+/** https targets kept. Four is already more than any real list offers. */
+const UNSUBSCRIBE_HTTPS_MAX = 4
+/** mailto targets kept. */
+const UNSUBSCRIBE_MAILTO_MAX = 2
+/** Per URL. A longer one is CLIPPED rather than dropped, so the ladder can still report it. */
+const UNSUBSCRIBE_URL_MAX_CHARS = 2048
+/** `<...>` groups even looked at. A header with thousands of them is not a list of real URLs. */
+const UNSUBSCRIBE_TARGETS_MAX = 64
+/** `List-Id` is a key, not prose. */
+const LIST_ID_MAX_CHARS = 200
+
+/**
+ * The `<...>` targets of a `List-Unsubscribe` header, in order, bounded.
+ *
+ * `matchAll` hands back an ITERATOR, so a hostile header carrying thousands of bracket pairs is
+ * walked only as far as the cap rather than materialised as an array first.
+ *
+ * The unbracketed fallback is for real senders, not for the RFC: RFC 2369 requires the brackets,
+ * and a bare `https://…` value is common enough in the wild to be worth reading. It is only taken
+ * when there is no bracketed group at all, and only when the whole value is one URL — splitting a
+ * bare value on commas would cut `mailto:x@y?subject=a,b` in half.
+ */
+function unsubscribeTargets(raw: string | undefined): string[] {
+  if (!raw) return []
+  const out: string[] = []
+  for (const match of raw.matchAll(/<([^<>]*)>/g)) {
+    const one = match[1]!.trim()
+    if (one) out.push(one)
+    if (out.length >= UNSUBSCRIBE_TARGETS_MAX) return out
+  }
+  if (out.length > 0) return out
+  const bare = raw.trim()
+  return /^(https:\/\/|mailto:)/i.test(bare) ? [bare] : []
+}
+
+/**
+ * The address a `mailto:` target would send to, when it is one.
+ *
+ * SHAPE CHECKED for the same reason `replyToList` is: `mailto:undisclosed-recipients:;` and
+ * `mailto:` are both real values, and one that is not an address can only become a draft the send
+ * route refuses in a place the human cannot see. A target naming several recipients fails this
+ * too, which is the wanted answer: "unsubscribe me" is one recipient.
+ */
+function mailtoAddress(target: string): string | undefined {
+  const rest = target.slice('mailto:'.length).split('?')[0]!.trim()
+  const address = rest.includes('%') ? safeDecode(rest) : rest
+  return ADDRESS_SHAPE.test(address) ? address : undefined
+}
+
+function safeDecode(value: string): string {
+  try { return decodeURIComponent(value) }
+  catch { return value }
+}
+
+/** `List-Id: Weekly news <news.example.invalid>` → `news.example.invalid`. */
+function parseListId(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  const match = /<([^<>]+)>/.exec(raw)
+  const id = (match ? match[1]! : raw).trim().toLowerCase()
+  return id ? id.slice(0, LIST_ID_MAX_CHARS) : undefined
+}
+
+/**
+ * How this message says it can be unsubscribed from, or `undefined` when it says nothing usable.
+ *
+ * Pure, and the ONE place the three headers are read: the poll path (`toEnvelope`) and the body
+ * path (`getBody`, for mail cached before this existed) both come through here, so a rule cannot
+ * hold for new mail and not for old.
+ *
+ * `undefined` rather than an empty object when there is no https target, no usable mailto and no
+ * `List-Id`: "this message offered nothing" and "this row predates the field" are the same answer
+ * to the console, and writing a hollow object into every payload blob would just grow the cache.
+ *
+ * `oneClick` needs BOTH headers. `List-Unsubscribe-Post` on its own names a POST with nowhere to
+ * send it, which is why RFC 8058 defines it as a companion.
+ */
+export function parseListUnsubscribe(headers: Record<string, string>): MailListUnsubscribe | undefined {
+  const raw = headers['list-unsubscribe']
+  const https: string[] = []
+  const mailto: string[] = []
+  for (const target of unsubscribeTargets(raw)) {
+    // https ONLY. A plaintext unsubscribe link is a request this server will not make: it leaks
+    // that the mail was read, over a hop anybody can rewrite.
+    if (/^https:\/\//i.test(target)) {
+      if (https.length < UNSUBSCRIBE_HTTPS_MAX) https.push(target.slice(0, UNSUBSCRIBE_URL_MAX_CHARS))
+      continue
+    }
+    if (!/^mailto:/i.test(target) || mailto.length >= UNSUBSCRIBE_MAILTO_MAX) continue
+    const clipped = target.slice(0, UNSUBSCRIBE_URL_MAX_CHARS)
+    if (mailtoAddress(clipped)) mailto.push(clipped)
+  }
+  const listId = parseListId(headers['list-id'])
+  if (https.length === 0 && mailto.length === 0 && !listId) return undefined
+  return {
+    ...(https.length > 0 ? { https } : {}),
+    ...(mailto.length > 0 ? { mailto } : {}),
+    oneClick: !!raw && /list-unsubscribe\s*=\s*one-click/i.test(headers['list-unsubscribe-post'] ?? ''),
+    ...(listId ? { listId } : {}),
+  }
+}
+
 export function millis(value: Date | string | undefined): number | undefined {
   if (!value) return undefined
   const at = value instanceof Date ? value.getTime() : Date.parse(value)
@@ -238,6 +394,7 @@ export function toEnvelope(mailbox: string, uidValidity: string, message: ImapFe
   const references = messageIdList(headers.references)
   const inReplyTo = messageIdList(headers['in-reply-to'])[0] ?? message.envelope?.inReplyTo
   const replyTo = replyToList(headers['reply-to'])
+  const listUnsubscribe = parseListUnsubscribe(headers)
   return {
     messageId: encodeMessageId(mailbox, uidValidity, message.uid),
     rfcMessageId: message.envelope?.messageId ?? headers['message-id'] ?? '',
@@ -257,5 +414,6 @@ export function toEnvelope(mailbox: string, uidValidity: string, message: ImapFe
     ...(references.length ? { references } : {}),
     attachments: attachmentsFromStructure(message.bodyStructure),
     ...(typeof message.size === 'number' ? { bodyBytes: message.size } : {}),
+    ...(listUnsubscribe ? { listUnsubscribe } : {}),
   }
 }

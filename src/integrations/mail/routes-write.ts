@@ -1,9 +1,9 @@
 /**
- * The write path: drafts, the approval ledger, and the two ways a human says yes.
+ * The write path: drafts, the approval ledger, the two ways a human says yes, and leaving a list.
  *
- * Split from routes.ts because these nine routes are one subject and the read routes are another.
- * The shape that matters in every one of them is `revision`: a client sends the revision it was
- * looking at, and a mismatch is a 409 rather than a send of something the human never read.
+ * Split from routes.ts because these routes are one subject and the read routes are another. The
+ * shape that matters in most of them is `revision`: a client sends the revision it was looking at,
+ * and a mismatch is a 409 rather than a send of something the human never read.
  *
  * Two contracts that apply to this file and not to the read side:
  *
@@ -31,6 +31,7 @@ import { replyHeaders } from './drafts.js'
 import type { MailDrafts } from './drafts.js'
 import type { MailSends } from './sends.js'
 import type { MailService } from './service.js'
+import { isRequestableUnsubscribeMethod, type MailUnsubscribe } from './unsubscribe.js'
 
 /**
  * How long a write waits for the letter store, the database and the provider before it answers
@@ -107,10 +108,91 @@ export function registerMailWriteRoutes(
     drafts: MailDrafts
     approvals: MailApprovals
     sends: MailSends
+    unsubscribe: MailUnsubscribe
   },
 ): void {
-  const { service, drafts, approvals, sends } = deps
+  const { service, drafts, approvals, sends, unsubscribe } = deps
   const primaryOnly = (): boolean => walnut.replica
+
+  /**
+   * POST /messages/:accountId/:messageId/unsubscribe  { method?, confirm? }
+   *
+   * Here rather than in routes.ts because it makes NETWORK EGRESS and (from S8) can send mail, which
+   * is what this file is for. Registered after the read routes, which is safe and is also why it can
+   * live here at all: the `/messages/:a/:m` mount only matches its own root, and `/read` and `/task`
+   * are literal fourth segments that `unsubscribe` is not.
+   *
+   * Answers:
+   *   200 { ok: true,  status: 'done',        method, at, message }
+   *   200 { ok: true,  status: 'needs-human', method, reason, url?, message }
+   *   200 { ok: false, status: 'failed',      method, reason, detail?, message }
+   *   202 { ok: true,  status: 'in-flight',   method, completed: false, message }
+   *   409 { error: 'in-flight' | 'already', unsubscribe: {...} }
+   *   409 { error: 'unsupported', message }      — nothing to open; the sentence is printable
+   *   400 { error: 'invalid', message }
+   *   503 { error: 'primary_only' | 'db_unavailable' }
+   *
+   * A `failed` outcome is a 200 with `ok: false` on purpose. It is not a fault of this server or of
+   * the request: the sender's own endpoint refused, or the guard would not open their link. The
+   * console has a sentence to print either way, and a client that had to catch an HTTP error to read
+   * it would show "something went wrong" instead of what actually happened.
+   */
+  walnut.http.route('post', '/messages/:accountId/:messageId/unsubscribe', async (request) => {
+    if (primaryOnly()) return PRIMARY_ONLY
+    const [accountId, messageId] = segmentsAfter(request, '/messages/')
+    if (!accountId || !messageId) {
+      return { status: 400, json: { error: 'invalid', message: 'an account id and a message id are required' } }
+    }
+    const body = await readBody(request)
+    // A body that did not parse is not consent to leave a list. Same rule the read-flag route learned.
+    if (body === null) return { status: 400, json: { error: 'invalid', message: 'body must be JSON' } }
+    if (body.method !== undefined && !isRequestableUnsubscribeMethod(body.method)) {
+      return {
+        status: 400,
+        json: { error: 'invalid', message: 'method must be one-click, mailto or link when it is given' },
+      }
+    }
+    try {
+      // Bounded like every other write here. The LADDER carries its own 10s deadline shared across
+      // every rung and hop, so a late winner still writes its verdict into the ledger and still
+      // announces it; this budget only decides how long the browser waits.
+      const answered = await bounded(
+        walnut,
+        unsubscribe.run(accountId, messageId, {
+          ...(body.method !== undefined ? { method: String(body.method) } : {}),
+          ...(body.confirm === true ? { confirm: true } : {}),
+        }),
+        'unsubscribe',
+      )
+      if (!answered) {
+        return {
+          status: 202,
+          json: {
+            ok: true,
+            completed: false,
+            status: 'in-flight',
+            message: 'Walnut is still unsubscribing you; the console updates itself when it lands.',
+          },
+        }
+      }
+      if (answered.status === 'conflict') {
+        return {
+          status: 409,
+          json: {
+            error: answered.conflict ?? 'in-flight',
+            message: answered.message,
+            ...(answered.ledger ? { unsubscribe: answered.ledger } : {}),
+          },
+        }
+      }
+      if (answered.status === 'in-flight') {
+        return { status: 202, json: { ok: true, completed: false, ...answered } }
+      }
+      return { json: { ok: answered.status !== 'failed', ...answered } }
+    } catch (error) {
+      return errorReply(walnut, error)
+    }
+  })
 
   walnut.http.route('post', '/drafts/:draftId/request-send', async (request) => {
     if (primaryOnly()) return PRIMARY_ONLY

@@ -551,7 +551,11 @@ describe('the v7 migration', () => {
         );
       }
 
-      expect(await client.migrate(MAIL_MIGRATIONS)).toBe(7);
+      // The version the whole list reaches, read from the list rather than written down: this test is
+      // about the v7 BACKFILL, and pinning a literal here makes every later migration fail a test that
+      // has nothing to say about it.
+      const latest = MAIL_MIGRATIONS[MAIL_MIGRATIONS.length - 1]!.version;
+      expect(await client.migrate(MAIL_MIGRATIONS)).toBe(latest);
 
       const backfilled = await client.all<{ message_id: string; seen: number }>(
         'SELECT message_id, seen FROM messages ORDER BY message_id',
@@ -574,7 +578,7 @@ describe('the v7 migration', () => {
       expect(indexes.map((row) => row.name)).toContain('messages_by_unread');
 
       // Migrating again is a no-op rather than a second ALTER, which would throw.
-      expect(await client.migrate(MAIL_MIGRATIONS)).toBe(7);
+      expect(await client.migrate(MAIL_MIGRATIONS)).toBe(latest);
     } finally {
       await client.dispose();
     }

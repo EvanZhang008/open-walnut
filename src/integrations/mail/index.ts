@@ -24,6 +24,7 @@ import { MailService } from './service.js'
 import { MailStore } from './store.js'
 import { MailSync, mailSyncForTesting, setActiveMailSync } from './sync.js'
 import { createMailTools } from './tools.js'
+import { MailUnsubscribe } from './unsubscribe.js'
 
 /**
  * The Mail base, as a capability plugin.
@@ -126,6 +127,10 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const approvals = new MailApprovals({
     store, service, drafts, sends, letters: walnut.letters, events, log: walnut.log,
   })
+  // Leaving a mailing list. Its own module because it is the one part of this plugin that opens a url
+  // a STRANGER wrote from inside the user's network, and every rule about that lives together in
+  // `unsubscribe-http.ts`. Nothing here configures the guard: there is no switch to configure.
+  const unsubscribe = new MailUnsubscribe({ store, service, events, log: walnut.log })
   // Everything that deletes, in one place, so a read path cannot reach a delete by accident.
   const retention = new MailRetention({ store, bodies, events })
   // Mail leaving the plugin, in the two directions it can: one message becomes one task, and the
@@ -249,6 +254,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   }))
   registerMailRoutes(walnut, {
     store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest,
+    unsubscribe,
   })
 
   // The phantom-provider sweep. A provider plugin normally disposes its own registration, and

@@ -53,6 +53,7 @@ export type {
   MailBody,
   MailCapabilities,
   MailEnvelope,
+  MailListUnsubscribe,
   MailPollRequest,
   MailPollResult,
   MailProviderSpec,
@@ -116,8 +117,15 @@ export type {
  * sees them now. The console's unread filter ingests that answer on its first page before reading
  * the cache, so a flag flipped on another device or a message the backfill has not reached is in
  * the list the moment the folder badge says so. Ingest-only: nothing is removed, [] adds nothing.
+ *
+ * 1.10.0 lets a provider report `List-Unsubscribe` / `List-Unsubscribe-Post` / `List-Id`, parsed and
+ * capped, on `MailEnvelope.listUnsubscribe` and (as gap fill, for mail cached before the field
+ * existed) on `MailBody.listUnsubscribe`. Additive and optional in both places: a provider that
+ * reports neither behaves exactly as it did, and the console simply offers no unsubscribe action.
+ * The base does NOT put the field in the envelope hash, so a provider that starts reporting it does
+ * not mass-update every row it has ever cached.
  */
-export const MAIL_BASE_API_VERSION = '1.9.0'
+export const MAIL_BASE_API_VERSION = '1.10.0'
 
 /**
  * The method bag published as `mail:base`.

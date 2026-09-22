@@ -65,6 +65,34 @@ export interface MailMessageDto {
    * truth that goes stale silently. Absent means nobody has made a task from this message yet.
    */
   taskId?: string
+  /**
+   * How this message can be unsubscribed from, and whether it already was.
+   *
+   * ABSENT means the cache captured nothing, which a client reads exactly as `available: 'none'`:
+   * no `List-Unsubscribe` header, or a row cached before the field existed and never opened since.
+   *
+   * `available` is PURE, derived in `toDto` from the stored payload, so a list page pays nothing for
+   * it. `done` and `pending` are DERIVED on every read from the plugin's own unsubscribe ledger, in
+   * ONE query per page, never stored on the message row — the same rule `taskId` above is written
+   * to: a copy here would be a second truth, and this one would also outlive the human changing
+   * their mind. Both arrive with the ladder.
+   */
+  unsubscribe?: MailUnsubscribeDto
+}
+
+export type MailUnsubscribeAvailability = 'one-click' | 'mailto' | 'link' | 'none'
+
+export interface MailUnsubscribeDto {
+  available: MailUnsubscribeAvailability
+  /**
+   * Set when THIS message, or another message of the same list, was already unsubscribed from.
+   *
+   * `scope: 'list'` is what lets the console say "you unsubscribed from this sender on Tuesday" on
+   * a message nobody ever clicked: the human left the LIST, not one mail.
+   */
+  done?: { method: string; at: number; scope: 'message' | 'list' }
+  /** An attempt is on the wire right now. */
+  pending?: boolean
 }
 
 export interface MailAccountDto extends MailAccount {
@@ -274,6 +302,17 @@ export function threadIdOf(envelope: MailEnvelope): string {
   return envelope.references?.[0] || envelope.inReplyTo || envelope.rfcMessageId || envelope.messageId
 }
 
+/**
+ * "Is this the same envelope the cache already holds?" — and therefore also "does this row cost a
+ * write, an FTS re-index and a bus event?"
+ *
+ * WHAT IS ABSENT IS PART OF THE DESIGN. `listUnsubscribe` is deliberately not hashed: the field
+ * arrived long after the cache was full, and hashing it would mark every row a provider now reports
+ * headers for as "updated" on the first tick after the upgrade — thousands of writes, an FTS
+ * re-index each, and a bus event per container, all to learn something no human asked for yet. The
+ * same reasoning is why migration v2 exists. Anything added here must be a field whose change really
+ * is news; a field the base can also learn later belongs in the gap-fill path instead.
+ */
 export function envelopeHashOf(envelope: MailEnvelope): string {
   return crypto.createHash('sha1').update(JSON.stringify([
     envelope.rfcMessageId, envelope.mailboxId, envelope.from, envelope.to, envelope.subject,

@@ -250,6 +250,42 @@ CREATE INDEX IF NOT EXISTS messages_by_unread
 `
 
 /**
+ * v8 is the unsubscribe ledger: what Walnut tried, for which list, and how it went.
+ *
+ * ONE ROW PER MESSAGE, and the primary key is what makes "one attempt in flight" a property of the
+ * database rather than of whoever remembered to check first. The claim is a single upsert whose WHERE
+ * clause names the states a fresh attempt may replace, so two clicks a millisecond apart cannot both
+ * reach the network: the loser changes zero rows and is answered 409.
+ *
+ * `list_key` is the interesting column. The human does not unsubscribe from a MESSAGE, they leave a
+ * list, so every other mail from the same list has to be able to say "you already did this" — which
+ * means the key has to be something both messages carry. `List-Id` lowercased when there is one, else
+ * the lowercased sender address, which is coarser (one sender's three lists share a key) and is
+ * nearly always what the human meant anyway. The index is `(account_id, list_key, at DESC)` because
+ * the question a page asks is "has anything from this list been unsubscribed", newest answer first.
+ *
+ * Nothing here retries on its own: `reason` and `detail` exist so a human reading the row can decide,
+ * and a human clicking again is what retries. The one automatic transition is the 60-second reclaim
+ * of an `in-flight` row, which is the crash-recovery path and nothing else.
+ */
+const SCHEMA_V8 = `
+CREATE TABLE IF NOT EXISTS unsubscribes (
+  account_id TEXT    NOT NULL,
+  message_id TEXT    NOT NULL,
+  list_key   TEXT    NOT NULL,
+  method     TEXT    NOT NULL,
+  status     TEXT    NOT NULL,
+  reason     TEXT,
+  detail     TEXT,
+  ref        TEXT,
+  at         INTEGER NOT NULL,
+  PRIMARY KEY (account_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS unsubscribes_by_list ON unsubscribes (account_id, list_key, at DESC);
+`
+
+/**
  * Exported for the ONE test that has to reach a version older than the current schema: the v7
  * backfill can only be graded on a database that already holds v6 rows, so that test migrates to 6,
  * writes flags, then migrates the rest of the way. Nothing else should read this.
@@ -262,6 +298,7 @@ export const MAIL_MIGRATIONS: Array<{ version: number; sql: string }> = [
   { version: 5, sql: SCHEMA_V5 },
   { version: 6, sql: SCHEMA_V6 },
   { version: 7, sql: SCHEMA_V7 },
+  { version: 8, sql: SCHEMA_V8 },
 ]
 
 /**

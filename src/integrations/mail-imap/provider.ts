@@ -45,7 +45,9 @@ import { accountIdFor, ImapAccountStore, PROVIDER_ID } from './config.js'
 import { decodeCursor, decodeMessageId, encodeCursor, mailboxRole } from './coords.js'
 import {
   hasTextPart,
+  LIST_HEADERS,
   MAX_SOURCE_BYTES,
+  parseListUnsubscribe,
   parseMime,
   toEnvelope,
 } from './mime.js'
@@ -54,8 +56,15 @@ import { createImapSender } from './provider-send.js'
 import { imapPortFor, pastedPassword, SETUP_PRESETS, serverFilesSentCopy, submissionPortFor } from './setup-presets.js'
 import { verifySmtp, type SmtpSecurity } from './smtp.js'
 
-/** Headers the ENVELOPE does not carry, or carries in a lossy form. */
-const WANTED_HEADERS = ['message-id', 'references', 'in-reply-to', 'date', 'reply-to']
+/**
+ * Headers the ENVELOPE does not carry, or carries in a lossy form.
+ *
+ * The `List-*` three ride along because they are free here: the poll already asks the server for a
+ * header set, and asking for three more names costs no round trip. A message whose unsubscribe
+ * headers were not read at poll time can only learn them when its body is fetched, which for old
+ * mail nobody opens is never.
+ */
+const WANTED_HEADERS = ['message-id', 'references', 'in-reply-to', 'date', 'reply-to', ...LIST_HEADERS]
 
 interface ProviderLog {
   debug(message: string, meta?: Record<string, unknown>): void
@@ -499,12 +508,19 @@ export function createImapProvider(deps: {
       // `'both'`. The synthesized text is still kept and still indexed: it is useful for search,
       // it is just not evidence that the sender wrote a text part.
       const hadText = hasTextPart(fetched.bodyStructure) ?? !!parsed.text
+      // The unsubscribe headers as GAP FILL for mail cached before the poll asked for them. The
+      // base takes it only when the row holds none (see `fillUnsubscribeFromBody`), so a body read
+      // can never rewrite what a listing said, and this is the only way a message from last year
+      // ever gets an unsubscribe option: the envelope hash deliberately ignores the field, so no
+      // re-poll will rewrite those rows.
+      const listUnsubscribe = parsed.headers ? parseListUnsubscribe(parsed.headers) : undefined
       return {
         format: hadText && parsed.html ? 'both' : parsed.html ? 'html' : 'text',
         ...(parsed.text ? { text: parsed.text } : {}),
         ...(parsed.html ? { html: parsed.html } : {}),
         bytes: size,
         ...(parsed.attachments.length ? { attachments: parsed.attachments } : {}),
+        ...(listUnsubscribe ? { listUnsubscribe } : {}),
       }
     },
 
