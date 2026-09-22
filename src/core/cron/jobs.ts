@@ -60,6 +60,19 @@ export function assertSupportedJobSpec(job: Pick<CronJob, 'sessionTarget' | 'pay
   }
 }
 
+/**
+ * A check and a wake counter are two different things deciding the same
+ * question, so a job may carry only one. The check runs on its host's daemon,
+ * which owns the dedup and the fire; a server-side counter beside it would run
+ * the routine on items that daemon never saw. Refused at create AND patch so no
+ * path (REST, agent tool, relay) can store the combination.
+ */
+export function assertWakeAllowed(job: Pick<CronJob, 'wake' | 'check'>): void {
+  if (job.wake && job.check) {
+    throw new Error('wake events cannot be combined with a check: the check already decides when this routine fires');
+  }
+}
+
 export function findJobOrThrow(state: CronServiceState, id: string): CronJob {
   const job = state.store?.jobs.find((j) => j.id === id);
   if (!job) throw new Error(`unknown cron job id: ${id}`);
@@ -190,12 +203,14 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     // Normalized input may carry an explicit null (a patch's "clear"); a create
     // has nothing to clear, so anything but a real object means no trigger.
     check: input.check && typeof input.check === 'object' ? input.check : undefined,
+    wake: input.wake && typeof input.wake === 'object' ? input.wake : undefined,
     state: { ...input.state },
   };
 
   // Keep executor ↔ legacy fields consistent (derives whichever side is missing)
   syncExecutorFields(job);
   assertSupportedJobSpec(job);
+  assertWakeAllowed(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -249,6 +264,11 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch): void {
     // responsible for pushing the (now shorter) set to the old host.
     job.check = patch.check === null || patch.check === undefined ? undefined : patch.check;
   }
+  if ('wake' in patch) {
+    // Key PRESENCE is the whole contract: null clears the counter, absent keeps
+    // it. The form's save omits `wake`, so it can never erase one.
+    job.wake = patch.wake === null || patch.wake === undefined ? undefined : patch.wake;
+  }
   // Executor ↔ legacy consistency:
   // - patch.executor present → executor is canonical, legacy fields re-derived.
   // - legacy-only patch on a legacy-type job → re-derive executor from legacy.
@@ -267,6 +287,7 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch): void {
   }
   syncExecutorFields(job);
   assertSupportedJobSpec(job);
+  assertWakeAllowed(job);
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {

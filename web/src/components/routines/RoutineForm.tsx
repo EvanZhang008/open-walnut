@@ -4,7 +4,7 @@ import type {
   RoutineCheckTestResult, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
 } from '@/api/routines';
 import { testRoutineCheck } from '@/api/routines';
-import { describeSchedule } from '@/utils/routine-format';
+import { describeSchedule, describeWake } from '@/utils/routine-format';
 
 interface RoutineFormProps {
   /** Prefill from an AI draft or an existing routine (edit mode). */
@@ -250,6 +250,15 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       setCheckTest({ busy: false, error: err instanceof Error ? err.message : 'Test failed' });
     }
   }
+
+  /**
+   * The counter half of the trigger, shown but NOT edited here. Deliberately
+   * read-only: it is set by whoever built the routine (the triage installer, an
+   * agent), and the save path omits `wake` entirely so the server's merge-by-key
+   * leaves it untouched. Rendering it as a control would mean sending it back,
+   * and then any form quirk could silently drop a counter the user never saw.
+   */
+  const wakeLine = useMemo(() => describeWake(routine?.wake), [routine?.wake]);
 
   const schedule = useMemo(() => triggerToSchedule(trigger), [trigger]);
   const headerLine = useMemo(() => {
@@ -501,6 +510,12 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                     </div>
                   )}
                 </div>
+              )}
+
+              {wakeLine && (
+                <p className="routine-wake-line text-xs text-muted" data-testid="routine-wake-line">
+                  Also runs {wakeLine}
+                </p>
               )}
             </div>
           </div>

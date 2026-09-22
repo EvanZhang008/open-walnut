@@ -4,7 +4,7 @@
  * Lives in the frontend so phrasing uses the viewer's locale/clock.
  */
 
-import type { RoutineAuditEntry, RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState } from '@/api/routines';
+import type { RoutineAuditEntry, RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState, RoutineWake } from '@/api/routines';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -78,11 +78,30 @@ export function describeNextRun(state: RoutineState | undefined): string | null 
   return `Next run ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at ${time}`;
 }
 
-/** "Weekdays at 5:30 AM · Next run tomorrow at 5:30 AM" */
-export function describeRoutineTiming(schedule: RoutineSchedule, state?: RoutineState): string {
+/**
+ * "after 20 new items" — the counter half of a wake routine's trigger.
+ * Null when there is nothing to say: no events, or a threshold of 0 (clock only).
+ */
+export function describeWake(wake: RoutineWake | undefined): string | null {
+  if (!wake || !Array.isArray(wake.events) || wake.events.length === 0) return null;
+  const n = wake.threshold;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return `after ${n} new item${n === 1 ? '' : 's'}`;
+}
+
+/** "Weekdays at 5:30 AM · Next run tomorrow at 5:30 AM · or after 20 new items" */
+export function describeRoutineTiming(
+  schedule: RoutineSchedule,
+  state?: RoutineState,
+  wake?: RoutineWake,
+): string {
   const parts = [describeSchedule(schedule)];
   const next = describeNextRun(state);
   if (next) parts.push(next);
+  // The clock is not the whole trigger for a wake routine, and a card that shows
+  // only the interval reads as "this runs twice a day" when it can run any time.
+  const counter = describeWake(wake);
+  if (counter) parts.push(`or ${counter}`);
   return parts.join(' · ');
 }
 

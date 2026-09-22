@@ -149,6 +149,36 @@ export function firedAuditEntry(input: {
 }
 
 /**
+ * A WAKE-fired run's audit line: the routine ran because enough events arrived.
+ *
+ * Same row shape as a trigger's fire so one list reads uniformly, minus the
+ * daemon's (epoch, seq) — a wake fire is counted by this server, has no daemon
+ * sequence, and is never replayed, so there are no attempts to fold. `items` is
+ * the counter value the dispatch observed, which is exactly what the run
+ * consumed. It exists for the same reason the trigger trail does: without it, a
+ * run woken by 20 new items is indistinguishable from the clock's own tick, and
+ * nothing records what was injected.
+ */
+export function wakeAuditEntry(input: {
+  atMs: number;
+  items: number;
+  durationMs?: number;
+  error?: string;
+  delivery: TriggerAuditDelivery;
+  injected?: { chars: number; preview: string };
+}): TriggerAuditEntry {
+  return compact({
+    atMs: input.atMs,
+    outcome: 'fired',
+    items: input.items,
+    durationMs: input.durationMs,
+    error: input.error,
+    delivery: input.delivery,
+    injected: input.injected,
+  });
+}
+
+/**
  * Fold a fire's later attempt into the entry it belongs to instead of appending a
  * second row. A transient delivery failure is replayed by the daemon about once a
  * minute, so three attempts of ONE fire would otherwise read as three fires —

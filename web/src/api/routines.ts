@@ -38,6 +38,19 @@ export type RoutineCheck = {
   maxFiresPerDay?: number;
 };
 
+/**
+ * The counter half of a routine's trigger: it also runs once this many counted
+ * events have arrived (server: src/core/cron/types.ts CronWake). Read-only in
+ * the UI — the form shows it and must never erase it, which is why a save omits
+ * the field entirely rather than sending it back.
+ */
+export type RoutineWake = {
+  events: string[];
+  countField?: string;
+  threshold: number;
+  skipWhenIdle?: boolean;
+};
+
 export type RoutineLastCheck = {
   atMs: number;
   outcome: 'fired' | 'quiet' | 'error';
@@ -94,6 +107,9 @@ export type RoutineState = {
   /** The daemon's highest processed fire seq: a floor on the count for a trigger
    *  that was already firing before the audit trail existed. */
   lastFireSeq?: number;
+  /** Wake routines: counted events waiting for the next run. */
+  wakeCount?: number;
+  wakeLastAtMs?: number;
 };
 
 export interface Routine {
@@ -108,6 +124,7 @@ export interface Routine {
   wakeMode: 'now' | 'next-cycle';
   executor?: RoutineExecutorRef;
   check?: RoutineCheck;
+  wake?: RoutineWake;
   state: RoutineState;
 }
 
@@ -153,6 +170,12 @@ export type CreateRoutineInput = {
   executor: RoutineExecutorRef;
   /** `null` on update clears an existing check. */
   check?: RoutineCheck | null;
+  /**
+   * `null` on update clears the counter trigger. OMIT it to leave a stored one
+   * alone: the server merges by key presence, so an absent `wake` is what lets
+   * the form save a routine whose counter it does not render.
+   */
+  wake?: RoutineWake | null;
   wakeMode?: 'now' | 'next-cycle';
   enabled?: boolean;
 };

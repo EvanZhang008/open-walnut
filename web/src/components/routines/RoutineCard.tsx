@@ -39,7 +39,7 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
         <div className="cron-job-info">
           <span className="cron-job-name">{routine.name}</span>
           <span className="cron-job-desc text-sm text-muted">
-            {describeRoutineTiming(routine.schedule, routine.state)}
+            {describeRoutineTiming(routine.schedule, routine.state, routine.wake)}
           </span>
         </div>
         {routine.check && (

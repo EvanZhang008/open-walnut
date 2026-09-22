@@ -17,6 +17,7 @@ export type {
   CronDelivery,
   CronDeliveryMode,
   CronSessionTarget,
+  CronWake,
   CronWakeMode,
   CronJobState,
   CronStoreFile,

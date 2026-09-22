@@ -37,6 +37,11 @@ function mapCronError(err: unknown): never {
   if (/requires a payload|requires payload|requires text|requires message/i.test(msg)) {
     throw new SessionControlError(msg, 400);
   }
+  // A check trigger and a wake counter both decide when the routine fires, and
+  // jobs.ts refuses the combination for every path. That is a caller mistake too.
+  if (/wake events cannot be combined with a check/i.test(msg)) {
+    throw new SessionControlError(msg, 400);
+  }
   throw err instanceof Error ? err : new Error(msg);
 }
 
@@ -140,6 +145,30 @@ async function validateCheckForSave(
 }
 
 /**
+ * A check and a wake counter both answer "when does this routine fire", so a job
+ * may carry only one (jobs.ts refuses the combination for every path). Checked
+ * HERE first, before validateCheckForSave: that probes the host's daemon and
+ * would answer 503 about a completely different problem.
+ *
+ * Resolved against the stored job, so adding a wake to an existing trigger — or
+ * a check to an existing wake routine — is refused too, not just a create that
+ * carries both.
+ */
+function assertWakeNotOnCheck(
+  input: { check?: unknown; wake?: unknown },
+  existing?: CronJob,
+): void {
+  const wake = input.wake === undefined ? existing?.wake : input.wake;
+  const check = input.check === undefined ? existing?.check : input.check;
+  if (wake && check) {
+    throw new SessionControlError(
+      'wake events cannot be combined with a check: the check already decides when this routine fires',
+      400,
+    );
+  }
+}
+
+/**
  * Arm (or disarm) the daemons whose set may have changed. Fire-and-forget: the
  * push is hash-skipped per host, and a failed push self-heals on the next
  * connect — a routine that saved must not fail because a host blipped.
@@ -188,6 +217,7 @@ export async function createRoutine(body: unknown): Promise<{ job: unknown }> {
     throw new SessionControlError('Invalid input. Provide at least schedule and payload.', 400);
   }
   await validateExecutorForSave(input);
+  assertWakeNotOnCheck(input);
   const checkHost = await validateCheckForSave(input, body);
   try {
     const job = await service.add(input);
@@ -208,6 +238,7 @@ export async function patchRoutine(id: string, body: unknown): Promise<{ job: un
   // Read BEFORE the write: a patch that moves a trigger to another host must
   // also push the host it is leaving, or that daemon keeps polling forever.
   const before = await findJob(service, id);
+  assertWakeNotOnCheck(patch, before ?? undefined);
   await validateCheckForSave(patch, body, before ?? undefined);
   try {
     const job = await service.update(id, patch);

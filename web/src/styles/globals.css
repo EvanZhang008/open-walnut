@@ -28776,6 +28776,11 @@ a.file-link:hover {
   color: var(--color-text-muted, inherit);
 }
 
+/* The counter half of the trigger: read-only text, not a control. */
+.routine-wake-line {
+  margin: 0;
+}
+
 .routine-trigger-clock {
   font-size: 13px;
 }

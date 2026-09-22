@@ -313,6 +313,50 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
   return { ok: true, ran: true } as const;
 }
 
+/** What a bump did, so the caller can decide whether to run the routine. */
+export type WakeBumpResult = {
+  jobId: string;
+  /** The counter AFTER this bump. */
+  count: number;
+  threshold: number;
+  /** The counter reached the threshold: the caller should run the routine now. */
+  due: boolean;
+};
+
+/**
+ * Add `n` counted events to a wake routine's counter.
+ *
+ * Inside locked() + persist() like every other write here, so the counter lands
+ * in the machine-local cron-state.json sidecar (persist strips `state` from the
+ * git-synced definitions file) and a concurrent run's subtract cannot interleave
+ * with it. Returns null when the job is gone, disabled, or has no `wake` —
+ * a stale in-memory watcher list must not resurrect a deleted counter.
+ *
+ * Deliberately emits NO cron event: a counter bump is not a lifecycle change,
+ * and broadcasting one per flush would spam every browser and re-arm the
+ * subscriber that caused it.
+ */
+export async function bumpWake(
+  state: CronServiceState,
+  id: string,
+  n: number,
+): Promise<WakeBumpResult | null> {
+  const add = Number.isFinite(n) ? Math.floor(n) : 0;
+  if (add <= 0) return null;
+  return await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const job = state.store?.jobs.find((j) => j.id === id);
+    if (!job || !job.wake || !job.enabled) return null;
+    if (!job.state) job.state = {};
+    const count = (job.state.wakeCount ?? 0) + add;
+    job.state.wakeCount = count;
+    job.state.wakeLastAtMs = state.deps.nowMs();
+    await persist(state);
+    const threshold = job.wake.threshold;
+    return { jobId: id, count, threshold, due: threshold > 0 && count >= threshold };
+  });
+}
+
 export async function toggle(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'toggle');

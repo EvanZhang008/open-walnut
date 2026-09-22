@@ -228,6 +228,59 @@ function coerceCheck(raw: UnknownRecord): UnknownRecord | null {
   return next;
 }
 
+// ── Wake coercion (the counter half of a trigger) ──
+
+/**
+ * A bus event name: at least two colon-separated segments
+ * ('plugin:mail:messages-received', 'task:created'). The colon is required —
+ * a bare word is not an event this bus ever emits, and accepting one would
+ * store a counter that can never move.
+ */
+const WAKE_EVENT_NAME_RE = /^[a-z0-9][a-z0-9._/-]*(?::[a-z0-9][a-z0-9._/-]*)+$/i;
+/** Bounded so one routine cannot widen a global subscriber's interest without limit. */
+const WAKE_EVENTS_MAX = 16;
+/**
+ * A payload key we are willing to index with. Rejecting the prototype hazards by
+ * name matters because `countField` comes from API input and is used to read a
+ * field off an arbitrary event payload.
+ */
+const WAKE_COUNT_FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const WAKE_UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Coerce a `wake` block. Returns null when no valid event name survives — a
+ * counter with nothing to count is not a trigger, and storing one would make a
+ * card claim a behaviour the routine does not have.
+ */
+function coerceWake(raw: UnknownRecord): UnknownRecord | null {
+  const rawEvents = Array.isArray(raw.events)
+    ? raw.events
+    : typeof raw.events === 'string' ? [raw.events] : [];
+  const events = [...new Set(
+    rawEvents
+      .filter((e): e is string => typeof e === 'string')
+      .map((e) => e.trim())
+      .filter((e) => WAKE_EVENT_NAME_RE.test(e)),
+  )].slice(0, WAKE_EVENTS_MAX);
+  if (events.length === 0) return null;
+
+  const next: UnknownRecord = { events };
+
+  const rawThreshold = raw.threshold;
+  const threshold = typeof rawThreshold === 'number' ? rawThreshold : Number(rawThreshold);
+  next.threshold = Number.isFinite(threshold) ? Math.max(0, Math.floor(threshold)) : 0;
+
+  const countField = raw.countField ?? raw.count_field;
+  if (typeof countField === 'string') {
+    const key = countField.trim();
+    if (WAKE_COUNT_FIELD_RE.test(key) && !WAKE_UNSAFE_KEYS.has(key)) next.countField = key;
+  }
+
+  if (raw.skipWhenIdle === true || raw.skip_when_idle === true) next.skipWhenIdle = true;
+
+  return next;
+}
+
 // ── Unwrap ──
 
 function unwrapJob(raw: UnknownRecord): UnknownRecord {
@@ -399,6 +452,21 @@ function normalizeCronJobInput(
     else next.check = null;
   } else if ('check' in next) {
     delete next.check;
+  }
+
+  // Coerce wake, exactly like check: an explicit null CLEARS it on a patch, and
+  // an ABSENT key leaves a stored one alone — the routine form never renders
+  // `wake`, so its save (name/schedule/executor/check) must not erase it.
+  const rawWake = base.wake;
+  if (isRecord(rawWake)) {
+    const coerced = coerceWake(rawWake as UnknownRecord);
+    if (coerced) next.wake = coerced;
+    else delete next.wake;
+  } else if (rawWake === null) {
+    if (applyDefaults) delete next.wake;
+    else next.wake = null;
+  } else if ('wake' in next) {
+    delete next.wake;
   }
 
   // Copy top-level timeoutSeconds into payload if applicable

@@ -486,6 +486,8 @@ function runPluginMutation<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 let cronServiceInstance: CronService | null = null
+/** Counts wake events for routines that run on a count, not only on the clock. */
+let routineWakeHandle: import('../core/routines/wake-events.js').RoutineWakeHandle | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
 let sessionReaper: SessionReaper | null = null
@@ -1284,6 +1286,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     },
     onEvent: (evt) => {
       broadcastEvent(`cron:job-${evt.action}`, evt)
+      // A definition changed, so the wake subscriber's interest set (derived from
+      // the stored jobs) may be stale. This hook is the ONE place every mutation
+      // path passes through — REST, the agent's cron tools, the cloud relay —
+      // and there is no bus event for a cron mutation to listen to instead.
+      // 'started'/'finished' change no definition, so they are skipped.
+      if (evt.action === 'added' || evt.action === 'updated' || evt.action === 'removed') {
+        routineWakeHandle?.refresh()
+      }
       // Wake heartbeat when a cron job finishes
       if (evt.action === 'finished' && heartbeatHandle) {
         heartbeatHandle.requestNow('cron-completed', `Cron job "${evt.summary ?? evt.jobId}" just finished.`)
@@ -1318,6 +1328,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Also needs no cron deps.
     const { createSessionExecutor } = await import('../core/routines/executors/session.js')
     registerExecutor(createSessionExecutor())
+  }
+
+  // ── Routine wake: the counter half of a trigger ──
+  // After the registry, because crossing a threshold dispatches a routine
+  // through its executor. One global bus subscriber, interest-gated to the
+  // events the stored wake routines actually name.
+  {
+    const { startRoutineWake } = await import('../core/routines/wake-events.js')
+    routineWakeHandle = startRoutineWake()
   }
 
   // ── walnut-trigger seams (both directions, registered once) ──
@@ -5068,6 +5087,10 @@ export async function stopServer(): Promise<void> {
   unsubscribeHostPhase?.()
   unsubscribeHostPhase = null
   bus.unsubscribe('host-status-defs')
+  if (routineWakeHandle) {
+    routineWakeHandle.stop()
+    routineWakeHandle = null
+  }
   if (cronServiceInstance) {
     cronServiceInstance.stop()
     setCronService(null)

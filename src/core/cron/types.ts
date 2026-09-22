@@ -16,6 +16,33 @@ export type CronSchedule =
 
 export type CronSessionTarget = 'main' | 'isolated';
 
+// ── Wake: the counter half of a routine's trigger ──
+
+/**
+ * A second, INDEPENDENT reason to run: enough new items arrived. Deliberately
+ * not a fourth `CronSchedule` kind — a schedule must answer "when is the next
+ * run", and a counter has no answer to that. The clock and the counter sit side
+ * by side: `schedule` still drives the timed run, `wake` runs the job early.
+ *
+ * The subscription that FEEDS the counter lives in the routines layer
+ * (src/core/routines/wake-events.ts). The cron engine never imports the event
+ * bus, which is what keeps it testable with nothing but an injected clock.
+ */
+export type CronWake = {
+  /**
+   * EXACT bus event names ('plugin:mail:messages-received'). Not prefixes: a
+   * prefix would count every sibling event a plugin emits
+   * (plugin:mail:draft-changed) as a new item to process.
+   */
+  events: string[];
+  /** Numeric payload field to add per event; absent = +1 per event. */
+  countField?: string;
+  /** Run as soon as the counter reaches this. 0 = clock only. */
+  threshold: number;
+  /** A timed run whose counter is 0 is skipped instead of dispatched. */
+  skipWhenIdle?: boolean;
+};
+
 // ── Check (walnut-trigger) ──
 
 /**
@@ -199,6 +226,19 @@ export type CronJobState = {
   fireLog?: TriggerAuditEntry[];
   /** Check jobs only: total fires ever, which the bounded fireLog cannot report. */
   fireCount?: number;
+  /**
+   * Wake jobs only: counted events that have arrived since the last run.
+   *
+   * RUNTIME state on purpose, so it rides the machine-local cron-state.json
+   * sidecar and never the git-synced definitions file — a counter echoing back
+   * from another box firing a job here is the 2026-08-04 storm in a new costume.
+   *
+   * A run SUBTRACTS the value it observed at dispatch rather than zeroing this
+   * (applyJobResult): an event that arrived mid-run belongs to the next batch.
+   */
+  wakeCount?: number;
+  /** Wake jobs only: when the counter was last bumped. */
+  wakeLastAtMs?: number;
 };
 
 // ── The job itself ──
@@ -229,6 +269,13 @@ export type CronJob = {
    * `state.nextRunAtMs` is whatever that daemon last reported.
    */
   check?: TriggerCheck;
+  /**
+   * Present = this routine ALSO runs on a count of events, not just its clock.
+   * Mutually exclusive with `check`: a check trigger already decides its own
+   * fires on its host, so a server-side counter next to it would be a second,
+   * disagreeing answer to the same question.
+   */
+  wake?: CronWake;
   state: CronJobState;
 };
 
@@ -255,7 +302,7 @@ export type CronJobCreate = Omit<CronJob, 'id' | 'createdAtMs' | 'updatedAtMs' |
   payload?: CronPayload;
 };
 
-export type CronJobPatch = Partial<Omit<CronJob, 'id' | 'createdAtMs' | 'state' | 'payload' | 'initProcessor' | 'check'>> & {
+export type CronJobPatch = Partial<Omit<CronJob, 'id' | 'createdAtMs' | 'state' | 'payload' | 'initProcessor' | 'check' | 'wake'>> & {
   initProcessor?: InitProcessorPatch;
   payload?: CronPayloadPatch;
   delivery?: Partial<CronDelivery>;
@@ -263,6 +310,11 @@ export type CronJobPatch = Partial<Omit<CronJob, 'id' | 'createdAtMs' | 'state' 
   executor?: RoutineExecutorRef;
   /** `null` turns a trigger back into a plain time-only routine. */
   check?: TriggerCheck | null;
+  /**
+   * `null` clears the counter trigger; ABSENT leaves it alone. The routine form
+   * does not render `wake`, so its save must not be able to erase one.
+   */
+  wake?: CronWake | null;
 };
 
 // ── Events ──

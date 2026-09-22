@@ -12,6 +12,9 @@ import type { CronJob, CronServiceState, CronEvent } from './types.js';
 import { cloudModeSkipsJob, computeJobNextRunAtMs, nextWakeAtMs, recomputeNextRuns } from './jobs.js';
 import { ensureLoaded, persist } from './store.js';
 import { withFileLock } from '../../utils/file-lock.js';
+import {
+  appendAudit, auditDelivery, injectedPreview, wakeAuditEntry, TRIGGER_FIRE_LOG_MAX,
+} from './trigger-audit.js';
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -149,20 +152,35 @@ export function stopTimer(state: CronServiceState): void {
 
 // ── Core execution ──
 
+/** What a dispatch observed and produced, for the wake counter + its audit line. */
+export type JobRunOutcome = {
+  status: 'ok' | 'error' | 'skipped';
+  error?: string;
+  startedAt: number;
+  endedAt: number;
+  /**
+   * Wake jobs: the counter value the dispatch OBSERVED. Subtracted (never
+   * zeroed) so an event that arrived mid-run survives into the next batch.
+   */
+  wakeObserved?: number;
+  /** The executor's own sentence, for the wake fire's audit row. */
+  summary?: string;
+  /** The text this run actually handed the executor, for the injected preview. */
+  dispatched?: string;
+  /** The session the run landed in, when the executor named one. */
+  sessionId?: string;
+};
+
 /**
  * Apply the result of a job execution to the job's state.
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
- * and nextRunAtMs computation. Returns `true` if the job should be deleted.
+ * the wake counter, and nextRunAtMs computation. Returns `true` if the job
+ * should be deleted.
  */
 export function applyJobResult(
   state: CronServiceState,
   job: CronJob,
-  result: {
-    status: 'ok' | 'error' | 'skipped';
-    error?: string;
-    startedAt: number;
-    endedAt: number;
-  },
+  result: JobRunOutcome,
 ): boolean {
   job.state.runningAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
@@ -176,6 +194,39 @@ export function applyJobResult(
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
   } else {
     job.state.consecutiveErrors = 0;
+  }
+
+  // Wake counter: SUBTRACT what the dispatch observed instead of zeroing it.
+  // This runs AFTER the executor, so events that arrived during the run are
+  // already in the counter — zeroing would silently swallow that whole batch
+  // (the one subtlety this feature has). Applied for 'skipped' too, for the same
+  // reason the replay guard below is: the slot was consumed either way.
+  if (job.wake) {
+    const observed = Math.max(0, Math.floor(result.wakeObserved ?? 0));
+    job.state.wakeCount = Math.max(0, (job.state.wakeCount ?? 0) - observed);
+    if (observed > 0 && result.status !== 'skipped') {
+      // One audit row per wake fire, with the text the run injected. A 'skipped'
+      // run never reached an executor, so calling that a fire would be a lie —
+      // its lastStatus/lastError carry the reason instead.
+      job.state.fireLog = appendAudit(
+        job.state.fireLog,
+        wakeAuditEntry({
+          atMs: result.startedAt,
+          items: observed,
+          durationMs: job.state.lastDurationMs,
+          ...(result.error ? { error: result.error } : {}),
+          delivery: auditDelivery({
+            status: result.status === 'error' ? 'error' : 'ok',
+            retry: false,
+            ...(result.summary ? { summary: result.summary } : {}),
+            ...(result.error ? { error: result.error } : {}),
+            ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+          }),
+          ...(result.dispatched ? { injected: injectedPreview(result.dispatched) } : {}),
+        }),
+        TRIGGER_FIRE_LOG_MAX,
+      );
+    }
   }
 
   const shouldDelete =
@@ -246,7 +297,20 @@ async function executeJobCore(
   status: 'ok' | 'error' | 'skipped';
   error?: string;
   summary?: string;
+  /** The text handed to the executor, for the wake fire's audit preview. */
+  dispatched?: string;
+  sessionId?: string;
 }> {
+  // ── Wake: nothing new, nothing to do ──
+  // Here rather than in findDueJobs: a job filtered out THERE keeps a past-due
+  // nextRunAtMs and is re-evaluated on every tick forever. Reaching this point
+  // means the slot is spent — applyJobResult computes the next run for a
+  // 'skipped' result and arms the replay guard. Before the init processor too:
+  // an idle slot must cost neither an action nor a model call.
+  if (job.wake?.skipWhenIdle && (job.state.wakeCount ?? 0) === 0) {
+    return { status: 'skipped', summary: 'no new items' };
+  }
+
   // ── Init processor (optional pre-step action) ──
   let initOutput: string | undefined;
   if (job.initProcessor) {
@@ -301,7 +365,15 @@ async function executeJobCore(
       return { status: 'skipped', error: `executor '${executor.type}' requires non-empty instructions` };
     }
     const message = initOutput ? `${initOutput}\n\n${instructions}` : instructions;
-    return await state.deps.runExecutor(job, executor, message);
+    const res = await state.deps.runExecutor(job, executor, message);
+    // `delivered.text` is the exact text a session received when the executor
+    // knows it (the session executor does); otherwise the message we dispatched
+    // is the honest answer to "what did this run inject".
+    return {
+      ...res,
+      dispatched: res.delivered?.text ?? message,
+      ...(res.delivered?.sessionId ? { sessionId: res.delivered.sessionId } : {}),
+    };
   }
 
   if (job.sessionTarget === 'main') {
@@ -326,14 +398,14 @@ async function executeJobCore(
         });
         // Return error status so backoff engages. The notification was already
         // broadcast, but the agent failed — callers should back off and retry.
-        return { status: 'error', error: errMsg, summary: text };
+        return { status: 'error', error: errMsg, summary: text, dispatched: text };
       }
     } else {
       // Queue for agent's next interaction (next-cycle)
       state.deps.queueCronNotificationForAgent?.(text, job.name);
     }
 
-    return { status: 'ok', summary: text };
+    return { status: 'ok', summary: text, dispatched: text };
   }
 
   // Isolated session target
@@ -367,7 +439,7 @@ async function executeJobCore(
           err: errMsg,
         });
         // Propagate error so backoff engages (notification already broadcast)
-        return { status: 'error', error: errMsg, summary: res.summary };
+        return { status: 'error', error: errMsg, summary: res.summary, dispatched: message };
       }
     }
   }
@@ -376,6 +448,7 @@ async function executeJobCore(
     status: res.status,
     error: res.error,
     summary: res.summary,
+    dispatched: message,
   };
 }
 
@@ -393,6 +466,9 @@ export async function executeJob(
   const startedAt = state.deps.nowMs();
   job.state.runningAtMs = startedAt;
   job.state.lastError = undefined;
+  // Read at DISPATCH, before the executor runs: this is the batch this run owns.
+  // Anything counted after this point belongs to the next run (see applyJobResult).
+  const wakeObserved = job.wake ? job.state.wakeCount ?? 0 : 0;
   emit(state, { jobId: job.id, action: 'started', runAtMs: startedAt });
 
   // Outer timeout wraps the entire job (init processor + payload execution).
@@ -409,6 +485,8 @@ export async function executeJob(
     status: 'ok' | 'error' | 'skipped';
     error?: string;
     summary?: string;
+    dispatched?: string;
+    sessionId?: string;
   };
 
   try {
@@ -440,6 +518,10 @@ export async function executeJob(
       error: coreResult.error,
       startedAt,
       endedAt,
+      wakeObserved,
+      summary: coreResult.summary,
+      dispatched: coreResult.dispatched,
+      sessionId: coreResult.sessionId,
     });
 
     emit(state, {
@@ -521,13 +603,18 @@ export async function onTimer(state: CronServiceState): Promise<void> {
       status: 'ok' | 'error' | 'skipped';
       error?: string;
       summary?: string;
+      dispatched?: string;
+      sessionId?: string;
       startedAt: number;
       endedAt: number;
+      wakeObserved: number;
     }> = [];
 
     for (const { id, job } of dueJobs) {
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
+      // The wake batch this run owns, read at dispatch (see applyJobResult).
+      const wakeObserved = job.wake ? job.state.wakeCount ?? 0 : 0;
       emit(state, { jobId: job.id, action: 'started', runAtMs: startedAt });
 
       const payloadTimeout2 = job.payload.kind === 'agentTurn' && typeof job.payload.timeoutSeconds === 'number'
@@ -549,7 +636,7 @@ export async function onTimer(state: CronServiceState): Promise<void> {
             );
           }),
         ]).finally(() => clearTimeout(timeoutId!));
-        results.push({ jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() });
+        results.push({ jobId: id, ...result, startedAt, endedAt: state.deps.nowMs(), wakeObserved });
       } catch (err) {
         state.deps.log.warn(`job failed: ${String(err)}`, {
           jobId: id,
@@ -562,6 +649,7 @@ export async function onTimer(state: CronServiceState): Promise<void> {
           error: String(err),
           startedAt,
           endedAt: state.deps.nowMs(),
+          wakeObserved,
         });
       }
     }
@@ -580,6 +668,10 @@ export async function onTimer(state: CronServiceState): Promise<void> {
             error: result.error,
             startedAt: result.startedAt,
             endedAt: result.endedAt,
+            wakeObserved: result.wakeObserved,
+            summary: result.summary,
+            dispatched: result.dispatched,
+            sessionId: result.sessionId,
           });
 
           emit(state, {

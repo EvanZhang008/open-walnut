@@ -78,6 +78,15 @@ export class CronService {
   }
 
   /**
+   * wake: add counted events to a routine's counter. The subscription that feeds
+   * this lives in the routines layer (core/routines/wake-events.ts) — the engine
+   * only owns the number and whether it reached the threshold.
+   */
+  async bumpWake(id: string, n: number): Promise<ops.WakeBumpResult | null> {
+    return await ops.bumpWake(this.state, id, n);
+  }
+
+  /**
    * walnut-trigger: fold a daemon's `trigger.checked` / `trigger.fired` event
    * into this store. Only the store bookkeeping lives here; the routines layer
    * (core/routines/trigger-events.ts) owns the envelope, the executor call, the
