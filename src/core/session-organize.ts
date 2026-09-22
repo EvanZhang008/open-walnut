@@ -145,8 +145,11 @@ export async function suggestSessionPlacement(
     // A Jev ANSWER — even "nothing fits" — is final; a transport error or a
     // malformed answer falls through to the fast-model path below. An explicit
     // modelOverride means the caller wants THAT model's judgment (evals, A/B),
-    // so Jev steps aside entirely, mirroring parseQuickTask.
-    const jev = opts.modelOverride ? undefined : getJevClient(config);
+    // so Jev steps aside entirely, mirroring parseQuickTask. The Settings
+    // opt-out (decisions.session_organize === false) disables this ONE
+    // decision; unset means on.
+    const organizeEnabled = config.jev?.decisions?.session_organize !== false;
+    const jev = opts.modelOverride || !organizeEnabled ? undefined : getJevClient(config);
     if (jev) {
       const viaJev = await placeViaJev(jev, digest, input, {
         timeoutMs: opts.timeoutMs, taskId: opts.taskId,

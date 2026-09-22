@@ -239,6 +239,29 @@ describe('parseQuickTask with Jev (CLI fast model: LLM leg skipped)', () => {
   });
 });
 
+describe('parseQuickTask with the Settings opt-out', () => {
+  it('decisions.quick_parse === false keeps the LLM-only path (client never built)', async () => {
+    config.jev = { api_key: 'test-key', decisions: { quick_parse: false } } as never;
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix login","pinTier":"focus"}'));
+
+    const { parse } = await parseQuickTask('fix login asap');
+    expect(parse).toMatchObject({ title: 'Fix login', pinTier: 'focus' });
+    expect(getJevClientMock).not.toHaveBeenCalled();
+    expect(decideMock).not.toHaveBeenCalled();
+    config.jev = { api_key: 'test-key', model: 'typesafe/jev-1.13' } as never;
+  });
+
+  it('an unset toggle means ON (configuring Jev is the opt-in)', async () => {
+    config.jev = { api_key: 'test-key', decisions: {} } as never;
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix login","pinTier":"focus"}'));
+    decideMock.mockResolvedValue({ pinTier: choice('satellite', 0.8) });
+
+    const { parse } = await parseQuickTask('fix login by friday');
+    expect(parse.pinTier).toBe('satellite');
+    config.jev = { api_key: 'test-key', model: 'typesafe/jev-1.13' } as never;
+  });
+});
+
 describe('parseQuickTask without Jev', () => {
   it('is byte-identical to the historical LLM-only behavior', async () => {
     getJevClientMock.mockReturnValue(undefined);

@@ -1310,6 +1310,14 @@ export interface Config {
     /** Model id the endpoint expects. Default 'jev-latest' (first-party);
      *  gateways use their own ids (OpenRouter: 'typesafe/jev-1.13'). */
     model?: string;
+    /** Per-decision opt-outs. Every decision defaults ON once Jev is
+     *  configured; `false` returns that one call site to its pre-Jev path. */
+    decisions?: {
+      /** Quick-add note classification (pinTier / priority / project). */
+      quick_parse?: boolean;
+      /** Quick-start session auto-filing into a project. */
+      session_organize?: boolean;
+    };
   };
   /** API keys for remote client authentication (iOS app, etc.) */
   api_keys?: ApiKeyEntry[];

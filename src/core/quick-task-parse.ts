@@ -393,7 +393,10 @@ export async function parseQuickTask(
   let jevPromise: Promise<JevQuickFields | undefined> | undefined;
   let skipLlm = false;
   try {
-    jev = config && !opts.modelOverride ? getJevClient(config) : undefined;
+    // decisions.quick_parse === false is the Settings opt-out for this ONE
+    // decision; unset means on (Jev configured = Jev used).
+    const quickParseEnabled = config?.jev?.decisions?.quick_parse !== false;
+    jev = config && quickParseEnabled && !opts.modelOverride ? getJevClient(config) : undefined;
     jevPromise = jev ? jevClassify(jev, trimmed.slice(0, 500), opts) : undefined;
     skipLlm = jevPromise !== undefined && config !== undefined && fastModelRidesCli(config);
   } catch (err) {

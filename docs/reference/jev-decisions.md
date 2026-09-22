@@ -21,6 +21,17 @@ existing fast-model path, byte for byte.
 
 ## Configuration
 
+**Settings > Jev Decisions is the front door.** It stores the key, points the
+client at a first-party or gateway endpoint, turns each decision on or off
+independently, and round-trips the endpoint with a Test button. Saving a key
+there writes the literal to `<walnut-home>/secrets/jev-api.key` (0600) and puts
+only a `${file:}` reference in config, so the key never enters the synced file.
+Routes: `POST /api/jev/key`, `DELETE /api/jev/key`, `POST /api/jev/test`
+(`src/web/routes/jev.ts`); the Test route answers `ok:false` with the status
+text rather than an error, because a settings page must always answer.
+
+The same shape is editable by hand:
+
 ```yaml
 # ~/.open-walnut/config.yaml
 jev:
@@ -35,6 +46,13 @@ jev:
   # request/response shape; set both fields for OpenRouter:
   endpoint: "https://openrouter.ai/api/alpha/decisions"
   model: "typesafe/jev-1.13"          # default: jev-latest (first-party)
+
+  # Optional per-decision opt-outs. Configuring Jev IS the opt-in, so an unset
+  # (or absent) toggle means on; `false` returns that ONE call site to its
+  # pre-Jev path and the client is never even built for it.
+  decisions:
+    quick_parse: true                 # quick-add classification
+    session_organize: true            # quick-start session auto-filing
 ```
 
 First-party keys come from the TypeSafe console (early-access waitlist at the

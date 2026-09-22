@@ -18,8 +18,11 @@ const digestMock = vi.fn();
 vi.mock('../../src/core/quick-task-digest.js', () => ({
   buildProjectDigest: (...args: unknown[]) => digestMock(...args),
 }));
+const config: Record<string, unknown> = {
+  version: 1, user: {}, defaults: { priority: 'backlog' }, agent: { main_provider: 'bedrock' },
+};
 vi.mock('../../src/core/config-manager.js', () => ({
-  getConfig: async () => ({ version: 1, user: {}, defaults: { priority: 'backlog' }, agent: { main_provider: 'bedrock' } }),
+  getConfig: async () => config,
 }));
 const getJevClientMock = vi.fn();
 // Keep the real module (readChoice is real validation logic under test here);
@@ -138,6 +141,18 @@ describe('suggestSessionPlacement with Jev', () => {
 
     expect(await suggestSessionPlacement(INPUT)).toEqual({ project: 'Errands' });
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('decisions.session_organize === false keeps the fast-model path (client never built)', async () => {
+    config.jev = { api_key: 'test-key', decisions: { session_organize: false } };
+    const decide = vi.fn();
+    getJevClientMock.mockReturnValue({ decide });
+    sendMessageMock.mockResolvedValue({ content: [{ type: 'text', text: '{"project":"walnut"}' }] });
+
+    expect(await suggestSessionPlacement(INPUT)).toEqual({ project: 'walnut' });
+    expect(getJevClientMock).not.toHaveBeenCalled();
+    expect(decide).not.toHaveBeenCalled();
+    delete config.jev;
   });
 
   it('keeps the fast-model path when Jev is not configured', async () => {

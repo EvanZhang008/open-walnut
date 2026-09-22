@@ -13,6 +13,7 @@ import { GeneralSection } from './sections/GeneralSection'
 import { HeartbeatSection } from './sections/HeartbeatSection'
 import { HooksSection } from './sections/HooksSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
+import { JevSection } from './sections/JevSection'
 import { PermissionsSection } from './sections/PermissionsSection'
 import { PluginStoreSection } from './sections/PluginStoreSection'
 import { ProvidersSection } from './sections/ProvidersSection'
@@ -79,6 +80,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'stt', label: 'Voice', title: 'Voice', group: 'configure', render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} /> },
   { owner: 'walnut', id: 'audio-capture', label: 'Audio Capture', title: 'Audio Capture', group: 'configure', render: ({ config, saveSection }) => <AudioCaptureSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'integrations', label: 'Integrations', title: 'Integrations', group: 'configure', render: ({ config, saveSection }) => <IntegrationsSection config={config} onSave={saveSection} /> },
+  // Right after Integrations: Jev is an outbound integration too (a decision
+  // API), and both answer "what external services does Walnut call?".
+  { owner: 'walnut', id: 'jev', label: 'Jev Decisions', title: 'Jev Decisions', group: 'configure', render: ({ config, saveSection, reload }) => <JevSection config={config} onSave={saveSection} onReload={reload} /> },
   // "Calendar Accounts" / "macOS Access": the two used to be "Calendar" and
   // "Permissions", which collided with the Calendar page and with the session
   // permission-prompt settings.

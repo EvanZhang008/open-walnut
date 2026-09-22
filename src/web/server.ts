@@ -1428,6 +1428,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // deeper /:agentId/conversations paths fall through here without collision.
   app.use('/api/agents', createConversationsRouter())
   app.use('/api/engines', (await import('./routes/engines.js')).enginesRouter)
+  app.use('/api/jev', (await import('./routes/jev.js')).jevRouter)
   app.use('/api/commands', createCommandsRouter())
   app.use('/api/skills', createSkillsRouter())
   app.use('/api/slash-commands', createSlashCommandsRouter())
