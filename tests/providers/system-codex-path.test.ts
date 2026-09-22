@@ -12,7 +12,7 @@ import {
   resolveSystemCodexPath,
   SystemCodexPathError,
 } from '../../src/providers/acp-session.js'
-import { buildAcpLaneConfig } from '../../src/providers/claude-code-session.js'
+import { buildAcpLaneConfig, buildAcpStartExtras } from '../../src/providers/claude-code-session.js'
 
 let tmpDir: string
 
@@ -131,6 +131,36 @@ describe('buildAcpLaneConfig', () => {
     expect(config.walnutMcpServer.name).toBe('walnut')
     expect(config.walnutMcpServer.args.at(-1)).toBe('mcp')
     expect(config.walnutMcpServer.env).toEqual([])
+  })
+})
+
+describe('buildAcpStartExtras', () => {
+  it('gives a lane the whole lane bundle', async () => {
+    const extras = await buildAcpStartExtras({ lane: 'chat:general:conv-codex' })
+    expect(extras.lane).toBe('chat:general:conv-codex')
+    expect(extras.disableProjectInstructions).toBe(true)
+    expect(extras.walnutMcpServer?.name).toBe('walnut')
+  })
+
+  it('gives an ask Walnut tools and nothing else', async () => {
+    const extras = await buildAcpStartExtras({ walnutAgent: true })
+    // The mount is the whole point: an Ask persona is written about task_list and
+    // note_edit, and on ACP there is no profile channel to carry tools.
+    expect(extras.walnutMcpServer?.name).toBe('walnut')
+    expect(extras.walnutMcpServer?.args.at(-1)).toBe('mcp')
+    // Not a lane: it is a task session, and it keeps its project's own docs.
+    expect(extras.lane).toBeUndefined()
+    expect(extras.disableProjectInstructions).toBeUndefined()
+  })
+
+  it('gives a plain ACP session nothing, leaving the opt-in flag to decide', async () => {
+    expect(await buildAcpStartExtras({})).toEqual({})
+    expect(await buildAcpStartExtras({ walnutAgent: false })).toEqual({})
+  })
+
+  it('prefers the lane bundle when a launch is somehow both', async () => {
+    const extras = await buildAcpStartExtras({ lane: 'chat:general:c1', walnutAgent: true })
+    expect(extras.disableProjectInstructions).toBe(true)
   })
 })
 

@@ -154,6 +154,27 @@ export interface SessionStartEvent {
    * spawn → CLI init). Optional; absent for non-HTTP-triggered starts.
    */
   requestTs?: number;
+  /**
+   * The human's own words, when `message` carries a Walnut-built prefix in front
+   * of them (an ACP ask's persona, the attached-image context block).
+   *
+   * Every NAME the runner derives (session title, task description) reads this
+   * and never `message`: a title reading "[Walnut agent profile] You are the
+   * agent described below…" shows the reader configuration where they expect
+   * their own request. Absent means the message IS the words, which is every
+   * caller that prepends nothing.
+   */
+  namingMessage?: string;
+  /**
+   * This session runs a Walnut console agent ("Ask Walnut"), rather than a plain
+   * coding session.
+   *
+   * On the native engine the profile already says so (it carries the persona). An
+   * ACP engine has no profile channel, so the flag is how the runner knows to
+   * mount Walnut's own tools for it — a persona written about `task_list` and
+   * `note_edit` is unreachable prose without them.
+   */
+  walnutAgent?: boolean;
 }
 
 export interface SessionSendEvent {

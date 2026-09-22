@@ -273,6 +273,11 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       host,
     });
   }
+  // What every NAME derives from, captured before either Walnut-built prefix goes
+  // on: the session title and the task description must read the request, not the
+  // configuration Walnut wrapped around it. Taken post-spill on purpose, so a
+  // spilled launch is still named by its pointer text exactly as before.
+  const namingMessage = sessionMessage;
   if (messagePrefix) {
     sessionMessage = messagePrefix + sessionMessage;
   }
@@ -506,6 +511,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   bus.emit(EventNames.SESSION_START, {
     taskId: updatedTask.id,
     message: sessionMessage,
+    // Only when a prefix was actually applied, so the payload every other
+    // launcher emits stays byte-identical.
+    ...(namingMessage !== sessionMessage ? { namingMessage } : {}),
     ...(params.sessionTitle?.trim() ? { title: params.sessionTitle.trim() } : {}),
     cwd,
     project,
@@ -517,6 +525,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     engine,
     // Ask Walnut: the spawn takes the Personal AI profile + chat-tuned effort.
     ...(walnutProfile ? { profile: walnutProfile.profile, effort: walnutProfile.effort } : {}),
+    // Named even when the profile rode the spawn: an ACP ask has no profile on
+    // the wire, and this is what tells the runner to mount Walnut's own tools.
+    ...(walnutAgent ? { walnutAgent: true } : {}),
     // ACP (codex) mints its own ids inside the adapter — only forward for native.
     ...(preassignedSessionId && !isAcpEngine(engine) ? { preassignedSessionId } : {}),
   }, ['session-runner'], { source });

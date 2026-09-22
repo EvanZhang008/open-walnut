@@ -18,6 +18,9 @@
  *      to that promise rather than handing back a dead id (the frozen /api/v1
  *      launch, the notification repair, a subagent runId).
  *   6. Garbage in the config degrades to the default instead of failing launches.
+ *   7. A launch that prepends anything to the message (the ACP persona here)
+ *      carries the human's own words alongside it, so the session is named after
+ *      the request and not after its own configuration.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -241,6 +244,65 @@ describe('POST /api/sessions/quick-start — walnutAgent on an ACP engine', () =
     expect(started.message).toBe('what do I have today?');
     expect((started.profile as { systemPrompt?: string } | undefined)?.systemPrompt).toBeTruthy();
     expect(started.effort).toBeTruthy();
+  });
+
+  it('names the session after the request, not after the persona it wrapped it in', async () => {
+    const res = await request(createApp())
+      .post('/api/sessions/quick-start')
+      .send({ message: 'what do I have today?', walnutAgent: true, engine: 'codex' });
+
+    expect(res.status).toBe(200);
+    const started = capture.last();
+    // The wire message leads with the profile banner; the naming text does not.
+    // Without this the session is titled "[Walnut agent profile] You are the
+    // agent described below…" and its description is 500 characters of persona.
+    expect(started.namingMessage).toBe('what do I have today?');
+    expect((started.message as string).startsWith(ASK_PROFILE_BANNER_OPEN)).toBe(true);
+  });
+
+  it('marks the launch as a Walnut agent so the ACP runner mounts Walnut tools', async () => {
+    configuredEngine.value = 'codex';
+    const res = await request(createApp())
+      .post('/api/sessions/quick-start')
+      .send({ message: 'what do I have today?', walnutAgent: true });
+
+    expect(res.status).toBe(200);
+    // ACP carries no profile, so this flag is the only thing that can tell the
+    // runner an ACP ask needs Walnut's own tools (buildAcpStartExtras).
+    expect(capture.last().walnutAgent).toBe(true);
+  });
+
+  it('marks the native ask too, where the profile also says so', async () => {
+    const res = await request(createApp())
+      .post('/api/sessions/quick-start')
+      .send({ message: 'what do I have today?', walnutAgent: true });
+
+    expect(res.status).toBe(200);
+    // Honest about what the launch is on both engines; the native path already
+    // gets its tools from the profile and ignores the flag.
+    expect(capture.last().walnutAgent).toBe(true);
+  });
+
+  it('leaves the flag off a plain coding launch', async () => {
+    const res = await request(createApp())
+      .post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp/plain-launch', message: 'fix the failing test', project: 'Walnut' });
+
+    expect(res.status).toBe(200);
+    expect('walnutAgent' in capture.last()).toBe(false);
+  });
+
+  it('sends no naming text when nothing was prepended, so every other launch is byte-identical', async () => {
+    const res = await request(createApp())
+      .post('/api/sessions/quick-start')
+      .send({ message: 'what do I have today?', walnutAgent: true });
+
+    expect(res.status).toBe(200);
+    const started = capture.last();
+    expect(started.message).toBe('what do I have today?');
+    // Absent, not equal-to-message: the payload must not grow a field for the
+    // callers that never needed one.
+    expect('namingMessage' in started).toBe(false);
   });
 
   it('still refuses a remote ask (the Personal AI runs where the server runs)', async () => {

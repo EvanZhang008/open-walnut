@@ -61,6 +61,7 @@ import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown } from './delive
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
+import { launchNamingText } from '../core/sessions/launch-naming.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind } from '../core/types.js'
 import {
   SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
@@ -86,18 +87,68 @@ import {
   getOpenTurnPromise,
 } from './turn-ledger.js'
 
+/**
+ * The walnut MCP mount for an ACP session, resolved to THIS install's CLI entry.
+ *
+ * Never a bare `open-walnut` on PATH: a server started from `dist/` usually has no
+ * global install, and the provider spawns the mount itself, so a PATH miss reads
+ * to the user as "Walnut's tools are broken". `walnutMcpProfile` resolves
+ * `process.execPath + <cli entry>` whenever it can and keeps the PATH form only
+ * as its last resort.
+ */
+export async function acpWalnutMcpServer(): Promise<import('./acp-worker/protocol.js').AcpMcpServer> {
+  const { walnutMcpProfile } = await import('../core/sessions/profiles.js')
+  const server = walnutMcpProfile().mcpServers?.walnut
+  if (!server) throw new Error('Walnut MCP profile is unavailable')
+  return sessionMcpServerToAcp('walnut', server)
+}
+
 export async function buildAcpLaneConfig(lane: string): Promise<{
   lane: string
   disableProjectInstructions: true
   walnutMcpServer: import('./acp-worker/protocol.js').AcpMcpServer
 }> {
-  const { walnutMcpProfile } = await import('../core/sessions/profiles.js')
-  const server = walnutMcpProfile().mcpServers?.walnut
-  if (!server) throw new Error('Walnut MCP profile is unavailable for the Main Agent lane')
   return {
     lane,
     disableProjectInstructions: true,
-    walnutMcpServer: sessionMcpServerToAcp('walnut', server),
+    walnutMcpServer: await acpWalnutMcpServer(),
+  }
+}
+
+/**
+ * The extra config an ACP start carries, and the three cases are NOT the same.
+ *
+ * - A LANE (the Main Agent's chat) takes the whole lane bundle: Walnut's tools,
+ *   the lane binding, and no project instructions.
+ * - An ASK (`walnutAgent`: a Walnut console agent running as a task session) takes
+ *   Walnut's tools and nothing else. It needs them because its persona is written
+ *   about them — "read State.md, ask the task, write the letter" is unreachable
+ *   prose without the mount, and on ACP there is no spawn profile to carry it
+ *   (the persona itself already had to move onto the first message). The opt-in
+ *   flag `session.acp_walnut_mcp` cannot answer for this case: it is off by
+ *   default for a reason that does not apply here (a mount on a REMOTE exec host
+ *   with no walnut), and an ask is refused on a remote host outright.
+ * - Any other ACP session takes nothing: AcpSession still reads that opt-in flag
+ *   for itself.
+ *
+ * Best-effort for the ask, fatal for the lane: a Main Agent chat with no tools is
+ * not the Main Agent, while an ask with no tools is a degraded ask and still worth
+ * more to the person than a failed launch.
+ */
+export async function buildAcpStartExtras(data: { lane?: string; walnutAgent?: boolean }): Promise<{
+  lane?: string
+  disableProjectInstructions?: true
+  walnutMcpServer?: import('./acp-worker/protocol.js').AcpMcpServer
+}> {
+  if (data.lane) return buildAcpLaneConfig(data.lane)
+  if (!data.walnutAgent) return {}
+  try {
+    return { walnutMcpServer: await acpWalnutMcpServer() }
+  } catch (error) {
+    log.session.warn('acp: an ask launches without Walnut tools — the MCP mount could not be resolved', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return {}
   }
 }
 
@@ -8685,6 +8736,14 @@ export class SessionRunner {
     lane?: string
     engine?: import('../core/types.js').SessionEngine
     forkedFromSessionId?: string
+    /** The human's own words when `message` carries a Walnut-built prefix; see
+     *  SessionStartEvent.namingMessage. This engine is where an Ask's persona
+     *  rides the message (ACP has no system-prompt channel), so it is the path
+     *  that would otherwise name the session after its own configuration. */
+    namingMessage?: string
+    /** This session runs a Walnut console agent ("Ask Walnut"). It gets Walnut's
+     *  own tools mounted — see buildAcpStartExtras. */
+    walnutAgent?: boolean
   }): Promise<{ claudeSessionId: string; title: string }> {
     // Only ACP engines reach here (both call sites gate on isAcpEngine); the
     // codex fallback keeps the prose honest if a caller ever slips through.
@@ -8722,7 +8781,7 @@ export class SessionRunner {
       mode: (data.mode as SessionMode | undefined) ?? 'default',
       engine,
       ...(draftAcpConfig ? { acpConfig: draftAcpConfig } : {}),
-      ...(data.lane ? await buildAcpLaneConfig(data.lane) : {}),
+      ...(await buildAcpStartExtras(data)),
       directWsUrl: this._testDaemonUrl,
       artifacts: this._testAcpArtifacts,
       onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),
@@ -8733,7 +8792,9 @@ export class SessionRunner {
     const sid = await this.acpContract(session).establish()
     this.acpSessions.set(sid, session)
 
-    const title = data.title ?? data.message.slice(0, 120)
+    // The human's words, never the wire message — see core/sessions/launch-naming.ts.
+    const naming = launchNamingText(data.message, data.namingMessage)
+    const title = data.title ?? naming.slice(0, 120)
     // Persist the draft's model choice ONLY when the adapter's `model` config
     // option actually advertises the base id — that is the exact gate
     // replayPersistedConfig applied a moment ago, so persisting past it would
@@ -8752,7 +8813,7 @@ export class SessionRunner {
       const { updateSessionRecord } = await import('../core/session-tracker.js')
       await updateSessionRecord(sid, {
         title,
-        description: data.message.slice(0, 500),
+        description: naming.slice(0, 500),
         // The record is the durable copy: acpConfig so a worker respawn
         // replays the choice, acpModel so the pill shows it immediately.
         ...(modelAdvertised && draftAcpConfig ? { acpConfig: draftAcpConfig } : {}),
@@ -8959,6 +9020,13 @@ export class SessionRunner {
      *  only up to this message uuid. Rides the fork spawn as
      *  `--resume-session-at`; ignored without forkedFromSessionId. */
     resumeSessionAtMessageUuid?: string
+    /** The human's own words, when `message` carries a Walnut-built prefix in
+     *  front of them (an ACP ask's persona, the attached-image context block).
+     *  Every NAME derives from this and never from `message`: a title reading
+     *  "[Walnut agent profile] You are the agent described below…" shows the
+     *  reader configuration where they expect their own request. Absent means
+     *  the message IS the words. */
+    namingMessage?: string
   }): Promise<{ sessionReady: Promise<string>; title: string }> {
     const { taskId, project, mode, model } = data
     let cwd = data.cwd
@@ -9086,6 +9154,10 @@ export class SessionRunner {
       }
     }
 
+    // Every name below reads the human's words, never the wire message — see
+    // core/sessions/launch-naming.ts.
+    const naming = launchNamingText(message, data.namingMessage)
+
     // Use agent-provided title if available, otherwise auto-generate
     if (data.title) {
       session.pendingTitle = data.title
@@ -9093,17 +9165,17 @@ export class SessionRunner {
       const defaultPromptPrefix = 'Working on task:'
       // Empty message = init-only spawn (no first turn) — fall through to the
       // task title so the session isn't named "Title — " with a dangling dash.
-      const isCustomPrompt = message.length > 0 && !message.startsWith(defaultPromptPrefix)
+      const isCustomPrompt = naming.length > 0 && !naming.startsWith(defaultPromptPrefix)
 
       if (taskTitle && isCustomPrompt) {
-        session.pendingTitle = `${taskTitle} — ${message.slice(0, 80)}`
+        session.pendingTitle = `${taskTitle} — ${naming.slice(0, 80)}`
       } else if (taskTitle) {
         session.pendingTitle = taskTitle
       } else {
-        session.pendingTitle = message.slice(0, 120)
+        session.pendingTitle = naming.slice(0, 120)
       }
     }
-    session.pendingDescription = message.slice(0, 500)
+    session.pendingDescription = naming.slice(0, 500)
 
     let appendSystemPrompt: string | undefined
     const isFork = !!data.forkedFromSessionId
@@ -9226,7 +9298,7 @@ export class SessionRunner {
     // Local images are uploaded to the remote host by RemoteSessionManager.prepareOutbound()
     // called inside start() and writeMessage(). No manual SCP transfer needed.
 
-    const sessionTitle = session.pendingTitle ?? message.slice(0, 120)
+    const sessionTitle = session.pendingTitle ?? naming.slice(0, 120)
     // For forks: pass source session ID as resumeSessionId with forkSession=true.
     // Claude Code's --resume + --fork-session creates a new session with full context.
     const resumeId = isFork ? data.forkedFromSessionId : undefined
@@ -9340,6 +9412,9 @@ export class SessionRunner {
     appendSystemPrompt?: string
     host?: string
     fromPlanSessionId?: string
+    /** The human's own words when `message` carries a Walnut-built prefix; see
+     *  SessionStartEvent.namingMessage. */
+    namingMessage?: string
   }): Promise<{ claudeSessionId: string; title: string }> {
     if (!this.sdkClient) throw new Error('SDK client not configured')
 
@@ -9409,19 +9484,21 @@ export class SessionRunner {
       }
     }
 
+    // The human's words, never the wire message — see core/sessions/launch-naming.ts.
+    const naming = launchNamingText(message, data.namingMessage)
     let sessionTitle: string
     if (data.title) {
       sessionTitle = data.title
     } else {
       const defaultPromptPrefix = 'Working on task:'
       // Empty message = init-only spawn — same dangling-dash guard as handleStart.
-      const isCustomPrompt = message.length > 0 && !message.startsWith(defaultPromptPrefix)
+      const isCustomPrompt = naming.length > 0 && !naming.startsWith(defaultPromptPrefix)
       if (taskTitle && isCustomPrompt) {
-        sessionTitle = `${taskTitle} — ${message.slice(0, 80)}`
+        sessionTitle = `${taskTitle} — ${naming.slice(0, 80)}`
       } else if (taskTitle) {
         sessionTitle = taskTitle
       } else {
-        sessionTitle = message.slice(0, 120)
+        sessionTitle = naming.slice(0, 120)
       }
     }
 
