@@ -156,7 +156,7 @@ export function TasksSection({ config, onSave }: Props) {
 
       <div className="form-row">
         <div className="form-group">
-          <label htmlFor="triage-notify-mode">Notify Main Agent</label>
+          <label htmlFor="triage-notify-mode">Notify Home Chat</label>
           <select
             id="triage-notify-mode"
             value={triageNotifyMode}
@@ -169,7 +169,7 @@ export function TasksSection({ config, onSave }: Props) {
           </select>
           <p className="text-sm text-muted" style={{ marginTop: 2 }}>
             The task summary is <strong>always</strong> updated. This only controls whether the
-            main agent is woken to tell you about it. <strong>Off</strong> stays silent — the agent
+            home chat is woken to tell you about it. <strong>Off</strong> stays silent — the agent
             sees it next time it checks the task. <strong>Realtime</strong> is the most expensive
             (reads the whole conversation each time).
           </p>

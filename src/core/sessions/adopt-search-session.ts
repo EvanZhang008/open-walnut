@@ -281,7 +281,7 @@ export async function adoptAgentSearchSession(
   // with the POST-LINK task carries session_id, so one event seats the board row;
   // the status emit seats its "stopped" badge and is what re-exports the session
   // projection the phone reads (no session STARTED here — the CLI already exited).
-  bus.emit(EventNames.TASK_CREATED, { task: linked }, ['web-ui', 'main-agent'], { source: 'agent-search-adopt' });
+  bus.emit(EventNames.TASK_CREATED, { task: linked }, ['web-ui'], { source: 'agent-search-adopt' });
   emitSessionStatusChanged(record, {}, ['*'], { source: 'agent-search-adopt' });
   log.session.info('adopted AI search session', {
     sessionId: resolved.sessionId,

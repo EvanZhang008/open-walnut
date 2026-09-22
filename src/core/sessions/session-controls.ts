@@ -507,7 +507,7 @@ export async function createForkSiblingTask(
   } catch {
     task = newFork; // re-read is best-effort; stale beats no event
   }
-  bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: opts.source });
+  bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: opts.source });
 
   // Refine the auto-generated title in the background: summarize the fork's
   // new prompt into a few English words → `<words> - fork of <source>`.
@@ -532,7 +532,7 @@ export async function createForkSiblingTask(
         }
         const refinedTitle = `${label} - fork of ${sourceTitle}`;
         const { task: updated } = await updateTask(forkId, { title: refinedTitle }, { source: titleSource });
-        bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: titleSource });
+        bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui'], { source: titleSource });
         log.session.info('fork title refined', { taskId: forkId, title: refinedTitle });
         // The SESSION wearing the same placeholder follows the task, because the
         // session title is what becomes the `Title [8hex]` handle session_list
@@ -559,7 +559,7 @@ export async function createForkSiblingTask(
         const label = await summarizeGroupLabel(seedTitles);
         if (!label) return;
         await renameGroup(gid, label);
-        bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: gid, label }, ['web-ui', 'main-agent'], { source: groupSource });
+        bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: gid, label }, ['web-ui'], { source: groupSource });
         log.session.info('fork group label refined', { groupId: gid, label });
       } catch (err) {
         log.session.warn('fork group label refine failed', {

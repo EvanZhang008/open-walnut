@@ -144,7 +144,7 @@ export function describeCheck(check: RoutineCheck): string {
   return `$ ${short} @ ${host}`;
 }
 
-/** Badge text: "Claude Code @ clouddev" / "Main Agent" / "Walnut Agent". */
+/** Badge text: "Claude Code @ clouddev" / "Home Chat" / "Walnut Agent". */
 export function describeExecutorBadge(
   executor: { type: string; config: Record<string, unknown> } | undefined,
   executorLabels: Record<string, string>,

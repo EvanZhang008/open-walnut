@@ -24,8 +24,7 @@
  *
  *  - Buffer, then flush. Ten mail accounts reporting in one tick must be ONE
  *    disk write, so counts accumulate in memory and a 5s TRAILING timer folds
- *    them into the store. (CoalescingQueue in event-bus.ts is the same idea, but
- *    its 60s normal flush is far too slow for a threshold anybody is waiting on.)
+ *    them into the store.
  *
  *  - A count is never thrown away by a write that failed. The buffer IS the
  *    record that those events happened, so a failed bump gives its amount back

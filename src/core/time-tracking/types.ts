@@ -80,7 +80,7 @@ export interface TimeRecord {
 export type RollupIndex = Map<string, number>;
 
 export interface TaskDayTime {
-  /** '' = no task (Inbox / taskless session / main-agent chat). */
+  /** '' = no task (Inbox / taskless session / home chat). */
   taskId: string;
   humanMs: number;
   byKind: Record<HumanKind, number>;

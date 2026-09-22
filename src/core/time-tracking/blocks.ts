@@ -70,7 +70,7 @@ export const MIN_BLOCK_MS = 30 * 1000;
 export const SLICE_JOIN_GAP_MS = 90 * 1000;
 
 export interface TimeBlock {
-  /** '' = no task (Inbox / taskless session / main-agent chat). */
+  /** '' = no task (Inbox / taskless session / home chat). */
   taskId: string;
   kind: TimeKind;
   startTs: string;

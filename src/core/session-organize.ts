@@ -231,7 +231,7 @@ export async function organizeQuickStartTask(
   // the unattended pass may file the task anywhere the model suggests.
   await updateTask(taskId, {
     project: suggestion.project,
-  }, { source: 'session-auto-organize', extraTargets: ['main-agent'] });
+  }, { source: 'session-auto-organize' });
 
   const placed = await getTask(taskId);
   log.web.info('session-auto-organize: placed quick-start task', {

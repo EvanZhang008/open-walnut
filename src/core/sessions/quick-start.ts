@@ -454,7 +454,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   }
 
   if (!existingTaskId) {
-    bus.emit(EventNames.TASK_CREATED, { task: updatedTask }, ['web-ui', 'main-agent'], { source });
+    bus.emit(EventNames.TASK_CREATED, { task: updatedTask }, ['web-ui'], { source });
   }
 
   // A start targeting a remote host is deliberate (human click or a routine the

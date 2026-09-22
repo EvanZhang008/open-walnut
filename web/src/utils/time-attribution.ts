@@ -55,7 +55,7 @@ export function resolveAttribution(el: Element | null, pathname: string): TimeCo
     const taskId = attr(row, 'data-task-id');
     if (taskId) return { kind: 'triage', taskId };
 
-    // 3. The main-agent chat.
+    // 3. The home chat.
     if (el.closest('.main-page-chat, .chat-panel')) return { kind: 'chat' };
   }
 

@@ -3,8 +3,8 @@
  *
  * A routine = trigger (cron schedule) + executor. The executor decides WHERE
  * the routine's instructions run:
- *   - main-agent:   inject into the Personal AI's main conversation (legacy sessionTarget 'main')
- *   - walnut-agent: isolated in-process agent turn (legacy sessionTarget 'isolated')
+ *   - main-agent:   deliver into the home chat conversation (legacy sessionTarget 'main')
+ *   - walnut-agent: start a fresh Personal AI session of its own (legacy sessionTarget 'isolated')
  *   - claude-code:  start a real Claude Code session (local or remote host)
  *
  * New executor types only need an ExecutorDefinition registered in the registry —

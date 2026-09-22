@@ -815,10 +815,10 @@ export interface AgentConfig {
   /**
    * Triage throttling. Turn-complete triage trailing-debounces by `debounce_minutes`
    * (default 4) so a burst of interactive turns collapses into one end-of-interaction
-   * triage. `notify_mode` gates the expensive main-agent notification:
-   *   - 'off' (default): never wake the main agent; task.summary still updates (poll model)
+   * triage. `notify_mode` gates the expensive home-chat notification:
+   *   - 'off' (default): never wake the home chat; task.summary still updates (poll model)
    *   - 'buffered': don't wake in real time, but nudge the heartbeat to review soon
-   *   - 'realtime': enqueue a main-agent turn immediately on each Outcome-B milestone
+   *   - 'realtime': enqueue a home-chat turn immediately on each Outcome-B milestone
    */
   triage?: {
     debounce_minutes?: number;

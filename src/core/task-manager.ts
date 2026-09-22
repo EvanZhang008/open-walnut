@@ -1164,7 +1164,7 @@ function emitProjectCreated(name: string, source: TaskSource): void {
   bus.emit(
     EventNames.PROJECT_CREATED,
     { name, source },
-    ['web-ui', 'main-agent'],
+    ['web-ui'],
     { source: 'task-manager' },
   );
 }
@@ -1450,7 +1450,7 @@ export async function renameProject(
   // follow it forward without a lookup.
   bus.emit(EventNames.PROJECT_RENAMED, {
     from, to: canonical, merged, count, source: renameSource,
-  }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+  }, ['web-ui'], { source: 'task-manager' });
 
   if (renamedTaskIds.length > 0) {
     bus.emit(EventNames.TASK_UPDATED, {
@@ -1459,7 +1459,7 @@ export async function renameProject(
       oldProject: from,
       newProject: canonical,
       count,
-    }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+    }, ['web-ui'], { source: 'task-manager' });
   }
 
   return { count, merged };
@@ -1615,7 +1615,7 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
   // project list would keep offering a row that no longer exists.
   bus.emit(EventNames.PROJECT_DELETED, {
     name: canonical, source, movedToInbox,
-  }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+  }, ['web-ui'], { source: 'task-manager' });
 
   if (taskIds.length > 0) {
     bus.emit(EventNames.TASK_UPDATED, {
@@ -1624,7 +1624,7 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
       oldProject: canonical,
       newProject: '',
       count: taskIds.length,
-    }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+    }, ['web-ui'], { source: 'task-manager' });
   }
 
   log.task.info('project deleted', { project: canonical, movedToInbox });
@@ -1788,7 +1788,7 @@ export async function deleteProjectCascade(project: string): Promise<{
     source: record.source,
     movedToInbox: newProjectName ? 0 : movedCount,
     ...(newProjectName ? { movedToProject: newProjectName } : {}),
-  }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+  }, ['web-ui'], { source: 'task-manager' });
 
   if (taskIds.length > 0) {
     bus.emit(EventNames.TASK_UPDATED, {
@@ -1797,7 +1797,7 @@ export async function deleteProjectCascade(project: string): Promise<{
       oldProject: record.name,
       newProject: newProjectName,
       count: taskIds.length,
-    }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+    }, ['web-ui'], { source: 'task-manager' });
   }
 
   log.task.info('project cascade-deleted', {
@@ -3140,7 +3140,7 @@ export function isTaskBlocked(task: Task, allTasks: Task[]): boolean {
  * work? Only the former may pull a task back out of COMPLETE.
  *
  * Deliberate: 'api' (a REST call — the web UI, the phone, the CLI, an agent
- * tool), 'user' (a direct in-app edit), 'agent' (an in-process agent tool).
+ * tool), 'user' (a direct in-app edit), 'agent' (an AI tool edit).
  * Background: 'internal' (the default — anything that merely passed a phase
  * along), 'sync' / plugin pulls (a stale remote row must not reopen finished
  * work), cron, reconcilers, the session state machine.
@@ -3257,7 +3257,7 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
   if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task);
 
   const eventName = task.phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED;
-  bus.emit(eventName, { task }, ['web-ui', 'main-agent'], { source: 'internal' });
+  bus.emit(eventName, { task }, ['web-ui'], { source: 'internal' });
   emitPhaseChanged(task, oldPhase, 'api');
   return { task };
 }
@@ -6719,7 +6719,7 @@ export async function updateTaskRaw(
   }
   if (opts?.emitEvent) {
     const eventName = updated.phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED;
-    bus.emit(eventName, { task: updated }, ['web-ui', 'main-agent'], { source: opts.source ?? 'internal' });
+    bus.emit(eventName, { task: updated }, ['web-ui'], { source: opts.source ?? 'internal' });
     if (rawOldPhase !== undefined) emitPhaseChanged(updated, rawOldPhase, opts.source ?? 'session');
   }
 

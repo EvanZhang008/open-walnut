@@ -2989,7 +2989,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       for (const dep of dependents) {
         // Check if ALL of this task's deps are now complete
         if (!isTaskBlocked(dep, allTasks)) {
-          bus.emit(EventNames.TASK_UNBLOCKED, { task: dep, unblockedBy: completedTask }, ['web-ui', 'main-agent'], { source: 'dependency-unblock' })
+          bus.emit(EventNames.TASK_UNBLOCKED, { task: dep, unblockedBy: completedTask }, ['web-ui'], { source: 'dependency-unblock' })
           log.web.info('task unblocked', { taskId: dep.id, unblockedBy: completedTask.id })
         }
       }
@@ -3181,8 +3181,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // cancel it during teardown. No per-startServer reset needed: entries
   // always self-remove in their own callback (line in handler below).
 
-  // -- Main AI triage: process session results with AI judgment --
-  // All session events now route through main-ai first; forward to web-ui for display.
+  // -- Session stream fan-out (subscriber name 'main-ai' is a LEGACY label) --
+  // No AI lives here: the in-process main agent is gone (62e54ed4). This
+  // subscriber is the session→browser pipe. Renaming it would touch ~220
+  // emit sites and tests for zero behavior change, so the name stays.
   // NO `interest` filter here ON PURPOSE: main-ai is the SOLE path streaming reaches the
   // browser (session:text-delta → sessionStreamBuffer → sendStreamEvent → ws broadcast),
   // so it must receive EVERY event including high-frequency deltas. Adding an interest

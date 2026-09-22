@@ -1,8 +1,9 @@
 /**
  * Personal AI lanes — "one chat conversation ⇄ one long-lived Claude Code session".
  *
- * When `config.agent.provider === 'claude-code'` a Personal AI chat turn is not run by
- * the in-process agent loop; it is delivered into a `claude` CLI session that the
+ * Lanes are the ONLY chat engine: the old in-process agent loop is gone
+ * (62e54ed4 removed its callers, 0e5672fd deleted the module). A Personal AI
+ * chat turn is delivered into a `claude` CLI session that the
  * daemon owns. That session is bound to the conversation by its `lane` field
  * (`chat:<agentId>:<conversationId>`), which is what makes it durable: the lane is
  * persisted on the SessionRecord, so it survives the CLI being reaped, the web

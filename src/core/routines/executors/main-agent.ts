@@ -1,6 +1,8 @@
 /**
- * main-agent executor — injects the routine's instructions into the Personal AI's
- * main conversation (the chat the user sees on the homepage).
+ * main-agent executor — delivers the routine's instructions into the home chat
+ * conversation. The TYPE string 'main-agent' is a legacy storage format (saved
+ * jobs carry it); the engine behind it is an ordinary Claude Code lane session
+ * (runMainAgentWithPrompt → runLaneTurn) — the old in-process agent is gone.
  *
  * NOTE: jobs with this executor type are dispatched through the cron engine's
  * legacy 'main' path (timer.ts), which owns the notification/wake plumbing.
@@ -19,15 +21,15 @@ export type MainAgentExecutorDeps = {
 export function createMainAgentExecutor(deps: MainAgentExecutorDeps): ExecutorDefinition {
   return {
     type: 'main-agent',
-    label: 'Main Agent',
-    description: 'Send the instructions to your main AI conversation at the scheduled time.',
+    label: 'Home Chat',
+    description: 'Deliver the instructions into your home chat conversation at the scheduled time.',
     configSchema: [
       {
         name: 'instructions',
         label: 'Instructions',
         kind: 'textarea',
         required: true,
-        placeholder: 'What should the main AI be told?',
+        placeholder: 'What should Walnut be told?',
       },
     ],
     validate(config: unknown) {

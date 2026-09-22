@@ -879,7 +879,7 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     bus.emit(EventNames.TASK_CREATED, {
       task: result.task,
       ...(typeof clientRequestId === 'string' ? { clientRequestId } : {}),
-    }, ['web-ui', 'main-agent'], { source: 'api' })
+    }, ['web-ui'], { source: 'api' })
     res.status(201).json(result)
   } catch (err) {
     if (err instanceof ProjectSourceConflictError) {
@@ -961,12 +961,12 @@ tasksRouter.post('/batch/phase', async (req: Request, res: Response, next: NextF
     const { changed, failed, syncFailed } = await setPhaseBulk(taskIds, phase as Task['phase'])
     log.web.info('tasks batch phase via REST', { count: taskIds.length, changed: changed.length, failed: failed.length, syncFailed: syncFailed.length, phase })
 
-    // Per-task events so every surface (web-ui lists, main-agent) reconciles the
+    // Per-task events so every surface (web-ui lists) reconciles the
     // same way it does for a single complete — the bulk `{ }` form would force a
     // full refetch and blank the list mid-animation.
     const eventName = phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED
     for (const task of changed) {
-      bus.emit(eventName, { task }, ['web-ui', 'main-agent'], { source: 'api' })
+      bus.emit(eventName, { task }, ['web-ui'], { source: 'api' })
     }
     // syncFailed is reported separately from failed — those tasks DID change locally,
     // only their external push failed, so the client must not roll them back.
@@ -989,7 +989,7 @@ tasksRouter.post('/batch/delete', async (req: Request, res: Response, next: Next
     log.web.info('tasks batch delete via REST', { count: taskIds.length, deleted: deleted.length, failed: failed.length, force })
 
     for (const task of deleted) {
-      bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui', 'main-agent'], { source: 'api' })
+      bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'api' })
     }
     res.json({ deleted, failed })
   } catch (err) {
@@ -1012,7 +1012,7 @@ tasksRouter.post('/groups', async (req: Request, res: Response, next: NextFuncti
       return
     }
     const result = await groupTasks(task_ids, label)
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api' })
     // Refine the AI label in the background when the caller didn't supply one.
     if (!label?.trim()) {
       const gid = result.group_id
@@ -1027,7 +1027,7 @@ tasksRouter.post('/groups', async (req: Request, res: Response, next: NextFuncti
           const aiLabel = await summarizeGroupLabel(titles)
           if (!aiLabel) return
           const r = await renameGroup(gid, aiLabel)
-          bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: r.group_id, label: r.label }, ['web-ui', 'main-agent'], { source: 'api' })
+          bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: r.group_id, label: r.label }, ['web-ui'], { source: 'api' })
         } catch (err) {
           log.web.warn('group label refine failed', { groupId: gid, error: err instanceof Error ? err.message : String(err) })
         }
@@ -1049,7 +1049,7 @@ tasksRouter.post('/groups/:groupId/add', async (req: Request, res: Response, nex
       return
     }
     const result = await addToGroup(groupId, task_ids)
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
     sendFolderError(res, err)
@@ -1065,7 +1065,7 @@ tasksRouter.post('/groups/remove', async (req: Request, res: Response, next: Nex
       return
     }
     const result = await removeFromGroup(task_ids)
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: result.dissolved_group_ids }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: result.dissolved_group_ids }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
     next(err)
@@ -1082,7 +1082,7 @@ tasksRouter.patch('/groups/:groupId', async (req: Request, res: Response, next: 
       return
     }
     const result = await renameGroup(groupId, label)
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
     next(err)
@@ -1101,7 +1101,7 @@ tasksRouter.patch('/groups/:groupId/hidden', async (req: Request, res: Response,
       return
     }
     const result = await setGroupHidden(groupId, hidden)
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, hidden: result.hidden }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, hidden: result.hidden }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
     next(err)
@@ -1153,7 +1153,7 @@ tasksRouter.post('/folders', async (req: Request, res: Response) => {
       return
     }
     const result = await createFolder(label, project, parent_id)
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api' })
     res.status(201).json(result)
   } catch (err) {
     sendFolderError(res, err)
@@ -1182,7 +1182,7 @@ tasksRouter.patch('/folders/:groupId', async (req: Request, res: Response) => {
       // A partial move still moved the folder, so the listing changed and the
       // event fires either way; per-task failures ride the response body.
       const moved = await moveFolderToProject(groupId, project)
-      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: moved.group_id, project: moved.project }, ['web-ui', 'main-agent'], { source: 'api' })
+      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: moved.group_id, project: moved.project }, ['web-ui'], { source: 'api' })
       res.json(moved)
       return
     }
@@ -1191,7 +1191,7 @@ tasksRouter.patch('/folders/:groupId', async (req: Request, res: Response) => {
       return
     }
     const result = await setFolderParent(groupId, parent_id)
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
     sendFolderError(res, err)
@@ -1206,7 +1206,7 @@ tasksRouter.delete('/folders/:groupId', async (req: Request, res: Response) => {
     const groupId = param(req.params.groupId)
     if (rejectBadFolderId(res, groupId)) return
     const result = await deleteFolder(groupId)
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: [result.group_id] }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: [result.group_id] }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
     sendFolderError(res, err)
@@ -1303,7 +1303,7 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     // Push failures still surface via sync_error + TASK_UPDATED, which the UI renders.
     // Phase-transition automation rides the task:phase-changed bus event emitted
     // inside updateTask — no inline executor.
-    const result = await updateTask(id, req.body, { source: 'api', extraTargets: ['main-agent'], asyncPush: true })
+    const result = await updateTask(id, req.body, { source: 'api', asyncPush: true })
     log.web.info('task updated via REST', { taskId: id, fields: Object.keys(req.body) })
 
     res.json(result)
@@ -1339,7 +1339,7 @@ tasksRouter.post('/:id/complete', async (req: Request, res: Response, next: Next
     const id = param(req.params.id)
     const result = await completeTask(id)
     log.web.info('task completed via REST', { taskId: id })
-    bus.emit(EventNames.TASK_COMPLETED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
+    bus.emit(EventNames.TASK_COMPLETED, { task: result.task }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
     if (err instanceof ActiveChildrenError) {
@@ -1418,7 +1418,7 @@ tasksRouter.delete('/:id', async (req: Request, res: Response, next: NextFunctio
     try {
       const result = await deleteTask(id)
       log.web.info('task deleted via REST', { taskId: id })
-      bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
+      bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui'], { source: 'api' })
       res.status(204).end()
     } catch (err) {
       if (err instanceof ActiveSessionError && force) {
@@ -1431,7 +1431,7 @@ tasksRouter.delete('/:id', async (req: Request, res: Response, next: NextFunctio
         }
         const result = await deleteTask(id)
         log.web.info('task force-deleted via REST (stopped sessions)', { taskId: id, stoppedSessions: err.activeSessionIds.length })
-        bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
+        bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui'], { source: 'api' })
         res.status(204).end()
         return
       }
@@ -1511,7 +1511,7 @@ tasksRouter.put('/:id/depends-on', async (req: Request, res: Response, next: Nex
       res.status(400).json({ error: 'depends_on must be an array of strings' })
       return
     }
-    const result = await updateTask(id, { set_depends_on: depends_on }, { source: 'api', extraTargets: ['main-agent'] })
+    const result = await updateTask(id, { set_depends_on: depends_on }, { source: 'api' })
     res.json(result)
   } catch (err) {
     if (err instanceof CircularDependencyError) {

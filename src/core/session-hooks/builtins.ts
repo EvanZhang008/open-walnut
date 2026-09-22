@@ -571,7 +571,7 @@ export async function applyTitleDirective(taskId: string, directive: string, exp
     if (!next) return;
 
     const { task: updated } = await updateTask(taskId, { title: next }, { source: 'title-drift' });
-    bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: 'title-drift' });
+    bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui'], { source: 'title-drift' });
     log.session.info('task title updated from self-report TITLE directive', {
       taskId, kind, from: fresh.title, to: next,
     });
@@ -1342,11 +1342,11 @@ async function askAndApplyTitle(
       return false;
     }
     try {
-      // updateTask's central emit covers web-ui; main-agent rides extraTargets
+      // updateTask's central emit covers web-ui
       // (a second manual emit would double-process the task in every frontend).
       // ContentValidationError is still possible (auto-organize can move the
       // task under a plugin between our check and the write) — final, no loop.
-      await updateTask(taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
+      await updateTask(taskId, { title }, { source: 'session-auto-title' });
     } catch (err) {
       if (err instanceof ContentValidationError) {
         log.session.warn('session-auto-title: write rejected by plugin rule — placeholder kept', {
@@ -1721,7 +1721,7 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
           taskId,
           message: `Working directory no longer exists: ${cwd}. Update the task's working directory to resume.`,
           severity: 'warning',
-        }, ['web-ui', 'main-agent'], { source: 'cwd-rename-detector' });
+        }, ['web-ui'], { source: 'cwd-rename-detector' });
       }
     } catch (err) {
       log.session.warn('cwd-rename-detector: turn-end check failed', {

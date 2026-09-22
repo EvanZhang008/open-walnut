@@ -161,7 +161,7 @@ export function createConversationsRouter(): Router {
         })
         log.web.info('conversation promoted to task', { agentId, conversationId: cid, taskId: task.id, sessionId })
         const { bus } = await import('../../core/event-bus.js')
-        bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: 'api' })
+        bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'api' })
         res.status(201).json({ task, sessionId })
       } catch (err) {
         if (err instanceof SessionControlError) {

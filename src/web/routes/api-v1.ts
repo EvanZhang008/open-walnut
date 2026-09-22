@@ -2172,7 +2172,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         asyncPush: true,
       })
       log.web.info('task created via api-v1', { taskId: task.id, project: task.project })
-      bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'api-v1' })
       // Project-only projection, same as GET /tasks (see the note there).
       res.status(201).json({ task: projectTask(task) })
     } catch (err) {
@@ -2354,7 +2354,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         updated = result.task
       }
       if (Object.keys(patch).length > 0) {
-        const result = await tm.updateTask(id, patch, { source: 'api', extraTargets: ['main-agent'], asyncPush: true })
+        const result = await tm.updateTask(id, patch, { source: 'api', asyncPush: true })
         updated = result.task
       }
       if (!updated) {

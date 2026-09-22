@@ -165,7 +165,7 @@ taskV1Router.delete('/tasks/:id', async (req: Request, res: Response, next: Next
     try {
       const result = await tm.deleteTask(id)
       log.web.info('task deleted via api-v1', { taskId: id })
-      bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui'], { source: 'api-v1' })
       res.status(204).end()
     } catch (err) {
       if (err instanceof tm.ActiveSessionError && force) {
@@ -177,7 +177,7 @@ taskV1Router.delete('/tasks/:id', async (req: Request, res: Response, next: Next
         }
         const result = await tm.deleteTask(id)
         log.web.info('task force-deleted via api-v1 (stopped sessions)', { taskId: id, stoppedSessions: err.activeSessionIds.length })
-        bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+        bus.emit(EventNames.TASK_DELETED, { id: result.task.id, task: result.task }, ['web-ui'], { source: 'api-v1' })
         res.status(204).end()
         return
       }
@@ -216,7 +216,7 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
       bus.emit(EventNames.TASK_COMPLETED, {
         task: result.task,
         fields: ['status', 'phase', 'completed_at'],
-      }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      }, ['web-ui'], { source: 'api-v1' })
       res.json(result)
     } catch (err) {
       if (err instanceof tm.ActiveChildrenError) {
@@ -409,7 +409,7 @@ taskV1Router.put('/tasks/:id/depends-on', async (req: Request, res: Response, ne
     }
     const tm = await import('../../core/task-manager.js')
     try {
-      res.json(await tm.updateTask(id, { set_depends_on: dependsOn }, { source: 'api', extraTargets: ['main-agent'] }))
+      res.json(await tm.updateTask(id, { set_depends_on: dependsOn }, { source: 'api' }))
     } catch (err) {
       if (err instanceof tm.CircularDependencyError) {
         sendError(res, 409, 'conflict', err.message, { task_id: err.taskId, dep_id: err.depId })
@@ -481,7 +481,7 @@ taskV1Router.post('/tasks/batch/phase', async (req: Request, res: Response, next
       ? ['status', 'phase', 'completed_at'] // completion no longer touches pin fields (2026-08-26)
       : ['status', 'phase']
     for (const task of changed) {
-      bus.emit(eventName, { task, fields }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(eventName, { task, fields }, ['web-ui'], { source: 'api-v1' })
     }
     res.json({ changed, failed, syncFailed })
   } catch (err) {
@@ -501,7 +501,7 @@ taskV1Router.post('/tasks/batch/delete', async (req: Request, res: Response, nex
     const { deleted, failed } = await deleteTasksByIds(taskIds, { force })
     log.web.info('tasks batch delete via api-v1', { count: taskIds.length, deleted: deleted.length, failed: failed.length, force })
     for (const task of deleted) {
-      bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'api-v1' })
     }
     res.json({ deleted, failed })
   } catch (err) {

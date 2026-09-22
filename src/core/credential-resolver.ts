@@ -1,8 +1,9 @@
 /**
  * Unified Bedrock credential resolver.
  *
- * Walnut's main agent (the Personal AI) talks to Bedrock directly via the SDK
- * (src/model/providers/adapter-bedrock.ts) — it does NOT go through the
+ * Walnut's background AI calls (quick-parse, summaries, titles, triage — every
+ * `sendMessage` user) talk to Bedrock directly via the SDK
+ * (src/model/providers/adapter-bedrock.ts) — they do NOT go through the
  * `claude` CLI. So "make Walnut usable on first launch" reduces to "resolve
  * one Bedrock credential". This module is the single source of truth for that.
  *

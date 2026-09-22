@@ -146,7 +146,7 @@ taskExtrasV1Router.post('/tasks/groups', async (req: Request, res: Response, nex
     const { groupTasks } = await import('../../core/task-manager.js')
     try {
       const result = await groupTasks(taskIds, label)
-      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api-v1' })
       res.status(201).json(result)
     } catch (err) {
       if (sendGroupError(res, err)) return
@@ -166,7 +166,7 @@ taskExtrasV1Router.post('/tasks/groups/:groupId/add', async (req: Request, res: 
     const { addToGroup } = await import('../../core/task-manager.js')
     try {
       const result = await addToGroup(String(req.params.groupId), taskIds)
-      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api-v1' })
       res.json(result)
     } catch (err) {
       if (sendGroupError(res, err)) return
@@ -186,7 +186,7 @@ taskExtrasV1Router.post('/tasks/groups/remove', async (req: Request, res: Respon
     const { removeFromGroup } = await import('../../core/task-manager.js')
     try {
       const result = await removeFromGroup(taskIds)
-      bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: result.dissolved_group_ids }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(EventNames.TASK_GROUPS_CHANGED, { dissolved_group_ids: result.dissolved_group_ids }, ['web-ui'], { source: 'api-v1' })
       res.json(result)
     } catch (err) {
       if (sendGroupError(res, err)) return
@@ -209,7 +209,7 @@ taskExtrasV1Router.patch('/tasks/groups/:groupId', async (req: Request, res: Res
     const { renameGroup } = await import('../../core/task-manager.js')
     try {
       const result = await renameGroup(String(req.params.groupId), label)
-      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api-v1' })
       res.json(result)
     } catch (err) {
       if (sendGroupError(res, err)) return
@@ -232,7 +232,7 @@ taskExtrasV1Router.patch('/tasks/groups/:groupId/hidden', async (req: Request, r
     const { setGroupHidden } = await import('../../core/task-manager.js')
     try {
       const result = await setGroupHidden(String(req.params.groupId), hidden)
-      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, hidden: result.hidden }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, hidden: result.hidden }, ['web-ui'], { source: 'api-v1' })
       res.json(result)
     } catch (err) {
       if (sendGroupError(res, err)) return

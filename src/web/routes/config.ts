@@ -560,7 +560,7 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     await updateConfig(body)
     // Re-read merged config so the event carries the full picture
     const merged = await getConfig()
-    bus.emit(EventNames.CONFIG_CHANGED, { config: merged }, ['web-ui', 'main-agent', 'heartbeat-config', 'setup-health', 'plugin-config-reload'], { source: 'api' })
+    bus.emit(EventNames.CONFIG_CHANGED, { config: merged }, ['web-ui', 'heartbeat-config', 'setup-health', 'plugin-config-reload'], { source: 'api' })
     res.json({ ok: true })
   } catch (err) {
     next(err)
