@@ -17,6 +17,10 @@
  *   read; when it cannot, it names the row in the pane's note and this does not open a composer. An
  *   HTML-ONLY body is not a body-less message: `bodyQuoteText` derives the text from the markup, which
  *   is what the snippet on the row is made of too.
+ * - THE THREE WALNUT ROWS READ THE SAME BODY, and a failed read does NOT stop them: a question about a
+ *   mail whose body will not load is still a fair question, and the block says the body is missing
+ *   rather than quoting nothing. What DOES stop them is a composer holding text the server has not been
+ *   told about, because the drawer takes that pane (`isSaveSettled`).
  */
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -26,9 +30,11 @@ import type { MailMessageDto } from '@/api/mail';
 import { loadMessageBodyForQuote, openMailMessage, runMailSearch } from './mail-actions';
 import { setMailMessageRead } from './mail-read-flag';
 import { makeTaskFromMessage } from './mail-task-actions';
-import { openMailForwardComposer, openMailReplyComposer } from './compose/compose-actions';
-import { getMailSnapshot, pairKey, setMailRowNote, type MailSnapshot } from './mail-store';
+import { closeMailComposer, openMailForwardComposer, openMailReplyComposer } from './compose/compose-actions';
+import { isSaveSettled } from './compose/compose-autosave';
+import { getMailSnapshot, openMailAsk, pairKey, setMailRowNote, type MailSnapshot } from './mail-store';
 import { mailRowLink, messageMenuItems } from './mail-context-items';
+import { MAIL_ASK_PRESETS, type MailAskKind } from './mail-ask';
 import { bodyQuoteText } from './mail-quote-text';
 
 /** The row a right-click landed on. The PAIR, because that is a message's identity. */
@@ -109,6 +115,48 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
     })();
   };
 
+  /**
+   * Hand one mail to Walnut in the reader's pane.
+   *
+   * The SAME body read a reply does (`quoteText`, which never marks anything read), because the first
+   * message quotes the mail and a summary of the subject line alone would be worthless. Unlike a
+   * reply, a body that would not load is NOT a refusal: the block says the body could not be read and
+   * the model still has the headers, which is a fair thing to ask about. A composer holding text the
+   * server does not have yet is the one refusal, because this takes its pane.
+   */
+  const askWalnut = (row: MailMessageDto, kind: MailAskKind) => {
+    const pair = pairKey(row.accountId, row.messageId);
+    if (snapshot.composer && !isSaveSettled()) {
+      // Sticky, the store's own rule for anything the person has to act on: a sentence that retires
+      // itself in 12 seconds is one they can miss while they are still typing.
+      setMailRowNote(
+        'Walnut needs this pane, and your draft has changes that are not saved yet.'
+        + ' Let it save, or close the draft, and ask again.',
+        pair,
+        { sticky: true },
+      );
+      return;
+    }
+    void (async () => {
+      // A SETTLED composer is closed the way opening a message closes it: its draft is on the server
+      // and one click away in Drafts. Closed before the read, so the pane cannot be handed to a
+      // composer the person opened while the body was on the wire.
+      if (snapshot.composer) await closeMailComposer();
+      const text = await quoteText(row);
+      const preset = MAIL_ASK_PRESETS[kind];
+      openMailAsk({
+        accountId: row.accountId,
+        messageId: row.messageId,
+        message: row,
+        ...(preset ? { preset } : {}),
+        // `null` only for a read that FAILED. `loadMessageBodyForQuote` answers null for both that and
+        // a mail with no words, and the note it leaves is the only thing that tells them apart
+        // (`readFailed`), so the two are separated HERE rather than inside the drawer.
+        bodyText: readFailed(row, text) ? null : (text ?? ''),
+      });
+    })();
+  };
+
   const copyLink = (row: MailMessageDto) => {
     const link = mailRowLink(row.accountId, row.messageId, window.location.origin);
     const pair = pairKey(row.accountId, row.messageId);
@@ -146,6 +194,9 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
           onOpenTask: (taskId) => { navigate(`/tasks/${taskId}`); },
           onSearchSender: (address) => { void runMailSearch(address); },
           onCopyLink: copyLink,
+          onSummarize: (row) => askWalnut(row, 'summarize'),
+          onDraftReply: (row) => askWalnut(row, 'draft-reply'),
+          onAskAbout: (row) => askWalnut(row, 'ask'),
         },
       })}
       onClose={menu.close}

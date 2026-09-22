@@ -99,6 +99,9 @@ function actions() {
     onOpenTask: (taskId: string) => acted.push(`open-task ${taskId}`),
     onSearchSender: (address: string) => acted.push(`search ${address}`),
     onCopyLink: (message: MailMessageDto) => acted.push(`copy ${message.accountId} ${message.messageId}`),
+    onSummarize: (message: MailMessageDto) => acted.push(`summarize ${message.accountId} ${message.messageId}`),
+    onDraftReply: (message: MailMessageDto) => acted.push(`ai-reply ${message.accountId} ${message.messageId}`),
+    onAskAbout: (message: MailMessageDto) => acted.push(`ask ${message.accountId} ${message.messageId}`),
   };
 }
 
@@ -134,6 +137,16 @@ function labels(items: ContextMenuItem[]): string[] {
   return items.map((one) => (one.divider ? '-' : String(one.label)));
 }
 
+/**
+ * The TITLE block's own info rows.
+ *
+ * `info` alone is no longer the same question: the Walnut group is named by an info row too, so a bare
+ * `filter(one => one.info)` counts it and the heading's "one line or two" rule stops being graded.
+ */
+function heading(items: ContextMenuItem[]): ContextMenuItem[] {
+  return items.filter((one) => one.info && one.key?.startsWith('target'));
+}
+
 /** Only the rows a human can press, which is what "the first item" means. */
 function pressable(items: ContextMenuItem[]): ContextMenuItem[] {
   return items.filter((one) => !one.divider && !one.info && !one.section && !one.disabled);
@@ -146,7 +159,7 @@ beforeEach(() => {
 });
 
 describe('the ordinary inbox row', () => {
-  it('lists the twelve rows of spec 4 in order, titles included', () => {
+  it('lists the rows of spec 4 in order, the Walnut group last, titles included', () => {
     const items = build();
     expect(labels(items)).toEqual([
       'Harbour Office · Pontoon works next week',
@@ -162,6 +175,13 @@ describe('the ordinary inbox row', () => {
       '-',
       'Find mail from this sender',
       'Copy Walnut link',
+      // S4: the rows that hand the mail to a model, last, under their own name. Every row above acts
+      // on the mail itself.
+      '-',
+      'Walnut',
+      'Summarize with Walnut',
+      'Draft a reply with Walnut',
+      'Ask Walnut about this…',
     ]);
     expect(items[0]!.info).toBe(true);
     expect(items[0]!.onSelect).toBeUndefined();
@@ -184,6 +204,10 @@ describe('the ordinary inbox row', () => {
       `task ${READER} INBOX:2:11`,
       'search office@example.invalid',
       `copy ${READER} INBOX:2:11`,
+      // The Walnut rows take the pair off the ROW as well. `Draft a reply` is missing because this
+      // account cannot send, so it is disabled and `pressable` drops it.
+      `summarize ${READER} INBOX:2:11`,
+      `ask ${READER} INBOX:2:11`,
     ]);
   });
 });
@@ -227,9 +251,13 @@ describe('the send gate', () => {
       expect(one.disabled).toBe(true);
       expect(one.title).toBe(CANNOT_SEND_TITLE);
     }
-    // The read toggle is untouched by the SEND gate: this provider can still move the flag.
+    // The read toggle is untouched by the SEND gate: this provider can still move the flag. Nor are
+    // the two Walnut rows that ask a question: reading a mail to a model needs no SMTP.
     expect(pressable(items).map((one) => one.label))
-      .toEqual(['Mark as read', 'Open message', 'Make a task', 'Find mail from this sender', 'Copy Walnut link']);
+      .toEqual([
+        'Mark as read', 'Open message', 'Make a task', 'Find mail from this sender', 'Copy Walnut link',
+        'Summarize with Walnut', 'Ask Walnut about this…',
+      ]);
   });
 
   it('reads the account, not the provider, when the account answers for itself', () => {
@@ -290,15 +318,15 @@ describe('the title line', () => {
     expect(labels(build({ merged: true })).slice(0, 2))
       .toEqual(['Harbour Office · Pontoon works next week', 'Fixture Mail']);
     expect(labels(build({ merged: false }))[0]).toBe('Harbour Office · Pontoon works next week');
-    expect(build({ merged: false }).filter((one) => one.info)).toHaveLength(1);
-    expect(build({ merged: true }).filter((one) => one.info)).toHaveLength(2);
+    expect(heading(build({ merged: false }))).toHaveLength(1);
+    expect(heading(build({ merged: true }))).toHaveLength(2);
   });
 
   it('says nothing about an account in a merged list that holds only one', () => {
     const one = [account(WRITER, 'Fixture Mail')];
     expect(labels(build({ merged: true, accounts: one }))[0])
       .toBe('Harbour Office · Pontoon works next week');
-    expect(build({ merged: true, accounts: one }).filter((row) => row.info)).toHaveLength(1);
+    expect(heading(build({ merged: true, accounts: one }))).toHaveLength(1);
   });
 
   // R2-08 reversed the old rule here. The label used to be capped at 44 characters, measured: the
@@ -350,6 +378,12 @@ describe('mail this person wrote is a different menu', () => {
       'Make a task',
       '-',
       'Copy Walnut link',
+      // Two of the three Walnut rows. `Draft a reply with Walnut` goes with `Reply`: there is nobody
+      // to answer on mail this person wrote and never sent.
+      '-',
+      'Walnut',
+      'Summarize with Walnut',
+      'Ask Walnut about this…',
     ]);
     // No read toggle: a draft carries no `\Seen`, so the row already draws an unread dot and flipping
     // it is a real provider write against mail nobody has sent. No Reply (to oneself) and no Forward
@@ -374,6 +408,10 @@ describe('mail this person wrote is a different menu', () => {
       'Make a task',
       '-',
       'Copy Walnut link',
+      '-',
+      'Walnut',
+      'Summarize with Walnut',
+      'Ask Walnut about this…',
     ]);
     expect(items.find((one) => one.key === 'reply')).toBeUndefined();
     expect(items.find((one) => one.key === 'reply-all')).toBeUndefined();

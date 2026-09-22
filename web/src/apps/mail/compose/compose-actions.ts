@@ -133,7 +133,9 @@ function hasContent(composer: MailComposer): boolean {
 function handOver(make: () => MailComposer, after?: (composer: MailComposer) => void): Promise<void> {
   const install = () => {
     const next = make();
-    patch({ composer: next, open: null });
+    // `ask: null` for the same reason as `open`: the Ask-Walnut drawer shares this one pane, and a
+    // composer the person cannot see is a composer they will type over.
+    patch({ composer: next, open: null, ask: null });
     after?.(next);
   };
   if (!store.state.composer) { install(); return Promise.resolve(); }

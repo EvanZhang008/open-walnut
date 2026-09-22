@@ -36,6 +36,13 @@ export interface MessageMenuActions {
   onOpenTask: (taskId: string) => void;
   onSearchSender: (address: string) => void;
   onCopyLink: (message: MailMessageDto) => void;
+  /**
+   * The three Walnut rows. Three members rather than one with a `kind`, so a reader of this file sees
+   * exactly which questions the menu can ask, and a test names the one it fired.
+   */
+  onSummarize: (message: MailMessageDto) => void;
+  onDraftReply: (message: MailMessageDto) => void;
+  onAskAbout: (message: MailMessageDto) => void;
 }
 
 export interface MessageMenuInput {
@@ -82,6 +89,25 @@ export const OPEN_MARKS_READ_TITLE = 'Opening a message marks it read';
 
 /** Said under `Copy Walnut link`: the origin is THIS console, never a provider permalink. */
 export const COPY_LINK_TITLE = 'A link back to this copy of Walnut, not a link your mail provider knows';
+
+/**
+ * The name over the group of rows that ask Walnut something.
+ *
+ * `info`, like the two title lines, and for the same reason: `section` UPPERCASES and carries no
+ * `title`. It is also why this is a heading and not a submenu: the core `ContextMenu` has no
+ * `children` (the Slack plugin's own menu does), so a group is a divider plus a name.
+ */
+export const WALNUT_GROUP_LABEL = 'Walnut';
+
+/**
+ * The three rows' words, exported because two surfaces name them: the menu draws them and the
+ * Playwright specs click them, and a label typed twice is a label that drifts.
+ */
+export const ASK_ROWS = {
+  summarize: 'Summarize with Walnut',
+  draftReply: 'Draft a reply with Walnut',
+  about: 'Ask Walnut about this…',
+} as const;
 
 /**
  * The heading's SANITY cap, far above what the box holds, because the BOX does the truncating.
@@ -297,5 +323,41 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
       title: COPY_LINK_TITLE,
       onSelect: () => actions.onCopyLink(message),
     },
+    // The Walnut group, LAST: every row above it acts on the mail itself, and these three hand it to
+    // a model instead. The divider and the name are the grouping, because this menu has no submenus.
+    { divider: true },
+    { key: 'walnut', info: true, label: WALNUT_GROUP_LABEL },
+    {
+      // `ai: true` is what draws the ✦ INSIDE the label and marks the row `data-ai="true"`. Not
+      // `icon`: the icon slot is a 14px column, and this menu draws no icons, so an icon here would
+      // indent these three rows' words and leave the ten above them flush left.
+      key: 'ask-summarize',
+      ai: true,
+      label: ASK_ROWS.summarize,
+      onSelect: () => actions.onSummarize(message),
+    },
+    {
+      key: 'ask-draft-reply',
+      // Absent on mail this person WROTE, exactly as `reply` is: a draft or a sent message is not a
+      // mail to answer. `draftsView` is named as well as `outbound` so the rule holds even if a
+      // future drafts list stops being outbound.
+      when: !outbound && !draftsView,
+      ai: true,
+      label: ASK_ROWS.draftReply,
+      // Disabled with the reason rather than dropped, the same way `reply` is: SMTP settings are
+      // something the person can go and fix. Deliberately NOT `closesTitle`: the drawer takes the
+      // reader's pane back the moment it closes and writes no draft, so it costs nothing to open.
+      disabled: !canSend,
+      ...(canSend ? {} : { title: CANNOT_SEND_TITLE }),
+      onSelect: () => actions.onDraftReply(message),
+    },
+    {
+      key: 'ask-about',
+      ai: true,
+      label: ASK_ROWS.about,
+      onSelect: () => actions.onAskAbout(message),
+    },
+    // S8 puts `Unsubscribe` here, under these three: it is the one Walnut row that acts on the world
+    // rather than asking a question, and `message.unsubscribe` already rides the DTO for it.
   ]);
 }

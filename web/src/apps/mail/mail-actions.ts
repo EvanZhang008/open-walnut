@@ -431,6 +431,10 @@ function applySelection(accountId: string, mailboxId: string, source: SelectionS
     nextBefore: null,
     listError: null,
     open: null,
+    // The Ask drawer shares the reader's pane, and it is about a mail from the folder just left: the
+    // same reason `open` and `rowNote` go. The conversation itself is kept (it is remembered per
+    // message), so the same row opens the same chat again.
+    ask: null,
     search: EMPTY_SEARCH,
     // A note about a row is about a row that is no longer on screen.
     rowNote: null,
@@ -904,6 +908,9 @@ export function openMailMessage(
   const known = [...store.state.messages, ...store.state.search.messages]
     .find((one) => one.messageId === messageId && one.accountId === accountId) ?? null;
   patch({
+    // The Ask drawer sits in this pane too, so opening a message closes it. The person asked for the
+    // message; leaving the drawer up would make the click look like it did nothing.
+    ask: null,
     open: {
       accountId,
       messageId,

@@ -111,6 +111,16 @@ export interface ContextMenuItem {
   section?: boolean;
   /** A read-only info line (not focusable). */
   info?: boolean;
+  /**
+   * This row hands the object to Walnut (a model), so it is drawn with the shared ✦ mark and carries
+   * `data-ai="true"`.
+   *
+   * The glyph goes INSIDE the label, before the words, and not in `icon`: the icon slot is a 14px
+   * column, so on a menu that draws no other icons (Mail's row menu) an icon here would indent this
+   * group's words and leave every other row flush left. One flag rather than each surface drawing its
+   * own span, so every console's AI rows look alike and one attribute finds them all.
+   */
+  ai?: boolean;
   /** Convenience for conditional items: `when: false` drops the row. */
   when?: boolean;
 }

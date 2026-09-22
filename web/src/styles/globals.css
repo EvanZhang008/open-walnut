@@ -33351,6 +33351,29 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   border-bottom: 1px solid var(--border);
 }
 
+/* A heading further DOWN the menu (the Walnut group) already has the divider above it as its
+   separator, so its own rule underneath would put two lines three rows apart. The title block at the
+   top keeps its rule: nothing else stands between it and the first action. */
+.wn-context-menu-divider + .wn-context-menu-info.heading-end {
+  padding-bottom: 2px;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+/* ✦ before an AI row's words (`ContextMenuItem.ai`). Inside the label, NOT in the 14px icon column:
+   a menu that draws no other icons would indent this one group's text and leave the rest flush left.
+   A disabled row's mark loses the accent with the words, so the row reads as one unavailable thing. */
+.wn-context-ai-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  /* The glyph is 13px on a 16px line; -2px puts its middle on the text's middle without changing the
+     row's height. `vertical-align` and not flex, because the label is a text box with an ellipsis. */
+  vertical-align: -2px;
+  color: var(--accent);
+}
+.wn-context-menu-item:disabled .wn-context-ai-mark { color: inherit; }
+
 /* ── Rich blocks: model-written HTML inside an assistant reply ───────────────
    A reply's HTML is rendered natively, so a chunk that carries markup gets
    containment: `contain: layout style paint` keeps its own CSS from reflowing

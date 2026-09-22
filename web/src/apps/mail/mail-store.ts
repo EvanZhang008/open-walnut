@@ -118,6 +118,37 @@ export interface MailOpenMessage {
   taskError: string | null;
 }
 
+/**
+ * The mail a Walnut row of the row menu was fired on, and what it asked.
+ *
+ * It occupies the READER's pane while it is set (see `MailApp`), so everything else that wants that
+ * pane clears it: opening a message, opening a composer, and changing folder. The alternative was a
+ * fourth pane, and a console that is already three panes wide at 1100px has no room for one.
+ *
+ * `message` is carried rather than looked up live, the same way `MailOpenMessage` carries one: the
+ * quote card and the first message are about the mail as it stood when the menu acted, and a page
+ * reload underneath must not change what Walnut was told.
+ */
+export interface MailAsk {
+  accountId: string;
+  messageId: string;
+  message: MailMessageDto;
+  /**
+   * The first message the entry stands for, sent as soon as the conversation exists.
+   *
+   * Absent for `Ask Walnut about this…`, which opens the composer and sends nothing: the drawer only
+   * auto-sends a preset it was given.
+   */
+  preset?: string;
+  /**
+   * The body as the menu read it (`loadMessageBodyForQuote`, which never marks anything read).
+   *
+   * `null` is a read that FAILED and `''` is a mail with no words: the two need opposite sentences in
+   * the quote, so they stay two values here rather than collapsing into one empty string.
+   */
+  bodyText: string | null;
+}
+
 export interface MailSearchState {
   query: string;
   /** True while the middle pane shows results instead of the mailbox. */
@@ -278,6 +309,8 @@ export interface MailSnapshot {
    */
   flagFailed: Record<string, string>;
   open: MailOpenMessage | null;
+  /** The Ask-Walnut drawer's subject, or null. Shares the reader's pane (see `MailAsk`). */
+  ask: MailAsk | null;
   refreshing: boolean;
   /** What a 202 refresh left behind: a sentence, not an error. */
   refreshNote: string | null;
@@ -398,6 +431,21 @@ export function setMailPaneNote(text: string, options: { sticky?: boolean } = {}
   }, ANSWER_MS);
 }
 
+/**
+ * Put the Ask-Walnut drawer in the reader's pane, about one mail.
+ *
+ * A plain patch: whoever calls it has already done the two things that can fail (read the body, and
+ * decide the pane is free), so this cannot refuse and has nothing to await. Opening a second ask
+ * simply replaces the first, which is what a right-click on another row means.
+ */
+export function openMailAsk(ask: MailAsk): void {
+  patch({ ask });
+}
+
+export function closeMailAsk(): void {
+  if (store.state.ask) patch({ ask: null });
+}
+
 export function clearMailPaneNote(): void {
   if (paneNoteTimer) { clearTimeout(paneNoteTimer); paneNoteTimer = null; }
   if (store.state.paneNote) patch({ paneNote: null });
@@ -457,6 +505,7 @@ function initialState(): MailSnapshot {
     pendingSeen: {},
     flagFailed: {},
     open: null,
+    ask: null,
     refreshing: false,
     refreshNote: null,
     drafts: {},

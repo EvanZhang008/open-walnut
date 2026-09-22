@@ -4,6 +4,7 @@ import type { AppComponentProps } from '../registry';
 import { AddAccountDialog } from './AddAccountDialog';
 import { MailAccountsPane } from './MailAccountsPane';
 import { MailMessageList } from './MailMessageList';
+import { MailAskDrawer } from './MailAskDrawer';
 import { MailReader } from './MailReader';
 import { ComposerPanel } from './compose/ComposerPanel';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
@@ -112,7 +113,7 @@ export function MailApp(props: AppComponentProps) {
   // itself; with nothing selected there is only the account list.
   const pane = !narrow
     ? 'all'
-    : (mail.open || mail.composer) ? 'reader'
+    : (mail.open || mail.composer || mail.ask) ? 'reader'
       : (showMailboxes || !mail.selected) ? 'accounts'
         : 'list';
 
@@ -200,9 +201,15 @@ export function MailApp(props: AppComponentProps) {
           narrow={narrow}
           onShowMailboxes={() => setShowMailboxes(true)}
         />
-        {/* One slot: the composer REPLACES the reader while it is open. Writing a mail is a task
-            you look things up during, so the two panes on its left stay live. */}
-        {mail.composer ? (
+        {/* One slot, three tenants: the Ask drawer, the composer, then the reader. Writing a mail or
+            asking about one is a task you look things up during, so the two panes on its left stay
+            live. The order cannot be observed, because everything that takes this pane clears the
+            others (`openMailAsk`'s callers close a composer, `openMailMessage` and `handOver` clear
+            `ask`); it is written widest-first so a state that did slip through still shows the pane
+            the person asked for last. */}
+        {mail.ask ? (
+          <MailAskDrawer ask={mail.ask} accounts={mail.accounts} />
+        ) : mail.composer ? (
           <ComposerPanel
             composer={mail.composer}
             mailboxes={mail.mailboxes[mail.composer.accountId] ?? []}

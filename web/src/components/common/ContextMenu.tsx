@@ -35,6 +35,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { SparklesIcon } from '@/components/icons/SparklesIcon';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import {
   keepNativeContextMenu,
@@ -46,6 +47,17 @@ import {
 
 export { normalizeContextMenuItems };
 export type { ContextMenuItem };
+
+/**
+ * The ✦ that leads an AI row's words (`item.ai`).
+ *
+ * INSIDE the label span, before the text, rather than in the `icon` slot: `icon` is a 14px column, so
+ * on a menu that draws no other icons it would indent one group's words and leave the rest flush left.
+ * One implementation here, so every surface's AI rows carry the same glyph in the same place.
+ */
+function aiMark() {
+  return <span className="wn-context-ai-mark"><SparklesIcon size={13} /></span>;
+}
 
 export interface ContextMenuPoint {
   x: number;
@@ -441,9 +453,10 @@ export function ContextMenu({
                 // a `note` here would be an invalid structure. The menu points `aria-describedby` at
                 // this line instead, which is what makes a screen reader say what the menu is about.
                 title={row.title}
+                data-ai={row.ai ? 'true' : undefined}
               >
                 {row.icon && <span className="wn-context-menu-icon">{row.icon}</span>}
-                <span className="wn-context-menu-label">{row.label}</span>
+                <span className="wn-context-menu-label">{row.ai && aiMark()}{row.label}</span>
               </div>
             );
           }
@@ -460,6 +473,7 @@ export function ContextMenu({
                 className={`wn-context-menu-item${row.danger ? ' danger' : ''}${focusIndex === index ? ' focused' : ''}`}
                 disabled={row.disabled}
                 title={row.title}
+                data-ai={row.ai ? 'true' : undefined}
                 onMouseEnter={() => setFocusIndex(index)}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -468,7 +482,7 @@ export function ContextMenu({
                 }}
               >
                 {row.icon && <span className="wn-context-menu-icon">{row.icon}</span>}
-                <span className="wn-context-menu-label">{row.label}</span>
+                <span className="wn-context-menu-label">{row.ai && aiMark()}{row.label}</span>
               </button>
               {/* WHY the group above is disabled, for anyone not holding a mouse: the reason used to live
                   in `title` alone, so it was a hover tooltip and nothing else. UNDER the group rather than
