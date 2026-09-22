@@ -15,7 +15,7 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  width: min(480px, 100vw - 24px);
+  width: min(620px, 100vw - 24px);
   height: min(720px, var(--menu-max-height, 720px));
   padding: 0;
   border: 1px solid var(--border-strong, var(--border));
@@ -300,23 +300,23 @@
 .engine-settings-scope-lock { flex: 0 0 auto; }
 
 /* The sentences under the switch keep ONE height whichever scope is on and
-   whether the view has landed: the scope note reserves three lines
-   (both sentences need three at this width), the applies-on sentence two. A
-   remote host's environment warning adds its own lines, present from the load. */
+   whether the view has landed: one line for the scope, one for when a change
+   applies (both sentences fit one line at this width). A remote host's
+   environment warning adds its own lines, present from the load. */
 .engine-settings-popover-notes {
   position: relative;
-  /* 3 lines + 6 + 2 lines = 93px (the note's own top margin
-     collapses out of the block); held while loading too, when the applies-on
-     line is not there yet. */
-  min-height: 94px;
+  /* 1 line + 6 + 1 line = 41px (the note's own top margin collapses out of
+     the block); held while loading too, when the applies-on line is not
+     there yet. */
+  min-height: 41px;
 }
 
 .engine-settings-popover-notes .engine-settings-scope-note {
-  min-height: calc(3 * 1.45em);
+  min-height: calc(1 * 1.45em);
 }
 
 .engine-settings-popover-notes .engine-settings-applies-on {
-  min-height: calc(2 * 1.45em);
+  min-height: calc(1 * 1.45em);
 }
 
 /* The draft guard is drawn OVER the note's first line, right under

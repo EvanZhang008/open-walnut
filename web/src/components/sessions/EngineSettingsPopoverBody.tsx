@@ -15,7 +15,7 @@ import type { EngineSettingsHook, EngineSettingsLastWrite } from '@/hooks/useEng
 import { rowHonoredHere, rowLacksProjectLayer, sessionsGroup } from '@/hooks/engine-settings-model';
 import {
   appliesOnSentence, emptySentence, envUncheckedSentence, filterSettingRows, noMatchSentence,
-  otherGroupsLink, projectFileShort, savedSentence, scopeSentence, shortenUnderCwd,
+  otherGroupsLink, projectFileRelative, savedSentence, scopeSentence, shortenUnderCwd,
 } from '@/utils/engine-settings-copy';
 import { EngineSettingRow } from '@/components/settings/sections/EngineSettingRows';
 import { log } from '@/utils/log';
@@ -30,28 +30,26 @@ export interface ScopeNotesProps {
   scope: EngineSettingsWriteScope;
   displayName: string;
   hostText: string;
-  cwdShort: string;
   /**: the uncommitted-draft warning, drawn OVER the scope sentence, right under the switch it answers. */
   draftGuard: string | null;
 }
 
 /**
- * The sentences under the switch. The scope note reserves THREE lines whichever
- * scope is on: both sentences take three at the popover's width, so
- * neither the view landing nor a scope switch moves the filter and the rows. The
- * engine's note lives in the About overlay. The draft guard is drawn over the
- * note's first line while the rest of the note dims: the block keeps
- * its height and shows no blank band, and the guard sits right under the
- * switch the user just clicked.
+ * The sentences under the switch: ONE line for the scope, one for when a change
+ * applies (the fine print lives in the About overlay). Both scope sentences fit
+ * one line at the popover's width, so neither the view landing nor a scope
+ * switch moves the filter and the rows. The draft guard is drawn over the scope
+ * line while it dims: the block keeps its height and shows no blank band, and
+ * the guard sits right under the switch the user just clicked.
  */
-export function EngineSettingsScopeNotes({ view, scope, displayName, hostText, cwdShort, draftGuard }: ScopeNotesProps) {
-  const projectFile = view ? projectFileShort(view.files, view.cwd, cwdShort) : undefined;
+export function EngineSettingsScopeNotes({ view, scope, displayName, hostText, draftGuard }: ScopeNotesProps) {
+  const projectFile = view ? projectFileRelative(view.files, view.cwd) : undefined;
   const applies = appliesOnSentence(view?.appliesOn, displayName);
   const envUnchecked = !!view && !view.envChecked;
   return (
     <div className={`engine-settings-popover-notes${envUnchecked ? ' has-env-note' : ''}${draftGuard ? ' has-guard' : ''}`}>
       <p className="engine-settings-scope-note" data-testid="engine-settings-scope-note" aria-hidden={draftGuard ? true : undefined}>
-        {scopeSentence(scope, displayName, hostText, cwdShort, projectFile)}
+        {scopeSentence(scope, displayName, hostText, projectFile)}
       </p>
       {draftGuard && <p className="engine-settings-draft-guard" role="status">{draftGuard}</p>}
       {applies && <p className="engine-settings-applies-on" data-testid="engine-settings-applies-on">{applies}</p>}

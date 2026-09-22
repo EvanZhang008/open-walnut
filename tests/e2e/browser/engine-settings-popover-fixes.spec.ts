@@ -146,8 +146,11 @@ test.describe('engine settings popover: nitpick fixes', () => {
     expect(d.right).toBeGreaterThanOrEqual(vw - 12 - 1)
     expect(d.left).toBeLessThanOrEqual(plusB.left + 0.5)
     expect(d.right).toBeGreaterThanOrEqual(plusB.right)
-    // The neighbour's composer "+" is not covered.
-    expect(d.left).toBeGreaterThan(plusA.right)
+    // At 620 wide the box overlaps the neighbouring column (it is wider than a
+    // column, and any outside click dismisses it); the invariant that killed
+    // the original bug is the pair above: the box COVERS its own "+" and its
+    // right edge sits at the viewport margin, so it can never flip right-aligned
+    // onto the neighbour and leave its own column, which is what N3 fixed.
     // And the popover's own composer box stays clear below it ( stays reachable): with a
     // one-line draft the bottom edge sits above the composer box, not merely above the "+".
     const boxB = await rect(panelB.locator('.chat-input-box'))
@@ -157,11 +160,18 @@ test.describe('engine settings popover: nitpick fixes', () => {
     await expect(dialog).toHaveCount(0)
     await expect(composerTextarea(panelB)).toBeFocused()
 
-    // The left column's popover is still start-aligned on its own "+".
+    // The left column's popover start-aligns on its own "+" when it fits,
+    // and clamps to the margin (still covering its "+") when 620 does not.
     const dialogA = await openPopover(page, panelA)
     await waitForRows(dialogA)
     const a = await rect(dialogA)
-    expect(Math.abs(a.left - plusA.left)).toBeLessThanOrEqual(1)
+    if (plusA.left + 620 <= vw - 12) {
+      expect(Math.abs(a.left - plusA.left)).toBeLessThanOrEqual(1)
+    } else {
+      expect(a.right).toBeLessThanOrEqual(vw - 12 + 0.5)
+      expect(a.left).toBeLessThanOrEqual(plusA.left + 0.5)
+      expect(a.right).toBeGreaterThanOrEqual(plusA.right)
+    }
     await page.keyboard.press('Escape')
   })
 
@@ -172,7 +182,7 @@ test.describe('engine settings popover: nitpick fixes', () => {
     const dialog = await openPopover(page, panel)
     await waitForRows(dialog)
     const d = await rect(dialog)
-    if (plus.left + 480 > 900 - 12) {
+    if (plus.left + 620 > 900 - 12) {
       expect(d.right).toBeGreaterThanOrEqual(900 - 12 - 1)
       expect(d.right).toBeLessThanOrEqual(900 - 12 + 0.5)
     } else {
@@ -379,7 +389,7 @@ test.describe('engine settings popover: nitpick fixes', () => {
     await waitForRows(dialog)
     // "This Mac" reads the same everywhere, mid-sentence included.
     await expect(dialog).toHaveAttribute('aria-label', new RegExp(` on ${HOST_LABEL}$`))
-    await expect(dialog.getByTestId('engine-settings-scope-note')).toContainText(`on ${HOST_LABEL} `)
+    await expect(dialog.getByTestId('engine-settings-scope-note')).toContainText(`on ${HOST_LABEL},`)
     expect(await dialog.evaluate((el) => (el as HTMLElement).innerText)).not.toMatch(/this Mac/)
     // The link is one phrase.
     await expect(dialog.locator('a.engine-settings-more-link')).toHaveText(/^.+ settings \(\d+\) are in Settings › Engines$/)

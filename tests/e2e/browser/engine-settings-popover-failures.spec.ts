@@ -250,7 +250,7 @@ test.describe('engine settings popover: failures and edge shapes', () => {
     await expect(dialog.locator('h2.engine-settings-popover-title')).toHaveText(/^(Codex|Claude Code) settings$/)
     await expect(dialog.locator('a.engine-settings-more-link')).toHaveText('Updates settings (1) are in Settings › Engines')
     await expect(dialog.getByTestId('engine-settings-files').locator('summary')).toHaveText('Files (1)')
-    await expect(dialog.getByTestId('engine-settings-applies-on')).toHaveText(/^Changes here apply to new (Codex|Claude Code) sessions; this session keeps its current settings\.$/)
+    await expect(dialog.getByTestId('engine-settings-applies-on')).toHaveText(/^Applies to new (Codex|Claude Code) sessions; this session keeps its current settings\.$/)
     expect(await dialog.getAttribute('aria-label')).toMatch(/^(Codex|Claude Code) settings for new sessions in /)
     await codex.unroute()
     await page.keyboard.press('Escape')

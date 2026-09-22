@@ -87,11 +87,11 @@ export function aboutScopeLine(
 ): string {
   if (scope === 'project') {
     const file = projectFileShort(files, cwd, cwdShort) ?? "this project's local settings file";
-    return `With the switch on "This project only", every save from here goes to ${file}.`;
+    return `With the switch on "This project only", every save from here goes to ${file}, created on first save and kept out of git. Other projects are unchanged.`;
   }
   const user = files.find((f) => f.scope === 'user' && !f.readOnly);
   const where = user ? `${user.path} on ${host}` : `your user settings on ${host}`;
-  return `With the switch on "Same as ${displayName}", saves go to ${where}, except keys ${displayName} itself files per project; each row's "Saves to" line says which.`;
+  return `With the switch on "Same as ${displayName}", saves go to ${where}, except the few keys ${displayName} itself keeps per project; those go to this project's local file.`;
 }
 
 /**
@@ -140,6 +140,23 @@ export function projectFileShort(
   return file ? shortenUnderCwd(file.path, cwd, cwdShort) : undefined;
 }
 
+/**
+ * The writable project file relative to the working directory
+ * (`.claude/settings.local.json`): the scope note names the file this way
+ * because the header right above it already shows the directory in full.
+ * A path not under the cwd (or no cwd) stays as the server sent it.
+ */
+export function projectFileRelative(
+  files: readonly EngineSettingsFileView[],
+  cwd: string | undefined,
+): string | undefined {
+  const file = files.find((f) => f.scope === 'project' && !f.readOnly);
+  if (!file) return undefined;
+  const base = cwd?.replace(/\/+$/, '');
+  if (base && file.path.startsWith(`${base}/`)) return file.path.slice(base.length + 1);
+  return file.path;
+}
+
 /** A path under the cwd, with the cwd prefix replaced by its short form; other paths unchanged. */
 export function shortenUnderCwd(path: string, cwd: string | undefined, cwdShort: string): string {
   if (cwd && (path === cwd || path.startsWith(`${cwd.replace(/\/+$/, '')}/`))) {
@@ -150,32 +167,30 @@ export function shortenUnderCwd(path: string, cwd: string | undefined, cwdShort:
 }
 
 /**
- * What the picked scope means, in plain words. The project file name comes from
- * the view (`projectFile`, already shortened with `projectFileShort`); the
- * fallback names no path, because the client knows no engine's layout.
- *
- * The default sentence admits the per-project exception up front: the engine's
- * own config screen files a few keys per project whatever the switch says, and a
- * save must never create a project file the sentence said it would not.
+ * What the picked scope means, in ONE short line (the fine print, created on
+ * first save, the per-project exception under the default scope, lives in the
+ * About overlay). The project file comes in relative to the working directory
+ * (`projectFileRelative`), because the header right above already shows the
+ * directory; the fallback names no path, because the client knows no engine's
+ * layout.
  */
 export function scopeSentence(
   scope: EngineSettingsWriteScope,
   displayName: string,
   host: string,
-  cwdShort: string,
   projectFile?: string,
 ): string {
   if (scope === 'project') {
-    const file = projectFile ?? "this project's local settings file";
-    return `Only ${cwdShort}: every save goes to ${file}, created on first save and kept out of git. Other projects are unchanged.`;
+    const file = projectFile ?? 'its local settings file';
+    return `Saves to ${file} in this project · not tracked by git.`;
   }
-  return `Saves where ${displayName} itself would: your user settings on ${host} for most keys, this project's local file for the few ${displayName} keeps per project. Each row's "Saves to" line says which.`;
+  return `Saves to your user settings on ${host}, as ${displayName} itself would.`;
 }
 
-/** When a saved value is felt, said once under the scope switch. */
+/** When a saved value is felt, said once under the scope switch, in one line. */
 export function appliesOnSentence(appliesOn: EngineSettingAppliesOn | undefined, displayName: string): string | null {
-  if (appliesOn === 'next-turn') return "Most changes apply on this session's next turn; a row's help says when it does not.";
-  if (appliesOn === 'new-session') return `Changes here apply to new ${displayName} sessions; this session keeps its current settings.`;
+  if (appliesOn === 'next-turn') return "Applies on this session's next turn.";
+  if (appliesOn === 'new-session') return `Applies to new ${displayName} sessions; this session keeps its current settings.`;
   return null;
 }
 

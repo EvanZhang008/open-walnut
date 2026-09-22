@@ -311,11 +311,11 @@ export function shortCwd(cwd: string, max = 48): string {
 }
 
 export const HOST_LABEL = 'This Mac'
-/** The default sentence admits the per-project exception up front (a key the engine files per project). */
-export const LOCAL_SCOPE_NOTE = `Saves where Claude Code itself would: your user settings on ${HOST_LABEL} for most keys, this project's local file for the few Claude Code keeps per project. Each row's "Saves to" line says which.`
-export const NEXT_TURN_SENTENCE = "Most changes apply on this session's next turn; a row's help says when it does not."
-export const projectScopeNote = (cwd: string) =>
-  `Only ${shortCwd(cwd)}: every save goes to ${shortCwd(cwd)}/.claude/settings.local.json, created on first save and kept out of git. Other projects are unchanged.`
+/** One line; the per-project exception and the created-file fine print live in the About overlay. */
+export const LOCAL_SCOPE_NOTE = `Saves to your user settings on ${HOST_LABEL}, as Claude Code itself would.`
+export const NEXT_TURN_SENTENCE = "Applies on this session's next turn."
+export const projectScopeNote = (_cwd: string) =>
+  'Saves to .claude/settings.local.json in this project · not tracked by git.'
 export const savedUserSentence = `Saved to user settings on ${HOST_LABEL} (all projects).`
 export const savedProjectBase = (cwd: string) => `Saved to this project (local), ${shortCwd(cwd)} only.`
 /** The footer link before the view answers. */
@@ -399,18 +399,25 @@ export async function expectInViewport(page: Page, dialog: Locator): Promise<voi
 export async function clickOutside(page: Page, panel: Locator, dialog: Locator): Promise<void> {
   const p = await rect(panel)
   const d = await rect(dialog)
-  const y = p.top + Math.min(120, p.height / 3)
-  const candidates = [p.left + 12, p.right - 12]
-  const x = candidates.find((cx) => cx < d.left || cx > d.right || y < d.top || y > d.bottom)
-  expect(x, 'a panel point outside the dialog').toBeDefined()
-  await page.mouse.click(x!, y)
+  // At 620px the dialog can span a narrow panel's whole width, so points are
+  // tried at several heights of the panel, not just one.
+  for (const y of [p.top + Math.min(120, p.height / 3), p.top + 8, d.bottom + 8]) {
+    if (y <= p.top || y >= p.bottom) continue
+    const x = [p.left + 12, p.right - 12].find((cx) => cx < d.left || cx > d.right || y < d.top || y > d.bottom)
+    if (x !== undefined) { await page.mouse.click(x, y); return }
+  }
+  expect(undefined, 'a panel point outside the dialog').toBeDefined()
 }
 
-/** Copy (label/help/status) stacks ABOVE the control in the popover's rows. */
-export async function expectStacked(dialog: Locator, key: string): Promise<void> {
-  const copy = await rect(popoverRow(dialog, key).locator('.engine-setting-help'))
+/** iOS-style row: text left, control right, vertically centered; no band under the text. */
+export async function expectSideBySide(dialog: Locator, key: string): Promise<void> {
+  const row = await rect(popoverRow(dialog, key))
+  const copy = await rect(popoverRow(dialog, key).locator('.settings-row-copy'))
   const control = await rect(popoverRow(dialog, key).locator('.engine-setting-control'))
-  expect(control.top).toBeGreaterThanOrEqual(copy.bottom - 0.5)
+  expect(control.left).toBeGreaterThanOrEqual(copy.right - 0.5)
+  const rowCenter = row.top + row.height / 2
+  const controlCenter = control.top + control.height / 2
+  expect(Math.abs(controlCenter - rowCenter)).toBeLessThanOrEqual(6)
 }
 
 /** Rows whose whole box sits inside the rows area's visible box (plus the geometry, for the report). */

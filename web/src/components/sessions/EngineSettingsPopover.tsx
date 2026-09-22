@@ -101,7 +101,7 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   onCloseRef.current = onClose;
 
   const close = useCallback((reason: EngineSettingsCloseReason) => { onCloseRef.current(reason); }, []);
-  // edgeOverflow 'clamp': from the rightmost column's "+" the 480px box
+  // edgeOverflow 'clamp': from the rightmost column's "+" the 620px box
   // does not fit start-aligned; the hook's default would flip it right-aligned
   // at the anchor, over the neighbouring column. Clamping to the viewport edge
   // keeps it over the session it belongs to. The bottom edge clears the
@@ -433,7 +433,6 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
           scope={scope}
           displayName={displayName}
           hostText={hostText}
-          cwdShort={cwdShort}
           draftGuard={draftGuard}
         />
       </div>

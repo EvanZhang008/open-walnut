@@ -29,6 +29,7 @@ import {
   menuActionTitle,
   noMatchSentence,
   otherGroupsLink,
+  projectFileRelative,
   projectFileShort,
   savedSentence,
   scopeSentence,
@@ -318,20 +319,23 @@ describe('filterSettingRows', () => {
 
 describe('one-line sentences', () => {
   it('appliesOnSentence: both branches and the silent one', () => {
-    expect(appliesOnSentence('next-turn', 'Claude Code')).toBe("Most changes apply on this session's next turn; a row's help says when it does not.")
-    expect(appliesOnSentence('new-session', 'Codex')).toBe('Changes here apply to new Codex sessions; this session keeps its current settings.')
+    expect(appliesOnSentence('next-turn', 'Claude Code')).toBe("Applies on this session's next turn.")
+    expect(appliesOnSentence('new-session', 'Codex')).toBe('Applies to new Codex sessions; this session keeps its current settings.')
     expect(appliesOnSentence(undefined, 'Codex')).toBeNull()
   })
 
-  it('scopeSentence: default names the host, project names the file from the view', () => {
-    expect(scopeSentence('default', 'Claude Code', 'This Mac', CWD_SHORT))
-      .toBe('Saves where Claude Code itself would: your user settings on This Mac for most keys, this project\'s local file for the few Claude Code keeps per project. Each row\'s "Saves to" line says which.')
-    const projectFile = projectFileShort(FILES, CWD, CWD_SHORT)
-    expect(scopeSentence('project', 'Claude Code', 'This Mac', CWD_SHORT, projectFile))
-      .toBe(`Only ${CWD_SHORT}: every save goes to ${CWD_SHORT}/.claude/settings.local.json, created on first save and kept out of git. Other projects are unchanged.`)
+  it('scopeSentence: one line each; default names the host, project the cwd-relative file', () => {
+    expect(scopeSentence('default', 'Claude Code', 'This Mac'))
+      .toBe('Saves to your user settings on This Mac, as Claude Code itself would.')
+    expect(projectFileRelative(FILES, CWD)).toBe('.claude/settings.local.json')
+    expect(scopeSentence('project', 'Claude Code', 'This Mac', projectFileRelative(FILES, CWD)))
+      .toBe('Saves to .claude/settings.local.json in this project · not tracked by git.')
     // Without the view's file the sentence names no path: the client knows no engine's layout.
-    expect(scopeSentence('project', 'Claude Code', 'This Mac', '~/work/app'))
-      .toContain("every save goes to this project's local settings file")
+    expect(scopeSentence('project', 'Claude Code', 'This Mac'))
+      .toBe('Saves to its local settings file in this project · not tracked by git.')
+    // A project file NOT under the cwd stays as the server sent it.
+    expect(projectFileRelative([{ ...FILES[2], path: '/elsewhere/settings.local.json' }], CWD)).toBe('/elsewhere/settings.local.json')
+    expect(projectFileRelative(FILES.filter((f) => f.scope !== 'project'), CWD)).toBeUndefined()
   })
 
   it('envUncheckedSentence, scopeUnavailableReason, emptySentence, scopeStorageKey', () => {
@@ -348,7 +352,7 @@ describe('one-line sentences', () => {
   it('no sentence carries an em or en dash', () => {
     const all = [
       appliesOnSentence('next-turn', 'X'), appliesOnSentence('new-session', 'X'),
-      scopeSentence('default', 'X', 'This Mac', '~/a'), scopeSentence('project', 'X', 'This Mac', '~/a'),
+      scopeSentence('default', 'X', 'This Mac'), scopeSentence('project', 'X', 'This Mac', '.claude/x.json'),
       envUncheckedSentence('h'), scopeUnavailableReason({ cwd: undefined, displayName: 'X' }),
       scopeUnavailableReason({ cwd: '/a', displayName: 'X' }), emptySentence('X'), noMatchSentence('q'),
       menuActionTitle('X', '~/a', 'This Mac'), dialogAriaLabel('X', '~/a', 'This Mac', 'new-session'),
@@ -383,12 +387,12 @@ describe('splitCwdShort', () => {
 describe('aboutScopeLine', () => {
   it('names the project file while the switch is on This project only', () => {
     expect(aboutScopeLine('project', 'Claude Code', 'This Mac', CWD_SHORT, FILES, CWD))
-      .toBe(`With the switch on "This project only", every save from here goes to ${CWD_SHORT}/.claude/settings.local.json.`)
+      .toBe(`With the switch on "This project only", every save from here goes to ${CWD_SHORT}/.claude/settings.local.json, created on first save and kept out of git. Other projects are unchanged.`)
   })
 
   it('names the user file and the per-project exception under the engine default', () => {
     const line = aboutScopeLine('default', 'Claude Code', 'devbox', CWD_SHORT, FILES, CWD)
-    expect(line).toBe('With the switch on "Same as Claude Code", saves go to /Users/someone/.claude/settings.json on devbox, except keys Claude Code itself files per project; each row\'s "Saves to" line says which.')
+    expect(line).toBe('With the switch on "Same as Claude Code", saves go to /Users/someone/.claude/settings.json on devbox, except the few keys Claude Code itself keeps per project; those go to this project\'s local file.')
     expect(line).not.toContain('/config')
     expect(line).not.toMatch(DASHES)
   })

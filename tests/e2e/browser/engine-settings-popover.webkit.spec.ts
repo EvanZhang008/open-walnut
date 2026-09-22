@@ -132,7 +132,9 @@ test('webkit: the rightmost column\'s popover clamps to the viewport edge', asyn
   expect(d.x + d.width).toBeLessThanOrEqual(vw - 12 + 0.5)
   expect(d.x + d.width).toBeGreaterThanOrEqual(vw - 12 - 1)
   expect(d.x).toBeLessThanOrEqual(plusB!.x + 0.5)
-  expect(d.x).toBeGreaterThan(plusA!.x + plusA!.width)
+  // At 620 wide the box overlaps the neighbouring column; what N3 fixed is
+  // pinned by the pair above (covers its own "+", right edge at the margin).
+  expect(d.x + d.width).toBeGreaterThan(plusB!.x + plusB!.width)
   await shot(page, 'fix-two-cols-right-webkit')
   await page.keyboard.press('Escape')
 })

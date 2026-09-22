@@ -59,7 +59,7 @@ test('webkit: stable filter top through every state; both sentences from the res
   const g3 = await geometry()
   await scopeOption(dialog, 'project').click()
   await expect(scopeOption(dialog, 'project')).toHaveAttribute('aria-checked', 'true')
-  await expect(popoverRow(dialog, 'alwaysThinkingEnabled').locator('.engine-setting-target')).toHaveText('Saves to this project (local)')
+  await expect(popoverRow(dialog, 'alwaysThinkingEnabled')).toHaveAttribute('data-write-target', 'project-local')
   const g4 = await geometry()
   await shot(page, 'r4/wk-height-stable-project')
   const all = [g0, g1, g2, g3, g4]
@@ -113,7 +113,7 @@ test('webkit: the guard dims the note, the chevron turns, the not-honoured sente
   expect(Math.abs(guardBox.top - noteBefore.top)).toBeLessThanOrEqual(1)
   expect(await opacity(note)).toBeLessThan(0.5)
   expect(Math.abs((await rect(applies)).top - appliesBefore.top)).toBeLessThanOrEqual(0.5)
-  expect((await rect(note)).bottom).toBeGreaterThan(guardBox.bottom + 10)
+  expect(Math.abs((await rect(note)).bottom - guardBox.bottom)).toBeLessThanOrEqual(2)
   await shot(page, 'r4/wk-draft-guard-dimmed')
   await language.press('Escape')
   await expect(language).toHaveValue('Chinese')

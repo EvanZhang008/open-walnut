@@ -13,7 +13,7 @@ import path from 'node:path'
 import { fixtureHome, readClaudeSettings } from './engine-settings-helpers'
 import {
   HOST_LABEL, LOCAL_SCOPE_NOTE, NEXT_TURN_SENTENCE, NEW_SOURCES, REPO, captureView, claimUserFile, clickComposerOutside, clickOutside,
-  composerTextarea, dialogOf, engineSettingsRow, expectInViewport, expectStacked, filterBox, fixtureRoot, makeGitProject, openPanels,
+  composerTextarea, dialogOf, engineSettingsRow, expectInViewport, expectSideBySide, filterBox, fixtureRoot, makeGitProject, openPanels,
   openPlusMenu, openPopover, otherGroupsLinkText, plusButton, popoverRow, popoverRowWrap, popoverSources, rect,
   restoreSeed, rowControl, rowsArea, savedLine, savedUserSentence, scopeOption, sessionsGroup,
   sessionsItems, shortCwd, shot, startSessionAt, stubGet, waitForRows, watchSettingsRequests, type View,
@@ -151,7 +151,7 @@ test.describe('composer "+" -> Engine settings popover', () => {
     // The panel's first line says which file the switch's position writes.
     const userFile = captured.files.find((f) => f.scope === 'user')!
     await expect(dialog.getByTestId('engine-settings-about-scope'))
-      .toHaveText(`With the switch on "Same as Claude Code", saves go to ${userFile.path} on ${HOST_LABEL}, except keys Claude Code itself files per project; each row's "Saves to" line says which.`)
+      .toHaveText(`With the switch on "Same as Claude Code", saves go to ${userFile.path} on ${HOST_LABEL}, except the few keys Claude Code itself keeps per project; those go to this project's local file.`)
     expect((await rect(filterBox(dialog))).top).toBeCloseTo(filterTopBefore, 0)
     expect((await rect(rowsArea(dialog))).top).toBeCloseTo(rowsTopBefore, 0)
     const panelBox = await rect(dialog.locator('.engine-settings-about-panel'))
@@ -248,15 +248,15 @@ test.describe('composer "+" -> Engine settings popover', () => {
   test('fits every viewport, keeps one height, scrolls inside, pointer rules', async ({ page }) => {
     const [panel] = await openPanels(page, [sid])
 
-    // Four viewports; width 480 when there is room, innerWidth - 24 when not; copy stacked over control.
+    // Four viewports; width 620 when there is room, innerWidth - 24 when not; text left, control right.
     for (const [w, h, name] of [[1280, 800, 'fit-1280x800'], [900, 700, 'narrow-900'], [1440, 600, 'fit-1440x600'], [420, 700, 'narrow-420']] as const) {
       await page.setViewportSize({ width: w, height: h })
       const dialog = await openPopover(page, panel)
       await waitForRows(dialog)
       await expectInViewport(page, dialog)
       const r = await rect(dialog)
-      expect(Math.round(r.width)).toBe(w >= 900 ? 480 : w - 24)
-      await expectStacked(dialog, 'alwaysThinkingEnabled')
+      expect(Math.round(r.width)).toBe(w >= 900 ? 620 : w - 24)
+      await expectSideBySide(dialog, 'alwaysThinkingEnabled')
       await shot(page, name)
       if (w === 900) await shot(page, 'fit-900x700')
       // A resize while open re-places the dialog, still inside the window.

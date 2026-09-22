@@ -45,9 +45,10 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     await waitForRows(dialog)
     const note = dialog.getByTestId('engine-settings-scope-note')
     await expect(note).toHaveText(LOCAL_SCOPE_NOTE)
-    // The second exception is the one Output style hits: the row says it saves to the project file under the default scope.
-    await expect(note).toContainText('this project\'s local file for the few Claude Code keeps per project. Each row\'s "Saves to" line says which.')
-    await expect(popoverRow(dialog, 'outputStyle').locator('.engine-setting-target')).toHaveText('Saves to this project (local)')
+    // Where a save goes is said ONCE, here: the rows carry no "Saves to" line
+    // (Output style still writes the project file; the data says so, hidden).
+    await expect(popoverRow(dialog, 'outputStyle')).toHaveAttribute('data-write-target', 'project-local')
+    await expect(popoverRow(dialog, 'outputStyle').locator('.engine-setting-target')).toBeHidden()
     // Titles in response order joined by " and ", N = the sum of those groups' rows (never a literal).
     const link = dialog.locator('a.engine-settings-more-link')
     const others = captured.groups.filter((g) => g.id !== 'sessions' && g.items.length > 0)
@@ -151,7 +152,7 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     await scopeOption(dialog, 'project').click()
     await expect(scopeOption(dialog, 'project')).toHaveAttribute('aria-checked', 'true')
     await expect(dialog).toHaveAttribute('data-scope', 'project')
-    await expect(popoverRow(dialog, 'alwaysThinkingEnabled').locator('.engine-setting-target')).toHaveText('Saves to this project (local)')
+    await expect(popoverRow(dialog, 'alwaysThinkingEnabled')).toHaveAttribute('data-write-target', 'project-local')
     const g4 = await geometry()
     await shot(page, 'r4/height-stable-project')
     const all = [g0, g1, g2, g3, g4]
@@ -164,9 +165,10 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     }
     const maxH = await dialog.evaluate((el) => parseFloat(getComputedStyle(el).getPropertyValue('--menu-max-height')))
     expect(Math.abs(g1.root.height - Math.min(720, maxH))).toBeLessThanOrEqual(1)
-    // Both scope notes are the same three-line box: the sentence changed, nothing under it moved.
+    // Both scope notes are the same ONE-line box: the sentence changed, nothing under it moved.
     const noteBox = await rect(dialog.getByTestId('engine-settings-scope-note'))
-    expect(noteBox.height).toBeGreaterThanOrEqual(3 * 12 * 1.45 - 1)
+    expect(noteBox.height).toBeGreaterThanOrEqual(12 * 1.45 - 1)
+    expect(noteBox.height).toBeLessThan(2 * 12 * 1.45)
     await scopeOption(dialog, 'default').click()
     await expect(scopeOption(dialog, 'default')).toHaveAttribute('aria-checked', 'true')
     await slow.unroute()
@@ -197,9 +199,9 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     const appliesDuring = await rect(applies)
     expect(Math.abs(noteDuring.top - noteBefore.top)).toBeLessThanOrEqual(0.5)
     expect(Math.abs(appliesDuring.top - appliesBefore.top)).toBeLessThanOrEqual(0.5)
-    // The gap between the guard and the applies-on sentence is filled by the dimmed note, not empty.
+    // The guard covers the one-line note edge to edge; the applies-on line sits right under it.
     expect(guardBox.bottom).toBeLessThan(appliesDuring.top)
-    expect(noteDuring.bottom).toBeGreaterThan(guardBox.bottom + 10)
+    expect(Math.abs(noteDuring.bottom - guardBox.bottom)).toBeLessThanOrEqual(2)
     await shot(page, 'r4/draft-guard-dimmed')
     await language.press('Escape')
     await expect(language).toHaveValue('Chinese')

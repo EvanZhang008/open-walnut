@@ -23,24 +23,40 @@
   pointer-events: none;
 }
 
-/* Rows stack: copy on top at full width, controls below, right-aligned.
-   The shared .settings-row lays copy and controls side by side, which leaves
-   the help about 170px wide inside a 480px popover. */
+/* Rows read like an iOS Settings list: text left, control right, one line,
+   vertically centered. At the popover's 620px the help column keeps about
+   380px, so the column stack the 480px popover needed is gone, and with it
+   the blank band under the text that the bottom-right control used to leave. */
 /* Specificity beats `.engine-setting-row .settings-row` from engine-settings.css
    whatever the stylesheet order in the bundle. */
 .engine-settings-popover .engine-setting-row.settings-row {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 3px;
-  padding: 4px 10px;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
 }
 
 .engine-settings-popover .engine-setting-row .settings-row-copy {
+  flex: 1 1 auto;
+  min-width: 0;
   gap: 1px;
 }
 
 .engine-settings-popover .settings-row-actions {
+  flex: 0 0 auto;
   justify-content: flex-end;
+}
+
+/* iOS shows a value, not its file: where a value lives is noise on every row
+   ("Set in user settings", "Default") and the visible Reset already marks a set
+   row. Provenance still shows when it is EXCEPTIONAL: a project layer or an
+   older location holding the value (overlay/legacy sources), and the override,
+   environment and invalid lines below. "Saves to …" left the rows entirely: the
+   scope line under the switch answers that once for the whole popover. */
+.engine-settings-popover .engine-setting-row[data-source="file"] .engine-setting-status,
+.engine-settings-popover .engine-setting-row[data-source="default"] .engine-setting-status,
+.engine-settings-popover .engine-setting-target {
+  display: none;
 }
 
 .engine-settings-popover .engine-setting-row:hover {
@@ -64,28 +80,20 @@
   line-height: 1.35;
 }
 
-/* The control's left edge stays put when Reset appears: the Reset slot is a
-   fixed 48px, reserved by an empty pseudo-element when the row has no Reset. */
+/* The control hugs the row's right edge like an iOS value; Reset appears on
+   its LEFT (order: -1), so the control never moves when a save makes the row
+   resettable and no empty slot hangs to its right when it is not. */
 .engine-settings-popover .engine-setting-control {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 
 .engine-settings-popover .engine-setting-reset {
-  flex: 0 0 48px;
-  width: 48px;
+  order: -1;
+  flex: 0 0 auto;
   padding: 2px 0;
-  text-align: right;
-}
-
-.engine-settings-popover .engine-setting-control:not(:has(.engine-setting-reset))::after {
-  content: '';
-  display: block;
-  flex: 0 0 48px;
-  width: 48px;
-  height: 1px;
 }
 
 /* The row's own environment line speaks of "the environment"; in a popover for

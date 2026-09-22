@@ -214,21 +214,26 @@ What the dialog shows:
   project's local file for the few keys the CLI keeps per project (output
   style). "This project only" sends `scope=project`: every row then saves to
   `<cwd>/.claude/settings.local.json`, created on first save and added to the
-  repo's exclude list. The sentence under the switch says exactly this, in
-  plain words (the default sentence leads with what the engine itself would do,
-  names the per-project exception, and points at each row's "Saves to" line),
-  and the footer sentence after a save names the
-  file and the directory (never the exclude list's path). The last scope is
+  repo's exclude list. ONE line under the switch says where a save goes
+  ("Saves to .claude/settings.local.json in this project · not tracked by
+  git"); the fine print (created on first save, the per-project exception under
+  the default scope) lives in the About overlay, and the footer sentence after
+  a save names the file and the directory (never the exclude list's path). The last scope is
   remembered per engine, host and directory and asked for on the first request;
   a remembered scope the server refuses falls back to the default once and is
   forgotten. A row whose key has no per-project layer (`projectLayer: false`
   from the server) is locked in project scope with the reason in its tooltip,
   rather than offered a control whose save would be refused.
 - Only the rows of the `sessions` group, in server order, each through the
-  shared `EngineSettingRow`: status line ("Set in user settings", "Set in this
-  project (local)", "Default"), the "Saves to ..." line when the write lands
-  elsewhere, Reset when the target file holds the key. A filter box narrows by
-  label or key, and falls back to help text with the match marked.
+  shared `EngineSettingRow`, laid out like an iOS Settings list: label and help
+  left, control right on the same line, vertically centered. Where a value
+  lives is noise on every row, so the popover hides the status line for the
+  ordinary sources (`file`, `default`; the visible Reset already marks a set
+  row) and hides the per-row "Saves to ..." line entirely (the scope line
+  answers that once); provenance still shows when it is exceptional (a project
+  layer or an older location holding the value), as do the override,
+  environment and invalid lines. A filter box narrows by label or key, and
+  falls back to help text with the match marked.
 - The other groups (updates, terminal only) are one link away: the footer link
   text is built from the response ("Updates and Terminal only settings (34) are
   in Settings › Engines"; a neutral "Settings › Engines" until the view answers)
@@ -262,10 +267,9 @@ would squeeze the rows, so past `COMPOSER_ANCHOR_MAX_PX` the bottom sits on
 the "+" row instead. The chrome above the rows (header, switch, two sentences,
 filter) stays under 240px and the rows get more than half of the box at
 1280x800. The block under
-the switch reserves only the default scope's height; the project note is a
-line longer and reflows once on the switch, and the scroller restores the
-first visible row by its offset so only the rows' own new "Saves to" lines
-move. Focus never gets stranded: Chromium drops focus to `<body>` when a
+the switch holds one line for the scope sentence and one for when a change
+applies, the same height under either scope, and the scroller restores the
+first visible row by its offset on a scope switch. Focus never gets stranded: Chromium drops focus to `<body>` when a
 saving row's fieldset disables and WebKit does not focus a button on click at
 all, so a document-level listener handles Escape and Tab while focus is
 outside the dialog, and a finished save puts focus on its row's control unless

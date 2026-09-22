@@ -55,13 +55,14 @@ test.describe('engine settings popover: round three, rows and keyboard', () => {
     await card.scrollIntoViewIfNeeded()
     const sentence = card.locator('.engine-setting-not-honored')
     await expect(sentence).toHaveText('Does not change this session.')
-    // Inside the card (the card's own box contains it), right after the status line, in its 11px muted type.
+    // Inside the card (the card's own box contains it), right under the help
+    // line (the status line before it is hidden at rest), in its 11px muted type.
     const cardBox = await rect(card)
     const sentenceBox = await rect(sentence)
-    const statusBox = await rect(card.locator('.engine-setting-status'))
+    const helpBox = await rect(card.locator('.engine-setting-help'))
     expect(sentenceBox.bottom).toBeLessThanOrEqual(cardBox.bottom + 0.5)
-    expect(sentenceBox.top).toBeGreaterThanOrEqual(statusBox.bottom - 1)
-    expect(sentenceBox.top - statusBox.bottom).toBeLessThanOrEqual(6)
+    expect(sentenceBox.top).toBeGreaterThanOrEqual(helpBox.bottom - 1)
+    expect(sentenceBox.top - helpBox.bottom).toBeLessThanOrEqual(6)
     expect(await sentence.evaluate((el) => el.previousElementSibling?.className)).toBe('engine-setting-status')
     expect(await sentence.evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px')
     // Nothing of it outside the card any more.
@@ -238,6 +239,51 @@ test.describe('engine settings popover: round three, rows and keyboard', () => {
     expect(order.filter((c) => c.includes('engine-settings-scope-option'))).toEqual([])
     await page.keyboard.press('Tab')
     await expect(def).toBeFocused()
+    await page.keyboard.press('Escape')
+  })
+
+  test('iOS-style rows: control beside the text and centered, no per-row file lines at rest', async ({ page }) => {
+    const [panel] = await openPanels(page, [sid])
+    const dialog = await openPopover(page, panel)
+    await waitForRows(dialog)
+    // Wide enough to read: 620 at a regular window.
+    expect(Math.round((await rect(dialog)).width)).toBe(620)
+    // A seeded row (user file) and an unset row (default): text left, control
+    // right on the SAME line, vertically centered; no blank band under the text.
+    for (const key of ['alwaysThinkingEnabled', 'verbose']) {
+      const row = popoverRow(dialog, key)
+      await row.scrollIntoViewIfNeeded()
+      const rowBox = await rect(row)
+      const copy = await rect(row.locator('.settings-row-copy'))
+      const control = await rect(row.locator('.engine-setting-control'))
+      expect(control.left, `${key} control beside text`).toBeGreaterThanOrEqual(copy.right - 0.5)
+      const drift = Math.abs((control.top + control.height / 2) - (rowBox.top + rowBox.height / 2))
+      expect(drift, `${key} control centered`).toBeLessThanOrEqual(6)
+      expect(rowBox.height - copy.height, `${key} no band under the text`).toBeLessThanOrEqual(16)
+      // Where the value lives is noise on every row; the visible Reset already marks a set one.
+      await expect(row.locator('.engine-setting-status')).toBeHidden()
+      await expect(row.locator('.engine-setting-target')).toBeHidden()
+    }
+    await expect(dialog.getByTestId('engine-setting-reset-alwaysThinkingEnabled')).toBeVisible()
+    await shot(page, 'r5/ios-rows-default-scope')
+    // The EXCEPTIONAL provenance still shows: a value the project file holds.
+    await scopeOption(dialog, 'project').click()
+    await expect(scopeOption(dialog, 'project')).toHaveAttribute('aria-checked', 'true')
+    const verbose = rowControl(dialog, 'claude', 'verbose')
+    // Reset joins on the control's LEFT: the control's right edge never moves.
+    const rightBefore = (await rect(verbose)).right
+    await verbose.click()
+    await expect.poll(async () => (await readLocal(repo))?.verbose).toBe(true)
+    await expect(dialog.getByTestId('engine-setting-reset-verbose')).toBeVisible()
+    expect(Math.abs((await rect(verbose)).right - rightBefore)).toBeLessThanOrEqual(1)
+    const resetBox = await rect(dialog.getByTestId('engine-setting-reset-verbose'))
+    expect(resetBox.right).toBeLessThanOrEqual((await rect(verbose)).left)
+    await expect(popoverRow(dialog, 'verbose').locator('.engine-setting-status')).toBeVisible()
+    await expect(popoverRow(dialog, 'verbose').locator('.engine-setting-status')).toHaveText('Set in this project (local)')
+    await shot(page, 'r5/ios-rows-overlay-status')
+    await dialog.getByTestId('engine-setting-reset-verbose').click()
+    await expect.poll(async () => (await readLocal(repo))?.verbose).toBeUndefined()
+    await scopeOption(dialog, 'default').click()
     await page.keyboard.press('Escape')
   })
 })

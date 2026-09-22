@@ -146,7 +146,7 @@ test.describe('engine settings popover: review round two', () => {
     await expect(scopeOption(dialog, 'project')).toHaveAttribute('aria-checked', 'true')
     await about.click()
     await expect(dialog.getByTestId('engine-settings-about-scope'))
-      .toHaveText(`With the switch on "This project only", every save from here goes to ${shortCwd(repoA)}/.claude/settings.local.json.`)
+      .toHaveText(`With the switch on "This project only", every save from here goes to ${shortCwd(repoA)}/.claude/settings.local.json, created on first save and kept out of git. Other projects are unchanged.`)
     await shot(page, 'r3/about-project')
     await page.keyboard.press('Escape')
     await expect(panel).toHaveCount(0)
