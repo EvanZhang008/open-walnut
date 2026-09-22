@@ -12,6 +12,7 @@ export type UsageSource =
   | 'chat'         // Personal AI turn answered by a lane-bound CLI session (agent.provider='claude-code')
   | 'perplexity'   // web search via Perplexity
   | 'glm'          // Zhipu GLM-4 API calls
+  | 'jev'          // TypeSafe Jev decision calls (System One)
   | 'heartbeat'    // periodic health checks
   | 'cron'         // cron-triggered agent turns
   | 'triage'       // session/subagent triage

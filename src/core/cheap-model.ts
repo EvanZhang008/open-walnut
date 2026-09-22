@@ -1,5 +1,5 @@
 import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
-import { resolveMainProviderName } from '../model/providers/default-provider.js';
+import { CLAUDE_CLI_PROVIDER, resolveMainProviderName } from '../model/providers/default-provider.js';
 import type { Config } from './types.js';
 
 /**
@@ -13,6 +13,22 @@ export function fastModelFor(config: Config): string | undefined {
   return MODEL_CATALOG[providerName]?.find((model) =>
     model.id.toLowerCase().includes('haiku')
   )?.id;
+}
+
+/**
+ * True when a fast-model call would run through the Claude Code CLI, i.e.
+ * spawn a whole `claude -p` process (measured ~5s before any prompt; see
+ * agent.quick_parse in types.ts). Call sites with a faster structured-decision
+ * backend (Jev) use this to skip the hopeless spawn instead of letting it blow
+ * its timeout. The predicate is the PROVIDER NAME alone: sendMessage picks its
+ * adapter from `config.provider ?? resolveMainProviderName(...)` and never
+ * from the model id, so any agent.fast_model value under a claude_cli main
+ * provider still spawns the CLI. (An earlier version of this function asked
+ * the catalog whether the model id "was a CLI model", which wrongly reported
+ * an escape for direct-API ids that sendMessage would still route to the CLI.)
+ */
+export function fastModelRidesCli(config: Config): boolean {
+  return resolveMainProviderName(config) === CLAUDE_CLI_PROVIDER;
 }
 
 /**

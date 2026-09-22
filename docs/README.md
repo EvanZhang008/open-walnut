@@ -58,6 +58,9 @@ must live under one of these top-level categories instead of directly under
 - [Cloud sync](reference/cloud-sync.md) - one-click cloud-companion setup, the
   git-over-HTTPS data plane, and the live-session bridge.
 - [Claude model configuration](reference/claude-model-configuration.md)
+- [Jev decisions](reference/jev-decisions.md) - optional System One backend for
+  background classifications (session→project placement, quick-parse fields):
+  config, confidence floors, and the rules for adding a new decision
 - [Engine settings](reference/engine-settings.md) - Settings → Engines: editing
   Claude Code's `/config` rows and Codex's `config.toml` from Walnut, where each
   key is stored, and the atomic conditional write that keeps the engine's file

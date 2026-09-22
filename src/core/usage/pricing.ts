@@ -60,6 +60,10 @@ export const DEFAULT_PRICING: PricingEntry[] = [
   // ── Perplexity ──
   { pattern: 'sonar-pro',          input: 3.00,  output: 15.00 },
   { pattern: 'sonar',              input: 1.00,  output: 1.00 },
+
+  // ── TypeSafe Jev (System One decisions; output tokens are free) ──
+  // Matches 'jev-latest', 'jev-1.13.0' and gateway ids like 'typesafe/jev-1.13'.
+  { pattern: 'jev',                input: 0.042, output: 0 },
 ];
 
 /**

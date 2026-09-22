@@ -20,6 +20,8 @@
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor } from './cheap-model.js';
+import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
+import type { Config } from './types.js';
 
 const SYSTEM_PROMPT = `You place a new coding-session task into ONE of the user's existing projects. Reply with ONLY a JSON object — no markdown fence, no commentary.
 Field:
@@ -41,24 +43,114 @@ function canonicalMatch(value: unknown, choices: string[] | undefined): string |
   return choices.find((choice) => choice.trim().toLowerCase() === normalized);
 }
 
+/** Floor for acting on a Jev placement — "a wrong move is worse than no move",
+ *  and unlike the prompt's OMIT-the-field begging this one is enforceable. */
+const JEV_MIN_CONFIDENCE = 0.6;
+/** Sentinel option key for "stays in Inbox" — cannot collide with a real
+ *  project name because criteria keys are ours, not the registry's. */
+const JEV_INBOX = '__inbox__';
+
+/**
+ * One Choice question over the existing projects (plus the Inbox sentinel).
+ * Returns a suggestion when Jev ANSWERED — including the empty suggestion for
+ * "nothing fits" / low confidence, which is authoritative, not a failure.
+ * Returns undefined on transport/HTTP errors AND on a malformed answer (a 200
+ * whose answer is missing, mis-shaped, or confidence-less is schema drift,
+ * not "nothing fits") so the caller still reaches the fast-model fallback.
+ */
+async function placeViaJev(
+  jev: JevClient,
+  digest: { digest: string; projects: string[] },
+  input: { cwd: string; message?: string },
+  opts: { timeoutMs?: number; taskId?: string } = {},
+): Promise<OrganizeSuggestion | undefined> {
+  try {
+    const criteria: Record<string, string> = {
+      [JEV_INBOX]: 'No listed project plausibly fits this session; leave it unfiled.',
+    };
+    for (const name of digest.projects) {
+      // A real project can't be allowed to shadow the sentinel key.
+      if (name === JEV_INBOX) continue;
+      criteria[name] = `File it under the project named "${name}".`;
+    }
+
+    const state = [
+      'A new coding session just started and its task needs a project.',
+      `Session working directory: ${input.cwd}`,
+      input.message?.trim()
+        ? `User's request (opening message): ${input.message.trim().slice(0, 800)}`
+        : '(No opening message — the session was started on the directory alone.)',
+      '',
+      "The user's projects (name, open task count, summary, recent task titles):",
+      digest.digest,
+    ].join('\n');
+
+    const answers = await jev.decide(state, {
+      project: {
+        type: 'choice',
+        instructions: 'Which existing project should this coding session be filed under? Coding sessions usually belong with the project whose summary or example titles mention the same repository/directory name.',
+        criteria,
+      },
+    }, {
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+      ...(opts.taskId ? { taskId: opts.taskId } : {}),
+    });
+
+    const answer = readChoice(answers.project);
+    if (!answer) {
+      // Loud, and a fallback — the silent version of this branch once turned
+      // auto-organize off forever on a renamed answer key, with zero log lines.
+      log.web.warn('jev placement answer malformed — falling back to fast model', {
+        answerKeys: Object.keys(answers),
+      });
+      return undefined;
+    }
+    if (answer.choice === JEV_INBOX || answer.confidence < JEV_MIN_CONFIDENCE) return {};
+    const project = canonicalMatch(answer.choice, digest.projects);
+    if (!project) {
+      log.web.warn('jev placement chose a key outside the offered list — falling back', {});
+      return undefined;
+    }
+    return { project };
+  } catch (err) {
+    log.web.debug('jev placement failed — falling back to fast model', {
+      errorKind: err instanceof Error ? err.name : typeof err,
+    });
+    return undefined;
+  }
+}
+
 /**
  * Ask the fast model where a quick-start session belongs. Never throws;
  * empty suggestion means "leave it where it is".
  */
 export async function suggestSessionPlacement(
   input: { cwd: string; message?: string },
-  opts: { timeoutMs?: number; modelOverride?: string } = {},
+  opts: { timeoutMs?: number; modelOverride?: string; taskId?: string } = {},
 ): Promise<OrganizeSuggestion> {
   try {
     const { buildProjectDigest } = await import('./quick-task-digest.js');
     const digest = await buildProjectDigest();
     if (!digest.projects.length) return {};
 
-    let model = opts.modelOverride;
-    if (!model) {
-      const { getConfig } = await import('./config-manager.js');
-      model = fastModelFor(await getConfig());
+    const { getConfig } = await import('./config-manager.js');
+    const config: Config = await getConfig();
+
+    // Jev first when configured: one Choice call (~300ms) instead of a
+    // fast-model JSON one-shot (which on a CLI provider spawns `claude -p`).
+    // A Jev ANSWER — even "nothing fits" — is final; a transport error or a
+    // malformed answer falls through to the fast-model path below. An explicit
+    // modelOverride means the caller wants THAT model's judgment (evals, A/B),
+    // so Jev steps aside entirely, mirroring parseQuickTask.
+    const jev = opts.modelOverride ? undefined : getJevClient(config);
+    if (jev) {
+      const viaJev = await placeViaJev(jev, digest, input, {
+        timeoutMs: opts.timeoutMs, taskId: opts.taskId,
+      });
+      if (viaJev) return viaJev;
     }
+
+    const model = opts.modelOverride ?? fastModelFor(config);
 
     const content = [
       'Your projects (name, open task count, summary, recent task titles):',
@@ -113,7 +205,7 @@ export async function suggestSessionPlacement(
 export async function organizeQuickStartTask(
   taskId: string, cwd: string, message?: string,
 ): Promise<void> {
-  const suggestion = await suggestSessionPlacement({ cwd, message });
+  const suggestion = await suggestSessionPlacement({ cwd, message }, { taskId });
   if (!suggestion.project) return;
 
   const { getTask, updateTask } = await import('./task-manager.js');

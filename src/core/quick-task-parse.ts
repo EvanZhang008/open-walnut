@@ -1,8 +1,9 @@
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
-import { fastModelFor } from './cheap-model.js';
+import { fastModelFor, fastModelRidesCli } from './cheap-model.js';
+import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
 import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from './types.js';
-import type { CustomTierRecord, QuickTaskParse } from './types.js';
+import type { Config, CustomTierRecord, QuickTaskParse } from './types.js';
 
 export type { QuickTaskParse } from './types.js';
 
@@ -211,6 +212,142 @@ export function unparsedTask(text: string): QuickTaskParseEnvelope {
   return { parse: { title: trimmed.slice(0, 200) || text }, parseMs: 0 };
 }
 
+/** Floor for acting on a Jev classification. These are suggestions the user
+ *  confirms in the composer UI, so the bar is lower than session-organize's
+ *  unattended move — but below it, silence beats a coin flip. */
+const JEV_SUGGEST_MIN_CONFIDENCE = 0.5;
+/** Sentinel choice key for "the field does not apply". Ours, so it can never
+ *  collide with a project name or a custom tier id. */
+const JEV_NONE = '__none__';
+
+/** The classification slice of the parse — what Jev can answer. Fields are
+ *  tri-state: a string sets it, null confidently clears it (the LLM's answer
+ *  loses), undefined means "no opinion" (the LLM's answer stands). */
+interface JevQuickFields {
+  pinTier?: string | null;
+  priority?: 'immediate' | 'important' | 'backlog' | null;
+  project?: string | null;
+}
+
+/** A confident choice, or undefined. Shape validation lives in readChoice —
+ *  a malformed answer and an unconfident one both mean "no opinion" here
+ *  (these are composer suggestions; the LLM's answer simply stands). */
+function confidentChoice(answer: unknown): string | undefined {
+  const choice = readChoice(answer);
+  return choice && choice.confidence >= JEV_SUGGEST_MIN_CONFIDENCE ? choice.choice : undefined;
+}
+
+/** Jev's own budget for the classification call. Measured p50 is ~250ms via a
+ *  gateway; anything past this is a degraded endpoint, and waiting on it after
+ *  the LLM leg already answered would pin a browser connection slot. */
+const JEV_CLASSIFY_TIMEOUT_MS = 2_500;
+
+/**
+ * Ask Jev the three classification questions in ONE call. Returns undefined on
+ * any transport/shape error — the LLM parse (when it ran) stands alone then.
+ */
+async function jevClassify(
+  jev: JevClient,
+  note: string,
+  opts: QuickTaskParseOptions,
+): Promise<JevQuickFields | undefined> {
+  try {
+    const customTiers = (opts.customTiers ?? []).filter((t) => t.id !== JEV_NONE);
+    const pinTierCriteria: Record<string, string> = Object.fromEntries([
+      ...PIN_TIER_POLICY.map((p) => [p.tier, p.guidance]),
+      ...customTiers.map((t) => [t.id, `The user's custom tier "${t.label}" — pick it when the note explicitly names this tier.`]),
+      [JEV_NONE, PIN_TIER_NONE_GUIDANCE],
+    ]);
+    const priorityCriteria: Record<string, string> = {
+      immediate: 'Urgent / asap / do it now wording.',
+      important: 'Explicitly marked important.',
+      backlog: 'Explicitly later / someday wording.',
+      [JEV_NONE]: 'No urgency or priority is stated.',
+    };
+    const knownProjects = (opts.knownProjects ?? []).filter((name) => name !== JEV_NONE);
+    const questions: Record<string, import('./decision/jev-client.js').JevQuestion> = {
+      pinTier: {
+        type: 'choice',
+        // Carries the same overriding rules the LLM prompt enforces
+        // (buildPinTierRule): without them Jev's confident "none" would veto an
+        // EXPLICIT "pin to focus" in the note.
+        instructions: 'Which pinned tier does this task belong in? An explicit "pin to X" or a named tier in the note always wins: choose that tier. A concrete due date within the next ~7 days points at satellite even without urgency wording. Otherwise judge from the work itself; when a signal is ambiguous prefer the weaker option — focus needs stated urgency and wait needs a stated blocker.',
+        criteria: pinTierCriteria,
+      },
+      priority: {
+        type: 'choice',
+        instructions: 'Which priority does the note itself state? Only pick one when urgency wording is present.',
+        criteria: priorityCriteria,
+      },
+      ...(knownProjects.length ? {
+        project: {
+          type: 'choice' as const,
+          instructions: 'Which existing project does this note belong to, judged against each project\'s summary and example task titles? One-off items (an errand, a call, a single reminder) belong to none.',
+          criteria: Object.fromEntries([
+            ...knownProjects.map((name) => [name, `File it under the project named "${name}".`]),
+            [JEV_NONE, 'No listed project fits; the task stays in the Inbox.'],
+          ]),
+        },
+      } : {}),
+    };
+
+    const digest = opts.projectDigest?.trim();
+    const state = [
+      `A user typed a quick task note: ${note}`,
+      ...(digest ? ['', "The user's projects (name, open task count, summary, recent task titles):", digest] : []),
+    ].join('\n');
+
+    // The caller's budget wins when it is tighter; Jev never gets MORE than
+    // its own ceiling just because the LLM leg was granted a long timeout.
+    const timeoutMs = Math.min(opts.timeoutMs ?? JEV_CLASSIFY_TIMEOUT_MS, JEV_CLASSIFY_TIMEOUT_MS);
+    const answers = await jev.decide(state, questions, { timeoutMs });
+    const out: JevQuickFields = {};
+
+    // Accept only keys the question offered (the criteria maps ARE the accept
+    // list, so a new PIN_TIER_POLICY tier is offered and accepted in one place).
+    const pin = confidentChoice(answers.pinTier);
+    if (pin === JEV_NONE) out.pinTier = null;
+    else if (pin && pin in pinTierCriteria) out.pinTier = pin;
+
+    const priority = confidentChoice(answers.priority);
+    if (priority === JEV_NONE) out.priority = null;
+    else if (priority && priority in priorityCriteria) {
+      out.priority = priority as 'immediate' | 'important' | 'backlog';
+    }
+
+    const project = confidentChoice(answers.project);
+    if (project === JEV_NONE) out.project = null;
+    else if (project) {
+      const existing = canonicalMatch(project, knownProjects);
+      if (existing) out.project = existing;
+    }
+    return out;
+  } catch (err) {
+    log.web.debug('jev quick-classify failed — LLM parse stands alone', {
+      errorKind: err instanceof Error ? err.name : typeof err,
+    });
+    return undefined;
+  }
+}
+
+/** Overlay Jev's confident answers on the LLM parse. null clears a field the
+ *  LLM claimed (Jev is calibrated where the LLM notoriously over-claims
+ *  focus/wait); undefined leaves the LLM's answer alone. */
+function applyJevFields(parse: QuickTaskParse, fields: JevQuickFields): void {
+  if (fields.pinTier === null) delete parse.pinTier;
+  else if (fields.pinTier) parse.pinTier = fields.pinTier;
+  if (fields.priority === null) delete parse.priority;
+  else if (fields.priority) parse.priority = fields.priority;
+  if (fields.project === null) {
+    // Jev is sure no EXISTING project fits — but it never saw the new-project
+    // escape hatch, so an LLM new-name proposal survives.
+    if (!parse.project_is_new) delete parse.project;
+  } else if (fields.project) {
+    parse.project = fields.project;
+    delete parse.project_is_new;
+  }
+}
+
 /** Best-effort parsing for quick task notes. Never throws. */
 export async function parseQuickTask(
   text: string,
@@ -219,13 +356,51 @@ export async function parseQuickTask(
   const trimmed = text.trim();
   if (!trimmed) return { parse: { title: text }, parseMs: 0 };
 
+  // Config once: fast-model resolution + Jev availability. Unreadable config
+  // degrades to "no model, no Jev" — the note itself is still the answer.
+  let config: Config | undefined;
+  try {
+    const { getConfig } = await import('./config-manager.js');
+    config = await getConfig();
+  } catch { /* model stays undefined; sendMessage resolves its own default */ }
+
+  // Jev answers the classification fields (pinTier/priority/project) in one
+  // ~300ms structured call, racing the LLM parse rather than waiting on it.
+  // When the main provider is the Claude Code CLI, the LLM leg is skipped
+  // outright — measured 2026-09-17 (see agent.quick_parse in types.ts), that
+  // spawn never answered inside the 10s abort, so running it buys nothing and
+  // starves the browser's six-connection pool. Setup is guarded: a malformed
+  // jev section (YAML numbers) must degrade, never break "never throws".
+  const started = Date.now();
+  let jev: JevClient | undefined;
+  let jevPromise: Promise<JevQuickFields | undefined> | undefined;
+  let skipLlm = false;
+  try {
+    jev = config && !opts.modelOverride ? getJevClient(config) : undefined;
+    jevPromise = jev ? jevClassify(jev, trimmed.slice(0, 500), opts) : undefined;
+    skipLlm = jevPromise !== undefined && config !== undefined && fastModelRidesCli(config);
+  } catch (err) {
+    log.web.debug('jev setup failed — LLM-only parse', {
+      errorKind: err instanceof Error ? err.name : typeof err,
+    });
+  }
+
+  if (skipLlm && jev) {
+    const envelope = unparsedTask(text);
+    const jevFields = await jevPromise;
+    if (jevFields) applyJevFields(envelope.parse, jevFields);
+    envelope.parseMs = Date.now() - started;
+    // No title cleanup and no dates in this mode — Jev cannot generate text,
+    // and the only model that could is the one that can't answer in time.
+    // Attribute the parse to Jev only when Jev actually answered: a swallowed
+    // transport error must not log a model that produced nothing.
+    return jevFields ? { ...envelope, model: jev.model } : envelope;
+  }
+
   let parseMs = 0;
   let model = opts.modelOverride;
   try {
-    if (!model) {
-      const { getConfig } = await import('./config-manager.js');
-      model = fastModelFor(await getConfig());
-    }
+    if (!model && config) model = fastModelFor(config);
     const now = opts.now ?? new Date();
     const timeZone = opts.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     const digest = opts.projectDigest?.trim();
@@ -316,6 +491,9 @@ export async function parseQuickTask(
       }
     }
 
+    const jevFields = jevPromise ? await jevPromise : undefined;
+    if (jevFields) applyJevFields(output, jevFields);
+
     return { parse: output, parseMs, ...(model ? { model } : {}) };
   } catch (err) {
     // Log only the error kind — JSON.parse messages embed a prefix of the model
@@ -323,6 +501,10 @@ export async function parseQuickTask(
     log.web.debug('parseQuickTask failed, using original text', {
       errorKind: err instanceof Error ? err.name : typeof err,
     });
-    return { parse: { title: trimmed }, parseMs, ...(model ? { model } : {}) };
+    // A dead LLM doesn't waste a live Jev answer (jevClassify never throws).
+    const parse: QuickTaskParse = { title: trimmed };
+    const jevFields = jevPromise ? await jevPromise : undefined;
+    if (jevFields) applyJevFields(parse, jevFields);
+    return { parse, parseMs, ...(model ? { model } : {}) };
   }
 }

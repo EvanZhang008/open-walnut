@@ -1287,6 +1287,27 @@ export interface Config {
      *  frees them). Default: false. */
     prewarm_on_start?: boolean;
   };
+  /**
+   * Jev (TypeSafe System One) decision model — optional backend for Walnut's
+   * small structured decisions (quick-start project placement, quick-parse
+   * classification fields). NOT a chat model: one call carries a text state
+   * plus typed questions and returns choices/scores with calibrated
+   * confidence, in ~100-400ms for ~$0.00002. Unset = every call site keeps
+   * its existing fast-model/heuristic path.
+   */
+  jev?: {
+    /** API key. Supports literal, `${env:VAR}`, bare ENV_VAR_NAME, and
+     *  `${file:~/path}` (keep real keys under `~/.open-walnut/secrets/`,
+     *  which git-sync excludes — never a literal key in this synced file). */
+    api_key?: string;
+    /** Full decisions endpoint URL. Default: the first-party API
+     *  (https://api.typesafe.ai/v1/systemone). Gateways mirror the request
+     *  shape — e.g. OpenRouter's is https://openrouter.ai/api/alpha/decisions. */
+    endpoint?: string;
+    /** Model id the endpoint expects. Default 'jev-latest' (first-party);
+     *  gateways use their own ids (OpenRouter: 'typesafe/jev-1.13'). */
+    model?: string;
+  };
   /** API keys for remote client authentication (iOS app, etc.) */
   api_keys?: ApiKeyEntry[];
   /** Registered push notification tokens for mobile clients */

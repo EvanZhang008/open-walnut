@@ -138,6 +138,18 @@ describe('pricing', () => {
     });
   });
 
+  describe('jev (System One decisions)', () => {
+    it('bills input only — output tokens are free', () => {
+      const cost = computeCost({ model: 'jev-1.13.0', input_tokens: 1_000_000, output_tokens: 5_000 });
+      expect(cost).toBeCloseTo(0.042, 6);
+    });
+
+    it('matches gateway model ids by substring', () => {
+      const cost = computeCost({ model: 'typesafe/jev-1.13-20260917', input_tokens: 500_000, output_tokens: 0 });
+      expect(cost).toBeCloseTo(0.021, 6);
+    });
+  });
+
   describe('metadata', () => {
     it('has a pricing version string', () => {
       expect(PRICING_VERSION).toMatch(/^\d{4}-\d{2}-\d{2}$/);
