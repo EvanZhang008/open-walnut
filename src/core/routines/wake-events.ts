@@ -9,7 +9,7 @@
  * bus (trigger-events.ts), so the subscription belongs here. The engine only
  * owns the number (`bumpWake`) and whether it crossed the threshold.
  *
- * Three rules this file exists to keep:
+ * Four rules this file exists to keep:
  *
  *  - ONE named global subscriber, never one per job. A global subscriber is
  *    consulted for every event on the hot path, so its `interest` allowlist is
@@ -26,6 +26,12 @@
  *    disk write, so counts accumulate in memory and a 5s TRAILING timer folds
  *    them into the store. (CoalescingQueue in event-bus.ts is the same idea, but
  *    its 60s normal flush is far too slow for a threshold anybody is waiting on.)
+ *
+ *  - A count is never thrown away by a write that failed. The buffer IS the
+ *    record that those events happened, so a failed bump gives its amount back
+ *    (bounded retries, then it rides the next event) and a stop() persists what
+ *    is left instead of clearing it. A lost batch silently pushes a routine's
+ *    threshold back by however many events were in flight.
  */
 
 import { bus, type BusEvent } from '../event-bus.js';
@@ -38,6 +44,14 @@ export const WAKE_SUBSCRIBER = 'routine-wake';
 export const WAKE_FLUSH_MS = 5_000;
 /** Re-arm debounce: a save emits several cron events in a row. */
 const WAKE_REARM_MS = 100;
+/**
+ * How many times a failed bump may drive its OWN retry timer before it stops
+ * asking for one. The count is never dropped — after this it simply waits for
+ * the next event to carry it into a flush. A store that is failing (full disk, a
+ * lock that keeps timing out) must not be hammered every flushMs forever, and a
+ * self-driven retry loop with no new events is the only way that could happen.
+ */
+const WAKE_RETRY_LIMIT = 3;
 
 type WakeBump = { count: number; threshold: number; due: boolean };
 
@@ -121,6 +135,8 @@ export function startRoutineWake(deps: RoutineWakeDeps = {}): RoutineWakeHandle 
   let handled = 0;
   let stopped = false;
   const pending = new Map<string, number>();
+  /** Consecutive failed bumps per job, so a retry loop is bounded (WAKE_RETRY_LIMIT). */
+  const failures = new Map<string, number>();
   const firing = new Set<string>();
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let rearmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -155,14 +171,53 @@ export function startRoutineWake(deps: RoutineWakeDeps = {}): RoutineWakeHandle 
     if (stopped || pending.size === 0) return;
     const batch = [...pending.entries()];
     pending.clear();
+    let retry = false;
     for (const [jobId, n] of batch) {
       try {
         const bump = await bumpWake(jobId, n);
+        failures.delete(jobId);
         // Not awaited: a run can take minutes, and the rest of this batch's
         // counters must land now rather than behind it.
         if (bump?.due) void fire(jobId, bump);
       } catch (err) {
-        log.cron.warn('wake flush failed', {
+        // The buffered counts are the ONLY record that those events happened, so
+        // a failed bump gives its amount back to `pending` instead of deleting
+        // it: a full disk or a lock timeout delays the threshold, it does not
+        // move it. Three details this shape depends on:
+        //  - the amount goes back under THIS job's id only, so one job's failure
+        //    can never re-add another job's successfully written count;
+        //  - it is ADDED to whatever is in `pending` now, never assigned — an
+        //    event that arrived during the await is already buffered there, and
+        //    assigning would drop it;
+        //  - `failures` bounds the self-driven retries (WAKE_RETRY_LIMIT); past
+        //    that the count still waits in the buffer for the next event's flush.
+        const buffered = (pending.get(jobId) ?? 0) + n;
+        pending.set(jobId, buffered);
+        const attempt = (failures.get(jobId) ?? 0) + 1;
+        failures.set(jobId, attempt);
+        if (attempt <= WAKE_RETRY_LIMIT) retry = true;
+        log.cron.warn('wake flush failed — the count stays buffered', {
+          jobId, added: n, buffered, attempt,
+          retrying: attempt <= WAKE_RETRY_LIMIT,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (retry) scheduleFlush();
+  }
+
+  /**
+   * Persist counts WITHOUT starting runs. Used only by stop(): a threshold that
+   * the shutdown write happens to cross must not launch a routine into a process
+   * that is going away — the count lands, and the next event (or the clock)
+   * discovers it.
+   */
+  async function drain(batch: Array<[string, number]>): Promise<void> {
+    for (const [jobId, n] of batch) {
+      try {
+        await bumpWake(jobId, n);
+      } catch (err) {
+        log.cron.warn('wake shutdown flush failed — count lost', {
           jobId, added: n, error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -207,6 +262,9 @@ export function startRoutineWake(deps: RoutineWakeDeps = {}): RoutineWakeHandle 
     for (const jobId of [...pending.keys()]) {
       if (!watchers.some((w) => w.jobId === jobId)) pending.delete(jobId);
     }
+    for (const jobId of [...failures.keys()]) {
+      if (!watchers.some((w) => w.jobId === jobId)) failures.delete(jobId);
+    }
     interest = [...new Set(watchers.flatMap((w) => [...w.events]))];
     if (interest.length === 0) {
       // No wake routines: cost the bus nothing at all rather than sit in its
@@ -219,17 +277,29 @@ export function startRoutineWake(deps: RoutineWakeDeps = {}): RoutineWakeHandle 
   }
 
   const handle: RoutineWakeHandle = {
+    /**
+     * Shutdown DELIBERATELY persists the buffer instead of dropping it: those
+     * counts are the only record that the events happened, and the common caller
+     * is startRoutineWake replacing the active handle (a re-arm must not cost a
+     * routine its batch). The write is best-effort and not awaited, because stop()
+     * is called from synchronous shutdown/replace paths; on a real process exit a
+     * write that does not finish in time loses at most the flush window, which is
+     * the same bound as the process dying one tick earlier.
+     */
     stop() {
       stopped = true;
       if (flushTimer) clearTimeout(flushTimer);
       flushTimer = null;
       if (rearmTimer) clearTimeout(rearmTimer);
       rearmTimer = null;
+      const draining = [...pending.entries()];
       pending.clear();
+      failures.clear();
       watchers = [];
       interest = [];
       bus.unsubscribe(WAKE_SUBSCRIBER);
       if (active === handle) active = null;
+      if (draining.length > 0) void drain(draining);
     },
     refresh() {
       if (stopped || rearmTimer) return;

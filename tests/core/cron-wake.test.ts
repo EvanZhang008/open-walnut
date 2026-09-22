@@ -14,6 +14,9 @@
  *     SUBTRACTS what the dispatch observed instead of zeroing (the correctness
  *     heart of the feature),
  *  9. a check trigger refuses a wake counter, at create and at patch, with a 400,
+ * 10. an UNREADABLE wake patch is refused with a 400, never ignored: an absent
+ *     key means "leave the stored wake alone", so dropping a bad one answered 200
+ *     and changed nothing at all,
  * 11. two crossings around one run collapse: the second is answered
  *     `already-running` rather than starting a second run.
  *
@@ -31,7 +34,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME } from '../../src/constants.js';
 import { CronService } from '../../src/core/cron/service.js';
 import { cronStatePath } from '../../src/core/cron/store.js';
-import { normalizeCronJobPatch } from '../../src/core/cron/normalize.js';
+import { normalizeCronJobCreate, normalizeCronJobPatch } from '../../src/core/cron/normalize.js';
 import { applyJobPatch } from '../../src/core/cron/jobs.js';
 import type { CronJob, CronJobCreate, CronStateFile, CronStoreFile } from '../../src/core/cron/types.js';
 import { setCronService } from '../../src/web/routes/cron.js';
@@ -372,10 +375,56 @@ describe('wake: the counter half of a routine trigger', () => {
       wake: { events: [MAIL_EVENT], threshold: -3, countField: '__proto__' },
     })!.wake).toEqual({ events: [MAIL_EVENT], threshold: 0 });
 
-    // Nothing countable left = no wake at all, rather than a counter that can
-    // never move while the card claims it can.
-    const empty = normalizeCronJobPatch({ wake: { events: ['bare-word'], threshold: 5 } })!;
-    expect('wake' in empty).toBe(false);
+    // Nothing countable left REFUSES the input. Dropping the key instead meant
+    // "leave the stored wake alone" (applyJobPatch reads key presence), so the
+    // caller got a 200 and no change — see the 400 case below.
+    expect(normalizeCronJobPatch({ wake: { events: ['bare-word'], threshold: 5 } })).toBeNull();
+    expect(normalizeCronJobPatch({ wake: { events: [], threshold: 5 } })).toBeNull();
+    expect(normalizeCronJobPatch({ wake: { threshold: 5 } })).toBeNull();
+    // A create carrying the same unreadable block is refused too: storing a
+    // clock-only routine would not be what the caller asked for either.
+    expect(normalizeCronJobCreate({
+      name: 'Bad wake',
+      schedule: { kind: 'every', everyMs: EVERY_MS },
+      payload: { kind: 'systemEvent', text: 'go' },
+      wake: { events: ['Mail Received'] },
+    })).toBeNull();
+  });
+
+  it('refuses an unreadable wake patch with a 400 instead of silently keeping the old one', async () => {
+    const { service } = await makeService();
+    setCronService(service);
+    const job = await service.add(wakeRoutine());
+
+    // An event name that fails the name pattern (a human label, not a bus event).
+    await expect(patchRoutine(job.id, { wake: { events: ['Mail Received'], threshold: 5 } }))
+      .rejects.toMatchObject({ statusCode: 400 });
+    // An empty array is the "clear the counter" attempt: refused, and said out
+    // loud, rather than answered 200 with the old counter still running.
+    await expect(patchRoutine(job.id, { wake: { events: [], threshold: 5 } }))
+      .rejects.toMatchObject({ statusCode: 400 });
+    await expect(patchRoutine(job.id, { wake: { events: ['Mail Received'] } }))
+      .rejects.toBeInstanceOf(SessionControlError);
+
+    // The stored routine is untouched by a refused patch...
+    const stored = (await service.list({ includeDisabled: true })).find((j) => j.id === job.id)!;
+    expect(stored.wake).toEqual({ events: [MAIL_EVENT], countField: 'count', threshold: 20 });
+    // ...and the two meanings that must survive the refusal: null REMOVES it,
+    // an omitted key leaves it alone.
+    const renamed = await patchRoutine(job.id, { name: 'Inbox triage (renamed)' });
+    expect((renamed.job as CronJob).wake).toEqual({ events: [MAIL_EVENT], countField: 'count', threshold: 20 });
+    const cleared = await patchRoutine(job.id, { wake: null });
+    expect((cleared.job as CronJob).wake).toBeUndefined();
+
+    // Create refuses it on the same path. Legacy-shaped (no `executor` key) so
+    // this stays a test about the refusal, not about the executor registry.
+    await expect(createRoutine({
+      name: 'Bad wake',
+      schedule: { kind: 'every', everyMs: EVERY_MS },
+      sessionTarget: 'main',
+      payload: { kind: 'systemEvent', text: 'go' },
+      wake: { events: ['Mail Received'], threshold: 5 },
+    })).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it('applyJobPatch treats wake by key presence, exactly like check', () => {

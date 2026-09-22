@@ -251,6 +251,9 @@ const WAKE_UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
  * Coerce a `wake` block. Returns null when no valid event name survives — a
  * counter with nothing to count is not a trigger, and storing one would make a
  * card claim a behaviour the routine does not have.
+ *
+ * Null here REFUSES the whole input (see the call site): it must never be read
+ * as "no wake", because an absent key already means "leave the stored one alone".
  */
 function coerceWake(raw: UnknownRecord): UnknownRecord | null {
   const rawEvents = Array.isArray(raw.events)
@@ -454,14 +457,23 @@ function normalizeCronJobInput(
     delete next.check;
   }
 
-  // Coerce wake, exactly like check: an explicit null CLEARS it on a patch, and
-  // an ABSENT key leaves a stored one alone — the routine form never renders
-  // `wake`, so its save (name/schedule/executor/check) must not erase it.
+  // Coerce wake: an explicit null CLEARS it on a patch, and an ABSENT key leaves
+  // a stored one alone — the routine form never renders `wake`, so its save
+  // (name/schedule/executor/check) must not erase it.
+  //
+  // NOT like `check` in one place: an unreadable wake block is REFUSED, not
+  // dropped. `delete next.wake` produced an absent key, and an absent key means
+  // "leave the existing value alone" in applyJobPatch — so a patch naming a
+  // misspelled event, or an empty `events` array meant to clear the counter,
+  // answered 200 and changed nothing at all. Returning null is how this module
+  // has always said "refuse this input" (see the isRecord guard at the top), and
+  // both callers already turn that into a 400: 'Invalid patch input.' /
+  // 'Invalid input…' in routines-core.ts. Clearing a wake is still `wake: null`.
   const rawWake = base.wake;
   if (isRecord(rawWake)) {
     const coerced = coerceWake(rawWake as UnknownRecord);
-    if (coerced) next.wake = coerced;
-    else delete next.wake;
+    if (!coerced) return null;
+    next.wake = coerced;
   } else if (rawWake === null) {
     if (applyDefaults) delete next.wake;
     else next.wake = null;
@@ -546,7 +558,9 @@ function normalizeCronJobInput(
 /**
  * Normalize raw input into a CronJobCreate. Applies defaults (enabled=true,
  * inferred sessionTarget, name, delivery). Returns null if the input is not
- * a valid object.
+ * a valid object, or carries a `wake` block that cannot be read (the caller
+ * answers 400 — a silently dropped counter is a routine that does not do what
+ * the caller asked for).
  */
 export function normalizeCronJobCreate(raw: unknown): CronJobCreate | null {
   return normalizeCronJobInput(raw, true) as CronJobCreate | null;
@@ -554,7 +568,9 @@ export function normalizeCronJobCreate(raw: unknown): CronJobCreate | null {
 
 /**
  * Normalize raw input into a CronJobPatch. No defaults applied — only coercion
- * of field values. Returns null if the input is not a valid object.
+ * of field values. Returns null if the input is not a valid object, or carries a
+ * `wake` block that cannot be read (the caller answers 400 — an ignored patch
+ * that answers 200 is indistinguishable from one that worked).
  */
 export function normalizeCronJobPatch(raw: unknown): CronJobPatch | null {
   return normalizeCronJobInput(raw, false) as CronJobPatch | null;

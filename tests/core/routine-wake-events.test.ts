@@ -10,7 +10,11 @@
  *     one leaves neither an interest entry nor a buffered count behind.
  *
  * Plus the flush contract: ten events in one window are ONE store write, and the
- * run starts only when the flushed count reaches the threshold.
+ * run starts only when the flushed count reaches the threshold — and the rule
+ * that makes that contract trustworthy: a write that FAILS never deletes the
+ * count it was carrying. The buffer is the only record that those events
+ * happened, so a full disk or a lock timeout may delay a routine's threshold,
+ * never move it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -56,11 +60,21 @@ type Harness = {
 
 let harness: Harness | null = null;
 
-function start(jobs: CronJob[]): Harness {
+/** Which bump attempts must fail, so a store error can be reproduced exactly. */
+type StartOptions = { failBump?: (jobId: string, n: number, attempt: number) => boolean };
+
+function start(jobs: CronJob[], opts?: StartOptions): Harness {
   const counters = new Map<string, number>();
+  const attempts = new Map<string, number>();
   // Stands in for CronService.bumpWake: the same contract (count after the bump,
   // the job's threshold, and whether that crossed it).
   const bump = vi.fn(async (jobId: string, n: number) => {
+    const attempt = (attempts.get(jobId) ?? 0) + 1;
+    attempts.set(jobId, attempt);
+    if (opts?.failBump?.(jobId, n, attempt)) {
+      // What a full disk / a lock timeout looks like from in here.
+      throw new Error('EROFS: read-only file system, open cron-state.json');
+    }
     const job = jobs.find((j) => j.id === jobId);
     if (!job?.wake || !job.enabled) return null;
     const count = (counters.get(jobId) ?? 0) + n;
@@ -200,6 +214,99 @@ describe('routine wake subscriber', () => {
     expect(h.bump).toHaveBeenCalledWith('plain', 3);
     expect(h.bump).toHaveBeenCalledWith('counted', 4);
     // threshold 0 means clock-only: counting still happens, no run is started.
+    expect(h.runNow).not.toHaveBeenCalled();
+  });
+
+  it('a failed bump keeps its count: the next flush retries the whole amount', async () => {
+    // The first write fails (read-only disk). Those 7 items really arrived, so
+    // the retry must carry them — plus the 5 that landed while it was failing.
+    const h = start(
+      [wakeJob('mail-1', [MAIL_EVENT], { countField: 'count', threshold: 12 })],
+      { failBump: (_jobId, _n, attempt) => attempt === 1 },
+    );
+    await h.refresh(1);
+
+    emitRaw(MAIL_EVENT, { count: 7 });
+    // No further events: the retry alone carries the full 7 into the store. The
+    // old code logged one warning and the 7 were gone forever.
+    await vi.waitFor(() => expect(h.counters.get('mail-1')).toBe(7));
+    expect(h.bump.mock.calls).toEqual([['mail-1', 7], ['mail-1', 7]]);
+    expect(h.runNow).not.toHaveBeenCalled();
+
+    // And the threshold those items were part of is still reachable.
+    emitRaw(MAIL_EVENT, { count: 5 });
+    await vi.waitFor(() => expect(h.runNow).toHaveBeenCalledTimes(1));
+    expect(h.bump).toHaveBeenLastCalledWith('mail-1', 5);
+    expect(h.handle.stats().pending).toBe(0);
+  });
+
+  it('one job failing does not re-add another job that flushed fine', async () => {
+    const h = start(
+      [
+        wakeJob('mail-1', [MAIL_EVENT], { countField: 'count', threshold: 0 }),
+        wakeJob('slack-1', [SLACK_EVENT], { countField: 'count', threshold: 0 }),
+      ],
+      { failBump: (jobId, _n, attempt) => jobId === 'mail-1' && attempt === 1 },
+    );
+    await h.refresh(2);
+
+    emitRaw(MAIL_EVENT, { count: 3 });
+    emitRaw(SLACK_EVENT, { count: 9 });
+    await vi.waitFor(() => expect(h.counters.get('mail-1')).toBe(3));
+    await new Promise((r) => setTimeout(r, 60));
+
+    // The retry carries mail's 3 and nothing else. Slack's 9 was written ONCE:
+    // re-adding the whole batch on one job's failure would double-count it.
+    expect(h.bump.mock.calls.filter(([jobId]) => jobId === 'mail-1')).toEqual([
+      ['mail-1', 3], ['mail-1', 3],
+    ]);
+    expect(h.bump.mock.calls.filter(([jobId]) => jobId === 'slack-1')).toEqual([['slack-1', 9]]);
+    expect(h.counters.get('slack-1')).toBe(9);
+  });
+
+  it('stops retrying a store that keeps failing, and still never drops the count', async () => {
+    // A retry loop with no new events would hammer a broken store forever, so the
+    // self-driven retries are bounded (WAKE_RETRY_LIMIT = 3, so 4 attempts).
+    const h = start(
+      [wakeJob('mail-1', [MAIL_EVENT], { countField: 'count', threshold: 0 })],
+      { failBump: (_jobId, _n, attempt) => attempt <= 4 },
+    );
+    await h.refresh(1);
+
+    emitRaw(MAIL_EVENT, { count: 2 });
+    await vi.waitFor(() => expect(h.bump).toHaveBeenCalledTimes(4));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(h.bump).toHaveBeenCalledTimes(4);
+    // Every failed attempt carried the same 2 items; none of them vanished.
+    expect(h.bump.mock.calls).toEqual([
+      ['mail-1', 2], ['mail-1', 2], ['mail-1', 2], ['mail-1', 2],
+    ]);
+    expect(h.handle.stats().pending).toBe(1);
+
+    // The next real event carries the whole backlog into a flush that works.
+    emitRaw(MAIL_EVENT, { count: 6 });
+    await vi.waitFor(() => expect(h.bump).toHaveBeenCalledTimes(5));
+    expect(h.bump).toHaveBeenNthCalledWith(5, 'mail-1', 8);
+    expect(h.counters.get('mail-1')).toBe(8);
+  });
+
+  it('stop() persists the buffered counts instead of dropping them, and starts no run', async () => {
+    const h = start([wakeJob('mail-1', [MAIL_EVENT], { countField: 'count', threshold: 1 })]);
+    await h.refresh(1);
+
+    // Buffered, with the trailing flush still ahead of it.
+    emitRaw(MAIL_EVENT, { count: 4 });
+    expect(h.handle.stats().pending).toBe(1);
+    expect(h.bump).not.toHaveBeenCalled();
+
+    h.handle.stop();
+    // A restart (startRoutineWake replaces the handle) must not cost the routine
+    // its batch, so shutdown WRITES what it holds.
+    await vi.waitFor(() => expect(h.bump).toHaveBeenCalledWith('mail-1', 4));
+    expect(h.counters.get('mail-1')).toBe(4);
+    // It crossed the threshold, but nobody launches a routine inside a shutdown:
+    // the count is on disk and the next event (or the clock) acts on it.
+    await new Promise((r) => setTimeout(r, 60));
     expect(h.runNow).not.toHaveBeenCalled();
   });
 
