@@ -28,8 +28,11 @@ async function createWakeRoutine(name: string): Promise<string> {
       wake: { events: [ITEMS_EVENT], countField: 'count', threshold: 20 },
     }),
   })
-  expect(res.status, await res.text()).toBe(201)
-  const { job } = (await res.json()) as { job: { id: string; wake?: unknown } }
+  // ONE read of the body: a `await res.text()` inside the expect message runs eagerly, and the
+  // json() after it then fails with "Body is unusable" whether the assertion passed or not.
+  const body = await res.text()
+  expect(res.status, body).toBe(201)
+  const { job } = JSON.parse(body) as { job: { id: string; wake?: unknown } }
   expect(job.wake).toBeTruthy()
   return job.id
 }
