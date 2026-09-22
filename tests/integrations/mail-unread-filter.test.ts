@@ -610,7 +610,12 @@ describe('the unread filter asks the provider first', () => {
       messageId: 'INBOX:1:2000', subject: 'Harbour note fresh', sentAt: Date.UTC(2026, 4, 2, 9, 0, 0), flags: [],
     };
     fixture.messages.unshift(fresh);
-    await rearm({ messageIds: [flipped.messageId, fresh.messageId] });
+    // The answer names EVERY unread message, because that is what `listUnread` means: "what is unread
+    // right now". Arming only the two interesting ids would be a provider claiming the rest are read,
+    // and the refresh believes a complete answer (see the reconcile cases below).
+    await rearm({
+      messageIds: fixture.messages.filter((one) => !fixture.isSeen(one.flags)).map((one) => one.messageId),
+    });
 
     const before = await rows<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE seen = 0");
     const first = await listPage({ limit: PAGE, unread: '1' });
@@ -641,5 +646,65 @@ describe('the unread filter asks the provider first', () => {
     expect(page.status).toBe(200);
     expect(page.body.messages).toHaveLength(cached[0]!.n);
     expect(marks().unreadCalls).toHaveLength(1);
+  });
+
+  /**
+   * Read somewhere else, and the cache has no way to hear about it — until this.
+   *
+   * The ingest half of the refresh can only ADD: a message read on a phone LEAVES the provider's unread
+   * answer, and an absence writes nothing. On a provider whose poll walks newest-first down to a
+   * watermark, nothing else can correct it either, because a conversation already below the line is
+   * never listed again. Measured on a real account on 2026-09-21: the folder badge said 4 unread and the
+   * console listed 12, eight of them read hours earlier.
+   */
+  it('marks read what a complete answer did not name, and pages without them', async () => {
+    const fixture = marks();
+    // A complete answer: two of the mailbox's unread messages, with the limit far above that.
+    const unread = fixture.messages.filter((one) => !fixture.isSeen(one.flags));
+    expect(unread.length).toBeGreaterThan(3);
+    const stillUnread = [unread[0]!, unread[1]!];
+    await rearm({ messageIds: stillUnread.map((one) => one.messageId) });
+
+    const page = await listPage({ limit: PAGE, unread: '1' });
+
+    expect(page.status).toBe(200);
+    expect(page.body.messages.map((one) => one.subject).sort())
+      .toEqual(stillUnread.map((one) => one.subject).sort());
+    // The DATABASE agrees, so the next page and the folder's own count do too.
+    const left = await rows<{ n: number }>('SELECT COUNT(*) AS n FROM messages WHERE seen = 0');
+    expect(left[0]!.n).toBe(2);
+    // And the flags array moved with the column: a row cleared this way really carries `\Seen`.
+    const cleared = await rows<{ flags_json: string | null }>(
+      'SELECT flags_json FROM messages WHERE message_id = ?', [unread[2]!.messageId],
+    );
+    expect(JSON.parse(cleared[0]!.flags_json ?? '[]')).toContain(SEEN);
+  });
+
+  /**
+   * A CAPPED answer proves less, and the difference matters: a page-sized limit on a mailbox with more
+   * unread mail than that would otherwise mark the whole tail read.
+   */
+  it('concludes nothing below the oldest entry of an answer that filled its limit', async () => {
+    const fixture = marks();
+    // Three unread in the cache, one of them OLD: a complete answer establishes them.
+    const newest = fixture.messages.slice(0, 2);
+    const oldest = fixture.messages[fixture.messages.length - 1]!;
+    // The envelopes this provider hands back carry the fixture's own flags, so a message it is asked to
+    // report as unread has to actually BE unread on its side.
+    for (const one of [...newest, oldest]) one.flags = fixture.setSeen(one.flags, false);
+    await rearm({ messageIds: [...newest, oldest].map((one) => one.messageId) });
+    await listPage({ limit: PAGE, unread: '1' });
+    expect((await rows<{ n: number }>('SELECT COUNT(*) AS n FROM messages WHERE seen = 0'))[0]!.n).toBe(3);
+
+    // Now an answer that FILLS its limit, naming only the two newest. It is a prefix, not the set, so
+    // the old one it never reached must keep its unread flag.
+    await rearm({ messageIds: newest.map((one) => one.messageId) });
+    const page = await listPage({ limit: 2, unread: '1' });
+
+    expect(page.status).toBe(200);
+    const still = await rows<{ seen: number }>(
+      'SELECT seen FROM messages WHERE message_id = ?', [oldest.messageId],
+    );
+    expect(still[0]!.seen, 'a capped answer proves nothing about mail older than its tail').toBe(0);
   });
 });

@@ -39,6 +39,7 @@ import {
   type StoredListUnsubscribe,
 } from './service-dto.js'
 import { unsubscribeFromBodyHtml } from './unsubscribe-link.js'
+import { foldersNeedingUnreadRefresh, reconcileUnread } from './unread-reconcile.js'
 import {
   callProvider,
   encodeMessageCursor,
@@ -58,7 +59,8 @@ import {
 } from './contract.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import type { MessageScopeRole } from './scope.js'
-import type { MailStore, MessageRow, MessageWrite } from './store.js'
+import { folderKey } from './store.js'
+import type { MailStore, MessageRow, MessageWrite, UnreadKeyRow } from './store.js'
 import type { UnsubscribeRow } from './store-write.js'
 import type {
   MailAccount,
@@ -426,10 +428,9 @@ export class MailService {
     // Later pages page the cache the first one just corrected. Never awaited past its deadline,
     // and a provider that cannot answer leaves the list exactly as the cache has it.
     //
-    // Single (account, mailbox) ONLY. A scope page covers several accounts, and ingesting each one in
-    // turn would put N provider round trips on a request whose whole point is one query; the smart
-    // list stays a cache read, and the per-account pages the same folders also appear in keep doing
-    // the correction.
+    // A scope page asks too, but only about the folders whose badge DISAGREES with the cache — see
+    // `refreshScopeUnread`. Skipping it entirely is what left the console's most-used unread view
+    // (All Inboxes) permanently stale.
     if (query.unread && !query.before && query.accountId && query.mailboxId && !query.scope) {
       await this.ingestUnreadFromProvider(query.accountId, query.mailboxId, query.limit)
     }
@@ -437,6 +438,9 @@ export class MailService {
       ? (await this.deps.store.mailboxesByRole(query.scope))
         .map((row) => ({ accountId: row.account_id, mailboxId: row.mailbox_id }))
       : undefined
+    if (query.unread && !query.before && query.scope && pairs) {
+      await this.refreshScopeUnread(pairs, query.scope, query.limit)
+    }
     const rows = await this.deps.store.listMessages({ ...query, ...(pairs ? { pairs } : {}) })
     const messages = await this.decorate(rows)
     // `nextBefore` is only offered when the page filled: handing one back on a short page
@@ -756,12 +760,73 @@ export class MailService {
       )
       // Only envelopes of the mailbox asked for: a provider that answers a broader set must not
       // be able to move rows between folders through this door.
-      await this.ingestPage(accountId, envelopes.filter((one) => one.mailboxId === mailboxId))
+      const mine = envelopes.filter((one) => one.mailboxId === mailboxId)
+      await this.ingestPage(accountId, mine)
+      await this.clearUnreadTheProviderNoLongerCounts(accountId, mailboxId, mine, limit)
     } catch (error) {
       this.deps.log?.debug('mail could not refresh the unread list from the provider', {
         accountId, mailboxId, error: String(error).slice(0, 200),
       })
     }
+  }
+
+  /**
+   * The half of the unread refresh that an ingest cannot do: mark read what the provider did not name.
+   *
+   * Ingesting the unread answer teaches the cache about mail it did not know was unread. It cannot
+   * teach it the opposite, because a message read in another client simply LEAVES that answer, and an
+   * absence writes nothing. Nothing else corrects it either on a provider whose poll walks newest-first
+   * down to a watermark (the Outlook one): a conversation already below the line is never listed again,
+   * so this is the only listing that can carry the new flag. Measured on a real account on 2026-09-21:
+   * the folder badge said 4 unread, the cache listed 12, and eight had been read hours earlier on a
+   * phone. IMAP does not have the illness because its poll re-fetches flags for the cached range.
+   *
+   * `reconcileUnread` decides what an absence proves; this only writes it down.
+   */
+  private async clearUnreadTheProviderNoLongerCounts(
+    accountId: string, mailboxId: string, answered: MailEnvelope[], limit: number,
+  ): Promise<void> {
+    const cached = await this.deps.store.unreadKeys(accountId, mailboxId)
+    if (cached.length === 0) return
+    const plan = reconcileUnread({
+      answered: answered.map((one) => ({ messageId: one.messageId, sentAt: sentAtOf(one) })),
+      cached: cached.map((row) => ({ messageId: row.message_id, sentAt: row.sent_at })),
+      limit,
+    })
+    if (plan.readNow.length === 0) return
+    const wanted = new Set(plan.readNow)
+    await this.deps.store.markMessagesSeen(cached.filter((row) => wanted.has(row.message_id)), this.now)
+    this.deps.log?.info?.('mail marked read what the provider no longer counts as unread', {
+      accountId, mailboxId, cleared: plan.readNow.length, cachedUnread: cached.length,
+      answered: answered.length, basis: plan.basis,
+    })
+  }
+
+  /**
+   * The same correction for a SMART list ("All Inboxes"), which is the view a reader actually keeps open.
+   *
+   * This used to be skipped outright, so the correction never ran where it was needed: one query must
+   * not become N provider round trips. The way out is that the folder badge already carries the
+   * provider's own count, refreshed by every poll — so a folder whose badge agrees with the cache costs
+   * NOTHING, and only a disagreement buys a request. Bounded per page (`foldersNeedingUnreadRefresh`),
+   * because the first page after this shipped may find every account disagreeing, and the rest is
+   * corrected by the next page or by opening that account's own folder.
+   */
+  private async refreshScopeUnread(
+    pairs: Array<{ accountId: string; mailboxId: string }>, role: MessageScopeRole, limit: number,
+  ): Promise<void> {
+    const [rows, cachedCounts] = await Promise.all([
+      this.deps.store.mailboxesByRole(role),
+      this.deps.store.unreadCounts(pairs),
+    ])
+    const candidates = pairs.map((pair) => ({
+      ...pair,
+      providerUnread: rows.find((row) => row.account_id === pair.accountId && row.mailbox_id === pair.mailboxId)?.unread ?? 0,
+      cachedUnread: cachedCounts.get(folderKey(pair.accountId, pair.mailboxId)) ?? 0,
+    }))
+    const wanted = foldersNeedingUnreadRefresh(candidates)
+    if (wanted.length === 0) return
+    await Promise.all(wanted.map((one) => this.ingestUnreadFromProvider(one.accountId, one.mailboxId, limit)))
   }
 
   private async requireMessage(accountId: string, messageId: string): Promise<MessageRow> {

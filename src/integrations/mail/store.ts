@@ -161,6 +161,25 @@ export interface MessageTaskRow extends Record<string, unknown> {
   created_at: number
 }
 
+/** One unread row as the unread reconcile needs it: what names it, what sorts it, what a write keeps. */
+export interface UnreadKeyRow extends Record<string, unknown> {
+  rowid: number
+  message_id: string
+  sent_at: number
+  flags_json: string | null
+}
+
+/**
+ * The key a per-folder map is held under.
+ *
+ * JSON rather than a joined string, because no character is unavailable in these two halves: an IMAP
+ * mailbox id carries spaces and slashes (`Sent Items`, `[Gmail]/All Mail`) and both halves are opaque
+ * provider strings, so any single separator makes some pair of folders collide.
+ */
+export function folderKey(accountId: string, mailboxId: string): string {
+  return JSON.stringify([accountId, mailboxId])
+}
+
 function placeholders(count: number): string {
   return new Array(count).fill('?').join(', ')
 }
@@ -286,9 +305,12 @@ export class MailStore {
    * builds from it is stable across requests, which is what makes a cursor comparable to the page
    * before it.
    */
-  mailboxesByRole(role: string): Promise<Array<Pick<MailboxRow, 'account_id' | 'mailbox_id'>>> {
-    return this.db.all<Pick<MailboxRow, 'account_id' | 'mailbox_id'>>(
-      'SELECT account_id, mailbox_id FROM mailboxes WHERE role = ? ORDER BY account_id, mailbox_id',
+  mailboxesByRole(role: string): Promise<Array<Pick<MailboxRow, 'account_id' | 'mailbox_id' | 'unread'>>> {
+    // `unread` rides along because it is the PROVIDER's own count, refreshed by every poll, and the
+    // smart list compares it against the cache's own unread rows to decide whether asking the provider
+    // could tell it anything (see `MailService.refreshScopeUnread`). One column, same index scan.
+    return this.db.all<Pick<MailboxRow, 'account_id' | 'mailbox_id' | 'unread'>>(
+      'SELECT account_id, mailbox_id, unread FROM mailboxes WHERE role = ? ORDER BY account_id, mailbox_id',
       [role],
     )
   }
@@ -591,6 +613,72 @@ export class MailStore {
       'UPDATE messages SET flags_json = ?, seen = ?, updated_at = ? WHERE rowid = ?',
       [flagsJson, seenOf(flagsJson), now, rowid],
     )
+  }
+
+  /**
+   * Every unread row of one folder: what identifies it, what sorts it, and the flags a write must keep.
+   *
+   * What the provider's unread answer is COMPARED against. Not `listMessages`, because that answers
+   * whole rows in page-sized bites and this question is about the complete set: an absence from the
+   * provider's answer only means something if the cache's own set is known in full. The index
+   * `messages_by_unread` serves it exactly.
+   */
+  unreadKeys(accountId: string, mailboxId: string): Promise<UnreadKeyRow[]> {
+    return this.db.all<UnreadKeyRow>(
+      'SELECT rowid, message_id, sent_at, flags_json FROM messages'
+      + ' WHERE account_id = ? AND mailbox_id = ? AND seen = 0',
+      [accountId, mailboxId],
+    )
+  }
+
+  /**
+   * How many unread rows the cache holds for each of these folders, as a count and not as rows.
+   *
+   * The cheap half of "is this folder's cached unread set worth a provider call": compared against the
+   * folder's own `unread`, which every poll refreshes from the provider. Agreement means there is
+   * nothing to correct and no request to make.
+   */
+  async unreadCounts(pairs: ReadonlyArray<{ accountId: string; mailboxId: string }>): Promise<Map<string, number>> {
+    const counts = new Map<string, number>()
+    if (pairs.length === 0) return counts
+    const holes = pairs.map(() => '(account_id = ? AND mailbox_id = ?)').join(' OR ')
+    const params = pairs.flatMap((one) => [one.accountId, one.mailboxId])
+    const rows = await this.db.all<{ account_id: string; mailbox_id: string; n: number }>(
+      `SELECT account_id, mailbox_id, COUNT(*) AS n FROM messages
+        WHERE seen = 0 AND (${holes}) GROUP BY account_id, mailbox_id`,
+      params,
+    )
+    for (const row of rows) counts.set(folderKey(row.account_id, row.mailbox_id), row.n)
+    return counts
+  }
+
+  /**
+   * Mark these rows read, because the provider no longer counts them as unread.
+   *
+   * Row by row through `setMessageFlags`, and the new array is computed HERE in TypeScript rather than
+   * by editing the stored text in SQL. Two reasons, both this file's own rules: `\Seen` is ADDED to
+   * whatever the row holds (a row can also be flagged or answered, and a reconcile may only have an
+   * opinion about being read), and a flag is an array ELEMENT — the substring test that SQL would need
+   * reads a provider flag called `\SeenByAgent` as read, which is exactly what `seenOf` warns about.
+   * The loop is as long as the disagreement, which is single digits on a real account.
+   */
+  async markMessagesSeen(rows: ReadonlyArray<{ rowid: number; flags_json: string | null }>, now: number): Promise<number> {
+    let changed = 0
+    for (const row of rows) {
+      let flags: string[]
+      try {
+        const parsed: unknown = row.flags_json ? JSON.parse(row.flags_json) : []
+        flags = Array.isArray(parsed) ? parsed.filter((one): one is string => typeof one === 'string') : []
+      } catch {
+        // Unparseable flags are replaced rather than preserved: `seenOf` already counts them as unread,
+        // so keeping them would mean writing a row that disagrees with its own `seen` column.
+        flags = []
+      }
+      if (!flags.includes(SEEN_FLAG)) flags.push(SEEN_FLAG)
+      await this.setMessageFlags(row.rowid, JSON.stringify(flags), now)
+      changed += 1
+    }
+    return changed
   }
 
   async countMessages(accountId: string): Promise<number> {
