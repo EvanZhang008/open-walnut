@@ -135,7 +135,7 @@ export function JevSection({ config, onSave, onReload }: Props) {
             <span className="text-sm" data-testid="jev-key-status">
               {ownKey
                 ? <>Jev-specific key — stored in <code>secrets/</code>, referenced from config, never synced.</>
-                : <>Using the shared OpenRouter provider key (the same credential chat models can use).</>}
+                : <>Using the shared OpenRouter provider key. <a href="#providers">Manage in Model Providers</a></>}
             </span>
             {ownKey && (
               <button type="button" className="btn btn-sm" onClick={removeKey} disabled={keyBusy}>Remove</button>

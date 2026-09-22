@@ -62,7 +62,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // groups must read in the same top-to-bottom order or a nav click lands somewhere
   // the eye did not expect. Keep this entry directly after the Manage sections.
   { owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'plugins', render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} /> },
-  { owner: 'walnut', id: 'providers', label: 'Ask Walnut Provider', title: 'Ask Walnut (Walnut Agent) Provider', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
+  { owner: 'walnut', id: 'providers', label: 'Model Providers', title: 'Model Providers', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure', render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} /> },
   // Tasks = where new tasks land + how a finished session reports back onto its
   // task. Focus Tiers is part of the same story (the pinned-task tiers), so it

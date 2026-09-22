@@ -66,7 +66,7 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
       <div className="setup-alt" style={{ marginTop: 10 }}>
         <span className="text-sm text-muted">Prefer an API key or Bedrock credentials instead?</span>
         <button className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
-          Settings &rarr; Ask Walnut Provider
+          Settings &rarr; Model Providers
         </button>
       </div>
     </div>

@@ -991,8 +991,8 @@ export function ProvidersSection({ config, onSave }: Props) {
   return (
     <SectionCard
       id="providers"
-      title="Ask Walnut (Walnut Agent) Provider"
-      description="Chat and coding sessions always use your own Claude Code. This picks the provider for the model calls Walnut makes itself: titles, summaries, and memory upkeep."
+      title="Model Providers"
+      description="Chat and coding sessions always use your own engine (Claude Code, set under Sessions). This picks the provider for the model calls Walnut makes itself (titles, summaries, memory upkeep) and holds each provider's API key. A key saved here is a shared credential: features like Jev Decisions reference it instead of keeping their own copy."
       showSave={false}
     >
       {loading ? (
