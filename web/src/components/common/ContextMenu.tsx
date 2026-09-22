@@ -249,6 +249,17 @@ export function ContextMenu({
     const onScroll = (e: Event) => {
       if (!scrollArmed) return;
       if (menuRef.current?.contains(e.target as Node)) return;
+      // ONLY a scroller that CARRIES the anchored row. Closing on scroll exists because the row moves
+      // out from under the menu, and the only thing that can move it is a scroll container it sits
+      // inside. This listener is on `window` in the CAPTURE phase, so it also hears every unrelated
+      // pane: a folder list restoring its offset after a sync, a timeline following its own tail, a
+      // drawer opening. Each of those took the menu down under a hand that never moved — the
+      // "right-click disappears after about two seconds" report (2026-09-22), which no fixture could
+      // reproduce because nothing there scrolls on its own. With no anchor to reason about (a caller
+      // that passes no `returnFocus`), the old close-on-any-scroll behaviour stands.
+      const anchor = back.current;
+      const scrolled = e.target;
+      if (anchor?.isConnected && scrolled instanceof Node && !scrolled.contains(anchor)) return;
       onClose();
     };
     window.addEventListener('keydown', onKey);
