@@ -685,7 +685,7 @@ export class MailStore {
    *
    * Row by row through `setMessageFlags`, and the new array is computed HERE in TypeScript rather than
    * by editing the stored text in SQL. Two reasons, both this file's own rules: `\Seen` is ADDED to
-   * whatever the row holds (a row can also be flagged or answered, and a reconcile may only have an
+   * whatever the row holds (a row can carry other provider flags too, and a reconcile may only have an
    * opinion about being read), and a flag is an array ELEMENT — the substring test that SQL would need
    * reads a provider flag called `\SeenByAgent` as read, which is exactly what `seenOf` warns about.
    *
