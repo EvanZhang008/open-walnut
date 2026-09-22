@@ -54,6 +54,16 @@ export function createConversationsRouter(): Router {
   router.post('/:agentId/conversations', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const agentId = validateAgentId(req.params.agentId as string)
+      // A conversation for an agent that EXISTS. `validateAgentId` only checks the shape, so this used to
+      // hand out a conversation for any well-formed id and the caller found out at its first message, where
+      // the lane's own lookup answers "Agent 'x' not found". A plugin's Ask drawer spent months in that
+      // state: the drawer opened, named a real conversation, and only the reader's question failed. The
+      // check uses the SAME lookup as the lane (`getAgent`), so create and send can never disagree.
+      const { getAgent } = await import('../../core/agent-registry.js')
+      if (!(await getAgent(agentId))) {
+        res.status(404).json({ error: `Agent not found: ${agentId}` })
+        return
+      }
       const title = typeof req.body?.title === 'string' ? req.body.title : undefined
       const conversation = await createConversation(agentId, title)
       broadcastEvent(EventNames.CONVERSATION_CREATED, { agentId, conversation })

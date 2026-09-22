@@ -183,6 +183,16 @@ export interface ChatViewProps {
   placeholder?: string
   emptyText?: string
   transformMessage?(text: string): string
+  /**
+   * Sent once as the first user turn when the conversation is ready, through `transformMessage`.
+   *
+   * This mirrors `@open-walnut/plugin-api`'s `ChatViewProps`, and it must: the plugin declares the prop
+   * against that package while the bridge renders THIS type, so a field missing here is a field the
+   * adapter silently drops. That is how a plugin's preset reached a chat that then sat empty.
+   */
+  autoSend?: string
+  /** Called with the text after `autoSend` went out, so the opener can latch it and never send it twice. */
+  onAutoSent?(text: string): void
 }
 
 export interface PluginViews {

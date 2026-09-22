@@ -382,6 +382,22 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   const [isCompacting, setIsCompacting] = useState(false);
   const [toolActivity, setToolActivity] = useState<ToolActivity | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  /**
+   * The conversation whose history has actually been read, which is NOT the same question as `isLoading`.
+   *
+   * `isLoading` answers "is a fetch in flight", and it is false in two very different situations: nothing is
+   * loading because the history is here, and nothing is loading because no conversation was named yet. A
+   * caller that acts on `!isLoading` cannot tell them apart, and the difference cost a real turn: the Ask
+   * drawer mounts with `conversationId === null` (which settles into not-loading), the id arrives one render
+   * later, and an effect reading the previous render's `false` sent its first message BEFORE the history
+   * effect ran — then that fetch resolved and replaced the transcript with the server's copy, which did not
+   * have the just-sent turn in it yet. The reader watched Walnut answer a question that was no longer on
+   * screen. Reported as "the preset never shows up" on 2026-09-21.
+   *
+   * So a conversation whose history has not settled reads as LOADING, whatever the fetch flag says, and that
+   * verdict does not depend on which effect React happens to run first.
+   */
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [stats, setStats] = useState<ChatStats | null>(null);
   const [queueCount, setQueueCount] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -451,6 +467,9 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       .finally(() => {
         if (!cancelled) {
           setIsLoading(false);
+          // Settled, however it went: a failed read is still the end of "we have not looked yet", and a
+          // caller waiting to send its first turn must not wait for ever on a server that answered 500.
+          setLoadedFor(conversationId);
           const endStats = perf.start('chat:stats');
           fetchChatStats(agentId, conversationId).then((s) => { endStats(); setStats(s); }).catch(() => endStats('error'));
         }
@@ -1052,5 +1071,9 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       .finally(() => setIsLoadingOlder(false));
   }, [isLoadingOlder, hasMore]);
 
-  return { messages, isStreaming, isCompacting, toolActivity, isLoading, stats, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages };
+  // A named conversation whose history has not settled counts as loading (see `loadedFor`). Without the
+  // second clause a caller can act on the render where the id has arrived and the fetch has not started.
+  const loading = isLoading || (conversationId !== null && loadedFor !== conversationId);
+
+  return { messages, isStreaming, isCompacting, toolActivity, isLoading: loading, stats, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages };
 }

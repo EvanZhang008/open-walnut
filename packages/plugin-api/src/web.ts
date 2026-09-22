@@ -126,8 +126,8 @@ export interface ChatViewProps {
   transformMessage?(text: string): string
   /** Sent once as the first user turn when the conversation is ready (through transformMessage). */
   autoSend?: string
-  /** Called after autoSend went out, so the opener can latch it and never re-send. */
-  onAutoSent?(): void
+  /** Called with the text after autoSend went out, so the opener can latch it and never re-send. */
+  onAutoSent?(text: string): void
 }
 
 export interface WebUiService {
