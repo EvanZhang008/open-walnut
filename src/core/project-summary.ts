@@ -8,9 +8,15 @@
  * gives the project drill-in UI something to show.
  *
  * TRIGGER: task:created bus events (see startProjectSummaryMaintainer), NOT
- * cron. Regeneration fires only when the project's task count crosses a
- * threshold — 1, 2, 4, 8, 20, then every 20 — so young projects converge fast
- * and mature ones refresh cheaply.
+ * cron. Regeneration fires when the project's task count has CROSSED a
+ * threshold — 1, 2, 4, 8, 20, then every 20 — since the last stored
+ * generation, so young projects converge fast, mature ones refresh cheaply,
+ * and a failed generation self-heals on the next create instead of waiting
+ * for the count to land exactly on a threshold again. Sync/bulk sources are
+ * not dropped (that left every synced project permanently undescribed) but
+ * debounced per project: a 300-task import is one generation, after the
+ * burst goes quiet. A startup catch-up sweep heals whatever both paths
+ * missed while the server was down.
  *
  * ALWAYS full regeneration from the current task list (+ the previous summary
  * as context). NEVER append — append-style summaries grow stale clauses
@@ -27,28 +33,50 @@
 import { sendMessage } from '../model/model.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { log } from '../logging/index.js';
-import { fastModelFor, backgroundAiDisabled } from './cheap-model.js';
+import { fastModelFor, fastModelRidesCli, directFastRoute, backgroundAiDisabled } from './cheap-model.js';
 import type { Task } from './types.js';
 
 const SUBSCRIBER = 'project-summary';
-/** Bulk importers storm task:created — never real "the user added work" events. */
-const SKIP_SOURCE = /sync|reconcile|migration|plugin/i;
+/** Bulk importers storm task:created — debounce these per project, never
+ *  refresh per event (a reconcile can emit hundreds in one loop). */
+const BULK_SOURCE = /sync|reconcile|migration|plugin/i;
+/** Quiet period after the last bulk create before one refresh runs.
+ *  Read per call so tests can shrink it and drive the REAL timer path. */
+function syncDebounceMs(): number {
+  const env = Number(process.env.WALNUT_SUMMARY_SYNC_DEBOUNCE_MS);
+  return Number.isFinite(env) && env > 0 ? env : 60_000;
+}
+/** Startup catch-up runs after boot settles; heals whatever event-driven
+ *  refreshes missed (server down, failed generations, pre-mechanism projects). */
+const CATCHUP_DELAY_MS = 120_000;
 /** Regenerate when the open+done task count reaches these; then every STEP. */
 const THRESHOLDS = [1, 2, 4, 8, 20];
 const STEP = 20;
 const MAX_TASKS_IN_PROMPT = 30;
 
 let queueTail: Promise<void> = Promise.resolve();
+const pendingSync = new Map<string, ReturnType<typeof setTimeout>>();
+let catchUpTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function __resetProjectSummaryState(): void {
   queueTail = Promise.resolve();
+  for (const timer of pendingSync.values()) clearTimeout(timer);
+  pendingSync.clear();
+  if (catchUpTimer) { clearTimeout(catchUpTimer); catchUpTimer = undefined; }
 }
 
-/** Threshold check: exact hit below 20, then every 20th task. */
-export function isSummaryThreshold(count: number): boolean {
-  if (count <= 0) return false;
-  if (count <= THRESHOLDS[THRESHOLDS.length - 1]) return THRESHOLDS.includes(count);
-  return count % STEP === 0;
+/**
+ * True when any threshold (1, 2, 4, 8, 20, then every 20) lies in
+ * (lastCount, count]. Crossing — not exact-hit — is the load-bearing choice:
+ * a bulk import that jumps 0 → 300 crossed plenty of thresholds even though
+ * 300 lands on none of the small ones, and a generation that failed at 20
+ * retries at 21 instead of waiting for 40.
+ */
+export function hasCrossedThreshold(lastCount: number, count: number): boolean {
+  if (count <= lastCount) return false;
+  if (THRESHOLDS.some((t) => t > lastCount && t <= count)) return true;
+  const top = THRESHOLDS[THRESHOLDS.length - 1];
+  return Math.floor(count / STEP) > Math.floor(Math.max(lastCount, top) / STEP);
 }
 
 const SYSTEM_PROMPT = `You maintain a one-line description of a project (a task list). Reply with ONLY a JSON object — no markdown fence, no commentary.
@@ -60,25 +88,44 @@ export interface ProjectSummaryResult {
   taskCount: number;
 }
 
+/** The slice of a task the summary prompt consumes — satisfied by both Task
+ *  and SlimTask, so callers can prefetch with the lighter projection. */
+export interface SummaryTaskLike {
+  title: string;
+  project?: string;
+  parent_task_id?: string;
+  phase?: string;
+  created_at?: string;
+  summary?: string;
+  description?: string;
+}
+
+/** The one definition of "which tasks count for this project's summary". */
+function projectSummaryTasks<T extends SummaryTaskLike>(all: readonly T[], project: string): T[] {
+  const key = project.toLowerCase();
+  return all.filter((t) =>
+    (t.project ?? '').toLowerCase() === key
+    && !t.title.startsWith('.metadata')
+    && !t.parent_task_id);
+}
+
 /**
  * Regenerate the summary for one project from its live task list.
  * Returns null for Inbox or when the model produced nothing usable. Never throws.
  */
 export async function generateProjectSummary(
   project: string,
-  opts: { timeoutMs?: number; modelOverride?: string } = {},
+  opts: { timeoutMs?: number; modelOverride?: string; tasks?: readonly SummaryTaskLike[] } = {},
 ): Promise<ProjectSummaryResult | null> {
   const name = (project ?? '').trim();
   if (!name) return null; // Inbox
   try {
-    const { listTasks, getProjectMetadata } = await import('./task-manager.js');
+    const { listTasksSlim, getProjectMetadata } = await import('./task-manager.js');
     // Case-insensitive match: project identity is NOCASE, and a caller may pass
     // a user-typed spelling (manual rebuild route) rather than the canonical one.
-    const all = await listTasks();
-    const tasks = all.filter((t) =>
-      (t.project ?? '').toLowerCase() === name.toLowerCase()
-      && !t.title.startsWith('.metadata')
-      && !t.parent_task_id);
+    // Callers that already hold the project's tasks (the gate, the catch-up
+    // sweep) pass them in so one refresh never reads the store twice.
+    const tasks = opts.tasks ?? projectSummaryTasks(await listTasksSlim({}), name);
     if (!tasks.length) return null;
     const taskCount = tasks.length;
 
@@ -98,10 +145,25 @@ export async function generateProjectSummary(
         return bits.join('\n');
       });
 
+    // Route: a claude_cli main provider would make sendMessage spawn a whole
+    // `claude -p` for this 256-token background call (~5s before any prompt;
+    // it blew the 15s budget often enough that most projects had no summary).
+    // Prefer a configured direct-API haiku, keeping the CLI as the fallback so
+    // CLI-only setups lose nothing.
     let model = opts.modelOverride;
+    let provider: string | undefined;
+    let cliFallbackModel: string | undefined;
     if (!model) {
       const { getConfig } = await import('./config-manager.js');
-      model = fastModelFor(await getConfig());
+      const config = await getConfig();
+      const direct = fastModelRidesCli(config) ? directFastRoute(config) : undefined;
+      if (direct) {
+        provider = direct.provider;
+        model = direct.model;
+        cliFallbackModel = fastModelFor(config);
+      } else {
+        model = fastModelFor(config);
+      }
     }
 
     const content = [
@@ -112,20 +174,34 @@ export async function generateProjectSummary(
       ...lines,
     ].join('\n');
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 15_000);
+    const attempt = async (prov: string | undefined, mdl: string | undefined) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 15_000);
+      try {
+        // Small maxTokens: Haiku's 64K catalog default trips the SDK's
+        // "streaming required" guard on the non-streaming path.
+        return await sendMessage({
+          system: SYSTEM_PROMPT,
+          messages: [{ role: 'user', content }],
+          config: { maxTokens: 256, ...(prov ? { provider: prov } : {}), ...(mdl ? { model: mdl } : {}) },
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
     let result;
     try {
-      // Small maxTokens: Haiku's 64K catalog default trips the SDK's
-      // "streaming required" guard on the non-streaming path.
-      result = await sendMessage({
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content }],
-        config: { maxTokens: 256, ...(model ? { model } : {}) },
-        signal: controller.signal,
+      result = await attempt(provider, model);
+    } catch (err) {
+      // Direct route unavailable (no creds, network) → the CLI path is still
+      // a real answer for CLI-only setups; give it its own full budget.
+      if (!provider) throw err;
+      log.web.debug('project-summary: direct route failed, retrying via main provider', {
+        project: name, provider, errorKind: err instanceof Error ? err.name : typeof err,
       });
-    } finally {
-      clearTimeout(timer);
+      result = await attempt(undefined, cliFallbackModel);
     }
 
     const text = (result.content ?? [])
@@ -149,10 +225,13 @@ export async function generateProjectSummary(
 }
 
 /** Generate + persist into the project registry. For the rebuild route + tests. */
-export async function refreshProjectSummary(project: string): Promise<boolean> {
+export async function refreshProjectSummary(
+  project: string,
+  opts: { tasks?: readonly SummaryTaskLike[] } = {},
+): Promise<boolean> {
   const name = (project ?? '').trim();
   if (!name) return false;
-  const generated = await generateProjectSummary(name);
+  const generated = await generateProjectSummary(name, { tasks: opts.tasks });
   if (!generated) return false;
   const { setProjectMetadata } = await import('./task-manager.js');
   await setProjectMetadata(name, {
@@ -166,49 +245,124 @@ export async function refreshProjectSummary(project: string): Promise<boolean> {
 }
 
 /**
- * task:created gate: count the project's tasks; regenerate only on a
- * threshold crossing SINCE the last stored generation (summary_task_count),
- * so a burst of creates between thresholds can't double-fire and a stale
- * stored count self-heals on the next crossing.
+ * The shared gate: count the project's tasks; regenerate only when a
+ * threshold was CROSSED since the last stored generation (summary_task_count).
+ * Serialized through one queue so bursts never fan out N model calls.
+ * Every path funnels here — live creates, the sync debounce, the catch-up.
  */
-export async function maybeRefreshForTask(task: Task | undefined, source: string): Promise<boolean> {
-  if (!task?.id) return false;
-  if (task.parent_task_id) return false;
-  if (task.title.startsWith('.metadata')) return false;
-  if (SKIP_SOURCE.test(source)) return false;
-  // Inbox is the unfiled pile, not a stream of work — a summary of "whatever is
-  // passing through" would be noise and a wasted model call per capture.
-  const project = (task.project ?? '').trim();
-  if (!project) return false;
-
-  // Serialize model runs — bursts of task creates must not fan out N calls.
+async function gateAndRefresh(project: string, context: string): Promise<boolean> {
   const prior = queueTail;
   let done!: () => void;
   queueTail = new Promise<void>((resolve) => { done = resolve; });
   await prior;
 
   try {
-    const { listTasks, getProjectMetadata } = await import('./task-manager.js');
-    const all = await listTasks();
-    const count = all.filter((t) =>
-      (t.project ?? '').toLowerCase() === project.toLowerCase()
-      && !t.title.startsWith('.metadata')
-      && !t.parent_task_id).length;
-    if (!isSummaryThreshold(count)) return false;
+    const { listTasksSlim, getProjectMetadata } = await import('./task-manager.js');
+    const tasks = projectSummaryTasks(await listTasksSlim({}), project);
 
     const meta = await getProjectMetadata(project);
     const lastCount = typeof meta?.summary_task_count === 'number' ? meta.summary_task_count : 0;
-    if (count <= lastCount) return false; // already summarized at/past this size
+    // A project whose summary vanished (metadata edited, registry rebuilt)
+    // regenerates from zero even though summary_task_count survived.
+    const hasSummary = typeof meta?.summary === 'string' && meta.summary.trim().length > 0;
+    if (!hasCrossedThreshold(hasSummary ? lastCount : 0, tasks.length)) return false;
 
-    return await refreshProjectSummary(project);
+    return await refreshProjectSummary(project, { tasks });
   } catch (err) {
     log.web.warn('project-summary: refresh check failed', {
-      taskId: task.id, error: err instanceof Error ? err.message : String(err),
+      project, context, error: err instanceof Error ? err.message : String(err),
     });
     return false;
   } finally {
     done();
   }
+}
+
+/**
+ * task:created gate. Bulk sources (sync reconcilers, migrations, plugins) are
+ * DEBOUNCED per project, not dropped: dropping them left every synced project
+ * permanently undescribed — the digest's "about:" line never existed for
+ * exactly the projects with the most tasks. One timer per project, pushed out
+ * by each event in the burst; the refresh runs once, after the import goes
+ * quiet, against the final count.
+ */
+export async function maybeRefreshForTask(task: Task | undefined, source: string): Promise<boolean> {
+  if (!task?.id) return false;
+  if (task.parent_task_id) return false;
+  if (task.title.startsWith('.metadata')) return false;
+  // Inbox is the unfiled pile, not a stream of work — a summary of "whatever is
+  // passing through" would be noise and a wasted model call per capture.
+  const project = (task.project ?? '').trim();
+  if (!project) return false;
+
+  if (BULK_SOURCE.test(source)) {
+    const key = project.toLowerCase();
+    const existing = pendingSync.get(key);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      pendingSync.delete(key);
+      void gateAndRefresh(project, 'sync-debounce').catch(() => {});
+    }, syncDebounceMs());
+    timer.unref?.();
+    pendingSync.set(key, timer);
+    return false; // nothing refreshed yet — the debounced run reports its own result
+  }
+
+  return gateAndRefresh(project, `task:${task.id}`);
+}
+
+/**
+ * Startup catch-up: sweep every registered project through the same crossing
+ * gate. Heals what event-driven refreshes structurally miss — projects
+ * imported while this feature didn't exist, generations that failed and saw
+ * no further creates, servers that were down during a sync. Runs its own
+ * serial loop rather than the event queue (a minutes-long sweep must not
+ * block live gates); racing a live refresh for the same project is harmless —
+ * both write the same regenerated state.
+ */
+export async function runSummaryCatchUp(): Promise<number> {
+  const { getStoreProjects, getProjectMetadata, listTasksSlim } = await import('./task-manager.js');
+  const projects = Object.keys(await getStoreProjects());
+  // ONE store read for the whole sweep — per-project gateAndRefresh calls
+  // would re-materialize the full task list once per registry project.
+  const all = await listTasksSlim({});
+  let refreshed = 0;
+  let consecutiveFailures = 0;
+  for (const name of projects) {
+    try {
+      const tasks = projectSummaryTasks(all, name);
+      const meta = await getProjectMetadata(name);
+      const lastCount = typeof meta?.summary_task_count === 'number' ? meta.summary_task_count : 0;
+      const hasSummary = typeof meta?.summary === 'string' && meta.summary.trim().length > 0;
+      if (!hasCrossedThreshold(hasSummary ? lastCount : 0, tasks.length)) continue;
+
+      if (await refreshProjectSummary(name, { tasks })) {
+        refreshed += 1;
+        consecutiveFailures = 0;
+      } else {
+        // The gate passed, so a false here means generation itself failed.
+        // Three in a row reads as "the model route is down" — stop burning a
+        // timeout per remaining project; the next boot retries the rest.
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) {
+          log.web.warn('project-summary: catch-up aborted after consecutive failures', {
+            refreshed, scanned: projects.length,
+          });
+          return refreshed;
+        }
+      }
+    } catch (err) {
+      log.web.warn('project-summary: catch-up project failed', {
+        project: name, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (refreshed > 0) {
+    log.web.info('project-summary: catch-up refreshed projects', {
+      refreshed, scanned: projects.length,
+    });
+  }
+  return refreshed;
 }
 
 /** Subscribe to task creation. Call once at server startup. */
@@ -229,6 +383,15 @@ export function startProjectSummaryMaintainer(): void {
       });
     });
   }, { global: true, interest: ['task:created'] });
+  catchUpTimer = setTimeout(() => {
+    catchUpTimer = undefined;
+    void runSummaryCatchUp().catch((err) => {
+      log.web.warn('project-summary: catch-up failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }, CATCHUP_DELAY_MS);
+  catchUpTimer.unref?.();
   log.web.info('project-summary: maintainer started');
 }
 

@@ -1,5 +1,5 @@
 import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
-import { CLAUDE_CLI_PROVIDER, resolveMainProviderName } from '../model/providers/default-provider.js';
+import { CLAUDE_CLI_PROVIDER, LEGACY_DEFAULT_PROVIDER, resolveMainProviderName } from '../model/providers/default-provider.js';
 import type { Config } from './types.js';
 
 /**
@@ -29,6 +29,40 @@ export function fastModelFor(config: Config): string | undefined {
  */
 export function fastModelRidesCli(config: Config): boolean {
   return resolveMainProviderName(config) === CLAUDE_CLI_PROVIDER;
+}
+
+/**
+ * A direct-API route for cheap background GENERATION when the main provider
+ * rides the CLI (fastModelRidesCli). Decisions have Jev; generation (project
+ * summaries) still needs a chat model, and spawning `claude -p` per background
+ * call is never the right vehicle — it burned the 15s budget often enough that
+ * most projects simply had no summary. Picks the first configured non-CLI
+ * provider that has a haiku catalog entry; with no explicit providers map,
+ * falls back to the legacy-synthesized bedrock (sendMessage always resolves
+ * it; missing credentials surface as a throw the caller treats as "route
+ * unavailable"). Returns undefined when every configured provider is the CLI —
+ * callers keep the CLI path rather than losing the feature.
+ */
+export function directFastRoute(config: Config): { provider: string; model: string } | undefined {
+  // An explicit agent.fast_model is the user's deliberate cheap-model choice —
+  // honor it on the direct route too, but only when the chosen provider's
+  // catalog actually serves that id (a CLI alias won't resolve on Bedrock).
+  const pick = (name: string): { provider: string; model: string } | undefined => {
+    const catalog = MODEL_CATALOG[name];
+    if (!catalog) return undefined;
+    const preferred = config.agent?.fast_model;
+    if (preferred && catalog.some((m) => m.id === preferred)) return { provider: name, model: preferred };
+    const haiku = catalog.find((m) => m.id.toLowerCase().includes('haiku'))?.id;
+    return haiku ? { provider: name, model: haiku } : undefined;
+  };
+  const explicit = Object.keys(config.providers ?? {});
+  for (const name of explicit) {
+    if (name === CLAUDE_CLI_PROVIDER) continue;
+    const route = pick(name);
+    if (route) return route;
+  }
+  if (explicit.length === 0) return pick(LEGACY_DEFAULT_PROVIDER);
+  return undefined;
 }
 
 /**

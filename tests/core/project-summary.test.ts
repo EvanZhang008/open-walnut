@@ -1,12 +1,16 @@
 /**
- * project-summary — fast-model per-project summaries regenerated at task-count
- * thresholds (1, 2, 4, 8, 20, then every 20). Contract pinned:
- *   - threshold math (exact hits below 20, modulo after)
+ * project-summary — fast-model per-project summaries regenerated on task-count
+ * threshold CROSSINGS (1, 2, 4, 8, 20, then every 20). Contract pinned:
+ *   - crossing math: any threshold in (lastCount, count] fires, so bulk jumps
+ *     and failed generations self-heal instead of waiting for an exact hit
  *   - full regeneration: previous summary + task titles reach the prompt;
  *     missing descriptions never block
  *   - persisted onto the task_projects registry row as summary + summary_task_count
- *   - non-threshold counts and bulk sources never call the model
- *   - stale/duplicate crossings deduped via summary_task_count
+ *   - between-threshold counts never call the model
+ *   - bulk sources are debounced per project (one refresh after the burst),
+ *     never refreshed per event and never dropped
+ *   - the catch-up sweep refreshes exactly the projects whose stored count
+ *     was crossed (or whose summary is missing) and skips current ones
  *
  * Real: summary code, task-manager (SQLite temp store). Fake: sendMessage,
  * config.
@@ -27,9 +31,10 @@ vi.mock('../../src/model/model.js', () => ({
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import {
-  isSummaryThreshold, maybeRefreshForTask, refreshProjectSummary, __resetProjectSummaryState,
+  hasCrossedThreshold, maybeRefreshForTask, refreshProjectSummary, runSummaryCatchUp,
+  __resetProjectSummaryState,
 } from '../../src/core/project-summary.js';
-import { addTask, getTask, getProjectMetadata, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
+import { addTask, getTask, getProjectMetadata, setProjectMetadata, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -62,10 +67,25 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
-describe('isSummaryThreshold', () => {
-  it('hits exactly 1, 2, 4, 8, 20, then every 20', () => {
-    const hits = Array.from({ length: 61 }, (_, i) => i).filter(isSummaryThreshold);
-    expect(hits).toEqual([1, 2, 4, 8, 20, 40, 60]);
+describe('hasCrossedThreshold', () => {
+  it('fires when any threshold lies in (lastCount, count]', () => {
+    // Single-step creates reproduce the old exact-hit behavior…
+    const singleStepHits = Array.from({ length: 61 }, (_, i) => i)
+      .filter((count) => hasCrossedThreshold(count - 1, count));
+    expect(singleStepHits).toEqual([1, 2, 4, 8, 20, 40, 60]);
+    // …and jumps catch thresholds they leapt over.
+    expect(hasCrossedThreshold(0, 3)).toBe(true);     // crossed 1 and 2
+    expect(hasCrossedThreshold(0, 300)).toBe(true);   // bulk import
+    expect(hasCrossedThreshold(8, 21)).toBe(true);    // crossed 20 (failed gen at 20 heals at 21)
+    expect(hasCrossedThreshold(295, 301)).toBe(true); // crossed 300
+  });
+
+  it('stays quiet between thresholds and on shrink', () => {
+    expect(hasCrossedThreshold(2, 3)).toBe(false);
+    expect(hasCrossedThreshold(20, 39)).toBe(false);
+    expect(hasCrossedThreshold(40, 40)).toBe(false);
+    expect(hasCrossedThreshold(40, 21)).toBe(false); // deletes never trigger
+    expect(hasCrossedThreshold(0, 0)).toBe(false);
   });
 });
 
@@ -83,20 +103,53 @@ describe('maybeRefreshForTask', () => {
   });
 
   it('does nothing between thresholds', async () => {
-    const task = await seedTasks(3); // 3 is not a threshold
+    const t2 = await seedTasks(2);
+    await maybeRefreshForTask(t2, 'web-api'); // summarizes at count 2
+    sendMessageMock.mockClear();
 
-    const ran = await maybeRefreshForTask(task, 'web-api');
-
-    expect(ran).toBe(false);
+    const t3 = await seedTasks(1); // count 3 — no threshold in (2, 3]
+    expect(await maybeRefreshForTask(t3, 'web-api')).toBe(false);
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('skips bulk sources, subtasks, and metadata tasks', async () => {
+  it('a failed generation self-heals on the next create (crossing, not exact hit)', async () => {
+    const t2 = await seedTasks(2);
+    sendMessageMock.mockResolvedValueOnce(textResult('not json')); // generation fails at 2
+    expect(await maybeRefreshForTask(t2, 'web-api')).toBe(false);
+
+    const t3 = await seedTasks(1); // count 3: (0, 3] still contains 1 and 2
+    expect(await maybeRefreshForTask(t3, 'web-api')).toBe(true);
+    const meta = await getProjectMetadata('walnut');
+    expect(meta?.summary_task_count).toBe(3);
+  });
+
+  it('skips subtasks and metadata tasks', async () => {
     const task = await seedTasks(1);
-    expect(await maybeRefreshForTask(task, 'jira-sync')).toBe(false);
     expect(await maybeRefreshForTask({ ...task, parent_task_id: 'x' }, 'web-api')).toBe(false);
     expect(await maybeRefreshForTask({ ...task, title: '.metadata_project' }, 'web-api')).toBe(false);
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('debounces bulk sources: a burst is one refresh at the final count, never a drop', async () => {
+    process.env.WALNUT_SUMMARY_SYNC_DEBOUNCE_MS = '50';
+    try {
+      // Simulate a sync import: 5 creates in a tight loop, each firing the event.
+      for (let i = 0; i < 5; i++) {
+        const last = await seedTasks(1);
+        expect(await maybeRefreshForTask(last, 'ms-todo-reconcile')).toBe(false);
+      }
+      expect(sendMessageMock).not.toHaveBeenCalled(); // nothing during the burst
+
+      await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalledOnce(), { timeout: 3_000 });
+      const meta = await getProjectMetadata('walnut');
+      expect(meta?.summary_task_count).toBe(5); // final count, not any mid-burst size
+
+      // The quiet window elapsing again must not double-fire.
+      await new Promise((r) => setTimeout(r, 150));
+      expect(sendMessageMock).toHaveBeenCalledOnce();
+    } finally {
+      delete process.env.WALNUT_SUMMARY_SYNC_DEBOUNCE_MS;
+    }
   });
 
   it('dedupes a re-fired threshold via summary_task_count', async () => {
@@ -153,6 +206,60 @@ describe('maybeRefreshForTask', () => {
     const meta = await getProjectMetadata('walnut');
     expect(meta?.default_cwd).toBe('/tmp/walnut');
     expect(meta?.summary).toBeTruthy();
+  });
+});
+
+describe('runSummaryCatchUp', () => {
+  it('refreshes projects with a missing or stale-count summary, skips current ones', async () => {
+    // "fresh": summarized at its current size → untouched.
+    const fresh = await seedTasks(2, 'fresh');
+    await maybeRefreshForTask(fresh, 'web-api');
+    // "stale": summarized at 2, then grew past a threshold while events were missed.
+    const stale = await seedTasks(2, 'stale');
+    await maybeRefreshForTask(stale, 'web-api');
+    await seedTasks(2, 'stale'); // count 4 — no event delivered (e.g. server was down)
+    // "naked": tasks imported before the mechanism existed — no summary at all.
+    await seedTasks(3, 'naked');
+    sendMessageMock.mockClear();
+    sendMessageMock.mockResolvedValue(textResult('{"summary":"Caught up."}'));
+
+    const refreshed = await runSummaryCatchUp();
+
+    expect(refreshed).toBe(2);
+    expect((await getProjectMetadata('fresh'))?.summary).toBe('A project about walnut development.');
+    expect((await getProjectMetadata('stale'))?.summary).toBe('Caught up.');
+    expect((await getProjectMetadata('stale'))?.summary_task_count).toBe(4);
+    expect((await getProjectMetadata('naked'))?.summary).toBe('Caught up.');
+  });
+
+  it('regenerates when the summary text vanished even though the count survived', async () => {
+    const task = await seedTasks(2, 'wiped');
+    await maybeRefreshForTask(task, 'web-api');
+    await setProjectMetadata('wiped', { summary: '' }); // registry edited, count stays 2
+    sendMessageMock.mockClear();
+    sendMessageMock.mockResolvedValue(textResult('{"summary":"Restored."}'));
+
+    expect(await runSummaryCatchUp()).toBe(1);
+    expect((await getProjectMetadata('wiped'))?.summary).toBe('Restored.');
+  });
+
+  it('one failing project does not stop the sweep', async () => {
+    await seedTasks(1, 'alpha');
+    await seedTasks(1, 'beta');
+    sendMessageMock
+      .mockResolvedValueOnce(textResult('not json'))
+      .mockResolvedValueOnce(textResult('{"summary":"Beta ok."}'));
+
+    expect(await runSummaryCatchUp()).toBe(1);
+    expect(sendMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts after three consecutive generation failures (model route down)', async () => {
+    for (const p of ['p1', 'p2', 'p3', 'p4', 'p5']) await seedTasks(1, p);
+    sendMessageMock.mockResolvedValue(textResult('not json')); // every generation fails
+
+    expect(await runSummaryCatchUp()).toBe(0);
+    expect(sendMessageMock).toHaveBeenCalledTimes(3); // p4/p5 never burn a timeout
   });
 });
 
