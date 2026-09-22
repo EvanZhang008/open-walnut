@@ -71,7 +71,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // Sessions is how WALNUT runs an engine; Engines is the engine's OWN settings
   // (what its command-line config screen edits) on the host the sessions run on.
   // Directly after Sessions because that is the question a reader asks next.
-  { owner: 'walnut', id: 'engines', label: 'Engines', title: 'Engines', group: 'configure', render: ({ config }) => <EnginesSection config={config} /> },
+  // `saveSection` is for the ONE Walnut-config control in there (the default
+  // engine for new sessions); the rest of the section writes the engines' own files.
+  { owner: 'walnut', id: 'engines', label: 'Engines', title: 'Engines', group: 'configure', render: ({ config, saveSection }) => <EnginesSection config={config} onSave={saveSection} /> },
   // Voice = both directions: dictation in (STT) and read-aloud out (TTS).
   { owner: 'walnut', id: 'stt', label: 'Voice', title: 'Voice', group: 'configure', render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} /> },
   { owner: 'walnut', id: 'audio-capture', label: 'Audio Capture', title: 'Audio Capture', group: 'configure', render: ({ config, saveSection }) => <AudioCaptureSection config={config} onSave={saveSection} /> },
