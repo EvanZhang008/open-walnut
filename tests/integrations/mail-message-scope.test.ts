@@ -546,9 +546,11 @@ describe('the pair statement is plan A, and only pair requests get the third lay
     const db = mailDatabaseForTesting();
     expect(db, 'the mail plugin must have an open database').not.toBeNull();
     const store = new MailStore(db!);
+    // `unread` rides along on the same index scan: it is the PROVIDER's own count, and the smart list
+    // compares it against the cache before deciding whether a provider call could teach it anything.
     expect(await store.mailboxesByRole('inbox')).toEqual([
-      { account_id: ONE, mailbox_id: 'INBOX' },
-      { account_id: TWO, mailbox_id: 'inbox' },
+      { account_id: ONE, mailbox_id: 'INBOX', unread: expect.any(Number) },
+      { account_id: TWO, mailbox_id: 'inbox', unread: expect.any(Number) },
     ]);
     // The colliding label is role `other`, so it is in no role's pair list.
     expect(await store.mailboxesByRole('drafts')).toEqual([]);
