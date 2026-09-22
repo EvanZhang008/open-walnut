@@ -21,6 +21,7 @@ import {
   askObjectTitle,
   claimAskObjectLatch,
   prefixContextOnce,
+  presetLatchName,
 } from '@/components/chat/ask-object-conversation';
 import '@/styles/ask-object-drawer.css';
 
@@ -92,8 +93,12 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   // Read ONCE, at mount, and never written here: StrictMode runs a state initializer twice, so a
   // latch taken during render would consume the preset without ever sending it. PluginChatView
   // reports the send back through `onAutoSent`, and THAT is where the latch is taken.
+  // Per OBJECT AND PRESET (see presetLatchName): a latch per object would mean that having asked for a
+  // summary of this mail, a later "finish unsubscribing" on the same mail opens the drawer and sends
+  // nothing.
+  const presetKey = preset ? `${objectKey}#${presetLatchName(preset)}` : objectKey;
   const [pendingPreset] = useState(() => (
-    autoSend && preset && !askObjectLatchTaken('preset', objectKey) ? preset : ''
+    autoSend && preset && !askObjectLatchTaken('preset', presetKey) ? preset : ''
   ));
 
   // Escape closes, and focus goes back to whatever had it (the row the menu opened from).
@@ -182,7 +187,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           onAutoSent={() => {
             if (latched.current) return;
             latched.current = true;
-            claimAskObjectLatch('preset', objectKey);
+            claimAskObjectLatch('preset', presetKey);
           }}
           focusNonce={pendingPreset ? undefined : 1}
         />

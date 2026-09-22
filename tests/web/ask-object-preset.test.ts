@@ -16,6 +16,7 @@ import {
   askObjectLatchTaken,
   claimAskObjectLatch,
   prefixContextOnce,
+  presetLatchName,
 } from '../../web/src/components/chat/ask-object-conversation'
 
 const MODULE = '../../web/src/components/chat/ask-object-conversation'
@@ -105,5 +106,32 @@ describe('the preset latch', () => {
     claimAskObjectLatch('preset', KEY, { storage, now: () => 1_700_000_000_000 })
     expect(JSON.parse(storage.getItem(`walnut:ask-object-once:preset:${KEY}`)!))
       .toEqual({ at: 1_700_000_000_000 })
+  })
+
+  /**
+   * Two DIFFERENT questions about the same object each get their own latch.
+   *
+   * The drawer keys the latch by `<objectKey>#<presetLatchName(preset)>`, and the reason is a bug this
+   * pins: with one latch per object, having asked Walnut to summarize a mail meant that clicking
+   * "finish unsubscribing" on the same mail later opened the drawer and sent nothing at all.
+   */
+  it('separates two different presets on one object, and still fires once per preset', () => {
+    const summarize = `${KEY}#${presetLatchName('Summarize this for me.')}`
+    const unsubscribe = `${KEY}#${presetLatchName('Finish unsubscribing from this list.')}`
+    expect(summarize).not.toBe(unsubscribe)
+
+    expect(claimAskObjectLatch('preset', summarize, { storage })).toBe(true)
+    // The other question has not been asked, so it is still allowed to go out.
+    expect(askObjectLatchTaken('preset', unsubscribe, storage)).toBe(false)
+    expect(claimAskObjectLatch('preset', unsubscribe, { storage })).toBe(true)
+    // And asking for the same thing twice still sends once.
+    expect(claimAskObjectLatch('preset', summarize, { storage })).toBe(false)
+  })
+
+  it('names a preset by its text, not by its length or its identity', () => {
+    expect(presetLatchName('Summarize this for me.')).toBe(presetLatchName('Summarize this for me.'))
+    expect(presetLatchName('Summarize this for me.')).not.toBe(presetLatchName('Summarize this for me!'))
+    // A key, not the paragraph itself: the preset is prose and this ends up in localStorage.
+    expect(presetLatchName('x'.repeat(4000)).length).toBeLessThan(10)
   })
 })

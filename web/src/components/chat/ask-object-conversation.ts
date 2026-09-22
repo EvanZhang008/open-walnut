@@ -179,6 +179,29 @@ function latchKey(name: AskObjectLatch, key: string): string {
   return `${FLAG_PREFIX}${name}:${key}`;
 }
 
+/**
+ * The latch key for ONE preset on one object, rather than for the object.
+ *
+ * `preset` was latched per object, which is right for the context block (the model has read the quote
+ * after the first turn) and wrong for a question: having asked Walnut to summarize a mail, clicking
+ * "Finish unsubscribing" on the same mail later opened the drawer and sent nothing, because the
+ * object's one preset latch was already taken. Each distinct question gets its own latch, so asking
+ * twice for the SAME thing still sends once.
+ *
+ * Hashed rather than stored verbatim: a preset is a paragraph, and a storage key per object per
+ * paragraph would put the prompts themselves in localStorage and blow past its per-origin budget on a
+ * busy mailbox. The hash is a 32-bit FNV-1a — a collision means one preset silently counts as another
+ * on the same object, which is the same outcome as today's behaviour and is why it is safe here.
+ */
+export function presetLatchName(preset: string): string {
+  let hash = 0x811c9dc5;
+  for (let at = 0; at < preset.length; at += 1) {
+    hash ^= preset.charCodeAt(at);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 /** Has this latch already been taken for this object? A read, never a write — safe under StrictMode. */
 export function askObjectLatchTaken(
   name: AskObjectLatch,
