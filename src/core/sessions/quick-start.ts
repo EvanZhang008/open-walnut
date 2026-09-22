@@ -14,7 +14,9 @@ import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task, SessionEngine } from '../types.js';
 import { spillLargePromptToFile } from './quick-start-spill.js';
-import { isAcpEngine } from '../agents/engine-registry.js';
+import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
+import { resolveDefaultEngine } from '../agents/default-engine.js';
+import { buildAskProfilePrefix } from './ask-profile-prefix.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, resolveAskAgent, stampedAgentId, type AskAgentRef } from './ask-agent.js';
 
 export interface QuickStartTaskMeta {
@@ -74,7 +76,14 @@ export interface QuickStartParams {
   /** Event-bus source tag, e.g. 'quick-start' | 'routine'. */
   source: string;
   requestTs?: number;
-  /** Coding-agent engine; defaults to 'claude' (native path). */
+  /**
+   * Coding-agent engine. Omitted = INHERIT `config.defaults.engine` (resolved
+   * below through resolveDefaultEngine, which answers 'claude' unless the user
+   * picked another one in Settings › Engines). A caller that names an engine
+   * always wins; a caller that mints its own `preassignedSessionId` must resolve
+   * the same way BEFORE deciding to mint (an ACP engine issues its own ids), so
+   * the HTTP route and the mobile launch pass the resolved value explicitly.
+   */
   engine?: SessionEngine;
   /**
    * Caller-minted session id, forwarded to the CLI as `--session-id`. Lets the
@@ -89,8 +98,10 @@ export interface QuickStartParams {
    * personal-ai-lane's buildLaneProfile) instead of as a bare coding agent.
    * Everything else is an ORDINARY quick-start — a normal task, a visible
    * session — the route just pre-fills project 'Ask Walnut' and cwd WALNUT_HOME.
-   * Native (claude) engine only: the profile rides the CLI's system-prompt
-   * flags, which ACP engines have no channel for (route enforces).
+   * On the native engine the profile rides the CLI's system-prompt flags. ACP
+   * engines have no such channel, so there the same bundle rides the FIRST
+   * MESSAGE instead (buildAskProfilePrefix) — see the prefix module for why the
+   * message is the carrier every engine has.
    */
   walnutAgent?: boolean;
   /**
@@ -165,8 +176,38 @@ export function matchPlaceholderTitle(
 export async function quickStartSession(params: QuickStartParams): Promise<Task> {
   const {
     message, messagePrefix, cwd, host, model, mode, existingTaskId, taskMeta,
-    source, requestTs = Date.now(), engine, preassignedSessionId, walnutAgent,
+    source, requestTs = Date.now(), preassignedSessionId, walnutAgent,
   } = params;
+
+  // Engine, resolved BEFORE anything else reads it: every gate below
+  // (`isAcpEngine`) and the SESSION_START payload must see the engine this
+  // launch will ACTUALLY run on, so a launch that named none behaves exactly as
+  // if the caller had passed the configured default.
+  //
+  // normalizeEngine keeps the storage/wire contract intact: the default engine
+  // stays ABSENT ('claude' is never written out), so a config with no
+  // `defaults.engine` produces a byte-identical payload to before.
+  let engine = params.engine;
+  if (engine === undefined) {
+    const { getConfig } = await import('../config-manager.js');
+    const inherited = normalizeEngine(resolveDefaultEngine(await getConfig(), { host }));
+    // A caller that minted its own session id has already PROMISED it: it rides
+    // an HTTP answer (the frozen /api/v1 launch, the notification repair) or IS
+    // the run's identity (a subagent's runId). An engine that issues its own ids
+    // cannot keep that promise — the id would name a session that never exists,
+    // and the client would sit on "Untitled session" forever. So the INHERITED
+    // engine yields to the promise; an engine the caller named explicitly still
+    // wins over both (that caller knows what it asked for). The one surface that
+    // supports both resolves the engine BEFORE deciding to mint (the quick-start
+    // route), so it never lands here.
+    if (inherited && preassignedSessionId && engineCaps(inherited).idProvisioning === 'provider-issued') {
+      log.web.info(`${source}: the configured default engine issues its own session ids — this launch keeps the id it was given and runs on the native engine`, {
+        configured: inherited, sessionId: preassignedSessionId,
+      });
+    } else {
+      engine = inherited;
+    }
+  }
 
   // "Ask Walnut": resolve the agent's profile up front — the same bundle
   // (persona + standing memory + skills index + walnut MCP mount) and the same
@@ -174,6 +215,12 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // write so a failure here fails the launch cleanly instead of leaving a task
   // whose session never got its persona.
   let walnutProfile: { profile: import('../types.js').SessionProfile; effort: import('../types.js').SessionEffort } | undefined;
+  /**
+   * ACP asks only: the profile's prompt half, carried by the FIRST MESSAGE
+   * because an ACP engine has no system-prompt channel (ask-profile-prefix.ts).
+   * Empty for the native engine, which rides the spawn flags as before.
+   */
+  let askProfilePrefix = '';
   let askAgent: AskAgentRef | undefined;
   if (walnutAgent) {
     // A retry on an existing ask names no agent; the task's own stamp says
@@ -183,13 +230,23 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     if (!askAgent) throw new QuickStartError(`Unknown console agent "${params.agentId}"`, 400);
     const { getConfig } = await import('../config-manager.js');
     const { buildLaneProfile } = await import('./personal-ai-lane.js');
-    const { getAskWalnutLaunchPrefs, resolveAskWalnutEffort } = await import('./ask-walnut-launch.js');
-    walnutProfile = await buildLaneProfile(await getConfig(), askAgent.id);
-    // The lane's medium is the FIRST-RUN default only: an effort the user picked
-    // for an earlier Ask Walnut (in its picker, or via config) carries forward,
-    // gated on the model this launch actually spawns being able to take it.
-    const remembered = await getAskWalnutLaunchPrefs();
-    walnutProfile.effort = resolveAskWalnutEffort(remembered.effort, model, walnutProfile.effort);
+    const built = await buildLaneProfile(await getConfig(), askAgent.id);
+    if (isAcpEngine(engine)) {
+      // One builder, two carriers. The spawn cannot take the bundle here, so it
+      // becomes the launch message's prefix instead — an ACP ask that launched
+      // without it would be a bare provider chat wearing Walnut's task.
+      // `effort` is deliberately dropped: on ACP it is a per-session config
+      // option, not a spawn argument, so there is nothing to forward it to.
+      askProfilePrefix = buildAskProfilePrefix(built.profile);
+    } else {
+      walnutProfile = built;
+      // The lane's medium is the FIRST-RUN default only: an effort the user picked
+      // for an earlier Ask Walnut (in its picker, or via config) carries forward,
+      // gated on the model this launch actually spawns being able to take it.
+      const { getAskWalnutLaunchPrefs, resolveAskWalnutEffort } = await import('./ask-walnut-launch.js');
+      const remembered = await getAskWalnutLaunchPrefs();
+      walnutProfile.effort = resolveAskWalnutEffort(remembered.effort, model, walnutProfile.effort);
+    }
   }
   // `let`, not const: a launcher can carry a project name the human has since
   // DELETED (the draft column remembers its last pick for as long as the tab
@@ -218,6 +275,11 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   }
   if (messagePrefix) {
     sessionMessage = messagePrefix + sessionMessage;
+  }
+  // The ACP ask's persona goes FIRST — it frames everything after it, including
+  // the caller's own prefix (the attached-images context block).
+  if (askProfilePrefix) {
+    sessionMessage = askProfilePrefix + sessionMessage;
   }
 
   let updatedTask: Task;
@@ -492,6 +554,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
 
   log.web.info(`${source}: created task + started session`, {
     taskId: updatedTask.id, cwd, host, project: project || 'Inbox', retry: !!existingTaskId,
+    ...(engine ? { engine } : {}),
+    // One grep answers "did this ask get its persona, and how" — the ACP carrier
+    // is invisible in the record (no profile is stored for it).
+    ...(walnutAgent ? { askProfileCarrier: askProfilePrefix ? 'message' : 'profile' } : {}),
   });
 
   return updatedTask;

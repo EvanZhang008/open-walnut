@@ -866,6 +866,14 @@ export interface Config {
     platform?: TaskSource;
     /** Optional default project for new quick-add tasks. Unset/'' = Inbox. */
     project?: string;
+    /**
+     * Coding-agent engine every Walnut-initiated session inherits when the
+     * launch names none (Ask Walnut, AI actions, triage runs, routines). Unset
+     * or unknown = 'claude' — the default lives at the READER
+     * (core/agents/default-engine.ts), never in DEFAULT_CONFIG. A launch that
+     * picks its own engine still wins.
+     */
+    engine?: SessionEngine;
   };
   provider: {
     type: string;

@@ -58,6 +58,7 @@ import {
 import { filterSessionsByQuery } from '../../core/session-search.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT, WALNUT_HOME } from '../../constants.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
+import { resolveDefaultEngine } from '../../core/agents/default-engine.js'
 import { splitAcpModelId } from '../../providers/acp-session.js'
 import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
@@ -356,12 +357,12 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       return
     }
     if (isWalnutAgent) {
-      // The profile rides the CLI's system-prompt flags; ACP has no channel for it,
-      // so an ACP Ask-Walnut would silently launch a bare provider chat.
-      if (engine !== undefined && isAcpEngine(normalizeEngine(engine))) {
-        res.status(400).json({ error: 'walnutAgent requires the claude engine' })
-        return
-      }
+      // Any REGISTERED engine may run an ask now. The profile still rides the
+      // CLI's system-prompt flags on the native engine; an ACP engine has no such
+      // channel, so quickStartSession carries the same bundle on the first
+      // message instead (core/sessions/ask-profile-prefix.ts) rather than
+      // launching a bare provider chat — which is what the old 400 prevented.
+      //
       // Remote is meaningless here: the Personal AI runs where the server runs.
       if (host) {
         res.status(400).json({ error: 'walnutAgent sessions run on the server host' })
@@ -404,6 +405,20 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       return
     }
 
+    // THE engine this launch will run on. A body that names one wins; a body that
+    // names none inherits `config.defaults.engine` (Settings › Engines), which is
+    // how every Walnut-initiated launch picks the user's engine up.
+    //
+    // Resolved HERE and not only inside quickStartSession because THIS handler
+    // makes two decisions that need the effective engine, not the body's silence:
+    // which validator the model id goes through, and whether a session id can be
+    // preassigned (an ACP engine issues its own, so minting one would hand the
+    // client an id that never exists and park its panel on "Untitled session").
+    // Storage shape as always: the default engine stays absent.
+    const effectiveEngine = engine !== undefined
+      ? normalizeEngine(engine)
+      : normalizeEngine(resolveDefaultEngine(await getConfig(), { host }))
+
     // Normalize model through the shared switch validator (same ruleset as
     // POST /:sessionId/model): legacy alias ids map to their CLI form, catalog
     // values (full provider IDs from the host catalog dropdown) pass verbatim,
@@ -412,7 +427,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // Auto, which read as "my model choice was ignored".
     let model: string | undefined
     if (typeof rawModel === 'string' && rawModel && rawModel !== 'default') {
-      if (engine !== undefined && isAcpEngine(normalizeEngine(engine))) {
+      if (isAcpEngine(effectiveEngine)) {
         // ACP engines: the id belongs to the PROVIDER's catalog (probed at
         // draft time — GET /api/engines/:id/models), not the claude switch
         // validator, so only shape-check it here. The adapter stays the
@@ -435,7 +450,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         }
         model = resolved
       }
-    } else if (isWalnutAgent && rawModel === undefined) {
+    } else if (isWalnutAgent && rawModel === undefined && !isAcpEngine(effectiveEngine)) {
+      // Native asks only: the remembered id was picked in the claude model picker,
+      // so replaying it onto an ACP launch would ask that adapter for a model it
+      // never advertised (it answers invalidParams and the session comes up on the
+      // provider's own default anyway). An ACP ask starts on the adapter's default
+      // until the user picks from ITS catalog.
+      //
       // Ask Walnut names no model → the last one picked FOR an Ask Walnut
       // session (see core/sessions/ask-walnut-launch). Applied HERE, not on the
       // client, so a draft that never saw the memory (opened before the pick,
@@ -583,7 +604,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // gave up at 15s, pending panel showed a false "Failed" and Retry created
       // a duplicate session). With the client owning the id, it can poll
       // GET /api/sessions/<id> regardless of the response's fate.
-      const isNativeEngine = !isAcpEngine(engine)
+      const isNativeEngine = !isAcpEngine(effectiveEngine)
       const clientSessionId = typeof (req.body as { sessionId?: unknown }).sessionId === 'string'
         && UUID_RE.test((req.body as { sessionId: string }).sessionId)
         ? (req.body as { sessionId: string }).sessionId : undefined
@@ -592,7 +613,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
         existingTaskId, taskMeta: isWalnutAgent ? walnutTaskMeta : fixWalnutTaskMeta,
         source: 'quick-start', requestTs,
-        engine: normalizeEngine(engine),
+        engine: effectiveEngine,
         preassignedSessionId,
         // Client project seed (project-header "+ → Add session"). fixWalnutExtras
         // spreads AFTER so a repair launch always files under 'Walnut' — and a
@@ -619,7 +640,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         recordLaunchPrefs(cwd, host ?? null, {
           model: rawPickerModel,
           // LaunchPrefs stores the persisted shape (explicit non-default engine
-          // or absent), which is exactly normalizeEngine's contract.
+          // or absent), which is exactly normalizeEngine's contract. The BODY's
+          // pick, deliberately not `effectiveEngine`: a global default must not
+          // become this folder's remembered choice (it would then outlive a later
+          // change to that default).
           engine: normalizeEngine(engine),
         }).catch(() => {})
       } else if (!existingTaskId && isWalnutAgent && rawModel !== undefined) {

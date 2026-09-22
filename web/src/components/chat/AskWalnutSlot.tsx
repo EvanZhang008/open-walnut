@@ -472,10 +472,13 @@ export function AskWalnutSlot({
   ): Promise<boolean> => {
     const message = text.trim();
     // The same payload launchQuickStart builds for a walnut draft: the server
-    // owns the cwd, the engine is forced native, and `pinTier: null` (never
-    // undefined) is how "don't pin" survives JSON.stringify. The model rides
-    // only when the user picked one — with walnutAgent the launch engine is
-    // always claude, so a pick here was necessarily made under claude.
+    // owns the cwd AND the engine, and `pinTier: null` (never undefined) is how
+    // "don't pin" survives JSON.stringify. No engine is sent, which is what lets
+    // an ask inherit `defaults.engine` (Settings › Engines) — the server carries
+    // the agent's persona on the first message when that engine is an ACP one.
+    // The model rides only when the user picked one, and a pick made in the
+    // claude picker is ignored server-side on an ACP launch (that adapter never
+    // advertised it).
     const payload: Parameters<typeof quickStartSession>[0] = {
       cwd: '',
       message,

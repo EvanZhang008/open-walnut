@@ -1,6 +1,12 @@
 /**
- * Settings › Engines: each coding-agent engine's OWN settings (the ones its
- * command-line config screen edits), on the host where its sessions run.
+ * Settings › Engines: which engine a new session starts on, then each
+ * coding-agent engine's OWN settings (the ones its command-line config screen
+ * edits), on the host where its sessions run.
+ *
+ * The default-engine picker at the top is the only control here that writes
+ * WALNUT config (`defaults.engine`); everything below it edits files the engine
+ * owns. It saves on pick — deliberately not through useAutoSave, so merely
+ * opening this page can never write the config back.
  *
  * This section edits files the ENGINE owns, not Walnut config. The load and
  * save rules (a write answers with a fresh read that replaces the view, a late
@@ -18,7 +24,7 @@
  * tabs only once GET /api/engines has hydrated.
  */
 import { useEffect, useMemo, useState } from 'react';
-import type { Config } from '@open-walnut/core';
+import type { Config, SessionEngine } from '@open-walnut/core';
 import { SettingsSection, SettingsEmpty, SettingsNotice, SettingsSubCard } from '../SettingsSection';
 import { StatusIndicator } from '../inputs/StatusIndicator';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
@@ -29,9 +35,10 @@ import { envUncheckedSentence } from '@/utils/engine-settings-copy';
 import { hostIndicatorStatus, hostStatusText } from '@/utils/host-connect';
 import { LOCAL_HOST, type EngineSettingView } from '@/api/engine-settings';
 import { EngineSettingRow } from './EngineSettingRows';
+import { currentDefaultEngine, defaultEngineOptions, defaultEngineSave } from './default-engine-select';
 import '@/styles/engine-settings.css';
 
-const ENGINES_DESCRIPTION = "Each engine's own settings, the ones its command-line config screen edits, on the host where your sessions run. Changes save automatically.";
+const ENGINES_DESCRIPTION = "Which engine new sessions start on, and each engine's own settings (the ones its command-line config screen edits) on the host where your sessions run. Changes save automatically.";
 
 /** The group that only the engine's interactive command reads, collapsed by default. */
 const TERMINAL_GROUP_ID = 'terminal';
@@ -86,9 +93,31 @@ function HostButton({ host, active, onPick }: { host: HostChoice; active: boolea
   );
 }
 
-export function EnginesSection({ config }: { config: Config }) {
+export function EnginesSection({ config, onSave }: { config: Config; onSave: (partial: Partial<Config>) => Promise<void> }) {
   const catalog = useEngineCatalog();
   const engines = useMemo(() => catalog.filter((e) => e.capabilities.settings), [catalog]);
+
+  // Default engine for new sessions. Its option list is the WHOLE catalog (minus
+  // what isn't installed), not the settings-capable subset the tabs below use:
+  // an engine can run sessions without exposing any settings of its own.
+  const defaultEngine = currentDefaultEngine(config);
+  const defaultOptions = useMemo(() => defaultEngineOptions(catalog, defaultEngine), [catalog, defaultEngine]);
+  const [savingDefault, setSavingDefault] = useState(false);
+  const [defaultError, setDefaultError] = useState<string | null>(null);
+  const pickDefaultEngine = async (id: SessionEngine) => {
+    if (id === defaultEngine) return;
+    setSavingDefault(true);
+    setDefaultError(null);
+    try {
+      await onSave(defaultEngineSave(config, id));
+    } catch (err) {
+      // The select keeps showing the SAVED value (it renders from config), so a
+      // failed write must say so — otherwise the row silently snaps back.
+      setDefaultError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingDefault(false);
+    }
+  };
 
   const hosts = useMemo<HostChoice[]>(() => {
     const remote = Object.entries(config.hosts ?? {})
@@ -232,6 +261,33 @@ export function EnginesSection({ config }: { config: Config }) {
         </div>
       ) : undefined}
     >
+      {/* Always rendered, independent of the tabs below: this is about which
+          engine RUNS a new session, which every engine does whether or not it
+          exposes settings Walnut can edit. */}
+      <SettingsSubCard>
+        <div className="form-group">
+          <label htmlFor="default-engine-select">Default engine for new sessions</label>
+          <select
+            id="default-engine-select"
+            data-testid="default-engine-select"
+            value={defaultEngine}
+            disabled={savingDefault}
+            onChange={(e) => { void pickDefaultEngine(e.target.value as SessionEngine); }}
+            style={{ maxWidth: 260 }}
+          >
+            {defaultOptions.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
+            Used by Ask Walnut, AI actions, Inbox Triage runs and routines unless a session picks its own.
+          </p>
+          {defaultError && (
+            <SettingsNotice kind="error" role="alert">{defaultError}</SettingsNotice>
+          )}
+        </div>
+      </SettingsSubCard>
+
       {/* One host: nothing to choose, so no picker at all. */}
       {engines.length > 0 && hosts.length > 1 && (
         <div className="engine-settings-picker" data-testid="engine-settings-host" role="group" aria-label="Host">
