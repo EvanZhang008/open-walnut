@@ -27,7 +27,7 @@ import {
   messageMenuItems,
 } from '../../web/src/apps/mail/mail-context-items';
 import { CANNOT_SEND_TITLE } from '../../web/src/apps/mail/compose/send-status';
-import { MAIL_ASK_PRESETS, mailAskKey } from '../../web/src/apps/mail/mail-ask';
+import { MAIL_ASK_PRESETS, mailAskKey, mailRowSelector } from '../../web/src/apps/mail/mail-ask';
 import { UNSUBSCRIBE_LABELS } from '../../web/src/apps/mail/mail-unsubscribe-state';
 import { __resetMailStore, patch } from '../../web/src/apps/mail/mail-store';
 import type {
@@ -307,5 +307,25 @@ describe('no row names an action with no route behind it', () => {
         expect(group(build({ outbound, draftsView })).some((one) => one.danger)).toBe(false);
       }
     }
+  });
+});
+
+/**
+ * The focus-return selector. Unit-graded because the values it interpolates are the hostile part: a
+ * provider's account id and message id are full of `:` and `@`, and a selector that escaped them as
+ * identifiers (`CSS.escape`) would match nothing at all, so the drawer would drop the keyboard at the
+ * top of the document instead of on the row. The browser half is graded in mail-ask-drawer.spec.ts.
+ */
+describe('mailRowSelector', () => {
+  it('quotes the pair as an attribute value, leaving : and @ alone', () => {
+    expect(mailRowSelector('fixture:ctx-writer@example.invalid', 'INBOX:8:1')).toBe(
+      '.mail-row[data-account-id="fixture:ctx-writer@example.invalid"][data-message-id="INBOX:8:1"]',
+    );
+  });
+
+  it('escapes the two characters that would end the quoted value', () => {
+    const selector = mailRowSelector('acct"1', 'IN\\BOX:2');
+    expect(selector).toContain('data-account-id="acct\\"1"');
+    expect(selector).toContain('data-message-id="IN\\\\BOX:2"');
   });
 });

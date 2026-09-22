@@ -129,6 +129,20 @@ const RECIPIENTS_SHOWN = 6;
 /** A subject is attacker-controlled text; the block states one, it does not carry a paragraph. */
 const SUBJECT_CHARS = 300;
 
+/**
+ * The row this mail is drawn as, as a CSS selector, for the drawer's focus return.
+ *
+ * A QUOTED attribute value, and escaped as one: only `"` and `\` mean anything inside it. Deliberately
+ * NOT `CSS.escape`, which is for identifiers and would turn `fixture:ctx-writer@example.invalid` into
+ * `fixture\:ctx-writer\@example\.invalid` — a string no row's attribute holds, so the selector would
+ * quietly match nothing. Both halves are provider strings full of `:` and `@`, which is why this is
+ * worth stating rather than guessing at.
+ */
+export function mailRowSelector(accountId: string, messageId: string): string {
+  const quoted = (value: string): string => value.replace(/["\\]/g, '\\$&');
+  return `.mail-row[data-account-id="${quoted(accountId)}"][data-message-id="${quoted(messageId)}"]`;
+}
+
 /** Stable identity of one mail, for the conversation store. */
 export function mailAskKey(accountId: string, messageId: string): string {
   return `mail:${JSON.stringify([accountId, messageId])}`;

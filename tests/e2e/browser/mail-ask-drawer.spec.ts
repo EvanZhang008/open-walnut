@@ -45,6 +45,12 @@ const DRAWER = 'ask-object-drawer'
 const SUMMARIZE = 'Summarize with Walnut'
 const DRAFT_REPLY = 'Draft a reply with Walnut'
 const ASK = 'Ask Walnut about this…'
+/**
+ * The group's fourth row, added by the unsubscribe slice. It sits LAST on purpose (it is the one row
+ * here that acts on the world instead of opening a chat, so a stray click is least likely to land on
+ * it); its own states and copy are graded in `mail-unsubscribe.spec.ts`.
+ */
+const UNSUBSCRIBE = 'Unsubscribe'
 
 /** `CANNOT_SEND_TITLE` (web/src/apps/mail/compose/send-status.ts), quoted so a reword is caught here. */
 const CANNOT_SEND = 'This account cannot send; add SMTP settings'
@@ -103,6 +109,27 @@ function userTurns(page: Page): Locator {
   return drawer(page).locator('.chat-message-user')
 }
 
+/**
+ * The first user turn, OPENED, ready to be asserted on.
+ *
+ * Two things this exists for, both of which made these cases read as product bugs when they were not:
+ * a long pasted turn renders COLLAPSED (`isLongPlainUser` in ChatMessage), so its text is one summary
+ * line until somebody opens it; and the row appears before React has filled it, so a single
+ * `innerText()` read right after `toHaveCount(1)` can catch nothing but the role label. Everything
+ * below therefore waits for the content with a RETRYING assertion.
+ */
+async function openedFirstTurn(page: Page): Promise<Locator> {
+  const turn = userTurns(page).first()
+  await expect(turn).toHaveCount(1, { timeout: 60_000 })
+  const toggle = turn.locator('.chat-collapse-toggle')
+  if (await toggle.count() > 0) {
+    await expect(toggle).toHaveText('▶')
+    await turn.locator('.chat-notification-header').click()
+    await expect(toggle).toHaveText('▼')
+  }
+  return turn
+}
+
 /** Every POST that made a conversation, counted for the whole page's life. */
 function countConversationPosts(page: Page): { total: () => number } {
   let total = 0
@@ -143,8 +170,8 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await openWriterInbox(page)
     await openRowMenu(page, WRITER, KEEPER)
 
-    // Last three items, in the designed order.
-    expect((await itemLabels(page)).slice(-3)).toEqual([SUMMARIZE, DRAFT_REPLY, ASK])
+    // Last four items, in the designed order.
+    expect((await itemLabels(page)).slice(-4)).toEqual([SUMMARIZE, DRAFT_REPLY, ASK, UNSUBSCRIBE])
 
     // Its name is an `info` row (not focusable, not uppercased), and it is the LAST info row.
     const info = menu(page).locator('.wn-context-menu-info')
@@ -152,10 +179,10 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     // `section` uppercases; this must read as written, like the two title lines above it.
     await expect(info.last()).toHaveCSS('text-transform', 'none')
 
-    // Exactly three rows are marked, and each draws one ✦ inside its own label.
+    // Exactly four rows are marked, and each draws one ✦ inside its own label.
     const marked = menu(page).locator('[role="menuitem"][data-ai="true"]')
-    await expect(marked).toHaveCount(3)
-    for (const label of [SUMMARIZE, DRAFT_REPLY, ASK]) {
+    await expect(marked).toHaveCount(4)
+    for (const label of [SUMMARIZE, DRAFT_REPLY, ASK, UNSUBSCRIBE]) {
       await expect(item(page, label)).toHaveAttribute('data-ai', 'true')
       await expect(item(page, label).locator('.wn-context-menu-label .wn-context-ai-mark svg')).toHaveCount(1)
     }
@@ -180,7 +207,12 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(item(page, DRAFT_REPLY)).toBeDisabled()
     await expect(item(page, DRAFT_REPLY)).toHaveAttribute('title', CANNOT_SEND)
     // The reason is drawn as its own row under the group as well, for anyone without a mouse.
-    await expect(menu(page).getByTestId('wn-context-menu-reason').last()).toContainText(CANNOT_SEND)
+    // By its WORDS, not by position: the unsubscribe row below draws a reason line of its own, so
+    // `.last()` graded that one instead of this one. Not a count either, because on an account with no
+    // outgoing mail more than one row can honestly give this same reason (a mailto-only list is the
+    // other one) and the point here is that the sentence is on screen for somebody without a mouse.
+    await expect(menu(page).getByTestId('wn-context-menu-reason').filter({ hasText: CANNOT_SEND }).first())
+      .toBeVisible()
     // Asking a question needs no SMTP.
     await expect(item(page, SUMMARIZE)).toBeEnabled()
     await expect(item(page, ASK)).toBeEnabled()
@@ -219,27 +251,28 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await ask(page, WRITER, KEEPER, SUMMARIZE)
 
     await expect(userTurns(page)).toHaveCount(1, { timeout: 60_000 })
-    const sent = await userTurns(page).first().innerText()
-    // The headers a model cannot see on screen.
-    expect(sent).toContain('From: ')
-    expect(sent).toContain('Subject: ')
-    expect(sent).toContain('Date: ')
+    const turn = await openedFirstTurn(page)
+    // The headers a model cannot see on screen. Retrying assertions, one per fact, so a turn that is
+    // still being painted is waited for rather than reported as a missing header.
+    await expect(turn).toContainText('From: ')
+    await expect(turn).toContainText('Subject: ')
+    await expect(turn).toContainText('Date: ')
     // The Walnut deep link back to THIS console, with both ids.
-    expect(sent).toMatch(new RegExp(`Link: http://127\\.0\\.0\\.1:${port}/mail\\?`))
-    expect(sent).toContain(encodeURIComponent(WRITER))
+    await expect(turn).toContainText(new RegExp(`Link: http://127\\.0\\.0\\.1:${port}/mail\\?`))
+    await expect(turn).toContainText(encodeURIComponent(WRITER))
     // The body, quoted line by line, which is what makes a hostile line harmless.
-    expect(sent).toContain('> ')
+    await expect(turn).toContainText('> ')
     // And the question itself, which is what `Summarize` stands for.
-    expect(sent).toMatch(/summarize this mail/i)
+    await expect(turn).toContainText(/summarize this mail/i)
   })
 
   test('S4-5: Draft a reply asks for a draft and names the approval, never a send', async ({ page }) => {
     await openWriterInbox(page)
     await ask(page, WRITER, LUNCH, DRAFT_REPLY)
     await expect(userTurns(page)).toHaveCount(1, { timeout: 60_000 })
-    const sent = await userTurns(page).first().innerText()
-    expect(sent).toMatch(/do not send/i)
-    expect(sent).toContain('mail_request_send')
+    const turn = await openedFirstTurn(page)
+    await expect(turn).toContainText(/do not send/i)
+    await expect(turn).toContainText('mail_request_send')
     // No composer was opened and no draft was written: this is a conversation, not a reply.
     await expect(page.locator('.mail-composer-pane')).toHaveCount(0)
   })
@@ -249,7 +282,11 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await openWriterInbox(page)
 
     await ask(page, WRITER, KEEPER, ASK)
-    const first = await drawer(page).getByTestId('ask-object-chat').getAttribute('data-conversation')
+    // Waited for, not read once: the id lands when the conversation POST answers, and reading the
+    // attribute the moment the element exists catches the empty value before it.
+    const chat = drawer(page).getByTestId('ask-object-chat')
+    await expect(chat).toHaveAttribute('data-conversation', /.+/, { timeout: 60_000 })
+    const first = await chat.getAttribute('data-conversation')
     expect(first).toBeTruthy()
     await page.keyboard.press('Escape')
     await expect(drawer(page)).toHaveCount(0)
@@ -261,7 +298,9 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     // A DIFFERENT mail is a different conversation, which is the other half of the same rule.
     await page.keyboard.press('Escape')
     await ask(page, WRITER, LUNCH, ASK)
-    const second = await drawer(page).getByTestId('ask-object-chat').getAttribute('data-conversation')
+    const otherChat = drawer(page).getByTestId('ask-object-chat')
+    await expect(otherChat).toHaveAttribute('data-conversation', /.+/, { timeout: 60_000 })
+    const second = await otherChat.getAttribute('data-conversation')
     expect(second).not.toBe(first)
     expect(posts.total()).toBe(2)
   })
@@ -280,12 +319,26 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
 
   test('S4-8: a dirty draft keeps its pane, and says why', async ({ page }) => {
     await openWriterInbox(page)
-    // A reply composer with text the server has not been told about yet. `fill` fires input, so the
-    // 800ms autosave debounce is armed and `isSaveSettled()` is false for the next moment.
+    // A reply composer with text the server does not have. The SAVE IS BROKEN on purpose rather than
+    // raced: betting that the 800ms autosave debounce is still pending two UI actions later is a bet
+    // this case kept losing (it passed or failed by how fast the machine was, which says nothing about
+    // the guard). A refused save is the same state the guard exists for, held still.
+    let refuse = true
+    await page.route('**/api/plugins/mail/drafts/**', async (route) => {
+      if (!refuse || route.request().method() !== 'PATCH') { await route.continue(); return }
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'fixture', message: 'the fixture refused this save' }),
+      })
+    })
     await openRowMenu(page, WRITER, KEEPER)
     await clickItem(page, 'Reply')
     await expect(page.getByTestId('mail-composer')).toBeVisible({ timeout: 60_000 })
     await page.getByTestId('mail-compose-body').fill('A sentence that is still only in the browser.')
+    // Held there: `failed`/`retrying` is what `isSaveSettled` reads, and it does not time out.
+    await expect(page.getByTestId('mail-compose-save'))
+      .toHaveAttribute('data-state', /failed|retrying/, { timeout: 60_000 })
 
     await openRowMenu(page, WRITER, LUNCH)
     await clickItem(page, SUMMARIZE)
@@ -295,7 +348,10 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(page.getByTestId('mail-row-note')).toContainText('not saved yet', { timeout: 30_000 })
     console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'dirty-draft-refusal')}`)
 
-    // Once the draft has settled the same click is allowed, and the composer gives the pane up.
+    // Once the draft has settled the same click is allowed, and the composer gives the pane up. The
+    // save is let through again and the composer's own retry is what saves it: nothing here re-types.
+    refuse = false
+    await page.getByTestId('mail-compose-body').fill('A sentence that is still only in the browser, edited.')
     await expect(page.getByTestId('mail-compose-save')).toHaveAttribute('data-state', 'saved', { timeout: 60_000 })
     await ask(page, WRITER, LUNCH, SUMMARIZE)
     await expect(page.getByTestId('mail-composer')).toHaveCount(0)
@@ -344,12 +400,16 @@ test.describe('a merged list where two accounts hold the same message id', () =>
 
     await ask(page, HARBOUR, SHARED, ASK)
     const first = await drawer(page).getAttribute('data-object-key')
+    await expect(drawer(page).getByTestId('ask-object-chat'))
+      .toHaveAttribute('data-conversation', /.+/, { timeout: 60_000 })
     const firstChat = await drawer(page).getByTestId('ask-object-chat').getAttribute('data-conversation')
     await page.keyboard.press('Escape')
     await expect(drawer(page)).toHaveCount(0)
 
     await ask(page, MARINA, SHARED, ASK)
     const second = await drawer(page).getAttribute('data-object-key')
+    await expect(drawer(page).getByTestId('ask-object-chat'))
+      .toHaveAttribute('data-conversation', /.+/, { timeout: 60_000 })
     const secondChat = await drawer(page).getByTestId('ask-object-chat').getAttribute('data-conversation')
 
     expect(first).toContain(HARBOUR)

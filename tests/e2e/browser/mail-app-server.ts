@@ -114,7 +114,15 @@ const withCtx = process.env.PW_MAIL_CTX === '1'
  */
 const writes503 = process.env.PW_MAIL_WRITES_503 === '1'
 
-const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx
+/**
+ * `PW_MAIL_UNSUB=1` is a message SET inside the canned provider, so it implies the provider link the
+ * same way `PW_MAIL_CTX=1` does. Without this the flag reached the provider and the provider was never
+ * installed, so the install had no accounts at all and every case timed out waiting for the accounts
+ * pane — a fixture that answers "no mail accounts yet" reads exactly like a product bug.
+ */
+const withUnsub = process.env.PW_MAIL_UNSUB === '1'
+
+const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub
 if (withProvider) {
   const providerSource = path.join(repoRoot, 'tests/e2e/browser/fixtures/mail-fixture-provider')
   await fs.access(path.join(providerSource, 'server.mjs'))

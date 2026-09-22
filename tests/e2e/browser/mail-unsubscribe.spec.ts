@@ -447,6 +447,13 @@ test('acceptance 9: a page that wants a confirmation hands the rest to Ask Walnu
   // "finish this" is useless to a model that is not told what stopped or where.
   await expect(page.getByTestId(DRAWER)).toBeVisible({ timeout: 60_000 })
   const turn = page.getByTestId(DRAWER).locator('.chat-message-user').first()
+  // The turn arrives COLLAPSED, because a long pasted user message is (`isLongPlainUser` in
+  // ChatMessage), and its summary line is the context block's first line. So it is opened the way a
+  // person opens it, by clicking the header: asserting on the collapsed row would only ever be able to
+  // see that first line, which says nothing about whether the question and the page reached the model.
+  await expect(turn.locator('.chat-collapse-toggle')).toHaveText('▶')
+  await turn.locator('.chat-notification-header').click()
+  await expect(turn.locator('.chat-collapse-toggle')).toHaveText('▼')
   await expect(turn).toContainText('I want off this list')
   await expect(turn).toContainText('lists.example.invalid/u/footer')
   await expect(turn).toContainText('wants a confirmation pressed')
@@ -464,8 +471,11 @@ test('acceptance 9: a page that wants a confirmation hands the rest to Ask Walnu
   expect(held.title).toBe(ASK_TITLE)
   expect(held.disabled).toBe(false)
 
-  // And the reader's line, which is the second surface saying the same thing in fewer words.
-  await openMessage(page, WRITER, FOOTER)
+  // And the reader's line, which is the second surface saying the same thing in fewer words. The reader
+  // is STILL on this message (right-clicking rows does not change it), and that matters: the verdict is
+  // canned at the route, so the server's ledger has no row for it, and re-opening the message would
+  // refetch the page and honestly drop a state the server never stored. The reader's line under a REAL
+  // needs-human, surviving a reload, is graded server-side in mail-unsubscribe-route.test.ts.
   await expect(statusLine(page)).toHaveAttribute('data-state', 'needs-human')
   await expect(statusLine(page)).toHaveText('Unsubscribe needs a confirmation')
 

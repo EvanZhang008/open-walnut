@@ -32,6 +32,9 @@ import { MailStore } from '../../src/integrations/mail/store.js';
 import type { DraftRow, SendRow } from '../../src/integrations/mail/store.js';
 import type { UnsubscribeRow } from '../../src/integrations/mail/store-write.js';
 import { MailUnsubscribe, unsubscribeApprovalRef } from '../../src/integrations/mail/unsubscribe.js';
+import {
+  UNSUBSCRIBE_MAILTO_RECLAIM_MS, UNSUBSCRIBE_RECLAIM_MS,
+} from '../../src/integrations/mail/store-write.js';
 import type {
   MailBody,
   MailCapabilities,
@@ -264,6 +267,45 @@ describe('a right-click on a mailto-only newsletter', () => {
         method: 'mailto', status: 'done',
       },
     }]);
+  });
+
+  /**
+   * A MAIL IN FLIGHT IS NOT A DEAD ATTEMPT, and the reclaim window has to know the difference.
+   *
+   * The fetching rungs finish inside the ladder's 10 s deadline, so a row of theirs left `in-flight` for
+   * a minute proves the holder died. This rung answers `in-flight` while the handshake carries on in the
+   * background ON PURPOSE, so at sixty seconds a second click would have sent a SECOND unsubscribe mail
+   * to the list, and nothing can take a sent mail back. The row is still reclaimable, just not until
+   * long after any real send would have settled.
+   */
+  it('will not let a second click reclaim a mail that may still be going out', async () => {
+    const one = await openHarness();
+    // A row exactly as a killed process leaves it: claimed for the mailto rung, never settled.
+    await one.service.ingestPage(ACCOUNT, [mailtoOnly()]);
+    await one.store.write.claimUnsubscribe({
+      accountId: ACCOUNT,
+      messageId: MESSAGE,
+      listKey: `weekly.${HOST}`,
+      method: 'mailto',
+      now: one.clock.at,
+      reclaimBefore: one.clock.at - UNSUBSCRIBE_RECLAIM_MS,
+    });
+
+    // Past the window a fetching rung would be reclaimed at, and then well past it.
+    one.clock.at += UNSUBSCRIBE_RECLAIM_MS + 5_000;
+    expect(await one.unsubscribe.run(ACCOUNT, MESSAGE))
+      .toMatchObject({ status: 'conflict', conflict: 'in-flight' });
+    one.clock.at += UNSUBSCRIBE_MAILTO_RECLAIM_MS / 2;
+    expect(await one.unsubscribe.run(ACCOUNT, MESSAGE))
+      .toMatchObject({ status: 'conflict', conflict: 'in-flight' });
+    // Nothing left the machine on either refused click.
+    expect(one.sent).toHaveLength(0);
+
+    // And it does eventually come back, because a row nothing will ever settle must not be permanent.
+    one.clock.at += UNSUBSCRIBE_MAILTO_RECLAIM_MS;
+    expect(await one.unsubscribe.run(ACCOUNT, MESSAGE)).toMatchObject({ status: 'in-flight' });
+    await one.unsubscribe.whenMailtoSendsSettle();
+    expect(one.sent).toHaveLength(1);
   });
 
   it('defaults both fields to the word "unsubscribe" when the header names neither', async () => {

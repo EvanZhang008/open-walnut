@@ -57,6 +57,16 @@ export interface AskObjectDrawerProps {
   onClose: () => void;
   /** Present when the drawer was opened from somewhere the user wants to return to (a thread). */
   onBack?: () => void;
+  /**
+   * The thing the keyboard goes back to when this closes, as a CSS selector.
+   *
+   * Needed because of WHEN this drawer mounts: the click that opens it is a click on a context-menu
+   * row, so `document.activeElement` at mount is that row, and the menu unmounts a moment later. The
+   * captured element is then disconnected and nothing is focused, which drops a keyboard user at the
+   * top of the document instead of on the message they were working through. The opener knows what to
+   * come back to; a selector (rather than an element) survives the list re-rendering in between.
+   */
+  restoreFocusTo?: string;
 }
 
 export function AskObjectDrawer(props: AskObjectDrawerProps) {
@@ -108,6 +118,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   // Escape closes, and focus goes back to whatever had it (the row the menu opened from).
   // preventDefault before stopPropagation is the repo's Escape-ownership convention.
   const onClose = props.onClose;
+  const restoreFocusTo = props.restoreFocusTo;
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const key = (e: KeyboardEvent) => {
@@ -119,11 +130,18 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     document.addEventListener('keydown', key);
     return () => {
       document.removeEventListener('keydown', key);
-      if (previous && previous.isConnected && previous !== document.body) {
-        previous.focus({ preventScroll: true });
-      }
+      // The opener's answer first, resolved NOW rather than at mount so a list that re-rendered in
+      // between is followed. The element captured at mount is the fallback, and it is usually the
+      // context-menu row that opened this and is gone by now.
+      const named = restoreFocusTo
+        ? document.querySelector(restoreFocusTo)
+        : null;
+      const back = named instanceof HTMLElement && named.isConnected
+        ? named
+        : (previous && previous.isConnected && previous !== document.body ? previous : null);
+      back?.focus({ preventScroll: true });
     };
-  }, [onClose]);
+  }, [onClose, restoreFocusTo]);
 
   const latched = useRef(false);
 

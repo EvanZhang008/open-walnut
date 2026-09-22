@@ -55,6 +55,21 @@ const RETRYABLE_UNSUBSCRIBE_STATES = ['failed', 'needs-human'] as const
 /** How long an `in-flight` row is believed before it is treated as a process that died. */
 export const UNSUBSCRIBE_RECLAIM_MS = 60_000
 
+/**
+ * The reclaim window for a MAILTO attempt, which is ten times the other one for a reason worth
+ * spelling out: the two rungs fail differently.
+ *
+ * A fetching rung is bounded by the ladder's own 10 s deadline, so an `in-flight` row a minute old
+ * proves the process that held it died. The mailto rung is NOT: it answers `in-flight` as soon as the
+ * `sends` row exists and lets the SMTP handshake finish in the background, precisely because a
+ * handshake legitimately takes tens of seconds and the response is holding one of the browser's six
+ * connections (see `mailtoRung`). Reclaiming that row at sixty seconds would let a second click send a
+ * SECOND unsubscribe mail while the first is still on the wire, and a mail cannot be taken back. Ten
+ * minutes is longer than any send that is still going and far short of leaving a dead row stuck: the
+ * row is reclaimable either way, the question is only how sure we are that nothing is running.
+ */
+export const UNSUBSCRIBE_MAILTO_RECLAIM_MS = 10 * 60_000
+
 /** How much of a verdict or a transport error is kept next to the row. */
 const UNSUBSCRIBE_DETAIL_CHARS = 300
 
@@ -382,7 +397,8 @@ export class MailWriteStore {
    * - `failed` or `needs-human` — settled, and settled unsuccessfully, so a human clicking again is
    *   the retry this plugin allows itself;
    * - `in-flight` but older than the reclaim window, which is the crash-recovery path and the only
-   *   automatic transition in the ledger.
+   *   automatic transition in the ledger. There are TWO windows, chosen by the held row's own rung:
+   *   see UNSUBSCRIBE_MAILTO_RECLAIM_MS for why a mail in flight gets ten minutes.
    *
    * `done` is deliberately absent: a message the human already left the list from answers 409
    * `already` with the row, and the console renders that as "you unsubscribed on Tuesday" rather than
@@ -398,6 +414,9 @@ export class MailWriteStore {
     now: number
     reclaimBefore: number
   }): Promise<number> {
+    // Judged on the HELD row's own method, not on the one being asked for: what needs the longer
+    // window is a mail that may still be going out, and the click that reclaims it can name any rung.
+    const reclaimMailtoBefore = claim.now - UNSUBSCRIBE_MAILTO_RECLAIM_MS
     const result = await this.db.run(
       'INSERT INTO unsubscribes (account_id, message_id, list_key, method, status, at)'
       + " VALUES (?, ?, ?, ?, 'in-flight', ?)"
@@ -405,10 +424,11 @@ export class MailWriteStore {
       + "   status = 'in-flight', method = excluded.method, list_key = excluded.list_key,"
       + '   at = excluded.at, reason = NULL, detail = NULL, ref = NULL'
       + ` WHERE unsubscribes.status IN (${placeholders(RETRYABLE_UNSUBSCRIBE_STATES.length)})`
-      + "    OR (unsubscribes.status = 'in-flight' AND unsubscribes.at < ?)",
+      + "    OR (unsubscribes.status = 'in-flight' AND unsubscribes.at <"
+      + "        (CASE WHEN unsubscribes.method = 'mailto' THEN ? ELSE ? END))",
       [
         claim.accountId, claim.messageId, claim.listKey, claim.method, claim.now,
-        ...RETRYABLE_UNSUBSCRIBE_STATES, claim.reclaimBefore,
+        ...RETRYABLE_UNSUBSCRIBE_STATES, reclaimMailtoBefore, claim.reclaimBefore,
       ],
     )
     return result.changes

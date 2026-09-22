@@ -14,7 +14,7 @@
 import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer';
 import { askObjectTitle } from '@/components/chat/ask-object-conversation';
 import type { MailAccountDto } from '@/api/mail';
-import { mailAskKey, mailAskQuote, mailContextBlock } from './mail-ask';
+import { mailAskKey, mailAskQuote, mailContextBlock, mailRowSelector } from './mail-ask';
 import { closeMailAsk, type MailAsk } from './mail-store';
 
 /** The agent that answers. Named here, once, so no caller can drift to another one. */
@@ -47,6 +47,8 @@ export function MailAskDrawer({ ask, accounts }: { ask: MailAsk; accounts: MailA
       placeholder="Ask about this mail"
       emptyText={`Ask Walnut about this mail${quote.who ? ` from ${quote.who}` : ''}.`}
       onClose={closeMailAsk}
+      // Back to the row the menu opened on, which is where the person's place in the list is.
+      restoreFocusTo={mailRowSelector(ask.accountId, ask.messageId)}
     />
   );
 }
