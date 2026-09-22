@@ -60,7 +60,7 @@ const JEV_INBOX = '__inbox__';
  */
 async function placeViaJev(
   jev: JevClient,
-  digest: { digest: string; projects: string[] },
+  digest: { digest: string; projects: string[]; summaries?: Record<string, string> },
   input: { cwd: string; message?: string },
   opts: { timeoutMs?: number; taskId?: string } = {},
 ): Promise<OrganizeSuggestion | undefined> {
@@ -71,7 +71,11 @@ async function placeViaJev(
     for (const name of digest.projects) {
       // A real project can't be allowed to shadow the sentinel key.
       if (name === JEV_INBOX) continue;
-      criteria[name] = `File it under the project named "${name}".`;
+      // The summary gives options outside the digest's top-20 window real
+      // evidence; guarded because tests (and old callers) pass digests
+      // without a summaries map.
+      const summary = digest.summaries?.[name];
+      criteria[name] = `File it under the project named "${name}".${summary ? ` ${summary}` : ''}`;
     }
 
     const state = [

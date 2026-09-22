@@ -184,6 +184,55 @@ describe('buildProjectDigest', () => {
   });
 
   it('returns empty output for an empty store', async () => {
-    await expect(buildProjectDigest()).resolves.toEqual({ digest: '', projects: [] });
+    await expect(buildProjectDigest()).resolves.toEqual({ digest: '', projects: [], summaries: {} });
+  });
+
+  it('collects summaries for EVERY project, including ones cut from the digest window', async () => {
+    // 24 projects; 'Project 1' has the fewest tasks so it falls outside the
+    // top-20 digest window — its summary must still reach the summaries map,
+    // because the Jev choice question offers it as an option.
+    const names = Array.from({ length: 24 }, (_, index) => `Project ${index + 1}`);
+    const tasks: FixtureTask[] = [];
+    names.forEach((name, index) => {
+      for (let count = 0; count <= index; count += 1) {
+        tasks.push(task(`${name} task ${count + 1}`, name));
+      }
+    });
+    mocks.getStoreProjects.mockResolvedValue(registry(names));
+    mocks.listTasksSlim.mockResolvedValue(tasks);
+    mocks.getProjectMetadata.mockImplementation(async (project: string) =>
+      project === 'Project 1' ? { summary: 'Hobby games and fun side quests.' } : null);
+
+    const result = await buildProjectDigest();
+
+    expect(result.digest).not.toContain('- Project 1 (1 open tasks)');
+    expect(result.summaries['Project 1']).toBe('Hobby games and fun side quests.');
+  });
+
+  it('flattens whitespace and caps criteria summaries at 160 chars (digest about: keeps 200)', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Website']));
+    mocks.listTasksSlim.mockResolvedValue([task('Update homepage', 'Website')]);
+    mocks.getProjectMetadata.mockResolvedValue({ summary: `multi\nline ${'y'.repeat(300)}` });
+
+    const result = await buildProjectDigest();
+
+    expect(result.summaries.Website).not.toContain('\n');
+    expect(result.summaries.Website.startsWith('multi line ')).toBe(true);
+    expect(Array.from(result.summaries.Website)).toHaveLength(160);
+    // The digest's own about: budget (200) is unchanged by the criteria
+    // budget (160). Measured on the raw text after the marker, not on split
+    // lines: a summary's own newlines split the about: line, as they always
+    // have — this test pins budgets, not that pre-existing quirk.
+    const afterMarker = result.digest.slice(result.digest.indexOf('  about: ') + '  about: '.length);
+    expect(Array.from(afterMarker)).toHaveLength(200);
+  });
+
+  it('summary read failures leave summaries empty, never throw', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Website']));
+    mocks.listTasksSlim.mockResolvedValue([task('Update homepage', 'Website')]);
+    mocks.getProjectMetadata.mockRejectedValue(new Error('db closed'));
+
+    const result = await buildProjectDigest();
+    expect(result.summaries).toEqual({});
   });
 });

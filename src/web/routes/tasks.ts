@@ -618,7 +618,7 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
     }
 
     const startedAt = Date.now()
-    let projectDigest: ProjectDigest = { digest: '', projects: [] }
+    let projectDigest: ProjectDigest = { digest: '', projects: [], summaries: {} }
     try {
       projectDigest = await buildProjectDigest()
     } catch (err) {
@@ -630,6 +630,7 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
       timeZone,
       projectDigest: projectDigest.digest,
       knownProjects: projectDigest.projects,
+      projectSummaries: projectDigest.summaries,
       customTiers: await getCustomTiers(),
     })
     log.web.info('quick-parse', {

@@ -280,7 +280,7 @@ taskExtrasV1Router.post('/tasks/quick-parse', async (req: Request, res: Response
 
     const startedAt = Date.now()
     const { buildProjectDigest } = await import('../../core/quick-task-digest.js')
-    let projectDigest: import('../../core/quick-task-digest.js').ProjectDigest = { digest: '', projects: [] }
+    let projectDigest: import('../../core/quick-task-digest.js').ProjectDigest = { digest: '', projects: [], summaries: {} }
     try {
       projectDigest = await buildProjectDigest()
     } catch (err) {
@@ -294,6 +294,7 @@ taskExtrasV1Router.post('/tasks/quick-parse', async (req: Request, res: Response
       timeZone,
       projectDigest: projectDigest.digest,
       knownProjects: projectDigest.projects,
+      projectSummaries: projectDigest.summaries,
       customTiers: await getCustomTiers(),
     })
     log.web.info('v1 quick-parse', {

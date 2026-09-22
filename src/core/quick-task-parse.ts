@@ -21,6 +21,10 @@ export interface QuickTaskParseOptions {
   projectDigest?: string;
   /** Canonical project names the model may pick from. */
   knownProjects?: string[];
+  /** Canonical name → one-line summary (buildProjectDigest().summaries). Rides
+   *  the Jev project-question criteria so options OUTSIDE the digest's
+   *  top-20 window still carry evidence, not just a bare name. */
+  projectSummaries?: Record<string, string>;
   modelOverride?: string;
   /** Registered custom tiers — accepted as pinTier values (by id, or label normalized to id). */
   customTiers?: CustomTierRecord[];
@@ -284,7 +288,10 @@ async function jevClassify(
           type: 'choice' as const,
           instructions: 'Which existing project does this note belong to, judged against each project\'s summary and example task titles? One-off items (an errand, a call, a single reminder) belong to none.',
           criteria: Object.fromEntries([
-            ...knownProjects.map((name) => [name, `File it under the project named "${name}".`]),
+            ...knownProjects.map((name) => {
+              const summary = opts.projectSummaries?.[name];
+              return [name, `File it under the project named "${name}".${summary ? ` ${summary}` : ''}`];
+            }),
             [JEV_NONE, 'No listed project fits; the task stays in the Inbox.'],
           ]),
         },

@@ -5,6 +5,8 @@ const MAX_TITLES_PER_LINE = 3;
 const MAX_TITLE_CHARS = 40;
 const MAX_DIGEST_CHARS = 4000;
 const MAX_SUMMARY_CHARS = 200;
+/** Per-project summary budget when riding inside a choice-question criteria. */
+const MAX_CRITERIA_SUMMARY_CHARS = 160;
 
 /** Inbox is rendered under this label; it is NOT a selectable project name. */
 export const INBOX_LABEL = 'Inbox';
@@ -13,6 +15,15 @@ export interface ProjectDigest {
   digest: string;
   /** Canonical project names the model may pick from. Never includes Inbox. */
   projects: string[];
+  /**
+   * Canonical name → flattened summary, for EVERY registry project — unlike
+   * the digest text, which lists only the top-{@link MAX_PROJECTS} by open
+   * count. A Jev choice question offers all projects as options, so an option
+   * outside the digest window used to be a bare name with zero evidence (the
+   * "Fun" failure: a hobby task stayed Inbox because the model knew nothing
+   * about a project called Fun). Criteria builders append these.
+   */
+  summaries: Record<string, string>;
 }
 
 interface ProjectDetails {
@@ -105,22 +116,35 @@ export async function buildProjectDigest(): Promise<ProjectDigest> {
     .sort((a, b) => b.openCount - a.openCount || a.name.localeCompare(b.name))
     .slice(0, MAX_PROJECTS);
 
+  // One metadata read per project, shared by the digest text (top window) and
+  // the exported summaries map (every project).
+  const rawSummaries = new Map<string, string>();
+  for (const name of projects) {
+    try {
+      const meta = await getProjectMetadata(name);
+      const summary = typeof meta?.summary === 'string' ? meta.summary.trim() : '';
+      if (summary) rawSummaries.set(name, summary);
+    } catch { /* summary is enrichment only — digest works without it */ }
+  }
+
   const lines: string[] = [];
   for (const project of ordered) {
     lines.push(appendTitles(`- ${project.name} (${project.openCount} open tasks)`, project.titles));
     // The maintained project summary (project-summary.ts) beats raw titles
     // for "does this note/session belong here?" judgment — ride it along.
-    try {
-      const meta = await getProjectMetadata(project.name);
-      const summary = typeof meta?.summary === 'string' ? meta.summary.trim() : '';
-      if (summary) {
-        lines.push(`  about: ${Array.from(summary).slice(0, MAX_SUMMARY_CHARS).join('')}`);
-      }
-    } catch { /* summary is enrichment only — digest works without it */ }
+    const summary = rawSummaries.get(project.name);
+    if (summary) {
+      lines.push(`  about: ${Array.from(summary).slice(0, MAX_SUMMARY_CHARS).join('')}`);
+    }
   }
   if (inbox.openCount > 0) {
     lines.push(appendTitles(`- ${INBOX_LABEL} — no project (${inbox.openCount} open tasks)`, inbox.titles));
   }
 
-  return { digest: capDigest(lines), projects };
+  const summaries: Record<string, string> = {};
+  for (const [name, summary] of rawSummaries) {
+    summaries[name] = Array.from(summary.replace(/\s+/g, ' ')).slice(0, MAX_CRITERIA_SUMMARY_CHARS).join('');
+  }
+
+  return { digest: capDigest(lines), projects, summaries };
 }

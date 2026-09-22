@@ -159,6 +159,20 @@ describe('parseQuickTask with Jev (direct-API fast model: parallel merge)', () =
     expect(parse).toMatchObject({ title: 'call the bank asap', priority: 'immediate' });
   });
 
+  it('rides project summaries into the criteria; bare names stay bare', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"x"}'));
+    decideMock.mockResolvedValue({});
+
+    await parseQuickTask('local maple server for fun', {
+      knownProjects: ['Fun', 'walnut'],
+      projectSummaries: { Fun: 'Hobby games and side quests.' },
+    });
+    const [, questions] = decideMock.mock.calls[0] as [string, Record<string, { criteria: Record<string, string> }>];
+    expect(questions.project.criteria.Fun).toBe('File it under the project named "Fun". Hobby games and side quests.');
+    // No summary → byte-identical to the pre-summaries criteria text.
+    expect(questions.project.criteria.walnut).toBe('File it under the project named "walnut".');
+  });
+
   it('does not ask a project question without knownProjects', async () => {
     sendMessageMock.mockResolvedValue(textResult('{"title":"x"}'));
     decideMock.mockResolvedValue({});

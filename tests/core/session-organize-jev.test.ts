@@ -66,6 +66,20 @@ describe('suggestSessionPlacement with Jev', () => {
     );
   });
 
+  it('rides digest summaries into the criteria; a digest without them keeps bare names', async () => {
+    const decide = vi.fn().mockResolvedValue(choiceAnswer('walnut', 0.9));
+    getJevClientMock.mockReturnValue({ decide });
+    digestMock.mockResolvedValue({
+      ...DIGEST,
+      summaries: { walnut: 'The Walnut personal-AI repo.' },
+    });
+
+    await suggestSessionPlacement(INPUT);
+    const [, questions] = decide.mock.calls[0] as [string, Record<string, { criteria: Record<string, string> }>];
+    expect(questions.project.criteria.walnut).toBe('File it under the project named "walnut". The Walnut personal-AI repo.');
+    expect(questions.project.criteria.Errands).toBe('File it under the project named "Errands".');
+  });
+
   it('treats the Inbox sentinel as final — no fast-model second opinion', async () => {
     getJevClientMock.mockReturnValue({ decide: vi.fn().mockResolvedValue(choiceAnswer('__inbox__', 0.95)) });
 
