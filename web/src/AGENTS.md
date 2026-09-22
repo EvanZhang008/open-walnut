@@ -251,6 +251,12 @@ still live on the client.
   is not inside `menuRef`, so naive "outside" checks close the parent when the user clicks
   its own submenu. Check `.closest('.task-kebab-project-flyout')` (and future flyout classes)
   before dismissing.
+- **There are no submenus.** The core `ContextMenu` has none, so the Mail message menu groups its
+  AI entries under a `Walnut` info row instead, with the ✦ inline in the LABEL rather than in
+  `row.icon`: Mail has never drawn that icon column, and filling it for one group indents only
+  that group. Adding a submenu means adding a portalled flyout (previous rule), not nesting a
+  menu. See [Leaving a mailing list](../../docs/plan/mail-unsubscribe.md) for how the four
+  unsubscribe states read in that group.
 - **Right-click opens the SAME kebab menu at the cursor** — task rows are app objects, not
   documents. One menu definition for both paths; never fork a separate context menu.
 - **Action rows are defined once.** The per-task kebab, the batch "More" dropdown, and the

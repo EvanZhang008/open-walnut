@@ -19,6 +19,13 @@ imports (`tests/lib/hybrid-search-boundary.test.ts` enforces it).
 
 **Task and session status:** read [Task/session status decisions](../../docs/decision/task-session-status.md) before changing phase migrations, cache invalidation, turn settlement, FIFO markers, or snapshot guards. It maps failure modes to code and regression tests.
 
+**Inbox Triage (`src/core/triage/`)** starts a NEW task and a NEW session for every run on purpose,
+and its memory lives in notes rather than in a context window. Read
+[Inbox Triage](../../docs/plan/inbox-triage.md) before touching the buffer, the envelope, the letter
+budget or the run bookkeeping: the load-bearing parts are the at-least-once handover (a claim is
+acknowledged only once the run's TASK exists) and the fact that the State.md check is SOFT and never
+retries a run that already sent letters.
+
 ## Invariants you must not break (even without reading the skill)
 
 - **Daemon-uniform file access (THE one rule):** every read of a Claude Code session-data file

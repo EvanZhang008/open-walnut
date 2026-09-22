@@ -77,4 +77,8 @@ must live under one of these top-level categories instead of directly under
 - [Coding-agent ACP provider](plan/coding-agent-acp-provider.md)
 - [Codex ACP UI test plan](plan/codex-acp-ui-test-plan.md)
 - [Daemon source-of-truth events](plan/daemon-source-of-truth-versioned-events.md)
+- [Inbox Triage](plan/inbox-triage.md) - a batch of new mail and Slack read by a
+  NEW session every run, with notes as the memory that carries across runs
+- [Leaving a mailing list](plan/mail-unsubscribe.md) - the unsubscribe ladder,
+  its SSRF guard and its ledger
 - [Memory v2 plan](plan/validated-snacking-ocean.md)
