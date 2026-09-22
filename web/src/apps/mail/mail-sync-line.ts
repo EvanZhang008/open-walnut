@@ -44,6 +44,14 @@ import {
  */
 export type MailSyncState = 'checked' | 'never' | 'fetching' | 'auth-required' | 'degraded';
 
+/**
+ * How far ahead of this reader's clock a `lastSyncAt` may be and still be believed.
+ *
+ * Two clocks are involved (the browser's and whichever host wrote the row) and they do drift by a second
+ * or two. Past this the value is not jitter, and `timeAgo` would read it as 'just now' for ever.
+ */
+const MAX_CLOCK_LEAD_MS = 60_000;
+
 export interface MailSyncLine {
   /** One short sentence. Never ends in a space, never carries a bare number. */
   text: string;
@@ -112,13 +120,24 @@ function scopeFor(input: MailSyncLineInput): SyncScope {
   return { pairs: [{ accountId: account.accountId, mailboxId: row.mailboxId }], accounts: [account], smart: false };
 }
 
-/** The newest real `lastSyncAt` among these rows, or undefined when none of them has one. */
-function newestSyncAt(rows: MailboxDto[]): number | undefined {
+/**
+ * The newest real `lastSyncAt` among these rows, or undefined when none of them has one.
+ *
+ * A timestamp AHEAD of the reader's clock is not usable, and it cannot simply be printed: `timeAgo`
+ * answers 'just now' for anything in the future, so a server whose clock runs fast (a VM without NTP, a
+ * remote host's daemon) would make this line read `Checked just now` for ever, about an account that
+ * stopped syncing days ago. A small lead is ordinary clock jitter and is pulled back to now; a large one
+ * is not a time this line can speak about, and saying nothing is the honest answer. The same bound
+ * discards a value so far out that `new Date(at)` is unrepresentable.
+ */
+function newestSyncAt(rows: MailboxDto[], now: number): number | undefined {
   let best: number | undefined;
   for (const row of rows) {
     const at = row.lastSyncAt;
     if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) continue;
-    if (best === undefined || at > best) best = at;
+    if (at > now + MAX_CLOCK_LEAD_MS) continue;
+    const usable = Math.min(at, now);
+    if (best === undefined || usable > best) best = usable;
   }
   return best;
 }
@@ -168,7 +187,7 @@ function fetching(folderFetch: Record<string, MailFolderFetch>, keys: string[]):
 export function syncLineFor(input: MailSyncLineInput): MailSyncLine | null {
   if (input.accounts.length === 0) return null;
   const scope = scopeFor(input);
-  const at = newestSyncAt(rowsOf(input.mailboxes, scope.pairs));
+  const at = newestSyncAt(rowsOf(input.mailboxes, scope.pairs), input.now);
   const ago = agoOf(at, input.now);
   const base = ago ? `Checked ${ago}` : 'Not checked yet';
 
@@ -221,7 +240,7 @@ function titleFor(input: MailSyncLineInput, scope: SyncScope, at: number | undef
       : (input.mailboxes[account.accountId] ?? []).map((row) => ({
         accountId: account.accountId, mailboxId: row.mailboxId,
       }));
-    const ago = agoOf(newestSyncAt(rowsOf(input.mailboxes, pairs)), input.now);
+    const ago = agoOf(newestSyncAt(rowsOf(input.mailboxes, pairs), input.now), input.now);
     const age = ago || 'never checked';
     // Parenthesised rather than another ` · ` clause: the separator already joins the accounts, so a
     // third one inside a clause would read as a fourth account. `accountsNotSyncing` covers the

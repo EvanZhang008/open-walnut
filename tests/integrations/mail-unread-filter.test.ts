@@ -132,6 +132,42 @@ async function rows<T extends Record<string, unknown>>(sql: string, params?: unk
 }
 
 /**
+ * Write the folder badge the way a poll would have, without running a poll.
+ *
+ * The state under test is one only the real world produces: the badge carries the PROVIDER's own count
+ * (every poll refreshes it) while the cached message rows are older than that. Running a real poll to set
+ * it would re-ingest every message with its current flags and correct the cache by the poll, which is the
+ * very path being tested around.
+ */
+async function setFolderBadge(unread: number): Promise<void> {
+  const db = mailDatabaseForTesting();
+  expect(db, 'the mail plugin must have an open database').not.toBeNull();
+  await db!.run('UPDATE mailboxes SET unread = ? WHERE mailbox_id = ?', [unread, 'INBOX']);
+}
+
+/**
+ * Put the CACHE in a known unread state: the newest `count` rows unread, every other row read.
+ *
+ * Written straight to the rows rather than through a poll, for the same reason `setFolderBadge` is: the
+ * state under test is a cache that disagrees with the provider, and a poll would resolve the
+ * disagreement before the case could look at it. The cases in this block share one database, so a case
+ * that cares about counts has to establish them rather than inherit them.
+ */
+async function cacheUnread(count: number): Promise<string[]> {
+  const db = mailDatabaseForTesting();
+  expect(db, 'the mail plugin must have an open database').not.toBeNull();
+  const all = await db!.all<{ message_id: string }>(
+    'SELECT message_id FROM messages ORDER BY sent_at DESC',
+  );
+  const wanted = all.slice(0, count).map((row) => row.message_id);
+  await db!.run("UPDATE messages SET seen = 1, flags_json = '[\"\\\\Seen\"]'");
+  for (const id of wanted) {
+    await db!.run("UPDATE messages SET seen = 0, flags_json = '[]' WHERE message_id = ?", [id]);
+  }
+  return wanted
+}
+
+/**
  * The mailbox: 120 messages, 37 of them unread, spread so the unread set outruns a page.
  *
  * `index % 3 === 0` up to 108 puts 17 unread on the first page of fifty, 17 on the second and 3 on
@@ -659,10 +695,19 @@ describe('the unread filter asks the provider first', () => {
    */
   it('marks read what a complete answer did not name, and pages without them', async () => {
     const fixture = marks();
-    // A complete answer: two of the mailbox's unread messages, with the limit far above that.
     const unread = fixture.messages.filter((one) => !fixture.isSeen(one.flags));
     expect(unread.length).toBeGreaterThan(3);
     const stillUnread = [unread[0]!, unread[1]!];
+    // The state being simulated, in FULL: the human read the rest on their phone, so the server now holds
+    // two unread messages and says so in both places it can be asked. Arming only the list would be a
+    // provider whose folder still counts 37 while its unread list names 2, and that disagreement is
+    // exactly what the reconcile treats as an incomplete answer (see the badge cases below): a page of an
+    // answer is not permission to mark the rest of the mailbox read.
+    const keep = new Set(stillUnread.map((one) => one.messageId));
+    for (const message of unread) {
+      if (!keep.has(message.messageId)) message.flags = fixture.setSeen(message.flags, true);
+    }
+    await setFolderBadge(stillUnread.length);
     await rearm({ messageIds: stillUnread.map((one) => one.messageId) });
 
     const page = await listPage({ limit: PAGE, unread: '1' });
@@ -706,5 +751,40 @@ describe('the unread filter asks the provider first', () => {
       'SELECT seen FROM messages WHERE message_id = ?', [oldest.messageId],
     );
     expect(still[0]!.seen, 'a capped answer proves nothing about mail older than its tail').toBe(0);
+  });
+
+  /**
+   * The provider contract's most dangerous sentence, end to end: "an empty array means nothing to add,
+   * NEVER nothing is unread". A provider is allowed to answer `[]` for a folder it cannot filter, and a
+   * real one does (the Outlook provider answers the unread question for the Inbox only). Believing it
+   * marks a whole folder read on the strength of a provider declining to answer, and a mail wrongly
+   * marked read is hidden rather than merely shown as stale.
+   */
+  it('leaves the cache alone when the answer names nothing but the folder still counts unread', async () => {
+    const cached = await cacheUnread(5);
+    await setFolderBadge(cached.length);
+    await rearm({ messageIds: [] });
+
+    const page = await listPage({ limit: PAGE, unread: '1' });
+
+    expect(page.status).toBe(200);
+    expect(marks().unreadCalls).toHaveLength(1);
+    expect(page.body.messages).toHaveLength(cached.length);
+    const after = await rows<{ n: number }>('SELECT COUNT(*) AS n FROM messages WHERE seen = 0');
+    expect(after[0]!.n, 'an answer that named nothing must not empty the folder').toBe(cached.length);
+  });
+
+  /** And the one case where nothing named really does mean nothing unread: the folder says so too. */
+  it('clears the cache when the answer names nothing and the folder agrees it is clear', async () => {
+    await cacheUnread(5);
+    await setFolderBadge(0);
+    await rearm({ messageIds: [] });
+
+    const page = await listPage({ limit: PAGE, unread: '1' });
+
+    expect(page.status).toBe(200);
+    expect(page.body.messages).toHaveLength(0);
+    const after = await rows<{ n: number }>('SELECT COUNT(*) AS n FROM messages WHERE seen = 0');
+    expect(after[0]!.n).toBe(0);
   });
 });

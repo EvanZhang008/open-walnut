@@ -406,6 +406,12 @@ export interface MailProviderSpec {
    * means "nothing to add", never "nothing is unread". That is what lets a provider answer for the
    * one mailbox its api can filter (an inbox) and return [] for every other without lying.
    * `limit` is a page size; a provider may answer fewer.
+   *
+   * The base DOES mark cached rows read that an answer skipped, but never on the strength of this
+   * answer alone: it has to agree with the folder's own `unread` count first. Both halves of that rule
+   * are the two sentences above, and they are why the count matters — see `unread-reconcile.ts`. A
+   * provider that keeps `Mailbox.unread` truthful therefore gets read state corrected for free, and one
+   * that cannot simply keeps the ingest-only behaviour.
    */
   listUnread?(accountId: string, mailbox: string, limit: number): Promise<MailEnvelope[]>
   /**

@@ -36,55 +36,102 @@ export interface UnreadReconcileInput {
   cached: readonly CachedUnreadRow[]
   /** The limit the answer was asked for. An answer that reached it may be a prefix of the truth. */
   limit: number
+  /**
+   * How many envelopes the provider actually handed back, BEFORE the caller dropped the ones belonging
+   * to another mailbox. The cap has to be judged on this rather than on `answered.length`, or one
+   * foreign envelope in a full page turns "this is page one of many" into "this is everything".
+   * Defaults to `answered.length` when the caller filtered nothing.
+   */
+  returned?: number
+  /**
+   * The folder's OWN unread count, as the provider reports it on every poll. The second opinion without
+   * which NOTHING is ever treated as complete: see the header. Absent when the caller has no folder row
+   * to read it from, and then the answer is only ever a prefix.
+   */
+  providerUnread?: number
+  /**
+   * When the provider was asked, as a message timestamp. A row that arrived AFTER this instant was not
+   * in the snapshot being judged, so its absence from the answer proves nothing about it. Without this
+   * the 8 second provider call is a window in which a newly delivered mail is marked read by an answer
+   * that predates it. Absent means "judge everything", which is only safe in a test.
+   */
+  snapshotAt?: number
 }
 
 export interface UnreadReconcileResult {
   /** Cached rows to mark read: the provider knows this mailbox and does not count them. */
   readNow: string[]
   /**
-   * Why the sweep stopped where it did, for the log line. `complete` = the answer named every unread
-   * message, so every absence counts. `capped` = the answer filled its limit, so only the range above
-   * its oldest entry can be judged. `no-answer` = nothing came back and nothing is concluded.
+   * Why the sweep stopped where it did, for the log line.
+   *  - `complete`: the folder's badge agrees with the answer's length, so every absence counts.
+   *  - `capped`: the answer filled the limit it was given, so only the range above its oldest entry can
+   *    be judged.
+   *  - `short-of-badge`: the answer named fewer than the folder itself counts, so it is a prefix too.
+   *  - `no-badge`: there was no folder count to check the answer against, so it is treated as a prefix.
+   *  - `no-answer`: the answer named nothing and the badge does not agree that the folder is clear, so
+   *    nothing at all is concluded.
    */
-  basis: 'complete' | 'capped' | 'no-answer'
-  /** With `capped`, the instant below which absence proves nothing. Absent otherwise. */
+  basis: 'complete' | 'capped' | 'short-of-badge' | 'no-badge' | 'no-answer'
+  /** For every prefix basis, the instant below which absence proves nothing. Absent with `complete`. */
   horizon?: number
 }
 
 /**
  * Which cached unread rows the provider's answer proves are read.
  *
- * Two cases, and the difference is the whole point:
+ * The provider contract (`MailProviderSpec.listUnread` in types.ts) is deliberately weak, and every rule
+ * here exists because of one of its sentences:
  *
- * A COMPLETE answer (fewer entries than the limit asked for) names every unread message there is, so
- * any cached unread row it skipped is read. This is the ordinary case: a real inbox has single digits
- * of unread and the limit is a page.
+ *  - "an empty array means nothing to add, NEVER nothing is unread". A provider is allowed to answer `[]`
+ *    for a folder it cannot filter, and a real one does: the Outlook provider answers the unread question
+ *    for the Inbox only. Reading that as "this folder is clear" marks a whole folder read on the strength
+ *    of a provider declining to answer, and a mail wrongly marked read is HIDDEN, which is worse than the
+ *    staleness this file exists to fix.
+ *  - "`limit` is a page size; a provider may answer fewer". So a short answer does not prove completeness
+ *    either, and the answer's own length can never establish it.
  *
- * A CAPPED answer (exactly the limit) may be a prefix, so absence below its oldest entry means only
- * "not in the first page". Rows at or older than that instant are left alone; rows newer than it are
- * judged, because a newest-first answer that reached its limit still covered everything above its own
- * tail. The tie at the horizon itself is left alone: two messages can share a delivery second, and one
- * of them being the answer's last entry says nothing about the other.
+ * What CAN establish it is a second opinion, and the folder's own badge is one that costs nothing because
+ * every poll refreshes it. So: an answer is COMPLETE only when the badge agrees with its length, and every
+ * other answer is a PREFIX, judged only above its oldest entry (a newest-first page still covers everything
+ * above its own tail). With no badge to check against, nothing is ever complete. The tie at the horizon is
+ * left alone: two messages can share a delivery second, and one of them being the answer's last entry says
+ * nothing about the other.
  *
- * An EMPTY answer is treated as complete only when the limit allowed for more, which it always does
- * (a limit of zero is not a question). That is deliberate and it is the case that matters most: zero
- * unread is the state an inbox somebody just cleared on their phone is actually in.
+ * A stale badge costs one round of partial correction and the next poll finishes the job, which is the
+ * right way round for a rule that writes read flags.
+ *
+ * One more bound, and it is about time rather than about the answer: a mail delivered WHILE the provider
+ * was being asked is not in the snapshot being judged, so its absence means nothing. `snapshotAt` keeps
+ * the sweep off it. Without that, opening an unread list was an 8 second window in which an arriving mail
+ * could be marked read by an answer older than the mail.
  */
 export function reconcileUnread(input: UnreadReconcileInput): UnreadReconcileResult {
-  const { answered, cached, limit } = input
-  if (cached.length === 0) return { readNow: [], basis: answered.length >= limit ? 'capped' : 'complete' }
-  const unread = new Set(answered.map((one) => one.messageId))
-  const capped = limit > 0 && answered.length >= limit
-  if (capped) {
-    // The oldest entry of the answer, which is where its knowledge stops.
-    const horizon = answered.reduce((oldest, one) => Math.min(oldest, one.sentAt), Number.POSITIVE_INFINITY)
-    return {
-      readNow: cached.filter((row) => row.sentAt > horizon && !unread.has(row.messageId)).map((row) => row.messageId),
-      basis: 'capped',
-      horizon,
-    }
+  const { answered, cached, limit, providerUnread } = input
+  const returned = input.returned ?? answered.length
+  const snapshotAt = input.snapshotAt ?? Number.POSITIVE_INFINITY
+  // Rows the answer could have covered at all. A row newer than the snapshot is not one of them.
+  const judgeable = cached.filter((row) => row.sentAt <= snapshotAt)
+  // Nothing cached is nothing to reconcile. The basis is the one that claims least, because the caller
+  // logs it and "complete" over an empty sweep reads as a conclusion nobody drew.
+  if (cached.length === 0) return { readNow: [], basis: 'no-answer' }
+  if (answered.length === 0) {
+    // The one absence that is allowed to mean something on its own: the folder itself says it is clear.
+    if (providerUnread !== 0) return { readNow: [], basis: 'no-answer' }
+    return { readNow: judgeable.map((row) => row.messageId), basis: 'complete' }
   }
-  return { readNow: cached.filter((row) => !unread.has(row.messageId)).map((row) => row.messageId), basis: 'complete' }
+  const unread = new Set(answered.map((one) => one.messageId))
+  const capped = limit > 0 && returned >= limit
+  const complete = !capped && typeof providerUnread === 'number' && answered.length >= providerUnread
+  if (complete) {
+    return { readNow: judgeable.filter((row) => !unread.has(row.messageId)).map((row) => row.messageId), basis: 'complete' }
+  }
+  // The oldest entry of the answer, which is where its knowledge stops.
+  const horizon = answered.reduce((oldest, one) => Math.min(oldest, one.sentAt), Number.POSITIVE_INFINITY)
+  return {
+    readNow: judgeable.filter((row) => row.sentAt > horizon && !unread.has(row.messageId)).map((row) => row.messageId),
+    basis: capped ? 'capped' : (providerUnread === undefined ? 'no-badge' : 'short-of-badge'),
+    horizon,
+  }
 }
 
 /** One (account, mailbox) of a smart list, with the two counts that decide whether to ask the provider. */

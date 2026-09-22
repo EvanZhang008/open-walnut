@@ -334,6 +334,36 @@ describe('the mail pane sync line', () => {
       .toBeNull();
   });
 
+  /**
+   * A server clock that runs fast used to make this line read `Checked just now` for ever: `timeAgo`
+   * answers 'just now' for any time in the future, so an account that stopped syncing days ago looked
+   * like the freshest thing on screen. Jitter is pulled back to now; a real lead is not a time this line
+   * can speak about.
+   */
+  it('does not believe a sync time that is ahead of this reader\'s clock', () => {
+    const base = { accounts: [account(A, A_LABEL)], folderFetch: {}, selected: { accountId: A, mailboxId: 'INBOX' } };
+    const withLead = (lead: number) => syncLineFor({
+      ...base,
+      mailboxes: { [A]: [mailbox(A, 'INBOX', 'inbox', NOW + lead)] },
+      now: NOW,
+    })!;
+
+    // Ordinary two-clock jitter: treated as now, which is what it almost certainly is.
+    expect(withLead(5_000).text).toBe('Checked just now');
+    expect(withLead(5_000).state).toBe('checked');
+
+    // A day into the future is not jitter. The line refuses to claim an age rather than claiming freshness.
+    expect(withLead(24 * 60 * MINUTE).state).toBe('never');
+    expect(withLead(24 * 60 * MINUTE).text).toBe('Not checked yet');
+
+    // And a value so far out that it is not a representable date does not reach `toISOString`.
+    expect(syncLineFor({
+      ...base,
+      mailboxes: { [A]: [mailbox(A, 'INBOX', 'inbox', 1e16)] },
+      now: NOW,
+    })!.title).not.toContain('Invalid Date');
+  });
+
   it('recomputes from the clock alone, with nothing else changed', () => {
     // What the pane's 30 s tick buys: the same snapshot, a later `now`, a later sentence. No request is
     // involved anywhere in this file, which is the point.

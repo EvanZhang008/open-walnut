@@ -188,6 +188,15 @@ function placeholders(count: number): string {
 const SEEN_FLAG = '\\Seen'
 
 /**
+ * How many unread rows one reconcile pass may read, and therefore at most how many it may write.
+ *
+ * This whole path runs inside a request a human is waiting on, and a folder whose backfill is far behind
+ * can hold thousands of unread rows: without a bound, one unread page turns into thousands of rows read
+ * plus thousands of serial UPDATEs on the one event loop every route shares.
+ */
+const UNREAD_KEYS_MAX = 500
+
+/**
  * What the `seen` column holds for a given flags array (see SCHEMA_V7).
  *
  * Here, in the only file that writes those columns, because `seen` is a DERIVED copy of `flags_json`
@@ -313,6 +322,21 @@ export class MailStore {
       'SELECT account_id, mailbox_id, unread FROM mailboxes WHERE role = ? ORDER BY account_id, mailbox_id',
       [role],
     )
+  }
+
+  /**
+   * ONE folder's provider-reported unread count, or undefined when there is no row for it.
+   *
+   * The distinction matters to the caller: `0` is the provider saying the folder is clear, and
+   * `undefined` is nobody having said anything, which the unread reconcile treats very differently (see
+   * `reconcileUnread`). Returning 0 for a missing row would collapse the two.
+   */
+  async mailboxUnread(accountId: string, mailboxId: string): Promise<number | undefined> {
+    const row = await this.db.get<{ unread: number }>(
+      'SELECT unread FROM mailboxes WHERE account_id = ? AND mailbox_id = ?',
+      [accountId, mailboxId],
+    )
+    return row ? row.unread : undefined
   }
 
   /**
@@ -623,11 +647,15 @@ export class MailStore {
    * provider's answer only means something if the cache's own set is known in full. The index
    * `messages_by_unread` serves it exactly.
    */
-  unreadKeys(accountId: string, mailboxId: string): Promise<UnreadKeyRow[]> {
+  unreadKeys(accountId: string, mailboxId: string, limit = UNREAD_KEYS_MAX): Promise<UnreadKeyRow[]> {
+    // BOUNDED and newest first, because this runs on the request path of an unread page and a folder whose
+    // backfill is far behind can hold thousands of unread rows. Newest first is also the half a reader can
+    // see, and the rest is corrected by a later pass rather than by making one page pay for all of it.
     return this.db.all<UnreadKeyRow>(
       'SELECT rowid, message_id, sent_at, flags_json FROM messages'
-      + ' WHERE account_id = ? AND mailbox_id = ? AND seen = 0',
-      [accountId, mailboxId],
+      + ' WHERE account_id = ? AND mailbox_id = ? AND seen = 0'
+      + ' ORDER BY sent_at DESC LIMIT ?',
+      [accountId, mailboxId, Math.max(1, Math.min(limit, UNREAD_KEYS_MAX))],
     )
   }
 
@@ -660,7 +688,9 @@ export class MailStore {
    * whatever the row holds (a row can also be flagged or answered, and a reconcile may only have an
    * opinion about being read), and a flag is an array ELEMENT — the substring test that SQL would need
    * reads a provider flag called `\SeenByAgent` as read, which is exactly what `seenOf` warns about.
-   * The loop is as long as the disagreement, which is single digits on a real account.
+   *
+   * The loop is as long as the disagreement, which is single digits on a healthy account and is bounded by
+   * `UNREAD_KEYS_MAX` on an unhealthy one, because the rows can only come from `unreadKeys`.
    */
   async markMessagesSeen(rows: ReadonlyArray<{ rowid: number; flags_json: string | null }>, now: number): Promise<number> {
     let changed = 0
