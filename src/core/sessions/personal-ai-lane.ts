@@ -33,7 +33,7 @@ import { CONVERSATION_SEED_HEADER, clipRenderedSeed } from '../chat-history.js';
 import { personalAiProfile, consoleAgentProfile } from './profiles.js';
 import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import type { SessionEngine } from '../types.js';
-import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
+import { engineCaps, isAcpEngine, isKnownEngine, resolveEngine } from '../agents/engine-registry.js';
 import { log } from '../../logging/index.js';
 
 /** The lane key a Personal AI conversation's session is bound to. */
@@ -672,6 +672,16 @@ async function resolveLane(
   engine?: SessionEngine,
 ): Promise<LaneSession> {
   const config = await getConfig();
+  // The chat engine: the caller's explicit choice (a relay that already knows)
+  // > agent.chat_engine (Settings > Ask Walnut) > claude.
+  //
+  // Deliberately NOT `defaults.engine`: that knob steers CODING sessions, and
+  // an ACP engine has no system-prompt channel, so a lane on one answers
+  // without the persona, the skills index or the memory block (see the ACP
+  // branch below). Inheriting a Codex coding default would therefore degrade
+  // every chat conversation silently. Chat opts in explicitly or stays on
+  // claude. An unknown value reads as unset rather than breaking the launch.
+  engine ??= isKnownEngine(config.agent?.chat_engine) ? config.agent.chat_engine : undefined;
   // One-time cleanup of the retired CLAUDE.md delivery path (see
   // cleanupLaneClaudeMd) — memory now rides the profile injection below.
   await cleanupLaneClaudeMd();

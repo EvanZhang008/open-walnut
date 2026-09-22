@@ -853,6 +853,11 @@ export interface AgentConfig {
   language?: string;
   /** Default provider name for the main agent. Maps to config.providers[name]. */
   main_provider?: string;
+  /** Engine that backs Ask Walnut CHAT conversations (a lane session). Unset =
+   *  follow `defaults.engine`. Chat has its own knob because `defaults.engine`
+   *  also steers coding sessions, and those are a different decision: picking
+   *  Codex for coding must not silently move every chat off Claude. */
+  chat_engine?: SessionEngine;
 }
 
 export interface Config {

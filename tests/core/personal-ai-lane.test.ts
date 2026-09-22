@@ -119,6 +119,40 @@ describe('getOrCreateLaneSession', () => {
     expect(started).toHaveLength(1)
   })
 
+  it('agent.chat_engine picks the chat engine, and a CODING default never moves chat', async () => {
+    // defaults.engine steers coding sessions. An ACP engine answers a lane with
+    // no persona/skills/memory (no system-prompt channel), so inheriting a Codex
+    // coding default here would degrade every conversation silently: chat opts
+    // in explicitly or stays on claude.
+    const { updateConfig } = await import('../../src/core/config-manager.js')
+    await updateConfig({ defaults: { priority: 'backlog', engine: 'codex' } as never })
+
+    await getOrCreateLaneSession('general', 'conv-ignores-coding-default', { firstMessage: 'x' })
+    expect(started.at(-1)?.engine ?? 'claude').toBe('claude')
+
+    await updateConfig({ agent: { chat_engine: 'codex' } as never })
+    // An ACP lane emits its SESSION_START and THEN waits for the record a real
+    // spawn would create (90s). This test only judges the engine decision, so
+    // it waits for the event, not for the (never-arriving) record.
+    const pending = getOrCreateLaneSession('general', 'conv-explicit', { firstMessage: 'y' })
+      .catch(() => undefined)
+    for (let i = 0; i < 100 && started.length < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    expect(started.at(-1)?.engine).toBe('codex')
+    void pending
+  })
+
+  it('an unknown chat_engine value is ignored rather than breaking every launch', async () => {
+    const { updateConfig } = await import('../../src/core/config-manager.js')
+    await updateConfig({ agent: { chat_engine: 'not-an-engine' } as never })
+
+    await getOrCreateLaneSession('general', 'conv-bad-engine', { firstMessage: 'z' })
+    // Falls through to the session default (claude here) — a typo in config must
+    // never leave chat unable to start.
+    expect(started.at(-1)?.engine ?? 'claude').toBe('claude')
+  })
+
   it('gives different conversations different sessions', async () => {
     const a = await getOrCreateLaneSession('general', 'conv-a', { firstMessage: 'a' })
     const b = await getOrCreateLaneSession('general', 'conv-b', { firstMessage: 'b' })
@@ -241,12 +275,12 @@ describe('personalAiProfile', () => {
   it('carries the short operating contract without parameter tables', () => {
     const prompt = personalAiProfile('Ada').systemPrompt!
     expect(prompt).toContain('## Walnut operating contract')
-    expect(prompt).toContain('`session_start` starts a session')
+    expect(prompt).toContain('`task_start` starts an existing task')
     // The 4-phase rewrite (22b34fee) deliberately dropped "Only a human may set
     // COMPLETE" for "You may set any phase; none is reserved" — assert TODAY's
     // rule, so this test states the contract rather than a retired one.
     expect(prompt).toContain('none is reserved')
-    expect(prompt).toContain('AGENT_COMPLETE')
+    expect(prompt).toContain('NEED_ACTION')
     expect(prompt).not.toContain('/api/')
     expect(prompt).not.toContain('tasks.sqlite')
   })

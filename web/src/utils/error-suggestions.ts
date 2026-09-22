@@ -38,7 +38,7 @@ const RULES: Rule[] = [
     suggestion: {
       suggestion: 'Check your AI provider credentials.',
       settingsHash: 'providers',
-      settingsLabel: 'Model Providers',
+      settingsLabel: 'Background Model',
     },
   },
 
