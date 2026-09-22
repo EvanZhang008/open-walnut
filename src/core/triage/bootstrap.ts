@@ -239,11 +239,41 @@ export type TriageBootstrapResult = {
 };
 
 /**
- * Bring the routine in line with `config.triage`. Idempotent: safe to call at
- * boot, on every config change, and twice in a row.
+ * One caller at a time, INCLUDING the read.
+ *
+ * The interleaving this exists for: the user flips Enable and immediately edits
+ * the interval, so Settings' auto-save sends two `PUT /api/config` and two
+ * `config:changed` events fire. Both handlers used to read `listRoutines()` before
+ * either wrote, both saw no routine, and both called `createRoutine` — from then on
+ * every interval minted TWO tasks and TWO sessions (two letter budgets, twice the
+ * model spend), and `findTriageRoutine`/`stopTriage` only ever act on the first, so
+ * the second was invisible and uncontrollable from Settings. The same race exists
+ * at boot, where server.ts starts the watcher and then awaits its own
+ * `ensureTriageRoutine`.
+ *
+ * A lock taken after the find-then-create's READ would fix nothing, so the queue
+ * wraps the WHOLE reconcile: the second caller runs after the first has written and
+ * therefore sees its routine ('unchanged' or 'patched', never a second 'created').
  */
-export async function ensureTriageRoutine(
+let reconcileQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Bring the routine in line with `config.triage`. Idempotent: safe to call at
+ * boot, on every config change, and twice in a row — and safe to call twice AT
+ * ONCE (see `reconcileQueue`).
+ */
+export function ensureTriageRoutine(
   deps: TriageBootstrapDeps = {},
+): Promise<TriageBootstrapResult> {
+  const result = reconcileQueue.then(() => reconcileTriageRoutine(deps));
+  // The queue carries only "the previous caller finished", never its outcome: a
+  // rejection here must not poison every later call.
+  reconcileQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function reconcileTriageRoutine(
+  deps: TriageBootstrapDeps,
 ): Promise<TriageBootstrapResult> {
   const getConfig = deps.getConfig ?? defaultGetConfig;
   const listRoutines = deps.listRoutines ?? defaultListRoutines;

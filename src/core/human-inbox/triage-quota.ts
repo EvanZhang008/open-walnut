@@ -155,6 +155,9 @@ const runs = new Map<string, RunEntry>();
  * Whether a task is a triage run's task, cached. `agent_id` is stamped at task
  * creation and never changes, so the answer is permanent for a given id; only the
  * map's SIZE needs bounding.
+ *
+ * ONLY REAL ANSWERS GO IN HERE. See `isTriageSender`: a lookup that timed out or
+ * threw never writes, because this cache is read first and never re-checked.
  */
 const MAX_TRACKED_TASKS = 500;
 const triageTasks = new Map<string, boolean>();
@@ -206,19 +209,43 @@ export interface TriageLetterDeps {
 /** A task read must never be what pins the letter route. */
 const TASK_STAMP_TIMEOUT_MS = 2_000;
 
+/**
+ * Deliberately NOT `stampedAgentId` (sessions/ask-agent.ts): that helper folds
+ * EVERY failure into `undefined`, which here is indistinguishable from the real
+ * answer "this task is not triage" — and would be cached as one, which is the
+ * failure this module's cache rule exists to stop, one layer down. Reading the
+ * task directly lets a store failure THROW, and `isTriageSender` then treats a
+ * throw as "no answer" and remembers nothing.
+ */
 async function defaultIsTriageTask(taskId: string): Promise<boolean> {
-  const { stampedAgentId } = await import('../sessions/ask-agent.js');
-  return (await stampedAgentId(taskId)) === TRIAGE_AGENT_ID;
+  const { getTask } = await import('../task-manager.js');
+  return (await getTask(taskId)).agent_id === TRIAGE_AGENT_ID;
 }
+
+/** A lookup that neither answered nor threw in time. NOT the answer `false`. */
+const NO_ANSWER = Symbol('triage-stamp-no-answer');
 
 /**
  * Is this sender a triage run? Keyed on the task's `agent_id` stamp — the thing
  * the executor writes — and never on a title or a project name, because a user is
  * free to rename either and a renamed project must not switch the budget off.
  *
- * Degrades to `false`. A task the store could not answer for is not tallied: the
- * quota is the BACKSTOP and the skill is the primary rule, so a store hiccup must
- * lose the backstop rather than refuse a letter the human is waiting for.
+ * A FAILED READ IS NOT AN ANSWER, so the verdict for the letter IN HAND and the
+ * verdict written to the CACHE deliberately differ when the lookup fails:
+ *
+ *  - in hand: `false`, i.e. no tally and no refusal. The quota is the BACKSTOP and
+ *    the skill is the primary rule, so a store hiccup must lose the backstop
+ *    rather than refuse a letter the human is waiting for.
+ *  - cached: nothing. The cache is consulted first and never re-checked, so
+ *    remembering a timeout would classify a REAL triage run as "not triage" for
+ *    the rest of that run, and every later letter in it would bypass the
+ *    1-summary + 3-decision budget — one bell badge and one phone push per item,
+ *    the exact outcome this module exists to prevent. The next letter asks again.
+ *
+ * The `external` sender is the same shape: letter-ops.ts answers it both for a
+ * genuine plugin letter AND when it could not resolve the caller's session, so it
+ * too is answered permissively and remembered nowhere (there is no task id to
+ * remember it under).
  */
 async function isTriageSender(sender: LetterSender, deps: TriageLetterDeps): Promise<boolean> {
   const taskId = sender.taskId?.trim();
@@ -228,26 +255,29 @@ async function isTriageSender(sender: LetterSender, deps: TriageLetterDeps): Pro
   if (cached !== undefined) return cached;
   const resolve = deps.isTriageTask ?? defaultIsTriageTask;
   let timer: NodeJS.Timeout | undefined;
-  let answer = false;
+  let answer: boolean | typeof NO_ANSWER = NO_ANSWER;
   try {
-    answer = await Promise.race([
+    answer = await Promise.race<boolean | typeof NO_ANSWER>([
       resolve(taskId),
-      new Promise<boolean>((resolvePromise) => {
+      new Promise<typeof NO_ANSWER>((resolvePromise) => {
         timer = setTimeout(() => {
-          log.notif.warn('human-inbox: triage stamp lookup timed out — letter not counted', { taskId });
-          resolvePromise(false);
+          log.notif.warn(
+            'human-inbox: triage stamp lookup timed out — letter not counted, verdict NOT cached',
+            { taskId },
+          );
+          resolvePromise(NO_ANSWER);
         }, TASK_STAMP_TIMEOUT_MS);
         timer.unref?.();
       }),
     ]);
   } catch (err) {
-    log.notif.warn('human-inbox: triage stamp lookup failed — letter not counted', {
+    log.notif.warn('human-inbox: triage stamp lookup failed — letter not counted, verdict NOT cached', {
       taskId, error: err instanceof Error ? err.message : String(err),
     });
-    answer = false;
   } finally {
     if (timer) clearTimeout(timer);
   }
+  if (answer === NO_ANSWER) return false;
   if (triageTasks.size >= MAX_TRACKED_TASKS) {
     const oldest = triageTasks.keys().next();
     if (!oldest.done) triageTasks.delete(oldest.value);

@@ -22,6 +22,13 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('triage-quota'));
 
+/** The store behind the DEFAULT lookup (no `isTriageTask` injected). */
+const getTask = vi.fn();
+vi.mock('../../src/core/task-manager.js', async (importOriginal) => ({
+  ...await importOriginal<object>(),
+  getTask,
+}));
+
 import {
   TRIAGE_DECISION_LETTERS_PER_RUN,
   TRIAGE_SUMMARY_LETTERS_PER_RUN,
@@ -38,6 +45,7 @@ import {
   triageModeText,
   triageRunRules,
 } from '../../src/core/triage/letter-rules.js';
+import type { TriageLetterDeps } from '../../src/core/human-inbox/triage-quota.js';
 import type { LetterSender } from '../../src/core/human-inbox/types.js';
 
 const TRIAGE_TASK = 'task-triage-run-1';
@@ -71,15 +79,20 @@ async function send(
   sender: LetterSender,
   input: Record<string, unknown>,
   letterId = `lt-${Math.random().toString(36).slice(2, 8)}`,
+  deps: TriageLetterDeps = { isTriageTask },
 ): Promise<{ letterId: string }> {
-  const charge = await guardTriageLetter(input, sender, { isTriageTask });
+  const charge = await guardTriageLetter(input, sender, deps);
   charge?.commit(letterId);
   return { letterId };
 }
 
-async function refusal(sender: LetterSender, input: Record<string, unknown>): Promise<string> {
+async function refusal(
+  sender: LetterSender,
+  input: Record<string, unknown>,
+  deps: TriageLetterDeps = { isTriageTask },
+): Promise<string> {
   try {
-    await send(sender, input);
+    await send(sender, input, undefined, deps);
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
@@ -88,6 +101,7 @@ async function refusal(sender: LetterSender, input: Record<string, unknown>): Pr
 
 beforeEach(() => {
   _resetTriageLetterQuotaForTesting();
+  getTask.mockReset();
   // mockReset, not mockClear: one case below swaps the implementation, and a
   // leaked "everything is triage" stub would quietly make the next case vacuous.
   isTriageTask.mockReset();
@@ -223,8 +237,104 @@ describe('only triage letters are counted', () => {
     for (let i = 0; i < 6; i++) {
       expect(await guardTriageLetter(decision(), sender, { isTriageTask: boom })).toBeUndefined();
     }
-    // Cached, so the failing read is paid once, not once per letter.
-    expect(boom).toHaveBeenCalledTimes(1);
+    // Asked EVERY time: a failed read is not an answer, so there is nothing to
+    // cache. Paying the read again per letter is the price of not remembering a
+    // wrong verdict — see the next describe block for why.
+    expect(boom).toHaveBeenCalledTimes(6);
+  });
+});
+
+describe('a failed sender lookup is not remembered', () => {
+  it('a real answer IS cached — one lookup per run, not one per letter', async () => {
+    const sender = triageSender('sess-cache-hit');
+    await send(sender, summary());
+    for (let i = 0; i < TRIAGE_DECISION_LETTERS_PER_RUN; i++) await send(sender, decision());
+    await refusal(sender, decision());
+    expect(isTriageTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('a lookup that throws and then succeeds ends up enforcing the budget', async () => {
+    const sender = triageSender('sess-store-flaky', 'task-triage-run-flaky');
+    let calls = 0;
+    const flaky = vi.fn(async (taskId: string) => {
+      calls += 1;
+      if (calls <= 2) throw new Error('sqlite is busy');
+      return taskId.startsWith('task-triage-run');
+    });
+    // The two letters in hand go through — refusing one the human is waiting for
+    // is worse than losing the backstop for it.
+    for (let i = 0; i < 2; i++) {
+      expect(await guardTriageLetter(decision(), sender, { isTriageTask: flaky })).toBeUndefined();
+    }
+    // Nothing was remembered, so the next letter asks again, gets a real answer,
+    // and the run is budgeted from there on.
+    for (let i = 0; i < TRIAGE_DECISION_LETTERS_PER_RUN; i++) {
+      await send(sender, decision(), `lt-flaky-000${i}`, { isTriageTask: flaky });
+    }
+    const message = await refusal(sender, decision(), { isTriageTask: flaky });
+    expect(message).toContain('at most 3 decision letters');
+    // Two failures, then ONE real answer that is cached for the rest of the run.
+    expect(flaky).toHaveBeenCalledTimes(3);
+  });
+
+  it('a lookup that TIMES OUT and then succeeds ends up enforcing the budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const sender = triageSender('sess-store-slow', 'task-triage-run-slow');
+      let calls = 0;
+      const slowThenFast = vi.fn(async (taskId: string) => {
+        calls += 1;
+        // The first read never comes back; the guard's 2s race gives up on it.
+        if (calls === 1) return await new Promise<boolean>(() => {});
+        return taskId.startsWith('task-triage-run');
+      });
+      const inFlight = guardTriageLetter(decision(), sender, { isTriageTask: slowThenFast });
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(await inFlight).toBeUndefined();
+
+      // The timeout must NOT have switched the budget off for the whole run.
+      for (let i = 0; i < TRIAGE_DECISION_LETTERS_PER_RUN; i++) {
+        const charge = await guardTriageLetter(decision(), sender, { isTriageTask: slowThenFast });
+        expect(charge, `decision ${i}`).toBeTruthy();
+        charge?.commit(`lt-slow-000${i}`);
+      }
+      await expect(guardTriageLetter(decision(), sender, { isTriageTask: slowThenFast }))
+        .rejects.toThrow(/at most 3 decision letters/);
+      // One timed-out read plus one real answer; only the real one is cached.
+      expect(slowThenFast).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the DEFAULT lookup lets a store failure throw, so it is not cached either', async () => {
+    // The production path (no isTriageTask injected). It reads the task itself
+    // rather than going through stampedAgentId, which folds every failure into
+    // `undefined` — indistinguishable from the real answer "not triage".
+    const sender = triageSender('sess-default-path', 'task-triage-run-default');
+    getTask.mockRejectedValue(new Error('tasks.json is locked'));
+    expect(await guardTriageLetter(decision(), sender)).toBeUndefined();
+    expect(await guardTriageLetter(decision(), sender)).toBeUndefined();
+    expect(getTask).toHaveBeenCalledTimes(2);
+
+    getTask.mockResolvedValue({ id: sender.taskId, agent_id: 'triage' });
+    for (let i = 0; i < TRIAGE_DECISION_LETTERS_PER_RUN; i++) {
+      const charge = await guardTriageLetter(decision(), sender);
+      expect(charge, `decision ${i}`).toBeTruthy();
+      charge?.commit(`lt-default-000${i}`);
+    }
+    await expect(guardTriageLetter(decision(), sender))
+      .rejects.toThrow(/at most 3 decision letters/);
+  });
+
+  it('the DEFAULT lookup calls a task that is not triage exactly what it is', async () => {
+    const sender = triageSender('sess-default-other', 'task-ordinary-1');
+    getTask.mockResolvedValue({ id: sender.taskId, agent_id: 'walnut' });
+    for (let i = 0; i < 5; i++) {
+      expect(await guardTriageLetter(decision(), sender)).toBeUndefined();
+    }
+    // A real answer, so it IS remembered: one read for the whole session.
+    expect(getTask).toHaveBeenCalledTimes(1);
   });
 });
 

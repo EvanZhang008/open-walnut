@@ -8,6 +8,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { readTriageConfig, isTriageWithinActiveHours } from '../../src/core/triage/config.js';
+import { log } from '../../src/logging/index.js';
 import {
   DEFAULT_TRIAGE_EVERY_MESSAGES,
   MIN_TRIAGE_EVERY_MS,
@@ -67,6 +68,55 @@ describe('readTriageConfig — the interval clamp', () => {
   it('an empty / whitespace interval falls back to the default, not to zero', () => {
     expect(readTriageConfig({ triage: { enabled: true, every: '   ' } }).everyMs).toBe(30 * 60_000);
     expect(readTriageConfig({ triage: { enabled: true, every: '' } }).everyMs).toBe(30 * 60_000);
+  });
+});
+
+/**
+ * parseDuration answers 0 both for a zero the user WROTE and for a value it cannot
+ * read at all, and only the first is a choice. Taking the second at face value
+ * turned `every: "half an hour"` into triage never running while Settings still
+ * showed it enabled, and blamed it on `interval-zero` — which reads as deliberate.
+ */
+describe('readTriageConfig — an interval nobody can parse is not "off"', () => {
+  it('"half an hour" falls back to the default and stays ENABLED', () => {
+    const r = readTriageConfig({ triage: { enabled: true, every: 'half an hour' } });
+    expect(r.enabled).toBe(true);
+    expect(r.disabledReason).toBeUndefined();
+    expect(r.everyMs).toBe(30 * 60_000);
+  });
+
+  it('so do the other shapes of a typo', () => {
+    for (const every of ['thirty minutes', 'hourly', 'm', '??']) {
+      const r = readTriageConfig({ triage: { enabled: true, every } });
+      expect(r.enabled, every).toBe(true);
+      expect(r.everyMs, every).toBe(30 * 60_000);
+    }
+  });
+
+  it('warns once per distinct value, naming it (the batch action re-reads every fire)', () => {
+    const warn = vi.spyOn(log.cron, 'warn').mockImplementation(() => {});
+    try {
+      const holder = { triage: { enabled: true, every: 'every other tuesday' } };
+      readTriageConfig(holder);
+      readTriageConfig(holder);
+      readTriageConfig(holder);
+      const named = warn.mock.calls.filter(
+        ([, meta]) => (meta as { configured?: string } | undefined)?.configured === 'every other tuesday',
+      );
+      expect(named).toHaveLength(1);
+      expect(named[0][0]).toContain('could not read the interval');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a zero the user WROTE still disables, in every spelling', () => {
+    for (const every of ['0', '0m', '0s', '0h', '00', ' 0 ']) {
+      const r = readTriageConfig({ triage: { enabled: true, every } });
+      expect(r.enabled, every).toBe(false);
+      expect(r.disabledReason, every).toBe('interval-zero');
+      expect(r.everyMs, every).toBe(0);
+    }
   });
 });
 

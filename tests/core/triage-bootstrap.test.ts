@@ -227,6 +227,71 @@ describe('disabling', () => {
   });
 });
 
+describe('two enables at once', () => {
+  /**
+   * Settings auto-saves per field, so flipping Enable and then editing the interval
+   * sends two `PUT /api/config` and fires two `config:changed` in the same tick
+   * (the boot path has the same shape: server.ts starts the watcher and then awaits
+   * its own ensure). Before the reconcile was serialized, both runs read
+   * listRoutines() before either wrote, both saw no routine, and each created one —
+   * two tasks and two sessions per interval, and findTriageRoutine/stopTriage only
+   * ever act on the first, so the second is invisible from Settings.
+   *
+   * The gate holds the READ open, which is where the interleaving lives: a lock
+   * taken after listRoutines() would not fix anything.
+   */
+  function gatedLayer() {
+    const layer = spyLayer();
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const listRoutines = vi.fn(async () => { await gate; return layer.jobs; });
+    return { layer, listRoutines, open: () => open(), deps: { ...layer.deps, listRoutines } };
+  }
+
+  it('creates exactly ONE routine, and the second caller sees the first one\'s', async () => {
+    const { layer, listRoutines, open, deps } = gatedLayer();
+    const both = Promise.all([
+      ensureTriageRoutine({ ...deps, getConfig: cfg(ON) }),
+      ensureTriageRoutine({ ...deps, getConfig: cfg(ON) }),
+    ]);
+    open();
+    const [first, second] = await both;
+
+    expect(layer.createRoutine).toHaveBeenCalledTimes(1);
+    expect(layer.jobs).toHaveLength(1);
+    expect([first.outcome, second.outcome]).toEqual(['created', 'unchanged']);
+    // Both callers name the SAME routine, so Settings can still stop it.
+    expect(second.jobId).toBe(first.jobId);
+    // Serialized, not coalesced: the second caller re-reads and sees the write.
+    expect(listRoutines).toHaveBeenCalledTimes(2);
+  });
+
+  it('five at once still create one (a settings page saving every field)', async () => {
+    const { layer, open, deps } = gatedLayer();
+    const all = Promise.all(Array.from({ length: 5 }, (_unused, i) => ensureTriageRoutine({
+      ...deps, getConfig: cfg({ ...ON, every_messages: 20 + i }),
+    })));
+    open();
+    const outcomes = (await all).map((r) => r.outcome);
+    expect(layer.jobs).toHaveLength(1);
+    expect(layer.createRoutine).toHaveBeenCalledTimes(1);
+    expect(outcomes[0]).toBe('created');
+    // The last write wins, and it is the same routine throughout.
+    expect((layer.jobs[0] as any).wake.threshold).toBe(24);
+  });
+
+  it('a rejected reconcile does not poison the queue for the next caller', async () => {
+    const layer = spyLayer();
+    await expect(ensureTriageRoutine({
+      ...layer.deps,
+      getConfig: async () => { throw new Error('config.yaml is mid-write'); },
+    })).rejects.toThrow('config.yaml is mid-write');
+    const after = await ensureTriageRoutine({ ...layer.deps, getConfig: cfg(ON) });
+    expect(after.outcome).toBe('created');
+    expect(layer.jobs).toHaveLength(1);
+  });
+});
+
 describe('hot config changes', () => {
   it('re-patches the schedule when every changes', async () => {
     const layer = spyLayer();

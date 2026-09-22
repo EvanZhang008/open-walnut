@@ -39,7 +39,8 @@ export interface ResolvedTriageConfig {
   /**
    * Run triage at all. False when the user never enabled it AND when `every` is
    * "0" — "no interval" is how heartbeat spells "off", so triage spells it the
-   * same way rather than inventing a second switch.
+   * same way rather than inventing a second switch. An `every` nobody can PARSE is
+   * not a zero and does not disable anything (see readEveryMs).
    */
   enabled: boolean;
   /** Why it is off, for the log line that explains an absent routine. */
@@ -58,9 +59,42 @@ export interface ResolvedTriageConfig {
   activeHours?: string;
 }
 
-function readEveryMs(raw: string | undefined): { everyMs: number; clamped: boolean } {
-  const parsed = parseDuration(typeof raw === 'string' && raw.trim() ? raw.trim() : DEFAULT_TRIAGE_EVERY);
-  if (parsed <= 0) return { everyMs: 0, clamped: false };
+/**
+ * A zero the user WROTE: "0", "0m", "0s", "0h", "00". `parseDuration` answers 0
+ * for these and for anything it cannot read at all ("half an hour"), and only the
+ * first of those is a choice — see `readEveryMs`.
+ */
+const EXPLICIT_ZERO_EVERY = /^0+\s*(?:ms|s|m|h)?$/i;
+
+/**
+ * Values already warned about, so an unchanged typo logs once, not per read.
+ * Bounded because this module is loaded for the life of the process: the values
+ * are hand-typed so a handful is the real ceiling, and forgetting them all costs
+ * one repeated log line.
+ */
+const warnedUnreadableEvery = new Set<string>();
+const MAX_WARNED_UNREADABLE = 16;
+
+/**
+ * An UNREADABLE interval is not "off".
+ *
+ * `parseDuration` answers 0 both for a deliberate zero and for a value it cannot
+ * parse, and taking that 0 at face value meant `every: "half an hour"` turned
+ * triage off while Settings still showed it enabled — and blamed it on
+ * `interval-zero`, which reads as the user's own choice rather than a typo. So a
+ * value that is not a zero and still parses to nothing falls back to the DEFAULT
+ * interval and says so in the log; only a written zero disables.
+ */
+function readEveryMs(raw: string | undefined): {
+  everyMs: number; clamped: boolean; unreadable?: string;
+} {
+  const value = typeof raw === 'string' && raw.trim() ? raw.trim() : DEFAULT_TRIAGE_EVERY;
+  const parsed = parseDuration(value);
+  if (parsed <= 0) {
+    if (EXPLICIT_ZERO_EVERY.test(value)) return { everyMs: 0, clamped: false };
+    const fallback = parseDuration(DEFAULT_TRIAGE_EVERY);
+    return { everyMs: fallback, clamped: false, unreadable: value };
+  }
   if (parsed < MIN_TRIAGE_EVERY_MS) return { everyMs: MIN_TRIAGE_EVERY_MS, clamped: true };
   return { everyMs: parsed, clamped: false };
 }
@@ -113,10 +147,19 @@ function readActiveHours(raw: unknown): string | undefined {
 /** Resolve `config.triage` into the numbers every triage caller uses. */
 export function readTriageConfig(config: TriageConfigHolder | null | undefined): ResolvedTriageConfig {
   const raw = config?.triage ?? {};
-  const { everyMs, clamped } = readEveryMs(raw.every);
+  const { everyMs, clamped, unreadable } = readEveryMs(raw.every);
   if (clamped) {
     log.cron.info('triage: interval below the floor — using the minimum', {
       configured: raw.every, everyMs, minEveryMs: MIN_TRIAGE_EVERY_MS,
+    });
+  }
+  // Once per distinct value, not once per read: the batch action re-reads this on
+  // every fire, so an unchanged typo would otherwise log forever, every interval.
+  if (unreadable !== undefined && !warnedUnreadableEvery.has(unreadable)) {
+    if (warnedUnreadableEvery.size >= MAX_WARNED_UNREADABLE) warnedUnreadableEvery.clear();
+    warnedUnreadableEvery.add(unreadable);
+    log.cron.warn('triage: could not read the interval — using the default instead', {
+      configured: unreadable, everyMs, defaultEvery: DEFAULT_TRIAGE_EVERY,
     });
   }
   const sources = readSources(raw.sources);
