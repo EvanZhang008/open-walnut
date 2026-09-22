@@ -31,6 +31,7 @@ import { WALNUT_HOME } from '../../../src/constants.js';
 
 const REAL_KEY = 'sk-or-v1-abcdef0123456789';
 const KEY_FILE = path.join(WALNUT_HOME, 'secrets', 'jev-api.key');
+const OPENROUTER_KEY_FILE = path.join(WALNUT_HOME, 'secrets', 'openrouter.key');
 
 function createApp() {
   const app = express();
@@ -74,8 +75,9 @@ beforeEach(async () => {
   // Deleting config.yaml is NOT a reset: the config reader is backup-aware and
   // restores the previous file, so a prior test's api_key would survive.
   // Clear the section explicitly instead.
-  await updateConfig({ jev: {} });
+  await updateConfig({ jev: {}, providers: {} as never });
   await fs.rm(KEY_FILE, { force: true });
+  await fs.rm(OPENROUTER_KEY_FILE, { force: true });
 });
 
 afterEach(async () => {
@@ -124,6 +126,38 @@ describe('POST /api/jev/key', () => {
     expect(res.status).toBe(400);
     await expect(fs.stat(KEY_FILE)).rejects.toThrow();
     expect((await getConfig()).jev?.api_key).toBeUndefined();
+  });
+});
+
+describe('POST /api/jev/key with an OpenRouter endpoint (shared provider credential)', () => {
+  const OR = 'https://openrouter.ai/api/alpha/decisions';
+
+  it('stores the key at the PROVIDER level so chat models share it', async () => {
+    await updateConfig({ jev: { endpoint: OR }, providers: { bedrock: { api: 'anthropic' } } as never });
+
+    const res = await request(createApp()).post('/api/jev/key').send({ key: REAL_KEY });
+
+    expect(res.status).toBe(200);
+    expect(res.body.shared).toBe(true);
+    expect((await fs.readFile(OPENROUTER_KEY_FILE, 'utf8')).trim()).toBe(REAL_KEY);
+    const cfg = await getConfig();
+    expect((cfg.providers as Record<string, { api_key?: string }>).openrouter?.api_key)
+      .toBe(`\${file:${OPENROUTER_KEY_FILE}}`);
+    // jev keeps NO copy of its own, and sibling providers survive.
+    expect(cfg.jev?.api_key).toBeUndefined();
+    expect((cfg.providers as Record<string, unknown>).bedrock).toBeDefined();
+  });
+
+  it('DELETE /key never touches the shared provider credential', async () => {
+    await updateConfig({ jev: { endpoint: OR } });
+    await request(createApp()).post('/api/jev/key').send({ key: REAL_KEY }).expect(200);
+
+    await request(createApp()).delete('/api/jev/key').expect(200);
+
+    // Disconnecting Jev must not revoke a credential chat models may ride.
+    const cfg = await getConfig();
+    expect((cfg.providers as Record<string, { api_key?: string }>).openrouter?.api_key).toContain('file:');
+    expect((await fs.readFile(OPENROUTER_KEY_FILE, 'utf8')).trim()).toBe(REAL_KEY);
   });
 });
 

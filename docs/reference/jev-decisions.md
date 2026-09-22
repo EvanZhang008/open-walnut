@@ -30,6 +30,16 @@ Routes: `POST /api/jev/key`, `DELETE /api/jev/key`, `POST /api/jev/test`
 (`src/web/routes/jev.ts`); the Test route answers `ok:false` with the status
 text rather than an error, because a settings page must always answer.
 
+**The OpenRouter key is a provider credential, not Jev's.** When the endpoint
+is an OpenRouter URL, the key resolves in this order: `jev.api_key` (explicit
+override) > `providers.openrouter.api_key` (the shared credential chat models
+use) > `OPENROUTER_API_KEY` from the environment. Saving an OpenRouter key in
+the Settings panel therefore stores it at the provider level
+(`secrets/openrouter.key`), configured once for everything; only a first-party
+TypeSafe key is Jev-specific. Disconnecting Jev never touches the shared
+credential. A non-OpenRouter endpoint never borrows the OpenRouter key — a
+credential must not travel to a host it was not issued for.
+
 The same shape is editable by hand:
 
 ```yaml

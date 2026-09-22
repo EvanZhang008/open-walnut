@@ -214,6 +214,56 @@ describe('readChoice (wire-shape validation)', () => {
   });
 });
 
+describe('shared OpenRouter provider credential', () => {
+  const OR = 'https://openrouter.ai/api/alpha/decisions';
+  function cfgShared(jev: Config['jev'], providerKey?: string): Config {
+    return {
+      ...cfg(jev),
+      providers: providerKey ? { openrouter: { api: 'openai-chat', api_key: providerKey } } : {},
+    } as Config;
+  }
+
+  it('an OpenRouter endpoint rides providers.openrouter.api_key when jev has no own key', async () => {
+    fetchMock.mockResolvedValue(okResponse(CHOICE_ANSWER));
+    const client = getJevClient(cfgShared({ endpoint: OR }, 'shared-key'));
+    expect(client).toBeDefined();
+    await client!.decide('s', {});
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBe('Bearer shared-key');
+  });
+
+  it('jev.api_key overrides the shared credential', async () => {
+    fetchMock.mockResolvedValue(okResponse(CHOICE_ANSWER));
+    const client = getJevClient(cfgShared({ endpoint: OR, api_key: 'own-key' }, 'shared-key'));
+    await client!.decide('s', {});
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBe('Bearer own-key');
+  });
+
+  it('a non-OpenRouter endpoint never borrows the OpenRouter key', () => {
+    // First-party TypeSafe endpoint + only a shared OpenRouter key = NOT
+    // configured. Sending an OpenRouter credential to another host would
+    // leak it to the wrong party.
+    expect(getJevClient(cfgShared({}, 'shared-key'))).toBeUndefined();
+    expect(getJevClient(cfgShared({ endpoint: 'https://api.typesafe.ai/v1/systemone' }, 'shared-key'))).toBeUndefined();
+  });
+
+  it('absent jev section stays unconfigured even with a shared key (the section is the opt-in)', () => {
+    expect(getJevClient(cfgShared(undefined, 'shared-key'))).toBeUndefined();
+  });
+
+  it('falls back to OPENROUTER_API_KEY from the environment for an OpenRouter endpoint', async () => {
+    vi.stubEnv('OPENROUTER_API_KEY', 'env-key');
+    fetchMock.mockResolvedValue(okResponse(CHOICE_ANSWER));
+    const client = getJevClient(cfgShared({ endpoint: OR }));
+    expect(client).toBeDefined();
+    await client!.decide('s', {});
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBe('Bearer env-key');
+    vi.unstubAllEnvs();
+  });
+});
+
 describe('client identity', () => {
   it('exposes the model the requests will carry', () => {
     expect(getJevClient(cfg({ api_key: 'k-model-test' }))!.model).toBe('jev-latest');

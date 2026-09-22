@@ -18,7 +18,7 @@
  * model calls, same house rule as micro-agent.ts.
  */
 
-import { resolveSecret } from '../../model/providers/secret.js';
+import { autoDetectApiKey, resolveSecret } from '../../model/providers/secret.js';
 import { log } from '../../logging/index.js';
 import type { Config } from '../types.js';
 
@@ -115,8 +115,30 @@ const CLIENT_CACHE_TTL_MS = 60_000;
 let clientCache: { key: string; at: number; client: JevClient | undefined } | undefined;
 
 /**
+ * The key reference Jev rides, in priority order:
+ *   1. jev.api_key — an explicit Jev-specific override (a TypeSafe key, or a
+ *      dedicated gateway key)
+ *   2. providers.openrouter.api_key — the SHARED OpenRouter credential, when
+ *      the endpoint is an OpenRouter URL. One key, configured once, serves
+ *      chat models and Jev alike.
+ *   3. OPENROUTER_API_KEY from the environment (same fallback the provider
+ *      registry uses), again only for an OpenRouter endpoint.
+ * Returns the UNRESOLVED reference (or a literal) — resolution happens once,
+ * after the cache check.
+ */
+function keyRefFor(config: Config, endpoint: string): string | undefined {
+  const own = config.jev?.api_key;
+  if (typeof own === 'string' && own) return own;
+  if (!/^https:\/\/openrouter\.ai\//.test(endpoint)) return undefined;
+  const shared = (config.providers as Record<string, { api_key?: unknown }> | undefined)?.openrouter?.api_key;
+  if (typeof shared === 'string' && shared) return shared;
+  return autoDetectApiKey('openrouter');
+}
+
+/**
  * Build a client from config, or undefined when Jev isn't configured — the
- * one check every call site branches on. Missing key (unset, or a `${file:}`/
+ * one check every call site branches on. Missing key (no jev.api_key AND no
+ * shared OpenRouter credential for an OpenRouter endpoint, or a `${file:}`/
  * `${env:}` reference that resolves to nothing) means "not configured"; the
  * unresolvable-reference case is logged so a typo'd path is diagnosable.
  * Non-string config values (YAML numbers) are treated as unset rather than
@@ -124,18 +146,20 @@ let clientCache: { key: string; at: number; client: JevClient | undefined } | un
  */
 export function getJevClient(config: Config): JevClient | undefined {
   const jev = config.jev;
-  if (!jev || typeof jev.api_key !== 'string' || !jev.api_key) return undefined;
+  if (!jev) return undefined;
 
   const endpoint = (typeof jev.endpoint === 'string' ? jev.endpoint : DEFAULT_ENDPOINT).replace(/\/$/, '');
   const model = typeof jev.model === 'string' ? jev.model : DEFAULT_MODEL;
+  const keyRef = keyRefFor(config, endpoint);
+  if (!keyRef) return undefined;
 
-  const cacheKey = JSON.stringify([jev.api_key, endpoint, model]);
+  const cacheKey = JSON.stringify([keyRef, endpoint, model]);
   const now = Date.now();
   if (clientCache && clientCache.key === cacheKey && now - clientCache.at < CLIENT_CACHE_TTL_MS) {
     return clientCache.client;
   }
 
-  const apiKey = resolveSecret(jev.api_key);
+  const apiKey = resolveSecret(keyRef);
   if (!apiKey) {
     log.web.warn('jev is configured but api_key did not resolve — jev disabled', {});
     clientCache = { key: cacheKey, at: now, client: undefined };

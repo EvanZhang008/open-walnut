@@ -35,7 +35,13 @@ export function JevSection({ config, onSave, onReload }: Props) {
   const [keyBusy, setKeyBusy] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: 'idle' });
 
-  const keyConfigured = Boolean(config.jev?.api_key);
+  // Three key states: Jev-specific override > shared OpenRouter provider
+  // credential (only meaningful when the effective endpoint IS OpenRouter) > none.
+  const ownKey = Boolean(config.jev?.api_key);
+  const effectiveEndpoint = (endpoint.trim() || config.jev?.endpoint || DEFAULT_ENDPOINT);
+  const onOpenRouter = effectiveEndpoint.startsWith('https://openrouter.ai/');
+  const sharedKey = !ownKey && onOpenRouter && Boolean(config.providers?.openrouter?.api_key);
+  const keyConfigured = ownKey || sharedKey;
 
   useEffect(() => {
     setEndpoint(config.jev?.endpoint ?? '');
@@ -127,9 +133,13 @@ export function JevSection({ config, onSave, onReload }: Props) {
         {keyConfigured ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className="text-sm" data-testid="jev-key-status">
-              Key configured — stored in <code>secrets/jev-api.key</code>, referenced from config, never synced.
+              {ownKey
+                ? <>Jev-specific key — stored in <code>secrets/</code>, referenced from config, never synced.</>
+                : <>Using the shared OpenRouter provider key (the same credential chat models can use).</>}
             </span>
-            <button type="button" className="btn btn-sm" onClick={removeKey} disabled={keyBusy}>Remove</button>
+            {ownKey && (
+              <button type="button" className="btn btn-sm" onClick={removeKey} disabled={keyBusy}>Remove</button>
+            )}
           </div>
         ) : (
           <div style={{ display: 'flex', gap: 8, maxWidth: 520 }}>
@@ -145,7 +155,10 @@ export function JevSection({ config, onSave, onReload }: Props) {
           </div>
         )}
         <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-          The key is written to <code>~/.open-walnut/secrets/</code> (excluded from sync); config keeps only a file reference.
+          {onOpenRouter
+            ? <>An OpenRouter key is saved as the SHARED provider credential (<code>providers.openrouter</code>), so chat models can use it too.</>
+            : <>A first-party key is Jev-specific.</>}{' '}
+          Keys are written to <code>~/.open-walnut/secrets/</code> (excluded from sync); config keeps only a file reference.
         </p>
       </div>
 

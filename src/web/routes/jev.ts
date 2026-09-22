@@ -17,6 +17,13 @@ import { log } from '../../logging/index.js'
 export const jevRouter = Router()
 
 const KEY_FILE = path.join(WALNUT_HOME, 'secrets', 'jev-api.key')
+/** The SHARED OpenRouter credential file — provider-level, not Jev's own. */
+const OPENROUTER_KEY_FILE = path.join(WALNUT_HOME, 'secrets', 'openrouter.key')
+const DEFAULT_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
+
+function isOpenRouter(endpoint: string | undefined): boolean {
+  return /^https:\/\/openrouter\.ai\//.test(endpoint ?? DEFAULT_ENDPOINT)
+}
 
 jevRouter.post('/key', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -29,14 +36,24 @@ jevRouter.post('/key', async (req: Request, res: Response, next: NextFunction) =
       res.status(400).json({ error: 'that does not look like an API key' })
       return
     }
-    await fs.mkdir(path.dirname(KEY_FILE), { recursive: true, mode: 0o700 })
-    await fs.writeFile(KEY_FILE, key + '\n', { mode: 0o600 })
     const config = await getConfig()
-    await updateConfig({
-      jev: { ...config.jev, api_key: `\${file:${KEY_FILE}}` },
-    })
-    log.web.info('jev key stored', { file: KEY_FILE })
-    res.json({ ok: true, ref: `\${file:${KEY_FILE}}` })
+    // An OpenRouter key is a PROVIDER credential: one key, configured once,
+    // serves chat models and Jev alike. Only a first-party/other-gateway key
+    // is Jev-specific. Which one this is follows from the effective endpoint.
+    const shared = isOpenRouter(config.jev?.endpoint)
+    const file = shared ? OPENROUTER_KEY_FILE : KEY_FILE
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+    await fs.writeFile(file, key + '\n', { mode: 0o600 })
+    const ref = `\${file:${file}}`
+    if (shared) {
+      const providers = { ...(config.providers as Record<string, object> | undefined) }
+      providers.openrouter = { ...(providers.openrouter as object | undefined), api_key: ref }
+      await updateConfig({ providers: providers as never })
+    } else {
+      await updateConfig({ jev: { ...config.jev, api_key: ref } })
+    }
+    log.web.info('jev key stored', { file, shared })
+    res.json({ ok: true, ref, shared })
   } catch (err) {
     next(err)
   }
@@ -48,8 +65,10 @@ jevRouter.delete('/key', async (req: Request, res: Response, next: NextFunction)
     const jev = { ...config.jev }
     delete jev.api_key
     await updateConfig({ jev })
-    // Remove the secret file only when config pointed at OUR managed file —
-    // a user-managed ${file:} path is theirs to keep.
+    // Remove the secret file only when config pointed at OUR managed Jev file —
+    // a user-managed ${file:} path is theirs to keep, and the SHARED OpenRouter
+    // provider credential is never touched here: chat models may be riding it,
+    // and this endpoint's contract is "disconnect Jev", not "revoke the key".
     if (config.jev?.api_key === `\${file:${KEY_FILE}}`) {
       await fs.rm(KEY_FILE, { force: true })
     }
