@@ -13453,6 +13453,36 @@ body.walnut-dragging {
 .detail-summary-refresh:hover:not(:disabled) { color: var(--fg); }
 .detail-summary-refresh:disabled { cursor: default; opacity: 0.6; }
 
+/* Tracking note — the project's vault note, rendered inline. The note body
+   reuses .todo-detail-note.markdown-body (the same styling the task detail
+   panes use), so only the section's own affordances need rules here.
+   text-transform: none because the title row is uppercased and this is a
+   sentence, not a label. */
+.project-tracking-open {
+  float: right;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 0;
+}
+.project-tracking-open:hover { color: var(--fg); text-decoration: underline; }
+/* A path is long and unbreakable; let it wrap anywhere rather than widen the pane. */
+.project-tracking-path {
+  font-size: 11px;
+  word-break: break-all;
+}
+/* The note can be long. Cap it and scroll rather than pushing Memory and the
+   delete button out of reach. */
+.project-tracking-note {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 /* Project delete — quiet by default, unmistakably destructive on hover */
 .project-danger-section {
   margin-top: 16px;

@@ -29,6 +29,7 @@ import {
   deleteProject,
   type ProjectMetadata,
 } from '@/api/projects';
+import { ProjectTrackingBlock } from './ProjectTrackingBlock';
 
 interface ProjectDetailPaneProps {
   /** Never '' — Inbox has no registry row. */
@@ -301,6 +302,10 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           ? <p className="detail-memory-text">{metadata.summary}</p>
           : <p className="detail-memory-text text-muted">No summary yet — generated automatically as tasks accumulate, or click ↻.</p>}
       </div>
+
+      {/* Tracking note — the project's living status note in the vault. Absent
+          entirely until something sets metadata.tracking_note. */}
+      <ProjectTrackingBlock notePath={metadata.tracking_note} />
 
       {/* Memory summary — memory/projects/<project>/MEMORY.md header */}
       {memorySummary && (

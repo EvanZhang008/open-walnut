@@ -79,6 +79,9 @@ export const SLOW_TEST_FILES = [
   'tests/web/routes/sessions-compare-modes-diverge.test.ts', // 2s
   'tests/web/routes/sessions-git-diff.test.ts', // 2s
   'tests/web/human-inbox-routes.test.ts', // boots a real server (route mount + ops parity)
+  // Boots a real server + a real notes vault and waits on the debounced notes
+  // indexer, so it is seconds by construction rather than by accident.
+  'tests/integration/tracking-note-ops.test.ts',
 
   // ── Real timers / pollers / plugin discovery ───────────────────────────────
   'tests/unit/subagent-poller.test.ts', // 15s

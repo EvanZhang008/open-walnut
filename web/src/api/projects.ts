@@ -28,6 +28,15 @@ export interface ProjectMetadata {
   remote_list?: string;
   /** Archived pre-refactor category name(s) this project inherited. Not displayed. */
   legacy_category?: string | string[];
+  /**
+   * Vault-relative path (WITH .md) of this project's ONE tracking note, e.g.
+   * "Projects/Marina/Tracking.md" — the same convention config.favorites.notes
+   * uses. Written by the project_tracking_ensure op, never by this client. It is
+   * the AUTHORITY on where the note lives, so a project rename keeps the key and
+   * leaves the note where it is; the detail pane's Tracking section is absent
+   * entirely when the key is missing.
+   */
+  tracking_note?: string;
   [key: string]: unknown;
 }
 

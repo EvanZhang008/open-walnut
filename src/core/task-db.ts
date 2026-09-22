@@ -375,7 +375,13 @@ export const TASK_COLUMNS: readonly string[] = EXPLICIT_TASK_COLUMNS;
 // lowercased existence check under the write lock — it does NOT rely on
 // ON CONFLICT); NOCASE is only the ASCII-case backstop for cross-process writes.
 // metadata JSON: default_cwd, default_host, summary, summary_task_count,
-//                legacy_category, remote_list.
+//                legacy_category, remote_list, tracking_note.
+//   tracking_note = the vault-relative path (WITH .md) of this project's ONE
+//   tracking note, e.g. "Projects/Marina/Tracking.md" — same convention as
+//   config.favorites.notes. It is the AUTHORITY on where the note lives: the
+//   derived path (trackingNotePathFor in src/core/tracking-note.ts) only says
+//   where a note that does not exist yet should go, and a rename deliberately
+//   does NOT move the note, it just keeps pointing at it.
 // Future nesting = add a nullable `parent` column.
 //
 // Its own const because the historical v1→v2 migration DROPs a long-dead table

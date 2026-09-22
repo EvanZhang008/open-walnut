@@ -1609,6 +1609,27 @@ export function resolveImagePath(path: string, cwd?: string): string | null {
  * pre-injects raw HTML (entityRefsToHtml task-ref anchors, filePathsToHtml links)
  * that the html-escaping renderer here would turn into visible escaped text.
  */
+/**
+ * Is this html token ONE markdown comment and nothing else?
+ *
+ * A comment is invisible in every other reader of the same bytes: the global
+ * Marked instance passes raw HTML through and DOMPurify drops comment nodes, and
+ * Obsidian — the other editor of this vault — hides them. Escaping one printed
+ * `<!-- … -->` as prose, which is how a project tracking note's format examples
+ * showed up as visible text in the project detail pane.
+ *
+ * Deliberately NOT a regex: `^\s*<!--[\s\S]*?-->\s*$` backtracks once per `-->`
+ * in the token, so a pathological note could make it quadratic. This is one
+ * linear scan, and it is strict — a token holding a comment PLUS anything else
+ * (`<!-- a --> <div>`) fails the last-occurrence test and is escaped as before.
+ */
+function isLoneHtmlComment(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith('<!--')
+    && trimmed.endsWith('-->')
+    && trimmed.indexOf('-->') === trimmed.length - 3;
+}
+
 const noteMarked = new Marked({ breaks: true, gfm: true });
 noteMarked.use({
   // Same double-tilde + CJK-autolink + CJK-strong contracts as the global
@@ -1618,6 +1639,10 @@ noteMarked.use({
   extensions: [cjkStrongExtension],
   renderer: {
     html({ text }: { text: string }) {
+      // Dropping a comment is not a hole in the escape below: a comment carries
+      // no tag, attribute or URL, so there is nothing to neutralize. Everything
+      // else still becomes visible text.
+      if (isLoneHtmlComment(text)) return '';
       return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     },
   },

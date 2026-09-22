@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
+import type { OpCall } from './core.js';
 import { defineOp } from './registry.js';
 import { REPLY_ARRIVES_HINT, TASK_IS_INERT, dispatchHint, withOutcome } from './outcome.js';
 
@@ -162,6 +163,177 @@ defineOp({
       throw new Error('project_metadata_update needs default_cwd or default_host');
     }
     return call('PUT', `/projects/${encodeURIComponent(String(name))}/metadata`, body);
+  },
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+// ── Project tracking note ────────────────────────────────────────────────────
+//
+// The tracking note is ONE note per project (`Projects/<folded name>/Tracking.md`)
+// whose location is recorded in `task_projects.metadata.tracking_note`. Two ops
+// rather than plain note_read/note_write, because BOTH halves of that sentence are
+// server rules: the name folding (src/core/tracking-note.ts, shared with
+// ask-agent's projectSafeName) and "the metadata key is the authority". A model
+// guessing the path would quietly create a second note beside the real one.
+
+/** Did a note read fail because the note isn't there (vs. a real failure)? */
+function isNoteMissing(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /not_found|404|Note not found|cannot resolve note reference/i.test(message);
+}
+
+/** The project's canonical spelling + its current metadata blob. */
+async function projectRow(project: string, call: OpCall): Promise<{ name: string; metadata: Record<string, unknown> }> {
+  const body = await call('GET', `/projects/${encodeURIComponent(project)}/metadata`) as
+    { name?: unknown; metadata?: unknown } | undefined;
+  const name = typeof body?.name === 'string' && body.name ? body.name : project;
+  const metadata = body?.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+    ? body.metadata as Record<string, unknown>
+    : {};
+  return { name, metadata };
+}
+
+/** The recorded tracking-note path for a project, or '' when it has none. */
+function recordedTrackingPath(metadata: Record<string, unknown>): string {
+  const value = metadata.tracking_note;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+defineOp({
+  name: 'project_tracking_get',
+  title: 'Read a project\'s tracking note',
+  description:
+    'Read the tracking note of ONE project — the living note that carries its status, workstreams, '
+    + 'open questions and log. Answers { path, content, contentHash, updatedAt }, or { path: null } '
+    + 'when the project has no tracking note yet (call project_tracking_ensure to create it). '
+    + 'Use this instead of guessing a note path: the path is derived from the project name by a '
+    + 'server rule, and a guess creates a SECOND note beside the real one. Keep the contentHash — '
+    + 'any edit to the Workstreams table must pass it to note_edit so a human editing the note at '
+    + 'the same moment wins with a conflict instead of being overwritten.',
+  input: {
+    project: z.string().min(1).describe('Project name (exact, case-insensitive); Inbox has no tracking note'),
+  },
+  handler: async (args, call) => {
+    const project = String(args.project ?? '').trim();
+    if (!project) return { path: null, reason: 'Inbox has no registry row, so it has no tracking note.' };
+    const { readNote } = await import('./core.js');
+    const row = await projectRow(project, call);
+    const recorded = recordedTrackingPath(row.metadata);
+    if (!recorded) {
+      return {
+        project: row.name,
+        path: null,
+        reason: `Project "${row.name}" has no tracking note yet (no metadata.tracking_note). `
+          + 'project_tracking_ensure creates it, with the skeleton, in one call.',
+      };
+    }
+    try {
+      // readNote is note_read's own helper, so a tracking note is read exactly the
+      // way every other note is. Its title fallback is path-scoped (it matches
+      // `%/<the full path>.md`), so it can never hand back another project's note.
+      const note = await readNote({ path: recorded }, call);
+      return {
+        project: row.name,
+        path: note.path,
+        content: note.content,
+        contentHash: note.contentHash,
+        updatedAt: note.updatedAt,
+      };
+    } catch (err) {
+      if (!isNoteMissing(err)) throw err;
+      return {
+        project: row.name,
+        path: null,
+        reason: `metadata.tracking_note points at "${recorded}", which is no longer in the vault `
+          + '(the human deleted or moved it). project_tracking_ensure writes a fresh skeleton there.',
+      };
+    }
+  },
+  tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
+  name: 'project_tracking_ensure',
+  title: 'Create a project\'s tracking note if it has none',
+  description:
+    'Make sure ONE project has ONE tracking note, and that the registry points at it. Writes the '
+    + 'skeleton (status / workstreams / open questions / log) when the project has no note, ADOPTS an '
+    + 'existing note at that path instead of overwriting it, and records the path in '
+    + 'task_projects.metadata.tracking_note. Idempotent: call it before the first edit of a run and it '
+    + 'does nothing when the note is already there. Inbox is refused (it has no registry row). '
+    + 'Answers { path, created, adopted } — then edit the note with note_edit, never note_write.',
+  input: {
+    project: z.string().min(1).describe('Project name (exact, case-insensitive); Inbox is refused'),
+  },
+  handler: async (args, call) => {
+    const project = String(args.project ?? '').trim();
+    // Refused HERE, before anything is written: setProjectMetadata refuses Inbox
+    // too, but by then the note would already exist as an orphan in the vault.
+    if (!project) throw new Error('Inbox has no registry row, so it can hold no tracking note — pass a project name.');
+
+    const { readNote } = await import('./core.js');
+    const { TRACKING_SKELETON, trackingNotePathFor } = await import('../core/tracking-note.js');
+    const row = await projectRow(project, call);
+    const recorded = recordedTrackingPath(row.metadata);
+    // The recorded key wins: ensure never MOVES a note that is already claimed,
+    // even when the derived path has since changed (a rename leaves the note put).
+    const notePath = recorded || trackingNotePathFor(row.name);
+    if (!notePath) {
+      throw new Error(
+        `Project "${row.name}" cannot have a tracking note: its name folds to nothing usable as a `
+        + 'folder. Skip it — do not invent a path.',
+      );
+    }
+
+    let existing: { path: string; contentHash: string; updatedAt?: string } | null = null;
+    try {
+      existing = await readNote({ path: notePath }, call);
+    } catch (err) {
+      if (!isNoteMissing(err)) throw err;
+    }
+
+    // Metadata BEFORE the note: a refused write (Inbox, a deleted/tombstoned
+    // project) must leave nothing behind, and a stray note in the user's vault is
+    // theirs to clean up by hand. The opposite order's failure mode — a key
+    // pointing at a note that isn't there yet — is a state the pane already
+    // renders honestly and a second ensure repairs.
+    if (recorded !== notePath) {
+      await call('PUT', `/projects/${encodeURIComponent(row.name)}/metadata`, { tracking_note: notePath });
+    }
+
+    if (existing) {
+      return {
+        project: row.name,
+        path: existing.path,
+        created: false,
+        // Adopted = a note was already sitting at that path and the registry did
+        // not know about it. Its content is left exactly as the human wrote it.
+        adopted: !recorded,
+        contentHash: existing.contentHash,
+        updatedAt: existing.updatedAt,
+      };
+    }
+
+    const content = TRACKING_SKELETON(row.name, new Date().toISOString());
+    try {
+      const created = await call('POST', '/notes', { path: notePath, content }) as
+        { path?: unknown; contentHash?: unknown; updatedAt?: unknown } | undefined;
+      return {
+        project: row.name,
+        path: typeof created?.path === 'string' ? created.path : notePath,
+        created: true,
+        adopted: false,
+        contentHash: typeof created?.contentHash === 'string' ? created.contentHash : undefined,
+        updatedAt: typeof created?.updatedAt === 'string' ? created.updatedAt : undefined,
+      };
+    } catch (err) {
+      // Create-only 409: another writer won the race between the probe and here.
+      // That is an adoption, not a failure — never overwrite what landed.
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/already exists/i.test(message)) throw err;
+      const note = await readNote({ path: notePath }, call);
+      return { project: row.name, path: note.path, created: false, adopted: true, contentHash: note.contentHash, updatedAt: note.updatedAt };
+    }
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

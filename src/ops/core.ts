@@ -206,10 +206,10 @@ defineOp({
 
 // ── Curated additions: notes ─────────────────────────────────────────────────
 
-type OpCall = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown) => Promise<unknown>
+export type OpCall = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown) => Promise<unknown>
 
 /** Vault path → URL path (each segment encoded, separators kept). */
-function encodeVaultPath(notePath: string): string {
+export function encodeVaultPath(notePath: string): string {
   return notePath.split('/').map(encodeURIComponent).join('/')
 }
 
@@ -239,8 +239,14 @@ async function resolveNoteTarget(args: Record<string, unknown>, call: OpCall): P
   return resolvedPath
 }
 
-/** GET one note, resolving a title/id path form when the direct read misses. */
-async function readNote(
+/**
+ * GET one note, resolving a title/id path form when the direct read misses.
+ *
+ * Exported because every op that reads a note must read it the SAME way —
+ * `project_tracking_get` in work.ts delegates here rather than re-deriving the
+ * request, so a note read is one code path no matter which op asked.
+ */
+export async function readNote(
   args: Record<string, unknown>,
   call: OpCall,
 ): Promise<{ path: string; content: string; contentHash: string; updatedAt?: string }> {

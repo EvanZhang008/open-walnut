@@ -53,4 +53,44 @@ describe('renderNoteMarkdown (noteMarked instance)', () => {
     const html = renderNoteMarkdown('returns JSON `{"html":"<table>"}` from the endpoint');
     expect(html).toMatch(/<code>.*&lt;table&gt;.*<\/code>/);
   });
+
+  /**
+   * A markdown comment is the ONE html shape that is dropped rather than escaped.
+   * Obsidian hides comments and the global Marked instance loses them to DOMPurify,
+   * so escaping them here made Walnut the only reader that printed them — which is
+   * how a project tracking note's format examples (`<!-- example row: … -->`)
+   * showed up as prose in the project detail pane.
+   */
+  describe('markdown comments are invisible, like every other reader of these bytes', () => {
+    it('drops a block comment instead of printing it', () => {
+      const html = renderNoteMarkdown('## Log\n\n<!-- example: - 2026-09-21 triage: nothing new -->\n');
+      expect(html).toContain('<h2>Log</h2>');
+      expect(html).not.toContain('&lt;!--');
+      expect(html).not.toContain('example:');
+    });
+
+    it('keeps a header-only table intact when a comment sits under it', () => {
+      const html = renderNoteMarkdown(
+        '| Item | State |\n| --- | --- |\n<!-- example row: | Design review | in progress | -->\n',
+      );
+      expect(html).toContain('<th>Item</th>');
+      // The comment must not become a visible table row, nor visible text.
+      expect(html).not.toContain('Design review');
+      expect(html).not.toContain('&lt;!--');
+    });
+
+    it('still escapes an html token that is a comment PLUS something else', () => {
+      // The strictness matters: anything beyond one comment keeps the old
+      // escaping, which is what makes hostile note HTML inert.
+      const html = renderNoteMarkdown('<!-- ok --><img src=x onerror="alert(1)">\n');
+      expect(html).toContain('&lt;');
+      expect(html).not.toMatch(/<img[^>]*onerror/);
+    });
+
+    it('never lets a comment smuggle live markup through', () => {
+      const html = renderNoteMarkdown('<!-- <script>alert(1)</script> -->\n');
+      expect(html).not.toContain('<script>');
+      expect(html).not.toContain('alert(1)');
+    });
+  });
 });

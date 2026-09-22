@@ -55,6 +55,7 @@ import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../ss
 import { mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
 import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
+import { withFileLock } from '../../utils/file-lock.js'
 import { log } from '../../logging/index.js'
 
 export const apiV1Router = Router()
@@ -3012,21 +3013,37 @@ apiV1Router.put('/notes/content/*path', async (req: Request, res: Response, next
 
     // Optimistic locking: on mismatch return the server's copy so the client
     // can merge locally without a second round trip.
-    if (typeof expectedHash === 'string' && expectedHash) {
-      try {
-        const serverContent = await fsp.readFile(filePath, 'utf-8')
-        const serverHash = computeContentHash(serverContent)
-        if (serverHash !== expectedHash) {
-          sendError(res, 409, 'conflict', 'Note was modified externally', { serverHash, serverContent })
-          return
+    //
+    // The compare and the write share ONE file lock — the same `<file>.lock` the
+    // notes-v2 PUT takes, so an agent write and a browser write are mutually
+    // exclusive too. A compare-and-set whose check and write are not atomic is
+    // not a compare-and-set: three concurrent note_edit calls each read the same
+    // hash, each passed the check, and each wrote, so two edits answered 200 and
+    // then vanished (found by tests/integration/tracking-note-ops.test.ts).
+    const outcome = await withFileLock(filePath, async (): Promise<
+      | { kind: 'conflict'; serverHash: string; serverContent: string }
+      | { kind: 'written'; contentHash: string; updatedAt: string }
+    > => {
+      if (typeof expectedHash === 'string' && expectedHash) {
+        try {
+          const serverContent = await fsp.readFile(filePath, 'utf-8')
+          const serverHash = computeContentHash(serverContent)
+          if (serverHash !== expectedHash) return { kind: 'conflict', serverHash, serverContent }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+          // File doesn't exist — no conflict possible.
         }
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-        // File doesn't exist — no conflict possible.
       }
+      return { kind: 'written', ...(await writeNote(filePath, notePath, content)) }
+    })
+    if (outcome.kind === 'conflict') {
+      sendError(res, 409, 'conflict', 'Note was modified externally', {
+        serverHash: outcome.serverHash,
+        serverContent: outcome.serverContent,
+      })
+      return
     }
-
-    const { contentHash, updatedAt } = await writeNote(filePath, notePath, content)
+    const { contentHash, updatedAt } = outcome
     log.memory.info('Note updated via api-v1', { path: notePath, size: content.length })
     res.json({ contentHash, updatedAt })
   } catch (err) {
@@ -3056,16 +3073,24 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
 
-    // Create-only: never silently overwrite (use PUT for updates).
-    try {
-      await fsp.stat(filePath)
+    // Create-only: never silently overwrite (use PUT for updates). Under the same
+    // lock as the PUT, so "does it exist" and "write it" cannot straddle another
+    // writer — two racing creates would otherwise both pass the stat and the
+    // loser's bytes would replace a note that already existed.
+    const created = await withFileLock(filePath, async (): Promise<{ contentHash: string; updatedAt: string } | null> => {
+      try {
+        await fsp.stat(filePath)
+        return null
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      }
+      return writeNote(filePath, notePath, body)
+    })
+    if (!created) {
       sendError(res, 409, 'conflict', 'Note already exists')
       return
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
-
-    const { contentHash, updatedAt } = await writeNote(filePath, notePath, body)
+    const { contentHash, updatedAt } = created
     log.memory.info('Note created via api-v1', { path: notePath })
     res.status(201).json({ path: toRelPath(filePath), contentHash, updatedAt })
   } catch (err) {
