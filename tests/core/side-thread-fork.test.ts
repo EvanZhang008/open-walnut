@@ -33,7 +33,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import {
   forkSideThreadSession, parseSideLaneKey, sideThreadLaneKey, isSideThreadLane,
-  STANDBY_THREAD_ID,
+  cachedSettingsReader, STANDBY_THREAD_ID, type LiveSettingsSource,
 } from '../../src/core/sessions/side-thread-fork.js'
 import { SessionControlError } from '../../src/core/sessions/session-controls.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
@@ -91,6 +91,65 @@ describe('side lane keys', () => {
     expect(parseSideLaneKey(`side:${PARENT}:`)).toBeNull()
     expect(isSideThreadLane('chat:general:c1')).toBe(false)
     expect(isSideThreadLane(`side:${PARENT}:sth-1`)).toBe(true)
+  })
+})
+
+describe('cachedSettingsReader', () => {
+  // The whole point: a fork's critical path never waits on get_settings, which
+  // answers serially on the CLI's stdin loop (measured queuing 16s+ behind a
+  // heavy get_context_usage).
+  it('answers from the snapshot even while refreshAppliedSettings hangs FOREVER', async () => {
+    const refresh = vi.fn(() => new Promise(() => {})) // never resolves
+    const source: LiveSettingsSource = {
+      cachedAppliedSettings: () => ({ model: 'global.anthropic.claude-fable-5-1[1m]', effort: 'medium', atMs: Date.now() }),
+      refreshAppliedSettings: refresh,
+    }
+    const read = cachedSettingsReader(() => source)
+    const got = await read(PARENT) // must resolve immediately, not in 5s, not never
+    expect(got).toMatchObject({ model: 'global.anthropic.claude-fable-5-1[1m]', effort: 'medium' })
+    expect(got?.atMs).toBeTypeOf('number') // snapshot age rides into the fork telemetry
+    expect(refresh).toHaveBeenCalledWith('fork-prefix') // background, for the NEXT fork
+  })
+
+  it('returns null before the first read-back (fresh attach) but still kicks the refresh', async () => {
+    const refresh = vi.fn(async () => null)
+    const read = cachedSettingsReader(() => ({
+      cachedAppliedSettings: () => null,
+      refreshAppliedSettings: refresh,
+    }))
+    expect(await read(PARENT)).toBeNull() // → record, which every switch persists first
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
+  it('returns null when no live session exists', async () => {
+    expect(await cachedSettingsReader(() => undefined)(PARENT)).toBeNull()
+  })
+
+  it('a stale snapshot self-heals: the refresh each fork kicks off feeds the NEXT fork', async () => {
+    // The staleness window is real (a mid-turn refusal fallback lands in the
+    // snapshot only at turn-end) — the contract is that one fork may copy the
+    // old value, and the background refresh it triggered corrects the next.
+    let snapshot = { model: 'global.anthropic.claude-fable-5[1m]', effort: 'max' as const, atMs: Date.now() }
+    const source: LiveSettingsSource = {
+      cachedAppliedSettings: () => ({ ...snapshot }),
+      refreshAppliedSettings: async () => {
+        snapshot = { model: 'global.anthropic.claude-fable-5-1[1m]', effort: 'medium' as never, atMs: Date.now() }
+        return null
+      },
+    }
+    const read = cachedSettingsReader(() => source)
+    expect((await read(PARENT))?.model).toBe('global.anthropic.claude-fable-5[1m]') // stale copy, tolerated
+    await new Promise((r) => setImmediate(r)) // let the background refresh land
+    expect((await read(PARENT))?.model).toBe('global.anthropic.claude-fable-5-1[1m]') // healed
+  })
+
+  it('a synchronously-throwing refresh cannot break the reader or leak a rejection', async () => {
+    const read = cachedSettingsReader(() => ({
+      cachedAppliedSettings: () => ({ model: 'opus[1m]', effort: null, atMs: Date.now() }),
+      refreshAppliedSettings: () => { throw new Error('transport gone') },
+    }))
+    expect(await read(PARENT)).toMatchObject({ model: 'opus[1m]', effort: null })
+    await new Promise((r) => setImmediate(r)) // an unhandled rejection would fail the file
   })
 })
 

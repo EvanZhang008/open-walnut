@@ -206,4 +206,32 @@ describe('readParentSpawnPrefix', () => {
     })
     expect(seen).toEqual(['__local__'])
   })
+
+  it('runs the settings read and the argv probe in PARALLEL, not serialized', async () => {
+    // Serializing them put a full daemon RTT on the fork's critical path. Pin
+    // the overlap: both reads must have STARTED before either resolves.
+    const order: string[] = []
+    let releaseSettings!: () => void
+    let releaseArgs!: () => void
+    const settingsGate = new Promise<void>((r) => { releaseSettings = r })
+    const argsGate = new Promise<void>((r) => { releaseArgs = r })
+    const done = readParentSpawnPrefix(parent({}), {
+      liveAppliedSettings: async () => {
+        order.push('settings-start')
+        await settingsGate
+        return { model: 'opus[1m]', effort: 'high' }
+      },
+      readLiveArgs: async () => {
+        order.push('args-start')
+        await argsGate
+        return LIVE_ARGS
+      },
+    })
+    await Promise.resolve() // let both readers begin
+    expect(order).toEqual(['settings-start', 'args-start'])
+    releaseSettings(); releaseArgs()
+    const p = await done
+    expect(p.model).toBe('opus[1m]')
+    expect(p.source).toBe('live-process')
+  })
 })

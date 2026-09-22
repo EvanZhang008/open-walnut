@@ -791,6 +791,12 @@ export class ClaudeCodeSession {
   /** TRUE runtime effort last read back from the CLI via get_settings (applied.effort).
    *  Authoritative — reflects env override + model downgrade. Undefined until first read. */
   private _effectiveEffort: import('../core/types.js').SessionEffort | undefined
+  /** Last successful get_settings read-back, verbatim. The zero-RPC view for
+   *  consumers that must not wait on the CLI's stdin loop (fork prefix):
+   *  refreshed at session-start, every turn-end and every model/effort switch,
+   *  so it is at most one in-flight turn stale. null model/effort = the CLI
+   *  answered "unset", distinct from undefined (never read). */
+  private _appliedSnapshot: { model: string | null; effort: import('../core/types.js').SessionEffort | null; atMs: number } | undefined
   /** Launch-config bundle expanded into spawn args. Persisted so a cold --resume
    *  re-applies it (spawn-time flags have no live control_request). */
   private _profile: import('../core/types.js').SessionProfile | undefined
@@ -3820,6 +3826,15 @@ export class ClaudeCodeSession {
             // Extract short model ID for display (e.g. "claude-opus-4-6" or "claude-opus-4-6[1m]")
             const shortModel = shortModelId(rawModel)
             this._model = shortModel
+            // A new init is the CLI declaring its live model (spawn, /model-
+            // triggered resume) in the authoritative --model format — sync the
+            // zero-RPC snapshot's model half so a fork landing between this
+            // init and the next get_settings read-back copies the NEW model.
+            // (Assistant-message models are NOT used for this: subagent calls
+            // ride cheaper models and would false-trigger.)
+            if (this._appliedSnapshot && this._appliedSnapshot.model !== rawModel) {
+              this._appliedSnapshot = { ...this._appliedSnapshot, model: rawModel, atMs: Date.now() }
+            }
           } else if (typeof sys.model === 'string' && sys.model) {
             // sanitizeInitModel rejected the string — log so we can diagnose.
             log.session.warn('init model failed validation, using raw', {
@@ -6954,6 +6969,10 @@ export class ClaudeCodeSession {
       this.seedCliContextWindow('first-settings-read')
     }
 
+    // Snapshot BEFORE the no-change early return: an unchanged read-back is
+    // still a successful read-back, and the snapshot's freshness is the point.
+    this._appliedSnapshot = { model: appliedModel ?? null, effort: next ?? null, atMs: Date.now() }
+
     const effortChanged = next !== this._effectiveEffort
     if (!effortChanged && !modelChanged) return { effort: next ?? null, model: appliedModel ?? null }
 
@@ -7000,6 +7019,15 @@ export class ClaudeCodeSession {
   /** Back-compat wrapper — effort-only view of refreshAppliedSettings. */
   async refreshEffectiveEffort(reason: string): Promise<import('../core/types.js').SessionEffort | null> {
     return (await this.refreshAppliedSettings(reason))?.effort ?? null
+  }
+
+  /** Zero-RPC view of the last get_settings read-back, or null before the first
+   *  one lands (~1.5s after spawn). Fork-prefix reads THIS instead of issuing a
+   *  fresh control_request: get_settings answers serially on the CLI's stdin
+   *  loop and can queue behind a 16s get_context_usage — nothing on a fork's
+   *  critical path may wait on that. */
+  cachedAppliedSettings(): { model: string | null; effort: import('../core/types.js').SessionEffort | null; atMs: number } | null {
+    return this._appliedSnapshot ? { ...this._appliedSnapshot } : null
   }
 
   /**

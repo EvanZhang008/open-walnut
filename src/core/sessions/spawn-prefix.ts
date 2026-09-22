@@ -93,7 +93,7 @@ async function defaultLiveArgsReader(hostKey: string, sessionId: string): Promis
  */
 export type AppliedSettingsReader = (
   sessionId: string,
-) => Promise<{ model: string | null; effort: SessionEffort | null } | null>;
+) => Promise<{ model: string | null; effort: SessionEffort | null; atMs?: number } | null>;
 
 /**
  * Current model/effort for a fork of `parent`. Never argv (see the file header).
@@ -103,7 +103,7 @@ export type AppliedSettingsReader = (
 async function currentModelAndEffort(
   parent: SessionRecord,
   read?: AppliedSettingsReader,
-): Promise<{ model?: string; effort?: SessionEffort; source: 'live-settings' | 'record' }> {
+): Promise<{ model?: string; effort?: SessionEffort; source: 'live-settings' | 'record'; snapshotAgeMs?: number }> {
   let applied: Awaited<ReturnType<AppliedSettingsReader>> = null;
   try {
     applied = (await read?.(parent.claudeSessionId)) ?? null;
@@ -118,6 +118,7 @@ async function currentModelAndEffort(
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     source: applied?.model || applied?.effort ? 'live-settings' : 'record',
+    ...(applied?.atMs ? { snapshotAgeMs: Date.now() - applied.atMs } : {}),
   };
 }
 
@@ -137,15 +138,37 @@ export async function readParentSpawnPrefix(
 ): Promise<SpawnPrefix> {
   const readLiveArgs = deps.readLiveArgs ?? defaultLiveArgsReader;
   const hostKey = parent.host || '__local__';
-  const current = await currentModelAndEffort(parent, deps.liveAppliedSettings);
-  let live: string[] | null = null;
-  try {
-    live = await readLiveArgs(hostKey, parent.claudeSessionId);
-  } catch (err) {
-    log.session.debug('spawn prefix: live argv read threw', {
-      sessionId: parent.claudeSessionId, error: err instanceof Error ? err.message : String(err),
+  const startedAt = Date.now();
+  // The two reads are independent (settings snapshot vs daemon argv probe) —
+  // serializing them put a full daemon RTT on the fork's critical path.
+  const [current, live] = await Promise.all([
+    currentModelAndEffort(parent, deps.liveAppliedSettings),
+    (async (): Promise<string[] | null> => {
+      try {
+        return await readLiveArgs(hostKey, parent.claudeSessionId);
+      } catch (err) {
+        log.session.debug('spawn prefix: live argv read threw', {
+          sessionId: parent.claudeSessionId, error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      }
+    })(),
+  ]);
+  // Unconditional, one line per fork: the ONLY record of which source tier
+  // answered (live snapshot / record / argv) and what the resolution cost.
+  // A silent fall-through to a stale record would otherwise be invisible.
+  const logResolved = (prefix: SpawnPrefix) => {
+    log.session.info('spawn prefix resolved', {
+      sessionId: parent.claudeSessionId,
+      source: prefix.source, settingsSource: current.source,
+      model: prefix.model ?? null, effort: prefix.effort ?? null,
+      hasAppendPrompt: prefix.appendSystemPrompt !== null,
+      elapsedMs: Date.now() - startedAt,
+      // How old the zero-RPC snapshot was. The staleness watch: a big number
+      // here on a fork that then missed its cache is the fingerprint.
+      ...(current.snapshotAgeMs !== undefined ? { snapshotAgeMs: current.snapshotAgeMs } : {}),
     });
-  }
+  };
   if (live && live.length > 0) {
     const fromArgs = parseSpawnPrefixFromArgs(live);
     // Argv owns the immutable half (append prompt, permission mode) outright and
@@ -186,14 +209,17 @@ export async function readParentSpawnPrefix(
         });
       });
     }
+    logResolved(prefix);
     return prefix;
   }
   // No live process: the record is the only source, and it also carries the
   // current model/effort (Walnut persists both on every switch).
   const fromRecord = spawnPrefixFromRecord(parent);
-  return {
+  const prefix: SpawnPrefix = {
     ...fromRecord,
     ...(current.model ? { model: current.model } : {}),
     ...(current.effort ? { effort: current.effort } : {}),
   };
+  logResolved(prefix);
+  return prefix;
 }

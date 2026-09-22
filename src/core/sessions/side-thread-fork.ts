@@ -25,6 +25,37 @@ import type { SessionEffort, SessionOutputMode, SessionRecord } from '../types.j
 /** Lane namespace for every side-thread session. */
 export const SIDE_LANE_PREFIX = 'side:';
 
+/** The slice of a live session the fork prefix needs. */
+export interface LiveSettingsSource {
+  cachedAppliedSettings(): { model: string | null; effort: SessionEffort | null; atMs: number } | null;
+  refreshAppliedSettings(reason: string): Promise<unknown>;
+}
+
+/**
+ * Zero-RPC applied-settings reader for the fork prefix. Answers from the
+ * session's in-memory read-back snapshot ONLY — get_settings answers serially
+ * on the CLI's stdin loop and can queue behind a 16s get_context_usage, and
+ * nothing on a fork's critical path may wait on that. The snapshot is at most
+ * one in-flight turn stale (refreshed at session-start, turn-end and every
+ * switch); a background refresh is kicked off so the NEXT fork and the record
+ * stay current. No snapshot yet (or no live session) → null → the record,
+ * which Walnut persists BEFORE every switch is applied.
+ */
+export function cachedSettingsReader(
+  find: (sid: string) => LiveSettingsSource | undefined,
+): (sid: string) => Promise<{ model: string | null; effort: SessionEffort | null; atMs?: number } | null> {
+  return async (sid) => {
+    const session = find(sid);
+    if (!session) return null;
+    const cached = session.cachedAppliedSettings();
+    // Promise.resolve().then(...) contains a synchronously-throwing refresh too.
+    void Promise.resolve()
+      .then(() => session.refreshAppliedSettings('fork-prefix'))
+      .catch(() => null);
+    return cached ? { model: cached.model, effort: cached.effort, atMs: cached.atMs } : null;
+  };
+}
+
 /** Thread id of the prewarmed, not-yet-consumed standby fork of a parent. */
 export const STANDBY_THREAD_ID = 'standby';
 
@@ -142,10 +173,11 @@ export async function forkSideThreadSession(
     // The live CLI outranks the record for model/effort: the record is written
     // optimistically before the CLI acknowledges a switch, so a refused switch
     // would otherwise send the thread off under a model the parent isn't using.
+    // Read the in-memory snapshot, never a fresh get_settings (see
+    // cachedSettingsReader — a fork must not wait on the CLI's stdin loop).
     liveAppliedSettings: async (sid) => {
       const { sessionRunner } = await import('../../providers/claude-code-session.js');
-      const session = sessionRunner.findSessionByClaudeId(sid);
-      return session ? session.refreshAppliedSettings('fork-prefix') : null;
+      return cachedSettingsReader((s) => sessionRunner.findSessionByClaudeId(s))(sid);
     },
   });
   // An explicit pick OVERRIDES the copied prefix, and the cost is real: the model
