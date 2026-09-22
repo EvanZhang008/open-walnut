@@ -110,8 +110,8 @@ test('S4-W2: the ✦ indents nothing and grows no row', async ({ page }) => {
   // ONE row height: a 13px glyph inside a 16px line must not make its row taller than its siblings
   // (the shape that made one of three grouped rows 52px next to two 30px ones).
   expect(new Set(shape.map((one) => one.height)).size).toBe(1)
-  // Exactly the three rows carry a mark.
-  expect(shape.filter((one) => one.marks === 1)).toHaveLength(3)
+  // Exactly the Walnut rows carry a mark: the three ask rows plus Unsubscribe (S8).
+  expect(shape.filter((one) => one.marks === 1)).toHaveLength(4)
   expect(shape.every((one) => one.marks <= 1)).toBe(true)
   console.log(`shot: ${await shoot(menu(page), SHOT_DIR, 'ai-mark-geometry')}`)
 })
@@ -128,12 +128,21 @@ test('S4-W3: one full round trip in the engine the Mac app is', async ({ page })
   await expect(drawer(page)).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('mail-reader')).toHaveCount(0)
 
-  // The question went out as one user turn, carrying the block.
+  // The question went out as one user turn, carrying the block. A long plain user
+  // message renders COLLAPSED, so the text has to be opened the way a person opens
+  // it; and the facts are read with retrying assertions rather than one innerText,
+  // which races the paint that follows the count settling.
   const turns = drawer(page).locator('.chat-message-user')
   await expect(turns).toHaveCount(1, { timeout: 60_000 })
-  const sent = await turns.first().innerText()
-  expect(sent).toContain('Subject: Quarterly keeper report')
-  expect(sent).toContain('> ')
+  const turn = turns.first()
+  const toggle = turn.locator('.chat-collapse-toggle')
+  if (await toggle.count() > 0) {
+    await expect(toggle).toHaveText('▶')
+    await turn.locator('.chat-notification-header').click()
+    await expect(toggle).toHaveText('▼')
+  }
+  await expect(turn).toContainText('Subject: Quarterly keeper report')
+  await expect(turn).toContainText('> ')
   console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'drawer-open')}`)
 
   // The drawer fills the reader's column and nothing else moved.

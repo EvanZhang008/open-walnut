@@ -157,10 +157,18 @@ test('Open in Notes navigates to the note', async ({ page, request }) => {
 
   // A real click, not a goto: this is the SPA route the human takes.
   await pane.locator('.project-tracking-open').click()
-  await expect(page).toHaveURL(new RegExp(`/notes\\?path=${encodeURIComponent(encodeURIComponent(notePath))}`))
+  // The path rides the query ONCE-encoded, so its separators are `%2F` and the
+  // Notes page decodes back to the vault-relative path. Escaped for the regex,
+  // not encoded twice: `%252F` would be asserting a path nobody navigates to.
+  const expectedQuery = encodeURIComponent(notePath).replace(/[.?*+^$[\]\\(){}|]/g, '\\$&')
+  await expect(page).toHaveURL(new RegExp(`/notes\\?path=${expectedQuery}`))
   // The Notes page opened THAT note, not just the page.
-  await expect(page.locator('.notes-page, .notes-layout').first()).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText('Waiting on the design review').first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.notes-split-view').first()).toBeVisible({ timeout: 15_000 })
+  // Scoped to the editor, not the page: the task pane this click came from stays
+  // mounted (hidden) behind the route, so an unscoped `.first()` finds ITS copy of
+  // the same sentence and reports the note as never opened.
+  await expect(page.locator('.notes-editor-pane').getByText('Waiting on the design review').first())
+    .toBeVisible({ timeout: 15_000 })
 })
 
 test('a project with no tracking_note has no Tracking section at all', async ({ page, request }) => {
