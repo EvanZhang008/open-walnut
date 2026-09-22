@@ -179,6 +179,51 @@ export function wakeAuditEntry(input: {
 }
 
 /**
+ * Fold a RUN'S OUTCOME into the row that recorded its dispatch, or append it.
+ *
+ * Why this is not just `appendAudit`: a run has two moments and they are learned
+ * by two different layers. The dispatch row is written by applyJobResult the
+ * instant the executor returned ("fired, 22 items, a session was started"); how
+ * the run actually ENDED is only known later, by whoever watches the session
+ * (src/core/triage/runs.ts). Appending would make one run read as two fires —
+ * exactly the confusion this trail exists to remove — so the outcome merges into
+ * the newest fired row when that row belongs to this run, and is appended when
+ * there is none (a clock-driven run writes no dispatch row at all, because
+ * applyJobResult only logs a fire when a wake counter was consumed).
+ *
+ * `ref` is what makes "belongs to this run" decidable, and it is deliberately an
+ * identity rather than a time window: two runs of the same routine can start
+ * inside a minute of each other, so "the newest row, recently" would hand run 1's
+ * verdict to run 2's row. An executor that starts a session puts the task id in
+ * its dispatch summary, so the row that names THIS run's task is the row to
+ * update; anything else appends. The OLD row is spread first so its `injected`
+ * preview survives an outcome that carries none.
+ */
+export function mergeRunOutcome(
+  list: TriggerAuditEntry[] | undefined,
+  entry: TriggerAuditEntry,
+  ref: string,
+  max: number,
+): TriggerAuditEntry[] {
+  const base = Array.isArray(list) ? list : [];
+  const at = ref
+    ? base.findIndex((e) => e.outcome === 'fired' && (e.delivery?.summary ?? '').includes(ref))
+    : -1;
+  if (at < 0) return appendAudit(base, entry, max);
+  const merged = [...base];
+  merged[at] = {
+    ...base[at],
+    ...entry,
+    // The dispatch knew the real batch size and the text it sent; an outcome that
+    // counted neither must not overwrite them with nothing.
+    items: entry.items ?? base[at].items,
+    delivery: entry.delivery ?? base[at].delivery,
+    injected: entry.injected ?? base[at].injected,
+  };
+  return merged.slice(0, Math.max(1, max));
+}
+
+/**
  * Fold a fire's later attempt into the entry it belongs to instead of appending a
  * second row. A transient delivery failure is replayed by the daemon about once a
  * minute, so three attempts of ONE fire would otherwise read as three fires —

@@ -324,6 +324,12 @@ async function executeJobCore(
     if (actionResult.status === 'error') {
       return { status: 'error', error: actionResult.error };
     }
+    // The action DECLINED this fire (see CronServiceDeps.runAction). Returning
+    // before the executor is the whole point: an init processor is the only place
+    // that can refuse a run before a session, a task or a model call exists.
+    if (actionResult.status === 'skipped') {
+      return { status: 'skipped', summary: actionResult.summary };
+    }
 
     // targetAgent used to pipe the action result into a config-defined action
     // agent that ran inside the server. Recorded as a failed run rather than

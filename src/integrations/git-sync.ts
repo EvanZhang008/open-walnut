@@ -648,6 +648,11 @@ cron-state.json
 # Machine-local for the same reason as cron-state.json: an LWW echo of another
 # box's older "acted" map would un-remember an outcome and re-fire it here.
 routine-state/
+# Inbox Triage's pending buffer (the mail/Slack arrivals one run has not read
+# yet, plus its open claim). Machine-local for the cron-state.json reason again:
+# an LWW echo of another box's buffer would deliver that box's Slack lines here,
+# or un-deliver ours mid-claim.
+triage-state.json
 # Reply-request ledger: deadlineAt is a machine-local due time and the whole
 # thing only means anything on the primary (the sweeper is !CLOUD_MODE). Syncing
 # it would let LWW roll a settled row back to pending and re-notify — same class

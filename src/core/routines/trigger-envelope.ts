@@ -12,30 +12,44 @@ import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { TriggerFiredEvent, TriggerItem } from '../../providers/trigger-check-core.js';
 import type { CronJob } from '../cron/types.js';
 
-/** Keep one fire's body bounded even when a script prints 200 fat items. */
-const ITEMS_JSON_CAP = 32 * 1024;
+/**
+ * Keep one fire's body bounded even when a script prints 200 fat items.
+ *
+ * Exported because there must be exactly ONE truncation rule in the repo: the
+ * triage batch (src/core/triage/batch.ts) serialises two arrays of its own and
+ * shares this budget rather than inventing a second number that would drift.
+ */
+export const ITEMS_JSON_CAP = 32 * 1024;
 
 export function triggerNote(atMs: number, itemCount: number): string {
   const when = new Date(Number.isFinite(atMs) ? atMs : Date.now()).toISOString();
   return `fired ${when}, ${itemCount} new item${itemCount === 1 ? '' : 's'}`;
 }
 
-export function buildTriggerBody(prompt: string, items: TriggerItem[], input?: string): string {
+/**
+ * `items` as pretty JSON, bounded by dropping WHOLE items.
+ *
+ * Truncating the JSON text would hand the model something unparseable, so the
+ * rule is: keep as many complete items as fit, then SAY how many are missing.
+ * `items` is `unknown[]` because every caller only stringifies it — a trigger's
+ * TriggerItem and a triage batch row are different shapes with the same budget.
+ */
+export function boundedItemsJson(items: readonly unknown[], cap = ITEMS_JSON_CAP): string {
+  const json = JSON.stringify(items, null, 2);
+  if (json.length <= cap) return json;
+  const kept: unknown[] = [];
+  for (const item of items) {
+    const next = JSON.stringify([...kept, item], null, 2);
+    if (next.length > cap) break;
+    kept.push(item);
+  }
+  return `${JSON.stringify(kept, null, 2)}\n[${items.length - kept.length} more item(s) omitted]`;
+}
+
+export function buildTriggerBody(prompt: string, items: readonly TriggerItem[], input?: string): string {
   const parts = [prompt.trim()];
   if (items.length > 0) {
-    let json = JSON.stringify(items, null, 2);
-    if (json.length > ITEMS_JSON_CAP) {
-      // Truncating the JSON would hand the model something unparseable, so drop
-      // whole items and SAY how many are missing.
-      const kept: TriggerItem[] = [];
-      for (const item of items) {
-        const next = JSON.stringify([...kept, item], null, 2);
-        if (next.length > ITEMS_JSON_CAP) break;
-        kept.push(item);
-      }
-      json = `${JSON.stringify(kept, null, 2)}\n[${items.length - kept.length} more item(s) omitted]`;
-    }
-    parts.push(`New items:\n\`\`\`json\n${json}\n\`\`\``);
+    parts.push(`New items:\n\`\`\`json\n${boundedItemsJson(items)}\n\`\`\``);
   }
   const extra = (input ?? '').trim();
   if (extra) parts.push(extra);

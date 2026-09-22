@@ -352,8 +352,16 @@ export type CronServiceDeps = {
    * fallback when no executor registry is wired, e.g. in unit tests).
    */
   runExecutor?: RunExecutorFn;
+  /**
+   * Run a named action as a job's init processor.
+   *
+   * `'skipped'` means the action DECLINED the fire (a window it must not run in,
+   * a precondition it owns): the executor is never reached, so nothing is minted
+   * and the run is recorded as skipped rather than as an error — no backoff, no
+   * red card, next slot computed as usual.
+   */
   runAction?: (actionId: string, params: Record<string, unknown>) => Promise<{
-    status: 'ok' | 'error';
+    status: 'ok' | 'error' | 'skipped';
     summary?: string;
     error?: string;
     data?: unknown;

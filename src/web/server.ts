@@ -498,6 +498,10 @@ let unsubscribeHostPhase: (() => void) | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
 /** Keeps the Inbox Triage routine in line with config.triage (no restart). */
 let triageConfigWatcher: { stop: () => void } | null = null
+/** Keeps what arrived (mail/Slack) for the next Inbox Triage batch. */
+let triageCollectHandle: import('../core/triage/collect.js').TriageCollectHandle | null = null
+/** Completes a triage run's task, journals it, checks it updated State.md. */
+let triageRunsHandle: import('../core/triage/runs.js').TriageRunsHandle | null = null
 let recordingReaperHandle: { stop: () => void } | null = null
 let externalSessionImporter:
   import('../core/sessions/external-session-import.js').ExternalSessionImporterHandle | null = null
@@ -1268,6 +1272,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { runAction } = await import('../actions/index.js')
       const ar = await runAction(actionId, params)
       // Adapt ActionResult { invoke, content, image } → CronServiceDeps shape { status, summary, data }
+      // An action that set `status` is deciding the RUN's fate, not just its text:
+      // 'skipped' declines the fire (nothing is minted), 'error' fails it. Absent
+      // is the old behaviour and stays byte-identical.
+      if (ar.status === 'skipped') return { status: 'skipped', summary: ar.content }
+      if (ar.status === 'error') return { status: 'error', error: ar.content }
       if (!ar.invoke) {
         // invoke=false: either error/permission issue or screen unchanged — return ok, let agent handle via text
         return { status: 'ok', summary: ar.content }
@@ -4275,6 +4284,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }).catch((err) => {
       log.cron.warn('triage bootstrap failed', { error: err instanceof Error ? err.message : String(err) })
     })
+    // The collector keeps what arrives, the run watcher closes out each run. Both
+    // are started whether or not triage is ENABLED: the collector throws its
+    // buffer away while it is off (so nothing accumulates), and the run watcher is
+    // interest-gated to three event names, so the cost of having them armed is
+    // nothing and the cost of arming them on a config change would be a restart.
+    void import('../core/triage/collect.js').then(({ startTriageCollect }) => {
+      triageCollectHandle = startTriageCollect()
+    }).catch((err) => {
+      log.cron.warn('triage collector failed to start', { error: err instanceof Error ? err.message : String(err) })
+    })
+    void import('../core/triage/runs.js').then(({ startTriageRuns }) => {
+      triageRunsHandle = startTriageRuns()
+    }).catch((err) => {
+      log.cron.warn('triage run bookkeeping failed to start', { error: err instanceof Error ? err.message : String(err) })
+    })
   }
 
   // Dream consolidation RETIRED (2026-07 memory/skill/history unification): it
@@ -5110,6 +5134,18 @@ export async function stopServer(): Promise<void> {
   if (triageConfigWatcher) {
     triageConfigWatcher.stop()
     triageConfigWatcher = null
+  }
+  if (triageCollectHandle) {
+    // Flush first: a burst that arrived inside the trailing window would
+    // otherwise be dropped by a restart, and those Slack items exist nowhere else.
+    const collector = triageCollectHandle
+    triageCollectHandle = null
+    try { await collector.flush() } catch { /* best effort on the way out */ }
+    collector.stop()
+  }
+  if (triageRunsHandle) {
+    triageRunsHandle.stop()
+    triageRunsHandle = null
   }
   if (cronServiceInstance) {
     cronServiceInstance.stop()

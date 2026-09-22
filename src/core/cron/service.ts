@@ -12,6 +12,7 @@ import type {
   CronServiceDeps,
   CronServiceState,
   CronStatusSummary,
+  TriggerAuditEntry,
 } from './types.js';
 import * as ops from './ops.js';
 import {
@@ -84,6 +85,16 @@ export class CronService {
    */
   async bumpWake(id: string, n: number): Promise<ops.WakeBumpResult | null> {
     return await ops.bumpWake(this.state, id, n);
+  }
+
+  /**
+   * Record how a run ENDED — learned after the dispatch returned, by whoever
+   * watched the session it started (Inbox Triage's runs.ts is the first).
+   * Merges into the fire row naming `ref` (the run's task id, which the dispatch
+   * summary carries), or appends one when the run left none.
+   */
+  async recordRunOutcome(id: string, entry: TriggerAuditEntry, ref: string): Promise<boolean> {
+    return await ops.recordRunOutcome(this.state, id, entry, ref);
   }
 
   /**

@@ -5,7 +5,8 @@
  * persists, re-arms the timer, and emits events as needed.
  */
 
-import type { CronJob, CronJobCreate, CronJobPatch, CronServiceState, CronStatusSummary } from './types.js';
+import type { CronJob, CronJobCreate, CronJobPatch, CronServiceState, CronStatusSummary, TriggerAuditEntry } from './types.js';
+import { mergeRunOutcome, TRIGGER_FIRE_LOG_MAX } from './trigger-audit.js';
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -354,6 +355,38 @@ export async function bumpWake(
     await persist(state);
     const threshold = job.wake.threshold;
     return { jobId: id, count, threshold, due: threshold > 0 && count >= threshold };
+  });
+}
+
+/**
+ * Record how a run ENDED, long after its dispatch returned.
+ *
+ * A routine whose executor starts a session is "ok" the moment the session
+ * exists — everything the run actually did happens afterwards, and only the layer
+ * watching that session learns it (src/core/triage/runs.ts on session:result).
+ * This is how that verdict reaches the card: it merges into the fire row that
+ * names this run (`ref`, e.g. its task id, which the dispatch summary carries), or
+ * appends one when the run left none — a clock-driven run leaves no fire row at
+ * all, because applyJobResult only logs a fire when a wake counter was consumed.
+ *
+ * Inside locked() + persist() like every other write here, and it emits NO cron
+ * event: an audit row is not a lifecycle change, and broadcasting one would
+ * re-arm the wake subscriber for nothing.
+ */
+export async function recordRunOutcome(
+  state: CronServiceState,
+  id: string,
+  entry: TriggerAuditEntry,
+  ref: string,
+): Promise<boolean> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const job = state.store?.jobs.find((j) => j.id === id);
+    if (!job) return false;
+    if (!job.state) job.state = {};
+    job.state.fireLog = mergeRunOutcome(job.state.fireLog, entry, ref, TRIGGER_FIRE_LOG_MAX);
+    await persist(state);
+    return true;
   });
 }
 

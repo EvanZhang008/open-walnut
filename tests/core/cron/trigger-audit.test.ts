@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   appendAudit, auditDelivery, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
+  mergeRunOutcome,
   AUDIT_TEXT_CAP, INJECTED_PREVIEW_CAP, TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
 } from '../../../src/core/cron/trigger-audit.js';
 import type { TriggerAuditEntry } from '../../../src/core/cron/types.js';
@@ -181,5 +182,77 @@ describe('mergeFireAttempt', () => {
     list = mergeFireAttempt(list, fire(TRIGGER_FIRE_LOG_MAX + 3, 'e1', 'ok'), TRIGGER_FIRE_LOG_MAX);
     expect(list).toHaveLength(before);
     expect(list[0].attempts).toBe(2);
+  });
+});
+
+describe('mergeRunOutcome', () => {
+  /** What applyJobResult writes the instant an executor returns. */
+  const dispatch = (atMs: number, taskId: string): TriggerAuditEntry => ({
+    ...firedAuditEntry({
+      atMs, seq: 0, items: 22,
+      delivery: auditDelivery({ status: 'ok', retry: false, summary: `Started Claude Code session for task ${taskId} (/repo)` }),
+      injected: injectedPreview('<walnut-message kind="trigger">the batch</walnut-message>'),
+    }),
+  });
+
+  /**
+   * What the layer watching that session writes minutes later — built as a plain
+   * row, exactly as src/core/triage/runs.ts does. It deliberately carries NO
+   * `items` and NO `injected`: it never knew either, and the merge has to keep the
+   * dispatch's.
+   */
+  const outcome = (atMs: number, taskId: string, ended: string): TriggerAuditEntry => ({
+    atMs,
+    outcome: 'fired',
+    durationMs: 94_000,
+    delivery: auditDelivery({ status: 'ok', retry: false, summary: `Triage (task ${taskId}) ${ended}` }),
+  });
+
+  it('folds the verdict into the row that NAMES this run, not the newest one', () => {
+    // Two runs a minute apart is ordinary for a wake routine, and it is exactly
+    // where "merge into the head row" hands run 1's verdict to run 2.
+    let list = mergeRunOutcome(undefined, dispatch(NOW, 'task-one'), '', TRIGGER_FIRE_LOG_MAX);
+    list = mergeRunOutcome(list, dispatch(NOW + 60_000, 'task-two'), '', TRIGGER_FIRE_LOG_MAX);
+    expect(list).toHaveLength(2);
+
+    list = mergeRunOutcome(list, outcome(NOW, 'task-one', 'ended ok'), 'task-one', TRIGGER_FIRE_LOG_MAX);
+    expect(list).toHaveLength(2);
+    const one = list.find((e) => (e.delivery?.summary ?? '').includes('task-one'))!;
+    const two = list.find((e) => (e.delivery?.summary ?? '').includes('task-two'))!;
+    expect(one.delivery!.summary).toContain('ended ok');
+    expect(two.delivery!.summary).toContain('Started Claude Code session');
+  });
+
+  it('keeps the dispatch\'s item count and injected preview through the merge', () => {
+    let list = mergeRunOutcome(undefined, dispatch(NOW, 'task-one'), '', TRIGGER_FIRE_LOG_MAX);
+    list = mergeRunOutcome(list, outcome(NOW, 'task-one', 'ended ok'), 'task-one', TRIGGER_FIRE_LOG_MAX);
+    expect(list).toHaveLength(1);
+    // The outcome counted no items and previewed nothing; both survive from the
+    // dispatch, which is the only thing that ever knew them.
+    expect(list[0].items).toBe(22);
+    expect(list[0].injected!.preview).toContain('the batch');
+    expect(list[0].durationMs).toBe(94_000);
+  });
+
+  it('appends when the run left no fire row at all (a clock-driven run)', () => {
+    // applyJobResult only logs a fire when a wake counter was consumed, so a run
+    // the clock started has nothing to merge into — and still has to be visible.
+    const list = mergeRunOutcome([quiet(NOW)], outcome(NOW, 'task-three', 'ended ok'), 'task-three', TRIGGER_FIRE_LOG_MAX);
+    expect(list).toHaveLength(2);
+    expect(list[0].delivery!.summary).toContain('ended ok');
+    expect(list[1].outcome).toBe('quiet');
+  });
+
+  it('an empty ref never merges — it would match every row', () => {
+    const list = mergeRunOutcome([dispatch(NOW, 'task-one')], outcome(NOW, '', 'ended ok'), '', TRIGGER_FIRE_LOG_MAX);
+    expect(list).toHaveLength(2);
+  });
+
+  it('never grows past the bound', () => {
+    let list: TriggerAuditEntry[] | undefined;
+    for (let i = 0; i < TRIGGER_FIRE_LOG_MAX + 3; i++) {
+      list = mergeRunOutcome(list, outcome(NOW + i, `task-${i}`, 'ended ok'), `task-${i}`, TRIGGER_FIRE_LOG_MAX);
+    }
+    expect(list).toHaveLength(TRIGGER_FIRE_LOG_MAX);
   });
 });
