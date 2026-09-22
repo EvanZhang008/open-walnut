@@ -121,13 +121,36 @@ export async function resolveLetterSender(callerSid: string | undefined): Promis
   }
 }
 
-/** Send a letter on behalf of a caller, with the envelope stamped server-side. */
+/**
+ * Send a letter on behalf of a caller, with the envelope stamped server-side.
+ *
+ * THE one place the server mints a letter from a caller's session id — the HTTP
+ * route and the cloud replica's relay both come through here — so it is also where
+ * a per-sender letter budget belongs. Today exactly one sender has one: an Inbox
+ * Triage run (one summary + three decisions per run, triage-quota.ts). The guard
+ * answers `undefined` for every other caller, so nothing else changes shape.
+ *
+ * The slot is TAKEN before the write and RELEASED if the write fails: two parallel
+ * sends must not both read the same remaining budget, and a letter the store
+ * rejects (an oversize field, a duplicate action id) must not burn a slot the run
+ * can never get back.
+ */
 export async function sendLetterAsCaller(
   input: Omit<NewLetter, 'sender'>,
   callerSid: string | undefined,
 ): Promise<LetterRecord> {
   const sender = await resolveLetterSender(callerSid);
-  return sendLetter({ ...input, sender });
+  const { guardTriageLetter } = await import('./triage-quota.js');
+  const charge = await guardTriageLetter(input, sender);
+  let letter: LetterRecord;
+  try {
+    letter = await sendLetter({ ...input, sender });
+  } catch (err) {
+    charge?.release();
+    throw err;
+  }
+  charge?.commit(letter.id);
+  return letter;
 }
 
 /** Agent-authored spans in the wrapper (subject, button label): one short line. */

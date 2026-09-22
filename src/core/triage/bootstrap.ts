@@ -45,6 +45,7 @@ import { bus, EventNames } from '../event-bus.js';
 import { askProjectFor } from '../sessions/ask-agent.js';
 import type { CronJob, CronWake } from '../cron/types.js';
 import { readTriageConfig, type ResolvedTriageConfig, type TriageConfigHolder } from './config.js';
+import { triageRunRules } from './letter-rules.js';
 import {
   TRIAGE_ACTION_ID,
   TRIAGE_ACTION_TIMEOUT_SECONDS,
@@ -85,6 +86,18 @@ export const TRIAGE_RUN_INSTRUCTIONS = [
   'learned. Never send mail, post to Slack, mark anything read or unsubscribe on',
   'your own — ask. Never invent a project or a task.',
 ].join('\n');
+
+/**
+ * The instructions for ONE mode — the fixed part plus the letter budget and the
+ * mode's own permissions (letter-rules.ts).
+ *
+ * `mode` therefore rides the routine DEFINITION, which is why `matchesSpec`
+ * compares `instructions`: without that, flipping ask → assist in Settings would
+ * leave every future run reading the old rules until something else drifted.
+ */
+export function triageInstructionsFor(resolved: ResolvedTriageConfig): string {
+  return `${TRIAGE_RUN_INSTRUCTIONS}\n\n${triageRunRules(resolved.mode, resolved.autoMarkRead)}`;
+}
 
 // ── Injectable seams (the live routines layer by default) ──
 
@@ -158,7 +171,7 @@ export function buildTriageRoutineSpec(resolved: ResolvedTriageConfig): Record<s
     executor: {
       type: 'claude-code',
       config: {
-        instructions: TRIAGE_RUN_INSTRUCTIONS,
+        instructions: triageInstructionsFor(resolved),
         cwd: WALNUT_HOME,
         walnutAgent: true,
         agentId: TRIAGE_AGENT_ID,
@@ -201,7 +214,10 @@ function matchesSpec(job: CronJob, spec: Record<string, unknown>): boolean {
   const haveExec = job.executor;
   if (!haveExec || haveExec.type !== wantExec.type) return false;
   const haveConfig = haveExec.config ?? {};
-  for (const key of ['cwd', 'agentId', 'project', 'titleTemplate', 'walnutAgent'] as const) {
+  // `instructions` is in the list because `triage.mode` / `auto_mark_read` only
+  // reach a run through it (triageInstructionsFor): leaving it out would make a
+  // mode change in Settings silently take effect "some time later".
+  for (const key of ['cwd', 'agentId', 'project', 'titleTemplate', 'walnutAgent', 'instructions'] as const) {
     if (haveConfig[key] !== wantExec.config[key]) return false;
   }
   return true;

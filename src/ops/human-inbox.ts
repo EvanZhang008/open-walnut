@@ -5,6 +5,16 @@
  * envelope (which session, task, project, host) is stamped server-side from the
  * caller's session id, so the descriptions below spend their words on the thing
  * the model actually has to get right: writing a letter worth reading.
+ *
+ * WHERE THE REFUSALS LIVE. Nothing here validates: this module only DECLARES the
+ * op, and `bind` is executed by src/ops/executor.ts as an HTTP call from the
+ * CALLER's own process, so a check in this file would run inside the session's CLI
+ * and be advisory. Every rule is enforced where the op is SERVED —
+ * `sendLetterAsCaller` (core/human-inbox/letter-ops.ts) and the store behind it —
+ * which is the one path both the HTTP route and the cloud replica's relay share.
+ * That is also where the per-run letter budget lives
+ * (core/human-inbox/triage-quota.ts); the refusal's text tells the model what to
+ * do instead, and the clause below is what stops that refusal being a surprise.
  */
 
 import { z } from 'zod'
@@ -30,7 +40,8 @@ defineOp({
     + 'type=action_required means you need a decision and REQUIRES `actions`, at least one: the human '
     + 'taps one option and that choice is delivered back into this session. Without them the letter is '
     + 'a dead end, so it is rejected — if the human only needs to read this, send review or info '
-    + 'instead. Never write who you are; the '
+    + 'instead. A few agents have a per-run letter budget (Inbox Triage: one summary plus three '
+    + 'action_required); going over it is refused with the next move spelled out. Never write who you are; the '
     + 'sender (session, task, host) is stamped for you. Returns the letter id, which you need to reply.',
   input: {
     subject: z.string().min(1).describe('One line the human reads first, like an email subject'),
