@@ -51,6 +51,7 @@ import {
   type SidebarPrefs,
   type SmartPrefId,
 } from './mail-sidebar-prefs';
+import { syncLineFor } from './mail-sync-line';
 import { MailSmartRows } from './MailSmartRows';
 import { MailAccountFolders } from './MailAccountFolders';
 import { ComposeIcon, RefreshIcon } from './mail-icons';
@@ -70,6 +71,29 @@ interface Props {
 
 /** How long a still pointer inside the pane counts as aiming at something. */
 const IDLE_MS = 2_500;
+
+/**
+ * How often the footer's relative time is recomputed. Zero requests: it is arithmetic on a number the
+ * mailbox rows already carry.
+ */
+export const SYNC_TICK_MS = 30_000;
+
+/**
+ * A clock this pane can read, ticking every 30 s.
+ *
+ * PANE-LOCAL, deliberately not a counter in the mail store: a store field wakes every subscriber that
+ * calls `useSyncExternalStore`, which is the three panes plus the sidebar badge, so a footer nobody is
+ * looking at would re-render the whole console twice a minute. Here it re-renders exactly the component
+ * that prints the sentence, and only while the pane is mounted.
+ */
+function useNow(everyMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), everyMs);
+    return () => clearInterval(timer);
+  }, [everyMs]);
+  return now;
+}
 
 /**
  * Where a menu opened from a BUTTON belongs.
@@ -361,6 +385,18 @@ export function MailAccountsPane({
   );
   const manyAccounts = accounts.length > 1;
 
+  /**
+   * The footer's sentence, recomputed on a pane-local 30 s clock.
+   *
+   * Reads the LIVE mailbox rows rather than `held.mailboxes`: the hold this pane enforces is about row
+   * GEOMETRY, and its own rule is that the numbers keep moving while only the rows stand still. This
+   * line is not a row, so freezing it would only make it wrong.
+   */
+  const now = useNow(SYNC_TICK_MS);
+  const syncLine = useMemo(() => syncLineFor({
+    selected, accounts, mailboxes, folderFetch: snapshot.folderFetch, refreshing, now,
+  }), [selected, accounts, mailboxes, snapshot.folderFetch, refreshing, now]);
+
   return (
     <aside className="mail-accounts-pane" data-testid="mail-accounts-pane" {...aim.handlers}>
       {/* No pane title: the folders are directly below and name themselves, and the 232px head has
@@ -511,6 +547,32 @@ export function MailAccountsPane({
             ×
           </button>
         </div>
+      )}
+
+      {/* WHEN THIS CONSOLE LAST HEARD FROM THE MAIL, in one line at the foot of the pane.
+          IN THE FLOW between the answer strip and `+ Add account`, for the same reason the strip is:
+          the space comes out of the scroller above (`flex: 1`), so no folder row moves and none is
+          covered. It is a BUTTON because the sentence and the verb are the same thing here: the answer
+          to "is this up to date?" is followed by "then check it now", and the pane's own Refresh icon
+          is 200px away at the top. A second click while the first is on the wire is a no-op, and the
+          line says `Checking…` for the duration, so it is never a control that looks idle while busy. */}
+      {syncLine && (
+        <button
+          type="button"
+          className="mail-sync-line"
+          data-testid="mail-sync-line"
+          data-state={syncLine.state}
+          {...(syncLine.at === undefined ? {} : { 'data-at': String(syncLine.at) })}
+          title={syncLine.title}
+          /* The visible words are a time, so the accessible name has to carry the VERB too, or a
+             screen reader reaches a button called "Checked 2 min ago" with nothing saying what it
+             does. Deliberately NOT `aria-live`: this text changes by itself every minute, and a live
+             region would announce a relative time over whatever the person was reading. */
+          aria-label={`${syncLine.text}. Check every account for new mail.`}
+          onClick={() => { if (!refreshing) void requestMailRefresh(); }}
+        >
+          {syncLine.text}
+        </button>
       )}
 
       <button

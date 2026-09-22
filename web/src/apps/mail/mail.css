@@ -396,6 +396,34 @@
   font-weight: 500;
 }
 
+/* The pane's LAST-CHECKED line. One 11.5px line in the flow above `+ Add account`, so the space comes
+   out of the scroller and no folder row moves (this pane's own rule). Ellipsed with the whole sentence
+   in `title`: the words that matter are at the front, so the half that survives the clip is the half
+   that answers the question. `text-align: left` because a button centres its label by default and this
+   one reads as a line of text, not as a control in the middle of the pane. */
+.mail-sync-line {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 4px 12px 5px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-sync-line:hover { background: var(--bg-hover); color: var(--fg-secondary); }
+
+/* The one state somebody has to act on gets the warning colour the rest of this console uses for it. */
+.mail-sync-line[data-state='auth-required'],
+.mail-sync-line[data-state='degraded'] { color: var(--warning); }
+
 .mail-add-account {
   margin: 0;
   padding: 12px;
