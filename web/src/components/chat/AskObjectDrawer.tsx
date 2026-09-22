@@ -22,6 +22,7 @@ import {
   claimAskObjectLatch,
   prefixContextOnce,
   presetLatchName,
+  releaseAskObjectLatch,
 } from '@/components/chat/ask-object-conversation';
 import '@/styles/ask-object-drawer.css';
 
@@ -96,9 +97,12 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   // Per OBJECT AND PRESET (see presetLatchName): a latch per object would mean that having asked for a
   // summary of this mail, a later "finish unsubscribing" on the same mail opens the drawer and sends
   // nothing.
-  const presetKey = preset ? `${objectKey}#${presetLatchName(preset)}` : objectKey;
+  // The agent is part of a latch's identity, exactly as it is part of the conversation key: this same
+  // object under a second agent is a second chat, which needs its own quote and its own first question.
+  const contextScope = { agentId, key: objectKey };
+  const presetScope = { agentId, key: preset ? `${objectKey}#${presetLatchName(preset)}` : objectKey };
   const [pendingPreset] = useState(() => (
-    autoSend && preset && !askObjectLatchTaken('preset', presetKey) ? preset : ''
+    autoSend && preset && !askObjectLatchTaken('preset', presetScope) ? preset : ''
   ));
 
   // Escape closes, and focus goes back to whatever had it (the row the menu opened from).
@@ -182,12 +186,20 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           draftStorageKey={`ask-object:${agentId}:${objectKey}`}
           placeholder={props.placeholder ?? 'Ask about this'}
           emptyText={props.emptyText ?? `Ask about this${quote.who ? ` message from ${quote.who}` : ''}.`}
-          transformMessage={(input) => prefixContextOnce(objectKey, contextBlock, input)}
+          transformMessage={(input) => prefixContextOnce(contextScope, contextBlock, input)}
           autoSend={pendingPreset || undefined}
           onAutoSent={() => {
             if (latched.current) return;
             latched.current = true;
-            claimAskObjectLatch('preset', presetKey);
+            claimAskObjectLatch('preset', presetScope);
+          }}
+          onAutoSendFailed={() => {
+            // Nothing reached Walnut, so neither latch may stay taken: the question has to stay
+            // askable, and the quote it was carrying has to ride whatever is sent next. Both are on
+            // disk, so a burnt one could never be lit again from any window.
+            latched.current = false;
+            releaseAskObjectLatch('preset', presetScope);
+            releaseAskObjectLatch('context', contextScope);
           }}
           focusNonce={pendingPreset ? undefined : 1}
         />

@@ -51,7 +51,45 @@ interface Props {
   bare?: boolean;
 }
 
-const MASKED = '••••••';
+/** What the server sends instead of a stored secret. Exported so a test cannot drift from it. */
+export const MASKED = '••••••';
+
+/**
+ * `step={1}` is a hint to the spinner, not a rule the browser enforces: a typed or pasted `2.5` reaches
+ * here intact, and an `integer` field in config.yaml holding 2.5 is a value no plugin asked for.
+ * Rounded at save rather than on change, because rounding mid-typing rewrites the box under the user
+ * (`2.` parses as 2) and makes the field impossible to edit.
+ */
+function wholeIfInteger(schema: FieldSchema | undefined, value: unknown): unknown {
+  if (fieldKindFor(schema) !== 'integer') return value;
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : value;
+}
+
+/**
+ * The patch one plugin's Save writes — every draft field, in the shape config.yaml holds, minus the two
+ * things that must never be written:
+ *
+ *   . a MASKED secret, which stands for "unchanged" and would otherwise store the mask as the value;
+ *   . an emptied SCALAR box, which stands for "unset", so the manifest default applies server-side.
+ *     A field the user never touched is not in the draft at all (or still holds the value that came off
+ *     the wire), so it is not this filter that protects those.
+ *
+ * `valueForSave` runs BEFORE the empty test, and that order is the whole point: it turns an emptied
+ * textarea into `[]`, which is a VALUE and survives, where the old order dropped the key entirely — the
+ * server then fell back to the manifest default and the list the user had just emptied came back after
+ * a refresh, looking exactly like a save that had silently failed.
+ */
+export function pluginSavePayload(
+  draft: Record<string, unknown>,
+  schemas: Record<string, FieldSchema>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(draft)
+      .filter(([, v]) => v !== MASKED)
+      .map(([k, v]) => [k, wholeIfInteger(schemas[k], valueForSave(schemas[k], v))] as const)
+      .filter(([, v]) => v !== ''),
+  );
+}
 
 /** Render help text with clickable http(s) links. */
 function HelpText({ text }: { text: string }) {
@@ -111,13 +149,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
   const savePlugin = async (plugin: PluginSettingsMeta) => {
     const draft = drafts[plugin.id] ?? {};
     const schemas = plugin.configSchema?.properties ?? {};
-    // Drop masked secrets (unchanged) and empty strings so defaults apply server-side, then put each
-    // value in the shape the config file holds (a list edits as text and saves as an array).
-    const cleaned = Object.fromEntries(
-      Object.entries(draft)
-        .filter(([, v]) => v !== MASKED && v !== '')
-        .map(([k, v]) => [k, valueForSave(schemas[k], v)]),
-    );
+    const cleaned = pluginSavePayload(draft, schemas);
     setSaving(plugin.id);
     try {
       await onSave({

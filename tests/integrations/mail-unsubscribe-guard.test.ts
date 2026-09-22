@@ -12,7 +12,14 @@
  *
  * Both the socket and the resolver are injected here, and neither is a way past the guard: whatever
  * the resolver answers is still run through the blocklist, which is what the "evil name resolving to
- * a private address" case proves.
+ * a private address" case proves. They are injected AS A PAIR, which is the third property: a test
+ * that could replace only the resolver would be scoring one answer while the real `fetch` resolved the
+ * name itself and connected somewhere else.
+ *
+ * Every address below is fed through `new URL(...).hostname` first, i.e. through the serializer a real
+ * url goes through, because writing a form by hand is what hid a wide-open NAT64 range: the guard's
+ * pattern required `64:ff9b::169.254.169.254`, the only form the test used, while everything real
+ * produces `64:ff9b::a9fe:a9fe`.
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -48,6 +55,14 @@ function seamOf(options: {
 
 const PUBLIC = { 'lists.example.invalid': ['203.0.113.10'] };
 
+/**
+ * The address as the pipeline really hands it over: through the WHATWG serializer, which is what
+ * `guardUnsubscribeUrl` reads out of `url.hostname`, and the same canonical form `dns.lookup` returns.
+ */
+function asProduced(literal: string): string {
+  return new URL(`https://[${literal}]/`).hostname.replace(/^\[|\]$/g, '');
+}
+
 describe('addresses the server must never be pointed at', () => {
   it.each([
     ['127.0.0.1', true],
@@ -82,6 +97,66 @@ describe('addresses the server must never be pointed at', () => {
   });
 });
 
+describe('an IPv6 address judged in the form a real url produces', () => {
+  it.each([
+    // NAT64. On an IPv6-only network (IPv6 Wi-Fi, cellular 464XLAT, an IPv6-only subnet) DNS64 answers
+    // for an IPv4-only host with one of these and the gateway translates it back, so the embedded v4 IS
+    // the destination. The pattern this replaces demanded a dotted tail nothing produces.
+    ['64:ff9b::169.254.169.254', true],
+    ['64:ff9b::10.0.0.1', true],
+    ['64:ff9b::127.0.0.1', true],
+    // …and it has to keep WORKING for a public one, which is the whole point of DNS64. A blanket
+    // block of the prefix would silently break unsubscribing on every IPv6-only network.
+    ['64:ff9b::203.0.113.10', false],
+    // RFC 8215's local-use prefix. The embedded v4's offset depends on a prefix length the address
+    // does not carry, so the range is refused rather than guessed at.
+    ['64:ff9b:1::169.254.169.254', true],
+    ['64:ff9b:1::203.0.113.10', true],
+    // IPv4-compatible: what `https://[::127.0.0.1]/` turns into, which no pattern here used to match.
+    ['::127.0.0.1', true],
+    ['::ffff:169.254.169.254', true],
+    // 6to4: the tunnel's destination is the embedded v4.
+    ['2002:a00:1::1', true],
+    ['2002:a9fe:a9fe::1', true],
+    ['2002:cb00:710a::1', false],
+    // Teredo: the relay in bytes 4-7, the client bit-flipped in the last four.
+    ['2001:0:a00:1:8:6e5b:b0f5:f5ff', true],
+    ['2001:0:5ef5:79fb:8:6e5b:f5ff:fffe', true],
+    // Site-local, which a `fc|fd` pattern cannot see, and the discard prefix.
+    ['fec0::1', true],
+    ['feff::1', true],
+    ['100::1', true],
+    // Real public addresses stay public.
+    ['2606:4700::1111', false],
+    ['2001:4860:4860::8888', false],
+  ])('%s is blocked: %s', (literal, blocked) => {
+    const produced = asProduced(literal);
+    expect(unsubscribeAddressBlocked(produced), `produced form ${produced}`).toBe(blocked);
+    // And as written, so a hand-written form and a produced one can never disagree again.
+    expect(unsubscribeAddressBlocked(literal), `written form ${literal}`).toBe(blocked);
+  });
+
+  it('is never handed the dotted tail the old NAT64 pattern required', () => {
+    // The measurement that explains the hole: this is the form the test used, and this is the form
+    // everything real produces instead.
+    expect(asProduced('64:ff9b::169.254.169.254')).toBe('64:ff9b::a9fe:a9fe');
+    expect(asProduced('::127.0.0.1')).toBe('::7f00:1');
+  });
+
+  it.each([
+    ['0:0:0:0:0:ffff:7f00:1', '::ffff:127.0.0.1'],
+    ['0064:ff9b:0000:0000:0000:0000:a9fe:a9fe', '64:ff9b::169.254.169.254'],
+    ['::FFFF:127.0.0.1', '::ffff:127.0.0.1'],
+    ['fe80::1%en0', 'fe80::1'],
+    [' ::1 ', '::1'],
+  ])('reads %s exactly as %s, so the predicate cannot be misused by its next caller', (written, canonical) => {
+    // `unsubscribeAddressBlocked` is exported. It used to be correct only for compressed canonical
+    // text, so an uncompressed answer would have been called public.
+    expect(unsubscribeAddressBlocked(written)).toBe(unsubscribeAddressBlocked(canonical));
+    expect(unsubscribeAddressBlocked(written)).toBe(true);
+  });
+});
+
 describe('the guard refuses before any socket is opened', () => {
   it.each([
     ['http://lists.example.invalid/u/1', 'blocked-scheme'],
@@ -93,6 +168,18 @@ describe('the guard refuses before any socket is opened', () => {
     ['https://walnut.local/u', 'blocked-host'],
     ['https://box.internal/u', 'blocked-host'],
     ['https://thing.home.arpa/u', 'blocked-host'],
+    // A trailing dot is the root, not a different host. `new URL` keeps it in `hostname`, so the
+    // `$`-anchored name list missed every one of these until the host was normalised first.
+    ['https://box.internal./u', 'blocked-host'],
+    ['https://box.internal../u', 'blocked-host'],
+    ['https://BOX.INTERNAL./u', 'blocked-host'],
+    // Names a home router or a corporate DHCP hands out as the search domain.
+    ['https://printer.lan/u', 'blocked-host'],
+    ['https://wiki.corp/u', 'blocked-host'],
+    ['https://portal.intranet/u', 'blocked-host'],
+    ['https://[64:ff9b::169.254.169.254]/u', 'blocked-host'],
+    ['https://[::127.0.0.1]/u', 'blocked-host'],
+    ['https://[fec0::1]/u', 'blocked-host'],
     ['https://127.0.0.1/u', 'blocked-host'],
     ['https://10.1.2.3/u', 'blocked-host'],
     ['https://169.254.169.254/latest/meta-data/', 'blocked-host'],
@@ -121,6 +208,34 @@ describe('the guard refuses before any socket is opened', () => {
     expect(answered).toMatchObject({ ok: false, reason: 'blocked-host' });
     expect(answered.ok === false && answered.detail).toContain('192.168.1.5');
     expect(calls).toHaveLength(0);
+  });
+
+  it('refuses a name whose AAAA is a NAT64 translation of a private address', async () => {
+    // The attack: `List-Unsubscribe: <https://leave.attacker.example/x>` plus the one-click companion,
+    // and that host's AAAA points at 64:ff9b::a9fe:a9fe. On any network with NAT64/DNS64 the gateway
+    // turns the request into one to 169.254.169.254.
+    const { seam, calls } = seamOf({
+      addresses: { 'leave.attacker.invalid': [asProduced('64:ff9b::169.254.169.254')] },
+    });
+    const answered = await fetchUnsubscribe('https://leave.attacker.invalid/x', {
+      method: 'GET', deadlineAt: Date.now() + 5_000, seam,
+    });
+    expect(answered).toMatchObject({ ok: false, reason: 'blocked-host' });
+    expect(answered.ok === false && answered.detail).toContain('64:ff9b::a9fe:a9fe');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('still fetches a name whose AAAA is a NAT64 translation of a PUBLIC address', async () => {
+    // The other half of that rule, and the reason it cannot be a blanket block of the prefix: on an
+    // IPv6-only network this is the ordinary answer for every IPv4-only newsletter host.
+    const { seam, calls } = seamOf({
+      addresses: { 'lists.example.invalid': [asProduced('64:ff9b::203.0.113.10')] },
+    });
+    const answered = await fetchUnsubscribe('https://lists.example.invalid/u/1', {
+      method: 'GET', deadlineAt: Date.now() + 5_000, seam,
+    });
+    expect(answered).toMatchObject({ ok: true, status: 200 });
+    expect(calls).toHaveLength(1);
   });
 
   it('refuses a name where only ONE of several answers is private', async () => {
@@ -378,7 +493,17 @@ describe('the deadline is shared across every hop', () => {
 });
 
 describe('the guard has no bypass', () => {
-  it('exports nothing that turns it off, and reads no environment variable', async () => {
+  /** A complete, legitimate test seam: a socket and the resolver whose answers it belongs to. */
+  function pair() {
+    return {
+      fetch: vi.fn(async () => new Response('ok')),
+      lookup: vi.fn(async () => [{ address: '203.0.113.10', family: 4 }]),
+    };
+  }
+
+  it('exports nothing that turns it off, and reads no environment variable that weakens it', async () => {
+    // A name grep is NOT the guarantee — `setUnsubscribeHttpForTesting` sails past this pattern, which
+    // is exactly how a half-seam bypass lived here. The cases below are the guarantee.
     const module = await import('../../src/integrations/mail/unsubscribe-http.js');
     const names = Object.keys(module);
     expect(names.filter((name) => /allow|bypass|disable|insecure|unsafe/i.test(name))).toEqual([]);
@@ -391,6 +516,78 @@ describe('the guard has no bypass', () => {
       const guarded = await module.guardUnsubscribeUrl('https://lies.example.invalid/u');
       expect(guarded).toMatchObject({ ok: false, reason: 'blocked-host' });
     } finally {
+      module.setUnsubscribeHttpForTesting(null);
+    }
+  });
+
+  it('refuses HALF a seam, which is the shape that really was a bypass', async () => {
+    // What used to work: replace only `lookup`, leave `fetch` real. The guard then scored this fake
+    // 203.0.113.10 while `globalThis.fetch` resolved the name itself and connected wherever it points.
+    const module = await import('../../src/integrations/mail/unsubscribe-http.js');
+    const lying = pair();
+    expect(() => module.setUnsubscribeHttpForTesting({ lookup: lying.lookup }))
+      .toThrow(/BOTH fetch and lookup/);
+    expect(() => module.setUnsubscribeHttpForTesting({ fetch: lying.fetch }))
+      .toThrow(/BOTH fetch and lookup/);
+    // The per-call override is the same rule, and the same throw.
+    await expect(module.guardUnsubscribeUrl('https://lists.example.invalid/u', { lookup: lying.lookup }))
+      .rejects.toThrow(/BOTH fetch and lookup/);
+    // A refused install leaves whatever was installed alone rather than half-replacing it.
+    const whole = pair();
+    module.setUnsubscribeHttpForTesting(whole);
+    try {
+      expect(() => module.setUnsubscribeHttpForTesting({ lookup: lying.lookup })).toThrow();
+      expect(module.unsubscribeHttpSeam().lookup).toBe(whole.lookup);
+      expect(module.unsubscribeHttpSeam().fetch).toBe(whole.fetch);
+      expect(lying.lookup).not.toHaveBeenCalled();
+    } finally {
+      module.setUnsubscribeHttpForTesting(null);
+    }
+  });
+
+  it('is the pair that answered the lookup which opens the socket, on every hop', async () => {
+    // The property the pairing buys: one object does both, so there is no way to grade one resolver's
+    // answer and then let a different one decide what is actually connected to.
+    const module = await import('../../src/integrations/mail/unsubscribe-http.js');
+    const asked: string[] = [];
+    const opened: string[] = [];
+    const seam = {
+      lookup: async (hostname: string) => { asked.push(hostname); return [{ address: '203.0.113.10', family: 4 }]; },
+      fetch: async (url: string) => {
+        opened.push(url);
+        return url.includes('/u/1')
+          ? new Response('', { status: 302, headers: { location: 'https://second.example.invalid/done' } })
+          : new Response('You have been unsubscribed.', { status: 200 });
+      },
+    };
+    const answered = await module.fetchUnsubscribe('https://lists.example.invalid/u/1', {
+      method: 'GET', deadlineAt: Date.now() + 5_000, seam,
+    });
+    expect(answered).toMatchObject({ ok: true, status: 200 });
+    expect(asked).toEqual(['lists.example.invalid', 'second.example.invalid']);
+    expect(opened).toEqual(['https://lists.example.invalid/u/1', 'https://second.example.invalid/done']);
+  });
+
+  it('refuses to install a seam at all when this is not a test runner', async () => {
+    // Walnut loads plugins from ~/.open-walnut/plugins/ INTO the server process, so an ungated setter
+    // is reachable by plugin code. Same three signals the rest of the repo reads for "am I a test".
+    const module = await import('../../src/integrations/mail/unsubscribe-http.js');
+    const held = {
+      vitest: process.env.VITEST,
+      worker: process.env.VITEST_WORKER_ID,
+      nodeEnv: process.env.NODE_ENV,
+    };
+    delete process.env.VITEST;
+    delete process.env.VITEST_WORKER_ID;
+    delete process.env.NODE_ENV;
+    try {
+      expect(() => module.setUnsubscribeHttpForTesting(pair())).toThrow(/outside a test runner/);
+      // Un-installing is always allowed: it can only make the guard stricter.
+      expect(() => module.setUnsubscribeHttpForTesting(null)).not.toThrow();
+    } finally {
+      if (held.vitest !== undefined) process.env.VITEST = held.vitest;
+      if (held.worker !== undefined) process.env.VITEST_WORKER_ID = held.worker;
+      if (held.nodeEnv !== undefined) process.env.NODE_ENV = held.nodeEnv;
       module.setUnsubscribeHttpForTesting(null);
     }
   });

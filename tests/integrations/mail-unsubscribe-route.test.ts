@@ -29,6 +29,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('mail-unsubscribe-ro
 
 import { WALNUT_HOME, CONFIG_FILE, TASKS_FILE } from '../../src/constants.js';
 import { bus } from '../../src/core/event-bus.js';
+import { listLetters } from '../../src/core/human-inbox/store.js';
 import { mailDatabaseForTesting } from '../../src/integrations/mail/db.js';
 import { setUnsubscribeHttpForTesting } from '../../src/integrations/mail/unsubscribe-http.js';
 import { startServer, stopServer } from '../../src/web/server.js';
@@ -42,6 +43,46 @@ const ONE_CLICK = 'INBOX:700:1';
 const MAILTO_ONLY = 'INBOX:700:2';
 const FOOTER_ONLY = 'INBOX:700:3';
 const NOTHING = 'INBOX:700:4';
+
+/**
+ * Where the fixture writes every mail it was asked to send.
+ *
+ * A FILE rather than a global, because the provider runs inside the plugin loader's own module graph and
+ * shares nothing with this test but the filesystem. Under the mocked `WALNUT_HOME`, so it is thrown away
+ * with the run.
+ */
+const OUTBOX_FILE = path.join(WALNUT_HOME, 'unsub-fixture-sends.json');
+
+/** The one draft this file's mailto case creates, by id. */
+async function onlyDraftId(): Promise<string> {
+  const held = await rows<{ draft_id: string }>('SELECT draft_id FROM drafts');
+  expect(held).toHaveLength(1);
+  return held[0]!.draft_id;
+}
+
+/**
+ * How many letters the mail plugin has sent. Read through the REAL inbox store.
+ *
+ * The assertion this exists for is a ZERO: the mailto rung's whole design is that a right-click is the
+ * authorisation, so a letter here would mean it asked for permission it already had.
+ */
+async function mailLetterCount(): Promise<number> {
+  const { letters } = await listLetters();
+  return letters.filter((letter) => letter.sender.pluginId === 'mail').length;
+}
+
+/** Every send the base asked the fixture for, in order. */
+async function outbox(): Promise<Array<{
+  to: Array<{ address: string }>;
+  cc: unknown[];
+  bcc: unknown[];
+  subject: string;
+  bodyMarkdown: string;
+  idempotencyKey: string;
+}>> {
+  try { return JSON.parse(await fsp.readFile(OUTBOX_FILE, 'utf8')); }
+  catch { return []; }
+}
 
 interface Seen { method: string; url: string; headers: http.IncomingHttpHeaders; body: string }
 interface Route { status?: number; body?: string; headers?: Record<string, string>; hang?: boolean }
@@ -119,7 +160,10 @@ async function writeFixtureProvider(): Promise<void> {
     dependencies: { mail: '^1.0.0' },
   }));
   await fsp.writeFile(path.join(dir, 'dist', 'server.mjs'), `
+import fs from 'node:fs';
+
 const HOST = '${HOST}';
+const OUTBOX = ${JSON.stringify(OUTBOX_FILE)};
 
 const MESSAGES = [
   {
@@ -173,8 +217,22 @@ function envelopeOf(message) {
 
 const CAPABILITIES = {
   search: false, watch: false, drafts: false, markRead: false, flags: false,
-  threads: false, send: false, sendAsReply: false, bodies: 'both', attachments: 'none',
+  // SENDABLE, because S8's mailto rung really sends: a fixture that refused would only ever exercise
+  // the cannot-send branch, and the approval_kind / approval_ref row this file asserts on would
+  // never be written at all.
+  threads: false, send: true, sendAsReply: false, bodies: 'both', attachments: 'none',
 };
+
+function recordSend(entry) {
+  let held = [];
+  try { held = JSON.parse(fs.readFileSync(OUTBOX, 'utf8')); } catch { held = []; }
+  held.push(entry);
+  // Written to a temp file and RENAMED, because the test reads it while this writes: a plain write is
+  // observable half-finished and the reader would parse a truncated file.
+  const staging = OUTBOX + '.' + process.pid + '.tmp';
+  fs.writeFileSync(staging, JSON.stringify(held, null, 2));
+  fs.renameSync(staging, OUTBOX);
+}
 
 export function activate(walnut) {
   const base = walnut.services.require('mail:base');
@@ -212,9 +270,23 @@ export function activate(walnut) {
       const html = found ? found.html : '<p>nothing</p>';
       return { format: 'both', text: 'Plain text.', html, bytes: Buffer.byteLength(html) };
     },
-    // Required by the contract and deliberately explosive: nothing in this slice may send mail, and a
-    // test that starts sending should fail loudly rather than quietly.
-    send: async () => { throw new Error('this fixture never sends mail'); },
+    // The mailto rung's transport. It RECORDS rather than swallows, so the test can assert on the one
+    // mail that went out (one recipient, the subject the header asked for) instead of on the console's
+    // own words. The idempotency key rides along because it is draftId:revision -- two rows with one
+    // key is the failure the whole approval ledger exists to prevent.
+    send: async (accountId, mail, options) => {
+      recordSend({
+        accountId,
+        to: mail.to,
+        cc: mail.cc ?? [],
+        bcc: mail.bcc ?? [],
+        subject: mail.subject,
+        bodyMarkdown: mail.bodyMarkdown,
+        idempotencyKey: (options && options.idempotencyKey) || '',
+        at: Date.now(),
+      });
+      return { providerMessageId: '<unsub-fixture-1@' + HOST + '>', acceptedAt: Date.now() };
+    },
   });
   return { dispose: () => handle.dispose() };
 }
@@ -441,15 +513,83 @@ describe('what the route refuses', () => {
     });
   });
 
-  it('answers the mailto rung honestly while S8 is unbuilt, without sending anything', async () => {
+});
+
+describe('the mailto rung, end to end', () => {
+  it('answers 202 in-flight, sends ONE mail, and files it as the click that authorised it', async () => {
     const answered = await unsubscribe(MAILTO_ONLY);
-    expect(answered.status).toBe(200);
-    expect(answered.body).toMatchObject({ status: 'needs-human', method: 'mailto', reason: 'mailto-pending' });
+    // 202, not 200: an SMTP handshake legitimately takes tens of seconds, and this response is holding
+    // one of the browser's six connections. The rung answers once the `sends` row exists.
+    expect(answered.status).toBe(202);
+    expect(answered.body).toMatchObject({ ok: true, completed: false, status: 'in-flight', method: 'mailto' });
+    expect(answered.body.message).toContain('unsubscribing you');
+
+    // No socket: this rung is a mail, not a page.
     expect(seen).toEqual([]);
-    // No draft and no send row: this rung has not been built yet and must not pretend otherwise.
-    expect(await rows('SELECT send_id FROM sends')).toEqual([]);
-    expect(await rows('SELECT draft_id FROM drafts')).toEqual([]);
-  });
+
+    // The ledger settles on its own, after the response. Polled, because that is exactly the contract:
+    // the attempt outlives the request and reports itself.
+    const until = Date.now() + 15_000;
+    let ledger: Array<{ status: string; method: string; ref: string | null }> = [];
+    while (Date.now() < until) {
+      ledger = await rows('SELECT status, method, ref FROM unsubscribes');
+      if (ledger[0] && ledger[0].status !== 'in-flight') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(ledger[0]).toMatchObject({ status: 'done', method: 'mailto' });
+
+    // EXACTLY ONE draft and ONE send, and the send names the CLICK rather than a generic console send.
+    expect(await rows('SELECT draft_id FROM drafts')).toHaveLength(1);
+    const sends = await rows<{ approval_kind: string; approval_ref: string; state: string; send_id: string }>(
+      'SELECT send_id, approval_kind, approval_ref, state FROM sends',
+    );
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({
+      approval_kind: 'console',
+      approval_ref: `unsubscribe:${MAILTO_ONLY}`,
+      state: 'sent',
+    });
+    // The ledger points at the row that carried the mail, which is the only join between the two ledgers.
+    expect(ledger[0]!.ref).toBe(sends[0]!.send_id);
+
+    // One mail, one recipient, and the subject the list's own header asked for.
+    const sent = await outbox();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toEqual([{ address: `leave-monthly@${HOST}` }]);
+    expect(sent[0]!.cc).toEqual([]);
+    expect(sent[0]!.bcc).toEqual([]);
+    expect(sent[0]!.subject).toBe('unsubscribe');
+    expect(sent[0]!.idempotencyKey).toBe(`${await onlyDraftId()}:1`);
+
+    // NO LETTER. The right-click IS the authorisation, and asking again for something already clicked is
+    // how a console teaches people to stop reading letters.
+    expect(await mailLetterCount()).toBe(0);
+
+    // And the event the console subscribes to says `mailto`.
+    expect(events.map((event) => event.data.status)).toContain('done');
+    expect(events[events.length - 1]!.data).toMatchObject({
+      accountId: ACCOUNT, messageId: MAILTO_ONLY, method: 'mailto', status: 'done',
+    });
+  }, 40_000);
+
+  it('carries the verdict into every later read, as a `done` and not as an attempt', async () => {
+    await unsubscribe(MAILTO_ONLY);
+    const until = Date.now() + 15_000;
+    let mine: { unsubscribe?: Record<string, unknown> } | undefined;
+    while (Date.now() < until) {
+      const page = await api<{ messages: Array<{ messageId: string; unsubscribe?: Record<string, unknown> }> }>(
+        'GET', `/messages?account=${encodeURIComponent(ACCOUNT)}&mailbox=INBOX&limit=10`,
+      );
+      mine = page.body.messages.find((message) => message.messageId === MAILTO_ONLY);
+      if (mine?.unsubscribe && 'done' in mine.unsubscribe) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(mine!.unsubscribe).toMatchObject({
+      available: 'mailto',
+      done: { method: 'mailto', scope: 'message' },
+    });
+    expect(mine!.unsubscribe).not.toHaveProperty('attempt');
+  }, 40_000);
 });
 
 describe('two clicks on one message', () => {

@@ -301,7 +301,7 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
 
   // Phase 2: execute OUTSIDE the lock (prevents deadlock when agent calls cron tools)
   try {
-    await executeJob(state, jobToRun!);
+    await executeJob(state, jobToRun!, { forced: mode === 'force' });
   } finally {
     // Phase 3: Always finalize under lock, even if execution threw.
     await locked(state, async () => {

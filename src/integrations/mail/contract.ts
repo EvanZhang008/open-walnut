@@ -72,7 +72,7 @@ export interface MailMessageDto {
    * no `List-Unsubscribe` header, or a row cached before the field existed and never opened since.
    *
    * `available` is PURE, derived in `toDto` from the stored payload, so a list page pays nothing for
-   * it. `done` and `pending` are DERIVED on every read from the plugin's own unsubscribe ledger, in
+   * it. `done` and `attempt` are DERIVED on every read from the plugin's own unsubscribe ledger, in
    * ONE query per page, never stored on the message row — the same rule `taskId` above is written
    * to: a copy here would be a second truth, and this one would also outlive the human changing
    * their mind. Both arrive with the ladder.
@@ -90,9 +90,35 @@ export interface MailUnsubscribeDto {
    * `scope: 'list'` is what lets the console say "you unsubscribed from this sender on Tuesday" on
    * a message nobody ever clicked: the human left the LIST, not one mail.
    */
-  done?: { method: string; at: number; scope: 'message' | 'list' }
-  /** An attempt is on the wire right now. */
-  pending?: boolean
+  done?: {
+    method: string
+    at: number
+    scope: 'message' | 'list'
+    /**
+     * What the list key was taken from, which decides whether the console says "this list" or "this
+     * sender". Only present with `scope: 'list'`, because it is only a wording question there.
+     *
+     * `sender` is genuinely coarser: one sender running three lists off one address shares a key, so
+     * leaving one of them marks all three (see `unsubscribeListKey`). The console must not overstate
+     * that, which is the whole reason this field is on the wire rather than being guessed at.
+     */
+    keyedBy?: 'list-id' | 'sender'
+  }
+  /**
+   * THIS message's own ledger row while it is anything other than `done`.
+   *
+   * A boolean `pending` was the first shape and it could only answer one of the three questions the
+   * console actually asks. `in-flight` is "Unsubscribing…", `needs-human` is "Finish unsubscribing…"
+   * with a page somebody has to look at, and `failed` is a click worth making again — and the wording
+   * for each is different enough that a console deriving them from one flag would have to invent the
+   * other two. `reason` is the ledger's own vocabulary (`confirm-form`, `http-403`, `cannot-send`,
+   * `send-unknown`, …); it is a key to switch on, never a sentence to print.
+   */
+  attempt?: {
+    status: 'in-flight' | 'needs-human' | 'failed'
+    reason?: string
+    at: number
+  }
 }
 
 export interface MailAccountDto extends MailAccount {

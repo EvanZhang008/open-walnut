@@ -1,5 +1,5 @@
 /**
- * The seven mail tools, as data.
+ * The eight mail tools, as data.
  *
  * A factory rather than a module-level array, following the calendar plugin: the dependencies
  * arrive per activation, and a zero-account install never builds this list at all (see the
@@ -21,6 +21,7 @@ import {
   mailSearch,
   mailThread,
   mailToTask,
+  mailUnsubscribeRequest,
   type MailAgentDeps,
 } from './agent-surface.js'
 
@@ -191,6 +192,21 @@ export function createMailTools(deps: MailAgentDeps): MailToolSpec[] {
         required: ['draftId', 'revision'],
       },
       execute: (input) => asText(() => mailRequestSend(deps, input)),
+    },
+    {
+      name: 'mail_unsubscribe_request',
+      description:
+        'Ask the user to unsubscribe from a mailing list: it never unsubscribes anything. Walnut sends '
+        + 'them a letter naming the message and the way out it found, and only their answer acts. '
+        + 'Nothing leaves the machine when you call this: no request to the sender, no mail. Call it '
+        + 'once per message and then stop; the outcome is reported in that letter, not back to you. '
+        + 'You have no tool that leaves a list yourself, so never tell the user they are unsubscribed.',
+      inputSchema: {
+        type: 'object',
+        properties: { account: ACCOUNT_FIELD, message: MESSAGE_FIELD },
+        required: ['message'],
+      },
+      execute: (input) => asText(() => mailUnsubscribeRequest(deps, input)),
     },
   ]
 }

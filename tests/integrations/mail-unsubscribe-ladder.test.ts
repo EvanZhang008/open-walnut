@@ -139,7 +139,7 @@ async function openHarness(): Promise<Harness> {
   const port = (server.address() as AddressInfo).port;
 
   const clock = { at: Date.UTC(2026, 8, 22, 9, 0, 0) };
-  const seam: Partial<UnsubscribeHttpSeam> = {
+  const seam: UnsubscribeHttpSeam = {
     // The guard has already passed `url` at this point, and it is a public https url. The socket is
     // the only thing redirected: `https://lists.example.invalid/x` reaches the local server as
     // `http://127.0.0.1:<port>/x`.
@@ -155,10 +155,28 @@ async function openHarness(): Promise<Harness> {
     events.push({ name, data: data as Record<string, unknown> });
   });
   const service = new MailService({ store, bodies, providers, log: { info: vi.fn(), debug: vi.fn() } });
+  // The mailto rung's collaborators, as SPIES that throw. This file is about the two FETCHING rungs, and
+  // a fetching rung that ever reached a draft or a send would be a real bug: the assertion is the throw.
+  // The mailto rung itself is graded against the real ledger in `mail-unsubscribe-console-send.test.ts`.
+  const drafts = {
+    create: vi.fn(async () => { throw new Error('a fetching rung must not draft a mail') }),
+  };
+  const approvals = {
+    consoleSend: vi.fn(async () => { throw new Error('a fetching rung must not send a mail') }),
+  };
+  const letters = {
+    send: vi.fn(async () => ({ letterId: 'lt-never' })),
+    reply: vi.fn(async () => undefined),
+    withdraw: vi.fn(async () => undefined),
+    get: vi.fn(async () => null),
+  };
   const unsubscribe = new MailUnsubscribe({
     store,
     service,
     events: mailEvents,
+    drafts: drafts as never,
+    approvals: approvals as never,
+    letters: letters as never,
     log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     now: () => clock.at,
     http: seam,
@@ -388,6 +406,32 @@ describe('the GET rung reads the page', () => {
     expect(one.seen).toHaveLength(1);
     expect(await ledgerRow(one, 'INBOX:9001:42')).toMatchObject({ status: 'failed', reason: 'blocked-host' });
   });
+
+  /**
+   * A refused url must not come back out — anywhere.
+   *
+   * The redirect target here is a host the SENDER chose and the user has never seen. Reporting it would
+   * put it in the console's status line and in the "finish this unsubscribe" ask, where a model with
+   * network access reads it as the page to open: the guard's refusal undone by the layer above it. The
+   * detail still names what happened, which is what a human reading the ledger needs.
+   */
+  it('never hands back a url the guard refused, on any hop', async () => {
+    const one = await openHarness();
+    one.routes.set('/u/abc', { status: 302, headers: { location: 'https://169.254.169.254/latest/meta-data/' } });
+    await one.service.ingestPage(ACCOUNT, [listing({ listUnsubscribe: headers({ oneClick: false }) })]);
+
+    const outcome = await one.unsubscribe.run(ACCOUNT, 'INBOX:9001:42');
+    expect(outcome).toMatchObject({ status: 'failed', reason: 'blocked-host' });
+    expect(outcome.url, 'the refused target must not be reported as a url').toBeUndefined();
+    // The DETAIL still names the address, and that is the point of the distinction: a sentence in the
+    // ledger tells a human why, while `url` is the field the console links and the ask hands to a
+    // model. Diagnosing this refusal without the address in it is guesswork.
+    expect(outcome.detail).toContain('169.254.169.254');
+    const row = await ledgerRow(one, 'INBOX:9001:42');
+    expect(row?.detail).toContain('169.254.169.254');
+    // One request: the hop that was refused never opened a socket.
+    expect(one.seen).toHaveLength(1);
+  });
 });
 
 describe('the link found in the body, for mail whose headers say nothing', () => {
@@ -414,19 +458,22 @@ describe('the link found in the body, for mail whose headers say nothing', () =>
   });
 });
 
-describe('the mailto rung is S8 and says so', () => {
-  it('answers needs-human with a reason rather than throwing, so the route stays total', async () => {
+describe('the mailto rung opens no socket', () => {
+  it('refuses on this account (no SMTP) without a single request leaving the machine', async () => {
+    // The fixture provider here declares `send: false`, which makes this the `cannot-send` branch — and
+    // that is exactly the shape worth pinning in THIS file: the mailto rung is not an http rung, so
+    // whatever it does, `seen` stays empty. The sending half is graded against a real approval ledger in
+    // `mail-unsubscribe-console-send.test.ts`.
     const one = await openHarness();
     await one.service.ingestPage(ACCOUNT, [listing({
       listUnsubscribe: { mailto: ['mailto:leave@lists.example.invalid'], oneClick: false },
     })]);
     const outcome = await one.unsubscribe.run(ACCOUNT, 'INBOX:9001:42');
-    expect(outcome).toMatchObject({ status: 'needs-human', method: 'mailto', reason: 'mailto-pending' });
-    expect(outcome.message).toContain('by mail');
-    // Nothing left the machine: this rung has no socket at all yet.
+    expect(outcome).toMatchObject({ status: 'failed', method: 'mailto', reason: 'cannot-send' });
+    expect(outcome.message).toContain('no outgoing mail set up');
     expect(one.seen).toEqual([]);
     expect(await ledgerRow(one, 'INBOX:9001:42')).toMatchObject({
-      status: 'needs-human', method: 'mailto', reason: 'mailto-pending',
+      status: 'failed', method: 'mailto', reason: 'cannot-send',
     });
   });
 });
@@ -548,6 +595,34 @@ describe('one attempt in flight, and nothing that retries itself', () => {
     expect(one.seen).toHaveLength(1);
   });
 
+  /**
+   * The claim is a LOCK, so it needs a release on the path its author did not plan for.
+   *
+   * An unexpected throw anywhere inside a rung used to leave the row `in-flight` with nothing running, and
+   * for the next sixty seconds every click answered "Walnut is already unsubscribing you from this one,
+   * give it a moment" about work that had already died.
+   */
+  it('settles the row when a rung throws, so the next click is not refused for a minute', async () => {
+    const one = await openHarness();
+    one.routes.set('/u/abc', { status: 200, body: SUCCESS_PAGE });
+    await one.service.ingestPage(ACCOUNT, [listing({ listUnsubscribe: headers({ oneClick: false }) })]);
+
+    // A defect inside the ladder, injected where one would actually land: between the claim and the
+    // settle. Reaching a private method is the point — the case is about an UNEXPECTED throw.
+    const ladder = one.unsubscribe as unknown as { runRung: (...args: unknown[]) => Promise<unknown> };
+    const realRung = ladder.runRung.bind(one.unsubscribe);
+    ladder.runRung = async () => { throw new Error('a defect inside the ladder'); };
+
+    await expect(one.unsubscribe.run(ACCOUNT, 'INBOX:9001:42')).rejects.toThrow('a defect inside the ladder');
+    const row = await ledgerRow(one, 'INBOX:9001:42');
+    expect(row?.status, 'an attempt that died is failed, not in flight').toBe('failed');
+    expect(row?.reason).toBe('crashed');
+
+    // And the human can click again immediately: `failed` is claimable, `in-flight` would not have been.
+    ladder.runRung = realRung;
+    expect(await one.unsubscribe.run(ACCOUNT, 'INBOX:9001:42')).toMatchObject({ status: 'done' });
+  });
+
   it('never lets a late loser overwrite a newer claim', async () => {
     const one = await openHarness();
     one.routes.set('/u/abc', { status: 200, body: SUCCESS_PAGE, hang: true });
@@ -598,12 +673,14 @@ describe('what a page of messages learns from the ledger, in one query', () => {
     });
     expect(byId.get('INBOX:9001:43')!.unsubscribe).toEqual({
       available: 'link',
-      done: { method: 'link', at: one.clock.at, scope: 'list' },
+      // `keyedBy: 'list-id'` is what lets the console say "this list" rather than "this sender". These
+      // fixtures publish a `List-Id`, so the narrower claim is the true one here.
+      done: { method: 'link', at: one.clock.at, scope: 'list', keyedBy: 'list-id' },
     });
     expect(byId.get('INBOX:9001:44')!.unsubscribe).toEqual({ available: 'link' });
   });
 
-  it('reports an attempt in flight as pending', async () => {
+  it('reports an attempt in flight as an `in-flight` attempt', async () => {
     const one = await openHarness();
     one.routes.set('/u/abc', { status: 200, body: SUCCESS_PAGE, hang: true });
     await one.service.ingestPage(ACCOUNT, [listing({ listUnsubscribe: headers({ oneClick: false }) })]);
@@ -611,10 +688,13 @@ describe('what a page of messages learns from the ledger, in one query', () => {
     while (one.seen.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
 
     const page = await one.service.listMessages({ accountId: ACCOUNT, mailboxId: 'INBOX', limit: 10 });
-    expect(page.messages[0]!.unsubscribe).toEqual({ available: 'link', pending: true });
+    expect(page.messages[0]!.unsubscribe).toEqual({
+      available: 'link',
+      attempt: { status: 'in-flight', at: one.clock.at },
+    });
     // And the single-message read says the same thing.
     expect((await one.service.readEnvelope(ACCOUNT, 'INBOX:9001:42')).unsubscribe)
-      .toEqual({ available: 'link', pending: true });
+      .toEqual({ available: 'link', attempt: { status: 'in-flight', at: one.clock.at } });
 
     one.release();
     await running;
@@ -642,7 +722,9 @@ describe('what a page of messages learns from the ledger, in one query', () => {
     const older = page.messages.find((message) => message.messageId === 'INBOX:9001:43')!;
     expect(older.unsubscribe).toEqual({
       available: 'none',
-      done: { method: 'link', at: one.clock.at, scope: 'list' },
+      // No `List-Id` on either row, so the key is the SENDER and the console must say "this sender":
+      // one address can run three lists, and leaving one marks all three.
+      done: { method: 'link', at: one.clock.at, scope: 'list', keyedBy: 'sender' },
     });
   });
 });

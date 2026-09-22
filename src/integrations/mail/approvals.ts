@@ -200,6 +200,18 @@ export class MailApprovals {
     revision: number,
     /** Called the moment the ledger row exists, which is what the route's 202 reports. */
     onMinted?: (send: SendDto) => void,
+    /**
+     * What the `sends` row records as the human's own act, when it is not a plain console Send.
+     *
+     * `'console'` is a click on Send in the Mail console, and it is the default because that is what
+     * this method is for. The unsubscribe ladder passes `unsubscribe:<messageId>` for the same
+     * reason: a right-click on Unsubscribe IS the authorisation, so the send belongs on this side of
+     * the ledger and not behind a letter — but "who authorised this" has to name the click, and a
+     * row that said `console` would send somebody looking for an unexpected mail to the composer
+     * they never opened. Anything passed here is `approvalKind: 'console'`, which is what keeps it
+     * out of the letter branches (see `unfreezeAfterSpentKey` and `sends.reply`).
+     */
+    approvalRef = 'console',
   ): Promise<{ send: SendDto; draft: DraftDto }> {
     const first = await this.deps.drafts.require(draftId)
     this.assertRevision(first, revision)
@@ -219,7 +231,7 @@ export class MailApprovals {
     )
     if (frozen === 0) throw stale(`Draft ${draftId} changed before the console send reached it.`)
 
-    const send = await this.mintAndSend(row, row.revision, 'console', 'console', onMinted)
+    const send = await this.mintAndSend(row, row.revision, 'console', approvalRef, onMinted)
     if (!send) throw stale(`Draft ${draftId} changed before the console send reached it.`)
     if (outstanding) await this.withdraw(outstanding, 'Sent from the console; this letter is no longer needed.')
     return { send: toSendDto(send), draft: this.deps.drafts.toDto(await this.deps.drafts.require(draftId)) }
@@ -481,7 +493,7 @@ export class MailApprovals {
       // previous outcome as this request's answer (a spent key used to leave the draft parked in
       // `approved` for good, with the console showing the old failure as fresh). Nothing may be
       // sent now, and the draft must not be left frozen.
-      await this.unfreezeAfterSpentKey(draft, existing.state, approvalRef)
+      await this.unfreezeAfterSpentKey(draft, existing.state, approvalKind, approvalRef)
       throw stale(
         `Revision ${revision} of this draft was already sent once (that attempt ended`
         + ` "${existing.state}"), so nothing was sent now. The draft is editable again: ask again`
@@ -524,10 +536,18 @@ export class MailApprovals {
    * it rather than to `composing`: that is the state it was in before the request, and it is what
    * the console's Retry reads. The letter, if any, is withdrawn, because its Send button now points
    * at a revision that can never be approved again.
+   *
+   * The last step keys on the KIND, not on the ref's value. It used to read `approvalRef !== 'console'`
+   * and treat everything else as a letter id, which was true for exactly as long as `console` was the
+   * only non-letter ref there was. The console path now mints refs of its own (`unsubscribe:<messageId>`,
+   * see `consoleSend`), and under the old test that spent key would have called `letters.reply` on a
+   * letter that never existed: a warning in the log for the human, and nothing at all in the thread
+   * they were actually watching. A `console` send has no thread to answer in, whatever its ref says.
    */
   private async unfreezeAfterSpentKey(
     draft: DraftRow,
     sendState: string,
+    approvalKind: ApprovalKind,
     approvalRef: string,
   ): Promise<void> {
     const back = sendState === 'sent' ? 'sent' : sendState === 'sending' ? 'sending' : sendState
@@ -540,7 +560,7 @@ export class MailApprovals {
     if (draft.letter_id) {
       await this.withdraw(draft.letter_id, 'This revision was already sent once; nothing was sent now.')
     }
-    if (approvalRef && approvalRef !== 'console' && approvalRef !== draft.letter_id) {
+    if (approvalKind === 'letter' && approvalRef && approvalRef !== draft.letter_id) {
       await this.reply(approvalRef, ALREADY_SENT_REPLY)
     }
   }

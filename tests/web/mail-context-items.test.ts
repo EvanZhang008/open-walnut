@@ -102,6 +102,9 @@ function actions() {
     onSummarize: (message: MailMessageDto) => acted.push(`summarize ${message.accountId} ${message.messageId}`),
     onDraftReply: (message: MailMessageDto) => acted.push(`ai-reply ${message.accountId} ${message.messageId}`),
     onAskAbout: (message: MailMessageDto) => acted.push(`ask ${message.accountId} ${message.messageId}`),
+    onUnsubscribe: (message: MailMessageDto) => acted.push(`unsubscribe ${message.accountId} ${message.messageId}`),
+    onFinishUnsubscribe: (message: MailMessageDto, reason?: string) =>
+      acted.push(`finish-unsubscribe ${message.accountId} ${message.messageId} ${reason ?? ''}`),
   };
 }
 
@@ -182,6 +185,9 @@ describe('the ordinary inbox row', () => {
       'Summarize with Walnut',
       'Draft a reply with Walnut',
       'Ask Walnut about this…',
+      // S8, under the three questions: the one Walnut row that acts on the world rather than asking
+      // about it, so a stray click lands on it last.
+      'Unsubscribe',
     ]);
     expect(items[0]!.info).toBe(true);
     expect(items[0]!.onSelect).toBeUndefined();
@@ -448,8 +454,14 @@ describe('mail this person wrote is a different menu', () => {
 });
 
 describe('no row names an action the server has no route for', () => {
-  /** Each one is a real mail-client verb with NO route in `src/integrations/mail/routes.ts`. */
-  const FORBIDDEN = ['Delete', 'Move', 'Archive', 'Flag', 'Star', 'Mark all as read', 'Unsubscribe'];
+  /**
+   * Each one is a real mail-client verb with NO route in `src/integrations/mail/routes.ts`.
+   *
+   * `Unsubscribe` left this list when S8 gave it one (`POST /messages/:a/:m/unsubscribe`, in
+   * routes-write.ts). It is now the only row in this menu that may be DISABLED on a message with
+   * nothing to act on rather than dropped, which is graded in `mail-unsubscribe-items.test.ts`.
+   */
+  const FORBIDDEN = ['Delete', 'Move', 'Archive', 'Flag', 'Star', 'Mark all as read'];
 
   it('across every combination of the five dimensions', () => {
     const dims = [true, false];

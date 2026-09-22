@@ -464,6 +464,28 @@ export class MailWriteStore {
   }
 
   /**
+   * Which message a `ref` belongs to. The durable half of the letter router.
+   *
+   * A letter answered days later has to find the message it was about, and this table is where that
+   * binding lives (`ref` is the letter id for the agent's ask, and the send id for the mailto rung).
+   * Keeping it here rather than in a side record is the same rule the rest of this plugin follows:
+   * one ledger per subject, and the thing that asked is recorded on the row it asked about.
+   *
+   * Deliberately NOT indexed. A row exists only where a human or an agent started an unsubscribe, so
+   * the table is bounded by clicks rather than by mail, and it is read once per answered letter — a
+   * scan of a few hundred rows against one index page is not worth a migration. `ORDER BY at DESC`
+   * because a ref is expected to be unique but nothing enforces it, and the newest row is the one the
+   * answer is about.
+   */
+  unsubscribeByRef(ref: string): Promise<UnsubscribeRow | undefined> {
+    if (!ref) return Promise.resolve(undefined)
+    return this.db.get<UnsubscribeRow>(
+      `SELECT ${UNSUBSCRIBE_COLUMNS} FROM unsubscribes WHERE ref = ? ORDER BY at DESC LIMIT 1`,
+      [ref],
+    )
+  }
+
+  /**
    * Everything the ledger knows about ONE PAGE of messages, in ONE statement.
    *
    * A page is decorated with "was this already unsubscribed" on every read (the field is derived,

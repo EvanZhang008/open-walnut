@@ -30,6 +30,24 @@ export function currentDefaultEngine(config: Pick<Config, 'defaults'> | undefine
 }
 
 /**
+ * May the picker be used yet? Only once the catalog is the SERVER's.
+ *
+ * The compiled-in cold-start catalog says `installed: true` for both engines it
+ * carries, on purpose — it exists so the composer's engine toggle paints its two
+ * buttons without waiting for a fetch (utils/engines.ts). That preset is wrong
+ * for THIS control: a pick made against it can name an engine this machine does
+ * not have, and the mistake is silent afterwards, because the server degrades
+ * such a default back to Claude on every launch (core/agents/default-engine.ts)
+ * instead of failing. One fetch is worth waiting for to avoid writing a setting
+ * that never takes effect. A hydration that FAILED is offered anyway: the
+ * compiled-in list is then the only answer anyone has, and a picker that can
+ * never be used is worse than one whose verdict the server re-checks.
+ */
+export function defaultEnginePickerReady(hydration: 'pending' | 'hydrated' | 'failed'): boolean {
+  return hydration !== 'pending';
+}
+
+/**
  * What the picker may offer: every INSTALLED engine, in catalog (registry) order.
  *
  * An engine that is not installed is not offered — picking it would break every

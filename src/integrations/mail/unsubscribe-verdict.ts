@@ -81,8 +81,23 @@ export interface UnsubscribeVerdictInput {
   contentType?: string
 }
 
+/**
+ * Content types whose words are a PAGE's words, and may therefore be read.
+ *
+ * Anything else — a PDF, an image, an octet-stream — is a download, not an answer, and its bytes must
+ * never be searched: the success words are ordinary English, and an uncompressed PDF that happens to
+ * contain "you have been unsubscribed" would be reported as `done` on the strength of a file nobody
+ * read. A missing content type stays readable (mail-grade endpoints omit it), so this only ever
+ * demotes a response that SAID it was not a page.
+ */
+const READABLE_TYPES = /^(?:text\/|application\/(?:xhtml\+xml|xml|json))/i
+
 export function unsubscribeVerdict(input: UnsubscribeVerdictInput): UnsubscribeVerdict {
   const { status } = input
+  const declared = input.contentType?.split(';')[0]?.trim()
+  if (status >= 200 && status < 300 && declared && !READABLE_TYPES.test(declared)) {
+    return { status: 'needs-human', reason: 'not-a-page', detail: `the endpoint answered with ${declared.slice(0, 80)}` }
+  }
   const markup = (input.body ?? '').slice(0, UNSUBSCRIBE_BODY_CAP)
   // Folded with the same extractor that feeds cache search, so the quote in the ledger reads like a
   // search hit rather than like a page source.
@@ -133,8 +148,16 @@ export function unsubscribeSentence(outcome: {
       if (outcome.reason === 'confirm-form') {
         return 'The unsubscribe page opened but it wants a confirmation, so nothing is final yet. Ask Walnut to finish it, or open the page yourself.'
       }
-      if (outcome.reason === 'mailto-pending') {
-        return 'This list only takes an unsubscribe by mail, which Walnut cannot send yet.'
+      if (outcome.reason === 'not-a-page') {
+        return 'The unsubscribe link answered with a file rather than a page, so Walnut cannot tell whether anything happened. Open the link yourself to be sure.'
+      }
+      // The mailto rung's two. Both are about a mail rather than a page, so neither may fall through
+      // to the page wording below: "open the page to be sure" is advice about a page that never existed.
+      if (outcome.reason === 'send-unknown') {
+        return 'Walnut sent the unsubscribe mail but the server never confirmed it, so nobody can say whether it went. Check your Sent folder before asking again, because a second one could go twice.'
+      }
+      if (outcome.reason === 'mailto-console-only') {
+        return 'This list only takes an unsubscribe by mail, and Walnut sends that mail from your own click. Open the message in Mail and use Unsubscribe there.'
       }
       return 'Walnut opened the unsubscribe page and could not tell whether it worked. Open the page to be sure.'
     case 'failed':
@@ -146,7 +169,27 @@ export function unsubscribeSentence(outcome: {
       if (outcome.reason === 'too-many-redirects') {
         return 'The unsubscribe link kept redirecting, so Walnut stopped. Nothing was changed.'
       }
+      // The mailto rung's failures, ahead of `unreachable` and the fallback for the same reason as
+      // above: each one is about a MAIL, and each names the one thing the person can do next.
+      if (outcome.reason === 'mailto-many-recipients') {
+        return 'This list asks to be unsubscribed by mail, but its address names more than one recipient, so Walnut will not send it. Ask Walnut to look for another way out of this list.'
+      }
+      if (outcome.reason === 'mailto-unusable') {
+        return 'This list asks to be unsubscribed by mail, but Walnut cannot read the address it gave. Ask Walnut to look for another way out of this list.'
+      }
+      if (outcome.reason === 'cannot-send') {
+        return 'This list only takes an unsubscribe by mail, and this account has no outgoing mail set up. Add its sending settings, or open the list\'s own page.'
+      }
+      if (outcome.reason === 'send-failed' || outcome.reason === 'send-refused') {
+        return 'The unsubscribe mail was not sent. Nothing left your mailbox, so you can try again.'
+      }
       if (outcome.reason === 'unreachable') return 'The unsubscribe page could not be reached. Nothing was changed.'
+      // Walnut's own fault, not the sender's. It must not fall through to the page wording below: an
+      // attempt that died inside Walnut never asked anything of anybody, and saying "the page refused"
+      // sends the person to argue with a list that never heard from them.
+      if (outcome.reason === 'crashed') {
+        return 'Walnut ran into a problem partway through and stopped, so nothing was changed. Trying again is safe.'
+      }
       return `The unsubscribe page refused (${outcome.reason ?? 'no reason given'}). Nothing was changed.`
   }
 }

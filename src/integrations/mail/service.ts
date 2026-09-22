@@ -331,11 +331,13 @@ export class MailService {
     messages: MailMessageDto[],
   ): Promise<MailMessageDto[]> {
     if (messages.length === 0) return messages
-    const keys = rows.map((row) => unsubscribeListKey(
-      parseJson<MessagePayload>(row.payload, {}).listUnsubscribe,
-      row.from_addr,
-      row.message_id,
-    ))
+    // The payload is parsed ONCE per row and both answers taken off it: the ledger key, and whether that
+    // key came from a `List-Id`. The second one is only a wording question ("this list" against "this
+    // sender") but it has to be answered HERE, because `List-Id` is not a field the wire carries and a
+    // client re-deriving a server key from the sender's address would be a second truth in a worse place.
+    const held = rows.map((row) => parseJson<MessagePayload>(row.payload, {}).listUnsubscribe)
+    const keys = rows.map((row, index) => unsubscribeListKey(held[index], row.from_addr, row.message_id))
+    const keyedBy = held.map((one) => (one?.listId ? 'list-id' as const : 'sender' as const))
     const groups = new Map<string, { accountId: string; messageIds: Set<string>; listKeys: Set<string> }>()
     rows.forEach((row, index) => {
       const group = groups.get(row.account_id)
@@ -368,11 +370,23 @@ export class MailService {
       const list = doneByList.get(`${row.account_id}\u0000${keys[index]!}`)
       const done = mine?.status === 'done'
         ? { method: mine.method, at: mine.at, scope: 'message' as const }
+        // `keyedBy` rides the LIST scope only, because that is the one place the console has to choose a
+        // word for what was left. Read off THIS row's own payload, which is right even though the `done`
+        // row belongs to a different message: the two matched at all only because their keys are equal.
         : list
-          ? { method: list.method, at: list.at, scope: 'list' as const }
+          ? { method: list.method, at: list.at, scope: 'list' as const, keyedBy: keyedBy[index]! }
           : undefined
-      const pending = mine?.status === 'in-flight'
-      if (!done && !pending) return message
+      // Every state except `done`, which the field above already speaks for. Both can be set at once and
+      // that is not a contradiction: the human left the list through another mail, and their attempt on
+      // THIS one failed. The console prefers `done`; dropping the attempt here would hide the failure.
+      const attempt = mine && mine.status !== 'done'
+        ? {
+          status: mine.status as 'in-flight' | 'needs-human' | 'failed',
+          ...(mine.reason ? { reason: mine.reason } : {}),
+          at: mine.at,
+        }
+        : undefined
+      if (!done && !attempt) return message
       return {
         ...message,
         unsubscribe: {
@@ -380,7 +394,7 @@ export class MailService {
           // still have something to say about it through the list key, so the key is added here.
           available: message.unsubscribe?.available ?? 'none',
           ...(done ? { done } : {}),
-          ...(pending ? { pending: true } : {}),
+          ...(attempt ? { attempt } : {}),
         },
       }
     })

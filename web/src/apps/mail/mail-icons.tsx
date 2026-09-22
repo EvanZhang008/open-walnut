@@ -163,6 +163,21 @@ export function EnvelopeOpenIcon({ size = 15 }: IconProps) {
   </>);
 }
 
+/**
+ * Unsubscribe: the envelope with a line through it.
+ *
+ * A struck-through envelope rather than a bin or a bell, because the act is about the MAIL STOPPING and
+ * not about this one message: a bin reads as "delete this", which is a different button one icon away,
+ * and a bell is a notification setting the mail console does not own.
+ */
+export function EnvelopeOffIcon({ size = 15 }: IconProps) {
+  return frame(size, <>
+    <path d="M21 12V7.5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h8" />
+    <path d="M3.5 7l8.5 6 5.2-3.7" />
+    <path d="M16 20l6-6" />
+  </>);
+}
+
 /** The one action this console does not have yet, drawn so the gap is visible and honest. */
 export function ClipIcon({ size = 15 }: IconProps) {
   return frame(size, <path d="M21 11.5l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7" />);

@@ -214,6 +214,139 @@ const coldFolder = process.env.MAIL_FIXTURE_COLD_FOLDER === '1';
  */
 const ctx = process.env.PW_MAIL_CTX === '1';
 
+/**
+ * `PW_MAIL_UNSUB=1`: the four ways a message can offer (or not offer) a way off a mailing list.
+ *
+ * One row per rung of the ladder, because the row menu's `Unsubscribe` says something different about
+ * each and there is no other way to get all four on one screen: a one-click POST the sender invited, a
+ * mail to the list, a link that only exists in the footer, and a message from a person with nothing at
+ * all. Adopted on BOTH accounts (see `UNSUB_INBOUND_MESSAGES`), so the SMTP gate is a real question with
+ * two real answers in one window — the mailto rung is the one rung that needs outgoing mail, and an
+ * account without it must offer a disabled row with the reason rather than a click that 409s.
+ *
+ * A fifth row (`UNSUB_MAILTO_SIBLING`) shares the mailto row's `List-Id`, because the ledger remembers a
+ * LIST: leaving one issue has to show on the others, and that is only provable with a second issue.
+ *
+ * Its own flag, not a default, because the read and gate specs count messages and providers.
+ */
+const unsub = process.env.PW_MAIL_UNSUB === '1';
+
+/** Fixed ids, so a spec can name any of the rows without scraping the list. */
+const UNSUB_ONE_CLICK = 'INBOX:8:1';
+const UNSUB_MAILTO = 'INBOX:8:2';
+const UNSUB_FOOTER = 'INBOX:8:3';
+const UNSUB_NONE = 'INBOX:8:4';
+/**
+ * A SECOND issue of the same list as `UNSUB_MAILTO`, and the only reason it exists.
+ *
+ * The ledger remembers a LIST, not a message, so leaving one issue has to show on every other issue
+ * still in the cache. One row per list can never prove that: the row somebody clicked is `scope:
+ * 'message'` and says which rung did it, and only a sibling can say `You unsubscribed from this list on
+ * …`. Same `listId`, same mailto, a different id and a different subject.
+ */
+const UNSUB_MAILTO_SIBLING = 'INBOX:8:5';
+
+/** The list host. `.invalid` (RFC 2606); nothing here resolves and no spec lets a socket out. */
+const UNSUB_HOST = 'lists.example.invalid';
+
+/**
+ * The rows, newest first so the order on screen is the order written here.
+ *
+ * The footer one deliberately carries NO headers: its only way out is the https anchor in its own
+ * markup, which is the path an account whose transport hands over no headers ever has, and the base has
+ * to find it while storing the body.
+ */
+function unsubMessages() {
+  return [
+    {
+      messageId: UNSUB_ONE_CLICK,
+      rfcMessageId: '<weekly-1@' + UNSUB_HOST + '>',
+      mailboxId: 'INBOX',
+      from: { name: 'Marina Weekly', address: 'weekly@' + UNSUB_HOST },
+      to: [{ address: 'ctx-writer@example.invalid' }],
+      subject: 'Marina Weekly, issue 41',
+      snippet: 'Moorings, tides and one heron.',
+      sentAt: now - 1 * HOUR,
+      attachments: [],
+      body: { format: 'text', text: 'Moorings, tides and one heron.\n\nThe Marina Weekly' },
+      unreadAtFirstSight: false,
+      listUnsubscribe: {
+        https: ['https://' + UNSUB_HOST + '/u/one-click'],
+        oneClick: true,
+        listId: 'weekly.' + UNSUB_HOST,
+      },
+    },
+    {
+      messageId: UNSUB_MAILTO,
+      rfcMessageId: '<monthly-2@' + UNSUB_HOST + '>',
+      mailboxId: 'INBOX',
+      from: { name: 'Moorings Monthly', address: 'monthly@' + UNSUB_HOST },
+      to: [{ address: 'ctx-writer@example.invalid' }],
+      subject: 'Moorings Monthly, issue 2',
+      snippet: 'Winter rates and the slipway.',
+      sentAt: now - 2 * HOUR,
+      attachments: [],
+      body: { format: 'text', text: 'Winter rates and the slipway.\n\nMoorings Monthly' },
+      unreadAtFirstSight: false,
+      listUnsubscribe: {
+        mailto: ['mailto:leave@' + UNSUB_HOST + '?subject=unsubscribe%20k9'],
+        oneClick: false,
+        listId: 'monthly.' + UNSUB_HOST,
+      },
+    },
+    {
+      messageId: UNSUB_FOOTER,
+      rfcMessageId: '<tides-3@' + UNSUB_HOST + '>',
+      mailboxId: 'INBOX',
+      from: { name: 'Tides Digest', address: 'tides@' + UNSUB_HOST },
+      to: [{ address: 'ctx-writer@example.invalid' }],
+      subject: 'Tides Digest, issue 3',
+      snippet: 'Spring tides on the eleventh.',
+      sentAt: now - 3 * HOUR,
+      attachments: [],
+      body: {
+        format: 'both',
+        text: 'Spring tides on the eleventh.',
+        html: '<p>Spring tides on the eleventh.</p>'
+          + '<p><a href="https://' + UNSUB_HOST + '/u/footer">Unsubscribe</a>'
+          + ' &middot; <a href="https://' + UNSUB_HOST + '/browser">View in browser</a></p>',
+      },
+      unreadAtFirstSight: false,
+    },
+    {
+      messageId: UNSUB_NONE,
+      rfcMessageId: '<lunch-4@example.invalid>',
+      mailboxId: 'INBOX',
+      from: { name: 'Priya', address: 'priya@example.invalid' },
+      to: [{ address: 'ctx-writer@example.invalid' }],
+      subject: 'Lunch on Thursday?',
+      snippet: 'Either day works for me.',
+      sentAt: now - 4 * HOUR,
+      attachments: [],
+      body: { format: 'text', text: 'Either day works for me.\n\nPriya' },
+      unreadAtFirstSight: false,
+    },
+    {
+      messageId: UNSUB_MAILTO_SIBLING,
+      rfcMessageId: '<monthly-1@' + UNSUB_HOST + '>',
+      mailboxId: 'INBOX',
+      from: { name: 'Moorings Monthly', address: 'monthly@' + UNSUB_HOST },
+      to: [{ address: 'ctx-writer@example.invalid' }],
+      subject: 'Moorings Monthly, issue 1',
+      snippet: 'The slipway reopens on the fourth.',
+      sentAt: now - 25 * HOUR,
+      attachments: [],
+      body: { format: 'text', text: 'The slipway reopens on the fourth.\n\nMoorings Monthly' },
+      unreadAtFirstSight: false,
+      listUnsubscribe: {
+        mailto: ['mailto:leave@' + UNSUB_HOST + '?subject=unsubscribe%20k9'],
+        oneClick: false,
+        listId: 'monthly.' + UNSUB_HOST,
+      },
+    },
+  ];
+}
+
 const CTX_FETCH_FOLDERS = ['ctx-fetch-ok', 'ctx-fetch-running', 'ctx-fetch-unknown', 'ctx-fetch-stopped', 'ctx-fetch-failed'];
 
 const MAILBOXES = [
@@ -309,6 +442,7 @@ function ctxMessages() {
 }
 
 if (ctx) MESSAGES.push(...ctxMessages());
+if (unsub) MESSAGES.push(...unsubMessages());
 
 /** Read state, as a server holds it. Seeded from the canned envelopes. */
 const seen = new Set(MESSAGES.filter((one) => !one.unreadAtFirstSight).map((one) => one.messageId));
@@ -334,6 +468,9 @@ function envelopeOf(message) {
     flags: seen.has(message.messageId) ? ['\\Seen'] : [],
     attachments: message.attachments,
     bodyBytes: bytesOf(message.body),
+    // Only when the row declares it. A transport that reports no List-Unsubscribe at all is the
+    // ordinary case and must stay indistinguishable from one whose message really has none.
+    ...(message.listUnsubscribe ? { listUnsubscribe: message.listUnsubscribe } : {}),
   };
 }
 
@@ -555,7 +692,31 @@ const INBOUND_MESSAGES = [
     text: null,
     seen: false,
   },
+  // `PW_MAIL_UNSUB=1` only: a mailto-only newsletter on the account with NO outgoing mail. It is the
+  // other half of the SMTP gate, and the only way to see it: the row must be disabled with the
+  // can't-send reason rather than offering a click that could only ever fail at the transport.
+  ...(unsub ? [{
+    messageId: 'INBOX:2:13',
+    rfcMessageId: '<harbour-news-13@' + UNSUB_HOST + '>',
+    mailboxId: 'INBOX',
+    from: { name: 'Harbour News', address: 'news@' + UNSUB_HOST },
+    to: [{ address: 'ctx-reader@example.invalid' }],
+    subject: 'Harbour News, issue 13',
+    snippet: 'Dredging starts in March.',
+    sentAt: now - 5 * HOUR,
+    attachments: [],
+    text: 'Dredging starts in March.',
+    seen: true,
+    listUnsubscribe: {
+      mailto: ['mailto:leave@' + UNSUB_HOST],
+      oneClick: false,
+      listId: 'news.' + UNSUB_HOST,
+    },
+  }] : []),
 ];
+
+/** The mailto-only row on the account that cannot send. Named so a spec need not scrape the list. */
+export const UNSUB_NO_SMTP = 'INBOX:2:13';
 
 /**
  * A second provider that reads mail and cannot send: an IMAP account with no SMTP settings, which
@@ -600,7 +761,7 @@ const inboundSpec = {
     return { state: 'ok', checkedAt: Date.now() };
   },
   async listMailboxes() {
-    const held = ctx ? INBOUND_MESSAGES : [];
+    const held = ctx || unsub ? INBOUND_MESSAGES : [];
     return [{
       mailboxId: 'INBOX',
       name: 'Inbox',
@@ -610,7 +771,7 @@ const inboundSpec = {
     }];
   },
   async poll(_accountId, request) {
-    const held = ctx && request.mailbox === 'INBOX' ? INBOUND_MESSAGES : [];
+    const held = (ctx || unsub) && request.mailbox === 'INBOX' ? INBOUND_MESSAGES : [];
     return {
       messages: held.map((one) => ({
         messageId: one.messageId,
@@ -624,13 +785,14 @@ const inboundSpec = {
         flags: one.seen ? ['\\Seen'] : [],
         attachments: one.attachments,
         bodyBytes: one.text ? Buffer.byteLength(one.text, 'utf8') : 0,
+        ...(one.listUnsubscribe ? { listUnsubscribe: one.listUnsubscribe } : {}),
       })),
       cursor: `${request.mailbox}:1:end`,
       more: false,
     };
   },
   async getBody(_accountId, messageId) {
-    const message = ctx ? INBOUND_MESSAGES.find((one) => one.messageId === messageId) : null;
+    const message = ctx || unsub ? INBOUND_MESSAGES.find((one) => one.messageId === messageId) : null;
     if (!message || !message.text) throw notFound('the inbound fixture has no body for that message');
     return { format: 'text', text: message.text, bytes: Buffer.byteLength(message.text, 'utf8') };
   },
@@ -1049,7 +1211,10 @@ function adopted(one) {
 
 export function activate(walnut) {
   const base = walnut.services.require('mail:base');
-  if (ctx) {
+  // `PW_MAIL_UNSUB=1` wants the same two adopted accounts `PW_MAIL_CTX=1` does, for the same reason: the
+  // capability gate on a menu item is only a real question when two accounts disagree about it on one
+  // screen. The two flags therefore share this branch, and each adds its own rows above.
+  if (ctx || unsub) {
     accounts.push({
       accountId: CTX_WRITER,
       providerId: 'fixture',

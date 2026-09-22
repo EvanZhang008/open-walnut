@@ -28,6 +28,7 @@ import {
 } from '../../web/src/apps/mail/mail-context-items';
 import { CANNOT_SEND_TITLE } from '../../web/src/apps/mail/compose/send-status';
 import { MAIL_ASK_PRESETS, mailAskKey } from '../../web/src/apps/mail/mail-ask';
+import { UNSUBSCRIBE_LABELS } from '../../web/src/apps/mail/mail-unsubscribe-state';
 import { __resetMailStore, patch } from '../../web/src/apps/mail/mail-store';
 import type {
   MailAccountDto,
@@ -120,6 +121,9 @@ function build(over: BuildOver = {}): ContextMenuItem[] {
       onSummarize: (message) => acted.push(`summarize ${message.accountId} ${message.messageId}`),
       onDraftReply: (message) => acted.push(`draft-reply ${message.accountId} ${message.messageId}`),
       onAskAbout: (message) => acted.push(`ask ${message.accountId} ${message.messageId}`),
+      onUnsubscribe: (message: MailMessageDto) => acted.push(`unsubscribe ${message.accountId} ${message.messageId}`),
+      onFinishUnsubscribe: (message: MailMessageDto, reason?: string) =>
+        acted.push(`finish-unsubscribe ${message.accountId} ${message.messageId} ${reason ?? ''}`),
     },
   });
 }
@@ -139,7 +143,7 @@ beforeEach(() => {
 });
 
 describe('where the group sits', () => {
-  it('is the last thing in the menu: a divider, the name Walnut, then the three rows', () => {
+  it('is the last thing in the menu: a divider, the name Walnut, then its rows', () => {
     const items = build();
     expect(group(items).map((one) => (one.divider ? '-' : String(one.label)))).toEqual([
       '-',
@@ -147,9 +151,13 @@ describe('where the group sits', () => {
       ASK_ROWS.summarize,
       ASK_ROWS.draftReply,
       ASK_ROWS.about,
+      // S8's `Unsubscribe`, under the three questions: it acts on the world rather than asking about
+      // it, so it sits where a stray click is least likely. Its own states are graded in
+      // `mail-unsubscribe-items.test.ts`.
+      UNSUBSCRIBE_LABELS.ready,
     ]);
     // Nothing follows it, so this really is the bottom of the menu.
-    expect(items[items.length - 1]!.key).toBe('ask-about');
+    expect(items[items.length - 1]!.key).toBe('unsubscribe');
   });
 
   it('names the group with an info row, not a section row', () => {
@@ -229,9 +237,9 @@ describe('which of the three rows exist', () => {
 });
 
 describe('the AI mark', () => {
-  it('marks each of the three `ai`, and nothing else in the menu', () => {
+  it('marks every Walnut row `ai`, and nothing else in the menu', () => {
     const items = build();
-    expect(items.filter((one) => one.ai).map((one) => one.key)).toEqual([...KEYS]);
+    expect(items.filter((one) => one.ai).map((one) => one.key)).toEqual([...KEYS, 'unsubscribe']);
   });
 
   it('carries the mark in `ai` and NOT in `icon`, so no row is indented for a column this menu has none of', () => {
@@ -288,8 +296,9 @@ describe('what the rows ask', () => {
 
 describe('no row names an action with no route behind it', () => {
   it('the group adds no verb the server cannot honour', () => {
-    // `Unsubscribe` belongs to S8 and has a route of its own; until then the group asks questions only.
-    const forbidden = ['Delete', 'Move', 'Archive', 'Flag', 'Star', 'Unsubscribe', 'Send'];
+    // `Unsubscribe` left this list in S8, which gave it a route of its own
+    // (`POST /messages/:a/:m/unsubscribe`). Everything else here is still a verb with no route.
+    const forbidden = ['Delete', 'Move', 'Archive', 'Flag', 'Star', 'Send'];
     for (const outbound of [true, false]) {
       for (const draftsView of outbound ? [true, false] : [false]) {
         const words = group(build({ outbound, draftsView }))

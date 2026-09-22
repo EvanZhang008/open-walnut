@@ -136,6 +136,28 @@ describe('what the ledger is handed', () => {
     expect(verdict.status).toBe('done');
   });
 
+  /**
+   * A DOWNLOAD IS NOT AN ANSWER. The success wordings are ordinary English, so a PDF or a
+   * spreadsheet whose bytes happen to contain them would otherwise be reported as `done` — a
+   * confident wrong answer about a list the person is still on. A response that SAID it was not a
+   * page is never searched; one that said nothing still is, because mail-grade endpoints omit it.
+   */
+  it('refuses to read the words out of a file that is not a page', () => {
+    const claims = 'You have been unsubscribed from this list.';
+    for (const type of ['application/pdf', 'application/octet-stream', 'image/png', 'application/pdf; charset=binary']) {
+      expect(unsubscribeVerdict({ status: 200, contentType: type, body: claims }), type)
+        .toMatchObject({ status: 'needs-human', reason: 'not-a-page' });
+    }
+    // The readable ones keep their verdict, including the charset parameter form and no type at all.
+    for (const type of ['text/html; charset=utf-8', 'text/plain', 'application/xhtml+xml', undefined]) {
+      expect(unsubscribeVerdict({ status: 200, ...(type ? { contentType: type } : {}), body: claims }), String(type))
+        .toMatchObject({ status: 'done' });
+    }
+    // And a refusal is still judged by its CODE: the content type says nothing about a 403.
+    expect(unsubscribeVerdict({ status: 403, contentType: 'application/pdf', body: claims }))
+      .toMatchObject({ status: 'failed', reason: 'http-403' });
+  });
+
   it('calls an empty 200 unclear, because nothing said anything', () => {
     expect(unsubscribeVerdict({ status: 200, body: '' }))
       .toMatchObject({ status: 'needs-human', reason: 'unclear' });
@@ -169,8 +191,22 @@ describe('the sentence a console prints', () => {
       .toContain('wants a confirmation');
     expect(unsubscribeSentence({ status: 'needs-human', method: 'link', reason: 'unclear' }))
       .toContain('could not tell');
-    expect(unsubscribeSentence({ status: 'needs-human', method: 'mailto', reason: 'mailto-pending' }))
-      .toContain('only takes an unsubscribe by mail');
+    // The mailto rung's own reasons (S8). `mailto-pending` was the stub's placeholder and is gone; each
+    // of these is about a MAIL rather than a page, so none of them may fall through to the page wording.
+    expect(unsubscribeSentence({ status: 'needs-human', method: 'mailto', reason: 'send-unknown' }))
+      .toContain('never confirmed it');
+    expect(unsubscribeSentence({ status: 'needs-human', method: 'mailto', reason: 'mailto-console-only' }))
+      .toContain('from your own click');
+    expect(unsubscribeSentence({ status: 'failed', method: 'mailto', reason: 'cannot-send' }))
+      .toContain('no outgoing mail set up');
+    expect(unsubscribeSentence({ status: 'failed', method: 'mailto', reason: 'mailto-many-recipients' }))
+      .toContain('more than one recipient');
+    expect(unsubscribeSentence({ status: 'failed', method: 'mailto', reason: 'mailto-unusable' }))
+      .toContain('cannot read the address');
+    for (const reason of ['send-failed', 'send-refused']) {
+      expect(unsubscribeSentence({ status: 'failed', method: 'mailto', reason }))
+        .toContain('Nothing left your mailbox');
+    }
     expect(unsubscribeSentence({ status: 'failed', method: 'link', reason: 'blocked-host' }))
       .toContain('not one Walnut is willing to open');
     expect(unsubscribeSentence({ status: 'failed', method: 'link', reason: 'timeout' }))
@@ -181,6 +217,9 @@ describe('the sentence a console prints', () => {
       .toContain('refused (http-403)');
     expect(unsubscribeSentence({ status: 'in-flight', method: 'mailto' }))
       .toContain('is unsubscribing you');
+    // Not the page wording: there was no page, and telling somebody to read one is a wrong instruction.
+    expect(unsubscribeSentence({ status: 'needs-human', method: 'link', reason: 'not-a-page' }))
+      .toContain('a file rather than a page');
   });
 
   it('never leaves a placeholder or a code where a human reads it', () => {

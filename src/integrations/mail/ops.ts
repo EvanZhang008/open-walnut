@@ -1,5 +1,5 @@
 /**
- * The same seven operations, registered in the host's op catalogue.
+ * The same eight operations, registered in the host's op catalogue.
  *
  * One implementation, two registrations. The tool list is the Personal AI's audience; the op
  * catalogue is everything that calls a capability by name: `walnut.ops.call` from another plugin,
@@ -14,19 +14,24 @@
  *   dev host reaches these through `walnut tools call`, and reading your own mail from the machine
  *   you are coding on is the point of the capability. Spelled out, a future change to the default
  *   cannot quietly take it away.
- * - The three writes keep the default (`remote: 'deny'`), so a remote session can read mail but
- *   cannot open a draft. That is the conservative half of a decision worth revisiting: none of the
+ * - Three of the four writes keep the default (`remote: 'deny'`), so a remote session can read mail
+ *   but cannot open a draft. That is the conservative half of a decision worth revisiting: none of the
  *   writes can send, so allowing them would not widen what an agent can DO, only where it can ask
- *   from. Left as it is because this slice's mandate was the reads.
- * - `mail_draft`, `mail_request_send` and `mail_to_task` are WRITES but NOT destructive. Asking is
- *   reversible: a draft is a row the human can edit or throw away, a request is a letter they can
- *   answer Discard, and a task is a row they can delete. Marking them destructive would put a
- *   confirmation in front of the one path whose whole purpose is to produce a human confirmation.
+ *   from. Left as it is because this slice's mandate was the reads. `mail_unsubscribe_request` is the
+ *   exception and says why at its own entry.
+ * - `mail_draft`, `mail_request_send`, `mail_to_task` and `mail_unsubscribe_request` are WRITES but
+ *   NOT destructive. Asking is reversible: a draft is a row the human can edit or throw away, a
+ *   request is a letter they can answer Discard or Not now, and a task is a row they can delete.
+ *   Marking them destructive would put a confirmation in front of the one path whose whole purpose is
+ *   to produce a human confirmation.
  * - `mail_to_task` is additionally IDEMPOTENT, which is what makes it safe to leave unconfirmed: a
  *   second call cannot produce a second task.
  * - There is no `mail_send`. Sending is executed by the approval path itself (the letter answer,
  *   or the console's own Send under the device credential), so there is no entry point here for a
  *   caller to reach and no token to leak or replay.
+ * - There is no `mail_unsubscribe` either, for the same shape of reason: the ladder is run by a human
+ *   click or by a human answering the letter `mail_unsubscribe_request` produces, and an agent has no
+ *   entry point to it at all.
  *
  * Known limitation, documented rather than papered over: a standalone `walnut` process and the
  * stdio MCP server cannot see plugin-declared ops until the out-of-process slice lands. That is a
@@ -43,6 +48,7 @@ import {
   mailSearch,
   mailThread,
   mailToTask,
+  mailUnsubscribeRequest,
   type MailAgentDeps,
 } from './agent-surface.js'
 
@@ -200,6 +206,26 @@ export function createMailOps(deps: MailAgentDeps): MailOpSpec[] {
       readonly: false,
       destructive: false,
       handler: (args) => asText(() => mailRequestSend(deps, args)),
+    },
+    {
+      name: 'unsubscribe_request',
+      title: 'Ask the human to leave a mailing list',
+      description:
+        'It only ever asks: it sends the human a letter naming the message and what Walnut found, and '
+        + 'unsubscribes nothing. No request leaves the machine and no mail is written. Their answer is '
+        + 'what acts, and the outcome comes back in that letter. Call it once per message.',
+      inputSchema: {
+        type: 'object',
+        properties: { account: ACCOUNT_FIELD, message: MESSAGE_FIELD },
+        required: ['message'],
+      },
+      readonly: false,
+      destructive: false,
+      // `allow`, unlike the three writes above, and it is a decision rather than an oversight: this op
+      // cannot act at all. It produces a letter, so WHERE it was called from changes nothing about what
+      // can happen, and "unsubscribe me from this" is a thing a session on a dev box legitimately says.
+      remote: 'allow',
+      handler: (args) => asText(() => mailUnsubscribeRequest(deps, args)),
     },
   ]
 }

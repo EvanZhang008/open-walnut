@@ -155,8 +155,67 @@ describe('a hostile or simply wrong header', () => {
       .toEqual(['https://lists.example.invalid/u/1']);
     expect(parse({ 'list-unsubscribe': 'mailto:leave@lists.example.invalid' })?.mailto)
       .toEqual(['mailto:leave@lists.example.invalid']);
-    // Not a url at all, so not a target: an unbracketed value is never split on commas.
+    // Not a url at all, so not a target. The value has to START with a scheme to be read at all.
     expect(parse({ 'list-unsubscribe': 'ask us nicely' })).toBeUndefined();
+    expect(parse({ 'list-unsubscribe': 'unsubscribe at https://lists.example.invalid/u' })).toBeUndefined();
+  });
+});
+
+describe('an unbracketed value carrying more than one target', () => {
+  // Senders who skip the brackets also skip them when they offer both rungs, and the bug this pins is
+  // the one that reads worst to a human: the two used to be glued into ONE https url whose path held
+  // the mailto. `new URL` accepts it, the SSRF guard passes it (the host is fine), the request 404s,
+  // and the console then reports "the unsubscribe page refused" about a list whose link was good.
+  it.each([
+    ['a comma and a space', 'https://lists.example.invalid/u, mailto:leave@lists.example.invalid'],
+    ['a bare comma', 'https://lists.example.invalid/u,mailto:leave@lists.example.invalid'],
+    ['only whitespace', 'https://lists.example.invalid/u mailto:leave@lists.example.invalid'],
+    ['a newline the unfolder left', 'https://lists.example.invalid/u,\tmailto:leave@lists.example.invalid'],
+  ])('is split into its targets when separated by %s', (_how, value) => {
+    expect(parse({ 'list-unsubscribe': value })).toEqual({
+      https: ['https://lists.example.invalid/u'],
+      mailto: ['mailto:leave@lists.example.invalid'],
+      oneClick: false,
+    });
+  });
+
+  it('reads the same value the same way whether or not the sender used brackets', () => {
+    const bare = 'https://lists.example.invalid/u, mailto:leave@lists.example.invalid';
+    const bracketed = '<https://lists.example.invalid/u>, <mailto:leave@lists.example.invalid>';
+    expect(parse({ 'list-unsubscribe': bare })).toEqual(parse({ 'list-unsubscribe': bracketed }));
+  });
+
+  it('splits only where a new target begins, so a comma inside one url survives', () => {
+    // The reason the fallback did not split before. Both of these are ONE target.
+    expect(parse({ 'list-unsubscribe': 'mailto:leave@lists.example.invalid?subject=unsubscribe,please' })?.mailto)
+      .toEqual(['mailto:leave@lists.example.invalid?subject=unsubscribe,please']);
+    expect(parse({ 'list-unsubscribe': 'https://lists.example.invalid/u?ids=1,2,3&from=a,b' })?.https)
+      .toEqual(['https://lists.example.invalid/u?ids=1,2,3&from=a,b']);
+  });
+
+  it('drops the http half and keeps the mailto, exactly as the bracketed path does', () => {
+    expect(parse({ 'list-unsubscribe': 'http://lists.example.invalid/u, mailto:leave@lists.example.invalid' }))
+      .toEqual({ mailto: ['mailto:leave@lists.example.invalid'], oneClick: false });
+    expect(parse({ 'list-unsubscribe': 'http://lists.example.invalid/u' })).toBeUndefined();
+  });
+
+  it('applies every bound the bracketed path applies', () => {
+    const many = Array.from({ length: 40 }, (_, at) => `https://lists.example.invalid/u/${at}`).join(', ');
+    expect(parse({ 'list-unsubscribe': many })?.https).toHaveLength(4);
+
+    const mailtos = Array.from({ length: 10 }, (_, at) => `mailto:leave${at}@lists.example.invalid`).join(', ');
+    expect(parse({ 'list-unsubscribe': mailtos })?.mailto).toHaveLength(2);
+
+    const long = `https://lists.example.invalid/u/${'x'.repeat(10 * 1024)}`;
+    const clipped = parse({ 'list-unsubscribe': `${long}, mailto:leave@lists.example.invalid` });
+    expect(clipped?.https?.[0]?.length).toBe(2048);
+    expect(clipped?.mailto).toEqual(['mailto:leave@lists.example.invalid']);
+
+    // Bounded work AND a bounded answer, the same property the bracketed path is graded on.
+    const thousands = Array.from({ length: 5_000 }, (_, at) => `https://x.example.invalid/${at}`).join(',');
+    const parsed = parse({ 'list-unsubscribe': thousands });
+    expect(parsed?.https).toHaveLength(4);
+    expect(JSON.stringify(parsed).length).toBeLessThan(400);
   });
 });
 

@@ -40,6 +40,7 @@ import { flipCountedBy, forgetFlipCounted, mailCountsClock } from './mail-seen-c
 import { noteRecentFolder, readSelectedPref, writeSelectedPref } from './mail-sidebar-prefs';
 import { arrivalsAfterOpen, folderLabel, smartPairs, smartRowVisible, type SmartRole } from './mail-smart';
 import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
+import { onMailUnsubscribed } from './mail-unsubscribe-actions';
 import { keepOpenRow, readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
 import {
   DRAFTS_MAILBOX,
@@ -1207,6 +1208,9 @@ export function onMailEvent(name: string, data: unknown): void {
     messageId?: string;
     taskId?: string;
     added?: number;
+    /** `unsubscribed` carries these two. See the branch below. */
+    status?: string;
+    method?: string;
   };
   if (name === 'providers-changed') { void loadProviders(true); return; }
 
@@ -1236,6 +1240,14 @@ export function onMailEvent(name: string, data: unknown): void {
   if (name === 'account-changed' || name === 'account-health') {
     void loadAccounts(true);
     if (payload.accountId) void loadMailboxesFor(payload.accountId, true);
+    return;
+  }
+  // An unsubscribe settled, here or in another tab. The row it names is stamped with no request at all;
+  // a `done` also reloads the page, because leaving a LIST turns every other cached message of that list
+  // into `done` with `scope: 'list'` and only the server's own ledger query knows which those are.
+  if (name === 'unsubscribed') {
+    onMailUnsubscribed(payload);
+    if (payload.status === 'done') void loadMailMessages(true);
     return;
   }
   if (name === 'sync-completed' || name === 'messages-received') {

@@ -15,16 +15,14 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
+import { WALNUT_HOME } from '../../src/constants.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { startTriageRuns } from '../../src/core/triage/runs.js';
 import { TRIAGE_PROJECT } from '../../src/core/triage/bootstrap.js';
 import { claimTriageBatch, loadTriageState, recordTriageArrivals } from '../../src/core/triage/state.js';
 import type { Task } from '../../src/core/types.js';
 
-const HOME = (): string => {
-  const { WALNUT_HOME } = require('../../src/constants.js') as { WALNUT_HOME: string };
-  return WALNUT_HOME;
-};
+const HOME = (): string => WALNUT_HOME;
 
 function runTask(id: string): Task {
   return {
@@ -38,9 +36,24 @@ function runTask(id: string): Task {
   } as unknown as Task;
 }
 
-/** Wait for the handler's fire-and-forget async work. */
+/**
+ * Wait for the handler's fire-and-forget async work, BY ITS OUTCOME.
+ *
+ * The handler's chain is three real file operations under a cross-process lock (read the state, ack the
+ * claim, then withdraw), so a fixed number of ticks is a race with the disk: a loaded machine fails the
+ * last assertion in the chain while the middle one passes, which reads exactly like a wiring bug.
+ */
+async function until(done: () => boolean | Promise<boolean>, what: string): Promise<void> {
+  for (let i = 0; i < 400; i += 1) {
+    if (await done()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/** Nothing should happen: give the handler a real chance to do the wrong thing. */
 async function settle(): Promise<void> {
-  for (let i = 0; i < 12; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 let handle: { stop(): void } | null = null;
@@ -48,9 +61,12 @@ let handle: { stop(): void } | null = null;
 beforeEach(async () => {
   handle?.stop();
   handle = null;
-  // A claim has to exist for the acknowledgement path to run at all.
+  // A claim has to exist for the acknowledgement path to run at all, and it has to be a claim the
+  // handler can LOAD: `claimTriageBatch` takes the clock first, and a claim stamped with anything but
+  // a number is dropped on the way back in — which would make every assertion below pass vacuously.
   await recordTriageArrivals({ mail: [{ accountId: 'a', mailbox: 'INBOX', count: 3, headlines: ['hi'] }] }, HOME());
-  await claimTriageBatch(HOME());
+  await claimTriageBatch(Date.now(), HOME());
+  expect((await loadTriageState(HOME())).claim?.atMs).toBeTypeOf('number');
 });
 
 describe('a run takes back the previous run s open decisions', () => {
@@ -67,6 +83,8 @@ describe('a run takes back the previous run s open decisions', () => {
     });
 
     bus.emit(EventNames.TASK_CREATED, { task: runTask('t-run-1') }, ['web-ui']);
+    await until(() => withdrawSuperseded.mock.calls.length > 0, 'the withdrawal');
+    // And exactly once: one more tick must not add a second sweep.
     await settle();
 
     expect(withdrawSuperseded).toHaveBeenCalledTimes(1);
@@ -97,7 +115,7 @@ describe('a run takes back the previous run s open decisions', () => {
     });
 
     bus.emit(EventNames.TASK_CREATED, { task: runTask('t-run-2') }, ['web-ui']);
-    await settle();
+    await until(async () => (await loadTriageState(HOME())).claim === undefined, 'the acknowledgement');
 
     expect((await loadTriageState(HOME())).claim).toBeUndefined();
   });

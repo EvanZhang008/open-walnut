@@ -3,10 +3,21 @@
  *
  * Both fetching rungs of the ladder (the RFC 8058 one-click POST and the plain GET) go through
  * `fetchUnsubscribe`, and it goes through `guardUnsubscribeUrl` on the first hop and on EVERY
- * redirect. There is deliberately **no bypass switch** — not an env var, not a "test mode", not an
- * allowlist. The seam a test may replace is the SOCKET (`fetch`) and the RESOLVER (`lookup`), and
- * whatever the resolver answers is still run through the blocklist below, so no test can make the
- * guard let an address through.
+ * redirect. There is deliberately **no switch that weakens the rules** — not an env var, not an
+ * allowlist, no "insecure mode". The seam a test may replace is the SOCKET (`fetch`) and the RESOLVER
+ * (`lookup`), and whatever the resolver answers is still run through the blocklist below.
+ *
+ * Two properties make that seam safe, and both are load-bearing rather than decorative:
+ *
+ * - IT IS REPLACED AS A PAIR. Replacing only `lookup` used to be allowed, and that was a real
+ *   bypass: the guard would score the fake resolver's `203.0.113.10` while the REAL `globalThis.fetch`
+ *   resolved the name itself and connected wherever it actually points. So a half seam is refused, and
+ *   the guard is handed the very same pair the socket will use.
+ * - IT ONLY INSTALLS UNDER A TEST RUNNER. Walnut loads plugins from `~/.open-walnut/plugins/` INTO
+ *   this process, so an exported setter with no gate is reachable by plugin code, not just by tests.
+ *   Outside VITEST / NODE_ENV=test the setter throws and the real seam stays in place. (Per-call
+ *   `seam` arguments are not gated — they are what an in-process caller could write by hand anyway,
+ *   and every address they hand back is still judged.)
  *
  * Why the guard exists at all: the url comes out of a header or a footer that a STRANGER wrote, and
  * this process sits inside the user's own network, next to their daemon sockets and whatever else
@@ -63,22 +74,69 @@ const REAL_SEAM: UnsubscribeHttpSeam = {
   lookup: (hostname, options) => dns.lookup(hostname, options),
 }
 
-let testSeam: Partial<UnsubscribeHttpSeam> | null = null
+let testSeam: UnsubscribeHttpSeam | null = null
 
 /**
- * Replace the socket and/or the resolver for a test, and nothing else.
- *
- * This is NOT a way around the guard: `guardUnsubscribeUrl` runs on every url and every redirect
- * whatever is installed here, and every address the resolver hands back is still checked against the
- * blocklist. It exists because the guard correctly refuses loopback, so an end-to-end test that
- * wants a real HTTP server has to reach it through a transport rather than by weakening the rule.
+ * Is this process a test runner? The repo's own signal, not a new one: the same three environment
+ * variables `src/constants.ts`, `src/core/cheap-model.ts` and `isTestEnv` in
+ * `src/providers/daemon-ownership.ts` read. Inlined rather than imported because those modules pull in
+ * `constants.js`, which a great many test files replace with a partial mock.
  */
-export function setUnsubscribeHttpForTesting(seam: Partial<UnsubscribeHttpSeam> | null): void {
-  testSeam = seam
+function underTestRunner(): boolean {
+  return !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test')
 }
 
+/**
+ * Both halves or neither — a resolver without its socket is a bypass, not a seam.
+ *
+ * Spreading a partial over the real seam is what made this dangerous: `{...REAL_SEAM, lookup: lie}`
+ * scores the lie and then lets `globalThis.fetch` resolve the name for real and connect wherever it
+ * points. Refusing the half seam is what makes "whoever answers the lookup is whoever opens the
+ * socket" a property of the module rather than a habit of its callers.
+ *
+ * The parameters stay typed `Partial<UnsubscribeHttpSeam>` only because `MailUnsubscribe` declares its
+ * `http` dependency that way; the rule is enforced here at runtime, and the day that declaration
+ * becomes the whole seam these signatures should require it too.
+ */
+function pairedSeam(
+  candidate: Partial<UnsubscribeHttpSeam> | null | undefined,
+  where: string,
+): UnsubscribeHttpSeam | null {
+  if (!candidate) return null
+  const { fetch: socket, lookup } = candidate
+  if (typeof socket === 'function' && typeof lookup === 'function') return { fetch: socket, lookup }
+  throw new Error(
+    `${where}: replace BOTH fetch and lookup or neither. Half a seam would have the guard judge one`
+    + ` resolver's answer while a different resolver decides what is actually connected to.`,
+  )
+}
+
+/**
+ * Replace the socket AND the resolver for a test, and nothing else.
+ *
+ * This is NOT a way around the guard: `guardUnsubscribeUrl` runs on every url and every redirect
+ * whatever is installed here, every address the resolver hands back is still checked against the
+ * blocklist, and the pair that answers the lookup is the pair that opens the socket. It exists because
+ * the guard correctly refuses loopback, so an end-to-end test that wants a real HTTP server has to
+ * reach it through a transport rather than by weakening the rule.
+ *
+ * Refuses to install outside a test runner. Plugins run in this process, so "an exported setter" and
+ * "an attack surface" are the same sentence here. Passing `null` to restore the real seam is always
+ * allowed — un-installing can only make the guard stricter.
+ */
+export function setUnsubscribeHttpForTesting(seam: Partial<UnsubscribeHttpSeam> | null): void {
+  if (seam && !underTestRunner()) {
+    throw new Error(
+      'setUnsubscribeHttpForTesting is refused outside a test runner: this would replace the socket and'
+      + ' resolver of a real server. The unsubscribe guard has no production bypass.',
+    )
+  }
+  testSeam = pairedSeam(seam, 'setUnsubscribeHttpForTesting')
+}
+
+/** The one pair this request will both judge with and connect with. */
 export function unsubscribeHttpSeam(override?: Partial<UnsubscribeHttpSeam>): UnsubscribeHttpSeam {
-  return { ...REAL_SEAM, ...testSeam, ...override }
+  return pairedSeam(override, 'unsubscribeHttpSeam') ?? testSeam ?? REAL_SEAM
 }
 
 /** What every unsubscribe request announces itself as. One request per click, and it says so. */
@@ -86,8 +144,20 @@ export function unsubscribeUserAgent(version = getVersion()): string {
   return `Walnut/${version} (unsubscribe; one request per click)`
 }
 
-/** Host names that are never on the public internet, however they resolve. */
-const LOCAL_NAMES = /^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.home\.arpa)$/i
+/**
+ * Host names that are never on the public internet, however they resolve.
+ *
+ * Matched against the NORMALISED host (see `judgedHost`), because `new URL('https://box.internal./')`
+ * keeps the root's trailing dot in `hostname` and a `$`-anchored pattern then misses it entirely.
+ * `.lan`, `.corp` and `.intranet` are here because home routers and corporate DHCP hand them out as
+ * the search domain, which is exactly the network this process is sitting inside.
+ */
+const LOCAL_NAMES = /^(?:localhost|.*\.(?:localhost|local|internal|intranet|lan|corp|home\.arpa))$/i
+
+/** Brackets off, lowercased, and the root's trailing dot(s) off. The form every rule below judges. */
+function judgedHost(hostname: string): string {
+  return hostname.replace(/^\[/, '').replace(/\]$/, '').trim().toLowerCase().replace(/\.+$/, '')
+}
 
 function ipv4Blocked(address: string): boolean {
   const parts = address.split('.').map((one) => Number(one))
@@ -106,29 +176,117 @@ function ipv4Blocked(address: string): boolean {
   return false
 }
 
-function ipv6Blocked(input: string): boolean {
-  const address = input.toLowerCase()
-  // An IPv4-mapped or NAT64 form carries a v4 address inside it, and the v4 rules are what decide.
-  const mapped = address.match(/(?:^::ffff:|^64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/)
-  if (mapped?.[1]) return ipv4Blocked(mapped[1])
-  const hex = address.match(/(?:^::ffff:)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
-  if (hex) {
-    const high = Number.parseInt(hex[1]!, 16)
-    const low = Number.parseInt(hex[2]!, 16)
-    return ipv4Blocked([high >> 8, high & 0xff, low >> 8, low & 0xff].join('.'))
+/**
+ * An IPv6 address as its SIXTEEN BYTES, or null when it cannot be read.
+ *
+ * Every rule below is byte arithmetic rather than a pattern over the text, and that is the fix for a
+ * whole class of miss. `::ffff:127.0.0.1`, `::ffff:7f00:1` and `0:0:0:0:0:ffff:7f00:1` are one
+ * address written three ways; the old patterns understood only whichever spelling the test happened
+ * to use, so `unsubscribeAddressBlocked('0:0:0:0:0:ffff:7f00:1')` answered "public".
+ *
+ * A `%zone` suffix is dropped: `net.isIP('fe80::1%en0')` says 6, so a scoped address does reach here.
+ */
+function ipv6Bytes(input: string): Uint8Array | null {
+  let text = input.split('%')[0]!.trim().toLowerCase()
+  // A dotted-quad tail is the same 32 bits as two hex groups; fold it so there is one parser.
+  const dotted = /:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text)
+  if (dotted) {
+    const octets = dotted.slice(1, 5).map((one) => Number(one))
+    if (octets.some((one) => one > 255)) return null
+    const high = ((octets[0]! << 8) | octets[1]!).toString(16)
+    const low = ((octets[2]! << 8) | octets[3]!).toString(16)
+    text = `${text.slice(0, dotted.index + 1)}${high}:${low}`
   }
-  if (address === '::' || address === '::1') return true    // unspecified, loopback
-  if (/^f[cd][0-9a-f]{2}:/.test(address)) return true       // fc00::/7 unique local
-  if (/^fe[89ab][0-9a-f]:/.test(address)) return true       // fe80::/10 link local
-  if (/^ff[0-9a-f]{2}:/.test(address)) return true          // ff00::/8 multicast
-  return false
+  const halves = text.split('::')
+  if (halves.length > 2) return null
+  const parse = (part: string): number[] | null => {
+    if (!part) return []
+    const groups: number[] = []
+    for (const one of part.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/.test(one)) return null
+      groups.push(Number.parseInt(one, 16))
+    }
+    return groups
+  }
+  const left = parse(halves[0] ?? '')
+  const right = halves.length === 2 ? parse(halves[1] ?? '') : []
+  if (!left || !right) return null
+  const groups = halves.length === 2
+    ? (left.length + right.length > 7
+      ? null
+      : [...left, ...Array.from({ length: 8 - left.length - right.length }, () => 0), ...right])
+    : (left.length === 8 ? left : null)
+  if (!groups) return null
+  const bytes = new Uint8Array(16)
+  groups.forEach((group, at) => {
+    bytes[at * 2] = group >> 8
+    bytes[at * 2 + 1] = group & 0xff
+  })
+  return bytes
 }
 
-/** Any literal address, v4 or v6, that this server must never be pointed at by a stranger. */
+/** The four bytes at `from`, as an IPv4 address the v4 rules can judge. */
+function embeddedIpv4(bytes: Uint8Array, from: number): string {
+  return `${bytes[from]}.${bytes[from + 1]}.${bytes[from + 2]}.${bytes[from + 3]}`
+}
+
+/**
+ * Is this IPv6 address one a stranger must never point this server at?
+ *
+ * Two ideas, in this order:
+ *
+ * 1. AN ADDRESS THAT CARRIES AN IPv4 IS JUDGED BY THE IPv4 RULES, in every form the prefix can take.
+ *    This matters most for NAT64 (`64:ff9b::/96`): on an IPv6-only network, DNS64 answers for an
+ *    IPv4-only host with exactly this, so it must keep working for public addresses AND must refuse
+ *    `64:ff9b::a9fe:a9fe`, which the gateway will translate straight to 169.254.169.254. The old
+ *    pattern demanded a dotted tail (`64:ff9b::169.254.169.254`) that neither the URL serializer nor
+ *    `inet_ntop` ever produces, so the whole prefix was open.
+ * 2. EVERYTHING ELSE DEFAULTS TO REFUSED, because the public internet's unicast space is 2000::/3 and
+ *    nothing else. That is what closes the leaks a blocklist of patterns kept springing: `::7f00:1`
+ *    (what `https://[::127.0.0.1]/` normalises to), `fec0::/10` site-local (which a `f[cd]` pattern
+ *    cannot see), `100::/64` discard, and every reserved range nobody has thought about yet.
+ */
+function ipv6Blocked(input: string): boolean {
+  const bytes = ipv6Bytes(input)
+  // Unreadable is refused: this is only ever asked about something a resolver or a url handed over.
+  if (!bytes) return true
+  const first10Zero = bytes.subarray(0, 10).every((one) => one === 0)
+  // ::ffff:0:0/96 IPv4-mapped, and ::/96 IPv4-compatible — which also covers :: and ::1.
+  if (first10Zero && bytes[10] === 0xff && bytes[11] === 0xff) return ipv4Blocked(embeddedIpv4(bytes, 12))
+  if (first10Zero && bytes[10] === 0 && bytes[11] === 0) return ipv4Blocked(embeddedIpv4(bytes, 12))
+  if (bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b) {
+    const wellKnown96 = bytes.subarray(4, 12).every((one) => one === 0)
+    if (wellKnown96) return ipv4Blocked(embeddedIpv4(bytes, 12))
+    // The rest of the translation space, including RFC 8215's local-use 64:ff9b:1::/48. RFC 6052 puts
+    // the embedded IPv4 at a different offset for every prefix length, and the address does not carry
+    // its prefix length, so which four bytes to judge is unknowable from here. Refuse the range
+    // rather than guess: a wrong guess here is a fetch into the user's own network.
+    return true
+  }
+  // 2002::/16 6to4 tunnels the IPv4 in the next 32 bits: 2002:a00:1::1 is a tunnel to 10.0.0.1.
+  if (bytes[0] === 0x20 && bytes[1] === 0x02) return ipv4Blocked(embeddedIpv4(bytes, 2))
+  // 2001::/32 Teredo: the relay's IPv4 in bytes 4-7 and the client's, bit-flipped, in the last four.
+  if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0 && bytes[3] === 0) {
+    const client = [12, 13, 14, 15].map((at) => bytes[at]! ^ 0xff).join('.')
+    return ipv4Blocked(embeddedIpv4(bytes, 4)) || ipv4Blocked(client)
+  }
+  // 2000::/3, the only globally routable unicast space there is. Everything else: refused.
+  return (bytes[0]! & 0xe0) !== 0x20
+}
+
+/**
+ * Any literal address, v4 or v6, that this server must never be pointed at by a stranger.
+ *
+ * Takes any spelling of an address, not just the compressed canonical text a resolver happens to
+ * return: whitespace, upper case, a `%zone`, an uncompressed `0:0:0:0:0:ffff:7f00:1` and a dotted
+ * `::ffff:127.0.0.1` all reach the same verdict. That is deliberate — this is exported, and the
+ * previous version was only correct for the one form its two callers happened to pass.
+ */
 export function unsubscribeAddressBlocked(address: string): boolean {
-  const kind = net.isIP(address)
-  if (kind === 4) return ipv4Blocked(address)
-  if (kind === 6) return ipv6Blocked(address)
+  const text = address.trim()
+  const kind = net.isIP(text)
+  if (kind === 4) return ipv4Blocked(text)
+  if (kind === 6) return ipv6Blocked(text)
   // Not an address at all: the caller only asks about things the resolver returned, so this is a
   // resolver answering with something unreadable. Refuse it rather than guess.
   return true
@@ -149,6 +307,9 @@ export async function guardUnsubscribeUrl(
   raw: string,
   seam?: Partial<UnsubscribeHttpSeam>,
 ): Promise<UnsubscribeGuardOutcome> {
+  // Resolved BEFORE anything is judged, and outside the try below: a half seam is a programming
+  // error, and it used to come back as `unreachable`, i.e. indistinguishable from a DNS failure.
+  const paired = unsubscribeHttpSeam(seam)
   let url: URL
   try {
     url = new URL(raw)
@@ -164,8 +325,9 @@ export async function guardUnsubscribeUrl(
   if (url.port && url.port !== '443') {
     return { ok: false, reason: 'blocked-url', detail: `port ${url.port} is not fetched` }
   }
-  // WHATWG keeps the brackets on an IPv6 host; every check below wants the address itself.
-  const host = url.hostname.replace(/^\[|\]$/g, '')
+  // WHATWG keeps the brackets on an IPv6 host and the root's trailing dot on a name; every check
+  // below wants neither. `box.internal.` reached the name list as a miss until this normalised.
+  const host = judgedHost(url.hostname)
   if (!host) return { ok: false, reason: 'blocked-url', detail: 'the url has no host' }
   if (LOCAL_NAMES.test(host)) {
     return { ok: false, reason: 'blocked-host', detail: `${host} is not a public host` }
@@ -179,7 +341,7 @@ export async function guardUnsubscribeUrl(
 
   let resolved: Array<{ address: string }>
   try {
-    resolved = await unsubscribeHttpSeam(seam).lookup(host, { all: true })
+    resolved = await paired.lookup(host, { all: true })
   } catch (error) {
     return { ok: false, reason: 'unreachable', detail: `${host} did not resolve: ${String(error).slice(0, 120)}` }
   }
@@ -208,7 +370,21 @@ export type UnsubscribeFetchResult =
     url: string
     hops: number
   }
-  | { ok: false; reason: UnsubscribeFetchFailure; detail: string; url: string }
+  | {
+    ok: false
+    reason: UnsubscribeFetchFailure
+    detail: string
+    /**
+     * The url a human may be pointed at, and ABSENT when the guard refused one.
+     *
+     * A refusal on a redirect hop is refusing a target the SENDER chose, which never appeared in the
+     * mail: handing that back would publish it to the console and, through the "finish this
+     * unsubscribe" ask, to a model with network access — the guard's decision undone by the layer
+     * above it. So a refused url is reported by REASON only. A transport failure keeps its url: that
+     * one passed the guard, and it is the page the person would open next.
+     */
+    url?: string
+  }
 
 export interface UnsubscribeFetchOptions {
   method: 'GET' | 'POST'
@@ -271,8 +447,12 @@ export async function fetchUnsubscribe(
   let target = raw
 
   for (let hop = 0; hop <= UNSUBSCRIBE_MAX_REDIRECTS; hop += 1) {
-    const guarded = await guardUnsubscribeUrl(target, options.seam)
-    if (!guarded.ok) return { ok: false, reason: guarded.reason, detail: guarded.detail, url: target }
+    // The RESOLVED pair, not `options.seam` again: the resolver that answers the guard has to be the
+    // one whose socket is about to be used, and handing the same object to both is what guarantees it.
+    const guarded = await guardUnsubscribeUrl(target, seam)
+    // No `url`: see UnsubscribeFetchResult. `target` here is whatever the guard just refused, and on
+    // any hop past the first that is a host the sender picked, not one the user has seen.
+    if (!guarded.ok) return { ok: false, reason: guarded.reason, detail: guarded.detail }
 
     const remaining = options.deadlineAt - now()
     if (remaining <= 0) {
@@ -332,7 +512,8 @@ export async function fetchUnsubscribe(
         try {
           redirectTo = new URL(location, guarded.url).toString()
         } catch {
-          return { ok: false, reason: 'blocked-url', detail: 'the redirect target is not a url', url: guarded.url }
+          // Same rule: the thing being refused is the redirect's own target, so it is not handed back.
+          return { ok: false, reason: 'blocked-url', detail: 'the redirect target is not a url' }
         }
       } else {
         let body: string

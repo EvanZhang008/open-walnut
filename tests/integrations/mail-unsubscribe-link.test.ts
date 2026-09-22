@@ -9,8 +9,11 @@
  * - RESTRAINT: `View in browser` is not an unsubscribe link, and a `mailto:` footer link is the header
  *   path's business, not a candidate here. Counting either would make `bodyCandidates` claim this
  *   message is ambiguous when it is not.
- * - COST: the scan is capped at 256 KB, which is what keeps a 2 MB image-heavy newsletter under a
- *   millisecond. The perf assertion at the end is the ratchet on that.
+ * - COST: the scan is capped at 256 KB AND it must be linear in those bytes, so that markup a
+ *   stranger wrote cannot cost more than a moment on the one event loop every route shares. The
+ *   hostile-markup block at the end is the ratchet on that, and it is the case the original cost test
+ *   missed: it measured 2 MB of WELL-FORMED anchors, which the old regex handled in microseconds,
+ *   while `'<a>'` repeated to 256 KB cost 7.3 s and `'<a\t'` (no `>` at all) cost 37.1 s.
  *
  * Every fixture is invented markup in the shape real newsletters use.
  */
@@ -162,7 +165,86 @@ describe('what the body read is allowed to store', () => {
   });
 });
 
+describe('an anchor whose </a> never arrives', () => {
+  // Real bulk mail ships these, and the old regex could not read one at all: it required a closing
+  // tag, so an unclosed anchor was invisible (and scanning for the close it never found is what cost
+  // the seconds below). The forward walk judges it on the text up to the next anchor or the end.
+  it('is still read, and its label still decides', () => {
+    expect(extractUnsubscribeLink('<p><a href="https://x.example.invalid/u">Unsubscribe</p>'))
+      .toEqual({ link: 'https://x.example.invalid/u', candidates: 1 });
+  });
+
+  it('does not swallow the anchor that follows it', () => {
+    const markup = '<a href="https://x.example.invalid/a">Read more'
+      + '<a href="https://x.example.invalid/u">Unsubscribe</a>';
+    expect(extractUnsubscribeLink(markup)).toEqual({ link: 'https://x.example.invalid/u', candidates: 1 });
+  });
+
+  it('does not lend its label to the anchor before it', () => {
+    // `Read more` is the first anchor's whole content even though no `</a>` ended it, so the first
+    // anchor is not a candidate and the count stays at one.
+    const markup = '<a href="https://x.example.invalid/a">Read more'
+      + '<a href="https://x.example.invalid/u">Unsubscribe';
+    expect(extractUnsubscribeLink(markup)).toEqual({ link: 'https://x.example.invalid/u', candidates: 1 });
+  });
+
+  it('is not confused by a bare < in prose, or by a tag that hides one', () => {
+    const markup = '<p>3 < 5, always</p><a href="https://x.example.invalid/u">Unsubscribe</a>';
+    expect(extractUnsubscribeLink(markup)).toEqual({ link: 'https://x.example.invalid/u', candidates: 1 });
+  });
+
+  it('reads `<a` only as an anchor, never `<abbr` or `<article`', () => {
+    const markup = '<abbr title="Unsubscribe">u</abbr><article>Unsubscribe</article>'
+      + '<a href="https://x.example.invalid/u">Unsubscribe</a>';
+    expect(extractUnsubscribeLink(markup)).toEqual({ link: 'https://x.example.invalid/u', candidates: 1 });
+  });
+});
+
 describe('cost', () => {
+  /** Best of a few runs: this box runs several agents at once, so a single run measures the load. */
+  function fastestScanMs(html: string, runs = 5): number {
+    extractUnsubscribeLink(html);
+    let best = Infinity;
+    for (let attempt = 0; attempt < runs; attempt += 1) {
+      const started = performance.now();
+      extractUnsubscribeLink(html);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
+  }
+
+  /** 256 KB of one repeated token: the exact shape the quadratic version choked on. */
+  function repeatedTo(unit: string, bytes = LINK_SCAN_BYTES): string {
+    let out = '';
+    while (out.length < bytes) out += unit;
+    return out.slice(0, bytes);
+  }
+
+  it.each([
+    // Measured on this machine against the old regex, for scale: 7258 ms, 4437 ms, 2296 ms, 37140 ms.
+    ['an unclosed anchor', '<a>'],
+    ['one with only whitespace in it', '<a  >'],
+    ['one carrying an href', '<a href=x>'],
+    ['a tag that never even ends', '<a\t'],
+  ])('reads 256 KB of %s in under 100ms', (_what, unit) => {
+    const html = repeatedTo(unit);
+    expect(html.length).toBe(LINK_SCAN_BYTES);
+    const ms = fastestScanMs(html);
+    expect(extractUnsubscribeLink(html)).toEqual({ candidates: 0 });
+    expect(ms, `${unit} cost ${ms.toFixed(1)}ms`).toBeLessThan(100);
+  });
+
+  it('still finds the footer link behind 200 KB of that spam', () => {
+    // The reason there is no cap on how many anchors are examined: any cap low enough to bound the
+    // cost is also low enough for a hostile prefix to use up, and then a genuine footer link is lost.
+    const html = repeatedTo('<a>', 200 * 1024) + FOOTER;
+    expect(extractUnsubscribeLink(html)).toEqual({
+      link: 'https://track.example.invalid/c/9f2/prefs',
+      candidates: 2,
+    });
+    expect(fastestScanMs(html)).toBeLessThan(100);
+  });
+
   it('scans a two-megabyte newsletter in under 5ms', () => {
     // Real shape: a wall of tables and inline base64, with the footer at the very end.
     const block = '<table><tr><td><img src="data:image/png;base64,'

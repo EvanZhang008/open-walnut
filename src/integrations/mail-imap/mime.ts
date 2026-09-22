@@ -299,8 +299,18 @@ const LIST_ID_MAX_CHARS = 200
  *
  * The unbracketed fallback is for real senders, not for the RFC: RFC 2369 requires the brackets,
  * and a bare `https://…` value is common enough in the wild to be worth reading. It is only taken
- * when there is no bracketed group at all, and only when the whole value is one URL — splitting a
- * bare value on commas would cut `mailto:x@y?subject=a,b` in half.
+ * when there is no bracketed group at all.
+ *
+ * A bare value can still name SEVERAL targets, and that is the whole reason this splits rather than
+ * taking the value whole. `List-Unsubscribe: https://lists.example.invalid/u, mailto:leave@x.invalid`
+ * used to come back as ONE https target whose path carried the mailto: `new URL` accepts it, the SSRF
+ * guard passes it (the host is clean), the request 404s, and the console then tells the user "the
+ * unsubscribe page refused" about a list whose link was perfectly good. The bracketed path has always
+ * read that value as two targets, and one header must not mean two things.
+ *
+ * The split is deliberately narrow: only at a separator that a NEW target follows, so the comma in
+ * `mailto:x@y?subject=a,b` or in `https://x/u?ids=1,2` is left alone. A raw space cannot appear inside
+ * a url either, so it separates targets too — which is the other form senders emit.
  */
 function unsubscribeTargets(raw: string | undefined): string[] {
   if (!raw) return []
@@ -312,7 +322,13 @@ function unsubscribeTargets(raw: string | undefined): string[] {
   }
   if (out.length > 0) return out
   const bare = raw.trim()
-  return /^(https:\/\/|mailto:)/i.test(bare) ? [bare] : []
+  if (!/^(https?:\/\/|mailto:)/i.test(bare)) return []
+  // The limit bounds the work the same way `matchAll`'s iterator does above: a hostile bare value
+  // carrying thousands of urls stops being walked at the cap instead of becoming an array first.
+  return bare
+    .split(/[\s,]+(?=(?:https?:\/\/|mailto:))/i, UNSUBSCRIBE_TARGETS_MAX)
+    .map((one) => one.trim())
+    .filter((one) => !!one)
 }
 
 /**

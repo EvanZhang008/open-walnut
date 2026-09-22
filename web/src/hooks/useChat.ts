@@ -301,6 +301,15 @@ interface ToolActivity {
 /** Error entries carry a repeat count once merged, so the row can read "×6". */
 export type MergedErrorMessage = WithErrorCount<ChatMessage>;
 
+/**
+ * What became of one `sendMessage` call.
+ *
+ * `sent` means the server accepted it, `failed` means it never went out (an offline socket, a 500, an
+ * attachment upload that died), `queued` means a turn is in flight and it goes out when that one ends,
+ * and `dropped` means the queue was already full.
+ */
+export type ChatSendOutcome = 'sent' | 'queued' | 'dropped' | 'failed';
+
 export const MAX_QUEUE_SIZE = 10;
 interface UseChatReturn {
   messages: ChatMessage[];
@@ -315,7 +324,16 @@ interface UseChatReturn {
   /** Ref set to true right before older messages are prepended.
    *  Pass to ChatPanel so it can distinguish prepend from append for scroll preservation. */
   prependedRef: MutableRefObject<boolean>;
-  sendMessage: (text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean) => void;
+  /**
+   * Send, and SAY WHAT HAPPENED. It used to answer `void` and swallow its RPC's promise, so a caller
+   * could not tell a delivered message from one that died on an offline socket: the hook put a
+   * notification on screen and told the caller nothing. The Ask-object drawer needs the difference,
+   * because it spends a once-per-question latch on the send (`PluginChatView`).
+   *
+   * `queued` is not a delivery: the message goes out when the current turn ends, and a failure then is
+   * reported the same way as any other queued send (a notification), not through this promise.
+   */
+  sendMessage: (text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean) => Promise<ChatSendOutcome>;
   clearMessages: () => void;
   addLocalMessage: (content: string, source?: ChatMessage['source']) => void;
   stopGeneration: () => void;
@@ -937,14 +955,14 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
           return m;
         });
       });
-      sendRpcRef.current?.(next.text, next.taskContext, next.images, undefined, next.mode, next.planModeFirst, next.planModeOff);
+      void sendRpcRef.current?.(next.text, next.taskContext, next.images, undefined, next.mode, next.planModeFirst, next.planModeOff);
     } else {
       setIsStreaming(false);
     }
   }, []);
 
-  /** Send a message via RPC (not queued) */
-  const sendRpc = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean) => {
+  /** Send a message via RPC (not queued). Answers `sent` or `failed`; never rejects. */
+  const sendRpc = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean): Promise<'sent' | 'failed'> => {
     setIsStreaming(true);
     rpcInFlightRef.current = true;
     // User-initiated chat — clear source so streaming goes into an unsourced assistant message
@@ -976,13 +994,14 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     // base64 on a WS frame trips the 4MB cap and `ws` closes the socket (1009).
     // See api/image-upload.ts. Oversized pastes spill to disk the same way
     // (paste-spill.ts). Either failing lands in the same catch below.
-    Promise.all([buildImageRefsPayload(images), spillOversizedText(text)])
+    return Promise.all([buildImageRefsPayload(images), spillOversizedText(text)])
       .then(([imagePayload, finalText]) => wsClient.sendRpc('chat', { ...payload, message: finalText, ...imagePayload }))
-      .then(() => {
+      .then((): 'sent' => {
         rpcInFlightRef.current = false;
         drainOrStop();
+        return 'sent';
       })
-      .catch((e: Error) => {
+      .catch((e: Error): 'failed' => {
         rpcInFlightRef.current = false;
         notify({
           kind: 'operation-error',
@@ -998,13 +1017,14 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
         } else {
           setIsStreaming(false);
         }
+        return 'failed';
       });
   }, [drainOrStop, notify]);
   sendRpcRef.current = sendRpc;
 
-  const sendMessage = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean) => {
+  const sendMessage = useCallback(async (text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean): Promise<ChatSendOutcome> => {
     if (isStreamingRef.current) {
-      if (queueRef.current.length >= MAX_QUEUE_SIZE) return;
+      if (queueRef.current.length >= MAX_QUEUE_SIZE) return 'dropped';
       const queueId = ++queueIdCounter.current;
       const userMsg: ChatMessage = {
         key: nextMessageKey(),
@@ -1015,7 +1035,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       setMessages((prev) => [...prev, userMsg]);
       queueRef.current.push({ id: queueId, text, taskContext, images, mode, planModeFirst, planModeOff });
       setQueueCount(queueRef.current.length);
-      return;
+      return 'queued';
     }
 
     // Immediate send
@@ -1025,7 +1045,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       ...(source ? { source: source as ChatMessage['source'] } : {}),
     };
     setMessages((prev) => [...prev, userMsg]);
-    sendRpc(text, taskContext, images, source, mode, planModeFirst, planModeOff);
+    return await sendRpc(text, taskContext, images, source, mode, planModeFirst, planModeOff);
   }, [sendRpc]);
 
   const clearMessages = useCallback(() => {

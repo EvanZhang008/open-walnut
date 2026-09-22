@@ -1,8 +1,8 @@
 /**
- * The seven mail operations an agent can perform, as ONE implementation.
+ * The eight mail operations an agent can perform, as ONE implementation.
  *
  * `tools.ts` registers these for the Personal AI's tool list and `ops.ts` registers the same
- * seven for the op catalogue. Neither of them holds any logic: two registrations, one behaviour,
+ * eight for the op catalogue. Neither of them holds any logic: two registrations, one behaviour,
  * so a rule fixed for a tool is fixed for the op in the same edit.
  *
  * Three contracts this file keeps, and each one is the reason a line here looks the way it does:
@@ -12,9 +12,10 @@
  *   console gets, because it is literally the same code.
  * - Every answer is TEXT, and a failure is a plain sentence rather than a throw. A tool that
  *   throws hands the model a stack trace to reason about; a sentence tells it what to do next.
- * - Nothing here can send. The write surface is a draft and a request, and the request produces
- *   a letter for the human. The send is executed by the approval path itself, so there is no
- *   entry point on this side of the wall for a body's text to reach.
+ * - Nothing here can send, and nothing here can leave a mailing list. The write surface is a draft
+ *   and two requests, and a request produces a letter for the human. Both the send and the
+ *   unsubscribe ladder are executed by the approval path itself, so there is no entry point on this
+ *   side of the wall for a body's text to reach.
  * - The one thing here that WRITES outside mail is `mail_to_task`, and everything it writes into
  *   the task is escaped first (see `message-tasks.ts`). A task is read later by an agent that can
  *   act, so a subject able to plant an instruction in a task description would be the same
@@ -56,6 +57,7 @@ import type { MailApprovals } from './approvals.js'
 import type { MailDrafts } from './drafts.js'
 import type { MailMessageTasks } from './message-tasks.js'
 import type { MailService } from './service.js'
+import type { MailUnsubscribe } from './unsubscribe.js'
 import {
   AGENT_READ_MAX_BYTES,
   isCacheKey,
@@ -78,6 +80,13 @@ export interface MailAgentDeps {
   approvals: MailApprovals
   /** The message-to-task ledger, so the tool and the console cannot disagree about a duplicate. */
   tasks: MailMessageTasks
+  /**
+   * The unsubscribe ledger, reached for exactly ONE thing: `requestFromAgent`, which sends a letter.
+   *
+   * Never `run`. The whole of this surface's relationship with leaving a list is asking about it, the
+   * same way its relationship with sending a mail is asking about it (see `mailUnsubscribeRequest`).
+   */
+  unsubscribe: MailUnsubscribe
   /** Read per call, not captured: a plugin instance outlives any one request. */
   replica: () => boolean
 }
@@ -510,6 +519,49 @@ export async function mailToTask(deps: MailAgentDeps, input: Record<string, unkn
     ? ' The body could not be added as a note (Walnut has no readable body for this message yet).'
     : ''
   return `${JSON.stringify({ taskId: result.taskId, created: result.created })}\n${sentence}${noteNote}`
+}
+
+/**
+ * Ask the user to leave a mailing list. The agent's ONLY move on unsubscribing.
+ *
+ * Read what this does: one call into `requestFromAgent`, which sends a letter. No HTTP request leaves
+ * the machine, no draft is written, no mail is sent, and the ladder is not run. Whether the user is
+ * taken off the list is decided by them tapping a button, minutes or days later, and Walnut reports
+ * back in that letter's own thread.
+ *
+ * The answer names the letter and the rung, because those are the two facts the model needs in order
+ * to say something true to the user ("I have asked you; it will use the sender's one-click link") and
+ * to know not to ask again. It carries NO text from the message: the letter shows the user the mail,
+ * and a subject repeated here would have to be wrapped for nothing.
+ */
+export async function mailUnsubscribeRequest(
+  deps: MailAgentDeps,
+  input: Record<string, unknown>,
+): Promise<string> {
+  assertPrimary(deps)
+  const account = await resolveAccount(deps, str(input, 'account'))
+  const messageId = str(input, 'message')
+  if (!messageId) {
+    refuse('mail_unsubscribe_request needs a message id in "message", as listed by mail_list or mail_search.')
+  }
+  try {
+    const asked = await deps.unsubscribe.requestFromAgent(account.accountId, messageId)
+    return `${JSON.stringify({
+      letterId: asked.letterId,
+      method: asked.method,
+      ...(asked.url ? { url: asked.url } : {}),
+    })}\nA letter is waiting for the user; nothing has been unsubscribed and nothing was sent.`
+      + ' Do not ask again for this message: their answer is what acts, and Walnut reports the outcome'
+      + ' in that letter.'
+  } catch (error) {
+    // `stale` here means "already asked, still waiting" and `unsupported` means "this message offers no
+    // way out". Both are sentences the model should repeat to the user rather than retry, so they come
+    // back through `asText` as themselves.
+    if (error instanceof MailServiceError && (error.code === 'stale' || error.code === 'unsupported')) {
+      refuse(error.message)
+    }
+    throw error
+  }
 }
 
 export async function mailRequestSend(deps: MailAgentDeps, input: Record<string, unknown>): Promise<string> {

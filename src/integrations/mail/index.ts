@@ -130,7 +130,12 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // Leaving a mailing list. Its own module because it is the one part of this plugin that opens a url
   // a STRANGER wrote from inside the user's network, and every rule about that lives together in
   // `unsubscribe-http.ts`. Nothing here configures the guard: there is no switch to configure.
-  const unsubscribe = new MailUnsubscribe({ store, service, events, log: walnut.log })
+  // `drafts` + `approvals` are the mailto rung's: it sends through the ORDINARY approval ledger, on the
+  // console side of it, so an unsubscribe mail is validated, recorded and settled by exactly the code
+  // every other outgoing mail goes through. Nothing else about this module can send.
+  const unsubscribe = new MailUnsubscribe({
+    store, service, events, drafts, approvals, letters: walnut.letters, log: walnut.log,
+  })
   // Everything that deletes, in one place, so a read path cannot reach a delete by accident.
   const retention = new MailRetention({ store, bodies, events })
   // Mail leaving the plugin, in the two directions it can: one message becomes one task, and the
@@ -186,7 +191,18 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
 
   // The letter answers. Owned by the loader through `walnut.letters`, and filtered host-side to
   // this plugin's own letters, so the ledger can never be handed a letter id it did not issue.
-  walnut.letters.onAnswered((event) => approvals.onLetterAnswered(event))
+  //
+  // A ROUTER, because this plugin now issues letters from two ledgers. The unsubscribe ledger is
+  // asked first and answers whether the letter is one of ITS OWN (it looks the id up as a `ref` on its
+  // own rows); everything else goes to the approval ledger exactly as before. The order is not
+  // arbitrary and the fallthrough is not incidental: the approval path treats an answer it cannot find
+  // a draft for as SUPERSEDED and replies so, which for an unsubscribe letter would be a confident
+  // wrong answer ("the draft was edited, discarded or sent") about a message that has no draft at all.
+  // So the ledger that can prove ownership goes first, and the one that guesses goes last.
+  walnut.letters.onAnswered(async (event) => {
+    if (await unsubscribe.onLetterAnswered(event)) return
+    await approvals.onLetterAnswered(event)
+  })
 
   /**
    * One sweep shortly AFTER activate, before the first tick's interval elapses.
@@ -279,7 +295,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // nobody can reach. Every handle here is also owned by the loader, so a plugin teardown that
   // never reaches `dispose` below still releases them.
   const agentDeps: MailAgentDeps = {
-    service, drafts, approvals, tasks: messageTasks, replica: () => walnut.replica,
+    service, drafts, approvals, tasks: messageTasks, unsubscribe, replica: () => walnut.replica,
   }
   let registered: Array<{ dispose(): void | Promise<void> }> = []
   let currentLine = ''

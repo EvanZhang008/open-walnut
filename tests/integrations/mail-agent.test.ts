@@ -58,7 +58,7 @@ const MESSAGE_COUNT = 7;
 /** Every mail tool and op this slice registers, sorted. The catalogue, as a ratchet. */
 const TOOL_NAMES = [
   'mail_draft', 'mail_list', 'mail_read', 'mail_request_send', 'mail_search', 'mail_thread',
-  'mail_to_task',
+  'mail_to_task', 'mail_unsubscribe_request',
 ];
 
 interface SendCall {
@@ -446,7 +446,7 @@ describe('a zero-account install has no agent surface at all', () => {
 });
 
 describe('adding the first account arms the surface', () => {
-  it('registers seven tools, seven ops and one context line naming the account', async () => {
+  it('registers eight tools, eight ops and one context line naming the account', async () => {
     marks().accounts = [ONE];
     const created = await api<{ account: { accountId: string } }>('POST', '/accounts', {
       providerId: 'agentmail', values: { which: 'one' },
@@ -843,12 +843,12 @@ describe('the ops are the same seven, with the same answers', () => {
     expect(viaOp).toBe(viaTool);
   });
 
-  it('flags the reads readonly and the three writes as writes that are not destructive', async () => {
+  it('flags the reads readonly and the four writes as writes that are not destructive', async () => {
     const ops = (await listPluginOps()).filter((one) => one.owner === 'mail');
     expect(ops.filter((one) => one.readonly).map((one) => one.name).sort())
       .toEqual(['mail_list', 'mail_read', 'mail_search', 'mail_thread']);
     expect(ops.filter((one) => !one.readonly).map((one) => one.name).sort())
-      .toEqual(['mail_draft', 'mail_request_send', 'mail_to_task']);
+      .toEqual(['mail_draft', 'mail_request_send', 'mail_to_task', 'mail_unsubscribe_request']);
   });
 
   it('drafts and asks through the ops, and still sends nothing', async () => {
@@ -891,11 +891,13 @@ describe('no agent path reaches the transport', () => {
       const code = strip(await fsp.readFile(path.join(dir, name), 'utf-8'));
       if (/\.send\(/.test(code)) callers.push(name);
     }
-    // `sends.ts` owns the one call. `approvals.ts` and `digest.ts` are allowed ONLY `letters.send(`
-    // (the human inbox, not a mail transport). Spelled out per file rather than skipped: an
-    // exemption for a whole file would hide the NEXT `.send(` added to it, which is the one that
-    // would matter.
-    const letterSenders = ['approvals.ts', 'digest.ts'];
+    // `sends.ts` owns the one call. `approvals.ts`, `digest.ts` and `unsubscribe.ts` are allowed ONLY
+    // `letters.send(` (the human inbox, not a mail transport). Spelled out per file rather than
+    // skipped: an exemption for a whole file would hide the NEXT `.send(` added to it, which is the
+    // one that would matter. `unsubscribe.ts` is on the list for the AI rung, whose whole job is to
+    // send a LETTER — and it is the file where the distinction matters most, because the rung next to
+    // it can put a real mail on the wire.
+    const letterSenders = ['approvals.ts', 'digest.ts', 'unsubscribe.ts'];
     expect(callers.filter((name) => !letterSenders.includes(name))).toEqual(['sends.ts']);
     for (const name of letterSenders) {
       const source = strip(await fsp.readFile(path.join(dir, name), 'utf-8'));

@@ -2044,6 +2044,26 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }
 
+  // -- Default engine: learn whether the configured one is really installed --
+  //    The launch-path reader keeps a MIRROR of the engine probe and refuses to
+  //    wait for it (core/agents/default-engine.ts), so in a fresh process the
+  //    first launches inherit a configured engine nobody has checked yet. Asking
+  //    once here closes that window, off the request path, and it is a cache read
+  //    for the /api/engines route that follows.
+  void (async () => {
+    const { getConfig } = await import('../core/config-manager.js')
+    const { refreshDefaultEngineAvailability } = await import('../core/agents/default-engine.js')
+    const { DEFAULT_ENGINE, isKnownEngine } = await import('../core/agents/engine-registry.js')
+    // Only a configured NON-default engine has anything to learn: the default is
+    // Walnut's own substrate and is never probed.
+    const engine = (await getConfig()).defaults?.engine
+    if (isKnownEngine(engine) && engine !== DEFAULT_ENGINE) await refreshDefaultEngineAvailability(engine)
+  })().catch((err) => {
+    log.web.debug('default engine availability warm-up skipped', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  })
+
   // -- Startup timing: track each phase to diagnose slow startups --
   const startupT0 = Date.now()
   const startupPhase = (name: string) => {

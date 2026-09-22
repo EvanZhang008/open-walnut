@@ -201,8 +201,15 @@ export function applyJobResult(
   // already in the counter — zeroing would silently swallow that whole batch
   // (the one subtlety this feature has). Applied for 'skipped' too, for the same
   // reason the replay guard below is: the slot was consumed either way.
+  //
+  // NOT applied to a run that ERRORED. The count is the record that those items
+  // arrived and have not been looked at, and an error means nobody looked: the run
+  // never reached a session, or the session died before reading its batch. Taking
+  // the count anyway spent the batch on nothing AND left the routine below its
+  // threshold, so the backoff retry arrived as "no new items" (skipWhenIdle) and
+  // the clock leg stalled until the threshold filled again from scratch.
   if (job.wake) {
-    const observed = Math.max(0, Math.floor(result.wakeObserved ?? 0));
+    const observed = result.status === 'error' ? 0 : Math.max(0, Math.floor(result.wakeObserved ?? 0));
     job.state.wakeCount = Math.max(0, (job.state.wakeCount ?? 0) - observed);
     if (observed > 0 && result.status !== 'skipped') {
       // One audit row per wake fire, with the text the run injected. A 'skipped'
@@ -293,6 +300,8 @@ export function applyJobResult(
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
+  /** A human pressed Run now. The idle gate is a cadence rule, and they outrank it. */
+  forced = false,
 ): Promise<{
   status: 'ok' | 'error' | 'skipped';
   error?: string;
@@ -307,7 +316,11 @@ async function executeJobCore(
   // means the slot is spent — applyJobResult computes the next run for a
   // 'skipped' result and arms the replay guard. Before the init processor too:
   // an idle slot must cost neither an action nor a model call.
-  if (job.wake?.skipWhenIdle && (job.state.wakeCount ?? 0) === 0) {
+  //
+  // `forced` is exempt. Run now is a person asking to see this routine work, and
+  // answering it with a silent 'skipped' (no reason anywhere on the card, because a
+  // skip writes no lastError and no fire row) reads as the button being broken.
+  if (!forced && job.wake?.skipWhenIdle && (job.state.wakeCount ?? 0) === 0) {
     return { status: 'skipped', summary: 'no new items' };
   }
 
@@ -465,6 +478,7 @@ async function executeJobCore(
 export async function executeJob(
   state: CronServiceState,
   job: CronJob,
+  options: { forced?: boolean } = {},
 ): Promise<void> {
   if (!job.state) {
     job.state = {};
@@ -498,7 +512,7 @@ export async function executeJob(
   try {
     let timeoutId: ReturnType<typeof setTimeout>;
     coreResult = await Promise.race([
-      executeJobCore(state, job),
+      executeJobCore(state, job, options.forced === true),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(
           () => reject(new Error('cron: job execution timed out')),

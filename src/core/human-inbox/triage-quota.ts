@@ -210,12 +210,11 @@ export interface TriageLetterDeps {
 const TASK_STAMP_TIMEOUT_MS = 2_000;
 
 /**
- * Deliberately NOT `stampedAgentId` (sessions/ask-agent.ts): that helper folds
- * EVERY failure into `undefined`, which here is indistinguishable from the real
- * answer "this task is not triage" — and would be cached as one, which is the
- * failure this module's cache rule exists to stop, one layer down. Reading the
- * task directly lets a store failure THROW, and `isTriageSender` then treats a
- * throw as "no answer" and remembers nothing.
+ * Deliberately NOT `stampedAgentId` (sessions/ask-agent.ts), even though that
+ * helper now lets a store failure through too: its `undefined` still means BOTH
+ * "no stamp" and "no such task", and here those are answers about different
+ * questions. Reading the task directly keeps one meaning per outcome: a stamp, no
+ * stamp, or a throw that `isTriageSender` treats as no answer and never caches.
  */
 async function defaultIsTriageTask(taskId: string): Promise<boolean> {
   const { getTask } = await import('../task-manager.js');

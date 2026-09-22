@@ -193,48 +193,104 @@ describe('forgetAskObjectConversation', () => {
   })
 })
 
+/**
+ * The prune has TWO rules, because the two kinds of key age differently.
+ *
+ * A conversation id is re-stamped every time it is read, so 30 days honestly means 30 days UNUSED. A
+ * latch is stamped once, when it is claimed, and can never be re-stamped: the drawer reads it inside a
+ * state initializer, StrictMode runs those twice, and a read that wrote would consume a preset without
+ * sending it. Ageing a latch on that one stamp is the bug pinned below — an object asked about for more
+ * than a month lost its latches on day 31, so the next open quoted the whole object into the existing
+ * chat again and re-sent a canned question that had already been answered.
+ */
 describe('pruneAskObjectStore', () => {
   const day = 24 * 60 * 60 * 1000
   let storage: FakeStorage
-  const now = 100 * day
+  const now = 500 * day
+  /** Keys as the module writes them: `<prefix><agent>:<object>` and `<flag><name>:<agent>:<object>`. */
+  const conv = (object: string, agent = AGENT) => `walnut:ask-object:${agent}:${object}`
+  const latch = (name: string, object: string, agent = AGENT) =>
+    `walnut:ask-object-once:${name}:${agent}:${object}`
 
   beforeEach(() => {
     storage = new FakeStorage()
   })
 
-  it('drops entries older than 30 days and keeps the rest', () => {
-    storage.setItem('walnut:ask-object:walnut:fresh', JSON.stringify({ id: 'a', at: now - 29 * day }))
-    storage.setItem('walnut:ask-object:walnut:stale', JSON.stringify({ id: 'b', at: now - 31 * day }))
-    storage.setItem('walnut:ask-object-once:context:fresh', JSON.stringify({ at: now - day }))
-    storage.setItem('walnut:ask-object-once:preset:stale', JSON.stringify({ at: now - 400 * day }))
+  it('drops conversation ids unused for 30 days and keeps the rest', () => {
+    storage.setItem(conv('fresh'), JSON.stringify({ id: 'a', at: now - 29 * day }))
+    storage.setItem(conv('stale'), JSON.stringify({ id: 'b', at: now - 31 * day }))
+    storage.setItem(latch('context', 'fresh'), JSON.stringify({ at: now - day }))
+
+    expect(pruneAskObjectStore(storage, now)).toBe(1)
+    expect([...storage.map.keys()].sort()).toEqual([
+      latch('context', 'fresh'),
+      conv('fresh'),
+    ].sort())
+  })
+
+  it('keeps a latch for as long as its conversation, however old the latch is', () => {
+    // A mail asked about every week for a year: the conversation is fresh, both latches were claimed on
+    // day one. Expiring them re-quotes the object and re-sends a question the user did not click.
+    storage.setItem(conv('mail:1'), JSON.stringify({ id: 'conv-1', at: now - day }))
+    storage.setItem(latch('context', 'mail:1'), JSON.stringify({ at: now - 400 * day }))
+    storage.setItem(latch('preset', 'mail:1#1abc2'), JSON.stringify({ at: now - 400 * day }))
+
+    expect(pruneAskObjectStore(storage, now)).toBe(0)
+    expect(storage.length).toBe(3)
+  })
+
+  it('takes a latch with the conversation it belongs to, so the store stays bounded', () => {
+    storage.setItem(conv('mail:1'), JSON.stringify({ id: 'conv-1', at: now - 31 * day }))
+    storage.setItem(latch('context', 'mail:1'), JSON.stringify({ at: now - day }))
+    storage.setItem(latch('preset', 'mail:1#1abc2'), JSON.stringify({ at: now }))
+
+    expect(pruneAskObjectStore(storage, now)).toBe(3)
+    expect(storage.length).toBe(0)
+  })
+
+  it('keeps each agent\'s latches with that agent\'s own conversation', () => {
+    storage.setItem(conv('mail:1'), JSON.stringify({ id: 'conv-1', at: now }))
+    storage.setItem(conv('mail:1', 'mentor'), JSON.stringify({ id: 'conv-2', at: now - 31 * day }))
+    storage.setItem(latch('preset', 'mail:1#1abc2'), JSON.stringify({ at: now - 200 * day }))
+    storage.setItem(latch('preset', 'mail:1#1abc2', 'mentor'), JSON.stringify({ at: now }))
 
     expect(pruneAskObjectStore(storage, now)).toBe(2)
-    expect([...storage.map.keys()].sort()).toEqual([
-      'walnut:ask-object-once:context:fresh',
-      'walnut:ask-object:walnut:fresh',
-    ])
+    expect([...storage.map.keys()].sort()).toEqual([conv('mail:1'), latch('preset', 'mail:1#1abc2')].sort())
+  })
+
+  it('sweeps a latch written before the agent was part of its key', () => {
+    // The old shape names no agent, so it can never be matched to a chat again. Deliberately not
+    // migrated: nothing in the key says WHICH agent took it, and guessing wrong silently suppresses a
+    // send. The one-time cost is one more quote on the next ask about that object.
+    storage.setItem(conv('mail:1'), JSON.stringify({ id: 'conv-1', at: now }))
+    storage.setItem('walnut:ask-object-once:context:mail:1', JSON.stringify({ at: now }))
+    expect(pruneAskObjectStore(storage, now)).toBe(1)
+    expect([...storage.map.keys()]).toEqual([conv('mail:1')])
   })
 
   it('never touches a key outside its own namespace', () => {
     storage.setItem('walnut.deviceToken', 'secret')
     storage.setItem('walnut:prefs', '{}')
-    storage.setItem('walnut:ask-object:walnut:stale', JSON.stringify({ id: 'b', at: 0 }))
+    storage.setItem(conv('stale'), JSON.stringify({ id: 'b', at: 0 }))
     pruneAskObjectStore(storage, now)
     expect(storage.getItem('walnut.deviceToken')).toBe('secret')
     expect(storage.getItem('walnut:prefs')).toBe('{}')
-    expect(storage.getItem('walnut:ask-object:walnut:stale')).toBeNull()
+    expect(storage.getItem(conv('stale'))).toBeNull()
   })
 
   it('drops an entry with no readable timestamp — this module is the only writer', () => {
-    storage.setItem('walnut:ask-object:walnut:legacy', 'conv-bare-string')
-    storage.setItem('walnut:ask-object:walnut:broken', '{not json')
-    expect(pruneAskObjectStore(storage, now)).toBe(2)
+    storage.setItem(conv('legacy'), 'conv-bare-string')
+    storage.setItem(conv('broken'), '{not json')
+    storage.setItem(latch('preset', 'broken'), 'not-json-either')
+    // ...and a key in the namespace in no shape this module has ever written.
+    storage.setItem('walnut:ask-object-somethingelse', JSON.stringify({ at: now }))
+    expect(pruneAskObjectStore(storage, now)).toBe(4)
     expect(storage.length).toBe(0)
   })
 
   it('survives a storage that throws on removal', () => {
     const hostile = new FakeStorage()
-    hostile.setItem('walnut:ask-object:walnut:stale', JSON.stringify({ id: 'b', at: 0 }))
+    hostile.setItem(conv('stale'), JSON.stringify({ id: 'b', at: 0 }))
     vi.spyOn(hostile, 'removeItem').mockImplementation(() => { throw new Error('quota') })
     expect(() => pruneAskObjectStore(hostile, now)).not.toThrow()
   })

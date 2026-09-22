@@ -1,10 +1,23 @@
 /**
  * The unsubscribe link a newsletter offers in its own footer, when its headers offered none.
  *
- * Pure, and deliberately a set of bounded regular expressions rather than a parser: it runs in the
- * server process on markup a stranger wrote, on every body the cache stores, so it must not be able
- * to execute, fetch, recurse or take more than a moment. Measured against a 2 MB newsletter it is
- * the scan cap below that keeps it at well under a millisecond.
+ * Pure, and deliberately a small forward tokenizer rather than a regular expression over the whole
+ * document: it runs in the server process on markup a stranger wrote, on every body the cache
+ * stores, and the server has ONE event loop that every route shares, so its cost has to be bounded
+ * by the bytes it reads and by nothing else.
+ *
+ * It used to be one regex, `/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi`, driven by an `exec` loop. That is
+ * QUADRATIC on markup with no closing `</a>`: every `<a` start scans to the end of the string
+ * looking for a close that is not there, then the next one does it again. Measured on this machine
+ * at the 256 KB cap: `<a>` repeated cost 7.3 s, `<a  >` 4.4 s, `<a href=x>` 2.3 s and `<a\t`
+ * (no `>` anywhere) 37.1 s — a stranger's mail freezing every route for half a minute, the exact
+ * outage class this repo's rules forbid. `MAX_CANDIDATES` could not help: it is checked after `exec`
+ * has already done the scanning. The old cost test measured 2 MB of WELL-FORMED anchors, which the
+ * regex handles fine, and so it read green.
+ *
+ * The cursor here only ever moves FORWARD, so the whole scan is linear in the bytes it reads and
+ * hostile markup is no more expensive than a newsletter: the same four inputs now cost 5.1 ms,
+ * 3.1 ms, 2.3 ms and 0.01 ms. The ratchet is in the test file, on these exact inputs.
  *
  * Three rules it encodes, each of which is the difference between a useful answer and a wrong one:
  *
@@ -33,6 +46,16 @@ const MAX_URL_CHARS = 2048
 /** Distinct urls kept before the scan gives up: past this the answer is "ambiguous" either way. */
 const MAX_CANDIDATES = 8
 
+// Deliberately NO cap on how many anchors are looked at: the byte window above is the whole bound.
+// A count cap was tried and removed. It is not what makes the scan cheap (the walk below is linear),
+// and it can only lose a real link: 256 KB of `<a>` spam is 87,000 anchor starts, so any cap low
+// enough to matter is also low enough for a hostile PREFIX to use up before the footer is reached —
+// measured, a 4,096 cap turned "spam, then a genuine footer" from "link found" into "nothing".
+//
+// What bounds the total work instead is a property to preserve when editing this file: every anchor's
+// label is read out of a slice of the window that no other anchor reads, and every pattern here is
+// linear in its own input. So the sum over every anchor is one pass over the window.
+
 /**
  * What an unsubscribe link says about itself.
  *
@@ -42,7 +65,6 @@ const MAX_CANDIDATES = 8
  */
 const LABEL = /unsubscrib|opt[- ]?out|manage preferences/i
 
-const ANCHOR = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi
 const HREF = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i
 const ACCESSIBLE_NAME = /\b(?:title|aria-label)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi
 
@@ -68,8 +90,44 @@ function accessibleNames(attrs: string): string {
   return out.join(' ')
 }
 
+/** `<a` and `<a ` are anchors; `<abbr` and `<article` are not. What the old `\b` was for. */
+function nameEnds(char: string | undefined): boolean {
+  return char === undefined || !/[a-z0-9]/i.test(char)
+}
+
+/**
+ * The url this one anchor offers, when its own label says it leaves the list.
+ *
+ * The TARGET is read first only because it is the commoner rejection: an anchor with no https href
+ * can never be a candidate, so the three label reads are skipped for all of them. It decides nothing
+ * — the label still has to match, and it is still read out of the anchor's own markup rather than out
+ * of its target. (Both orders are a few milliseconds over 87,000 junk anchors; this one is the one
+ * that does less work on the shape hostile markup actually takes.)
+ *
+ * Then three readings of the same label, because newsletter markup hides the word in all three
+ * places. The RAW inner markup catches an `<img alt="Unsubscribe">` standing in for it; the
+ * TAG-STRIPPED text catches a word broken across tags (`<b>Un</b>subscribe`), which the raw form
+ * cannot see; and the anchor's own accessible names catch a link whose visible content is a spacer.
+ */
+function anchorLink(attrs: string, inner: string): string | undefined {
+  const href = attributeValue(attrs.match(HREF))
+  // `mailto:` is the header path's business, and an `http:` link is one the guard would refuse
+  // anyway: neither is a candidate, so neither makes this message look ambiguous.
+  if (!/^https:\/\//i.test(href) || href.length > MAX_URL_CHARS) return undefined
+  if (!LABEL.test(inner)
+    && !LABEL.test(inner.replace(/<[^>]*>/g, ''))
+    && !LABEL.test(accessibleNames(attrs))) return undefined
+  return href
+}
+
 /**
  * The https unsubscribe links this markup offers, in document order.
+ *
+ * One forward pass. `indexOf` from a cursor that never moves backwards is what makes the cost
+ * linear: a `<a` whose `</a>` never arrives is judged on the text up to the NEXT `<a` (or to the end
+ * of the window) rather than re-scanning the rest of the document looking for a close that is not
+ * there. Unclosed anchors are ordinary in real bulk mail, so this reads MORE of them than the old
+ * regex did, not fewer.
  *
  * Case-insensitive on the scheme because `HTTPS://` is legal and a sender wrote this string. The
  * url is otherwise handed over exactly as it appeared: the SSRF guard is the thing that decides
@@ -80,27 +138,50 @@ export function extractUnsubscribeLink(html: string): UnsubscribeLinkFind {
   const markup = html.length > LINK_SCAN_BYTES ? html.slice(0, LINK_SCAN_BYTES) : html
   const seen = new Set<string>()
   let first: string | undefined
-  ANCHOR.lastIndex = 0
-  let anchor: RegExpExecArray | null
-  while ((anchor = ANCHOR.exec(markup)) !== null) {
-    if (seen.size >= MAX_CANDIDATES) break
-    const attrs = anchor[1] ?? ''
-    const inner = anchor[2] ?? ''
-    // Three readings of the same label, because newsletter markup hides the word in all three places.
-    // The RAW inner markup catches an `<img alt="Unsubscribe">` standing in for it; the TAG-STRIPPED
-    // text catches a word broken across tags (`<b>Un</b>subscribe`), which the raw form cannot see;
-    // and the anchor's own accessible names catch a link whose visible content is a spacer.
-    if (!LABEL.test(inner)
-      && !LABEL.test(inner.replace(/<[^>]*>/g, ''))
-      && !LABEL.test(accessibleNames(attrs))) continue
-    const href = attributeValue(attrs.match(HREF))
-    // `mailto:` is the header path's business, and an `http:` link is one the guard would refuse
-    // anyway: neither is a candidate, so neither makes this message look ambiguous.
-    if (!/^https:\/\//i.test(href) || href.length > MAX_URL_CHARS) continue
-    if (seen.has(href)) continue
+  /** The open anchor waiting for its label: its attributes, and where its content starts. */
+  let openAttrs: string | undefined
+  let innerFrom = 0
+
+  /** Judge the open anchor, whose content ended at `innerTo`. */
+  const settle = (innerTo: number): void => {
+    if (openAttrs === undefined) return
+    const attrs = openAttrs
+    openAttrs = undefined
+    if (seen.size >= MAX_CANDIDATES) return
+    const href = anchorLink(attrs, markup.slice(innerFrom, innerTo))
+    if (!href || seen.has(href)) return
     seen.add(href)
     if (!first) first = href
   }
+
+  let at = 0
+  while (seen.size < MAX_CANDIDATES) {
+    const lt = markup.indexOf('<', at)
+    if (lt === -1) break
+    const closing = markup[lt + 1] === '/'
+    const nameAt = closing ? lt + 2 : lt + 1
+    const name = markup[nameAt]
+    if ((name !== 'a' && name !== 'A') || !nameEnds(markup[nameAt + 1])) {
+      // Any other tag, or a bare `<` in prose. Stepping one character on is what keeps the walk
+      // honest: jumping to this tag's `>` would step over an `<a` hidden inside its attributes.
+      at = lt + 1
+      continue
+    }
+    if (closing) {
+      settle(lt)
+      at = nameAt + 1
+      continue
+    }
+    const gt = markup.indexOf('>', nameAt + 1)
+    // An unterminated tag ends the document as far as this scan is concerned. This is the branch the
+    // old regex paid 37 s for: here it is one forward scan, once.
+    if (gt === -1) { settle(lt); break }
+    settle(lt)
+    openAttrs = markup.slice(nameAt + 1, gt)
+    innerFrom = gt + 1
+    at = gt + 1
+  }
+  settle(markup.length)
   return { ...(first ? { link: first } : {}), candidates: seen.size }
 }
 

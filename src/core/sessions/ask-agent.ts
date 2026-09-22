@@ -79,11 +79,27 @@ export async function resolveAskAgent(agentId: string | undefined): Promise<AskA
 
 /**
  * The agent an EXISTING ask was launched with, from its task stamp; undefined
- * for Walnut's asks, an unknown task, or a store hiccup. A retry on an existing
- * ask (the slot's Retry, ▶ Start on a stamped task) names no agent itself, and
+ * for Walnut's own asks and for a task nobody has. A retry on an existing ask
+ * (the slot's Retry, ▶ Start on a stamped task) names no agent itself, and
  * without this it would be resumed as the Personal AI.
+ *
+ * A STORE FAILURE THROWS, and that is the whole point of the shape. Folding it
+ * into `undefined` made "this ask is Walnut's" and "I could not read the stamp"
+ * the same answer, so a hiccup resumed a Mentor ask as Walnut: the wrong persona,
+ * the wrong memory, and a task whose own `agent_id` disagreed with the session
+ * running under it. Refusing the launch is recoverable (the human retries); a
+ * session wearing another agent's identity is not. The one failure that stays
+ * `undefined` is the task genuinely not being there, because the caller's own
+ * lookup turns that into the 404 it should be.
  */
 export async function stampedAgentId(taskId: string): Promise<string | undefined> {
   const { getTask } = await import('../task-manager.js');
-  return getTask(taskId).then((t) => t.agent_id || undefined, () => undefined);
+  try {
+    const task = await getTask(taskId);
+    return task.agent_id || undefined;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('No task found matching')) return undefined;
+    throw err;
+  }
 }

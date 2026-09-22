@@ -190,7 +190,7 @@ export interface MailMessageDto {
    * something is wrong".
    *
    * `available` costs the server nothing (it is derived from what the poll already stored);
-   * `done`/`pending` are derived per read from its own ledger, so a stale `done` is impossible.
+   * `done`/`attempt` are derived per read from its own ledger, so a stale `done` is impossible.
    */
   unsubscribe?: MailUnsubscribeDto;
 }
@@ -200,9 +200,33 @@ export type MailUnsubscribeAvailability = 'one-click' | 'mailto' | 'link' | 'non
 export interface MailUnsubscribeDto {
   available: MailUnsubscribeAvailability;
   /** Set when this message, or another of the same list, was already unsubscribed from. */
-  done?: { method: string; at: number; scope: 'message' | 'list' };
-  /** An attempt is on the wire right now. */
-  pending?: boolean;
+  done?: {
+    method: string;
+    at: number;
+    scope: 'message' | 'list';
+    /**
+     * What the list key was taken from, with `scope: 'list'`: a `List-Id` the sender published, or
+     * its address as the coarser fallback.
+     *
+     * It decides one word, and the word matters. One sender running three lists off one address
+     * shares a key, so leaving one marks all three; saying "this list" there would tell somebody they
+     * had left a list they are still on. Absent means the server did not say, which reads as `sender`.
+     */
+    keyedBy?: 'list-id' | 'sender';
+  };
+  /**
+   * This message's own attempt, while it is anything other than `done`.
+   *
+   * Three states, not a boolean, because the console says something different about each:
+   * `in-flight` is `Unsubscribing…`, `needs-human` is a page somebody has to finish, and `failed` is
+   * a click worth making again. `reason` is the server's own key (`confirm-form`, `cannot-send`,
+   * `send-unknown`, …) — switch on it, never print it; the route's `message` is the sentence.
+   */
+  attempt?: {
+    status: 'in-flight' | 'needs-human' | 'failed';
+    reason?: string;
+    at: number;
+  };
 }
 
 export interface MailBodyDto {
@@ -429,7 +453,7 @@ export interface MailUnsubscribeResult {
   status: 'done' | 'needs-human' | 'failed' | 'in-flight';
   method: 'one-click' | 'mailto' | 'link' | 'manual';
   at?: number;
-  /** `confirm-form`, `unclear`, `http-403`, `timeout`, `blocked-host`, `mailto-pending`, … */
+  /** `confirm-form`, `unclear`, `http-403`, `timeout`, `blocked-host`, `cannot-send`, `send-unknown`, … */
   reason?: string;
   detail?: string;
   /** The page a human still has to finish, on anything other than `done`. */

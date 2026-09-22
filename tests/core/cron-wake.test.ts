@@ -235,6 +235,50 @@ describe('wake: the counter half of a routine trigger', () => {
     expect(after.state.wakeCount).toBe(3);
   });
 
+  /**
+   * A run that ERRORED looked at nothing, so its batch is still waiting.
+   *
+   * Taking the count anyway spent the batch on a run that never read it AND left the routine below its
+   * threshold, so the backoff retry arrived as "no new items" under skipWhenIdle and the clock leg stalled
+   * until the threshold filled again from scratch.
+   */
+  it('keeps the batch when the run failed, so the retry still has something to read', async () => {
+    const runExecutor = vi.fn(async () => ({ status: 'error' as const, error: 'the host is unreachable' }));
+    const { service, storePath } = await makeService({ runExecutor });
+    const job = await service.add(wakeRoutine({
+      wake: { events: [MAIL_EVENT], countField: 'count', threshold: 20, skipWhenIdle: true },
+    }));
+
+    expect((await service.bumpWake(job.id, 20))!.due).toBe(true);
+    await service.run(job.id, 'force');
+
+    const after = await readJob(storePath, job.id);
+    expect(after.state.lastStatus).toBe('error');
+    expect(after.state.wakeCount, 'nobody read those 20 items').toBe(20);
+    // And the backoff retry is a real run, not a skip: the counter is still over the threshold.
+    await service.run(job.id, 'force');
+    expect(runExecutor).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Run now is a person asking to see the routine work. Answering with a silent skip reads as the button
+   * being broken, because a skip writes no `lastError` and no fire row: the card just says "skipped".
+   */
+  it('runs a forced job even when the counter is empty and skipWhenIdle is on', async () => {
+    const { service, storePath, runExecutor } = await makeService();
+    const job = await service.add(wakeRoutine({
+      wake: { events: [MAIL_EVENT], countField: 'count', threshold: 20, skipWhenIdle: true },
+    }));
+
+    expect(await service.run(job.id, 'force')).toEqual({ ok: true, ran: true });
+    expect(runExecutor).toHaveBeenCalledTimes(1);
+    const after = await readJob(storePath, job.id);
+    expect(after.state.lastStatus).toBe('ok');
+    // A DUE run with the same empty counter is still skipped: the exemption is the force, not the flag.
+    await service.run(job.id, 'due');
+    expect(runExecutor).toHaveBeenCalledTimes(1);
+  });
+
   it('records one audit row per wake fire, carrying the text it injected', async () => {
     const { service, storePath } = await makeService();
     const job = await service.add(wakeRoutine());

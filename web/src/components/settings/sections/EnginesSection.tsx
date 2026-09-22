@@ -28,14 +28,16 @@ import type { Config, SessionEngine } from '@open-walnut/core';
 import { SettingsSection, SettingsEmpty, SettingsNotice, SettingsSubCard } from '../SettingsSection';
 import { StatusIndicator } from '../inputs/StatusIndicator';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
-import { useEngineCatalog, type EngineCatalogEntry } from '@/hooks/useEngineCatalog';
+import { useEngineCatalog, useEngineCatalogHydration, type EngineCatalogEntry } from '@/hooks/useEngineCatalog';
 import { useEngineSettings } from '@/hooks/useEngineSettings';
 import { useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { envUncheckedSentence } from '@/utils/engine-settings-copy';
 import { hostIndicatorStatus, hostStatusText } from '@/utils/host-connect';
 import { LOCAL_HOST, type EngineSettingView } from '@/api/engine-settings';
 import { EngineSettingRow } from './EngineSettingRows';
-import { currentDefaultEngine, defaultEngineOptions, defaultEngineSave } from './default-engine-select';
+import {
+  currentDefaultEngine, defaultEngineOptions, defaultEnginePickerReady, defaultEngineSave,
+} from './default-engine-select';
 import '@/styles/engine-settings.css';
 
 const ENGINES_DESCRIPTION = "Which engine new sessions start on, and each engine's own settings (the ones its command-line config screen edits) on the host where your sessions run. Changes save automatically.";
@@ -95,6 +97,7 @@ function HostButton({ host, active, onPick }: { host: HostChoice; active: boolea
 
 export function EnginesSection({ config, onSave }: { config: Config; onSave: (partial: Partial<Config>) => Promise<void> }) {
   const catalog = useEngineCatalog();
+  const catalogHydration = useEngineCatalogHydration();
   const engines = useMemo(() => catalog.filter((e) => e.capabilities.settings), [catalog]);
 
   // Default engine for new sessions. Its option list is the WHOLE catalog (minus
@@ -102,6 +105,7 @@ export function EnginesSection({ config, onSave }: { config: Config; onSave: (pa
   // an engine can run sessions without exposing any settings of its own.
   const defaultEngine = currentDefaultEngine(config);
   const defaultOptions = useMemo(() => defaultEngineOptions(catalog, defaultEngine), [catalog, defaultEngine]);
+  const defaultPickerReady = defaultEnginePickerReady(catalogHydration);
   const [savingDefault, setSavingDefault] = useState(false);
   const [defaultError, setDefaultError] = useState<string | null>(null);
   const pickDefaultEngine = async (id: SessionEngine) => {
@@ -271,7 +275,7 @@ export function EnginesSection({ config, onSave }: { config: Config; onSave: (pa
             id="default-engine-select"
             data-testid="default-engine-select"
             value={defaultEngine}
-            disabled={savingDefault}
+            disabled={savingDefault || !defaultPickerReady}
             onChange={(e) => { void pickDefaultEngine(e.target.value as SessionEngine); }}
             style={{ maxWidth: 260 }}
           >

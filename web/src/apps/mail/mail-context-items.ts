@@ -23,6 +23,7 @@ import type { MailAccountDto, MailMessageDto, MailProviderSummary } from '@/api/
 import { normalizeContextMenuItems, type ContextMenuItem } from '@/utils/context-menu';
 import { isUnread, rowRecipientLabel, senderLabel } from './mail-format';
 import { mayOfferMarkRead } from './mail-providers';
+import { unsubscribeRowState } from './mail-unsubscribe-state';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 
 /** What the menu's items call. The row is passed back so a handler never has to find it again. */
@@ -43,6 +44,16 @@ export interface MessageMenuActions {
   onSummarize: (message: MailMessageDto) => void;
   onDraftReply: (message: MailMessageDto) => void;
   onAskAbout: (message: MailMessageDto) => void;
+  /**
+   * Leave the list this message came from. The one Walnut row that acts on the world.
+   *
+   * TWO handlers, because the row has two meanings and the menu must not be the thing that decides
+   * which: `onUnsubscribe` starts the programmatic ladder, and `onFinishUnsubscribe` opens the drawer
+   * for a page that wants a person. `unsubscribeRowState` picks, and it carries the ledger's `reason`
+   * across so the drawer's first message can say what stopped.
+   */
+  onUnsubscribe: (message: MailMessageDto) => void;
+  onFinishUnsubscribe: (message: MailMessageDto, reason?: string) => void;
 }
 
 export interface MessageMenuInput {
@@ -243,6 +254,10 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
   const taskId = message.taskId;
   const canMarkRead = mayOfferMarkRead(providers, message.accountId);
   const offerRead = !draftsView && canMarkRead;
+  // Read off the LIVE row for the same reason the read toggle is: the ledger's answer arrives as an
+  // event (`plugin:mail:unsubscribed`) while a menu can already be open, and a row built from the
+  // right-click's frozen payload would keep offering `Unsubscribe` for a list already left.
+  const unsubscribe = unsubscribeRowState({ message, canSend });
   return normalizeContextMenuItems([
     // `info`, not `section`: the section row neither truncates nor carries a title, and it
     // UPPERCASES, which shouts an account whose display name is its own address.
@@ -357,7 +372,27 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
       label: ASK_ROWS.about,
       onSelect: () => actions.onAskAbout(message),
     },
-    // S8 puts `Unsubscribe` here, under these three: it is the one Walnut row that acts on the world
-    // rather than asking a question, and `message.unsubscribe` already rides the DTO for it.
+    {
+      // `Unsubscribe`, UNDER the three questions: it is the one Walnut row that acts on the world
+      // rather than asking about it, so it sits at the bottom where a stray click is least likely.
+      //
+      // Present in EVERY state, including `none`, which is the one exception this menu makes to its own
+      // no-dead-controls rule and makes deliberately: the other rows here can look at a message with no
+      // unsubscribe link at all, so dropping this one would answer "why is there no Unsubscribe?" with
+      // silence. It is disabled and the title says what to do instead (`UNSUBSCRIBE_NONE_TITLE`).
+      //
+      // Dropped on OUTBOUND and DRAFT lists, where it is genuinely dead: mail this person wrote has no
+      // list to leave, and a `List-Unsubscribe` on their own sent copy would be their own footer.
+      key: 'unsubscribe',
+      when: !outbound && !draftsView,
+      ai: true,
+      label: unsubscribe.label,
+      disabled: unsubscribe.disabled,
+      ...(unsubscribe.title ? { title: unsubscribe.title } : {}),
+      onSelect: () => {
+        if (unsubscribe.action === 'ask') actions.onFinishUnsubscribe(message, unsubscribe.reason);
+        else if (unsubscribe.action === 'run') actions.onUnsubscribe(message);
+      },
+    },
   ]);
 }

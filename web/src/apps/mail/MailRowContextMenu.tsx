@@ -34,7 +34,9 @@ import { closeMailComposer, openMailForwardComposer, openMailReplyComposer } fro
 import { isSaveSettled } from './compose/compose-autosave';
 import { getMailSnapshot, openMailAsk, pairKey, setMailRowNote, type MailSnapshot } from './mail-store';
 import { mailRowLink, messageMenuItems } from './mail-context-items';
-import { MAIL_ASK_PRESETS, type MailAskKind } from './mail-ask';
+import { finishUnsubscribePreset, MAIL_ASK_PRESETS } from './mail-ask';
+import { unsubscribeFromMessage } from './mail-unsubscribe-actions';
+import { unsubscribeHandsOverToAsk } from './mail-unsubscribe-state';
 import { bodyQuoteText } from './mail-quote-text';
 
 /** The row a right-click landed on. The PAIR, because that is a message's identity. */
@@ -124,7 +126,7 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
    * the model still has the headers, which is a fair thing to ask about. A composer holding text the
    * server does not have yet is the one refusal, because this takes its pane.
    */
-  const askWalnut = (row: MailMessageDto, kind: MailAskKind) => {
+  const askWalnut = (row: MailMessageDto, preset: string) => {
     const pair = pairKey(row.accountId, row.messageId);
     if (snapshot.composer && !isSaveSettled()) {
       // Sticky, the store's own rule for anything the person has to act on: a sentence that retires
@@ -143,7 +145,6 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
       // composer the person opened while the body was on the wire.
       if (snapshot.composer) await closeMailComposer();
       const text = await quoteText(row);
-      const preset = MAIL_ASK_PRESETS[kind];
       openMailAsk({
         accountId: row.accountId,
         messageId: row.messageId,
@@ -194,9 +195,29 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
           onOpenTask: (taskId) => { navigate(`/tasks/${taskId}`); },
           onSearchSender: (address) => { void runMailSearch(address); },
           onCopyLink: copyLink,
-          onSummarize: (row) => askWalnut(row, 'summarize'),
-          onDraftReply: (row) => askWalnut(row, 'draft-reply'),
-          onAskAbout: (row) => askWalnut(row, 'ask'),
+          onSummarize: (row) => askWalnut(row, MAIL_ASK_PRESETS.summarize),
+          onDraftReply: (row) => askWalnut(row, MAIL_ASK_PRESETS['draft-reply']),
+          onAskAbout: (row) => askWalnut(row, MAIL_ASK_PRESETS.ask),
+          // The ladder's programmatic half. A `needs-human` verdict comes back with the page's url, and
+          // THAT is the moment to hand it to the drawer: the url is on the wire once and the ledger keeps
+          // only the reason, so a drawer opened later (after a reload) gets the reason and no page. The
+          // reader's own button does the identical thing (`MailReaderHead`), and both ask
+          // `unsubscribeHandsOverToAsk` rather than reading the status themselves — `reason: 'asked'` is
+          // a `needs-human` that must not open anything.
+          onUnsubscribe: (row) => {
+            void unsubscribeFromMessage(row.accountId, row.messageId).then((answered) => {
+              if (!unsubscribeHandsOverToAsk(answered) || !answered) return;
+              askWalnut(row, finishUnsubscribePreset({
+                ...(answered.url ? { url: answered.url } : {}),
+                ...(answered.reason ? { reason: answered.reason } : {}),
+                ...(row.from?.address ? { listName: row.from.address } : {}),
+              }));
+            });
+          },
+          onFinishUnsubscribe: (row, reason) => askWalnut(row, finishUnsubscribePreset({
+            ...(reason ? { reason } : {}),
+            ...(row.from?.address ? { listName: row.from.address } : {}),
+          })),
         },
       })}
       onClose={menu.close}

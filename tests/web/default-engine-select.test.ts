@@ -13,6 +13,7 @@ import { DEFAULT_ENGINE_CATALOG, type EngineCatalog } from '@/utils/engines';
 import {
   currentDefaultEngine,
   defaultEngineOptions,
+  defaultEnginePickerReady,
   defaultEngineSave,
 } from '@/components/settings/sections/default-engine-select';
 
@@ -87,6 +88,23 @@ describe('defaultEngineOptions', () => {
   it('works against the compiled-in catalog a cold page paints from', () => {
     const rows = defaultEngineOptions(DEFAULT_ENGINE_CATALOG, 'claude');
     expect(rows.map((r) => r.id)).toEqual(['claude', 'codex']);
+  });
+});
+
+describe('defaultEnginePickerReady', () => {
+  /**
+   * The cold catalog above is exactly the trap: both its rows claim `installed`,
+   * because it exists to paint the composer's toggle without a fetch. A pick made
+   * against it can name an engine this machine does not have, and nothing says so
+   * afterwards — the server quietly degrades that default back to Claude on every
+   * launch. So the picker waits for the server's answer, and only for that.
+   */
+  it('waits for hydration, and does not wait forever when it fails', () => {
+    expect(defaultEnginePickerReady('pending')).toBe(false);
+    expect(defaultEnginePickerReady('hydrated')).toBe(true);
+    // A failed fetch leaves the compiled-in list as the only answer anyone has;
+    // a picker that can never be used would be the worse outcome.
+    expect(defaultEnginePickerReady('failed')).toBe(true);
   });
 });
 
