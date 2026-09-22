@@ -220,6 +220,13 @@ export function unparsedTask(text: string): QuickTaskParseEnvelope {
  *  confirms in the composer UI, so the bar is lower than session-organize's
  *  unattended move — but below it, silence beats a coin flip. */
 const JEV_SUGGEST_MIN_CONFIDENCE = 0.5;
+/** The project question offers ~50 options, so a right answer's probability
+ *  mass is spread thinner than on the 5-option tier/priority questions.
+ *  Benchmarked on 53 real tasks with meaningful ground truth: 0.5 → 0.4 moved
+ *  9 abstains to hits and only 1 to a wrong pick, while on 92 real quick
+ *  notes (errand-heavy) NOTHING sat in the 0.35-0.5 band — confidence there
+ *  is bimodal, so the lower floor changes nothing. */
+const JEV_PROJECT_MIN_CONFIDENCE = 0.4;
 /** Sentinel choice key for "the field does not apply". Ours, so it can never
  *  collide with a project name or a custom tier id. */
 const JEV_NONE = '__none__';
@@ -236,9 +243,9 @@ interface JevQuickFields {
 /** A confident choice, or undefined. Shape validation lives in readChoice —
  *  a malformed answer and an unconfident one both mean "no opinion" here
  *  (these are composer suggestions; the LLM's answer simply stands). */
-function confidentChoice(answer: unknown): string | undefined {
+function confidentChoice(answer: unknown, floor = JEV_SUGGEST_MIN_CONFIDENCE): string | undefined {
   const choice = readChoice(answer);
-  return choice && choice.confidence >= JEV_SUGGEST_MIN_CONFIDENCE ? choice.choice : undefined;
+  return choice && choice.confidence >= floor ? choice.choice : undefined;
 }
 
 /** Jev's own budget for the classification call. Measured p50 is ~250ms via a
@@ -286,13 +293,16 @@ async function jevClassify(
       ...(knownProjects.length ? {
         project: {
           type: 'choice' as const,
-          instructions: 'Which existing project does this note belong to, judged against each project\'s summary and example task titles? One-off items (an errand, a call, a single reminder) belong to none.',
+          // A/B'd on 53 real tasks (2026-09-21): naming product work as the
+          // expected case (vs leading with the one-off escape) moved 2
+          // abstains to hits with zero new wrong picks.
+          instructions: 'Which existing project does this note belong to? Judge by subject matter against each project\'s summary and example task titles, and pick the best match even when the note does not name the project. Software bug reports, feature ideas and investigations almost always belong to the product project whose scope covers them. Reserve none for personal errands, one-off reminders, and notes no listed project plausibly covers.',
           criteria: Object.fromEntries([
             ...knownProjects.map((name) => {
               const summary = opts.projectSummaries?.[name];
               return [name, `File it under the project named "${name}".${summary ? ` ${summary}` : ''}`];
             }),
-            [JEV_NONE, 'No listed project fits; the task stays in the Inbox.'],
+            [JEV_NONE, 'A personal errand or one-off reminder, or a note outside every listed project\'s scope.'],
           ]),
         },
       } : {}),
@@ -322,7 +332,7 @@ async function jevClassify(
       out.priority = priority as 'immediate' | 'important' | 'backlog';
     }
 
-    const project = confidentChoice(answers.project);
+    const project = confidentChoice(answers.project, JEV_PROJECT_MIN_CONFIDENCE);
     if (project === JEV_NONE) out.project = null;
     else if (project) {
       const existing = canonicalMatch(project, knownProjects);

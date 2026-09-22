@@ -121,6 +121,23 @@ describe('parseQuickTask with Jev (direct-API fast model: parallel merge)', () =
     expect(parse.project_is_new).toBe(true);
   });
 
+  it('project uses its own lower floor (many options thin the mass): 0.45 lands, 0.35 does not', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix panel scroll"}'));
+    decideMock.mockResolvedValue({ project: choice('walnut', 0.45) });
+    const a = await parseQuickTask('panel scroll blocked at wide width', { knownProjects: ['walnut'] });
+    expect(a.parse.project).toBe('walnut');
+
+    decideMock.mockResolvedValue({ project: choice('walnut', 0.35) });
+    const b = await parseQuickTask('panel scroll blocked at wide width', { knownProjects: ['walnut'] });
+    expect(b.parse.project).toBeUndefined();
+
+    // tier/priority keep the 0.5 bar: 0.45 there is still "no opinion".
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix login","pinTier":"focus"}'));
+    decideMock.mockResolvedValue({ pinTier: choice('satellite', 0.45) });
+    const c = await parseQuickTask('fix login asap');
+    expect(c.parse.pinTier).toBe('focus');
+  });
+
   it('a Jev "none" clears an LLM EXISTING-project claim', async () => {
     sendMessageMock.mockResolvedValue(textResult('{"title":"Buy milk","project":"walnut"}'));
     decideMock.mockResolvedValue({ project: choice('__none__', 0.9) });

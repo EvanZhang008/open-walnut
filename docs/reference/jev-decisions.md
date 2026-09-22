@@ -48,7 +48,7 @@ provider secret.
 | Decision | Call site | Question shape | Confidence floor |
 |---|---|---|---|
 | Quick-start session to project | `src/core/session-organize.ts` | one Choice over existing projects plus an Inbox sentinel | 0.6 (unattended move: "a wrong move is worse than no move") |
-| Quick-add note to pinTier / priority / project | `src/core/quick-task-parse.ts` | three Choices (policy tiers, custom tiers, none) in ONE call | 0.5 (suggestions the user confirms in the composer) |
+| Quick-add note to pinTier / priority / project | `src/core/quick-task-parse.ts` | three Choices (policy tiers, custom tiers, none) in ONE call | 0.5 for tier/priority; 0.4 for project (about 50 options thin the probability mass; benchmarked on 53 real tasks, the lower floor recovered 9 correct picks at the cost of 1 wrong one, and changed nothing on errand-style notes whose confidence is bimodal) |
 
 Rules both sites share:
 
