@@ -1,5 +1,6 @@
 import { useState, useEffect, type RefObject } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { AppTopBar } from './AppTopBar';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useAppCatalog } from '@/apps/hooks';
@@ -170,6 +171,11 @@ export function Sidebar({
   };
 
   return (
+    <>
+    <AppTopBar todoVisible={todoVisible} onToggleTodo={handleToggleTodo}
+      onNotifications={() => setNotifOpen(true)} onVoice={() => setVoiceOpen(true)}
+      attentionCount={attentionCount} recording={!!audio.available && audio.recording}
+      onStopRecording={audio.toggleRecording} />
     <aside
       id="primary-sidebar"
       ref={asideRef}
@@ -331,6 +337,7 @@ export function Sidebar({
         sidebarCollapsed={collapsed}
       />
     </aside>
+    </>
   );
 }
 

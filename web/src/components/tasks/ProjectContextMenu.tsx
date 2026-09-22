@@ -54,6 +54,8 @@ export interface ProjectMenuActions {
   onNewSeparator?: (project: string) => void;
   onToggleFavorite?: (project: string) => void;
   onViewDetails?: (project: string) => void;
+  onMoveUp?: (project: string) => void;
+  onMoveDown?: (project: string) => void;
   /** Forwarded to useProjectActions: rename/delete finished on the server. */
   onChanged?: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
 }
@@ -102,6 +104,8 @@ export function buildProjectMenuItems(
       when: !!onToggleCollapse,
       onSelect: () => onToggleCollapse?.(target.project),
     },
+    { key: 'move-up', label: 'Move up', when: !!actions.onMoveUp, onSelect: () => actions.onMoveUp?.(target.project) },
+    { key: 'move-down', label: 'Move down', when: !!actions.onMoveDown, onSelect: () => actions.onMoveDown?.(target.project) },
     { divider: true },
     {
       key: 'new-task',
@@ -167,7 +171,7 @@ export function buildProjectMenuItems(
 }
 
 export function useProjectContextMenu(actions: ProjectMenuActions): ProjectContextMenuHandle {
-  const menu = useContextMenu<ProjectMenuTarget>();
+  const menu = useContextMenu<ProjectMenuTarget>({ ignorePressSelection: true });
   const { busy, rename, remove } = useProjectActions({ onChanged: actions.onChanged });
 
   const node = menu.state && (
@@ -179,10 +183,19 @@ export function useProjectContextMenu(actions: ProjectMenuActions): ProjectConte
         remove: (project) => { void remove(project); },
       })}
       onClose={menu.close}
+      returnFocus={menu.state.origin}
       ariaLabel={`Project actions for ${menu.state.payload.project || 'Inbox'}`}
       testId="project-ctx-menu"
     />
   );
 
-  return { open: menu.open, node, busy };
+  return { open: (event, target) => {
+    if (event.type !== 'click') return menu.open(event, target);
+    const rect = event.currentTarget.getBoundingClientRect();
+    return menu.open({
+      ...event, clientX: rect.right, clientY: rect.bottom,
+      preventDefault: () => event.preventDefault(),
+      stopPropagation: () => event.stopPropagation(),
+    }, target);
+  }, node, busy };
 }

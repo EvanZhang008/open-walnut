@@ -22,7 +22,8 @@
  * BELOW every card, and a typed title must end up as a real task in the tier.
  */
 
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
+import { type Page } from '@playwright/test'
 import { selectSection, selectProject } from './todo-panel-helpers'
 
 // Pin membership is GLOBAL server state on one shared fixture dataset: the geometry
@@ -166,10 +167,13 @@ test.describe('tier inline add', () => {
     await expect(page.locator('.todo-pinned-wrapper [data-task-id]', { hasText: title }))
       .toBeVisible({ timeout: 15_000 })
 
-    const created = ((await (await page.request.get('/api/tasks?fields=list')).json()) as
-      { tasks: { title: string; source: string; project: string }[] })
-      .tasks.find((t) => t.title === title)
-    expect(created).toBeTruthy()
+    const readCreated = async () => {
+      const response = await page.request.get('/api/tasks?fields=list')
+      expect(response.ok()).toBe(true)
+      return ((await response.json()) as { tasks: { title: string; source: string; project: string }[] }).tasks.find(t => t.title === title)
+    }
+    await expect.poll(readCreated).toBeTruthy()
+    const created = await readCreated()
     expect(created!.source).toBe('local')
     // '' = Inbox, never the literal string 'Inbox' (that would be a real project).
     expect(created!.project).toBe('')

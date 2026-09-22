@@ -396,12 +396,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const opErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fetchGeneration = useRef(0);
-  // Task id → the fetch generation current when a WS event (or an optimistic
-  // create) inserted it. A list fetch is a snapshot from the moment it was
-  // issued; a task inserted at generation >= that fetch's is newer than the
-  // snapshot and must survive the merge, or it vanishes until the next refetch.
-  const insertedAtGen = useRef(new Map<string, number>());
-  const noteInserted = (id: string) => { insertedAtGen.current.set(id, fetchGeneration.current); };
+  // Server events newer than an in-flight snapshot must survive its eventual merge.
+  const retainedAtGen = useRef(new Map<string, number>());
+  const retainServerTask = (id: string) => { retainedAtGen.current.set(id, fetchGeneration.current); };
   // True once the first fetch has populated the list — gates the loading spinner so
   // later background re-syncs (WS / post-mutation) don't blank the list into a spinner.
   const hasLoadedRef = useRef(false);
@@ -538,17 +535,18 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         // Time-sliced, the page stays responsive while rows mount. Loading
         // flips ride the same transition so there is no "loaded but empty"
         // flash between the states.
-        // Inserts newer than this snapshot survive it; older records are done
-        // with (a later snapshot has already ruled on them).
-        const retain = new Set<string>();
-        for (const [id, gen] of insertedAtGen.current) {
-          if (gen >= generation) retain.add(id);
-          else insertedAtGen.current.delete(id);
+        for (const [id, gen] of retainedAtGen.current) {
+          if (gen < generation) retainedAtGen.current.delete(id);
         }
         startTransition(() => {
-          // Identity-preserving merge: a refetch that changes 1 of ~6k tasks must
-          // not mint 6k fresh objects (that re-renders every memoized row).
-          setTasks((prev) => mergeFetchedTasks(prev, tasks, retain));
+          // Events may arrive after this transition is queued but before React applies it.
+          setTasks((prev) => {
+            const retain = new Set<string>();
+            for (const [id, gen] of retainedAtGen.current) {
+              if (gen >= generation) retain.add(id);
+            }
+            return mergeFetchedTasks(prev, tasks, retain);
+          });
           setLoading(false);
           setRefreshing(false);
         });
@@ -644,7 +642,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // HTTP first: the broadcast is still coming — suppress it. (Event first: this
     // IS the broadcast, nothing to guard.)
     if (via === 'response') guardEcho(`create:${task.id}`);
-    noteInserted(task.id);
+    retainServerTask(task.id);
     setTasks((prev) => {
       const withoutTmp = prev.filter((t) => t.id !== tmpId);
       const idx = withoutTmp.findIndex((t) => t.id === task.id);
@@ -688,7 +686,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // Upsert: merge when the task already exists (the task:updated upsert path
     // may have inserted it first — fork emits pin/tier updates BEFORE created —
     // and this created payload is the authoritative final state incl. group_id).
-    noteInserted(task.id);
+    retainServerTask(task.id);
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.id === task.id);
       if (idx === -1) return [task, ...prev];
@@ -708,6 +706,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     if (consumeEcho(`move:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-move', { id: task.id.slice(0,12) }); return; }
     if (consumeEcho(`update:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-update', { id: task.id.slice(0,12) }); return; }
     if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); return; }
+    retainServerTask(task.id);
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.id === task.id);
       if (idx === -1) {
@@ -718,7 +717,6 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         // Same guard as task:created: skip empty-title metadata/sync artifacts.
         if (!task.title || task.title.trim() === '') return prev;
         scrollLog('drag-trace-ws-updated-UPSERT', { id: task.id.slice(0,12) });
-        noteInserted(task.id);
         return [task, ...prev];
       }
       const merged = mergeTask(prev[idx], task);
@@ -751,7 +749,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
 
   useEvent('task:deleted', (data) => {
     const { id } = data as { id: string };
-    insertedAtGen.current.delete(id);
+    retainedAtGen.current.delete(id);
     setTasks((prev) => prev.filter((t) => t.id !== id));
   });
 

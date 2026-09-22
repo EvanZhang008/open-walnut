@@ -53,6 +53,7 @@ interface TaskKebabMenuProps {
   onUnparent?: (id: string) => void;
   /** Move task up one slot among its siblings. Pass undefined when task is already first. */
   onMoveUp?: (id: string) => void;
+  onMoveDown?: (id: string) => void;
   /** Remove this task from its virtual group. Only shown when task.group_id is set. */
   onUngroup?: (id: string) => void;
   /** True when this task's group is hidden from the Focus area — enables "Unhide group". */
@@ -410,7 +411,7 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
   );
 }
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete }: TaskKebabMenuProps) {
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveDown, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const sessionId = resolveTaskSessionId(task);
   const [open, setOpen] = useState(false);
@@ -593,7 +594,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
           )}
 
           {/* Move actions — hierarchy + order shortcuts (precise alternative to drag) */}
-          {((onUnparent && task.parent_task_id) || onMoveUp) && (
+          {((onUnparent && task.parent_task_id) || onMoveUp || onMoveDown) && (
             <>
               <div className="task-kebab-divider" />
               {onUnparent && task.parent_task_id && (
@@ -620,6 +621,11 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
                 >
                   <span className="task-kebab-icon">↑</span>
                   <span>Move up</span>
+                </button>
+              )}
+              {onMoveDown && (
+                <button className="task-kebab-item" onClick={event => { event.stopPropagation(); onMoveDown(task.id); closeMenu(); }}>
+                  <span className="task-kebab-icon">↓</span><span>Move down</span>
                 </button>
               )}
             </>

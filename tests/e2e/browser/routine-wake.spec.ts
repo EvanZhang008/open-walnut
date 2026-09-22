@@ -11,7 +11,7 @@
  * the routine would then only ever run on its clock, and the user would have no
  * way to tell from the UI. Chromium only: nothing here is engine-specific.
  */
-import { test, expect } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
 
 const API = 'http://localhost:3457'
 const ITEMS_EVENT = 'plugin:walnuttest:items-received'

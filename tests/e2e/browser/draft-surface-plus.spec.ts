@@ -39,7 +39,7 @@
  * frequent-directories row, so it is never in the chip window).
  */
 
-import { test, expect } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
 import {
   basenameOf, discoverFixtureRoot, draftCwdPill, draftPanel, draftPanels, draftProjectPill,
   loadHome, watchForbiddenRequests,
@@ -368,68 +368,31 @@ test('▶ on a title-only pinned tier card opens a bound draft, exactly like a l
 
 // ── 5. The toolbar names the task-first verb responsively (GAP-5) ─────────────
 
-test('the toolbar says "New task" until the panel is genuinely narrow', async ({ page }) => {
-  // Both exits from the draft create a task: one remains sessionless and one starts
-  // a session. Name that shared object at normal widths, but keep the create action
-  // reachable as a compact plus when the task panel has almost no horizontal room.
-  // Pin syncable layout prefs before boot: other serial specs drag this same panel,
-  // and the fixture server can otherwise hydrate their saved width into our context.
+test('the toolbar keeps New task named while search expands on demand', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-todo-width', '25')
     localStorage.setItem('open-walnut-sidebar-collapsed', 'true')
   })
-  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.setViewportSize({ width: 1280, height: 840 })
   await loadHome(page)
-
   const toolbar = page.locator('.todo-panel-toolbar')
-  const btn = toolbar.locator('.new-launcher-btn')
-  const label = btn.locator('.new-launcher-label')
+  const button = toolbar.locator('.new-launcher-btn')
   const search = toolbar.getByPlaceholder(/Search tasks/)
-  const view = toolbar.getByRole('button', { name: 'View options' })
-  const collapsedButtonPx = 28
-  const toolbarContentWidth = () => toolbar.evaluate((element) => {
-    const style = getComputedStyle(element)
-    return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-  })
-
-  await expect(btn).toBeVisible({ timeout: 25_000 })
-  await expect(label).toBeVisible()
-  await expect(label).toHaveText('New task')
-  await expect(btn).toHaveAttribute('title', 'New task')
-  await expect(btn).toHaveAttribute('aria-label', 'New task')
-  await expect(search).toBeVisible()
-  await expect(view).toBeVisible()
-  expect(await toolbarContentWidth()).toBeGreaterThan(275)
-  const normalBox = await btn.boundingBox()
-  const normalSearchBox = await search.boundingBox()
-  expect(normalBox?.width ?? 0).toBeGreaterThan(collapsedButtonPx * 2)
-  expect(normalSearchBox?.width ?? 0).toBeGreaterThan(100)
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-wide.png`, fullPage: false })
-
-  // With the pinned 25% panel and collapsed sidebar, a 4px viewport step moves
-  // the toolbar content box from 276px to 275px. This pins both sides of the
-  // container breakpoint instead of merely sampling far-away wide/narrow states.
-  await page.setViewportSize({ width: 1260, height: 900 })
-  await expect(label).toBeVisible()
-  expect(await toolbarContentWidth()).toBe(276)
-  const boundaryWideSearchBox = await search.boundingBox()
-  expect(boundaryWideSearchBox?.width ?? 0).toBeGreaterThan(100)
-
-  await page.setViewportSize({ width: 1256, height: 900 })
-  await expect(label).toBeHidden()
-  await expect(btn).toBeVisible()
-  await expect(btn.locator('svg')).toBeVisible()
-  await expect(search).toBeVisible()
-  await expect(view).toBeVisible()
-  expect(await toolbarContentWidth()).toBe(275)
-  const narrowBox = await btn.boundingBox()
-  const narrowSearchBox = await search.boundingBox()
-  expect(narrowBox?.width ?? 0).toBeCloseTo(collapsedButtonPx, 0)
-  expect(narrowSearchBox?.width ?? 0).toBeGreaterThan(60)
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-narrow.png`, fullPage: false })
-
-  // Responsive presentation must not change the established one-click behavior.
-  await btn.click()
+  for (const width of [1280, 1000, 820]) {
+    await page.setViewportSize({ width, height: 840 })
+    await expect(button.locator('.new-launcher-label')).toBeVisible()
+    await expect(button).toHaveAttribute('aria-label', 'New task')
+    await expect(search).toBeHidden()
+    await toolbar.getByRole('button', { name: 'Search tasks', exact: true }).click()
+    await expect(search).toBeFocused()
+    await expect(toolbar.getByRole('button', { name: 'View options' })).toBeVisible()
+    const bounds = await toolbar.boundingBox()
+    const searchBounds = await search.boundingBox()
+    expect(searchBounds!.width).toBeGreaterThan(30)
+    expect(searchBounds!.x + searchBounds!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width)
+    await search.press('Escape')
+  }
+  await button.click()
   await expect(draftPanel(page)).toBeVisible({ timeout: 10_000 })
   await expect(draftPanels(page)).toHaveCount(1)
 })
@@ -471,7 +434,9 @@ test('the session "+" is legible at rest on every surface, while the kebab stays
   await expect(labelPlus).toHaveCount(1, { timeout: 25_000 })
   const labelRest = await restVisibility(labelPlus)
   expect(labelRest.hovered, 'the label "+" was measured under the pointer').toBe(false)
-  expect(labelRest.opacity, 'the tier project label "+" is invisible at rest').toBeGreaterThan(0.2)
+  expect(labelRest.opacity, 'the project menu stays quiet at rest').toBe(0)
+  await tierProjectLabel(page, SURFACE_PROJECT).hover()
+  await expect.poll(() => labelPlus.evaluate(el => Number(getComputedStyle(el).opacity))).toBeGreaterThan(0.2)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-07-rest-visible-home.png`, fullPage: false })
 

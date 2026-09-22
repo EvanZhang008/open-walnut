@@ -12,7 +12,9 @@
  * client-side metadata pass serves the query — the same path production takes
  * while the semantic backend is still responding).
  */
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test } from './shortcut-test-fixture';
+import { type APIRequestContext } from '@playwright/test';
+import { isolateUiPrefs, selectSection } from './todo-panel-helpers';
 
 async function createTask(
   request: APIRequestContext,
@@ -50,6 +52,7 @@ test('search filters the Pinned tiers and Recent feed like the Tasks list', asyn
   await pinTask(request, pinnedMatch, 'focus');
   await pinTask(request, pinnedMiss, 'focus');
 
+  await isolateUiPrefs(page);
   await page.goto('/');
   await expect(page.locator('.todo-panel')).toBeVisible();
 
@@ -65,17 +68,21 @@ test('search filters the Pinned tiers and Recent feed like the Tasks list', asyn
   // search" proves nothing.
   await expect(focusCard(pinnedMatch)).toBeVisible({ timeout: 10_000 });
   await expect(focusCard(pinnedMiss)).toBeVisible();
+  await selectSection(page, 'Recent');
   await expect(recentCard(recentMatch)).toBeVisible();
   await expect(recentCard(recentMiss)).toBeVisible();
-
+  await selectSection(page, 'All');
+  await page.getByRole('button', { name: 'Search tasks', exact: true }).click();
   await page.locator('.todo-search-input').fill(token);
 
   // The report's bug: pinned cards ignored the query. Matching cards stay,
   // non-matching cards leave — in BOTH the Focus tier and the Recent feed.
   await expect(focusCard(pinnedMiss)).toHaveCount(0, { timeout: 5_000 });
   await expect(focusCard(pinnedMatch)).toBeVisible();
+  await selectSection(page, 'Recent');
   await expect(recentCard(recentMiss)).toHaveCount(0);
   await expect(recentCard(recentMatch)).toBeVisible();
+  await selectSection(page, 'All');
 
   // The main Tasks list agrees with the pinned area (same lens everywhere).
   await expect(page.locator(
@@ -90,5 +97,6 @@ test('search filters the Pinned tiers and Recent feed like the Tasks list', asyn
   await page.locator('.todo-search-clear').click();
   await expect(focusCard(pinnedMiss)).toBeVisible({ timeout: 5_000 });
   await expect(focusCard(pinnedMatch)).toBeVisible();
+  await selectSection(page, 'Recent');
   await expect(recentCard(recentMiss)).toBeVisible();
 });

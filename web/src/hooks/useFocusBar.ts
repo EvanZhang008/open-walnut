@@ -90,7 +90,7 @@ function tierField(tier: FocusTier): string | undefined {
  * Satellite (mirrors server splitTiers self-heal).
  */
 export function useFocusBar(): UseFocusBarReturn {
-  const { tasks, patchTasksLocal, guardEcho } = useTasksContext();
+  const { tasks, patchTasksLocal, guardEcho, showOperationError } = useTasksContext();
 
   const [visible, setVisibleState] = useState(readVisible);
 
@@ -296,9 +296,10 @@ export function useFocusBar(): UseFocusBarReturn {
     try {
       await focusApi.reorderPinnedTasks(newIds);
     } catch {
+      showOperationError('Could not save task order. Please try again.');
       focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
     }
-  }, [patchTasksLocal, applyFocusData]);
+  }, [patchTasksLocal, applyFocusData, showOperationError]);
 
   const setTier = useCallback(async (taskId: string, tier: FocusTier, newPinnedOrder?: string[]) => {
     lastWriteRef.current = Date.now();
@@ -317,9 +318,10 @@ export function useFocusBar(): UseFocusBarReturn {
       if (newPinnedOrder) await focusApi.reorderPinnedTasks(newPinnedOrder);
       await focusApi.setTaskTier(taskId, tier);
     } catch {
+      showOperationError('Could not move the task to that group. Please try again.');
       focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
     }
-  }, [patchTasksLocal, applyFocusData]);
+  }, [patchTasksLocal, applyFocusData, showOperationError]);
 
   // ── Optimistic local pin helpers (quick-add: show in tier before the create
   // round-trip returns a real id). Pure task patches + a separate persist call so

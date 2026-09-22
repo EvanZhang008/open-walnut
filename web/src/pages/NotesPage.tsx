@@ -109,7 +109,7 @@ function isValidTab(t: unknown): t is OpenTab {
  * active tab into `?path=`, so a plain refresh always carries one — treating it
  * as a sole-tab deep link silently dropped every other open tab on reload.
  */
-function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
+function hydrateTabs(searchParams: URLSearchParams, storageKey = LS_TABS_KEY): PersistedTabs {
   const urlAttachment = searchParams.get('attachment');
   const urlPath = searchParams.get('path');
   const urlTab: OpenTab | null = urlAttachment
@@ -121,7 +121,7 @@ function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
   let tabs: OpenTab[] = [];
   let activePath: string | null = null;
   try {
-    const raw = localStorage.getItem(LS_TABS_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<PersistedTabs>;
       tabs = Array.isArray(parsed.tabs) ? parsed.tabs.filter(isValidTab) : [];
@@ -196,14 +196,21 @@ function findTextInDom(root: HTMLElement, needles: string[]): HTMLElement | null
 /** Flash-highlight class applied to the jumped-to element (defined in globals.css). */
 const JUMP_FLASH_CLASS = 'notes-jump-flash';
 
-export function NotesPage() {
+interface NotesPageProps {
+  embedded?: boolean;
+}
+
+export function NotesPage({ embedded = false }: NotesPageProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const { tree, loading: treeLoading, error: treeError, refresh: refreshTree, addFolder, removeNote, removeFolder, removeAttachment, renameNote } = useNotesTree();
   const { favoriteNotes, toggleFavoriteNote, isNoteFavorite } = useFavorites();
 
   // ── Open-tabs model (replaces the old single selectedPath + attachmentPath) ──
+  // Embedded hydrates from the persisted workspace ONLY: a `?path=` on the
+  // homepage belongs to another surface.
+  const tabsKey = embedded ? 'open-walnut-home-notes-tabs' : LS_TABS_KEY;
   const initial = useRef<PersistedTabs | null>(null);
-  if (initial.current === null) initial.current = hydrateTabs(searchParams);
+  if (initial.current === null) initial.current = hydrateTabs(embedded ? new URLSearchParams() : searchParams, tabsKey);
   const [tabs, setTabs] = useState<OpenTab[]>(initial.current.tabs);
   const [activePath, setActivePath] = useState<string | null>(initial.current.activePath);
 
@@ -392,12 +399,22 @@ export function NotesPage() {
     markMovedAway,
   } = useNoteContent(activeNotePath);
 
+  // ── Embedded: one pane at a time ──
+  // The tree starts collapsed so the note fills the narrow panel, but a panel
+  // with no open tab has nothing to edit, so it opens on the tree instead.
+  // Both panes stay MOUNTED either way (hidden, not unmounted): the editor's
+  // pending save is flushed on unmount fire-and-forget, so unmounting it to
+  // show the tree would risk the dirty buffer.
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const treeVisible = !embedded || browseOpen || !activeTab;
+  const toggleBrowse = useCallback(() => setBrowseOpen(!treeVisible), [treeVisible]);
+
   // ── Persist {tabs, activePath} (mirrors the tree-width persistence) ──
   useEffect(() => {
     try {
-      localStorage.setItem(LS_TABS_KEY, JSON.stringify({ tabs, activePath }));
+      localStorage.setItem(tabsKey, JSON.stringify({ tabs, activePath }));
     } catch { /* ignore quota / disabled storage */ }
-  }, [tabs, activePath]);
+  }, [tabsKey, tabs, activePath]);
 
   // Jump-to-match request state: {path, needles} of the search hit to scroll
   // to (set by handleSelect below); the nonce re-fires the effect when the
@@ -458,6 +475,8 @@ export function NotesPage() {
 
   // ── URL sync: mirror the active tab into ?path= / ?attachment= (replace, never push) ──
   useEffect(() => {
+    // Embedded never writes the address bar — it would clobber the homepage's params.
+    if (embedded) return;
     if (!activeTab) {
       // Only clear if a notes param is present (avoid clobbering unrelated params).
       if (searchParams.get('path') || searchParams.get('attachment')) {
@@ -470,7 +489,7 @@ export function NotesPage() {
     setSearchParams(next, { replace: true });
   // setSearchParams is stable; intentionally exclude searchParams to avoid a sync loop.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, embedded]);
 
   // ── Inbound URL navigation while already MOUNTED: hydrateTabs only runs once,
   //    so a navigate('/notes?path=…') fired from inside this page (note link
@@ -478,6 +497,8 @@ export function NotesPage() {
   //    effect above keeps the URL equal to the active tab, so only a param that
   //    points elsewhere is a real navigation. ──
   useEffect(() => {
+    // Embedded reads no url either: `/?path=…` is not addressed to this panel.
+    if (embedded) return;
     const urlAttachment = searchParams.get('attachment');
     const urlPath = searchParams.get('path');
     const target = urlAttachment ?? urlPath;
@@ -486,7 +507,7 @@ export function NotesPage() {
     }
   // Only react to URL changes — activePath churn is the mirror effect's domain.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [searchParams, embedded]);
 
   // ── Single source of truth for opening a path (§1.3). All programmatic opens
   //    (tree click, Cmd+K, bookmark click, create, rename follow) funnel here. ──
@@ -510,8 +531,11 @@ export function NotesPage() {
       return next;
     });
     setActivePath(path);
+    // Embedded: picking something IS the end of browsing — hand the panel back
+    // to the editor (the toggle re-opens the tree).
+    if (embedded) setBrowseOpen(false);
     if (kind === 'note') pushRecent(path);
-  }, [activePath]);
+  }, [activePath, embedded]);
 
   // Thin wrappers preserve the existing prop names consumed by tree / palette /
   // backlinks / wiki-link clicks — they all open in the ACTIVE tab by default.
@@ -618,11 +642,14 @@ export function NotesPage() {
   // empty state) and open the Cmd+K quick-switcher (§1.3 "New / empty").
   const handleNewTab = useCallback(() => {
     setActivePath(null);
+    // Embedded has no palette (see the CommandPalette note below); clearing the
+    // active tab is what opens its tree, which is the same "pick a note" step.
+    if (embedded) return;
     // Defer so the empty state renders before the palette steals focus.
     setTimeout(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }));
     }, 0);
-  }, []);
+  }, [embedded]);
 
   // Resizable left pane. Both dividers here sit beside the editor pane, which
   // renders PDF <iframe>s (attachment preview / wiki embeds) — the reason these
@@ -810,8 +837,9 @@ export function NotesPage() {
   );
 
   // Rendered into the tab strip's trailing slot (both the with-tabs and the
-  // no-tabs strip), so there's a single definition of the button.
-  const aiToggleButton = (
+  // no-tabs strip), so there's a single definition of the button. Embedded has
+  // no AI column, so it has no toggle either.
+  const aiToggleButton = embedded ? undefined : (
     <button
       className={`notes-ai-toggle${chatOpen ? ' active' : ''}`}
       onClick={toggleChat}
@@ -824,15 +852,26 @@ export function NotesPage() {
   );
 
   if (treeLoading) return <LoadingSpinner />;
-  if (treeError) return <div className="empty-state"><p>Error: {treeError}</p></div>;
+  if (treeError && tree.length === 0 && !activeTab) return <div className="empty-state"><p>Error: {treeError}</p><button type="button" onClick={() => void refreshTree()}>Retry</button></div>;
 
-  return (
-    <div className="notes-split-view">
+  // Hidden panes keep their instance: `display:none` inline (the pane classes
+  // set `display:flex`, so a class alone could not hide them).
+  const treePaneStyle: React.CSSProperties = !treeVisible
+    ? { display: 'none' }
+    : embedded
+      ? { flex: '1 1 auto', minWidth: 0 }
+      : { width: listWidth, flex: `0 0 ${listWidth}px` };
+  const editorHidden = embedded && treeVisible;
+
+  const splitView = (
+    <div className={`notes-split-view${embedded ? ' notes-split-view-embedded' : ''}`}>
       <div
         className="notes-tree-pane"
         ref={listPaneRef}
-        style={{ width: listWidth, flex: `0 0 ${listWidth}px` }}
+        style={treePaneStyle}
+        inert={!treeVisible}
       >
+        {treeError && <div role="alert">{treeError} <button type="button" onClick={() => void refreshTree()}>Retry</button></div>}
         <NotesTreePanel
           tree={tree}
           selectedPath={activePath}
@@ -849,16 +888,20 @@ export function NotesPage() {
           onToggleFavorite={toggleFavoriteNote}
           revealPath={reveal.path}
           revealNonce={reveal.nonce}
-          onStartSession={handleStartCcSession}
-          onStartAgentChat={handleStartAgentChat}
+          onStartSession={embedded ? undefined : handleStartCcSession}
+          onStartAgentChat={embedded ? undefined : handleStartAgentChat}
         />
       </div>
-      <div className="notes-resize-handle" onPointerDown={treeResizePointerDown} />
-      <div className="notes-editor-pane">
+      {!embedded && <div className="notes-resize-handle" onPointerDown={treeResizePointerDown} />}
+      <div
+        className="notes-editor-pane"
+        style={editorHidden ? { display: 'none' } : undefined}
+        inert={editorHidden}
+      >
         {/* The AI toggle is IN the tab strip (real layout space, right-aligned), not
             floating over the pane — an absolute overlay sat on top of the note's own
             header/content. With no tabs open there's no strip, so we render a bare
-            strip that holds just the button. */}
+            strip that holds just the button (embedded has no button, so no strip). */}
         {tabs.length > 0 ? (
           <NotesTabStrip
             tabs={tabs}
@@ -874,11 +917,11 @@ export function NotesPage() {
             isFavorite={isNoteFavorite}
             onToggleFavorite={toggleFavoriteNote}
           />
-        ) : (
+        ) : aiToggleButton ? (
           <div className="notes-tab-strip notes-tab-strip-empty">
             <div className="notes-tab-trailing">{aiToggleButton}</div>
           </div>
-        )}
+        ) : null}
         <div className="notes-editor-body">
           {activeTab?.kind === 'attachment' ? (
             <AttachmentPreview notePath={activeTab.path} />
@@ -923,7 +966,8 @@ export function NotesPage() {
           )}
         </div>
       </div>
-      {chatOpen && (
+      {/* No AI column when embedded — the main session is the chat beside it. */}
+      {!embedded && chatOpen && (
         <>
           <div className="notes-chat-divider" onPointerDown={chatResizePointerDown} title="Drag to resize" />
           <div className="notes-chat-pane" style={{ flex: `0 0 ${chatWidth}px`, width: chatWidth }}>
@@ -1007,8 +1051,39 @@ export function NotesPage() {
         edit. Scope caveat: the shortcut is active only while /notes is mounted
         (reported in sharedFileTouches). Cmd+K jump opens in a NEW tab (or
         activates the existing one).
+        NOT embedded: the homepage's task search already owns Cmd+K, and a
+        companion panel must not install a second global shortcut on it. The
+        tree's own search box is the embedded search entry point.
       */}
-      <CommandPalette onNavigate={(p, opts) => handleSelect(p, { newTab: true, ...opts })} onCreate={handleQuickCreate} onPreviewAttachment={handlePreviewAttachment} />
+      {!embedded && (
+        <CommandPalette onNavigate={(p, opts) => handleSelect(p, { newTab: true, ...opts })} onCreate={handleQuickCreate} onPreviewAttachment={handlePreviewAttachment} />
+      )}
+    </div>
+  );
+
+  if (!embedded) return splitView;
+
+  return (
+    // The structural flex column is inline so the panel can never collapse
+    // before its CSS lands; everything cosmetic keys off the classes.
+    <div
+      className="notes-embedded"
+      style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minWidth: 0, minHeight: 0, height: '100%' }}
+    >
+      <div className="notes-embedded-bar">
+        <button
+          type="button"
+          className={`notes-browse-toggle${treeVisible ? ' active' : ''}`}
+          onClick={toggleBrowse}
+          aria-pressed={treeVisible}
+          disabled={!activeTab}
+          title={!activeTab ? 'Pick a note to start editing' : treeVisible ? 'Back to the note' : 'Browse the vault'}
+          data-testid="notes-browse-toggle"
+        >
+          Browse notes
+        </button>
+      </div>
+      {splitView}
     </div>
   );
 }

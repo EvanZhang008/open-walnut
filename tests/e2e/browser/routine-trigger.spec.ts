@@ -7,7 +7,7 @@
  * Needs a daemon advertising `triggers-v1`: the fixture spawns the built
  * binary from dist/daemon-binaries, so run `bash scripts/build-daemon.sh` first.
  */
-import { test, expect } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
 
 const API = 'http://localhost:3457'
 

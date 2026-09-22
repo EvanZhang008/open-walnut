@@ -133,7 +133,6 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
       onClick={toggleCollapse}
       onContextMenu={(e) => folderMenu.open(e, { groupId, label, project, collapsed })}
     >
-      <span className="task-group-chip-grip" aria-hidden="true" title="Drag to move the whole folder">⣿</span>
       {onToggleCollapse && (
         <button
           className={`collapse-chevron${!collapsed ? ' expanded' : ''}`}
@@ -249,6 +248,8 @@ interface SortableTierCardProps {
   onDelete?: (id: string) => void;
   /** Move this task to another project ('' = Inbox) — kebab "Project" select. */
   onMoveToProject?: (taskId: string, project: string) => void;
+  onMoveUp?: (taskId: string) => void;
+  onMoveDown?: (taskId: string) => void;
   /** Virtual-group cluster info for this card — drives the rail/rounding on every
    *  member. The header chip itself is now rendered standalone by TodoPanel (see
    *  GroupChip), so the rename/dissolve/hide callbacks live there, not here. */
@@ -274,7 +275,7 @@ interface SortableTierCardProps {
   isGroupTarget?: boolean;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, folderCollapsed, projectCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, onMoveUp, onMoveDown, groupInfo, folderCollapsed, projectCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const {
@@ -431,11 +432,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         >
           {isSelected ? '✓' : ''}
         </button>
-      ) : (
-        <span className="todo-pinned-drag-handle" aria-hidden="true" title="Drag to reorder">
-          &#x28FF;
-        </span>
-      )}
+      ) : null}
       {/* Unread dot — same affordance as the main list row, so the Focus and
           Satellite strips read the same way as the list. */}
       {unread && (
@@ -496,6 +493,8 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         onOpenSession={onOpenSession}
         onStartSelect={onStartSelect}
         onMoveToProject={onMoveToProject}
+        onMoveUp={onMoveUp}
+        onMoveDown={onMoveDown}
         onDelete={onDelete}
       />
     </div>

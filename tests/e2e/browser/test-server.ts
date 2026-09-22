@@ -3181,11 +3181,12 @@ if (mockDaemon) {
   })
 }
 
-// Exercise the same real dev-server contract as route E2E tests: the API binds
-// an OS-assigned port, while Vite serves current React source and proxies REST
-// and WebSocket traffic to that real Express server. No Playwright route mocks.
 const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
-const apiServer = await startServer({ port: 0, dev: true })
+const builtSpa = process.env.PW_BUILT_SPA === '1'
+if (builtSpa && !process.env.WALNUT_WEB_STATIC_DIR) {
+  throw new Error('PW_BUILT_SPA requires WALNUT_WEB_STATIC_DIR')
+}
+const apiServer = await startServer({ port: builtSpa ? testPort : 0, dev: !builtSpa })
 
 // Stream buffer of the stale-question session, as the live server holds it two
 // hours into an unanswered AskUserQuestion: the turn is still marked streaming,
@@ -3201,26 +3202,30 @@ const apiServer = await startServer({ port: 0, dev: true })
   sessionStreamBuffer.appendToolUse(STALE_QUESTION.sessionId, STALE_QUESTION.toolUseId, 'AskUserQuestion', STALE_QUESTION.input)
   sessionStreamBuffer.appendPermission(STALE_QUESTION.sessionId, STALE_QUESTION.requestId, 'AskUserQuestion', STALE_QUESTION.input, 'Need a colour')
 }
-const apiAddress = apiServer.address()
-if (!apiAddress || typeof apiAddress === 'string') {
-  throw new Error('Playwright API server did not bind a TCP port')
-}
-const apiTarget = `http://127.0.0.1:${apiAddress.port}`
-const { createServer: createViteServer } = await import('vite')
-const viteServer = await createViteServer({
-  root: path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../web'),
-  server: {
-    host: '127.0.0.1',
-    port: testPort,
-    strictPort: true,
-    proxy: {
-      '/api': { target: apiTarget, changeOrigin: true },
-      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true },
+
+let viteServer: import('vite').ViteDevServer | undefined
+if (!builtSpa) {
+  const apiAddress = apiServer.address()
+  if (!apiAddress || typeof apiAddress === 'string') {
+    throw new Error('Playwright API server did not bind a TCP port')
+  }
+  const apiTarget = `http://127.0.0.1:${apiAddress.port}`
+  const { createServer: createViteServer } = await import('vite')
+  viteServer = await createViteServer({
+    root: path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../web'),
+    server: {
+      host: '127.0.0.1',
+      port: testPort,
+      strictPort: true,
+      proxy: {
+        '/api': { target: apiTarget, changeOrigin: true },
+        '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true },
+      },
     },
-  },
-  logLevel: 'warn',
-})
-await viteServer.listen()
+    logLevel: 'warn',
+  })
+  await viteServer.listen()
+}
 console.log(`Playwright test server ready on http://localhost:${testPort}`)
 
 // Graceful shutdown

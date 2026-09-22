@@ -15,7 +15,8 @@
  * The write is HELD at the network layer for HOLD_MS, so any propagation that
  * still rode the server round-trip (or its echo) fails the sub-second assertions.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from './shortcut-test-fixture'
+import { type Page } from '@playwright/test'
 
 const TASK_ID = 'pw-task-store-sync'
 const TITLE = 'Store sync fixture task'
@@ -55,6 +56,7 @@ test('a write on /tasks/:id reaches the mounted home board row before the server
 
   // Bring the row onto the board FIRST, so what is asserted later is a mounted
   // (merely hidden) surface rather than one that remounted on the way back.
+  await page.getByRole('button', { name: 'Search tasks', exact: true }).click()
   await page.locator('.todo-search-input').fill(TITLE)
   const boardRow = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(boardRow).toBeVisible()

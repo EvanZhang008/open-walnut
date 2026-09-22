@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
+import { type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 
 const SCREENSHOT_DIR = '/tmp/walnut-create-plugin'

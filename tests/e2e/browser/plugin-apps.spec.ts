@@ -2,7 +2,8 @@ import http from 'node:http'
 import path from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
+import { type Page } from '@playwright/test'
 
 /**
  * Plugin APPS — the frontend half of the plugin app system.

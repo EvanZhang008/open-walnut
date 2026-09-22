@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test } from './shortcut-test-fixture'
+import { type Locator, type Page } from '@playwright/test'
 
 /**
  * Three things the Mail console asked a human to put up with, against the dense fixture, in both

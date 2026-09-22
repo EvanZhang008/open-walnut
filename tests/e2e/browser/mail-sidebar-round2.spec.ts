@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { expect, test } from './shortcut-test-fixture'
 import {
   HARBOUR,
   MARINA,

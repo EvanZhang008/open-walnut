@@ -17,7 +17,8 @@
  * dataset.
  */
 
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
+import { type Page } from '@playwright/test'
 import { selectSection } from './todo-panel-helpers'
 import { presetTierViewModes } from './draft-surface-helpers'
 

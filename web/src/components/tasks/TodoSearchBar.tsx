@@ -22,6 +22,11 @@ export function TodoSearchBar({
   resultCount,
 }: TodoSearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const reveal = useCallback(() => {
+    setExpanded(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, []);
   // Keep keystrokes urgent while the parent list update runs as interruptible work.
   const [draftQuery, setDraftQuery] = useState(query);
 
@@ -38,32 +43,39 @@ export function TodoSearchBar({
   // Keyboard shortcut: Cmd+K or / to focus
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      const main = inputRef.current?.closest('.main-page');
+      if (!main?.getClientRects().length) return;
+      const ensureVisible = () => {
+        if (inputRef.current?.closest('[inert]')) window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
+        reveal();
+      };
       // Cmd+K (Mac) or Ctrl+K (Windows)
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
-        inputRef.current?.focus();
+        ensureVisible();
         return;
       }
       // / key when no editable element is focused
       if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA' && !(document.activeElement as HTMLElement)?.isContentEditable) {
         e.preventDefault();
-        inputRef.current?.focus();
+        ensureVisible();
       }
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [reveal]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       clear();
       inputRef.current?.blur();
+      setExpanded(false);
     }
   }, [clear]);
 
   return (
-    <div className="todo-search-bar">
-      <span className="todo-search-icon">{ICON_SEARCH}</span>
+    <div className={`todo-search-bar${expanded || draftQuery ? ' is-expanded' : ' is-compact'}`}>
+      <button type="button" className="todo-search-reveal" aria-label="Search tasks" onClick={reveal}>{ICON_SEARCH}</button>
       <input
         ref={inputRef}
         type="text"

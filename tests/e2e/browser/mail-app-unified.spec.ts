@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test } from './shortcut-test-fixture'
+import { type Locator, type Page } from '@playwright/test'
 
 /**
  * The merged lists, against the dense fixture: two accounts, 70 folders, the same roles under

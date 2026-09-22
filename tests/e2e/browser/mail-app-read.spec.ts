@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from './shortcut-test-fixture'
+import { type Page } from '@playwright/test'
 
 /**
  * The Mail console's read path, end to end, against a real server with a canned provider plugin.

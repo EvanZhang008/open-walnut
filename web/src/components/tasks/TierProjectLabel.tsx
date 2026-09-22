@@ -26,7 +26,6 @@
  */
 import { type HTMLAttributes } from 'react';
 import * as ICONS from '../common/Icons';
-import { ProjectPlusMenu } from './ProjectHeaderMenus';
 import { useProjectContextMenu } from './ProjectContextMenu';
 
 export interface TierProjectLabelRowProps {
@@ -58,12 +57,14 @@ export interface TierProjectLabelRowProps {
   isFavorite?: boolean;
   onToggleFavorite?: (project: string) => void;
   onViewDetails?: (project: string) => void;
+  onMoveUp?: (project: string) => void;
+  onMoveDown?: (project: string) => void;
 }
 
 export function TierProjectLabelRow({
   project, count, collapsed, inert, dropIndicator, dragProps,
   onToggleCollapse, onAddTask, onAddSeparator, onAddFolder, onAddSession,
-  isFavorite, onToggleFavorite, onViewDetails,
+  isFavorite, onToggleFavorite, onViewDetails, onMoveUp, onMoveDown,
 }: TierProjectLabelRowProps) {
   const projectMenu = useProjectContextMenu({
     onToggleCollapse,
@@ -74,7 +75,7 @@ export function TierProjectLabelRow({
     // different actions on one row.
     onNewSeparator: onAddSeparator,
     onToggleFavorite,
-    onViewDetails,
+    onViewDetails, onMoveUp, onMoveDown,
   });
   const className = [
     'tier-project-label',
@@ -146,13 +147,9 @@ export function TierProjectLabelRow({
           // would re-arm it mid-drag.
           onPointerLeave={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = !inert; }}
         >
-          <ProjectPlusMenu
-            project={project}
-            onAddSession={onAddSession}
-            onAddTask={onAddTask}
-            onAddSeparator={onAddSeparator}
-            onAddFolder={onAddFolder}
-          />
+          <button type="button" className="navigation-more" aria-label={`${project || 'Inbox'} menu`} aria-haspopup="menu"
+            onPointerDown={event => event.stopPropagation()}
+            onClick={event => projectMenu.open(event, { project, collapsed, favorite: isFavorite })}>···</button>
         </span>
       </div>
       {/* Sibling, not child — see the note in ProjectContextMenu.tsx. */}

@@ -14,7 +14,8 @@
  * so serialize within the file.
  */
 
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
+import { type Page } from '@playwright/test'
 import { selectSection, showAllSections } from './todo-panel-helpers'
 
 test.describe.configure({ mode: 'serial' })
@@ -173,9 +174,10 @@ test('mid-drag preview: card visually enters an (empty) custom tier before drop'
     await showAllSections(page)
 
     const tierScope = page.locator('.todo-pinned-section:not(.todo-pinned-section-recent)')
-    const card = tierScope.locator(`.todo-pinned-card[data-task-id="${taskId}"]`)
+    const card = tierScope.locator(`[data-task-id="${taskId}"]`)
     await expect(card).toBeVisible({ timeout: 15_000 })
-    const handle = card.locator('.todo-pinned-drag-handle')
+    const handle = card
+    await handle.scrollIntoViewIfNeeded()
     const srcBox = await handle.boundingBox()
     expect(srcBox).not.toBeNull()
 
@@ -183,7 +185,7 @@ test('mid-drag preview: card visually enters an (empty) custom tier before drop'
     await page.mouse.down()
     // Small activation move — the empty custom tier subgroup mounts once the
     // drag is live (the drag-active exemption from the non-empty gate).
-    await page.mouse.move(srcBox!.x + srcBox!.width / 2, srcBox!.y + srcBox!.height / 2 + 8)
+    await page.mouse.move(srcBox!.x + srcBox!.width / 2 + 15, srcBox!.y + srcBox!.height / 2, { steps: 4 })
     const zone = page.locator(`[data-drop-zone="${tierId}-drop-zone"]`)
     await expect(zone).toBeVisible({ timeout: 10_000 })
 
@@ -198,10 +200,24 @@ test('mid-drag preview: card visually enters an (empty) custom tier before drop'
     // position before releasing, like a human tracking the moving highlight.
     // Releasing at the stale coordinates lands on whatever card slid under the
     // pointer and triggers drop-into-group instead of the tier move.
-    const zoneBoxNow = await zone.boundingBox()
-    expect(zoneBoxNow).not.toBeNull()
-    await page.mouse.move(zoneBoxNow!.x + zoneBoxNow!.width / 2, zoneBoxNow!.y + Math.min(zoneBoxNow!.height / 2, 40), { steps: 6 })
-    await page.waitForTimeout(300)
+    const scroller = page.locator('.home-navigation-scroll')
+    for (let round = 0; round < 20; round++) {
+      const target = (await zone.boundingBox())!
+      const viewport = (await scroller.boundingBox())!
+      if (target.y >= viewport.y + 30 && target.y + Math.min(target.height, 60) <= viewport.y + viewport.height - 30) break
+      await page.mouse.move(viewport.x + viewport.width / 2, viewport.y + viewport.height / 2)
+      const before = await scroller.evaluate(el => el.scrollTop)
+      await page.mouse.wheel(0, target.y < viewport.y + 30 ? -160 : 160)
+      await expect.poll(() => scroller.evaluate(el => el.scrollTop)).not.toBe(before)
+    }
+    for (let step = 0; step < 5; step++) {
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+      const current = (await zone.boundingBox())!
+      await page.mouse.move(current.x + current.width / 2, current.y + Math.min(current.height / 2, 40), { steps: 4 })
+    }
+    const landing = (await zone.boundingBox())!
+    const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-drop-zone]')?.getAttribute('data-drop-zone'), { x: landing.x + landing.width / 2, y: landing.y + Math.min(landing.height / 2, 40) })
+    expect(hit).toBe(`${tierId}-drop-zone`)
     await page.mouse.up()
 
     // Drop persisted server-side.

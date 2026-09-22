@@ -17,7 +17,7 @@ import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
 import { RoutinesView } from '@/components/routines/RoutinesView';
-import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
+import { HomeCompanionPanel } from '@/components/layout/HomeCompanionPanel';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
@@ -313,6 +313,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     () => localStorage.getItem(LS_CALENDAR_VISIBLE_KEY) === 'true'
   );
 
+  const [notesVisible, setNotesVisible] = useState(false);
+  const companionOpenerRef = useRef<HTMLElement | null>(null);
+  const openCompanion = useCallback((kind: 'notes' | 'calendar') => {
+    companionOpenerRef.current = document.querySelector(`[data-navigation-id="${kind}"] .navigation-heading-open`);
+    setNotesVisible(kind === 'notes');
+    setCalendarVisible(kind === 'calendar');
+  }, []);
+  const closeCompanion = useCallback(() => {
+    setNotesVisible(false);
+    setCalendarVisible(false);
+    requestAnimationFrame(() => {
+      const opener = companionOpenerRef.current;
+      if (opener?.getClientRects().length && !opener.closest('[inert]')) opener.focus();
+      else document.querySelector<HTMLButtonElement>('.app-task-panel-toggle')?.focus();
+    });
+  }, []);
+
   // Session columns state — up to 2 sessions displayed side by side
   const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(loadSessionColumns);
 
@@ -495,7 +512,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Resizable panels
   const todoPanel = useResizablePanel('open-walnut-todo-width', 25, 'left');
   const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35);
-  const calendarPanel = useResizablePanel('open-walnut-calendar-width', 20, 'left');
 
   // Merge sessionPanel.panelRef (for width resize observer) with auto-animate's
   // callback ref on the sessions container. Must be stable — a new function
@@ -750,9 +766,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // The /task slash command. The draft column is the ONE place a task is
     // created (its "Create task for later" is the no-session path).
     const handleTaskComposer = () => { openDraftColumnRef.current(); };
-    const handleToggleTodo = () => setTodoVisible(prev => !prev);
+    const handleToggleTodo = () => {
+      if (document.activeElement?.closest('#home-task-navigation')) document.querySelector<HTMLButtonElement>('.app-task-panel-toggle')?.focus();
+      setTodoVisible(prev => !prev);
+    };
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
-    const handleToggleCalendar = () => setCalendarVisible(prev => !prev);
+    const handleToggleCalendar = () => { setNotesVisible(false); setCalendarVisible(prev => !prev); };
     // openSessionOnHome (utils/open-session.ts) — deep links (e.g. notification
     // cards) open the session as a home-page column instead of /sessions.
     const handleOpenSession = (e: Event) => {
@@ -783,22 +802,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const restoredScrollRef = useRef(false);
   useEffect(() => {
     if (loading) return;
-    const el = document.querySelector('.todo-panel-list') as HTMLElement | null;
+    const el = document.querySelector('#home-task-navigation .home-navigation-scroll') as HTMLElement | null;
     if (!el) return;
     // Restore saved scroll position (once)
     if (!restoredScrollRef.current) {
       restoredScrollRef.current = true;
       const saved = Number(sessionStorage.getItem(SS_TODO_SCROLL_KEY));
-      if (saved > 0) requestAnimationFrame(() => { el.scrollTop = saved; });
+      if (saved > 0) requestAnimationFrame(() => {
+        const target = el.classList.contains('is-stacked') ? el : el.querySelector<HTMLElement>('.todo-panel-list, .todo-pinned-list-scroll') ?? el;
+        target.scrollTop = saved;
+      });
     }
     // Save on scroll (debounced)
     let timer: ReturnType<typeof setTimeout>;
-    const onScroll = () => {
+    const onScroll = (event: Event) => {
+      if (!(event.target instanceof HTMLElement)) return;
+      const top = event.target.scrollTop;
       clearTimeout(timer);
-      timer = setTimeout(() => sessionStorage.setItem(SS_TODO_SCROLL_KEY, String(el.scrollTop)), 150);
+      timer = setTimeout(() => sessionStorage.setItem(SS_TODO_SCROLL_KEY, String(top)), 150);
     };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => { el.removeEventListener('scroll', onScroll); clearTimeout(timer); };
+    el.addEventListener('scroll', onScroll, { passive: true, capture: true });
+    return () => { el.removeEventListener('scroll', onScroll, true); clearTimeout(timer); };
   }, [loading]);
 
   // Session columns ref — lets handlers peek at current state synchronously
@@ -2445,6 +2469,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {/* Todo Panel (LEFT — collapsible via Sidebar toggle) */}
       <div
         ref={todoPanel.panelRef}
+        id="home-task-navigation"
+        inert={!todoVisible}
         className={`main-page-todo${todoVisible ? '' : ' collapsed'}`}
         style={todoVisible ? { width: todoPanel.width } : undefined}
       >
@@ -2504,6 +2530,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOperationError={showOperationError}
           externalProject={activeProject}
           onProjectChange={setActiveProject}
+          onOpenCompanion={openCompanion}
+          activeCompanion={notesVisible ? 'notes' : calendarVisible ? 'calendar' : null}
           onOpenLauncher={handleToolbarOpenLauncher}
           onOpenLauncherForProject={handleOpenLauncherForProject}
           onOpenLauncherForTier={handleOpenLauncherForTier}
@@ -2517,18 +2545,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       {/* Todo Resize Handle — only shown when todo is visible */}
       {todoVisible && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
-
-      {/* Calendar day-agenda panel (slide-out, toggled via Sidebar) */}
-      {calendarVisible && (
-        <>
-          <CalendarSidePanel
-            onClose={() => setCalendarVisible(false)}
-            width={calendarPanel.width}
-            panelRef={calendarPanel.panelRef}
-          />
-          <div className="cal-side-resize-handle" {...calendarPanel.handleProps} />
-        </>
-      )}
 
       {/* Routines Panel (slide-out, toggled via Sidebar) */}
       {routinesVisible && (
@@ -2734,6 +2750,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {focusBar.visible && <FocusDock focusBar={focusBar} onQuickAddToFocus={handleQuickAddToFocus} />}
 
       </div>{/* end .main-page-right */}
+
+      <HomeCompanionPanel active={notesVisible ? 'notes' : calendarVisible ? 'calendar' : null} onClose={closeCompanion} />
 
       {/* Full-screen task detail — shared by TodoPanel clicks AND the Session panel
           kebab "Task detail" item (both drive focusedTask). suppressDetail (set by

@@ -6,7 +6,7 @@
  * only way to open a blank routine form was to make the AI drafter FAIL, so a
  * box with no provider configured could not create a routine at all.
  */
-import { test, expect } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
 
 const API = 'http://localhost:3457'
 

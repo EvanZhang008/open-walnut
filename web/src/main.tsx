@@ -26,6 +26,7 @@ import { installDesktopBridge } from './utils/desktop-bridge';
 import { initWebPlugins } from './plugins/loader';
 import { installPluginHostRuntime } from './plugins/runtime';
 import './styles/globals.css';
+import './styles/home-navigation.css';
 
 // Persist browser console logs to disk (view with: open-walnut logs -s browser)
 initBrowserLogger();

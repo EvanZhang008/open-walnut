@@ -31,8 +31,13 @@ export async function selectSection(
   name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent' | 'Tasks' | 'Notes',
 ): Promise<void> {
   const tab = sectionTab(page, name)
-  await tab.waitFor({ state: 'visible', timeout: 15_000 })
-  if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click()
+  if (await tab.isVisible()) {
+    if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click()
+    return
+  }
+  const label = name === 'All' ? 'All tasks' : name === 'Tasks' ? 'Projects' : name === 'Notes' ? 'Scratchpad' : name
+  await page.getByRole('button', { name: 'Task view', exact: true }).click()
+  await page.getByRole('menu', { name: 'Task views', exact: true }).getByRole('menuitem', { name: label, exact: true }).click()
 }
 
 /**

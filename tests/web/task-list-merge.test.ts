@@ -155,6 +155,20 @@ describe('mergeFetchedTasks with tasks inserted after the snapshot was taken', (
     expect(next.map((t) => t.id)).toEqual(['old']);
   });
 
+  it('preserves a confirmed tier removal when an earlier group snapshot arrives last', () => {
+    const confirmed = task({ id: 'moved', pinned: true, focus_tier: undefined, updated_at: '2026-09-22T00:00:02Z' });
+    const earlier = { ...confirmed, focus_tier: 'focus', updated_at: '2026-09-22T00:00:01Z' };
+    expect(mergeFetchedTasks([confirmed], [earlier], new Set(['moved']))[0]).toBe(confirmed);
+    const later = { ...earlier, focus_tier: 'wait', updated_at: '2026-09-22T00:00:03Z' };
+    expect(mergeFetchedTasks([confirmed], [later], new Set(['moved']))[0]).toBe(later);
+  });
+
+  it('accepts server corrections with equal timestamps even for a retained task', () => {
+    const local = task({ id: 'moved', pinned: true, focus_tier: 'focus' });
+    const fetched = { ...local, focus_tier: undefined };
+    expect(mergeFetchedTasks([local], [fetched], new Set(['moved']))[0]).toBe(fetched);
+  });
+
   it('an empty retain set behaves exactly like no retain set', () => {
     const a = task({ id: 'a' });
     const prev = [a];

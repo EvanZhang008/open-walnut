@@ -9,7 +9,7 @@
  * this spec owns is that a user can find it, read what to grant, and act on it
  * without a terminal.
  */
-import { test, expect } from '@playwright/test'
+import { test, expect } from './shortcut-test-fixture'
 
 /**
  * Evidence for a human reviewer, off by default: `PW_SHOTS=1` saves what the

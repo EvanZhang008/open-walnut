@@ -95,6 +95,7 @@ class DragBus {
       const el = t.element();
       if (!el) continue;
       const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || el.closest('[inert]')) continue;
       if (pt.x < r.left || pt.x > r.right || pt.y < r.top || pt.y > r.bottom) continue;
       const area = r.width * r.height;
       if (area < bestArea) {

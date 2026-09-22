@@ -23,7 +23,8 @@
  * button and the toolbar "+" are the entry points a user has.
  */
 import fs from 'node:fs/promises'
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { expect, seedShortcutBars, test } from './shortcut-test-fixture'
+import { type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { DRAFT_PANEL, openDraft } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
@@ -109,6 +110,11 @@ async function relaunch(browser: Browser, page: Page): Promise<Page> {
   const { baseURL, viewport } = test.info().project.use
   const context = await browser.newContext({ storageState, baseURL, viewport })
   spawned.push(context)
+  // The shortcut-bar premise already rides along inside `storageState` (it is
+  // localStorage), but this context is built straight from `browser`, outside the
+  // fixture's reach, so re-assert it rather than depend on that carry. Absent-only,
+  // which leaves the keys this spec actually toggles untouched.
+  await seedShortcutBars(context)
   const next = await context.newPage()
   await isolateUiPrefs(next)
   await boot(next)
@@ -204,7 +210,7 @@ test('the Todo and Agenda toggles survive a relaunch too', async ({ browser, pag
   await sidebarTodo(next).click()
   await expect(todoColumn(next)).not.toHaveClass(/collapsed/)
   await sidebarAgenda(next).click()
-  await expect(agendaPanel(next)).toHaveCount(0)
+  await expect(agendaPanel(next)).toBeHidden()
   next = await relaunch(browser, next)
   await expect(todoColumn(next)).not.toHaveClass(/collapsed/)
   await expect(agendaPanel(next)).toHaveCount(0)

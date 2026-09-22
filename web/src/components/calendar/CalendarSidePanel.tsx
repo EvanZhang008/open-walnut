@@ -6,7 +6,7 @@
  * drag from TodoPanel is a deliberate non-goal — it owns a separate
  * DndContext and merging them risks its tuned drag setup).
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DndContext } from '@dnd-kit/core';
 import { Link } from 'react-router-dom';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -23,12 +23,13 @@ import { CalendarsPopover } from './CalendarsPopover';
 
 interface Props {
   onClose: () => void;
+  active?: boolean;
   /** Viewport-% width from useResizablePanel; falls back to the CSS default. */
   width?: string;
   panelRef?: React.RefObject<HTMLDivElement | null>;
 }
 
-export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }: Props) {
+export function CalendarSidePanel({ onClose, active = true, width, panelRef: externalPanelRef }: Props) {
   const { tasks, update, create, setPhase, deleteTask } = useTasksContext();
   const [day, setDay] = useState(() => formatDateOnly(new Date()));
   const anchor = useMemo(() => parseDateLocal(day), [day]);
@@ -38,6 +39,13 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
   const [ctxTarget, setCtxTarget] = useState<CalendarContextTarget | null>(null);
   const [openItem, setOpenItem] = useState<{ item: CalendarItem; anchorEl: HTMLElement } | null>(null);
   const [calsAnchor, setCalsAnchor] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (active) return;
+    setCreateSeed(null);
+    setCtxTarget(null);
+    setOpenItem(null);
+    setCalsAnchor(null);
+  }, [active]);
   const metricsRef = useRef<GridMetrics | null>(null);
   const internalPanelRef = useRef<HTMLDivElement | null>(null);
   // One element, two consumers: the drag-bus hit-test reads it, and MainPage's
@@ -228,7 +236,7 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
           />
         </DndContext>
       </div>
-      {createSeed && (
+      {active && createSeed && (
         <QuickCreatePopover
           seed={createSeed}
           onClose={() => setCreateSeed(null)}
@@ -236,7 +244,7 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
           onCreateEvent={canCreateEvent ? calendar.createEvent : undefined}
         />
       )}
-      {ctxTarget && (
+      {active && ctxTarget && (
         <CalendarContextMenu
           target={ctxTarget}
           onClose={() => setCtxTarget(null)}
@@ -253,10 +261,10 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
           canCreateEvent={canCreateEvent}
         />
       )}
-      {calsAnchor && (
+      {active && calsAnchor && (
         <CalendarsPopover anchorEl={calsAnchor} onClose={() => setCalsAnchor(null)} />
       )}
-      {openItem && (
+      {active && openItem && (
         <CalendarItemPopover
           item={openItem.item}
           anchorEl={openItem.anchorEl}

@@ -385,6 +385,7 @@ export function MarkdownEditorPanel({
     if (!showRawToggle || !key) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'e' || e.key === 'E')) {
+        if (!contentElRef.current?.getClientRects().length || contentElRef.current.closest('[inert]')) return;
         e.preventDefault();
         toggleRawMode();
       }

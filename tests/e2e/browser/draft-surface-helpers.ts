@@ -44,7 +44,7 @@ export async function presetTierViewModes(
  * locator, and take the session branch through `openSessionFromPlus`.
  */
 export function plusControl(scope: Locator): Locator {
-  return scope.locator('[data-testid="plus-menu-trigger"]').first()
+  return scope.locator('[data-testid="plus-menu-trigger"], .navigation-more').first()
 }
 
 /** Is this "+" a menu trigger (multi-verb host) or the direct button? */
@@ -54,16 +54,18 @@ export async function plusIsMenu(scope: Locator): Promise<boolean> {
 
 /** Click a "+" and land on its SESSION branch on either shape of host. */
 export async function openSessionFromPlus(page: Page, scope: Locator): Promise<void> {
+  await scope.hover()
   await plusControl(scope).click()
-  const item = page.getByTestId('plus-menu').locator('.task-kebab-item', { hasText: 'New task with session' }).first()
+  const item = page.locator('[data-testid="plus-menu"] .task-kebab-item, .wn-context-menu-item').filter({ hasText: 'New task with session' }).first()
   const opened = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false)
   if (opened) await item.click()
 }
 
 /** Click a "+" and take a named branch of its menu (multi-verb hosts only). */
 export async function chooseFromPlus(page: Page, scope: Locator, label: string): Promise<void> {
+  await scope.hover()
   await plusControl(scope).click()
-  const item = page.getByTestId('plus-menu').locator('.task-kebab-item', { hasText: label }).first()
+  const item = page.locator('[data-testid="plus-menu"] .task-kebab-item, .wn-context-menu-item').filter({ hasText: label }).first()
   await item.waitFor({ state: 'visible', timeout: 5_000 })
   await item.click()
 }
