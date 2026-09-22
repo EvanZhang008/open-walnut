@@ -124,6 +124,10 @@ export interface ChatViewProps {
   placeholder?: string
   emptyText?: string
   transformMessage?(text: string): string
+  /** Sent once as the first user turn when the conversation is ready (through transformMessage). */
+  autoSend?: string
+  /** Called after autoSend went out, so the opener can latch it and never re-send. */
+  onAutoSent?(): void
 }
 
 export interface WebUiService {

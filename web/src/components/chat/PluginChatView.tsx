@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { ImageAttachment } from '@/api/chat'
 import { ChatInput } from '@/components/chat/ChatInput'
 import { ChatMessage } from '@/components/chat/ChatMessage'
@@ -8,6 +9,18 @@ import type { ChatViewProps } from '@/plugins/types'
 
 interface PluginChatViewProps extends Omit<ChatViewProps, 'draftKey'> {
   draftStorageKey: string
+  /**
+   * Send this text once, as soon as the conversation exists, as a normal user turn (so it goes
+   * through `transformMessage` and shows up in the transcript). The Ask-object drawer's
+   * `Summarize…` / `Draft a reply…` entries are "open AND ask" in one click; only the caller knows
+   * whether this object was already asked, which is why the once-ness is a prop and not a guess
+   * here. Plugins never see it: `ChatViewProps` is unchanged.
+   */
+  autoSend?: string
+  /** Called after `autoSend` actually went out, so the caller can latch it. */
+  onAutoSent?: (text: string) => void
+  /** Forwarded to the composer: a truthy nonce focuses the box WITHOUT touching the draft. */
+  focusNonce?: number
 }
 
 export function PluginChatView({
@@ -18,6 +31,9 @@ export function PluginChatView({
   placeholder = 'Message this agent…',
   emptyText = 'Start a conversation.',
   transformMessage,
+  autoSend,
+  onAutoSent,
+  focusNonce,
 }: PluginChatViewProps) {
   const chat = useChat(agentId, conversationId)
 
@@ -25,6 +41,19 @@ export function PluginChatView({
     const message = transformMessage ? transformMessage(text) : text
     chat.sendMessage(message, undefined, images)
   }
+
+  // A ref, not state: StrictMode runs effects twice on mount and the conversation id lands a moment
+  // after it, so the guard has to survive both without the user seeing the preset twice. Refs are
+  // preserved across StrictMode's simulated remount, which is exactly the property needed.
+  const autoSentRef = useRef(false)
+  useEffect(() => {
+    if (!autoSend || autoSentRef.current || !conversationId || chat.isLoading) return
+    autoSentRef.current = true
+    handleSend(autoSend)
+    onAutoSent?.(autoSend)
+    // handleSend/onAutoSent are re-created every render; the ref is what makes this run once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSend, conversationId, chat.isLoading])
 
   return (
     <div className="plugin-chat-view" data-testid="plugin-chat-view" data-agent-id={agentId}>
@@ -74,6 +103,7 @@ export function PluginChatView({
               showCommands={false}
               placeholder={placeholder}
               draftKey={draftStorageKey}
+              focusNonce={focusNonce}
             />
           </div>
         </>

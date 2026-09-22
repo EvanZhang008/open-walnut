@@ -1,0 +1,111 @@
+/* Ask-about-this-object drawer (web/src/components/chat/AskObjectDrawer.tsx).
+   It fills whatever slot the host gives it (Mail hands it the reader pane), so every
+   size here is relative and the only fixed rows are the header and the quote card. */
+
+.ask-object-drawer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.ask-object-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ask-object-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ask-object-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.ask-object-icon-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
+
+.ask-object-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin: 8px 10px 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--fg-secondary);
+  font-size: 12px;
+}
+
+.ask-object-who {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+/* Three lines of preview at most: the quote is a reminder of what Walnut is being
+   told, not a second reader. Integer line-height in px — WebKit floors a ratio
+   line box, so a ratio here shows half a fourth line in the Mac app. */
+.ask-object-preview {
+  line-height: 16px;
+  max-height: 48px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ask-object-error {
+  flex: 0 0 auto;
+  margin: 8px 10px 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
+.ask-object-inline-btn {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text, var(--accent));
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.ask-object-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The drawer's own header is the one header. PluginChatView draws its own (title +
+   Clear) because a plugin hosting it has no chrome of its own; here it would be a
+   second title row directly under the first. */
+.ask-object-chat .plugin-chat-view { min-height: 0; }
+.ask-object-chat .plugin-chat-view-header { display: none; }

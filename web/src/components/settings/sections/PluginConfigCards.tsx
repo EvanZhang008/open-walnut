@@ -9,6 +9,13 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import type { Config } from '@open-walnut/core';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import {
+  fieldKindFor,
+  listPlaceholder,
+  listTextFor,
+  valueForSave,
+  type PluginFieldSchema,
+} from '../plugin-config-fields';
 import { PLUGINS_CHANGED_EVENT, emitPluginsChanged } from '@/utils/plugin-events';
 
 interface PluginSettingsMeta {
@@ -22,10 +29,8 @@ interface PluginSettingsMeta {
   values: Record<string, unknown>;
 }
 
-interface FieldSchema {
-  type?: string;
-  default?: unknown;
-}
+/** The slice of JSON Schema these forms understand — see ../plugin-config-fields.ts. */
+type FieldSchema = PluginFieldSchema;
 
 interface Props {
   config: Config;
@@ -105,9 +110,13 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
 
   const savePlugin = async (plugin: PluginSettingsMeta) => {
     const draft = drafts[plugin.id] ?? {};
-    // Drop masked secrets (unchanged) and empty strings so defaults apply server-side
+    const schemas = plugin.configSchema?.properties ?? {};
+    // Drop masked secrets (unchanged) and empty strings so defaults apply server-side, then put each
+    // value in the shape the config file holds (a list edits as text and saves as an array).
     const cleaned = Object.fromEntries(
-      Object.entries(draft).filter(([, v]) => v !== MASKED && v !== ''),
+      Object.entries(draft)
+        .filter(([, v]) => v !== MASKED && v !== '')
+        .map(([k, v]) => [k, valueForSave(schemas[k], v)]),
     );
     setSaving(plugin.id);
     try {
@@ -155,7 +164,9 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                 const value = draft[key];
                 const fieldId = `plugin-${plugin.id}-${key}`;
 
-                if (schema.type === 'boolean') {
+                const kind = fieldKindFor(schema);
+
+                if (kind === 'boolean') {
                   return (
                     <div className="form-group" key={key}>
                       <ToggleSwitch
@@ -168,7 +179,29 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                     </div>
                   );
                 }
-                if (schema.type === 'string' || schema.type === 'number') {
+                if (kind === 'list') {
+                  return (
+                    <div className="form-group" key={key}>
+                      <label htmlFor={fieldId}>
+                        {label}
+                        {required.has(key) && <span style={{ color: 'var(--priority-immediate)' }}> *</span>}
+                      </label>
+                      <textarea
+                        id={fieldId}
+                        rows={3}
+                        // The draft holds the RAW text once the user types; re-joining a parsed array
+                        // on every keystroke would eat the separator as it was typed.
+                        value={listTextFor(value)}
+                        onChange={e => setField(plugin.id, key, e.target.value)}
+                        placeholder={listPlaceholder(schema)}
+                        style={isMissing ? { borderColor: 'var(--priority-immediate)' } : undefined}
+                      />
+                      {hint?.help && <HelpText text={hint.help} />}
+                    </div>
+                  );
+                }
+                if (kind === 'text' || kind === 'number' || kind === 'integer') {
+                  const numeric = kind !== 'text';
                   return (
                     <div className="form-group" key={key}>
                       <label htmlFor={fieldId}>
@@ -177,10 +210,11 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                       </label>
                       <input
                         id={fieldId}
-                        type={schema.type === 'number' ? 'number' : 'text'}
+                        type={numeric ? 'number' : 'text'}
+                        step={kind === 'integer' ? 1 : undefined}
                         value={(value as string | number) ?? ''}
                         onChange={e => setField(plugin.id, key,
-                          schema.type === 'number'
+                          numeric
                             ? (e.target.value === '' ? '' : Number(e.target.value))
                             : e.target.value)}
                         placeholder={schema.default !== undefined ? `default: ${schema.default}` : undefined}
@@ -190,7 +224,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                     </div>
                   );
                 }
-                // array/object fields: config.yaml-only for now
+                // object fields, and arrays of anything but strings: config.yaml-only for now
                 return null;
               })}
               <div className="form-group">
