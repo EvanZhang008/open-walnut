@@ -23,6 +23,7 @@ import { SttSection } from './sections/SttSection'
 import { SuggestAccuracySection } from './sections/SuggestAccuracySection'
 import { TasksSection } from './sections/TasksSection'
 import { TimelineSection } from './sections/TimelineSection'
+import { TriageSection } from './sections/TriageSection'
 import { UsageSection } from './sections/UsageSection'
 
 export interface CoreSettingsContext {
@@ -84,6 +85,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'calendar', label: 'Calendar Accounts', title: 'Calendar Accounts', group: 'configure', render: () => <CalendarSection /> },
   { owner: 'walnut', id: 'permissions', label: 'macOS Access', title: 'macOS Access', group: 'configure', render: () => <PermissionsSection /> },
   { owner: 'walnut', id: 'heartbeat', label: 'Heartbeat', title: 'Heartbeat', group: 'configure', render: ({ config, saveSection }) => <HeartbeatSection config={config} onSave={saveSection} /> },
+  // Directly after Heartbeat: both are "Walnut wakes itself up and works", and a
+  // reader who just set the heartbeat's clock asks about this one next.
+  { owner: 'walnut', id: 'triage', label: 'Inbox Triage', title: 'Inbox Triage', group: 'configure', render: ({ config, saveSection }) => <TriageSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'search', label: 'Search', title: 'Search', group: 'configure', render: ({ config, saveSection }) => <SearchSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'backup', label: 'S3 Backup', title: 'S3 Backup', group: 'configure', render: ({ config, saveSection }) => <BackupSection config={config} onSave={saveSection} /> },
   // Machines: phones + the cloud companion they reach this Mac through share one

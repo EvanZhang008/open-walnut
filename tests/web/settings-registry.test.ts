@@ -20,7 +20,9 @@ const EXPECTED_IDS = [
   // Engines sits directly after Sessions, which is the next question a reader asks.
   'tasks', 'focus-tiers', 'sessions', 'engines',
   // `stt` is labelled Voice and also carries Text-to-Speech now.
-  'stt', 'audio-capture', 'integrations', 'calendar', 'permissions', 'heartbeat', 'search', 'backup',
+  // Inbox Triage sits directly after Heartbeat: both are "Walnut wakes itself up
+  // and works", and it is the question a reader asks next.
+  'stt', 'audio-capture', 'integrations', 'calendar', 'permissions', 'heartbeat', 'triage', 'search', 'backup',
   // Phones & Cloud: `devices` is the nav entry, `cloud` renders under it (navHidden).
   'devices', 'cloud', 'remote-hosts', 'advanced',
   // Diagnostics group. No `time` row: time tracking's only UI is the walnut-time

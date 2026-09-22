@@ -10,6 +10,16 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
+/**
+ * The claude-code executor's run() is the ONE place a routine turns into a task
+ * and a session. Spying on quickStartSession is what lets this tier assert the
+ * exact params without spawning a CLI.
+ */
+const { quickStartSession } = vi.hoisted(() => ({
+  quickStartSession: vi.fn(async () => ({ id: 'task-1' })),
+}));
+vi.mock('../../src/core/sessions/quick-start.js', () => ({ quickStartSession }));
+
 import {
   registerExecutor,
   getExecutor,
@@ -19,7 +29,12 @@ import {
 } from '../../src/core/routines/registry.js';
 import { createMainAgentExecutor } from '../../src/core/routines/executors/main-agent.js';
 import { createWalnutAgentExecutor } from '../../src/core/routines/executors/walnut-agent.js';
-import { createClaudeCodeExecutor } from '../../src/core/routines/executors/claude-code.js';
+import {
+  createClaudeCodeExecutor,
+  readTriageCountHint,
+  stripTriageCountHint,
+  renderRoutineTitleTemplate,
+} from '../../src/core/routines/executors/claude-code.js';
 import {
   deriveExecutorFromLegacy,
   deriveLegacyFromExecutor,
@@ -125,6 +140,176 @@ describe('executor validate()', () => {
     });
     expect(def.validate({ instructions: '  ' }).ok).toBe(false);
     expect(def.validate({ instructions: 'hello' }).ok).toBe(true);
+  });
+});
+
+// ── claude-code: the walnut-agent fields (S12) ──
+//
+// The whole point of these is that they are OPTIONAL: this executor runs every
+// user-authored routine on the box, so an absent field must leave the old
+// behaviour byte-identical.
+
+describe('claude-code run() — ordinary routines are unchanged', () => {
+  const job = { id: 'j1', name: 'Nightly' } as CronJob;
+
+  beforeEach(() => { quickStartSession.mockClear(); });
+
+  it('a config with none of the new fields produces exactly the old params', async () => {
+    const def = createClaudeCodeExecutor();
+    const res = await def.run(job, {
+      type: 'claude-code', config: { instructions: 'go', cwd: '/repo' },
+    }, 'go');
+
+    expect(res.status).toBe('ok');
+    expect(quickStartSession).toHaveBeenCalledTimes(1);
+    expect(quickStartSession.mock.calls[0][0]).toEqual({
+      message: 'go',
+      cwd: '/repo',
+      host: undefined,
+      model: undefined,
+      taskTitle: 'Routine: Nightly',
+      taskMeta: { pinTier: null },
+      project: 'Routines',
+      source: 'routine',
+    });
+  });
+
+  it('taskTitle still wins over the routine name, and no agent keys appear', async () => {
+    const def = createClaudeCodeExecutor();
+    await def.run(job, {
+      type: 'claude-code', config: { instructions: 'go', cwd: '/repo', taskTitle: 'Mine' },
+    }, 'go');
+    const params = quickStartSession.mock.calls[0][0] as Record<string, unknown>;
+    expect(params.taskTitle).toBe('Mine');
+    expect('walnutAgent' in params).toBe(false);
+    expect('agentId' in params).toBe(false);
+    expect('engine' in params).toBe(false);
+  });
+
+  it('validate() drops the new fields when absent (a form-authored routine is untouched)', () => {
+    const def = createClaudeCodeExecutor();
+    const res = def.validate({ instructions: 'x', cwd: '/tmp', taskTitle: 'T' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.config).toEqual({ instructions: 'x', cwd: '/tmp', taskTitle: 'T' });
+  });
+});
+
+describe('claude-code run() — walnut-agent routines', () => {
+  const job = { id: 'j2', name: 'Inbox Triage' } as CronJob;
+
+  beforeEach(() => { quickStartSession.mockClear(); });
+
+  it('passes walnutAgent / agentId / project through and leaves engine unset', async () => {
+    const def = createClaudeCodeExecutor();
+    await def.run(job, {
+      type: 'claude-code',
+      config: {
+        instructions: 'triage', cwd: '/home/walnut',
+        walnutAgent: true, agentId: 'triage', project: 'Ask Inbox Triage',
+      },
+    }, 'triage');
+
+    const params = quickStartSession.mock.calls[0][0] as Record<string, unknown>;
+    expect(params.walnutAgent).toBe(true);
+    expect(params.agentId).toBe('triage');
+    expect(params.project).toBe('Ask Inbox Triage');
+    expect(params.taskMeta).toEqual({ pinTier: null });
+    // Engine stays absent so quickStartSession inherits config.defaults.engine.
+    expect('engine' in params).toBe(false);
+  });
+
+  it('refuses a routine naming an agent that does not exist, without starting anything', async () => {
+    const def = createClaudeCodeExecutor();
+    const res = await def.run(job, {
+      type: 'claude-code',
+      config: { instructions: 'x', cwd: '/tmp', walnutAgent: true, agentId: 'no-such-agent' },
+    }, 'x');
+    expect(res.status).toBe('error');
+    expect(res.error).toContain('no-such-agent');
+    // Non-retryable by omission: a refusal must not be replayed forever.
+    expect(res.retryable).toBeUndefined();
+    expect(quickStartSession).not.toHaveBeenCalled();
+  });
+
+  it('validate() keeps all four fields when present', () => {
+    const def = createClaudeCodeExecutor();
+    const res = def.validate({
+      instructions: 'x', cwd: '/tmp', walnutAgent: true, agentId: ' triage ',
+      project: ' Ask Inbox Triage ', titleTemplate: ' Triage · {time} ',
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config).toMatchObject({
+        walnutAgent: true, agentId: 'triage',
+        project: 'Ask Inbox Triage', titleTemplate: 'Triage · {time}',
+      });
+    }
+  });
+});
+
+describe('claude-code titleTemplate + the count hint', () => {
+  const job = { id: 'j3', name: 'Inbox Triage' } as CronJob;
+
+  beforeEach(() => { quickStartSession.mockClear(); });
+
+  it('{time} renders the run\'s local HH:MM', () => {
+    // 09:07 local, built from local parts so the assertion is timezone-proof.
+    const at = new Date(2026, 8, 21, 9, 7, 0).getTime();
+    expect(renderRoutineTitleTemplate('Triage · {time}', { nowMs: at })).toBe('Triage · 09:07');
+  });
+
+  it('{count} renders the hint, and the whole segment is dropped when there is none', () => {
+    const at = new Date(2026, 8, 21, 14, 10, 0).getTime();
+    const t = 'Triage · {time} · {count} items';
+    expect(renderRoutineTitleTemplate(t, { nowMs: at, count: 12 })).toBe('Triage · 14:10 · 12 items');
+    // Never "· 0 items" about a batch nobody counted.
+    expect(renderRoutineTitleTemplate(t, { nowMs: at })).toBe('Triage · 14:10');
+  });
+
+  it('reads the hint line and strips it from the message the session sees', () => {
+    const message = 'WALNUT_TRIAGE_COUNT: 12\n\n3 new mail, 9 Slack items.\n\nDo the thing.';
+    expect(readTriageCountHint(message)).toBe(12);
+    expect(stripTriageCountHint(message)).toBe('3 new mail, 9 Slack items.\n\nDo the thing.');
+  });
+
+  it('a message with no hint is passed through byte-identical', () => {
+    const message = 'Nothing special here.\nSecond line.';
+    expect(readTriageCountHint(message)).toBeUndefined();
+    expect(stripTriageCountHint(message)).toBe(message);
+  });
+
+  it('a hint-shaped line far down the message is left alone (it is content, not a header)', () => {
+    const message = ['a', 'b', 'c', 'd', 'e', 'WALNUT_TRIAGE_COUNT: 99'].join('\n');
+    expect(readTriageCountHint(message)).toBeUndefined();
+    expect(stripTriageCountHint(message)).toBe(message);
+  });
+
+  it('the run uses the template and never forwards the hint', async () => {
+    const def = createClaudeCodeExecutor();
+    await def.run(job, {
+      type: 'claude-code',
+      config: {
+        instructions: 'triage', cwd: '/home/walnut',
+        titleTemplate: 'Triage · {time} · {count} items',
+      },
+    }, 'WALNUT_TRIAGE_COUNT: 7\n\nbatch body');
+
+    const params = quickStartSession.mock.calls[0][0] as Record<string, unknown>;
+    expect(params.message).toBe('batch body');
+    expect(String(params.taskTitle)).toMatch(/^Triage · \d{2}:\d{2} · 7 items$/);
+  });
+
+  it('a template with no hint still names the run by its clock', async () => {
+    const def = createClaudeCodeExecutor();
+    await def.run(job, {
+      type: 'claude-code',
+      config: {
+        instructions: 'triage', cwd: '/home/walnut',
+        titleTemplate: 'Triage · {time} · {count} items',
+      },
+    }, 'batch body');
+    const params = quickStartSession.mock.calls[0][0] as Record<string, unknown>;
+    expect(String(params.taskTitle)).toMatch(/^Triage · \d{2}:\d{2}$/);
   });
 });
 

@@ -47,6 +47,21 @@ export interface ClaudeCodeExecutorConfig {
   model?: string;
   /** Optional task title override; defaults to the routine name. */
   taskTitle?: string;
+  /**
+   * Run the session as one of Walnut's console agents (persona + standing
+   * memory), instead of as a bare coding agent. Needs `agentId`.
+   */
+  walnutAgent?: boolean;
+  /** Which console agent, e.g. 'triage'. Ignored without `walnutAgent`. */
+  agentId?: string;
+  /** Project the run's task is filed under; defaults to 'Routines'. */
+  project?: string;
+  /**
+   * Task title template, used INSTEAD of `taskTitle` when present. `{time}` is
+   * the run's local HH:MM; `{count}` is the batch size an init processor
+   * reported (see readTriageCountHint in executors/claude-code.ts).
+   */
+  titleTemplate?: string;
 }
 
 // ── Executor definition (registry entry) ──

@@ -83,6 +83,25 @@ const BUILTIN_NOTE: AgentDefinition = {
   source: 'builtin',
 };
 
+/**
+ * Inbox Triage — the agent a triage run speaks as. Every run is a NEW task and a
+ * NEW session (src/core/triage/), so this persona plus the notes it writes ARE
+ * the continuity; there is no long-lived triage session to remember anything.
+ *
+ * Kept under 1200 characters so the lane prompt cap (personal-ai-lane.ts) is
+ * never the binding constraint. The procedure itself lives in the
+ * `walnut-inbox-triage` skill, which the session's injected index carries.
+ */
+const BUILTIN_TRIAGE: AgentDefinition = {
+  id: 'triage',
+  name: 'Inbox Triage',
+  description: 'Works through each batch of new mail and Slack: matches items to your projects and tasks, keeps the project tracking notes true, and asks you about anything that needs a decision.',
+  runner: 'embedded',
+  console: true,
+  system_prompt: `You are Inbox Triage. Once every batch of new mail and Slack you decide what each item means for work the user already has, and you keep the project tracking notes true. In order: read State.md and the batch; read what you need; match items to projects and tasks; update Tracking.md; ask affected tasks (task_send, expectReply); write one summary letter and at most three decision letters; then rewrite State.md, append the run journal, and memory_write anything durable you learned. You never send mail, post to Slack, mark read or unsubscribe on your own: you ask (mail_request_send, slack_request_post, mail_unsubscribe_request). You never invent a project or a task for something the user has not shown they care about.`,
+  source: 'builtin',
+};
+
 // NOTE: The BUILTIN_TURN_COMPLETE_TRIAGE subagent was DELETED (2026-07). The session
 // itself now writes the merged task summary via side_question (it re-receives the
 // existing task.summary each turn, so multi-day/post-compaction sessions stay
@@ -105,7 +124,7 @@ const BUILTIN_NOTE: AgentDefinition = {
 // correctly, but no agent definition is dispatched for it anymore.
 
 /** All built-in agents. */
-const BUILTIN_AGENTS = [BUILTIN_GENERAL, BUILTIN_MENTOR, BUILTIN_NOTE];
+const BUILTIN_AGENTS = [BUILTIN_GENERAL, BUILTIN_MENTOR, BUILTIN_NOTE, BUILTIN_TRIAGE];
 
 /** Set of builtin agent IDs for quick lookup. */
 const BUILTIN_ID_SET = new Set(BUILTIN_AGENTS.map(a => a.id));

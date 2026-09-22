@@ -1093,6 +1093,9 @@ export interface Config {
     premount_walnut_mcp?: boolean;
   };
   heartbeat?: import('../heartbeat/types.js').HeartbeatConfig;
+  /** Inbox Triage — batched mail/Slack triage. Opt-in; every default lives at
+   *  the reader (src/core/triage/config.ts), never in DEFAULT_CONFIG. */
+  triage?: import('./triage/types.js').TriageConfig;
   /** S3 backup of the data dir — see src/core/backup/. Primary box only. */
   backup?: import('./backup/types.js').BackupConfig;
   /** Keep the Mac awake (lid closed included) while local sessions run.

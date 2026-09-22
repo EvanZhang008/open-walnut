@@ -496,6 +496,8 @@ let hostWarmup: import('../core/hosts/host-warmup.js').HostWarmup | null = null
 /** Unhooks the daemon phase listener → host:status push (module-global set). */
 let unsubscribeHostPhase: (() => void) | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
+/** Keeps the Inbox Triage routine in line with config.triage (no restart). */
+let triageConfigWatcher: { stop: () => void } | null = null
 let recordingReaperHandle: { stop: () => void } | null = null
 let externalSessionImporter:
   import('../core/sessions/external-session-import.js').ExternalSessionImporterHandle | null = null
@@ -4261,6 +4263,20 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.heartbeat.error('failed to start heartbeat', { error: err instanceof Error ? err.message : String(err) })
   })
 
+  // -- Inbox Triage: reconcile its ONE routine with config.triage --
+  // A REPLICA must not touch cron-jobs.json (the primary owns it — the
+  // dual-engine blind-write rule), and the primary's git-synced config would
+  // otherwise make both boxes create the same routine.
+  if (!CLOUD_MODE) {
+    void import('../core/triage/bootstrap.js').then(async ({ ensureTriageRoutine, startTriageConfigWatcher }) => {
+      triageConfigWatcher = startTriageConfigWatcher()
+      const result = await ensureTriageRoutine()
+      log.cron.debug('triage bootstrap', { outcome: result.outcome, jobId: result.jobId })
+    }).catch((err) => {
+      log.cron.warn('triage bootstrap failed', { error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
   // Dream consolidation RETIRED (2026-07 memory/skill/history unification): it
   // wrote to the retired memory/topics/ + index.md wiki and kept regrowing the
   // old structure after migration. Its job (periodic knowledge consolidation)
@@ -5090,6 +5106,10 @@ export async function stopServer(): Promise<void> {
   if (routineWakeHandle) {
     routineWakeHandle.stop()
     routineWakeHandle = null
+  }
+  if (triageConfigWatcher) {
+    triageConfigWatcher.stop()
+    triageConfigWatcher = null
   }
   if (cronServiceInstance) {
     cronServiceInstance.stop()
