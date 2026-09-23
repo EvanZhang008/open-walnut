@@ -3,7 +3,8 @@
 .app-shell-navigation .sidebar-header { height: 42px; box-sizing: border-box; padding: 0 13px; font-size: 15px; }
 .app-shell-navigation .sidebar.collapsed .sidebar-header { padding: 0; gap: 0; }
 
-/* Home owns three panel toggles; they sit under the Home icon so the rail says whose they are. */
+/* Home owns three panel toggles; they sit under the Home icon so the rail says whose they are.
+   A toggle whose panel is open wears the rail's active colour, like the page it belongs to. */
 .sidebar-home-panels { margin: -2px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--border); }
 .sidebar-home-panels .sidebar-link { padding: 6px 10px 6px 12px; font-size: 13px; margin-bottom: 1px; }
 .sidebar-home-panels .sidebar-link svg { width: 16px; height: 16px; }
@@ -35,16 +36,18 @@
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon.vd-has-filter { width: 24px; border-radius: 6px; color: var(--fg-muted); }
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon:hover { color: var(--fg); background: var(--bg-hover); }
 .app-shell-navigation .todo-panel-toolbar .vd-dot { background: var(--fg-secondary); }
-.tier-solo-heading { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 8px 0 16px; flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--fg-secondary); }
+.tier-solo-heading { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 8px 0 12px; flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--fg-secondary); }
 .tier-solo-heading > :last-child { margin-left: auto; }
 .app-shell-navigation .todo-panel-toolbar .todo-search-bar {
   height: 28px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg);
 }
 .app-shell-navigation .todo-panel-toolbar .todo-search-bar:focus-within { border-color: var(--accent); }
 
-/* Headings and task circles share one column 16px in from the panel edge, titles a second
-   one at 40px (the user's call, 2026-09-22, after a flush edge read as cramped). */
-.home-navigation-scroll { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; padding: 0 8px 16px 12px; scrollbar-width: thin; }
+/* One grid (the user's call, 2026-09-23): heading text and the status dots share the
+   column 12px in from the panel edge (the toolbar's search field starts there too), task
+   circles sit at 22px whether or not a dot is showing, titles at 46px, folder members one
+   16px step deeper. Hover backgrounds start at 8px. */
+.home-navigation-scroll { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; padding: 0 8px 16px 8px; scrollbar-width: thin; }
 .home-navigation-scroll.is-unpin-dragging { margin-bottom: 46px; }
 .todo-unpin-zone { pointer-events: auto; background: var(--bg); }
 .home-navigation-scroll.is-stacked > .todo-pinned-wrapper,
@@ -81,39 +84,42 @@
 .home-navigation-scroll .todo-pinned-subgroup,
 .home-navigation-scroll .todo-pinned-subgroup + .todo-pinned-subgroup { margin: 0; border: 0; padding: 0; }
 .home-navigation-scroll .todo-pinned-sublabel { padding: 0; text-transform: none; letter-spacing: normal; font-weight: 500; }
-.home-navigation-scroll .todo-focus-drop-zone-empty { border: 0; justify-content: flex-start; padding-left: 6px; min-height: 0; }
+.home-navigation-scroll .todo-focus-drop-zone-empty { border: 0; justify-content: flex-start; padding-left: 14px; min-height: 0; }
 .home-navigation-scroll .todo-focus-placeholder { display: none; }
 .is-task-dragging .home-navigation-scroll .todo-focus-drop-zone-empty { min-height: 28px; }
 .is-task-dragging .home-navigation-scroll .todo-focus-placeholder { display: inline; }
 
-/* Rows: no drag grips, no rails, no pink fill. Headings and task circles share ONE left
-   column; only folder members step in, by 16px. */
+/* Rows: no drag grips, no rails, no pink fill. Every task circle sits on ONE column (22px);
+   only folder members step in, by 16px. */
 .home-navigation-scroll .todo-focus-card, .home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-panel-item { border-radius: 6px; border-left-color: transparent; box-shadow: none; touch-action: pan-y; }
 .home-navigation-scroll .todo-panel-item { border-bottom: 0; }
 .home-navigation-scroll .todo-pinned-title, .home-navigation-scroll .todo-item-title { font-size: 13px; }
 .home-navigation-scroll .todo-item-title { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
 /* One row rhythm (29px pitch). */
-.home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-focus-card { min-height: 27px; padding: 2px 6px 2px 4px; margin-left: 0; }
+.home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-focus-card { min-height: 27px; padding: 2px 6px 2px 14px; margin-left: 0; }
 .home-navigation-scroll .todo-focus-card.task-grouped, .home-navigation-scroll .todo-pinned-card.task-grouped { margin-left: 16px; }
-.home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { margin-left: -8px; padding: 3px 6px 3px 12px; }
+.home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { margin-left: -8px; padding: 3px 6px 3px 22px; }
 .home-navigation-scroll .todo-item-title-row { gap: 6px; }
-.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: 28px; }
+.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: 38px; }
 .home-navigation-scroll .todo-panel-item .todo-row-pill { left: 8px; }
 /* The estimate is the CONTENT box: 22 + the 6px padding = the rendered 28px row. At 28 an
    unrendered row stood 34px tall in WebKit and every row shrank as it came into view,
    shifting the list under the pointer. */
 .home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { contain-intrinsic-size: auto 22px; }
 /* The unread dot (filled: output you have not opened) and the needs-action dot (hollow: opened,
-   still waiting on you) sit in the gutter LEFT of the circle, 4 to 11px from the panel edge, so
-   they never move the circle and never meet the session chevron on the right. */
-.home-navigation-scroll .todo-pinned-card > .task-unread-dot, .home-navigation-scroll .todo-focus-card > .task-unread-dot,
-.home-navigation-scroll .todo-pinned-card.task-grouped > .task-unread-dot, .home-navigation-scroll .todo-focus-card.task-grouped > .task-unread-dot { left: -8px; right: auto; }
+   still waiting on you) sit on the heading text column, 12 to 19px from the panel edge, for
+   every row, folder members included. They never move the circle and never meet the session
+   chevron on the right. Each offset below is 12px minus where that box starts. */
+.home-navigation-scroll .todo-pinned-card > .task-unread-dot, .home-navigation-scroll .todo-focus-card > .task-unread-dot { left: 4px; right: auto; }
+.home-navigation-scroll .todo-pinned-card.task-grouped > .task-unread-dot, .home-navigation-scroll .todo-focus-card.task-grouped > .task-unread-dot { left: -12px; right: auto; }
 /* There is no drag grip here, so the dot never yields to one on hover. */
 .home-navigation-scroll .todo-pinned-card:hover:has(> .todo-pinned-drag-handle) > .task-unread-dot,
 .home-navigation-scroll .todo-focus-card:hover:has(> .todo-pinned-drag-handle) > .task-unread-dot { opacity: 1; }
 .home-navigation-scroll .todo-panel-item,
 .home-navigation-scroll .todo-panel-item:has(> .collapse-chevron),
-.home-navigation-scroll .todo-group-project .todo-panel-item:has(> .collapse-chevron) { --dot-pull: -12px; }
+.home-navigation-scroll .todo-group-project .todo-panel-item:has(> .collapse-chevron) { --dot-pull: -10px; }
+.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped,
+.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped:has(> .collapse-chevron) { --dot-pull: -26px; }
 .home-navigation-scroll .todo-pinned-drag-handle, .home-navigation-scroll .todo-item-drag-handle { display: none; }
 .home-navigation-scroll .todo-pinned-card-needs-action,
 .home-navigation-scroll .todo-focus-card.todo-pinned-card-needs-action { background: transparent; }
@@ -176,8 +182,6 @@
   .navigation-more { opacity: .65; pointer-events: auto; }
   .home-navigation-scroll .focus-inline-add-trigger { opacity: .65; }
 }
-.sidebar-home-panels .sidebar-link.active { background: none; color: var(--fg); font-weight: 500; }
-.sidebar-home-panels .sidebar-link.active:hover { background: var(--accent-subtle); }
 .home-navigation-scroll .task-grouped::before { display: none; }
 /* The shared ▶ glyph reads as a filled triangle at this size; draw the same stroke chevron the headings use. */
 .home-navigation-scroll .todo-group-project-header .collapse-chevron::before,
@@ -209,4 +213,20 @@
 }
 .todo-list-show-more:hover { color: var(--fg); background: var(--bg-hover); }
 .todo-list-show-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.home-navigation-scroll .todo-list-show-more { margin-left: -8px; width: calc(100% + 8px); padding-left: 36px; }
+.home-navigation-scroll .todo-list-show-more { margin-left: -8px; width: calc(100% + 8px); padding-left: 46px; }
+/* An on/off setting in the filter menu's View section reads as a switch, not as one more chip. */
+.vd-toggle {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 5px 10px; font-size: 12px; border-radius: 6px; background: var(--bg-secondary); color: var(--fg-secondary); cursor: pointer;
+}
+.vd-switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex-shrink: 0; width: 28px; height: 16px; margin: 0;
+  border-radius: 8px; background: var(--border-strong); cursor: pointer; transition: background .15s;
+}
+.vd-switch::before {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 20%); transition: transform .15s;
+}
+.vd-switch:checked { background: var(--accent); }
+.vd-switch:checked::before { transform: translateX(12px); }
+.vd-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -1,6 +1,7 @@
 import { Children, createContext, isValidElement, useContext, useEffect, useMemo, useState, type ReactNode, type MouseEvent } from 'react';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useNotifications } from '@/contexts/notifications';
+import { TASK_SHORTCUTS_KEY, useNavigationPreference } from '@/hooks/useNavigationPreference';
 
 import { orderedNavigationIds, moveNavigationId } from './navigation-order';
 
@@ -65,6 +66,7 @@ interface HeadingProps {
 
 export function NavigationHeading({ id, label, className = '', collapsed, onClick, actions = [] }: HeadingProps) {
   const order = useContext(NavigationOrder);
+  const [tabBar, setTabBar] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
   const [over, setOver] = useState(false);
   const openMenu = (event: MouseEvent<HTMLElement>, atCursor = false) => {
@@ -78,6 +80,9 @@ export function NavigationHeading({ id, label, className = '', collapsed, onClic
     ...(actions.length ? [{ divider: true }] : []),
     { key: 'up', label: 'Move up', disabled: !order || index <= 0, onSelect: () => order?.move(id, order.ids[index - 1]) },
     { key: 'down', label: 'Move down', disabled: !order || index < 0 || index >= order.ids.length - 1, onSelect: () => order?.move(id, order.ids[index + 1]) },
+    // A panel-wide setting, so every heading offers it, the same switch as the filter menu's.
+    { divider: true },
+    { key: 'tab-bar', label: 'Show tab bar', toggle: true, checked: tabBar, onSelect: () => setTabBar(!tabBar) },
   ];
   return <>
     <div className={`navigation-heading ${className}${over ? ' navigation-drop-target' : ''}`} data-navigation-id={id}

@@ -7368,7 +7368,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       { key: 'recent-created', label: 'Sort by creation time', active: recentSortMode === 'created', onSelect: () => handleRecentSortChange('created') },
     ] : []),
     { key: 'collapse', label: allCollapsed ? 'Expand all projects' : 'Collapse all projects', onSelect: handleCollapseExpandAll },
-    { key: 'quick-views', label: 'Quick view tabs', active: quickViews, onSelect: () => setQuickViews(!quickViews) },
+  ] });
+  // The horizontal strip of views (All, Focus, Satellite...) across the top of the panel.
+  // Every heading's right-click menu carries the same switch (NavigationHeading).
+  viewGroups.push({ label: 'Task panel', options: [
+    { key: 'quick-views', label: 'Show tab bar', toggle: true, active: quickViews, title: 'All, Focus, Satellite and the other views as tabs across the top', onSelect: () => setQuickViews(!quickViews) },
   ] });
 
   return (

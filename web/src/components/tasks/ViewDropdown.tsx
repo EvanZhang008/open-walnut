@@ -118,6 +118,8 @@ export interface ViewOption {
   label: string;
   active?: boolean;
   title?: string;
+  /** An on/off setting: drawn as a switch row instead of a chip, `active` is its state. */
+  toggle?: boolean;
   onSelect: () => void;
 }
 export interface ViewOptionGroup { label: string; options: ViewOption[] }
@@ -544,7 +546,12 @@ function SectionDetail(props: {
           <div key={group.label} className="vd-field vd-span2" data-view-group={group.label}>
             <span className="vd-label">{group.label}</span>
             <div className="vd-cats">
-              {group.options.map((o) => (
+              {group.options.map((o) => o.toggle ? (
+                <label key={o.key} className="vd-toggle" data-view-option={o.key} title={o.title}>
+                  <span>{o.label}</span>
+                  <input type="checkbox" role="switch" className="vd-switch" checked={!!o.active} onChange={o.onSelect} />
+                </label>
+              ) : (
                 <button key={o.key} className={`vd-cat${o.active ? ' vd-active' : ''}`} data-view-option={o.key}
                   aria-pressed={o.active} title={o.title} onClick={o.onSelect}>
                   <span className="vd-cat-name">{o.label}</span>

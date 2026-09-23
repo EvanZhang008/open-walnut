@@ -477,7 +477,7 @@ export function ContextMenu({
               <button
                 id={itemId(index)}
                 type="button"
-                role={row.checked === undefined ? 'menuitem' : 'menuitemradio'}
+                role={row.checked === undefined ? 'menuitem' : row.toggle ? 'menuitemcheckbox' : 'menuitemradio'}
                 aria-checked={row.checked}
                 // OUT of the tab order: Tab is answered above as a step of the same highlight, and a
                 // tabbable item is what let DOM focus and the highlight point at different rows.

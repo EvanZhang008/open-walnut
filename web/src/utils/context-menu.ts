@@ -126,6 +126,8 @@ export interface ContextMenuItem {
    * the chosen one: the row becomes a `menuitemradio` and draws a check in the icon column.
    */
   checked?: boolean;
+  /** An on/off setting rather than one option of a group: with `checked`, the row is a `menuitemcheckbox`. */
+  toggle?: boolean;
   /** Convenience for conditional items: `when: false` drops the row. */
   when?: boolean;
 }

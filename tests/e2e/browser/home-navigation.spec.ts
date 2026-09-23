@@ -83,23 +83,30 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   if (!(await row.isVisible())) await project.locator('.todo-group-name-btn').click();
   await expect(row).toBeVisible();
   expect(await row.locator('.todo-row-pill').evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
-  // Headings and task circles share one left edge, and the status dot trails the row.
+  // One grid: heading text, project names and the status dots share the column 12px in
+  // from the panel edge (where the search field starts), circles sit at 22px with or
+  // without a dot, titles at 46px.
   const leftOf = (locator: ReturnType<Page['locator']>) => locator.evaluate(el => el.getBoundingClientRect().left);
   const circleX = await leftOf(row.locator('.task-phase-icon-btn'));
-  expect(Math.abs(circleX - await leftOf(project.locator('.todo-group-name-btn')))).toBeLessThanOrEqual(4);
-  expect(Math.abs(circleX - await leftOf(heading(page, 'pinned').locator('.navigation-label')))).toBeLessThanOrEqual(4);
-  // Room to breathe, like Codex's sidebar: that column is 16px in from the panel edge, titles at 40px.
   const panelX = await leftOf(navigation(page));
-  expect(Math.round(circleX - panelX)).toBe(16);
+  const textColumn = await heading(page, 'pinned').locator('.navigation-label').evaluate(el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return range.getClientRects()[0].left;
+  });
+  expect(Math.round(textColumn - panelX)).toBe(12);
+  expect(Math.round(await leftOf(project.locator('.todo-group-name-btn')) - panelX)).toBe(12);
+  expect(Math.round(await leftOf(homeToolbar(page).locator('.todo-search-bar')) - panelX)).toBe(12);
+  expect(Math.round(circleX - panelX)).toBe(22);
   const textLeft = await row.locator('.todo-item-title').evaluate(el => {
     const range = document.createRange();
     range.selectNodeContents(el);
     return range.getClientRects()[0].left;
   });
-  expect(Math.round(textLeft - panelX)).toBe(40);
-  // Status dots sit in the gutter LEFT of the circle: filled while the output is unread,
-  // hollow once it is read but the task still needs you. The circle keeps its session
-  // colour either way, and the dot never moves it.
+  expect(Math.round(textLeft - panelX)).toBe(46);
+  // Status dots sit on that text column, left of the circle: filled while the output is
+  // unread, hollow once it is read but the task still needs you. The circle keeps its
+  // session colour either way, and the dot never moves it.
   const dotBox = (dot: ReturnType<Page['locator']>) => dot.evaluate(el => {
     const box = el.getBoundingClientRect();
     const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
@@ -108,17 +115,17 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   const unreadDot = row.locator('.task-unread-dot:not(.task-attention-dot)');
   if (await unreadDot.count()) {
     const dot = await dotBox(unreadDot);
-    expect(dot.left).toBeGreaterThanOrEqual(panelX);
+    expect(Math.round(dot.left - textColumn)).toBe(0);
     expect(dot.right).toBeLessThanOrEqual(circleX - 3);
     expect((await page.request.patch(`/api/tasks/${taskId}`, { data: { unread: false } })).ok()).toBe(true);
   }
   await expect(row.locator('.task-attention-dot')).toBeVisible();
   await expect(unreadDot).toHaveCount(0);
   const ring = await dotBox(row.locator('.task-attention-dot'));
-  expect(ring.left).toBeGreaterThanOrEqual(panelX);
+  expect(Math.round(ring.left - textColumn)).toBe(0);
   expect(ring.right).toBeLessThanOrEqual(circleX - 3);
   expect(ring.painted).toBe(true);
-  expect(Math.round(await leftOf(row.locator('.task-phase-icon-btn')) - panelX)).toBe(16);
+  expect(Math.round(await leftOf(row.locator('.task-phase-icon-btn')) - panelX)).toBe(22);
   await expect(row.locator('.task-phase-icon-btn')).toHaveClass(/task-circle-todo/);
   expect(await row.locator('.task-phase-icon-btn').evaluate(el => getComputedStyle(el).color)).not.toBe('rgb(255, 59, 48)');
   await project.locator('.collapse-chevron').click();
@@ -164,9 +171,26 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await toggle.click();
   await expect(navigation(page)).not.toHaveAttribute('inert', '');
   const group = page.locator('.sidebar-home-group');
-  // Only the current page is accent-coloured; a toggle that is on reads as plain text.
-  const pageColor = await group.locator('> .sidebar-link').evaluate(el => getComputedStyle(el).color);
-  expect(await toggle.evaluate(el => getComputedStyle(el).color)).not.toBe(pageColor);
+  // A toggle whose panel is open looks like the current page (the rail's active blue);
+  // one whose panel is shut is a plain grey icon. The pointer leaves the rail first, since
+  // hover tints every link, and the poll waits out the colour transition.
+  const railLook = (locator: ReturnType<Page['locator']>) => locator.evaluate(el => {
+    const style = getComputedStyle(el);
+    return `${style.color} / ${style.backgroundColor}`;
+  });
+  const agenda = page.getByTestId('sidebar-toggle-calendar');
+  await page.mouse.move(900, 500);
+  const pageLook = await railLook(group.locator('> .sidebar-link'));
+  await expect(toggle).toHaveClass(/\bactive\b/);
+  await expect.poll(() => railLook(toggle)).toBe(pageLook);
+  await expect(agenda).not.toHaveClass(/\bactive\b/);
+  expect(await railLook(agenda)).not.toBe(pageLook);
+  await toggle.click();
+  await page.mouse.move(900, 500);
+  await expect(toggle).not.toHaveClass(/\bactive\b/);
+  await expect.poll(async () => await railLook(toggle) === await railLook(agenda)).toBe(true);
+  await toggle.click();
+  await expect(toggle).toHaveClass(/\bactive\b/);
   expect(await group.evaluate(el => getComputedStyle(el).borderTopWidth)).toBe('1px');
   await page.locator('.sidebar-collapse-btn').click();
   await expect(page.locator('.sidebar.collapsed')).toHaveCount(0);
@@ -261,8 +285,8 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   for (const tier of ['satellite', 'backlog', 'wait']) await expect(heading(page, tier)).toHaveCount(0);
   await expect(heading(page, 'nav-custom-someday')).toBeVisible();
 
-  // The unread dot sits in the gutter left of the circle, so it never meets the chevron
-  // an open session draws on the card's right edge, and it stays put on hover.
+  // The unread dot sits on the heading text column, left of the circle, so it never meets
+  // the chevron an open session draws on the card's right edge, and it stays put on hover.
   const sessionCard = navigation(page).locator('.todo-pinned-card-session-open[data-task-id="pw-task-store-sync"]');
   await expect(sessionCard).toBeVisible({ timeout: 20_000 });
   const panelLeft = await navigation(page).evaluate(el => el.getBoundingClientRect().left);
@@ -274,7 +298,13 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   });
   await page.mouse.move(0, 0);
   const atRest = await gutterDot();
-  expect(atRest.left).toBeGreaterThanOrEqual(panelLeft);
+  const textColumn = await heading(page, 'pinned').locator('.navigation-label').evaluate(el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return range.getClientRects()[0].left;
+  });
+  expect(Math.round(atRest.left - textColumn)).toBe(0);
+  expect(Math.round(atRest.circle - panelLeft)).toBe(22);
   expect(atRest.right).toBeLessThanOrEqual(atRest.circle - 3);
   expect(atRest.painted).toBe(true);
   await sessionCard.hover();
@@ -387,6 +417,42 @@ test('quick view tabs stay in sync across windows', async ({ page, context, base
   await chooseViewOption(other, 'quick-views');
   await expect(page.locator('.todo-section-tabs')).toHaveCount(0);
   await other.close();
+});
+
+test('the tab bar is one switch, in the filter menu and in every heading menu', async ({ page, baseURL }) => {
+  const tag = `${test.info().project.name}-${test.info().repeatEachIndex}-${Date.now()}`;
+  // An empty tier is hidden, so give Focus a card for its heading to show.
+  const pinned = await page.request.post('/api/tasks', { data: { title: `Tab bar pin ${tag}`, project: `Tab bar ${tag}`, source: 'local' } });
+  const pinnedId = (await pinned.json()).task.id;
+  expect((await page.request.post(`/api/focus/tasks/${pinnedId}`)).ok()).toBe(true);
+  expect((await page.request.put(`/api/focus/tasks/${pinnedId}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true);
+  await boot(page, baseURL!);
+  const tabs = page.locator('.todo-section-tabs');
+  await expect(tabs).toHaveCount(0);
+
+  // The filter menu: a switch in a Task panel group of its own, no longer a Layout chip.
+  await openViewMenu(page);
+  const panelSwitch = page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' });
+  await expect(panelSwitch).not.toBeChecked();
+  await expect(page.locator('.vd-panel [data-view-group="Layout"] [data-view-option="quick-views"]')).toHaveCount(0);
+  await panelSwitch.click();
+  await expect(panelSwitch).toBeChecked();
+  await expect(tabs).toBeVisible();
+  await closeViewMenu(page);
+
+  // Right-clicking any heading offers the same switch, showing the same state.
+  const menuSwitch = page.getByRole('menuitemcheckbox', { name: 'Show tab bar' });
+  for (const [id, on] of [['pinned', true], ['focus', false], ['tasks', true]] as const) {
+    await heading(page, id).click({ button: 'right' });
+    await expect(menuSwitch).toHaveAttribute('aria-checked', String(on));
+    await menuSwitch.click();
+    await expect(menuSwitch).toHaveCount(0);
+    await expect(tabs).toHaveCount(on ? 0 : 1);
+  }
+  await openViewMenu(page);
+  await expect(panelSwitch).not.toBeChecked();
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-tab-bar-switch.png`, clip: { x: 0, y: 0, width: 900, height: 620 } });
+  await closeViewMenu(page);
 });
 
 test('plain task creation needs no folder and retains the explicit AI launch path', async ({ page, baseURL }) => {
