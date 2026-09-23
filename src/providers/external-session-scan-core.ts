@@ -64,11 +64,13 @@ export interface ExternalSessionCandidate {
 }
 
 /**
- * 'walnut-driven': a Walnut envelope sits in a user turn, so some Walnut drove
- * the session. 'no-reply': the whole transcript holds no real model reply (a
- * probe, or a first turn that only ever errored), so there is nothing to adopt.
+ * 'fork': a programmatic fork (btw side thread, standby prewarm, chat-lane or
+ * task fork): its history is a copy of another session. 'walnut-driven': a
+ * Walnut envelope sits in a user turn, so some Walnut drove the session.
+ * 'no-reply': the whole transcript holds no real model reply (a probe, or a
+ * first turn that only ever errored), so there is nothing to adopt.
  */
-export type NotExternalReason = 'walnut-driven' | 'no-reply'
+export type NotExternalReason = 'fork' | 'walnut-driven' | 'no-reply'
 
 export interface ScanExternalSessionsOptions {
   /** Only consider transcripts written within this window. */
@@ -402,6 +404,8 @@ interface ClaudeHead extends TitleLines {
   isSidechain: boolean
   /** A Walnut envelope was seen in a user turn or a queued input. */
   walnutDriven: boolean
+  /** The history was copied from another session (see FORK_COPY_GAP_MS). */
+  forked: boolean
   /** A real model reply was seen (not an API error, not a synthetic stub). */
   replied: boolean
   /** The whole file fit the head budget, so a missing reply is a fact. */
@@ -414,10 +418,23 @@ interface ClaudeHead extends TitleLines {
  *  copied carries Walnut's envelopes. */
 function claudeNotExternal(head: ClaudeHead): NotExternalReason | undefined {
   const human = head.entrypoint !== undefined && HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)
+  if (head.forked && !human) return 'fork'
   if (head.walnutDriven && !human) return 'walnut-driven'
   if (head.readWhole && !head.replied) return 'no-reply'
   return undefined
 }
+
+/**
+ * How a fork looks on disk: the CLI logs the queued first input (stamped at
+ * fork time) and only then writes the copied chain, whose lines keep the
+ * parent's older timestamps. So a first message line that predates a line
+ * before it by more than this is copied history, not a session's own start.
+ * Measured on one host's 30 days: every recorded Walnut fork (37) matched, and
+ * the only other match was a chat-lane fork with no fork link; no plain, cli or
+ * desktop session did. Fails open: a CLI that stops writing that order only
+ * lets a fork through to the envelope rule.
+ */
+const FORK_COPY_GAP_MS = 60000
 
 function isRealReply(entry: Record<string, unknown>): boolean {
   if (entry.isApiErrorMessage === true) return false
@@ -427,11 +444,22 @@ function isRealReply(entry: Record<string, unknown>): boolean {
 
 function parseClaudeHead(filePath: string, size: number): ClaudeHead {
   const out: ClaudeHead = {
-    messageCount: 0, isSidechain: false, walnutDriven: false, replied: false,
+    messageCount: 0, isSidechain: false, walnutDriven: false, forked: false, replied: false,
     readWhole: size <= MAX_HEAD_BYTES,
   }
+  let latestBeforeFirstMessage = 0
+  let sawMessage = false
   walkHeadLines(filePath, size, (entry) => {
     const type = entry.type
+    const at = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
+    if (!sawMessage && Number.isFinite(at)) {
+      if (type === 'user' || type === 'assistant' || type === 'system') {
+        sawMessage = true
+        if (latestBeforeFirstMessage - at > FORK_COPY_GAP_MS) out.forked = true
+      } else if (at > latestBeforeFirstMessage) {
+        latestBeforeFirstMessage = at
+      }
+    }
     if (!out.startedAt && typeof entry.timestamp === 'string') out.startedAt = entry.timestamp
     if (!out.cwd && typeof entry.cwd === 'string') out.cwd = entry.cwd
     if (type === 'user' || type === 'assistant') out.messageCount++
@@ -456,8 +484,8 @@ function parseClaudeHead(filePath: string, size: number): ClaudeHead {
       if (!human && !program) return true
       if (program && !human && isTempCwd(out.cwd)) return true
     }
-    // Settled: a Walnut-driven programmatic session is never imported.
-    if (out.walnutDriven && out.entrypoint && !HUMAN_CLAUDE_ENTRYPOINTS.has(out.entrypoint)) return true
+    // Settled: a programmatic fork or Walnut-driven session is never imported.
+    if ((out.walnutDriven || out.forked) && out.entrypoint && !HUMAN_CLAUDE_ENTRYPOINTS.has(out.entrypoint)) return true
     if (type === 'user' && !out.firstUserText && isTitleBearingUserLine(entry)) {
       out.firstUserText = titleFromMessage(entry.message)
     }

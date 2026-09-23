@@ -571,6 +571,38 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     expect(scan().candidates).toEqual([])
   })
 
+  it('skips a programmatic fork with no Walnut envelope at all (markdown-mode btw / lane / task fork)', () => {
+    // The queued first input is stamped at fork time; the copied chain keeps
+    // the parent's older timestamps.
+    writeJsonl(file('fork-plain'), [
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-09-21T18:30:36.716Z', content: 'what does this function return?' },
+      { type: 'system', subtype: 'compact_boundary', timestamp: '2026-09-18T17:58:41.634Z', parentUuid: null },
+      user('fork-plain', 'the parent asked this first', { timestamp: '2026-09-18T17:55:38.049Z' }),
+      reply(),
+      user('fork-plain', 'what does this function return?', { timestamp: '2026-09-21T18:30:37.000Z' }),
+      reply(),
+    ])
+    const byId = Object.fromEntries(describeExternalSessions({ sessionIds: ['fork-plain'], homeDir: home })
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    expect(scan().candidates).toEqual([])
+    expect(byId).toEqual({ 'fork-plain': 'fork' })
+  })
+
+  it('keeps a plain SDK session whose later input was queued mid-turn, and a terminal fork', () => {
+    writeJsonl(file('plain-q'), [
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-09-21T10:00:00.000Z', content: 'start the work' },
+      user('plain-q', 'start the work', { timestamp: '2026-09-21T10:00:00.500Z' }),
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-09-21T10:30:00.000Z', content: 'also this' },
+      reply('long turn', { timestamp: '2026-09-21T10:05:00.000Z' }),
+    ])
+    writeJsonl(file('term-fork-2'), [
+      { type: 'file-history-snapshot', timestamp: '2026-09-21T18:30:36.716Z' },
+      user('term-fork-2', 'copied parent turn', { entrypoint: 'cli', timestamp: '2026-09-18T17:55:38.049Z' }),
+      reply(),
+    ])
+    expect(scan().candidates.map((c) => c.sessionId).sort()).toEqual(['plain-q', 'term-fork-2'])
+  })
+
   it('skips a Walnut-driven session found by the reminder alone, and by the mode switch line', () => {
     writeJsonl(file('rem-1'), [user('rem-1', [{ type: 'text', text: 'fix the flaky test\n\n' + REMINDER }]), reply()])
     writeJsonl(file('edge-1'), [user('edge-1', 'hello\n\n[Rich output mode: ON] Keep writing markdown.'), reply()])
