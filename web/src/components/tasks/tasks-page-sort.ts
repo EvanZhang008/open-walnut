@@ -5,7 +5,9 @@
  */
 import type { Task } from '@open-walnut/core';
 
-export type TpSortKey = 'title' | 'priority' | 'due' | 'session' | 'project';
+export type TpSortKey =
+  | 'title' | 'priority' | 'due' | 'start' | 'session' | 'project'
+  | 'phase' | 'created' | 'updated' | 'completed';
 export type TpSortDir = 'asc' | 'desc';
 export interface TpSort { key: TpSortKey; dir: TpSortDir }
 
@@ -14,6 +16,20 @@ const PRIORITY_RANK: Record<string, number> = { immediate: 0, important: 1, back
 
 function priorityRank(t: Task): number {
   return PRIORITY_RANK[t.priority] ?? 3;
+}
+
+/** Lifecycle order — the same left-to-right the phase machine walks. */
+const PHASE_RANK: Record<string, number> = { TODO: 0, IN_PROGRESS: 1, NEED_ACTION: 2, COMPLETE: 3 };
+
+/**
+ * Compare two optional ISO timestamps; a missing value sinks to the bottom in BOTH
+ * directions (flipping it would float the dateless pile above real dates on desc).
+ */
+function compareOptionalDate(av: string | undefined, bv: string | undefined, sign: number): number {
+  if (!av && !bv) return 0;
+  if (!av) return 1;
+  if (!bv) return -1;
+  return sign * av.localeCompare(bv);
 }
 
 /** running < idle < error < stopped < no session — "what needs me" first. */
@@ -42,14 +58,19 @@ export function compareTasks(a: Task, b: Task, sort: TpSort): number {
       if (priorityRank(a) === 3 || priorityRank(b) === 3) return d;
       return sign * d;
     }
-    case 'due': {
-      const av = a.due_date || '';
-      const bv = b.due_date || '';
-      if (!av && !bv) return 0;
-      if (!av) return 1; // dateless last, both directions
-      if (!bv) return -1;
-      return sign * av.localeCompare(bv);
-    }
+    case 'due':
+      return compareOptionalDate(a.due_date, b.due_date, sign);
+    case 'start':
+      return compareOptionalDate(a.start_date, b.start_date, sign);
+    case 'completed':
+      return compareOptionalDate(a.completed_at, b.completed_at, sign);
+    // created_at / updated_at are always set, so a plain signed compare is right.
+    case 'created':
+      return sign * (a.created_at || '').localeCompare(b.created_at || '');
+    case 'updated':
+      return sign * (a.updated_at || '').localeCompare(b.updated_at || '');
+    case 'phase':
+      return sign * ((PHASE_RANK[a.phase] ?? 4) - (PHASE_RANK[b.phase] ?? 4));
     case 'session': {
       const d = sessionRank(a) - sessionRank(b);
       if (sessionRank(a) === 4 || sessionRank(b) === 4) return d;

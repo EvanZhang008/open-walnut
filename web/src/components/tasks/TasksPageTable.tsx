@@ -17,6 +17,14 @@ import { sortTasks, groupTasksByProject, type TpSort, type TpSortKey } from './t
 import {
   ROW_H, GROUP_H, GHOST_H, WINDOW_MIN_ITEMS, OVERSCAN, visibleRangeFor, offsetsFor,
 } from './tasks-table-window';
+import {
+  TP_DEFAULT_COLUMNS, visibleColumns, gridTemplate, formatTableTime, formatTableTimeTitle,
+  type TpColumnDef, type TpColumnId,
+} from './tasks-table-columns';
+import { TasksColumnsMenu } from './TasksColumnsMenu';
+import { TagChip } from './TagChip';
+import { PHASE_LABELS } from '@/utils/session-status';
+import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
 
@@ -38,6 +46,11 @@ interface TasksPageTableProps {
   onProjectChanged: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
   /** Column sort — null = server/manual order. Lifted so the toolbar can show it. */
   sort: TpSort | null;
+  /** Optional columns to draw after Title (see tasks-table-columns.ts). Defaults to
+   *  the shipped layout. Project/Priority are additionally gated by scope. */
+  columns?: readonly TpColumnId[];
+  /** Present = render the column chooser in the header; absent = fixed columns. */
+  onColumnsChange?: (next: TpColumnId[]) => void;
   onSortChange: (sort: TpSort | null) => void;
   /** Group-by-project (All Tasks view only). */
   grouped: boolean;
@@ -275,13 +288,14 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
   );
 }
 
-/** Column header cell — click cycles asc → desc → off. */
+/** Column header cell — click cycles asc → desc → off; no key = plain label. */
 function Th({ label, k, sort, onSortChange }: {
   label: string;
-  k: TpSortKey;
+  k?: TpSortKey;
   sort: TpSort | null;
   onSortChange: (s: TpSort | null) => void;
 }) {
+  if (!k) return <span className="tp-th tp-th-static">{label}</span>;
   const active = sort?.key === k;
   const arrow = !active ? '' : sort!.dir === 'asc' ? '▲' : '▼';
   const cycle = () => {
@@ -312,6 +326,8 @@ export function TasksPageTable({
   onProjectChanged,
   sort,
   onSortChange,
+  columns = TP_DEFAULT_COLUMNS,
+  onColumnsChange,
   grouped,
   collapsed,
   onToggleGroup,
@@ -329,10 +345,23 @@ export function TasksPageTable({
   const isAll = activeProject === null;
   const showGroups = isAll && grouped;
   const showPriority = useShowPriority();
-  // The grid template is per-row, so dropping the priority CELL has to drop its
-  // TRACK too or every later cell lands one column to the left. `tp-nopri` is the
-  // same column set minus the 120px priority track.
-  const cols = `${isAll ? 'tp-cols-5' : 'tp-cols-4'}${showPriority ? '' : ' tp-nopri'}`;
+  // ONE list drives the header cells, the row cells AND the grid tracks (as a CSS
+  // variable on the scroller), so a cell/track mismatch cannot happen: dropping a
+  // column drops all three at once.
+  const scope = useMemo(() => ({ isAll, showPriority }), [isAll, showPriority]);
+  const visible = useMemo(() => visibleColumns(columns, scope), [columns, scope]);
+  const gridStyle = useMemo(
+    () => ({ '--tp-cols': gridTemplate(visible) }) as React.CSSProperties,
+    [visible],
+  );
+  // Relative times ("3h ago") go stale while nothing else re-renders; tick once a
+  // minute, but only while a timestamp column is actually on screen.
+  const hasTimeColumn = visible.some((c) => c.id === 'created' || c.id === 'updated' || c.id === 'completed');
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    if (!hasTimeColumn) return;
+    return visibleInterval(() => setClock((n) => n + 1), 60_000);
+  }, [hasTimeColumn]);
 
   // ── ghost add-row state (keyed by group so only one ghost is editing) ──
   const [addingIn, setAddingIn] = useState<string | null>(null);
@@ -395,7 +424,7 @@ export function TasksPageTable({
     return (
       <div
         key={ghostKey}
-        className={`tp-ghost ${cols}${editing ? ' editing' : ''}`}
+        className={`tp-ghost${editing ? ' editing' : ''}`}
         data-testid="tasks-ghost-row"
         onClick={() => { if (!editing) { setAddingIn(ghostKey); setDraft(''); } }}
       >
@@ -421,7 +450,7 @@ export function TasksPageTable({
 
   const row = (t: Task) => {
     return (
-      <div key={t.id} className={`tp-row ${cols}${t.status === 'done' ? ' done' : ''}`} data-task-id={t.id}>
+      <div key={t.id} className={`tp-row${t.status === 'done' ? ' done' : ''}`} data-task-id={t.id}>
         <span className="tp-cell-title">
           <button
             type="button"
@@ -471,28 +500,85 @@ export function TasksPageTable({
             />
           </span>
         </span>
-        {showPriority && <span><PriorityCell task={t} onUpdate={onUpdate} /></span>}
-        <span className={`tp-cell-due${isOverdue(t.due_date) && t.status !== 'done' ? ' overdue' : ''}`}>
-          {/* DatePicker popover handles flip/clamp; trigger inherits cell style */}
-          <span className="tp-due-picker" onClick={(e) => e.stopPropagation()}>
-            <DatePicker
-              date={t.due_date}
-              onChange={(d) => onUpdate(t.id, { due_date: d ?? '' })}
-              ghostWhenEmpty
-            />
-          </span>
-        </span>
-        <span className="tp-cell-session">
-          {/* Shared pill — same status text/classes as every other surface
-              (specs assert .task-session-pill contains Running/Idle here).
-              Clickable: one click opens the session on the home columns. */}
-          <TaskSessionPill task={t} onOpenSession={openSession} />
-        </span>
-        {isAll && (
-          <span><ProjectCell task={t} sourceByName={sourceByName} projectNames={projectNames} onUpdate={onUpdate} /></span>
-        )}
+        {visible.map((col) => cell(col, t))}
       </div>
     );
+  };
+
+  /** One optional-column cell. Wrapped so each column owns exactly one grid track. */
+  const cell = (col: TpColumnDef, t: Task): ReactNode => {
+    switch (col.id) {
+      case 'priority':
+        return <span key={col.id} data-col={col.id}><PriorityCell task={t} onUpdate={onUpdate} /></span>;
+      case 'phase':
+        return (
+          <span key={col.id} data-col={col.id} className={`tp-cell-phase ph-${t.phase.toLowerCase()}`}>
+            {PHASE_LABELS[t.phase] ?? t.phase}
+          </span>
+        );
+      case 'due':
+        return (
+          <span key={col.id} data-col={col.id} className={`tp-cell-due${isOverdue(t.due_date) && t.status !== 'done' ? ' overdue' : ''}`}>
+            {/* DatePicker popover handles flip/clamp; trigger inherits cell style */}
+            <span className="tp-due-picker" onClick={(e) => e.stopPropagation()}>
+              <DatePicker
+                date={t.due_date}
+                onChange={(d) => onUpdate(t.id, { due_date: d ?? '' })}
+                ghostWhenEmpty
+              />
+            </span>
+          </span>
+        );
+      case 'start':
+        return (
+          <span key={col.id} data-col={col.id} className="tp-cell-due">
+            <span className="tp-due-picker" onClick={(e) => e.stopPropagation()}>
+              <DatePicker
+                date={t.start_date}
+                onChange={(d) => onUpdate(t.id, { start_date: d ?? '' })}
+                label="Start"
+                ghostWhenEmpty
+              />
+            </span>
+          </span>
+        );
+      case 'session':
+        return (
+          <span key={col.id} data-col={col.id} className="tp-cell-session">
+            {/* Shared pill — same status text/classes as every other surface
+                (specs assert .task-session-pill contains Running/Idle here).
+                Clickable: one click opens the session on the home columns. */}
+            <TaskSessionPill task={t} onOpenSession={openSession} />
+          </span>
+        );
+      case 'project':
+        return (
+          <span key={col.id} data-col={col.id}>
+            <ProjectCell task={t} sourceByName={sourceByName} projectNames={projectNames} onUpdate={onUpdate} />
+          </span>
+        );
+      case 'tags': {
+        const tags = t.tags ?? [];
+        return (
+          <span key={col.id} data-col={col.id} className="tp-cell-tags" title={tags.join(', ')}>
+            {tags.length === 0
+              ? <span className="tp-cell-empty">–</span>
+              : tags.map((tag) => <TagChip key={tag} tag={tag} inline />)}
+          </span>
+        );
+      }
+      case 'created':
+      case 'updated':
+      case 'completed': {
+        const iso = col.id === 'created' ? t.created_at : col.id === 'updated' ? t.updated_at : t.completed_at;
+        const text = formatTableTime(iso);
+        return (
+          <span key={col.id} data-col={col.id} className="tp-cell-time" title={formatTableTimeTitle(iso)}>
+            {text || <span className="tp-cell-empty">–</span>}
+          </span>
+        );
+      }
+    }
   };
 
   const groupHeader = (project: string, groupTasks: Task[], isCollapsed: boolean) => {
@@ -625,13 +711,15 @@ export function TasksPageTable({
   }
 
   return (
-    <div className="tp-table-scroll" data-testid="tasks-table" ref={scrollRef}>
-      <div className={`tp-thead ${cols}`}>
+    <div className="tp-table-scroll" data-testid="tasks-table" ref={scrollRef} style={gridStyle}>
+      <div className="tp-thead">
         <Th label="Title" k="title" sort={sort} onSortChange={onSortChange} />
-        {showPriority && <Th label="Priority" k="priority" sort={sort} onSortChange={onSortChange} />}
-        <Th label="Due" k="due" sort={sort} onSortChange={onSortChange} />
-        <Th label="Session" k="session" sort={sort} onSortChange={onSortChange} />
-        {isAll && <Th label="Project" k="project" sort={sort} onSortChange={onSortChange} />}
+        {visible.map((col) => (
+          <Th key={col.id} label={col.label} k={col.sortKey} sort={sort} onSortChange={onSortChange} />
+        ))}
+        {onColumnsChange && (
+          <TasksColumnsMenu columns={columns} scope={scope} onChange={onColumnsChange} />
+        )}
       </div>
       {body}
     </div>

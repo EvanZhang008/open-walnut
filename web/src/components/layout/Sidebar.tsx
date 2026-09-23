@@ -1,5 +1,6 @@
 import { useState, useEffect, type RefObject } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { linkTargetFor } from '@/utils/last-location';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useAppCatalog } from '@/apps/hooks';
@@ -247,10 +248,19 @@ export function Sidebar({
           ) : app.iconUrl ? (
             <img src={app.iconUrl} alt="" className="sidebar-app-icon" />
           ) : <PuzzleIcon />;
+          // Where the link goes: the section's remembered location (Calendar's
+          // view+date, Settings' pane, …), the bare path when there is none. While
+          // ON the app the link points at the current URL, so clicking the active
+          // icon is a no-op instead of a reset to an older remembered state.
+          const onThisApp = app.path !== '/'
+            && (location.pathname === app.path || location.pathname.startsWith(`${app.path}/`));
+          const target = app.path === '/' ? '/'
+            : onThisApp ? `${location.pathname}${location.search}${location.hash}`
+            : linkTargetFor(app.path);
           const link = (
             <NavLink
               key={`${app.key}:${app.generation}`}
-              to={app.path}
+              to={target}
               end={app.path === '/'}
               className={navLinkClass}
               title={collapsed ? app.title : undefined}

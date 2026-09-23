@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { usePersistentState, oneOf, isString } from '@/hooks/usePersistentState';
 import { useSkills } from '@/hooks/useSkills';
 import { SkillCard } from '@/components/skills/SkillCard';
 import { SkillDetail } from '@/components/skills/SkillDetail';
@@ -11,10 +12,18 @@ type StatusFilter = 'all' | 'enabled' | 'disabled';
 
 export function SkillsPage() {
   const { skills, loading, error, create, update, toggle, remove } = useSkills();
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<SkillInfo | null>(null);
+  // View choices survive leaving the page (it unmounts on every navigation).
+  const [sourceFilter, setSourceFilter] = usePersistentState<SourceFilter>(
+    'walnut-skills-page-source', 'all', oneOf(['all', 'workspace', 'walnut', 'claude', 'plugin']),
+  );
+  const [statusFilter, setStatusFilter] = usePersistentState<StatusFilter>(
+    'walnut-skills-page-status', 'all', oneOf(['all', 'enabled', 'disabled']),
+  );
+  const [search, setSearch] = usePersistentState<string>('walnut-skills-page-search', '', isString);
+  // The selection is remembered by dirName and resolved against the live list, so
+  // it both survives leaving the page and stays fresh after a refetch.
+  const [selectedDir, setSelectedDir] = usePersistentState<string>('walnut-skills-page-selected', '', isString);
+  const setSelected = useCallback((skill: SkillInfo | null) => setSelectedDir(skill?.dirName ?? ''), [setSelectedDir]);
   const [showForm, setShowForm] = useState(false);
 
   const filtered = useMemo(() => {
@@ -49,17 +58,16 @@ export function SkillsPage() {
     disabled: skills.filter((s) => !s.enabled).length,
   }), [skills]);
 
-  // Keep selected skill fresh after refetch
   const selectedSkill = useMemo(() => {
-    if (!selected) return null;
-    return skills.find((s) => s.dirName === selected.dirName) ?? null;
-  }, [skills, selected]);
+    if (!selectedDir) return null;
+    return skills.find((s) => s.dirName === selectedDir) ?? null;
+  }, [skills, selectedDir]);
 
   const handleCreate = useCallback(async (input: { dirName: string; content: string; target: 'claude' | 'walnut' }) => {
     const skill = await create(input);
     setShowForm(false);
     setSelected(skill);
-  }, [create]);
+  }, [create, setSelected]);
 
   const handleSave = useCallback(async (dirName: string, content: string) => {
     await update(dirName, content);
@@ -71,8 +79,8 @@ export function SkillsPage() {
 
   const handleDelete = useCallback(async (dirName: string) => {
     await remove(dirName);
-    if (selected?.dirName === dirName) setSelected(null);
-  }, [remove, selected]);
+    if (selectedDir === dirName) setSelected(null);
+  }, [remove, selectedDir, setSelected]);
 
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;

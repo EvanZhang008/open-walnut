@@ -7,6 +7,7 @@ import { syncAppCommands } from './apps/commands';
 import { ensureCoreAppsRegistered } from './apps/core-apps';
 import { useAppCatalog } from './apps/hooks';
 import { openSessionOnHome } from './utils/open-session';
+import { rememberLocation } from './utils/last-location';
 import { parseSessionInboxTarget } from './components/inbox/session-inbox-link';
 import { AppShell } from './components/layout/AppShell';
 import { DebugCrashProbe } from './components/common/AppErrorBoundary';
@@ -56,6 +57,11 @@ export function App() {
   useEffect(() => {
     syncAppCommands(apps.discoverable);
   }, [apps.discoverable]);
+
+  // Sidebar links return the user to where they last were in a section (Calendar's
+  // ?view=&d=, Settings' #pane) — see utils/last-location.ts for which locations
+  // are recorded.
+  useEffect(() => { rememberLocation(location); }, [location]);
 
   if (isPopoutPath(location.pathname)) return <PopoutRoot />;
 

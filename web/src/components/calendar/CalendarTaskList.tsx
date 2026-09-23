@@ -6,7 +6,8 @@
  * Deliberately slim (NOT a TodoPanel embed — that component owns its own
  * DndContexts and nesting them invites sensor conflicts).
  */
-import { memo, useDeferredValue, useMemo, useState } from 'react';
+import { memo, useDeferredValue, useMemo } from 'react';
+import { usePersistentState, isString } from '@/hooks/usePersistentState';
 import { useDraggable } from '@dnd-kit/core';
 import type { Task } from '@open-walnut/core';
 import { PIN_TIER_POLICY } from '@open-walnut/core';
@@ -68,7 +69,7 @@ interface RailSection {
 }
 
 export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props) {
-  const [filter, setFilter] = useState('');
+  const [filter, setFilter] = usePersistentState<string>('walnut-calendar-rail-filter', '', isString);
   // Safe variant: the rail renders fine without the provider (tests, popouts) —
   // it just degrades to project-only grouping.
   const focusBar = useFocusBarContextSafe();

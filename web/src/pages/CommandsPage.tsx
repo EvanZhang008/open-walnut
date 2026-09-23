@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { usePersistentState, oneOf } from '@/hooks/usePersistentState';
 import { useCommands } from '@/hooks/useCommands';
 import { CommandCard } from '@/components/commands/CommandCard';
 import { CommandForm } from '@/components/commands/CommandForm';
@@ -11,7 +12,9 @@ type FilterTab = 'all' | 'builtin' | 'user';
 export function CommandsPage() {
   const { commands, loading, error, create, update, remove } = useCommands();
   const alert = useAlert();
-  const [filter, setFilter] = useState<FilterTab>('all');
+  const [filter, setFilter] = usePersistentState<FilterTab>(
+    'walnut-commands-page-filter', 'all', oneOf(['all', 'builtin', 'user']),
+  );
   const [showForm, setShowForm] = useState(false);
   const [editingCommand, setEditingCommand] = useState<CommandDef | undefined>(undefined);
 

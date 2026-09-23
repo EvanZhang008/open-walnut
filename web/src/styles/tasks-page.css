@@ -318,13 +318,12 @@
   display: grid;
   align-items: center;
   padding: 0 20px;
+  /* The tracks come from ONE place: TasksPageTable sets `--tp-cols` on the scroller
+     from the same visible-column list that renders the header and row cells
+     (tasks-table-columns.ts). Header, rows and ghosts therefore can never disagree
+     on how many tracks there are. The fallback is the Title-only layout. */
+  grid-template-columns: var(--tp-cols, minmax(280px, 1fr));
 }
-.tp-cols-5 { grid-template-columns: minmax(280px, 1fr) 120px 90px 170px 140px; }
-.tp-cols-4 { grid-template-columns: minmax(280px, 1fr) 120px 90px 170px; }
-/* Priority hidden (ui.show_priority off): same columns minus the 120px priority
-   track, so Due/Session/Project keep their own widths instead of shifting left. */
-.tp-cols-5.tp-nopri { grid-template-columns: minmax(280px, 1fr) 90px 170px 140px; }
-.tp-cols-4.tp-nopri { grid-template-columns: minmax(280px, 1fr) 90px 170px; }
 
 .tp-thead {
   height: 32px;
@@ -428,6 +427,93 @@
 .tp-cell-due.overdue { color: var(--tp-p0); }
 
 .tp-cell-empty { color: var(--fg-muted); opacity: 0.45; font-size: 12px; }
+
+/* optional columns: phase / tags / timestamps */
+.tp-cell-phase { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.tp-cell-phase.ph-need_action { color: var(--tp-p0); }
+.tp-cell-phase.ph-in_progress { color: var(--accent); }
+.tp-cell-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.tp-cell-tags .tag-chip { flex: none; }
+.tp-cell-time { font-size: 12px; color: var(--fg-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* unsortable header (Tags) — same type as .tp-th, no pointer */
+.tp-th-static { cursor: default; }
+.tp-th-static:hover { color: var(--fg-muted); }
+
+/* column chooser — lives in the header's right padding so it costs no track */
+.tp-cols-btn {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.tp-cols-btn:hover, .tp-cols-btn.open { background: var(--bg-tertiary); color: var(--fg); }
+.tp-cols-popover {
+  position: fixed;
+  z-index: 9500;
+  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  overflow-y: auto;
+}
+.tp-cols-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 10px 4px;
+}
+.tp-cols-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+}
+.tp-cols-opt:hover { background: var(--bg-hover); }
+.tp-cols-opt.disabled { color: var(--fg-muted); cursor: not-allowed; }
+.tp-cols-opt input { margin: 0; accent-color: var(--accent); }
+.tp-cols-reset {
+  margin: 4px 6px 2px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  padding: 8px 4px 4px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+.tp-cols-reset:disabled { color: var(--fg-muted); cursor: default; }
 
 /* session cell hosts the shared .task-session-pill — just clip it to the column */
 .tp-cell-session {

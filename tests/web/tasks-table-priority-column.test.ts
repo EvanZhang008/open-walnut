@@ -1,14 +1,17 @@
 /**
- * The /tasks table stays aligned when priority is hidden (`ui.show_priority` off,
- * the default).
+ * The /tasks table's header, rows and grid tracks can never disagree.
  *
- * `.tp-thead`, `.tp-row` and `.tp-ghost` are three separate grids that share ONE
- * `grid-template-columns` class, so dropping the priority CELL without dropping its
- * TRACK does not leave a gap — it shifts Due, Session and Project one column to the
- * left in the rows while the header keeps its own tracks, i.e. every value ends up
- * under the wrong heading. A cell/track mismatch is exactly the kind of break that
- * looks fine in a screenshot of the header row alone, so it is pinned here rather
- * than left to the eye.
+ * History: `.tp-thead`, `.tp-row` and `.tp-ghost` are three separate grids. They
+ * used to share a hard-coded `grid-template-columns` class per column count, and
+ * hiding the priority CELL without its TRACK shifted Due/Session/Project one column
+ * left in the rows while the header kept its tracks — every value under the wrong
+ * heading, invisible in a header-only screenshot.
+ *
+ * The 2026-09 column chooser replaced the classes with ONE source: TasksPageTable
+ * computes `visibleColumns(...)` once and maps over it for the header cells, the row
+ * cells and the `--tp-cols` CSS variable (tasks-table-columns.ts). This file pins
+ * that structure in the SOURCE, so a future "just add a cell" edit that bypasses
+ * the list is caught here rather than by eye.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -18,32 +21,36 @@ const WEB = path.resolve(import.meta.dirname, '../../web/src');
 const CSS_SRC = fs.readFileSync(path.join(WEB, 'styles/tasks-page.css'), 'utf8');
 const TABLE_SRC = fs.readFileSync(path.join(WEB, 'components/tasks/TasksPageTable.tsx'), 'utf8');
 
-/** The column tracks a `.tp-cols-*` rule declares, `minmax(a, b)` folded to one token. */
-function tracks(selector: string): string[] {
-  const idx = CSS_SRC.indexOf(selector);
-  expect(idx, `missing CSS rule: ${selector}`).toBeGreaterThan(-1);
-  const body = CSS_SRC.slice(idx, CSS_SRC.indexOf('}', idx) + 1);
-  const match = /grid-template-columns:\s*([^;}]+)/.exec(body);
-  expect(match, `${selector} declares no grid-template-columns`).toBeTruthy();
-  return match![1].replace(/minmax\([^)]*\)/g, 'TITLE').trim().split(/\s+/);
-}
-
-describe('tasks table priority column', () => {
-  it('the no-priority template is the full one minus exactly the priority track', () => {
-    for (const base of ['.tp-cols-5', '.tp-cols-4']) {
-      const full = tracks(`${base} {`);
-      const withoutPriority = tracks(`${base}.tp-nopri {`);
-      // Priority is the SECOND track (title first), so removing it must leave the
-      // remaining widths untouched — not re-flow them.
-      expect(withoutPriority, base).toEqual([full[0], ...full.slice(2)]);
-    }
+describe('tasks table column alignment', () => {
+  it('header, row and ghost grids all take their tracks from the --tp-cols variable', () => {
+    const idx = CSS_SRC.indexOf('.tp-thead,\n.tp-row,\n.tp-ghost {');
+    expect(idx, 'the shared grid rule for thead/row/ghost is gone').toBeGreaterThan(-1);
+    const body = CSS_SRC.slice(idx, CSS_SRC.indexOf('}', idx) + 1);
+    expect(body).toMatch(/grid-template-columns:\s*var\(--tp-cols/);
+    // No hard-coded per-count templates may come back.
+    expect(CSS_SRC).not.toMatch(/\.tp-cols-\d/);
+    expect(CSS_SRC).not.toMatch(/tp-nopri/);
   });
 
-  it('the header cell, the row cell and the track are gated on the same flag', () => {
-    expect(TABLE_SRC).toMatch(/\{showPriority && <Th label="Priority"/);
-    expect(TABLE_SRC).toMatch(/\{showPriority && <span><PriorityCell/);
-    // The modifier is applied when the flag is OFF; inverting this is the
-    // misalignment bug with the cells and the tracks swapped.
-    expect(TABLE_SRC).toMatch(/showPriority \? '' : ' tp-nopri'/);
+  it('the table sets --tp-cols from the same visible list that renders header and cells', () => {
+    expect(TABLE_SRC).toMatch(/const visible = useMemo\(\(\) => visibleColumns\(columns, scope\)/);
+    expect(TABLE_SRC).toMatch(/'--tp-cols': gridTemplate\(visible\)/);
+    // Header: Title, then one <Th> per visible column.
+    expect(TABLE_SRC).toMatch(/\{visible\.map\(\(col\) => \(\s*<Th key=\{col\.id\}/);
+    // Rows: Title cell, then one cell per visible column.
+    expect(TABLE_SRC).toMatch(/\{visible\.map\(\(col\) => cell\(col, t\)\)\}/);
+    // Nothing renders a column cell on its own gate any more.
+    expect(TABLE_SRC).not.toMatch(/\{showPriority && <span><PriorityCell/);
+    expect(TABLE_SRC).not.toMatch(/\{isAll && \(\s*<span><ProjectCell/);
+  });
+
+  it('the cell switch covers every column id the model can offer', () => {
+    const modelSrc = fs.readFileSync(path.join(WEB, 'components/tasks/tasks-table-columns.ts'), 'utf8');
+    const ids = [...modelSrc.matchAll(/\{ id: '([a-z]+)'/g)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(5);
+    const switchStart = TABLE_SRC.indexOf('const cell = (col: TpColumnDef, t: Task)');
+    expect(switchStart).toBeGreaterThan(-1);
+    const switchSrc = TABLE_SRC.slice(switchStart, TABLE_SRC.indexOf('const groupHeader', switchStart));
+    for (const id of ids) expect(switchSrc, `no cell for column '${id}'`).toMatch(new RegExp(`case '${id}'`));
   });
 });

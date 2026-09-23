@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
+import { usePersistentState, isString, isStringArray } from '@/hooks/usePersistentState';
 import type { MemoryBrowseTree, BrowseItem, BrowseDailyItem } from '@/api/memory';
 
 interface MemoryTreePanelProps {
@@ -67,8 +68,15 @@ function filterProjectTree(nodes: ProjectNode[], filter: string): ProjectNode[] 
 }
 
 export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePanelProps) {
-  const [filter, setFilter] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // Both survive leaving /memory (the page unmounts on navigation). The Set is
+  // stored as an array; the two wrappers below keep the Set API the rest of the
+  // component uses.
+  const [filter, setFilter] = usePersistentState<string>('walnut-memory-tree-filter', '', isString);
+  const [collapsedList, setCollapsedList] = usePersistentState<string[]>('walnut-memory-tree-collapsed', [], isStringArray);
+  const collapsed = useMemo(() => new Set(collapsedList), [collapsedList]);
+  const setCollapsed = useCallback((update: (prev: Set<string>) => Set<string>) => {
+    setCollapsedList((prev) => [...update(new Set(prev))]);
+  }, [setCollapsedList]);
 
   const projectNodes = useMemo(() => (tree ? buildProjectTree(tree.projects) : []), [tree]);
 

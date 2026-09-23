@@ -11,6 +11,12 @@ import { TaskForm, type TaskFormData } from '@/components/tasks/TaskForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import type { TpSort } from '@/components/tasks/tasks-page-sort';
 import {
+  LS_TASKS_PAGE_COLUMNS, parseColumns, serializeColumns, type TpColumnId,
+} from '@/components/tasks/tasks-table-columns';
+import {
+  readActiveProject, writeActiveProject, readQuery, writeQuery, readSearch, writeSearch,
+} from '@/components/tasks/tasks-page-persist';
+import {
   ViewDropdown,
   DEFAULT_TASK_QUERY_FILTER_STATE,
   logTaskQueryChange,
@@ -59,6 +65,10 @@ function readCollapsed(): Set<string> {
   return new Set();
 }
 
+function readColumns(): TpColumnId[] {
+  try { return parseColumns(localStorage.getItem(LS_TASKS_PAGE_COLUMNS)); } catch { return parseColumns(null); }
+}
+
 /** /tasks — dense two-pane workspace: project rail (left) + task table (right). */
 export function DashboardPage() {
   const { tasks, loading, error, toggleComplete, create, deleteTask, update } = useTasksContext();
@@ -71,18 +81,25 @@ export function DashboardPage() {
   // so it is deliberately not a query condition: the query panel's own `projects`
   // chips are the refinement, and mixing the two would make "clear all filters"
   // silently move the board off the project the user was looking at.
-  const [activeProject, setActiveProject] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  //
+  // Project, query and search are read back from localStorage: this route unmounts
+  // on every navigation, and coming back to "All Tasks, no filter, empty search"
+  // after a detour to a session was the 2026-09-23 complaint. Written by the
+  // effects below, so every setter path (rail click, project create/rename/delete,
+  // chip removal) persists without each one remembering to.
+  const [activeProject, setActiveProject] = useState<string | null>(readActiveProject);
+  const [search, setSearch] = useState(readSearch);
   const [showForm, setShowForm] = useState(false);
 
-  // The SAME canonical query state the home panel uses. Seeded with
-  // completion: ['todo','in_progress'] to preserve this page's shipped default
-  // (Todo on, Done off): hiding completed tasks is an explicit choice a surface
-  // makes, never a rule buried inside the shared evaluator.
-  const [query, setQuery] = useState<TaskQueryFilterState>(() => ({
-    ...DEFAULT_TASK_QUERY_FILTER_STATE,
-    completion: ['todo', 'in_progress'],
-  }));
+  // The SAME canonical query state the home panel uses. The persisted default is
+  // seeded with completion: ['todo','in_progress'] to preserve this page's shipped
+  // default (Todo on, Done off): hiding completed tasks is an explicit choice a
+  // surface makes, never a rule buried inside the shared evaluator.
+  const [query, setQuery] = useState<TaskQueryFilterState>(readQuery);
+
+  useEffect(() => { writeActiveProject(activeProject); }, [activeProject]);
+  useEffect(() => { writeQuery(query); }, [query]);
+  useEffect(() => { writeSearch(search); }, [search]);
 
   const handleQueryChange = useCallback((next: TaskQueryFilterState) => {
     setQuery(next);
@@ -130,6 +147,12 @@ export function DashboardPage() {
   const [sort, setSort] = useState<TpSort | null>(readSort);
   const [grouped, setGrouped] = useState(readGrouped);
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+  const [columns, setColumns] = useState<TpColumnId[]>(readColumns);
+
+  const handleColumnsChange = useCallback((next: TpColumnId[]) => {
+    setColumns(next);
+    try { localStorage.setItem(LS_TASKS_PAGE_COLUMNS, serializeColumns(next)); } catch { /* ignore */ }
+  }, []);
 
   const handleSortChange = useCallback((s: TpSort | null) => {
     setSort(s);
@@ -466,6 +489,8 @@ export function DashboardPage() {
           onProjectChanged={handleProjectChanged}
           sort={sort}
           onSortChange={handleSortChange}
+          columns={columns}
+          onColumnsChange={handleColumnsChange}
           grouped={grouped}
           collapsed={collapsed}
           onToggleGroup={handleToggleGroup}

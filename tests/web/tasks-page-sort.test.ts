@@ -62,6 +62,42 @@ describe('sortTasks', () => {
     expect(desc.map((t) => t.id)).toEqual([late.id, early.id, never.id]);
   });
 
+  it('start / completed: missing values stay last in both directions', () => {
+    const early = task({ start_date: '2026-08-01', completed_at: '2026-08-02T00:00:00Z' });
+    const late = task({ start_date: '2026-09-01', completed_at: '2026-09-02T00:00:00Z' });
+    const never = task({});
+    for (const key of ['start', 'completed'] as const) {
+      const asc = sortTasks([never, late, early], { key, dir: 'asc' });
+      expect(asc.map((t) => t.id), `${key} asc`).toEqual([early.id, late.id, never.id]);
+      const desc = sortTasks([never, late, early], { key, dir: 'desc' });
+      expect(desc.map((t) => t.id), `${key} desc`).toEqual([late.id, early.id, never.id]);
+    }
+  });
+
+  it('created / updated: plain signed compare on the always-present timestamps', () => {
+    const old = task({ created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-05T00:00:00Z' });
+    const mid = task({ created_at: '2026-03-01T00:00:00Z', updated_at: '2026-03-05T00:00:00Z' });
+    const fresh = task({ created_at: '2026-06-01T00:00:00Z', updated_at: '2026-02-01T00:00:00Z' });
+    expect(sortTasks([mid, fresh, old], { key: 'created', dir: 'asc' }).map((t) => t.id))
+      .toEqual([old.id, mid.id, fresh.id]);
+    expect(sortTasks([mid, fresh, old], { key: 'created', dir: 'desc' }).map((t) => t.id))
+      .toEqual([fresh.id, mid.id, old.id]);
+    // updated is an independent axis: `fresh` was CREATED last but UPDATED second.
+    expect(sortTasks([mid, fresh, old], { key: 'updated', dir: 'desc' }).map((t) => t.id))
+      .toEqual([mid.id, fresh.id, old.id]);
+  });
+
+  it('phase: lifecycle order TODO → IN_PROGRESS → NEED_ACTION → COMPLETE, reversible', () => {
+    const todo = task({ phase: 'TODO' });
+    const doing = task({ phase: 'IN_PROGRESS' });
+    const need = task({ phase: 'NEED_ACTION' });
+    const done = task({ phase: 'COMPLETE' });
+    expect(sortTasks([done, need, todo, doing], { key: 'phase', dir: 'asc' }).map((t) => t.phase))
+      .toEqual(['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE']);
+    expect(sortTasks([todo, doing, need, done], { key: 'phase', dir: 'desc' }).map((t) => t.phase))
+      .toEqual(['COMPLETE', 'NEED_ACTION', 'IN_PROGRESS', 'TODO']);
+  });
+
   it('session: running first, sessionless last regardless of direction', () => {
     const running = task({ session_status: { process_status: 'running' } } as Partial<Task>);
     const idle = task({ session_status: { process_status: 'idle' } } as Partial<Task>);

@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { usePersistentState, oneOf } from '@/hooks/usePersistentState';
 import { useAgents } from '@/hooks/useAgents';
 import { AgentCard } from '@/components/agents/AgentCard';
 import { AgentForm } from '@/components/agents/AgentForm';
@@ -13,7 +14,9 @@ const isConsoleAgent = (a: AgentDefinition) => a.id === 'general' || a.console =
 
 export function AgentsPage() {
   const { agents, availableModels, skills, loading, error, create, update, remove, clone } = useAgents();
-  const [filter, setFilter] = useState<FilterTab>('all');
+  const [filter, setFilter] = usePersistentState<FilterTab>(
+    'walnut-agents-page-filter', 'all', oneOf(['all', 'builtin', 'config']),
+  );
   const [showForm, setShowForm] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentDefinition | undefined>(undefined);
   const [cloningFrom, setCloningFrom] = useState<AgentDefinition | undefined>(undefined);
