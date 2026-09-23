@@ -35,6 +35,7 @@ import { WALNUT_HOME, CONFIG_FILE, TASKS_FILE } from '../../src/constants.js';
 import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js';
 import { MAIL_MIGRATIONS, mailDatabaseForTesting } from '../../src/integrations/mail/db.js';
 import { startServer, stopServer } from '../../src/web/server.js';
+import { bus } from '../../src/core/event-bus.js';
 
 const FIXTURE_ID = 'mail-unread-fixture';
 const ACCOUNT_ID = 'fake:one';
@@ -84,6 +85,8 @@ interface Fixture {
   unreadFromProvider?: { messageIds: string[] } | { fail: string };
   /** Every `listUnread` call, so a test can say a later page did not ask again. */
   unreadCalls: Array<{ mailbox: string; limit: number }>;
+  /** How long `listUnread` takes to answer. A real Outlook helper routinely takes seconds. */
+  unreadDelayMs?: number;
 }
 
 let server: HttpServer;
@@ -304,6 +307,7 @@ export function activate(walnut) {
     ...(S().unreadFromProvider ? {
       listUnread: async (accountId, mailbox, limit) => {
         S().unreadCalls.push({ mailbox, limit });
+        if (S().unreadDelayMs) await new Promise((resolve) => setTimeout(resolve, S().unreadDelayMs));
         const armed = S().unreadFromProvider;
         if ('fail' in armed) throw new Error(armed.fail);
         return armed.messageIds.map((id) => envelope(findMessage(id), mailbox));
@@ -786,5 +790,105 @@ describe('the unread filter asks the provider first', () => {
     expect(page.body.messages).toHaveLength(0);
     const after = await rows<{ n: number }>('SELECT COUNT(*) AS n FROM messages WHERE seen = 0');
     expect(after[0]!.n).toBe(0);
+  });
+});
+
+/**
+ * The console has to HEAR about a correction that lands after its page did (2026-09-23).
+ *
+ * A smart list ("All Inboxes") waits only a moment for the provider and then answers from the cache,
+ * leaving the unread call to run on. A real Outlook helper routinely takes seconds, so the page on
+ * screen kept showing mail read on a phone while the cache under it had already been corrected: the
+ * reported "I already read these, why are they still here". `unread-reconciled` is how the open page
+ * learns to read again, and it must be said only when rows were actually cleared.
+ */
+describe('a late unread correction is announced', () => {
+  const EVENT = 'plugin:mail:unread-reconciled';
+
+  async function rearm(armed: Fixture['unreadFromProvider'], delayMs = 0): Promise<void> {
+    marks().unreadFromProvider = armed;
+    marks().unreadCalls = [];
+    marks().unreadDelayMs = delayMs;
+    const reloaded = await fetch(`http://127.0.0.1:${port}/api/plugin-runtime/${FIXTURE_ID}/reload`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(reloaded.status).toBe(200);
+  }
+
+  /** Every `unread-reconciled` the bus carries while `body` runs. */
+  async function recording<T>(body: (seen: unknown[]) => Promise<T>): Promise<T> {
+    const seen: unknown[] = [];
+    const name = `mail-unread-probe-${Math.random().toString(36).slice(2)}`;
+    bus.subscribe(name, (event) => { if (event.name === EVENT) seen.push(event.data); }, { global: true });
+    try { return await body(seen); } finally { bus.unsubscribe(name); }
+  }
+
+  /** Make the provider's side agree with `stillUnread` and nothing else: read everywhere but these. */
+  function readEverywhereBut(stillUnread: string[]): void {
+    const fixture = marks();
+    const keep = new Set(stillUnread);
+    for (const one of fixture.messages) one.flags = fixture.setSeen(one.flags, !keep.has(one.messageId));
+  }
+
+  function scopePage(): Promise<{ status: number; body: Page }> {
+    return getJson<Page>(`/messages?${new URLSearchParams({ scope: 'role:inbox', unread: '1', limit: String(PAGE) })}`);
+  }
+
+  it('tells the console when a smart list\'s correction outlives the page that asked for it', async () => {
+    const cached = await cacheUnread(6);
+    const stillUnread = cached.slice(0, 2);
+    readEverywhereBut(stillUnread);
+    await setFolderBadge(stillUnread.length);
+    // Slower than the smart list is willing to wait, which is the production shape.
+    await rearm({ messageIds: stillUnread }, 2_500);
+
+    await recording(async (seen) => {
+      const first = await scopePage();
+      expect(first.status).toBe(200);
+      // The precondition of the bug: the page was answered from the cache before the provider did.
+      expect(first.body.messages, 'the page answers before a slow provider does').toHaveLength(6);
+      expect(seen, 'nothing has been corrected yet').toEqual([]);
+
+      await expect.poll(() => seen.length, { timeout: 15_000, interval: 100 }).toBe(1);
+      expect(seen[0]).toEqual({ accountId: ACCOUNT_ID, mailboxId: 'INBOX', cleared: 4 });
+
+      // What the console does on hearing it: read the page again, and it is right this time.
+      const again = await scopePage();
+      expect(again.body.messages.map((one) => one.messageId).sort()).toEqual([...stillUnread].sort());
+      // And that re-read asks nobody: the correction it follows is what made the folder agree.
+      expect(marks().unreadCalls, 'the re-read must not buy a second provider call').toHaveLength(1);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(seen, 'one correction is one event, and the re-read causes none').toHaveLength(1);
+    });
+  }, 30_000);
+
+  it('says nothing when the refresh had nothing to clear', async () => {
+    const cached = await cacheUnread(3);
+    readEverywhereBut(cached);
+    await setFolderBadge(cached.length);
+    await rearm({ messageIds: cached });
+
+    await recording(async (seen) => {
+      const page = await listPage({ limit: PAGE, unread: '1' });
+      expect(page.status).toBe(200);
+      expect(page.body.messages).toHaveLength(3);
+      expect(marks().unreadCalls).toHaveLength(1);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(seen, 'a refresh that agreed with the cache is not news').toEqual([]);
+    });
+  });
+
+  it('says nothing, and changes nothing, when the provider cannot answer', async () => {
+    await cacheUnread(4);
+    await setFolderBadge(1);
+    await rearm({ fail: 'the helper stopped' });
+
+    await recording(async (seen) => {
+      const page = await listPage({ limit: PAGE, unread: '1' });
+      expect(page.status).toBe(200);
+      expect(page.body.messages, 'a failed refresh leaves the cache as it was').toHaveLength(4);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(seen).toEqual([]);
+    });
   });
 });

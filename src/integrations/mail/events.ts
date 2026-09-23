@@ -28,6 +28,7 @@ export const MAIL_EVENT = {
   messageTasked: 'message-tasked',
   digestSent: 'digest-sent',
   unsubscribed: 'unsubscribed',
+  unreadReconciled: 'unread-reconciled',
 } as const
 
 /** At most this many subject lines ride a `messages-received`. */
@@ -107,6 +108,23 @@ export interface MailUnsubscribedEvent {
   listKey: string
   method: string
   status: string
+}
+
+/**
+ * The provider's unread answer showed that cached rows of one folder had been read somewhere else,
+ * and the cache now says so.
+ *
+ * A console needs this because the correction usually lands AFTER the page that asked for it: a
+ * smart list ("All Inboxes") answers from the cache after a short wait and lets the provider call
+ * run on, so without an event the open list keeps showing mail read on a phone until some
+ * unrelated refresh. Only emitted when rows were actually cleared, so the volume is bounded by
+ * mail the person read elsewhere, and the re-read it causes cannot emit it again: the rows it
+ * cleared are no longer cached as unread, so the next reconcile has nothing left to clear.
+ */
+export interface MailUnreadReconciledEvent {
+  accountId: string
+  mailboxId: string
+  cleared: number
 }
 
 /** The daily digest went out. `unread` is what it counted, so a log line reads on its own. */
@@ -189,6 +207,12 @@ export class MailEvents {
   /** One per settled attempt. Bounded by human clicks, so never coalesced. */
   unsubscribed(event: MailUnsubscribedEvent): void {
     this.emit(MAIL_EVENT.unsubscribed, event)
+  }
+
+  /** Only when rows were cleared. See `MailUnreadReconciledEvent`. */
+  unreadReconciled(event: MailUnreadReconciledEvent): void {
+    if (event.cleared <= 0) return
+    this.emit(MAIL_EVENT.unreadReconciled, event)
   }
 
   /** At most once a day, or once per "send it now". No suppression to do. */

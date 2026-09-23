@@ -447,6 +447,35 @@ if (unsub) MESSAGES.push(...unsubMessages());
 /** Read state, as a server holds it. Seeded from the canned envelopes. */
 const seen = new Set(MESSAGES.filter((one) => !one.unreadAtFirstSight).map((one) => one.messageId));
 
+/**
+ * `PW_MAIL_READ_ELSEWHERE=1`: mail read on another device, reported the way a provider whose poll never
+ * lists an old message again reports it (the Outlook shape).
+ *
+ * A spec names the messages it "read on the phone" in `<home>/mail-fixture-read-elsewhere.json`. From
+ * then on the folder's own count leaves them out and `listUnread` does not name them, while the poll
+ * keeps handing over the envelope it always did, so the unread reconcile is the ONLY thing that can
+ * correct the cache. `listUnread` answers after `delayMs` (2500 unless the file says otherwise), which is
+ * slower than a smart list waits for it: the production timing that left read mail on an open list.
+ * Read from disk on every call so a running spec can change it.
+ */
+const readElsewhereOn = process.env.PW_MAIL_READ_ELSEWHERE === '1';
+const READ_ELSEWHERE = path.join(process.env.OPEN_WALNUT_HOME || os.tmpdir(), 'mail-fixture-read-elsewhere.json');
+
+function readElsewhere() {
+  if (!readElsewhereOn) return { ids: new Set(), delayMs: 0 };
+  try {
+    const raw = JSON.parse(fs.readFileSync(READ_ELSEWHERE, 'utf8'));
+    return { ids: new Set(raw.messageIds ?? []), delayMs: typeof raw.delayMs === 'number' ? raw.delayMs : 2500 };
+  } catch {
+    return { ids: new Set(), delayMs: 2500 };
+  }
+}
+
+/** Unread on the server: not read here, and not read on another device either. */
+function unreadOnServer(message, elsewhere) {
+  return !seen.has(message.messageId) && !elsewhere.ids.has(message.messageId);
+}
+
 /** Accounts this provider has been given, which is what `listAccounts` answers with. */
 const accounts = [];
 
@@ -586,16 +615,30 @@ const spec = {
     return { state: 'ok', checkedAt: Date.now() };
   },
   async listMailboxes() {
+    const elsewhere = readElsewhere();
     return MAILBOXES.map(({ declared, ...mailbox }) => {
       const held = MESSAGES.filter((one) => one.mailboxId === mailbox.mailboxId);
       return {
         ...mailbox,
         // Counted from what this server holds, unless the folder declares its own figures (Junk).
         total: declared ? declared.total : held.length,
-        unread: declared ? declared.unread : held.filter((one) => !seen.has(one.messageId)).length,
+        unread: declared ? declared.unread : held.filter((one) => unreadOnServer(one, elsewhere)).length,
       };
     });
   },
+  // Only with `PW_MAIL_READ_ELSEWHERE=1`, so every other spec keeps the poll-only provider it was written
+  // against. Newest first, like a real unread search.
+  ...(readElsewhereOn ? {
+    async listUnread(_accountId, mailbox, limit) {
+      const elsewhere = readElsewhere();
+      if (elsewhere.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, elsewhere.delayMs));
+      return MESSAGES
+        .filter((one) => one.mailboxId === mailbox && unreadOnServer(one, elsewhere))
+        .sort((a, b) => b.sentAt - a.sentAt)
+        .slice(0, limit)
+        .map(envelopeOf);
+    },
+  } : {}),
   async poll(_accountId, request) {
     if (coldFolder && request.mailbox === COLD_MAILBOX) {
       throw unreachable(`this server will not open ${request.mailbox}`);

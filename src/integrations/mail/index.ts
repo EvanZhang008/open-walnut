@@ -117,7 +117,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const db = openMailDatabase(walnut)
   const store = new MailStore(db)
   const bodies = new MailBodyStore(walnut.storage.dataDir)
-  const service = new MailService({ store, bodies, providers, log: walnut.log })
+  const service = new MailService({ store, bodies, providers, events, log: walnut.log })
   forgetCapabilities = (accountId) => service.forgetCapabilities(accountId)
   // The write path. `letters` is the host's, and it is the ONLY way this plugin asks the human
   // for anything: a letter renders on the console and on the phone, and its answer comes back

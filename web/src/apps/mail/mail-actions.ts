@@ -1250,28 +1250,43 @@ export function onMailEvent(name: string, data: unknown): void {
     if (payload.status === 'done') void loadMailMessages(true);
     return;
   }
+  // Mail read somewhere else, found out late: the unread refresh a smart list starts outlives the page
+  // that started it, so the rows it cleared are still on screen. Not a sync, so no refresh note is
+  // retired and no folder list is re-read (the badges are the provider's own count and did not move).
+  if (name === 'unread-reconciled') {
+    void loadAccounts(true);
+    if (eventIsForPageOnScreen(payload.accountId, payload.mailboxId)) void loadMailMessages(true);
+    return;
+  }
   if (name === 'sync-completed' || name === 'messages-received') {
     clearRefreshNoteFor(payload.accountId);
     void loadAccounts(true);
     // Noted BEFORE the mailbox read, so it rides in the same patch as the rows it promotes.
     noteArrival(payload.accountId, payload.mailboxId, payload.added);
     if (payload.accountId) void loadMailboxesFor(payload.accountId, true);
-    const selection = store.state.selected;
-    const role = selection ? smartRoleOf(selection) : null;
-    // Whether this event belongs to the list on screen. For a merged list the question is asked of
-    // the PAIRS that list is made of, the same pairs the server's scope resolves to: the reserved
-    // accountId matches no real account, so comparing it would freeze the merged list while the
-    // badges next to it kept moving. `messages-received` carries no mailboxId, so the loose reading
-    // stands: any account taking part in this role is news for this pane.
-    const mine = selection && (role
-      ? smartPairs(store.state.mailboxes, store.state.accounts, role).some((pair) => (
-        (!payload.accountId || pair.accountId === payload.accountId)
-        && (!payload.mailboxId || pair.mailboxId === payload.mailboxId)
-      ))
-      // The page on screen, by the mailbox it was READ from: with the Drafts row open that is the
-      // provider's drafts folder, so a sync of that folder is news for this pane too.
-      : (!payload.accountId || payload.accountId === selection.accountId)
-        && (!payload.mailboxId || payload.mailboxId === pageMailboxOf(selection)));
-    if (mine) void loadMailMessages(true);
+    if (eventIsForPageOnScreen(payload.accountId, payload.mailboxId)) void loadMailMessages(true);
   }
+}
+
+/**
+ * Whether an event about (account, mailbox) belongs to the list on screen.
+ *
+ * For a merged list the question is asked of the PAIRS that list is made of, the same pairs the
+ * server's scope resolves to: the reserved accountId matches no real account, so comparing it would
+ * freeze the merged list while the badges next to it kept moving. A missing half is the loose reading
+ * (`messages-received` carries no mailboxId): any account taking part is news for this pane.
+ */
+function eventIsForPageOnScreen(accountId: string | undefined, mailboxId: string | undefined): boolean {
+  const selection = store.state.selected;
+  if (!selection) return false;
+  const role = smartRoleOf(selection);
+  if (role) {
+    return smartPairs(store.state.mailboxes, store.state.accounts, role).some((pair) => (
+      (!accountId || pair.accountId === accountId) && (!mailboxId || pair.mailboxId === mailboxId)
+    ));
+  }
+  // The page on screen, by the mailbox it was READ from: with the Drafts row open that is the
+  // provider's drafts folder, so a sync of that folder is news for this pane too.
+  return (!accountId || accountId === selection.accountId)
+    && (!mailboxId || mailboxId === pageMailboxOf(selection));
 }

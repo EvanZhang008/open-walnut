@@ -138,6 +138,11 @@ export class MailService {
     bodies: MailBodyStore
     providers: MailProviderRegistry
     now?: () => number
+    /**
+     * Optional: told when an unread refresh marked cached rows read. Its own seam rather than the
+     * whole `MailEvents`, because this is the only thing a read path is allowed to announce.
+     */
+    events?: { unreadReconciled(event: { accountId: string; mailboxId: string; cleared: number }): void }
     /** Optional: an address a body offered and the base refused (debug), a body retired because its row moved (info). */
     log?: {
       debug(message: string, fields?: Record<string, unknown>): void
@@ -804,9 +809,13 @@ export class MailService {
         accountId, mailboxId, mine, { limit, returned: envelopes.length, snapshotAt },
       )
     } catch (error) {
-      this.deps.log?.debug('mail could not refresh the unread list from the provider', {
-        accountId, mailboxId, error: String(error).slice(0, 200),
-      })
+      // INFO, not debug: a refresh that fails leaves mail read elsewhere showing as unread, and with
+      // the line at debug nothing on disk said why (2026-09-23: a dead Outlook helper held 27 read
+      // mails on the list for minutes with no trace). Bounded by page loads, not by polls.
+      const log = this.deps.log
+      const fields = { accountId, mailboxId, error: String(error).slice(0, 200) }
+      if (log?.info) log.info('mail could not refresh the unread list from the provider', fields)
+      else log?.debug('mail could not refresh the unread list from the provider', fields)
     }
   }
 
@@ -850,6 +859,9 @@ export class MailService {
       accountId, mailboxId, cleared: plan.readNow.length, cachedUnread: cached.length,
       answered: answered.length, basis: plan.basis, providerUnread,
     })
+    // The page that asked has usually been answered already (a smart list waits only
+    // `SCOPE_UNREAD_WAIT_MS`), so the console holding it has to be told the rows changed.
+    this.deps.events?.unreadReconciled({ accountId, mailboxId, cleared: plan.readNow.length })
   }
 
   /**

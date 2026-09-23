@@ -307,6 +307,61 @@ describe('a sync event and the merged list', () => {
   });
 });
 
+/**
+ * Mail read somewhere else, corrected AFTER the page on screen was answered (2026-09-23).
+ *
+ * The server's smart list waits only a moment for the provider's unread answer, so the correction
+ * usually lands later. `unread-reconciled` is the only thing that can take the stale rows off the open
+ * list; without it they stayed until an unrelated refresh.
+ */
+describe('a late unread correction and the merged list', () => {
+  it('re-reads the page for a pair the list is made of, and drops the rows read elsewhere', async () => {
+    scopePage = {
+      messages: [
+        envelope(B, 'b-read-on-phone', B_INBOX, '2026-09-17T10:00:00Z'),
+        envelope(B, 'b-still-unread', B_INBOX, '2026-09-17T09:00:00Z'),
+      ],
+    };
+    selectSmartMailbox(SMART_INBOX);
+    await loadMailMessages();
+    expect(getMailSnapshot().messages).toHaveLength(2);
+    const pages = messageCalls().length;
+    const folders = mailboxCalls().length;
+    // What the server holds once the correction has landed.
+    scopePage = { messages: [envelope(B, 'b-still-unread', B_INBOX, '2026-09-17T09:00:00Z')] };
+
+    onMailEvent('unread-reconciled', { accountId: B, mailboxId: B_INBOX, cleared: 1 });
+
+    await vi.waitFor(() => expect(getMailSnapshot().messages.map((one) => one.messageId)).toEqual(['b-still-unread']));
+    expect(messageCalls().length).toBe(pages + 1);
+    await drain();
+    // Not a sync: the folder badges are the provider's own count and did not move, so no folder list
+    // is read again for it.
+    expect(mailboxCalls().length, 'a correction is not a sync').toBe(folders);
+  });
+
+  it('leaves the page alone for a pair that is not in the list', async () => {
+    selectSmartMailbox(SMART_INBOX);
+    await loadMailMessages();
+    const before = messageCalls().length;
+
+    onMailEvent('unread-reconciled', { accountId: A, mailboxId: A_LABEL, cleared: 2 });
+    await drain();
+
+    expect(messageCalls().length).toBe(before);
+  });
+
+  it('re-reads a real folder on screen when the correction is about that folder', async () => {
+    selectMailbox(B, B_INBOX);
+    await loadMailMessages();
+    const before = messageCalls().length;
+
+    onMailEvent('unread-reconciled', { accountId: B, mailboxId: B_INBOX, cleared: 1 });
+
+    await vi.waitFor(() => expect(messageCalls().length).toBe(before + 1));
+  });
+});
+
 describe('a merged list is never treated as a folder', () => {
   it('never asks the fetch route for it, however empty the page is (C6, C7)', async () => {
     // The trigger for an on-demand fetch is "nothing cached and never synced", and the reserved pair
