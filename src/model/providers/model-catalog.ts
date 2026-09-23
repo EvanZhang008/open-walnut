@@ -15,6 +15,12 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
   // The API has no -1m model; 1M capability is activated via the context-1m beta header.
   // model_id therefore redirects the -1m catalog entry to the real API endpoint.
   bedrock: [
+    // Opus 5.5 (2026-09-22) has the same shape as Opus 5: native 1M, 128K output,
+    // adaptive thinking always on (the model card says it cannot be disabled),
+    // and no -1m variant.
+    { id: 'global.anthropic.claude-opus-5-5', provider: 'bedrock',
+      label: 'Opus 5.5', max_tokens: 128_000, context_window: 1_000_000,
+      compat: { thinking_format: 'anthropic', supports_adaptive: true, native_1m: true } },
     // Opus 5: 1M context is native and the only size — no -1m variant, no beta header.
     { id: 'global.anthropic.claude-opus-5', provider: 'bedrock',
       label: 'Opus 5', max_tokens: 128_000, context_window: 1_000_000,
@@ -52,6 +58,9 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
   ],
   // ── Anthropic Direct API ──
   anthropic: [
+    { id: 'claude-opus-5-5', provider: 'anthropic',
+      label: 'Opus 5.5', max_tokens: 128_000, context_window: 1_000_000,
+      compat: { thinking_format: 'anthropic', supports_adaptive: true, native_1m: true } },
     // Opus 5: 1M context is native and the only size — no -1m variant, no beta header.
     { id: 'claude-opus-5', provider: 'anthropic',
       label: 'Opus 5', max_tokens: 128_000, context_window: 1_000_000,
@@ -108,6 +117,8 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
   // ── OpenRouter (aggregator — sorted by release date, newest first) ──
   openrouter: [
     // -- Anthropic --
+    { id: 'anthropic/claude-opus-5.5', provider: 'openrouter',
+      label: 'Claude Opus 5.5', max_tokens: 128_000, context_window: 1_000_000 },
     { id: 'anthropic/claude-opus-5', provider: 'openrouter',
       label: 'Claude Opus 5', max_tokens: 128_000, context_window: 1_000_000 },
     { id: 'anthropic/claude-opus-5-fast', provider: 'openrouter',

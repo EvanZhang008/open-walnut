@@ -53,6 +53,20 @@ describe('pricing', () => {
       expect(fast!.output).toBe(50.00);
     });
 
+    it('prices Opus 5.5 by its own row, not the opus-5 substring', () => {
+      const base = findPricing('global.anthropic.claude-opus-5-5');
+      const fast = findPricing('claude-opus-5-5-fast');
+      expect(base!.pattern).toBe('claude-opus-5-5');
+      expect(base!.input).toBe(4.00);
+      expect(base!.output).toBe(20.00);
+      expect(base!.cacheRead).toBe(0.20);
+      expect(fast!.pattern).toBe('claude-opus-5-5-fast');
+      expect(fast!.input).toBe(8.00);
+      expect(fast!.output).toBe(40.00);
+      // Opus 5 keeps its own price; the new row must not shadow it.
+      expect(findPricing('global.anthropic.claude-opus-5[1m]')!.pattern).toBe('claude-opus-5');
+    });
+
     it('prefers more specific patterns (opus-4-6 over opus-4)', () => {
       const entry46 = findPricing('claude-opus-4-6-v1');
       const entry4 = findPricing('claude-opus-4-v1');
