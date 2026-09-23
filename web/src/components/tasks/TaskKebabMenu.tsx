@@ -139,10 +139,12 @@ export function KebabDateRow({ label, date, display, onChange }: {
  */
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
-  onSetPriority, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
+  onSetPriority, onPinTask, onPinWithTier, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
 }: {
-  /** Single task (kebab) — null in batch mode. */
-  task: Task | null;
+  /** Single task (kebab) — null in batch mode. Only the fields the rows READ are
+   *  required, so a draft column can hand in its launch meta (the task that
+   *  Start will create) shaped like a task — see DraftTaskMenu. */
+  task: Pick<Task, 'priority' | 'start_date' | 'due_date'> | null;
   isPinned: boolean;
   pinnedTier?: FocusTier;
   isDone: boolean;
@@ -150,6 +152,11 @@ export function TaskActionMenuItems({
   batchMode?: boolean;
   onSetPriority?: (priority: string) => void;
   onPinTask?: () => void;
+  /** Pin straight INTO a tier, in one step. When given, it replaces the
+   *  pin-then-setTier-100ms-later dance below for an unpinned task — for owners
+   *  whose pin is one atomic write (a draft's launch meta), where the delayed
+   *  half could land after the draft was already launched. */
+  onPinWithTier?: (tier: FocusTier) => void;
   onUnpinTask?: () => void;
   onSetTier?: (tier: FocusTier) => void;
   onSetDate?: (date: string | null) => void;
@@ -168,7 +175,7 @@ export function TaskActionMenuItems({
   return (
     <>
       {/* Pin / Tier */}
-      {(batchMode ? !!onSetTier : !isDone && (onPinTask || isPinned)) && (
+      {(batchMode ? !!onSetTier : !isDone && (onPinTask || onPinWithTier || isPinned)) && (
         <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-tier">
@@ -192,6 +199,8 @@ export function TaskActionMenuItems({
                       // The lit pill is the pin itself: click it again to unpin.
                       if (isCurrent) onUnpinTask?.();
                       else onSetTier?.(t.value);
+                    } else if (onPinWithTier) {
+                      onPinWithTier(t.value);
                     } else {
                       // Pin first, then set the tier. The 100ms gap is a race guard: the
                       // pin must register (server write + local focus-store update) before

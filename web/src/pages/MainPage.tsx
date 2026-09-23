@@ -897,11 +897,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           setDraftColumns(prev => prev.map(d => {
             if (d.id !== leftmostDraft.id) return d;
             const next = { ...d };
-            // A seeded rebind commits the draft to a task/fork/project shape —
-            // walnut mode can't coexist with any of those (a half-walnut bound
-            // draft loses its tabs AND double-creates the task on Start).
-            // Normally unreachable: the toggle marks the draft userTouched, so
-            // a seed opens a fresh column instead. Belt-and-braces.
+            // A seeded rebind resets the mode: the seed decides the shape (a
+            // fork can't be walnut at all; a task/project seed starts on Start
+            // Task like every fresh column, the user re-picks Ask Walnut if that
+            // is what they want). Normally unreachable: the toggle marks the
+            // draft userTouched, so a seed opens a fresh column instead.
             if (next.walnut) {
               next.meta = restoreMetaAfterWalnut(next.meta, next.walnutPrev);
               delete next.walnut; delete next.walnutPrev;
@@ -1200,8 +1200,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           // start on its own default (Auto), not on a model borrowed from an
           // unrelated coding folder.
           walnutPrev: { project: d.project, projectSource: d.projectSource, model: d.meta.model, pinTier: d.meta.pinTier },
-          project: ASK_WALNUT_PROJECT,
-          projectSource: 'seed' as const,
+          // A BOUND draft's task already lives somewhere: asking Walnut about it
+          // must not re-file it under "Ask Walnut" (the server keeps an existing
+          // task's project anyway; the pill would just have lied).
+          ...(d.taskId ? {} : { project: ASK_WALNUT_PROJECT, projectSource: 'seed' as const }),
           meta: {
             ...d.meta,
             // Focus is the walnut default. Only an EXPLICIT non-default tier the
@@ -2148,19 +2150,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // (WALNUT_HOME) and spawns with the Personal AI profile. Same one-commit
     // morph (draft: → pending:) as a normal launch; project/tier were seeded on
     // the row when the tab was switched (handleDraftWalnutToggle).
-    // Guarded on !forkOf/!taskId: a walnut draft can't become bound or fork
-    // (the toggle marks it userTouched, and openDraftColumn's rebind clears the
-    // walnut fields) — but if state ever diverges, the binding must win, or a
-    // bound Start would mint a DUPLICATE task and a fork would silently not fork.
-    if (draft.walnut && !draft.forkOf && !draft.taskId) {
+    // A BOUND draft (task-row ▶) can be a walnut draft too — the tabs render on
+    // it — and then the launch is an Ask Walnut session ON that task: `taskId`
+    // rides along so the server reuses the task (its existingTaskId branch)
+    // instead of minting an "Ask Walnut" one, the project stays the task's own,
+    // and an empty composer sends the title, exactly as the coding Start does.
+    // Guarded on !forkOf: a walnut draft can't become a fork (the toggle marks
+    // it userTouched, and openDraftColumn's rebind clears the walnut fields) —
+    // but if state ever diverges, the fork must win or it would silently not fork.
+    if (draft.walnut && !draft.forkOf) {
       forgetDraft(draftId);
+      const bound = draft.taskId;
       launchQuickStart(
         { cwd: '', host: null },
         draft.meta,
-        text.trim(),
+        text.trim() || (bound ? draft.boundTaskTitle ?? '' : ''),
         images,
-        draft.project || ASK_WALNUT_PROJECT,
-        { columnId: draftId, walnutAgent: true },
+        bound ? draft.project || undefined : draft.project || ASK_WALNUT_PROJECT,
+        { columnId: draftId, walnutAgent: true, ...(bound ? { taskId: bound } : {}) },
       );
       return true;
     }

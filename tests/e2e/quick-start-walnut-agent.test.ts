@@ -168,6 +168,40 @@ describe('quick-start walnutAgent', () => {
     expect(record!.profile?.systemPrompt).not.toContain('You are Walnut,')
   })
 
+  it("an Ask Walnut launch ON an existing plain task (task-row ▶ → Ask Walnut) reuses it, keeps its project, and makes it an ask", async () => {
+    const { addTask, getTask } = await import('../../src/core/task-manager.js')
+    const { task } = await addTask({ title: 'plan the plugin system', project: 'Backlog Ideas' })
+    expect(task.walnut_agent).toBeUndefined()
+
+    // The client sends the task's own project (it never re-files a bound task);
+    // an older client that still sent the ask project must not move it either.
+    for (const project of ['Backlog Ideas', 'Ask Walnut']) {
+      const res = await quickStart({ walnutAgent: true, taskId: task.id, message: 'plan the plugin system', project })
+      expect(res.status, res.error).toBe(200)
+      expect(res.taskId).toBe(task.id)
+      const after = await getTask(task.id)
+      // Filing is the task's, not the launch's.
+      expect(after.project).toBe('Backlog Ideas')
+      // The marker every Ask Walnut behaviour keys on (amber title, the slot's
+      // asks list, launch memory, persona repair). General agent: no agent_id.
+      expect(after.walnut_agent).toBe(true)
+      expect(after.agent_id).toBeUndefined()
+      // The session record agrees with the task, and runs the Personal AI.
+      const record = await getSessionByClaudeId(res.sessionId!)
+      expect(record!.project).toBe('Backlog Ideas')
+      expect(record!.cwd).toBe(WALNUT_HOME)
+      expect(record!.profile?.systemPrompt).toContain('Personal AI')
+    }
+  })
+
+  it('a coding launch on an existing task stays a coding task (no Ask Walnut marker)', async () => {
+    const { addTask, getTask } = await import('../../src/core/task-manager.js')
+    const { task } = await addTask({ title: 'fix the dedup bug', project: 'Backlog Ideas' })
+    const res = await quickStart({ taskId: task.id, message: 'fix the dedup bug', cwd: WALNUT_HOME })
+    expect(res.status, res.error).toBe(200)
+    expect((await getTask(task.id)).walnut_agent).toBeUndefined()
+  })
+
   it('the general agent is the default and stamps no agent_id; an explicit general is the same launch', async () => {
     const res = await quickStart({ walnutAgent: true, agentId: 'general', message: 'hi' })
     expect(res.status, res.error).toBe(200)

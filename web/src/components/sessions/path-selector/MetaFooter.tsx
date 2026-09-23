@@ -155,9 +155,9 @@ function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' 
  *  new task lands in is a per-launch decision, so it has to be visible and one
  *  click away. The buttons are the shared PinTierPicker (same control as Quick
  *  Task). Deliberately NOT sticky: every fresh launcher opens on the default
- *  tier (DEFAULT_META, Focus) and a pick applies to this launch only. This
- *  footer is the ONE place a launch can still choose a tier up front: the draft
- *  column's launch bar dropped its tier row (see DraftLaunchBar). */
+ *  tier (DEFAULT_META, Focus) and a pick applies to this launch only. The draft
+ *  column's launch bar dropped its tier row (see DraftLaunchBar); its header ⋮
+ *  (DraftTaskMenu) edits the same meta, so a pick here and a pick there agree. */
 function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
   return (
     <PinTierPicker

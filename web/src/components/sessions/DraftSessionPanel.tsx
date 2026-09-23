@@ -9,7 +9,7 @@
  *
  * Layout (top → bottom) — the approved v4 shape, everything stacked upward from
  * the composer, because a normal chat has NO folder/project controls inside it:
- *   header             title + Draft badge + (bound task) + ✕
+ *   header             title + Draft badge + (bound task) + ⋮ task settings + ✕
  *   body               nothing but one centered muted line of "what happens next"
  *   DraftLaunchBar     quick-access folder chips → cwd pill · project pill (fixed
  *                      last; no tier/More row since 2026-09-15, see that file),
@@ -55,11 +55,16 @@ import { fetchEngineModelCatalog } from '@/api/sessions';
 import { draftComposerKey, type DraftColumn } from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import { GENERAL_AGENT_ID } from '@/components/chat/ask-walnut-slot-model';
+import { DraftTaskMenu } from './DraftTaskMenu';
+import { TaskQuickActions } from './TaskQuickActions';
+import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
+import { useStoreTask } from '@/contexts/TasksContext';
 import '@/styles/walnut-agent.css';
 
 const PLACEHOLDER = 'What should this session do?';
 const HINT = 'Nothing runs yet — send to start, or keep it as a task for later.';
 const BOUND_HINT = 'Start a session on this task — type the first instruction, or press Start to send its title.';
+const BOUND_WALNUT_HINT = 'Ask Walnut about this task — type what you need, or press Start to send its title.';
 const FORK_HINT = 'Forks the source conversation into a sibling session — type where it should go next (or Start to just branch).';
 const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
 const WALNUT_PLACEHOLDER = 'Ask Walnut anything…';
@@ -285,8 +290,11 @@ export function DraftSessionPanel({
   // project/folder are immutable facts, so there is nothing for it to fill.
   const isFork = !!draft.forkOf;
   // Ask Walnut tab: project/folder are server-owned facts, so like a fork there
-  // is nothing for the AI backfill to fill. Tabs render only on a PLAIN draft —
-  // bound and fork drafts are already committed to a shape.
+  // is nothing for the AI backfill to fill. Tabs render on a plain draft AND on
+  // a bound one (task-row ▶): a task can be handed to the Personal AI as well as
+  // to a coding agent, and the binding survives the switch — Start reuses the
+  // task either way (MainPage.handleDraftStart). Fork and repair drafts are
+  // committed to a shape and show no tabs.
   const isWalnut = !!draft.walnut;
   // A walnut draft for ANOTHER console agent (Mentor, Note Assistant, …): same
   // launch shape, its own name in the header/placeholder, and the Walnut seeds
@@ -298,7 +306,38 @@ export function DraftSessionPanel({
   // fork — the "Ask Walnut" card would flip it to a walnut launch, whose payload
   // has no cwd and therefore silently drops the repair the user just asked for.
   const isRepair = draft.intent === 'fix-walnut';
-  const showTabs = !isBound && !isFork && !isRepair && !!onWalnutToggle;
+  const showTabs = !isFork && !isRepair && !!onWalnutToggle;
+
+  // Header ⋮. A bound draft's task EXISTS, so it gets the real task's kebab
+  // (pin / dates / priority / project — live writes, the same menu a session
+  // header has); pin state comes from the shared Focus Bar store, like there.
+  // A plain draft has no task yet: its ⋮ edits the launch meta the task will be
+  // created with (DraftTaskMenu). A fork inherits the source task's meta by
+  // contract and a repair is filed by the server, so neither draws one; nor
+  // does the chat slot's fixed-walnut draft (no toggle) — that surface stays
+  // minimal by design, its asks land in Focus.
+  const showDraftMenu = !isBound && !isFork && !isRepair && (!!onWalnutToggle || !isWalnut);
+  const focusBar = useFocusBarContextSafe();
+  const boundTaskId = draft.taskId;
+  const boundPinned = !!boundTaskId && !!focusBar?.isPinned(boundTaskId);
+  const boundTier = boundPinned && boundTaskId ? focusBar?.tierOf(boundTaskId) : undefined;
+  const pinBound = useCallback((id: string) => { focusBar?.pin(id).catch(() => {}); }, [focusBar]);
+  const unpinBound = useCallback((id: string) => { focusBar?.unpin(id).catch(() => {}); }, [focusBar]);
+  const setBoundTier = useCallback((id: string, tier: string) => { focusBar?.setTier(id, tier).catch(() => {}); }, [focusBar]);
+  // The header kebab can MOVE the bound task (its Project row is a live write),
+  // and so can the board. The draft's project pill was seeded once at ▶, so it
+  // follows the task — but only on a change of the TASK's project: the first
+  // observation just records it, and a pill the user edits by hand is left
+  // alone until the task itself moves again.
+  const boundTask = useStoreTask(boundTaskId);
+  const boundProject = boundTask ? boundTask.project ?? '' : null;
+  const lastBoundProject = useRef<string | null>(null);
+  useEffect(() => {
+    if (boundProject === null) return;
+    const prev = lastBoundProject.current;
+    lastBoundProject.current = boundProject;
+    if (prev !== null && prev !== boundProject) onProjectChange(draft.id, boundProject);
+  }, [boundProject, draft.id, onProjectChange]);
 
   const focusComposer = useCallback(() => {
     rootRef.current?.querySelector<HTMLTextAreaElement>('.chat-input-textarea')?.focus();
@@ -492,6 +531,23 @@ export function DraftSessionPanel({
               </span>
             )}
           </div>
+          {isBound && focusBar && (
+            <TaskQuickActions
+              taskId={draft.taskId}
+              slot="kebab"
+              isPinned={boundPinned}
+              pinnedTier={boundTier}
+              onPinTask={pinBound}
+              onUnpinTask={unpinBound}
+              onSetTier={setBoundTier}
+            />
+          )}
+          {showDraftMenu && (
+            <DraftTaskMenu
+              meta={draft.meta}
+              onMetaChange={(updater) => onMetaChange(draft.id, updater)}
+            />
+          )}
           <button
             className="task-action-btn session-panel-close"
             onClick={() => onClose(draft.id)}
@@ -536,19 +592,30 @@ export function DraftSessionPanel({
                 >
                   <span className="draft-intent-ic" aria-hidden="true">🥜</span>
                   <span className="draft-intent-t">Ask Walnut</span>
-                  <span className="draft-intent-d">A quick session with Walnut: organize tasks, plan your day, configure Walnut, ask or search anything.</span>
+                  <span className="draft-intent-d">
+                    {isBound
+                      ? 'Hand this task to Walnut: plan it, research it, or organize it with your tasks, notes and memory in reach.'
+                      : 'A quick session with Walnut: organize tasks, plan your day, configure Walnut, ask or search anything.'}
+                  </span>
                 </button>
               </div>
             )}
             {/* Composer seeds — prefill, never send. Only while the composer is
                 EMPTY: prefill is replace-only (ChatInput contract), so a visible
                 chip next to typed text is an invitation to silently destroy it. */}
+            {/* The bound task keeps its one-line "what Start does" under the
+                cards — the cards say which agent, this says what gets sent. */}
+            {isBound && (
+              <div className="draft-quick-hint">{isWalnut ? BOUND_WALNUT_HINT : BOUND_HINT}</div>
+            )}
             {askAgent && (
               <p className="draft-agent-desc" data-testid="draft-agent-desc">
                 {askAgent.description || `A session with ${askAgent.name}.`}
               </p>
             )}
-            {isWalnut && !askAgent && !text.trim() && (
+            {/* Not on a bound draft: "plan my day" / "organize tasks" seeds have
+                nothing to do with the one task this column is about. */}
+            {isWalnut && !askAgent && !isBound && !text.trim() && (
               <div className="draft-walnut-suggests" role="group" aria-label="Ask Walnut suggestions">
                 {WALNUT_SUGGESTS.map((s) => (
                   <button
@@ -656,15 +723,20 @@ export function DraftSessionPanel({
                   NO extra button (user: keep it minimal — the composer's send arrow, amber
                   in this mode, is the one send affordance; an empty ask is
                   pointless anyway). */}
-              {!isWalnut && (
+              {/* A BOUND walnut draft keeps it: its empty composer still has
+                  something to send (the task title), and losing the button on the
+                  tab switch would read as the ask having no way to start. */}
+              {(!isWalnut || isBound) && (
                 <button
                   className="draft-start-btn"
                   onClick={handleStartClick}
                   title={isFork
                     ? 'Fork the source session (an empty message just branches the conversation)'
-                    : isBound
-                      ? 'Start the session on this task (an empty message sends the task title)'
-                      : 'Start the session (an empty message is fine — the agent spawns and waits)'}
+                    : isBound && isWalnut
+                      ? 'Ask Walnut about this task (an empty message sends the task title)'
+                      : isBound
+                        ? 'Start the session on this task (an empty message sends the task title)'
+                        : 'Start the session (an empty message is fine — the agent spawns and waits)'}
                 >
                   {isFork ? 'Fork ↵' : 'Start ↵'}
                 </button>

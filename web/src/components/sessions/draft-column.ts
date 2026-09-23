@@ -104,7 +104,10 @@ export interface DraftColumn {
   intent?: 'fix-walnut';
   /** This draft is BOUND to an existing task (task row ▶ Start on a title-only
    *  task): the launch reuses that task instead of minting a new one, so there is
-   *  nothing to "create for later" — it already IS a task. */
+   *  nothing to "create for later" — it already IS a task. Coexists with
+   *  `walnut`: the bound column offers the same Start Task / Ask Walnut fork, and
+   *  a walnut launch on it is an Ask Walnut session on THIS task (taskId rides
+   *  the quick-start; the task keeps its project). */
   taskId?: string;
   /** Title of the bound task — shown in the header, and used as the first message
    *  when the user hits Start with an empty composer. */
@@ -116,7 +119,8 @@ export interface DraftColumn {
   openPickerNonce?: number;
   /** "Ask Walnut" tab: Start launches a session that runs the Personal AI
    *  profile. Folder/project are server-owned facts (ASK_WALNUT_PROJECT /
-   *  WALNUT_HOME), so the launch bar renders no pills for them at all. */
+   *  WALNUT_HOME), so the launch bar renders no pills for them at all. On a
+   *  BOUND draft the project is the task's own and is left alone. */
   walnut?: boolean;
   /** Which console agent a walnut draft speaks to when it is not the Personal
    *  AI (the chat slot's drawer picks one): names the header ("Ask Mentor"),

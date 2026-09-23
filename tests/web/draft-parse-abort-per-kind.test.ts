@@ -67,10 +67,21 @@ vi.mock('@/components/chat/ChatInput', () => ({
   },
 }));
 
-// Launch bar / slash commands are unrelated surfaces; keep them out of the mount.
+// Launch bar / slash commands / the header's task-settings ⋮ are unrelated
+// surfaces; keep them out of the mount. The ⋮ stubs matter for the harness: the
+// real menus reach the markdown renderer through the task kebab's import chain,
+// and DOMPurify's hook registration at module load has no window under linkedom.
 vi.mock('@/components/sessions/DraftLaunchBar', () => ({
   DraftLaunchBar: () => createElement('div', { className: 'draft-launch-bar-stub' }),
 }));
+vi.mock('@/components/sessions/DraftTaskMenu', () => ({
+  DraftTaskMenu: () => createElement('div', { className: 'draft-task-menu-stub' }),
+}));
+vi.mock('@/components/sessions/TaskQuickActions', () => ({
+  TaskQuickActions: () => createElement('div', { className: 'task-quick-actions-stub' }),
+}));
+// The bound-draft project follower reads the task store; these drafts are unbound.
+vi.mock('@/contexts/TasksContext', () => ({ useStoreTask: () => null }));
 vi.mock('@/hooks/useSlashCommands', () => ({
   useSlashCommands: () => ({
     items: [], search: () => [], refresh: () => {}, status: 'ready', onPaletteOpen: () => {},

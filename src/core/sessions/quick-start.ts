@@ -310,6 +310,16 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       }
       throw err;
     }
+    // An Ask Walnut launch ON an existing plain task (task-row ▶ → Ask Walnut)
+    // makes it a Personal-AI task from here on: stamp the marker, because every
+    // Ask Walnut behaviour keys on it, never on the project — the amber title,
+    // the chat slot's list of asks, the model/effort launch memory and the
+    // persona drift repair would all skip this session otherwise. General agent
+    // only: agent_id is create-time data (updateTask does not take it), and a
+    // stamp without it would have the repair rebuild the wrong persona.
+    if (walnutAgent && !updatedTask.walnut_agent && askAgent?.id === GENERAL_AGENT_ID) {
+      updatedTask = (await updateTask(updatedTask.id, { walnut_agent: true }, { source })).task;
+    }
     // Archive all error/stopped sessions under this task to free the slot
     const existingSessions = await getSessionsForTask(updatedTask.id);
     for (const s of existingSessions) {
@@ -483,7 +493,12 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   if (preassignedSessionId && !isAcpEngine(engine)) {
     try {
       const { createSessionRecord } = await import('../session-tracker.js');
-      await createSessionRecord(preassignedSessionId, updatedTask.id, project, cwd, {
+      // An EXISTING task keeps its project (the retry branch above never
+      // re-files it), so its session record must say the same — not whatever
+      // the caller's launch payload carried. Concretely: an Ask Walnut launch
+      // on a task-row draft arrives with the ask project ("Ask Walnut") while
+      // the task stays where the user filed it.
+      await createSessionRecord(preassignedSessionId, updatedTask.id, existingTaskId ? updatedTask.project ?? '' : project, cwd, {
         title: updatedTask.title,
         mode: mode as import('../types.js').SessionMode | undefined,
         host,

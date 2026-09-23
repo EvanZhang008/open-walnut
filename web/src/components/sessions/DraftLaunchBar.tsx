@@ -27,13 +27,13 @@
  * unread) between the two. It sat there until 2026-09-15 and the user asked for it
  * to go: a segmented Focus / Satellite / Backlog / Wait control plus a More menu
  * was "complicated for people" on a surface whose job is "type, start". Every new
- * task lands in Focus (DEFAULT_META); tier, dates and priority are edited on the
- * task afterwards. A Start Task draft that really needs them up front still has
- * the folder picker's footer (SessionPathSelector → MetaFooter); an Ask Walnut
- * draft has no picker (the server owns its folder) and a fork inherits the source
- * task's meta by contract, so neither offers launch meta at all any more — edit
- * the task on the board. The model stays in the composer's controls row, where a
- * real session's model pill sits.
+ * task lands in Focus (DEFAULT_META). Since 2026-09-23 the header's ⋮
+ * (DraftTaskMenu — the same rows as a task row's kebab) is where tier, dates,
+ * priority and start-unread are set up front, on Start Task and Ask Walnut
+ * drafts alike; the folder picker's footer (SessionPathSelector → MetaFooter)
+ * still edits the same meta. A fork inherits the source task's meta by contract,
+ * so it offers no launch meta — edit the task on the board. The model stays in
+ * the composer's controls row, where a real session's model pill sits.
  *
  * The pills keep their original class names AND the `.draft-composer-bar`
  * container marker: that pair is the documented DOM hook the browser specs use to
