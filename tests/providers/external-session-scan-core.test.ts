@@ -661,6 +661,26 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     expect(byId).toEqual({ 'fork-2': 'walnut-driven', 'probe-2': 'no-reply', 'real-2': null })
   })
 
+  it('skips any id in the spawn ledger or the streams dir, whatever the transcript says', () => {
+    // A daemon on this host started these CLIs for SOME Walnut instance —
+    // maybe not the asking server (dev/test server, records gone).
+    fs.mkdirSync(path.join(home, '.open-walnut', 'tmp', 'spawned-sessions'), { recursive: true })
+    fs.mkdirSync(path.join(home, '.open-walnut', 'tmp', 'streams'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.open-walnut', 'tmp', 'spawned-sessions', 'led-1'), '')
+    fs.writeFileSync(path.join(home, '.open-walnut', 'tmp', 'streams', 'str-1.jsonl'), '')
+    // Sibling stream artifacts must not mint ids.
+    fs.writeFileSync(path.join(home, '.open-walnut', 'tmp', 'streams', 'str-1.jsonl.err'), '')
+    fs.writeFileSync(path.join(home, '.open-walnut', 'tmp', 'streams', 'str-1.pgid'), '')
+    // Perfectly human-looking transcripts, but the ledger says they are ours.
+    writeJsonl(file('led-1'), [user('led-1', 'fix the login bug', { entrypoint: 'cli' }), reply()])
+    writeJsonl(file('str-1'), [user('str-1', 'add retries', { entrypoint: 'cli' }), reply()])
+    writeJsonl(file('out-1'), [user('out-1', 'real outside work', { entrypoint: 'cli' }), reply()])
+    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['out-1'])
+    const byId = Object.fromEntries(describeExternalSessions({ sessionIds: ['led-1', 'str-1', 'out-1'], homeDir: home })
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    expect(byId).toEqual({ 'led-1': 'walnut-spawned', 'str-1': 'walnut-spawned', 'out-1': null })
+  })
+
   it('mirrors the markers Walnut actually writes', async () => {
     const { WALNUT_ENVELOPE_MARKERS } = await import('../../src/providers/external-session-scan-core.js')
     const { CACHE_WARMUP_TAG } = await import('../../src/core/sessions/side-thread-warmup.js')

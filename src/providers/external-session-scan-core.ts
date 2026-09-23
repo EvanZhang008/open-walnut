@@ -64,13 +64,16 @@ export interface ExternalSessionCandidate {
 }
 
 /**
+ * 'walnut-spawned': the id is in this host's spawn ledger — a daemon on this
+ * host started that CLI for some Walnut instance (prod, dev, or a test server
+ * whose own DB is gone), so no transcript reading is needed at all.
  * 'fork': a programmatic fork (btw side thread, standby prewarm, chat-lane or
  * task fork): its history is a copy of another session. 'walnut-driven': a
  * Walnut envelope sits in a user turn, so some Walnut drove the session.
  * 'no-reply': the whole transcript holds no real model reply (a probe, or a
  * first turn that only ever errored), so there is nothing to adopt.
  */
-export type NotExternalReason = 'fork' | 'walnut-driven' | 'no-reply'
+export type NotExternalReason = 'walnut-spawned' | 'fork' | 'walnut-driven' | 'no-reply'
 
 export interface ScanExternalSessionsOptions {
   /** Only consider transcripts written within this window. */
@@ -134,6 +137,36 @@ export function isWalnutEnvelopeText(text: string): boolean {
     if (t.startsWith(m.outputModeReminder) && t.endsWith(']')) return true
   }
   return false
+}
+
+/**
+ * Session ids some Walnut instance on this host STARTED, read from two
+ * daemon-written places under the scanned HOME (the HOME whose ~/.claude the
+ * CLI writes into): the spawn ledger (one empty <sid> file per spawn,
+ * daemon-core/standalone/source recordSpawnLedger) and the streams dir, whose
+ * <sid>.jsonl files date back to before the ledger existed. This is the
+ * authoritative "is it ours" answer — knownSessionIds only covers the ASKING
+ * server's DB, while the ledger covers every instance that shares the host.
+ * The text heuristics below it stay as the fallback for transcripts spawned
+ * by daemons older than the ledger.
+ */
+export function walnutSpawnedIds(homeDir: string): Set<string> {
+  const out = new Set<string>()
+  const dirs = [
+    path.join(homeDir, '.open-walnut', 'tmp', 'spawned-sessions'),
+    path.join(homeDir, '.open-walnut', 'tmp', 'streams'),
+  ]
+  for (const dir of dirs) {
+    let names: string[] = []
+    try { names = fs.readdirSync(dir) } catch { continue }
+    for (const name of names) {
+      // Ledger entries are bare ids; streams hold <sid>.jsonl plus .pipe/.pgid/
+      // .jsonl.err siblings, which the dot filter drops.
+      if (name.endsWith('.jsonl')) out.add(name.slice(0, -6))
+      else if (!name.includes('.')) out.add(name)
+    }
+  }
+  return out
 }
 
 /** Temp/test locations whose programmatic sessions are throwaway debris. */
@@ -763,6 +796,7 @@ export function describeExternalSessions(
   const candidates: ExternalSessionCandidate[] = []
   const activity: ExternalSessionActivity[] = []
   if (ids.length === 0) return { candidates, activity }
+  const spawned = walnutSpawnedIds(homeDir)
   for (const [sessionId, hit] of locateTranscripts(homeDir, ids)) {
     if (options.activityOnly) {
       activity.push({ sessionId, lastActiveAt: new Date(hit.file.mtimeMs).toISOString() })
@@ -774,11 +808,11 @@ export function describeExternalSessions(
       let stat: fs.Stats
       try { stat = fs.statSync(hit.file.filePath) } catch { continue }
       const candidate = claudeCandidate(sessionId, hit.file.filePath, stat, head)
-      candidate.notExternal = claudeNotExternal(head) ?? null
+      candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned' : (claudeNotExternal(head) ?? null)
       candidates.push(candidate)
     } else {
       const candidate = codexCandidate(sessionId, hit.file, parseCodexHead(hit.file.filePath, hit.file.size))
-      candidate.notExternal = null
+      candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned' : null
       candidates.push(candidate)
     }
   }
@@ -795,6 +829,7 @@ export function scanExternalSessions(
   const homeDir = options.homeDir ?? os.homedir()
   const cutoff = Date.now() - Math.max(0, options.sinceMs)
   const known = new Set(options.knownSessionIds ?? [])
+  for (const sid of walnutSpawnedIds(homeDir)) known.add(sid)
   const candidates: ExternalSessionCandidate[] = []
 
   let scanned = 0

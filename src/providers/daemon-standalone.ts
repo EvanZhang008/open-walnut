@@ -166,6 +166,26 @@ const PROD_STREAMS_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'streams')
 const LEGACY_STREAMS_DIR = process.env.WALNUT_LEGACY_STREAMS_DIR || '/tmp/open-walnut-streams'
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
   || (DAEMON_DIR === PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
+// ── Spawn ledger ────────────────────────────────────────────────────────────
+// One empty file per CLI session ANY daemon on this host has ever started,
+// named by session id, under the HOME whose ~/.claude the spawned CLI writes
+// its transcripts into. The external-session scan reads this dir (plus the
+// streams dir, which reaches back before the ledger existed) to tell Walnut's
+// own sessions from outside ones BY ID — a session whose record lives in some
+// other Walnut instance's DB (dev server, ephemeral test server) is still
+// never imported. Anchored to the CLI's HOME env, NOT to STREAMS_DIR or
+// DAEMON_DIR: isolated test daemons override those, but their CLIs inherit
+// process.env and keep writing the real ~/.claude. Keep in sync with
+// daemon-source.ts and walnutSpawnedIds in external-session-scan-core.ts.
+const SPAWN_LEDGER_DIR = path.join(process.env.HOME || HOME_DIR, '.open-walnut', 'tmp', 'spawned-sessions')
+function recordSpawnLedger(sid: string): void {
+  if (!sid || sid.includes('/') || sid.includes('.')) return
+  try {
+    fs.mkdirSync(SPAWN_LEDGER_DIR, { recursive: true })
+    fs.writeFileSync(path.join(SPAWN_LEDGER_DIR, sid), '')
+  } catch { /* best-effort: the scan also consults the streams dir */ }
+}
+
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid')
 const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance')
@@ -2506,6 +2526,7 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   }
 
   fs.mkdirSync(STREAMS_DIR, { recursive: true })
+  recordSpawnLedger(sid)
 
   const pipePath = path.join(STREAMS_DIR, sid + '.pipe')
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
@@ -4531,6 +4552,8 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
     session.jsonlPath = newBase + '.jsonl'
     session.pipePath = newBase + '.pipe'
     session.pgidPath = newBase + '.pgid'
+    // A fresh spawn's tmp id was ledgered at spawn; the real id must be too.
+    recordSpawnLedger(newSid)
 
     // The session-bound watcher's pollTimer closure captured the OLD sid and
     // looks up sessions.get(oldSid) each tick. After the re-key below, that
