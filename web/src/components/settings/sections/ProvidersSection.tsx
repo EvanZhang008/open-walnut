@@ -991,8 +991,8 @@ export function ProvidersSection({ config, onSave }: Props) {
   return (
     <SectionCard
       id="providers"
-      title="Ask Walnut: Model &amp; API Keys"
-      description="Which model answers the jobs listed above, and where each provider's API key lives. Conversations do not use this (they run on the engine picked above); coding sessions do not either. A key saved here is shared: Jev Decisions references the OpenRouter key instead of keeping its own copy."
+      title="AI Provider &amp; API Keys"
+      description="Walnut's small background jobs run on this provider: quick-add, filing new tasks into a project, chat and fork names, project descriptions, task notes, memory upkeep and routine drafts. Sessions and chats run on the default engine (Engines) instead. A key saved here is shared: Jev Decisions uses the OpenRouter key from here."
       showSave={false}
     >
       {loading ? (

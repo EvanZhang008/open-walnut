@@ -12,10 +12,7 @@ const EXPECTED_IDS = [
   // sections because the nav's Plugins group renders between Manage and
   // Configure — nav order and scroll order must agree or a click lands wrong.
   'plugin-store',
-  // Ask Walnut (which engine answers the chat) leads Configure; Background
-  // Model (which provider serves background calls) follows it — a099df31
-  // split the one model question by who is asking.
-  'ask-walnut',
+  // No separate chat-engine section: the one default engine lives in Engines.
   'providers', 'general',
   // Tasks owns task defaults + Task Summary; Focus Tiers renders under it and
   // shares its nav entry (navHidden).

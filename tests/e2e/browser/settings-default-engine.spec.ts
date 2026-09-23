@@ -55,8 +55,12 @@ test.describe('Settings → Engines → default engine', () => {
     // control deliberately avoids by saving only on a pick.
     expect(await serverDefaults(request)).toEqual(before)
 
-    await expect(section).toContainText('Default engine for new sessions')
-    await expect(section).toContainText('Used by Ask Walnut, AI actions, Inbox Triage runs and routines')
+    await expect(section).toContainText('Default engine')
+    // One engine for everything Walnut starts: coding sessions AND its chats.
+    await expect(section.getByTestId('default-engine-used-for'))
+      .toContainText('Starts new coding sessions, Ask Walnut and agent chats')
+    await section.getByTestId('default-engine-used-for').locator('xpath=ancestor::div[contains(@class,"form-group")][1]')
+      .screenshot({ path: '/tmp/default-engine-settings/engines-default.png' })
 
     // Every option is a distinct engine the catalog reported, Claude included,
     // and nothing is offered that the row itself marks as missing.

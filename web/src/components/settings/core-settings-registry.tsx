@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 import type { Config } from '@open-walnut/core'
 import { AdvancedSection } from './sections/AdvancedSection'
-import { AskWalnutSection } from './sections/AskWalnutSection'
 import { AudioCaptureSection } from './sections/AudioCaptureSection'
 import { BackupSection } from './sections/BackupSection'
 import { BugReportSection } from './sections/BugReportSection'
@@ -63,17 +62,13 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // groups must read in the same top-to-bottom order or a nav click lands somewhere
   // the eye did not expect. Keep this entry directly after the Manage sections.
   { owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'plugins', render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} /> },
-  // Ask Walnut first: it is the thing the user talks to. Its only setting is
-  // WHICH ENGINE answers (chat runs on a lane session) — not a model or a
-  // provider, which is exactly the confusion the old naming created.
-  { owner: 'walnut', id: 'ask-walnut', label: 'Ask Walnut', title: 'Ask Walnut', group: 'configure', render: ({ config, saveSection }) => <AskWalnutSection config={config} onSave={saveSection} /> },
-  // Providers/keys for the model calls WALNUT makes itself (titles, summaries,
-  // memory upkeep). Nothing a user chats with reads this.
-  // The model + keys behind Ask Walnut's own jobs. It renders directly under
-  // Ask Walnut and shares its nav entry (navHidden): on its own it reads as a
-  // separate feature, which is exactly the confusion 'Background Model Calls'
-  // created — it is one of Ask Walnut's two runners, not a third thing.
-  { owner: 'walnut', id: 'providers', label: 'Model & Keys', title: 'Ask Walnut: Model & API Keys', group: 'configure', navHidden: true, render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
+  // There is ONE engine choice and it lives in Engines ("Default engine"):
+  // coding sessions, Ask Walnut, agent chats and routines all start on it. A
+  // separate chat-engine section existed for a day and was removed because
+  // users read "which engine does Walnut use" as one question.
+  // Providers = the API provider for Walnut's small one-call jobs (quick-add,
+  // names, summaries, memory upkeep). No session starts on it.
+  { owner: 'walnut', id: 'providers', label: 'AI Provider', title: 'AI Provider & API Keys', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure', render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} /> },
   // Tasks = where new tasks land + how a finished session reports back onto its
   // task. Focus Tiers is part of the same story (the pinned-task tiers), so it

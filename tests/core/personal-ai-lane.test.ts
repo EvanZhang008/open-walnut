@@ -119,38 +119,65 @@ describe('getOrCreateLaneSession', () => {
     expect(started).toHaveLength(1)
   })
 
-  it('agent.chat_engine picks the chat engine, and a CODING default never moves chat', async () => {
-    // defaults.engine steers coding sessions. An ACP engine answers a lane with
-    // no persona/skills/memory (no system-prompt channel), so inheriting a Codex
-    // coding default here would degrade every conversation silently: chat opts
-    // in explicitly or stays on claude.
-    const { updateConfig } = await import('../../src/core/config-manager.js')
-    await updateConfig({ defaults: { priority: 'backlog', engine: 'codex' } as never })
+  describe('engine: chats follow the ONE default engine', () => {
+    afterEach(async () => {
+      const { updateConfig } = await import('../../src/core/config-manager.js')
+      await updateConfig({ defaults: { priority: 'backlog' } as never })
+      const { _resetEngineProbeCache } = await import('../../src/core/agents/engine-probe.js')
+      _resetEngineProbeCache()
+      const { _resetDefaultEngineAvailabilityForTesting } = await import('../../src/core/agents/default-engine.js')
+      _resetDefaultEngineAvailabilityForTesting()
+    })
 
-    await getOrCreateLaneSession('general', 'conv-ignores-coding-default', { firstMessage: 'x' })
-    expect(started.at(-1)?.engine ?? 'claude').toBe('claude')
+    it('a Codex default moves chat too, and the chat still gets Walnut’s persona', async () => {
+      // One question, one answer: "which engine does Walnut use" covers coding
+      // sessions, Ask Walnut and chats alike. The probe is pinned so the
+      // default resolver never spawns `codex --version`.
+      const { _seedEngineProbeCache } = await import('../../src/core/agents/engine-probe.js')
+      _seedEngineProbeCache('codex', { installed: true, version: 'codex 0.9.0', reason: null })
+      const { updateConfig } = await import('../../src/core/config-manager.js')
+      await updateConfig({ defaults: { priority: 'backlog', engine: 'codex' } as never })
 
-    await updateConfig({ agent: { chat_engine: 'codex' } as never })
-    // An ACP lane emits its SESSION_START and THEN waits for the record a real
-    // spawn would create (90s). This test only judges the engine decision, so
-    // it waits for the event, not for the (never-arriving) record.
-    const pending = getOrCreateLaneSession('general', 'conv-explicit', { firstMessage: 'y' })
-      .catch(() => undefined)
-    for (let i = 0; i < 100 && started.length < 2; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20))
-    }
-    expect(started.at(-1)?.engine).toBe('codex')
-    void pending
-  })
+      // An ACP lane emits its SESSION_START and THEN waits for the record a real
+      // spawn would create (90s). This test only judges the launch, so it waits
+      // for the event, not for the (never-arriving) record.
+      const pending = getOrCreateLaneSession('general', 'conv-codex-default', { firstMessage: 'hello there' })
+        .catch(() => undefined)
+      for (let i = 0; i < 100 && started.length < 1; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      const start = started.at(-1)
+      expect(start?.engine).toBe('codex')
+      // ACP has no system-prompt channel: without the persona on the message a
+      // Codex default would silently turn every chat into a bare provider chat.
+      const { ASK_PROFILE_BANNER_OPEN, ASK_PROFILE_BANNER_CLOSE } = await import('../../src/core/sessions/ask-profile-prefix.js')
+      expect(start?.message.startsWith(ASK_PROFILE_BANNER_OPEN)).toBe(true)
+      expect(start?.message).toContain(ASK_PROFILE_BANNER_CLOSE)
+      expect(start?.message.trimEnd().endsWith('hello there')).toBe(true)
+      void pending
+    })
 
-  it('an unknown chat_engine value is ignored rather than breaking every launch', async () => {
-    const { updateConfig } = await import('../../src/core/config-manager.js')
-    await updateConfig({ agent: { chat_engine: 'not-an-engine' } as never })
+    it('a default engine this machine cannot run falls back to claude instead of breaking chat', async () => {
+      const { _seedEngineProbeCache } = await import('../../src/core/agents/engine-probe.js')
+      _seedEngineProbeCache('codex', { installed: false, version: null, reason: 'not found on PATH' })
+      // The launch path never probes under vitest; pull the pinned verdict into
+      // the resolver's mirror the way the server's background refresh would.
+      const { refreshDefaultEngineAvailability } = await import('../../src/core/agents/default-engine.js')
+      await refreshDefaultEngineAvailability('codex')
+      const { updateConfig } = await import('../../src/core/config-manager.js')
+      await updateConfig({ defaults: { priority: 'backlog', engine: 'codex' } as never })
 
-    await getOrCreateLaneSession('general', 'conv-bad-engine', { firstMessage: 'z' })
-    // Falls through to the session default (claude here) — a typo in config must
-    // never leave chat unable to start.
-    expect(started.at(-1)?.engine ?? 'claude').toBe('claude')
+      await getOrCreateLaneSession('general', 'conv-codex-missing', { firstMessage: 'x' })
+      expect(started.at(-1)?.engine ?? 'claude').toBe('claude')
+    })
+
+    it('an unknown default engine value reads as claude', async () => {
+      const { updateConfig } = await import('../../src/core/config-manager.js')
+      await updateConfig({ defaults: { priority: 'backlog', engine: 'not-an-engine' } as never })
+
+      await getOrCreateLaneSession('general', 'conv-bad-engine', { firstMessage: 'z' })
+      expect(started.at(-1)?.engine ?? 'claude').toBe('claude')
+    })
   })
 
   it('gives different conversations different sessions', async () => {

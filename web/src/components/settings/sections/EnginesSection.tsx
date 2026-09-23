@@ -270,7 +270,7 @@ export function EnginesSection({ config, onSave }: { config: Config; onSave: (pa
           exposes settings Walnut can edit. */}
       <SettingsSubCard>
         <div className="form-group">
-          <label htmlFor="default-engine-select">Default engine for new sessions</label>
+          <label htmlFor="default-engine-select">Default engine</label>
           <select
             id="default-engine-select"
             data-testid="default-engine-select"
@@ -283,8 +283,9 @@ export function EnginesSection({ config, onSave }: { config: Config; onSave: (pa
               <option key={option.id} value={option.id}>{option.label}</option>
             ))}
           </select>
-          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-            Used by Ask Walnut, AI actions, Inbox Triage runs and routines unless a session picks its own.
+          <p className="text-sm text-muted" style={{ marginTop: 2 }} data-testid="default-engine-used-for">
+            Starts new coding sessions, Ask Walnut and agent chats, AI actions, Inbox Triage runs and
+            routines, unless one picks its own engine.
           </p>
           {defaultError && (
             <SettingsNotice kind="error" role="alert">{defaultError}</SettingsNotice>

@@ -30,7 +30,7 @@ test('webkit: the default-engine row renders, matches the config and offers the 
   const select = section.getByTestId('default-engine-select')
   await expect(select).toBeVisible()
   await expect(select).toHaveValue(configured)
-  await expect(section).toContainText('Default engine for new sessions')
+  await expect(section).toContainText('Default engine')
 
   // The control has real height and is not clipped by the subcard around it —
   // a zero/negative box is how a WebKit-only layout break shows up.

@@ -34,7 +34,9 @@ import { CONVERSATION_SEED_HEADER, clipRenderedSeed } from '../chat-history.js';
 import { personalAiProfile, consoleAgentProfile } from './profiles.js';
 import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import type { SessionEngine } from '../types.js';
-import { engineCaps, isAcpEngine, isKnownEngine, resolveEngine } from '../agents/engine-registry.js';
+import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
+import { resolveDefaultEngine } from '../agents/default-engine.js';
+import { buildAskProfilePrefix } from './ask-profile-prefix.js';
 import { log } from '../../logging/index.js';
 
 /** The lane key a Personal AI conversation's session is bound to. */
@@ -674,15 +676,12 @@ async function resolveLane(
 ): Promise<LaneSession> {
   const config = await getConfig();
   // The chat engine: the caller's explicit choice (a relay that already knows)
-  // > agent.chat_engine (Settings > Ask Walnut) > claude.
-  //
-  // Deliberately NOT `defaults.engine`: that knob steers CODING sessions, and
-  // an ACP engine has no system-prompt channel, so a lane on one answers
-  // without the persona, the skills index or the memory block (see the ACP
-  // branch below). Inheriting a Codex coding default would therefore degrade
-  // every chat conversation silently. Chat opts in explicitly or stays on
-  // claude. An unknown value reads as unset rather than breaking the launch.
-  engine ??= isKnownEngine(config.agent?.chat_engine) ? config.agent.chat_engine : undefined;
+  // > the ONE default engine (Settings > Engines), the same one coding sessions,
+  // Ask Walnut asks and routines inherit. A separate chat-only knob existed for
+  // a day and was removed: users read "which engine does Walnut use" as one
+  // question. resolveDefaultEngine also degrades an uninstalled or unknown
+  // value to claude instead of breaking the launch.
+  engine ??= resolveDefaultEngine(config);
   // One-time cleanup of the retired CLAUDE.md delivery path (see
   // cleanupLaneClaudeMd) — memory now rides the profile injection below.
   await cleanupLaneClaudeMd();
@@ -742,14 +741,16 @@ async function resolveLane(
     // ACP lane: the worker mints the session id itself, so there is no record to
     // seed up front — emit the start (the runner routes any ACP engine to
     // handleAcpStart, which creates the lane-bound record on establish) and wait
-    // for that record. Known limitation: no persona/profile — ACP has no
-    // system-prompt channel, so an ACP lane is a bare provider chat.
+    // for that record. ACP has no system-prompt channel, so the MESSAGE carries
+    // what the claude branch puts in the profile: the persona (prefix, the same
+    // carrier an ACP Ask Walnut launch uses, ask-profile-prefix.ts) and the
+    // conversation seed. Chats now follow the one default engine, so a Codex
+    // default reaches this branch without anyone opting in; a bare provider
+    // chat there would be a silent downgrade.
     //
-    // That limitation is why the MESSAGE is an ACP lane's only carrier for the
-    // conversation seed — not a fallback the way it is on the claude branch, the
-    // whole channel. The invariant has no exception for a transport: an ACP lane
-    // that answers turn one without the prior conversation denies text the user is
-    // looking at, exactly like a claude lane would.
+    // The invariant has no exception for a transport: an ACP lane that answers
+    // turn one without the prior conversation denies text the user is looking
+    // at, exactly like a claude lane would.
     //
     // Same guard, same banner, same latch-follows-delivery rule as below; the
     // `!seedInProfile` half is constantly true here because there is no profile.
@@ -759,9 +760,12 @@ async function resolveLane(
     const viaMessage = firstMessage
       ? await recapOntoFirstMessage(agentId, conversationId, firstMessage, lane)
       : null;
+    const personaPrefix = firstMessage
+      ? buildAskProfilePrefix((await buildLaneProfile(config, agentId)).profile)
+      : '';
     bus.emit(EventNames.SESSION_START, {
       taskId: '',
-      message: viaMessage?.message ?? firstMessage,
+      message: personaPrefix + (viaMessage?.message ?? firstMessage),
       cwd: WALNUT_HOME,
       title,
       lane,
