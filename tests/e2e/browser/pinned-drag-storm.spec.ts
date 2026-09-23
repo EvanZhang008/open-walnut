@@ -8,10 +8,10 @@
  * useRect saw a new element identity on every commit and its layout-effect
  * setState looped past React's 50-nested-update guard (error #185).
  *
- * This spec replicates the crash conditions: drag held on a NON-All project chip
- * (the crash URL scoped to one group — pinned cards are only visible there
- * because of the cross-project focus view) while a PATCH storm churns the
- * task store, including cross-tier hovers.
+ * This spec replicates the crash conditions: drag held with the panel filtered
+ * to one project while a PATCH storm churns the task store, including
+ * cross-tier hovers. The frozen model is observed directly: the storm renames
+ * pinned filler cards, and their titles must hold still until the drop.
  */
 import { test, expect, type Page } from '@playwright/test'
 import { selectProject, showAllSections } from './todo-panel-helpers'
@@ -48,7 +48,9 @@ async function pinTaskViaApi(taskId: string, tier = 'focus'): Promise<void> {
 // copy, which meant every panel-markup change had to be made twice.
 
 /** PATCH filler tasks in a loop — emulates the session-status / task:updated
- *  storm from the crash console ("transition accepted" x2352, bulk refetch). */
+ *  storm from the crash console ("transition accepted" x2352, bulk refetch).
+ *  Each PATCH renames a filler, because a title is what a pinned card draws
+ *  from the render model the drag freezes. */
 function startChurnStorm(taskIds: string[], intervalMs: number): { stop: () => Promise<number> } {
   let running = true
   let count = 0
@@ -58,7 +60,7 @@ function startChurnStorm(taskIds: string[], intervalMs: number): { stop: () => P
       await fetch(`${API}/api/tasks/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: `churn ${count}` }),
+        body: JSON.stringify({ title: `Storm filler churn ${count}` }),
       }).catch(() => {})
       count += 1
       await new Promise((r) => setTimeout(r, intervalMs))
@@ -69,149 +71,142 @@ function startChurnStorm(taskIds: string[], intervalMs: number): { stop: () => P
 }
 
 test('pinned drag survives task-churn storm on a non-All chip (no React #185)', async ({ page }) => {
-  test.setTimeout(60_000)
+  test.setTimeout(90_000)
   const proj = `DragProj${Date.now().toString(36)}`
 
-  // Seed: 3 pinned across tiers + filler tasks that dominate the Recent feed so
-  // churn PATCHes re-sort Recent (top-50 by updated_at/last_session_update).
+  // Seed: one card per tier the drag crosses, plus pinned Satellite fillers the
+  // storm renames while the drag is live.
   const focusTask = await createTaskViaApi('Storm focus', { project: proj })
   const satTask = await createTaskViaApi('Storm satellite', { project: proj })
   const waitTask = await createTaskViaApi('Storm wait', { project: proj })
   const fillers: string[] = []
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 8; i++) {
     const t = await createTaskViaApi(`Storm filler ${i}`, { project: proj })
     fillers.push(t.id)
   }
-  await pinTaskViaApi(focusTask.id, 'focus')
-  await pinTaskViaApi(satTask.id, 'satellite')
-  await pinTaskViaApi(waitTask.id, 'wait')
-
-  // Collect every signal the crash produced: React error boundary console lines
-  // and uncaught page errors.
-  const crashes: string[] = []
-  page.on('console', (msg) => {
-    if (msg.type() !== 'error' && msg.type() !== 'warning') return
-    const text = msg.text()
-    if (/Maximum update depth|error #185|Minified React error #185|error-boundary|render error caught/i.test(text)) {
-      crashes.push(text.slice(0, 300))
-    }
-  })
-  page.on('pageerror', (err) => { crashes.push(`pageerror: ${String(err).slice(0, 300)}`) })
-
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-
-  // This spec drags ACROSS tiers (focus → satellite → wait), so all three must be
-  // mounted at once — that's the "All" SECTION tab. A single-tier tab renders one
-  // tier only, and there'd be no cross-tier target to drop on.
-  await showAllSections(page)
-
-  // Crash precondition: a NON-All project chip (cross-project focus view keeps
-  // the pinned cards visible there).
-  await selectProject(page, proj)
-
-  // Tier cards: focus tier uses .todo-focus-card, satellite/wait use
-  // .todo-pinned-card. Scope to the non-Recent pinned section — a pinned task
-  // ALSO renders a (non-draggable) card in the Recent feed with the same
-  // data-task-id.
-  const tierScope = page.locator('.todo-pinned-section:not(.todo-pinned-section-recent)')
-  const focusCard = tierScope.locator(`.todo-focus-card[data-task-id="${focusTask.id}"]`)
-  await expect(focusCard).toBeVisible({ timeout: 5000 })
-  const handle = focusCard.locator('.todo-pinned-drag-handle')
-  const satCard = tierScope.locator(`.todo-pinned-card[data-task-id="${satTask.id}"]`)
-  const waitCard = tierScope.locator(`.todo-pinned-card[data-task-id="${waitTask.id}"]`)
-
-  const srcBox = await handle.boundingBox()
-  const satBox = await satCard.boundingBox()
-  const waitBox = await waitCard.boundingBox()
-  expect(srcBox).not.toBeNull()
-  expect(satBox).not.toBeNull()
-  expect(waitBox).not.toBeNull()
-
-  // The #185 crash itself is timing-dependent (needs production-scale layout
-  // thrash to push >50 nested commits), so this spec asserts the structural
-  // invariant that FEEDS the crash loop instead: while a pinned drag is active,
-  // external task churn must NOT reshape the pinned-area render model. The
-  // observable proxy is the Recent feed — it sorts by updated_at, so on the
-  // unfrozen (buggy) model the churn PATCHes visibly re-sort it mid-drag.
-  const recentOrder = () => page.$$eval(
-    '.todo-pinned-section-recent .todo-pinned-card',
-    (els) => els.map((el) => el.getAttribute('data-task-id')).join(','),
-  )
-
-  // Start the storm, then drag while it runs.
-  const storm = startChurnStorm(fillers, 60)
+  const seeded = [focusTask.id, satTask.id, waitTask.id, ...fillers]
   try {
-    await page.mouse.move(srcBox!.x + srcBox!.width / 2, srcBox!.y + srcBox!.height / 2)
-    await page.mouse.down()
-    await page.mouse.move(srcBox!.x + srcBox!.width / 2, srcBox!.y + srcBox!.height / 2 + 8)
-    const orderAtDragStart = await recentOrder()
-    // Cross-tier hovers with holds — the crash scenario ("drag task in the
-    // pinned area" during churn). Holds give the storm time to land re-renders
-    // mid-drag; steps exercise collision recomputation.
-    await page.mouse.move(satBox!.x + satBox!.width / 2, satBox!.y + satBox!.height / 2, { steps: 10 })
-    await page.waitForTimeout(1500)
-    await page.mouse.move(waitBox!.x + waitBox!.width / 2, waitBox!.y + waitBox!.height / 2, { steps: 10 })
-    await page.waitForTimeout(1500)
-    // Re-target the satellite card for the final hover: the cross-tier preview
-    // moves cards in real time (2026-08 fix — the drag Map is copy-on-write, so
-    // the tier memos recompute mid-drag) and the long hold near the container's
-    // bottom edge triggers dnd-kit auto-scroll — together they can push the sat
-    // card nearly out of the viewport (measured y 204 → 3.5). Scroll it back and
-    // re-acquire its box; releasing at the stale coordinates resolved collision
-    // to the focus drop-zone and silently kept the original tier.
-    // NO settle gap between scroll and hover: the pointer is still parked at the
-    // container's bottom edge, so auto-scroll keeps running — a 300ms pause here
-    // let it re-drift the card clean out of the viewport (measured y 204 → -87
-    // once the always-rendered Backlog subgroup grew the scrollable stack).
-    await satCard.scrollIntoViewIfNeeded()
-    const satBoxNow = await satCard.boundingBox()
-    expect(satBoxNow).not.toBeNull()
-    await page.mouse.move(satBoxNow!.x + satBoxNow!.width / 2, satBoxNow!.y + satBoxNow!.height / 2, { steps: 10 })
-    await page.waitForTimeout(1500)
+    await pinTaskViaApi(focusTask.id, 'focus')
+    await pinTaskViaApi(satTask.id, 'satellite')
+    await pinTaskViaApi(waitTask.id, 'wait')
+    for (const id of fillers) await pinTaskViaApi(id, 'satellite')
 
-    // Mid-drag invariants:
-    // 1. Frozen render model — Recent order identical to drag start despite
-    //    ~75 churn PATCHes having re-sorted the underlying data.
-    expect(await recentOrder(), 'Recent re-sorted mid-drag — render model not frozen').toBe(orderAtDragStart)
-    // 2. At most one TIER card for the dragged id (it may render as
-    //    .todo-focus-card or .todo-pinned-card depending on the hover tier).
-    await expect(tierScope.locator(`[data-task-id="${focusTask.id}"]`)).toHaveCount(1)
-    // 3. No crash signals so far.
-    expect(crashes, `crash signals mid-drag:\n${crashes.join('\n')}`).toEqual([])
+    // Collect every signal the crash produced: React error boundary console lines
+    // and uncaught page errors.
+    const crashes: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() !== 'error' && msg.type() !== 'warning') return
+      const text = msg.text()
+      if (/Maximum update depth|error #185|Minified React error #185|error-boundary|render error caught/i.test(text)) {
+        crashes.push(text.slice(0, 300))
+      }
+    })
+    page.on('pageerror', (err) => { crashes.push(`pageerror: ${String(err).slice(0, 300)}`) })
 
-    // Last-instant re-hover: the 1500ms hold + the assertion roundtrips above
-    // give auto-scroll time to drift again (the drag is still live). Whatever
-    // the drift did, dragEnd resolves from the LAST hover — re-acquire the sat
-    // card and release on its live coordinates so the drop deterministically
-    // lands in Satellite.
-    await satCard.scrollIntoViewIfNeeded()
-    const satBoxUp = await satCard.boundingBox()
-    expect(satBoxUp).not.toBeNull()
-    await page.mouse.move(satBoxUp!.x + satBoxUp!.width / 2, satBoxUp!.y + satBoxUp!.height / 2, { steps: 5 })
-    await page.mouse.up()
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+
+    // This spec drags ACROSS tiers (focus → satellite → wait), so all three must be
+    // mounted at once — that's the "All" SECTION tab. A single-tier tab renders one
+    // tier only, and there'd be no cross-tier target to drop on.
+    await showAllSections(page)
+    // Crash precondition: the panel filtered to one project.
+    await selectProject(page, proj)
+
+    const tierScope = page.locator('#home-task-navigation .todo-pinned-section:not(.todo-pinned-section-recent)')
+    // Wait starts folded out of the box, and a folded tier draws no cards to hover.
+    const waitHeading = page.locator('#home-task-navigation [data-navigation-id="wait"] .navigation-heading-open')
+    if ((await waitHeading.getAttribute('aria-expanded')) !== 'true') await waitHeading.click()
+    const focusCard = tierScope.locator(`[data-task-id="${focusTask.id}"]`)
+    const satCard = tierScope.locator(`[data-task-id="${satTask.id}"]`)
+    const waitCard = tierScope.locator(`[data-task-id="${waitTask.id}"]`)
+    await expect(focusCard).toBeVisible({ timeout: 10_000 })
+    await expect(waitCard).toBeVisible()
+    await expect(tierScope.locator(`[data-task-id="${fillers[fillers.length - 1]}"]`)).toBeVisible()
+    const grip = focusCard.locator('.todo-pinned-title')
+
+    const fillerTitles = () => page.evaluate((ids) => ids.map((id) =>
+      document.querySelector(`#home-task-navigation .todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${id}"] .todo-pinned-title`)?.textContent ?? null,
+    ), fillers)
+    const hover = async (target: typeof satCard) => {
+      await target.scrollIntoViewIfNeeded()
+      const box = await target.boundingBox()
+      expect(box).not.toBeNull()
+      await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2, { steps: 10 })
+    }
+
+    // Start the storm, then drag while it runs.
+    const storm = startChurnStorm(fillers, 60)
+    try {
+      const srcBox = await grip.boundingBox()
+      expect(srcBox).not.toBeNull()
+      await page.mouse.move(srcBox!.x + srcBox!.width / 2, srcBox!.y + srcBox!.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(srcBox!.x + srcBox!.width / 2, srcBox!.y + srcBox!.height / 2 + 8)
+      const titlesAtDragStart = await fillerTitles()
+      expect(titlesAtDragStart.every((t) => t !== null)).toBe(true)
+      // Cross-tier hovers with holds — the crash scenario ("drag task in the
+      // pinned area" during churn). Holds give the storm time to land re-renders
+      // mid-drag; steps exercise collision recomputation. Each hover re-acquires its
+      // target: the cross-tier preview moves cards in real time and a hold near the
+      // scroller's edge auto-scrolls it.
+      await hover(satCard)
+      await page.waitForTimeout(1500)
+      await hover(waitCard)
+      await page.waitForTimeout(1500)
+      await hover(satCard)
+      await page.waitForTimeout(1500)
+
+      // Mid-drag invariants:
+      // 1. Frozen render model: the storm renamed the fillers dozens of times on the
+      //    server, and not one pinned card changed its title while the drag is live.
+      expect(await fillerTitles(), 'pinned cards re-rendered from live data mid-drag: render model not frozen').toEqual(titlesAtDragStart)
+      // 2. At most one TIER card for the dragged id.
+      await expect(tierScope.locator(`[data-task-id="${focusTask.id}"]`)).toHaveCount(1)
+      // 3. No crash signals so far.
+      expect(crashes, `crash signals mid-drag:\n${crashes.join('\n')}`).toEqual([])
+
+      // Release on the Satellite HEADING, which a card preview never slides under, so
+      // the drop deterministically lands in Satellite whatever auto-scroll did during
+      // the holds. Follow it for a few frames until the preview settles (as
+      // home-navigation-drag.spec.ts does).
+      const satHeading = page.locator('#home-task-navigation [data-navigation-id="satellite"]')
+      await hover(satHeading)
+      for (let step = 0; step < 5; step++) {
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+        const box = await satHeading.boundingBox()
+        if (box) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
+      }
+      await page.mouse.up()
+    } finally {
+      await storm.stop()
+    }
+
+    // AFTER the drag ends the model converges to live data (freeze released).
+    const renamed = `Storm filler converged ${Date.now()}`
+    await fetch(`${API}/api/tasks/${fillers[0]}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: renamed }),
+    })
+    await expect(tierScope.locator(`[data-task-id="${fillers[0]}"] .todo-pinned-title`)).toHaveText(renamed, { timeout: 10_000 })
+
+    // Post-drop: no crash, panel alive, drop persisted (task moved to satellite tier).
+    await expect.poll(async () => {
+      const res = await fetch(`${API}/api/focus/tasks`)
+      const body = (await res.json()) as { satellite_tasks?: string[]; focus_tasks?: string[] }
+      return body.satellite_tasks?.includes(focusTask.id)
+        ?? !body.focus_tasks?.includes(focusTask.id)
+    }, { timeout: 5000 }).toBe(true)
+    expect(crashes, `crash signals:\n${crashes.join('\n')}`).toEqual([])
+
+    // Panel still interactive after the storm (error boundary did not swallow it).
+    await expect(satCard).toBeVisible()
   } finally {
-    await storm.stop()
+    // Pinned cards left in the shared fixture push later specs' drag targets out of view.
+    for (const id of seeded) {
+      await fetch(`${API}/api/focus/tasks/${id}`, { method: 'DELETE' }).catch(() => {})
+      await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => {})
+    }
   }
-
-  // AFTER the drag ends the model must converge to live data (freeze released):
-  // touch one filler and it must float to the top of the Recent feed.
-  await fetch(`${API}/api/tasks/${fillers[0]}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description: 'post-drag convergence touch' }),
-  })
-  await expect.poll(async () => (await recentOrder()).split(',')[0], { timeout: 5000 }).toBe(fillers[0])
-
-  // Post-drop: no crash, panel alive, drop persisted (task moved to satellite tier).
-  await expect.poll(async () => {
-    const res = await fetch(`${API}/api/focus/tasks`)
-    const body = (await res.json()) as { satellite_tasks?: string[]; focus_tasks?: string[] }
-    return body.satellite_tasks?.includes(focusTask.id)
-      ?? !body.focus_tasks?.includes(focusTask.id)
-  }, { timeout: 5000 }).toBe(true)
-  expect(crashes, `crash signals:\n${crashes.join('\n')}`).toEqual([])
-
-  // Panel still interactive after the storm (error boundary did not swallow it).
-  await expect(satCard).toBeVisible()
 })
