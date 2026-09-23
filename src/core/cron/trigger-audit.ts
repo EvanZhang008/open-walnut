@@ -22,6 +22,9 @@
  */
 
 import type { TriggerAuditEntry, TriggerAuditDelivery } from './types.js';
+import { LATE_DELIVERY_MS } from './trigger-timing.js';
+
+export { LATE_DELIVERY_MS };
 
 /** Recent activity: ~2 minutes at the 10s floor, hours at a sane cadence. */
 export const TRIGGER_CHECK_LOG_MAX = 12;
@@ -132,9 +135,17 @@ export function firedAuditEntry(input: {
   error?: string;
   /** The caller's authoritative attempt number for THIS fire (state.fireRetry). */
   attempts?: number;
+  /** A backlog delivered as one envelope: how many fires, and when the oldest was. */
+  coalesced?: number;
+  firstAtMs?: number;
+  /** When the delivery started; kept only when that was late (LATE_DELIVERY_MS). */
+  deliveredAtMs?: number;
   delivery: TriggerAuditDelivery;
   injected?: { chars: number; preview: string };
 }): TriggerAuditEntry {
+  const merged = input.coalesced !== undefined && input.coalesced > 1;
+  const oldest = merged && input.firstAtMs !== undefined ? input.firstAtMs : input.atMs;
+  const late = input.deliveredAtMs !== undefined && input.deliveredAtMs - oldest > LATE_DELIVERY_MS;
   return compact({
     atMs: input.atMs,
     outcome: 'fired',
@@ -143,6 +154,9 @@ export function firedAuditEntry(input: {
     durationMs: input.durationMs,
     error: input.error,
     attempts: input.attempts !== undefined && input.attempts > 1 ? input.attempts : undefined,
+    coalesced: merged ? input.coalesced : undefined,
+    firstAtMs: merged ? input.firstAtMs : undefined,
+    deliveredAtMs: late ? input.deliveredAtMs : undefined,
     delivery: input.delivery,
     injected: input.injected,
   });

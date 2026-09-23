@@ -15,16 +15,40 @@
  * with no memory of why it is being told", because a trigger typically fires
  * hours after the session that created it went quiet.
  *
- * 'error' is terminal here as everywhere else (isTerminalSession), and an
+ * An 'error' the INFRASTRUCTURE caused (host rebooted or unreachable, daemon lost
+ * the process) is resumable the same way, on a host the caller knows is up: the
+ * transcript is on that host's disk, which is what session-auto-recover relies
+ * on. For a trigger it is the common case, not an edge: an outage is what piles
+ * fires up, the fires are replayed the moment the host is back, and the session
+ * the outage killed still reads 'error' then. A fire is itself the proof that its
+ * host is reachable, so the trigger passes that host. Without one (or on another
+ * host) such a session is skipped, since a send would only queue behind a resume
+ * that cannot happen. Any other 'error' is terminal (isTerminalSession), and an
  * archived session is never a target. Among equals, the most recently active.
  * Returns null when the task has no resumable session and the caller must start
- * a new one on the task.
+ * a new one.
  */
+
+import { isInfraSessionError } from '../session-error-kind.js';
+import type { SessionErrorKind, StatusReason } from '../types.js';
 
 export interface DeliverySessionCandidate {
   process_status?: string;
   archived?: boolean;
   lastActiveAt?: string;
+  status_reason?: StatusReason;
+  errorKind?: SessionErrorKind;
+  errorMessage?: string;
+  host?: string;
+}
+
+export interface DeliveryPickOptions {
+  /** A host known to be reachable right now (the one whose daemon sent the fire). */
+  reachableHost?: string;
+}
+
+function sameHost(a: string | undefined, b: string | undefined): boolean {
+  return (a || '__local__') === (b || '__local__');
 }
 
 /** True when the CLI behind the record is alive, so a send lands without a cold resume. */
@@ -32,9 +56,11 @@ export function isLiveSessionStatus(status: string | undefined): boolean {
   return status === 'running' || status === 'idle';
 }
 
-function tierOf(status: string | undefined): number | null {
-  if (isLiveSessionStatus(status)) return 0;
-  if (status === 'stopped') return 1;
+function tierOf(session: DeliverySessionCandidate, opts: DeliveryPickOptions): number | null {
+  if (isLiveSessionStatus(session.process_status)) return 0;
+  if (session.process_status === 'stopped') return 1;
+  if (session.process_status === 'error' && opts.reachableHost !== undefined
+    && sameHost(session.host, opts.reachableHost) && isInfraSessionError(session)) return 1;
   return null;
 }
 
@@ -46,12 +72,12 @@ function newer(a: DeliverySessionCandidate, b: DeliverySessionCandidate): boolea
   return ta > tb;
 }
 
-export function pickDeliverySession<S extends DeliverySessionCandidate>(sessions: S[]): S | null {
+export function pickDeliverySession<S extends DeliverySessionCandidate>(sessions: S[], opts: DeliveryPickOptions = {}): S | null {
   let best: S | null = null;
   let bestTier = Number.POSITIVE_INFINITY;
   for (const session of sessions) {
     if (session.archived) continue;
-    const tier = tierOf(session.process_status);
+    const tier = tierOf(session, opts);
     if (tier === null) continue;
     if (tier < bestTier || (tier === bestTier && best && newer(session, best))) {
       best = session;

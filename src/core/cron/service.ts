@@ -108,10 +108,10 @@ export class CronService {
   }
 
   async applyTriggerFired(
-    event: TriggerFiredEvent,
-    deliver: (job: CronJob) => Promise<{ status: 'ok' | 'error'; summary?: string; error?: string }>,
+    events: TriggerFiredEvent | readonly TriggerFiredEvent[],
+    deliver: (job: CronJob, fires: TriggerFiredEvent[], at: { startedAtMs: number }) => Promise<{ status: 'ok' | 'error'; summary?: string; error?: string }>,
   ): Promise<TriggerFiredApplied> {
-    return await applyTriggerFired(this.state, event, deliver);
+    return await applyTriggerFired(this.state, events, deliver);
   }
 
   /**

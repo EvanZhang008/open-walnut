@@ -22,7 +22,7 @@ import { findDueJobs, findMissedJobs } from '../../../src/core/cron/timer.js';
 import { compileTriggerDefs, triggerDefOf } from '../../../src/core/routines/trigger-push.js';
 import { buildTriggerMessage, buildScheduledSessionMessage } from '../../../src/core/routines/trigger-envelope.js';
 import { parseWalnutMessage } from '../../../src/core/peers/walnut-message-tag.js';
-import { MIN_EVERY_MS, CHECK_TIMEOUT_MAX_S } from '../../../src/providers/trigger-check-core.js';
+import { MIN_EVERY_MS, CHECK_TIMEOUT_MAX_S, CHECK_INPUT_CAP } from '../../../src/providers/trigger-check-core.js';
 import type { CronJob, CronServiceState, CronStoreFile } from '../../../src/core/cron/types.js';
 import { parseEveryMs } from '../../../src/core/routines/trigger-api.js';
 
@@ -278,6 +278,57 @@ describe('buildTriggerMessage', () => {
     const parsed = parseWalnutMessage(message)!;
     expect(parsed.body).toContain('</walnut-message>');
     expect(parsed.attrs.from).toBe('Trigger: PR comments');
+  });
+
+  // A host back from an outage replays every fire it held: one envelope, every
+  // item, and it says the fires are late so the model does not read them as news.
+  it('a backlog becomes ONE envelope with every item, oldest first, marked late', () => {
+    const t0 = Date.UTC(2026, 8, 19, 6, 12, 0);
+    const parsed = parseWalnutMessage(buildTriggerMessage(job, [
+      { atMs: t0 + 2 * 3_600_000, items: [{ id: 'b' }] },
+      { atMs: t0, items: [{ id: 'a' }] },
+      { atMs: t0 + 43 * 3_600_000, items: [{ id: 'c1' }, { id: 'c2' }] },
+    ], 'sweep', { deliveredAtMs: t0 + 43 * 3_600_000 + 60_000 }))!;
+    expect(parsed.attrs.note).toBe('3 fires 2026-09-19T06:12:00.000Z to 2026-09-21T01:12:00.000Z, 4 new items, delivered 43h late');
+    expect(parsed.body).toContain('These 3 fires arrive together and late: the oldest is 43h old.');
+    const order = ['"id": "a"', '"id": "b"', '"id": "c1"', '"id": "c2"'].map((k) => parsed.body.indexOf(k));
+    expect(order.every((at) => at > 0)).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    // Order is prompt, timing, items.
+    expect(parsed.body.indexOf('sweep')).toBeLessThan(parsed.body.indexOf('These 3 fires'));
+    expect(parsed.body.indexOf('These 3 fires')).toBeLessThan(parsed.body.indexOf('New items:'));
+  });
+
+  it('a single late fire says so; an on-time one reads exactly as before', () => {
+    const at = Date.UTC(2026, 8, 11, 10, 0, 0);
+    const late = parseWalnutMessage(buildTriggerMessage(job, { atMs: at, items: [{ id: 'x' }] }, 'look', { deliveredAtMs: at + 3 * 86_400_000 }))!;
+    expect(late.attrs.note).toBe('fired 2026-09-11T10:00:00.000Z, 1 new item, delivered 3d late');
+    expect(late.body).toContain('This fire arrives late: it is 3d old.');
+    const onTime = parseWalnutMessage(buildTriggerMessage(job, { atMs: at, items: [{ id: 'x' }] }, 'look', { deliveredAtMs: at + 90_000 }))!;
+    expect(onTime.attrs.note).toBe('fired 2026-09-11T10:00:00.000Z, 1 new item');
+    expect(onTime.body).not.toContain('arrives');
+  });
+
+  it("a backlog's inputs are labelled per fire, repeats collapse, and the oldest go first when over budget", () => {
+    const t0 = Date.UTC(2026, 8, 20, 0, 0, 0);
+    const parsed = parseWalnutMessage(buildTriggerMessage(job, [
+      { atMs: t0, items: [], input: 'same summary' },
+      { atMs: t0 + 1, items: [], input: 'same summary' },
+      { atMs: t0 + 2, items: [], input: 'build went red' },
+    ], 'go'))!;
+    expect(parsed.body.match(/same summary/g)).toHaveLength(1);
+    expect(parsed.body).toContain('Input from the fire at 2026-09-20T00:00:00.000Z:\nsame summary');
+    expect(parsed.body).toContain('Input from the fire at 2026-09-20T00:00:00.002Z:\nbuild went red');
+
+    const big = 'x'.repeat(CHECK_INPUT_CAP);
+    const bounded = parseWalnutMessage(buildTriggerMessage(job, [
+      { atMs: t0, items: [], input: `oldest ${big}` },
+      { atMs: t0 + 1, items: [], input: `middle ${big}` },
+      { atMs: t0 + 2, items: [], input: `newest ${big}` },
+    ], 'go'))!;
+    expect(bounded.body).toContain('newest');
+    expect(bounded.body).not.toContain('oldest');
+    expect(bounded.body).toMatch(/\[\d older input\(s\) omitted\]/);
   });
 
   it('a plain scheduled run wears the same envelope, marked scheduled', () => {

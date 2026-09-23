@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   appendAudit, auditDelivery, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
   mergeRunOutcome,
-  AUDIT_TEXT_CAP, INJECTED_PREVIEW_CAP, TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
+  AUDIT_TEXT_CAP, LATE_DELIVERY_MS, INJECTED_PREVIEW_CAP, TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
 } from '../../../src/core/cron/trigger-audit.js';
 import type { TriggerAuditEntry } from '../../../src/core/cron/types.js';
 
@@ -38,6 +38,53 @@ describe('appendAudit', () => {
     const next = appendAudit(original, quiet(NOW + 1), 5);
     expect(original).toHaveLength(1);
     expect(next).toHaveLength(2);
+  });
+
+  // Write order, not fire time: the bound keeps the most recent WRITES. A fire
+  // held through an outage is older than the checks around it, and cutting by
+  // age would drop it the moment it was written (the display sorts it instead).
+  it('a late fire goes on top and is never cut by its age on the write', () => {
+    const full = [quiet(NOW + 2), quiet(NOW + 1)];
+    const late = firedAuditEntry({ atMs: NOW - 3_600_000, seq: 1, items: 1, delivery: { status: 'ok' } });
+    const next = appendAudit(full, late, 2);
+    expect(next[0]).toBe(late);
+    expect(next).toHaveLength(2);
+  });
+});
+
+describe('a coalesced or late fire row', () => {
+  it('records how many fires one delivery carried and when the oldest was', () => {
+    const entry = firedAuditEntry({
+      atMs: NOW, seq: 3, items: 9, coalesced: 7, firstAtMs: NOW - 43 * 3_600_000,
+      deliveredAtMs: NOW + 1_000, delivery: { status: 'ok' },
+    });
+    expect(entry).toMatchObject({ seq: 3, items: 9, coalesced: 7, firstAtMs: NOW - 43 * 3_600_000 });
+    // Late is measured from the OLDEST fire: the newest one was only 1s ago.
+    expect(entry.deliveredAtMs).toBe(NOW + 1_000);
+  });
+
+  it('a single fire carries no batch fields, and an on-time delivery no delivery time', () => {
+    const single = firedAuditEntry({
+      atMs: NOW, seq: 1, items: 1, coalesced: 1, firstAtMs: NOW,
+      deliveredAtMs: NOW + LATE_DELIVERY_MS - 1, delivery: { status: 'ok' },
+    });
+    expect(single.coalesced).toBeUndefined();
+    expect(single.firstAtMs).toBeUndefined();
+    expect(single.deliveredAtMs).toBeUndefined();
+    const lateSingle = firedAuditEntry({
+      atMs: NOW, seq: 1, items: 1, deliveredAtMs: NOW + LATE_DELIVERY_MS + 1, delivery: { status: 'ok' },
+    });
+    expect(lateSingle.deliveredAtMs).toBe(NOW + LATE_DELIVERY_MS + 1);
+  });
+
+  it('a retried batch updates its one row in place', () => {
+    const older = quiet(NOW - 10);
+    const first = { ...firedAuditEntry({ atMs: NOW - 5, seq: 1, items: 3, coalesced: 3, firstAtMs: NOW - 99, delivery: { status: 'retrying' } }), epoch: 'e' };
+    const newer = quiet(NOW);
+    const retry = { ...firedAuditEntry({ atMs: NOW - 5, seq: 1, items: 3, coalesced: 3, firstAtMs: NOW - 99, attempts: 2, delivery: { status: 'ok' } }), epoch: 'e' };
+    const merged = mergeFireAttempt([newer, first, older], retry, 10);
+    expect(merged).toHaveLength(3);
+    expect(merged[1]).toMatchObject({ seq: 1, coalesced: 3, attempts: 2, delivery: { status: 'ok' } });
   });
 });
 

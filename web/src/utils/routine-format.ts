@@ -5,6 +5,7 @@
  */
 
 import type { RoutineAuditEntry, RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState, RoutineWake } from '@/api/routines';
+import { describeSpan } from '../../../src/core/cron/trigger-timing';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -160,10 +161,17 @@ export function describeExecutorBadge(
 
 // ── Trigger audit trail (state.checkLog / state.fireLog) ──
 
-/** Local clock time for an audit row: the "when" a human scans for. */
-export function auditClock(atMs: number): string {
+/**
+ * Local clock time for an audit row: the "when" a human scans for. A row from
+ * another day carries its date, since a replayed fire can be days old and "06:12"
+ * alone reads as this morning.
+ */
+export function auditClock(atMs: number, nowMs = Date.now()): string {
   if (!Number.isFinite(atMs)) return '--:--';
-  return new Date(atMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const at = new Date(atMs);
+  const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (at.toDateString() === new Date(nowMs).toDateString()) return time;
+  return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`;
 }
 
 /**
@@ -183,7 +191,11 @@ export function describeAuditEntry(entry: RoutineAuditEntry): string {
     return 'quiet — the script said no';
   }
   const n = entry.items ?? 0;
-  const what = n > 0 ? `fired, ${n} new item${n === 1 ? '' : 's'}` : 'fired';
+  const newItems = `${n} new item${n === 1 ? '' : 's'}`;
+  // A backlog delivered as one envelope is one row: say how many fires it held.
+  const what = (entry.coalesced ?? 1) > 1
+    ? `${entry.coalesced} fires, ${newItems}`
+    : n > 0 ? `fired, ${newItems}` : 'fired';
   const d = entry.delivery;
   if (!d) return what;
   const tries = (entry.attempts ?? 1) > 1 ? ` after ${entry.attempts} tries` : '';
@@ -193,7 +205,11 @@ export function describeAuditEntry(entry: RoutineAuditEntry): string {
     const short = why.length > 80 ? `${clip(why, 80)}…` : why;
     return `${what} → not delivered${tries}: ${short}`;
   }
-  return `${what} → ${auditTarget(d.summary)}${tries}`;
+  const oldest = entry.firstAtMs ?? entry.atMs;
+  const late = typeof entry.deliveredAtMs === 'number' && Number.isFinite(oldest)
+    ? `, ${describeSpan(entry.deliveredAtMs - oldest)} late`
+    : '';
+  return `${what} → ${auditTarget(d.summary)}${tries}${late}`;
 }
 
 /** Longest "where it went" clause an audit row prints before clamping. */
@@ -257,7 +273,12 @@ export function describeFireTally(state: RoutineState | undefined, nowMs = Date.
   // line exists to prevent.
   const retrying = fires.some((f) => f.delivery?.status === 'retrying');
   if (!count) return retrying ? 'fired, delivery retrying' : 'never fired yet';
-  const landed = fires.find((f) => f.delivery?.status !== 'retrying')?.atMs;
+  // The newest by FIRE time, not the first row: rows are in write order, and a
+  // backlog replayed after an outage is written after fires that happened later.
+  const landedTimes = fires
+    .filter((f) => f.delivery?.status !== 'retrying' && Number.isFinite(f.atMs))
+    .map((f) => f.atMs);
+  const landed = landedTimes.length ? Math.max(...landedTimes) : undefined;
   const when = typeof landed === 'number' ? `, last ${describeAgo(landed, nowMs)}` : '';
   return `fired ${count}×${when}${retrying ? ', one delivery retrying' : ''}`;
 }
@@ -287,5 +308,10 @@ export function auditHistory(state: RoutineState | undefined): RoutineAuditEntry
     // that carries the newest attempt count and delivery verdict.
     out.push(fires.find((f) => `${f.epoch ?? ''}#${f.seq ?? ''}` === key) ?? row);
   }
-  return out;
+  // Shown by each row's own time. The lists are stored in write order (their
+  // bound keeps the most recent WRITES, so a late fire is never cut the moment it
+  // lands), and a backlog replayed after an outage is written after checks that
+  // ran later: in write order the History clock ran backwards.
+  const at = (e: RoutineAuditEntry) => (Number.isFinite(e.atMs) ? e.atMs : Number.NEGATIVE_INFINITY);
+  return out.sort((a, b) => at(b) - at(a));
 }

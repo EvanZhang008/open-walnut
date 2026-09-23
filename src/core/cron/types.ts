@@ -89,6 +89,15 @@ export type TriggerAuditEntry = {
   epoch?: string;
   /** Fires only: how many delivery attempts this ONE fire took. */
   attempts?: number;
+  /**
+   * Fires only, set when a backlog was delivered as ONE envelope: how many fires
+   * it merged. `seq` is then the lowest of them, `atMs` the newest fire's time
+   * and `firstAtMs` the oldest's.
+   */
+  coalesced?: number;
+  firstAtMs?: number;
+  /** Fires only, set when the delivery landed long after the (oldest) fire. */
+  deliveredAtMs?: number;
   /** Fires only. */
   delivery?: TriggerAuditDelivery;
   /** Fires only: the message the session actually received, clamped. */
@@ -208,7 +217,12 @@ export type CronJobState = {
    * replays it; this counts the attempts so a permanently failing delivery is
    * given up on (recorded, acked, notified) instead of retried forever.
    */
-  fireRetry?: { epoch?: string; seq: number; attempts: number };
+  /**
+   * The fire (or batch, named by its lowest seq) whose delivery is being retried.
+   * `seqs` lists every fire of that batch; absent on rows written before batches,
+   * where it means `[seq]`.
+   */
+  fireRetry?: { epoch?: string; seq: number; attempts: number; seqs?: number[] };
   /**
    * Check jobs only: recorded fire seqs ABOVE `lastFireSeq`, which is the highest
    * CONTIGUOUS one. Fires are not processed in order (see isDuplicateFire), so a

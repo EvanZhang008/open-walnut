@@ -11,6 +11,16 @@ import { test, expect } from './shortcut-test-fixture'
 
 const API = 'http://localhost:3457'
 
+// The daemon-driven tests wait on real check cadences (a 5s first-run delay, a 10s
+// floor) with inner waits up to 60s; the 30s default budget cuts them off under load.
+test.describe.configure({ timeout: 120_000 })
+
+/** A new task is born pinned (Satellite), so its row is a pinned card; an unpinned
+ *  one sits in the Projects list. Both carry the TRIGGER pill. */
+function taskRow(page: import('@playwright/test').Page, title: string) {
+  return page.locator('.todo-panel-item, .todo-pinned-card, .todo-focus-card').filter({ hasText: title })
+}
+
 async function deleteRoutine(id: string): Promise<void> {
   await fetch(`${API}/api/routines/${id}`, { method: 'DELETE' }).catch(() => {})
 }
@@ -81,8 +91,8 @@ test('a check with a wall-clock trigger is refused in the form with the reason',
   await openRoutines(page)
   const form = await openBlankForm(page)
   await form.locator('#routine-name').fill(`PW trigger clock ${Date.now()}`)
-  // Main Agent needs no working directory, so the only refusal left is the schedule's.
-  await form.locator('label.cron-form-radio', { hasText: 'Main Agent' }).locator('input').check()
+  // Home Chat needs no working directory, so the only refusal left is the schedule's.
+  await form.locator('label.cron-form-radio', { hasText: 'Home Chat' }).locator('input').check()
   await form.locator('#routine-f-instructions').fill('Say hello.')
   await form.getByRole('button', { name: /Add a check script/ }).click()
   await form.locator('#routine-check-run').fill(`echo '{"fire": false}'`)
@@ -100,7 +110,7 @@ test('a hand-built trigger stores its check, shows the badge, and the daemon rep
     await openRoutines(page)
     const form = await openBlankForm(page)
     await form.locator('#routine-name').fill(name)
-    await form.locator('label.cron-form-radio', { hasText: 'Main Agent' }).locator('input').check()
+    await form.locator('label.cron-form-radio', { hasText: 'Home Chat' }).locator('input').check()
     await form.locator('#routine-f-instructions').fill('Nothing new means do nothing.')
     await form.getByRole('button', { name: /Add a check script/ }).click()
     await form.locator('#routine-check-run').fill(`echo '{"fire": false, "state": {"cursor": "pw"}}'`)
@@ -201,7 +211,7 @@ test('a task with an armed trigger shows the TRIGGER pill; the pill opens the tr
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await showEverything(page)
-    const row = page.locator('.todo-panel-item', { hasText: task.title })
+    const row = taskRow(page, task.title)
     await expect(row).toBeVisible()
     // No trigger yet: no pill. A plain task must not grow a badge.
     await expect(row.getByTestId('task-trigger-pill')).toHaveCount(0)
@@ -277,7 +287,7 @@ test('the flyout audits the trigger: never-fired, then the checks, then what a f
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await showEverything(page)
-    const row = page.locator('.todo-panel-item', { hasText: task.title })
+    const row = taskRow(page, task.title)
     const pill = row.getByTestId('task-trigger-pill')
     await expect(pill).toBeVisible({ timeout: 15_000 })
     await pill.click()
@@ -326,7 +336,7 @@ test('the flyout audits the trigger: never-fired, then the checks, then what a f
     await page.reload()
     await page.waitForLoadState('networkidle')
     await showEverything(page)
-    const pill2 = page.locator('.todo-panel-item', { hasText: task.title }).getByTestId('task-trigger-pill')
+    const pill2 = taskRow(page, task.title).getByTestId('task-trigger-pill')
     await pill2.click()
     await expect(page.getByTestId('trigger-jobs-flyout').locator('.trigger-jobs-tally')).toContainText('fired')
   } finally {
@@ -346,7 +356,7 @@ test('the flyout\'s Delete asks once, then removes the trigger; an outside click
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await showEverything(page)
-    const row = page.locator('.todo-panel-item', { hasText: task.title })
+    const row = taskRow(page, task.title)
     const pill = row.getByTestId('task-trigger-pill')
     await expect(pill).toBeVisible({ timeout: 10_000 })
     await pill.click()
@@ -366,6 +376,105 @@ test('the flyout\'s Delete asks once, then removes the trigger; an outside click
     await expect(flyout).toBeHidden()
     await expect(row.getByTestId('task-trigger-pill')).toHaveCount(0)
     await expect.poll(async () => await getRoutine(created.id)).toBeNull()
+  } finally {
+    await deleteRoutine(created.id)
+    await fetch(`${API}/api/tasks/${task.id}`, { method: 'DELETE' }).catch(() => {})
+  }
+})
+
+// A host back from an outage replays every fire it held (2026-09-21: seven, and
+// seven sessions started). Driven through the fixture's REAL daemon: a trigger's
+// state file is given a backlog while it is disarmed, and re-arming it makes the
+// daemon replay that backlog exactly as a reconnect does.
+test('a replayed backlog lands as ONE delivery in ONE session, and History says it was late', async ({ page }) => {
+  const fsp = await import('node:fs/promises')
+  const pathMod = await import('node:path')
+  const os = await import('node:os')
+  const { isolateUiPrefs, presetPanelView, showEverything } = await import('./todo-panel-helpers')
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
+  const task = await createTask('PW replay storm task')
+  const name = `PW storm ${Date.now()}`
+  const created = await createTriggerFor(task.id, name, `echo '{"fire": false}'`, 10_000)
+  const liveSessions = async () => {
+    const res = await fetch(`${API}/api/sessions?limit=500`)
+    const { sessions } = (await res.json()) as { sessions: any[] }
+    return sessions.filter((s) => (s.taskId ?? s.task_id) === task.id && !s.archived)
+  }
+  try {
+    // The daemon writes the trigger's state file on its first check.
+    const stateFile = await (async () => {
+      const deadline = Date.now() + 45_000
+      while (Date.now() < deadline) {
+        for (const dir of await fsp.readdir(os.tmpdir())) {
+          if (!/^walnut-pw-\d+$/.test(dir)) continue
+          const file = pathMod.join(os.tmpdir(), dir, 'daemon', 'trigger-state', `${created.id}.json`)
+          if (await fsp.stat(file).then(() => true, () => false)) return file
+        }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      throw new Error('the fixture daemon never wrote the trigger state file')
+    })()
+
+    // Disarm, give it a 43-hour backlog, re-arm: the configure that re-arms it is
+    // the reconnect path, which replays every pending fire at once.
+    await fetch(`${API}/api/routines/${created.id}/toggle`, { method: 'POST' })
+    await expect.poll(async () => (await getRoutine(created.id))?.enabled).toBe(false)
+    await new Promise((r) => setTimeout(r, 1_500))
+    const state = JSON.parse(await fsp.readFile(stateFile, 'utf-8'))
+    const now = Date.now()
+    state.pendingFires = [1, 2, 3, 4, 5, 6, 7].map((seq) => ({
+      seq, atMs: now - (44 - seq) * 3_600_000, durationMs: 20,
+      items: [{ id: `PW-STORM-${seq}`, title: `mention ${seq}` }],
+    }))
+    state.seq = 7
+    await fsp.writeFile(`${stateFile}.tmp`, JSON.stringify(state))
+    await fsp.rename(`${stateFile}.tmp`, stateFile)
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await showEverything(page)
+    const row = taskRow(page, task.title)
+    await expect(row).toBeVisible()
+    await fetch(`${API}/api/routines/${created.id}/toggle`, { method: 'POST' })
+
+    await expect.poll(async () => (await getRoutine(created.id))?.state?.fireCount, { timeout: 45_000 }).toBe(7)
+    // Give any stray second launch time to show up before counting.
+    await new Promise((r) => setTimeout(r, 3_000))
+    const sessions = await liveSessions()
+    expect(sessions, 'seven replayed fires must start ONE session').toHaveLength(1)
+    const sid = sessions[0].claudeSessionId as string
+    const job = await getRoutine(created.id)
+    expect(job.state.fireLog).toHaveLength(1)
+    expect(job.state.fireLog[0]).toMatchObject({ coalesced: 7, items: 7, delivery: { status: 'ok', sessionId: sid } })
+
+    const pill = row.getByTestId('task-trigger-pill')
+    await expect(pill).toBeVisible({ timeout: 10_000 })
+    await pill.click()
+    const flyout = page.getByTestId('trigger-jobs-flyout')
+    await expect(flyout).toBeVisible()
+    await expect(flyout.locator('.trigger-jobs-tally')).toContainText('fired 7×')
+    // The day-old backlog is not the last check: the checks since the re-arm are.
+    await expect(flyout.locator('.trigger-jobs-last')).toContainText('quiet', { timeout: 20_000 })
+    await flyout.getByTestId('trigger-audit-toggle').click()
+    const list = flyout.getByTestId('trigger-audit-list')
+    const fired = list.locator('.trigger-audit-row[data-outcome="fired"]')
+    await expect(fired).toHaveCount(1)
+    await expect(fired.locator('.trigger-audit-what')).toHaveText(/^7 fires, 7 new items → restarted session on task .+, 43h late$/)
+    // 37 hours ago is another day: the clock carries its date.
+    await expect(fired.locator('.trigger-audit-clock')).toHaveText(/[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}/)
+    // Newest first by the rows' own time: the quiet checks after the re-arm sit above.
+    const outcomes = await list.locator('.trigger-audit-row').evaluateAll((els) => els.map((el) => el.getAttribute('data-outcome')))
+    expect(outcomes[outcomes.length - 1]).toBe('fired')
+
+    await fired.locator('.trigger-audit-line').click()
+    const injected = fired.locator('.trigger-audit-injected')
+    await expect(injected).toContainText('7 fires')
+    await expect(injected).toContainText('delivered 43h late')
+    await page.screenshot({ path: '/tmp/walnut-trigger/pw-storm-history.png', clip: await flyout.boundingBox() ?? undefined })
+    // "Open that session" names the session the backlog actually landed in.
+    await fired.getByRole('button', { name: 'Open that session' }).click()
+    await expect(page.locator(`[data-session-id="${sid}"]`).first()).toBeVisible({ timeout: 15_000 })
   } finally {
     await deleteRoutine(created.id)
     await fetch(`${API}/api/tasks/${task.id}`, { method: 'DELETE' }).catch(() => {})

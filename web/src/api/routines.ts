@@ -85,6 +85,11 @@ export type RoutineAuditEntry = {
   seq?: number;
   epoch?: string;
   attempts?: number;
+  /** A backlog delivered as ONE envelope: how many fires, and the oldest one's time. */
+  coalesced?: number;
+  firstAtMs?: number;
+  /** Set only when the delivery landed late (long after the oldest fire). */
+  deliveredAtMs?: number;
   delivery?: RoutineAuditDelivery;
   injected?: { chars: number; preview: string };
 };

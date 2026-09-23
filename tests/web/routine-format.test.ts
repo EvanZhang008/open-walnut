@@ -187,6 +187,51 @@ describe('the trigger audit trail as sentences', () => {
 
   it('prints an audit clock even for a broken timestamp', () => {
     expect(auditClock(Number.NaN)).toBe('--:--');
-    expect(auditClock(NOW)).toMatch(/\d{2}:\d{2}/);
+    expect(auditClock(NOW, NOW)).toMatch(/^\d{2}:\d{2}/);
+  });
+
+  // A replayed fire can be days old; "06:12" alone would read as this morning.
+  it('dates a row from another day, and only then', () => {
+    expect(auditClock(NOW - 60_000, NOW)).not.toMatch(/[A-Za-z]{3}/);
+    const twoDaysAgo = auditClock(NOW - 2 * 86_400_000, NOW);
+    expect(twoDaysAgo).toMatch(/[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}/);
+  });
+
+  it('a backlog delivered as one envelope reads as one row, with how late it was', () => {
+    expect(describeAuditEntry({
+      atMs: NOW, outcome: 'fired', seq: 1, items: 9, coalesced: 7,
+      firstAtMs: NOW - 43 * 3_600_000, deliveredAtMs: NOW + 60_000,
+      delivery: { status: 'ok', summary: 'resumed session Slack sweep [e9a5f101]' },
+    })).toBe('7 fires, 9 new items → resumed session Slack sweep [e9a5f101], 43h late');
+    // A single late fire, and a batch that has not landed yet (no lateness claim).
+    expect(describeAuditEntry({
+      atMs: NOW, outcome: 'fired', items: 1, deliveredAtMs: NOW + 12 * 60_000,
+      delivery: { status: 'ok', summary: 'sent to session x [abcd1234]' },
+    })).toBe('fired, 1 new item → sent to session x [abcd1234], 12m late');
+    expect(describeAuditEntry({
+      atMs: NOW, outcome: 'fired', items: 3, coalesced: 3, attempts: 2,
+      delivery: { status: 'retrying' },
+    })).toBe('3 fires, 3 new items → delivery retrying after 2 tries');
+  });
+
+  it('the tally names the newest fire by fire time, not the last one written', () => {
+    expect(describeFireTally({
+      fireCount: 9,
+      fireLog: [
+        { atMs: NOW - 43 * 3_600_000, outcome: 'fired', delivery: { status: 'ok' } },
+        { atMs: NOW - 180_000, outcome: 'fired', delivery: { status: 'ok' } },
+      ],
+    }, NOW)).toBe('fired 9×, last 3m ago');
+  });
+
+  it('orders the History rows by their own time, even from a list stored out of order', () => {
+    const rows = auditHistory({
+      checkLog: [
+        { atMs: NOW - 43 * 3_600_000, outcome: 'fired', seq: 1, epoch: 'e', delivery: { status: 'ok' } },
+        { atMs: NOW, outcome: 'quiet' },
+        { atMs: NOW - 60_000, outcome: 'quiet' },
+      ],
+    });
+    expect(rows.map((r) => r.atMs)).toEqual([NOW, NOW - 60_000, NOW - 43 * 3_600_000]);
   });
 });

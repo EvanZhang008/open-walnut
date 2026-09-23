@@ -113,51 +113,68 @@ export async function handleTriggerChecked(host: string, event: TriggerCheckedEv
   await pushTriggers(applied.host ?? host);
 }
 
-export async function handleTriggerFired(host: string, event: TriggerFiredEvent): Promise<void> {
+/**
+ * Deliver one fire, or one trigger's batch of fires (same id, same epoch) as ONE
+ * envelope. Every seq is acked on its own, since the daemon's ack removes one.
+ */
+export async function handleTriggerFired(host: string, fires: TriggerFiredEvent | readonly TriggerFiredEvent[]): Promise<void> {
+  const batch = Array.isArray(fires) ? [...fires] : [fires as TriggerFiredEvent];
+  const head = batch[0];
+  if (!head) return;
+  const seqs = batch.map((e) => e.seq);
   const service = await resolveService();
   if (!service) {
     // Deliberately NOT acked: the daemon keeps it in pendingFires and replays it
     // once the engine is up, which is the whole point of at-least-once.
-    log.cron.warn('trigger.fired dropped: routines engine not running', { host, jobId: event.id });
+    log.cron.warn('trigger.fired dropped: routines engine not running', { host, jobId: head.id });
     return;
   }
 
-  const applied = await service.applyTriggerFired(event, async (job) => {
+  const applied = await service.applyTriggerFired(batch, async (job, fresh, at) => {
     if (!job.executor) return { status: 'error' as const, error: 'routine has no executor to deliver to' };
-    const message = buildTriggerMessage(job, event, promptOf(job));
+    const message = buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: at.startedAtMs });
     const { runExecutor } = await import('./registry.js');
     return await runExecutor(job, job.executor, message);
   });
 
   log.cron.info('trigger fired', {
-    host, jobId: event.id, epoch: event.epoch, seq: event.seq, items: event.items?.length ?? 0,
+    host, jobId: head.id, epoch: head.epoch, seq: applied.seq ?? Math.min(...seqs),
+    ...(batch.length > 1 ? { seqs, coalesced: batch.length } : {}),
+    items: batch.reduce((n, e) => n + (e.items?.length ?? 0), 0),
     found: applied.found, duplicate: applied.duplicate, delivered: applied.delivered, retry: applied.retry,
     ...(applied.error ? { error: applied.error } : {}),
   });
 
   if (!applied.found) {
     if (await hasPushedTriggersTo(host)) {
-      await ackFire(host, event.id, event.seq);
+      await ackFires(host, head.id, seqs);
     } else {
-      log.cron.warn('trigger.fired for a routine this server never pushed: left unacked', { host, jobId: event.id, seq: event.seq });
+      log.cron.warn('trigger.fired for a routine this server never pushed: left unacked', { host, jobId: head.id, seqs });
     }
     return;
   }
   if (applied.retry) {
     // Withheld ack = the daemon replays it; the attempt count lives on the job.
+    // Seqs already recorded before this batch are acked anyway, or they would
+    // keep riding every replay.
     log.cron.warn('trigger delivery failed transiently; the daemon will replay it', {
-      host, jobId: event.id, seq: event.seq, error: applied.error,
+      host, jobId: head.id, seqs, error: applied.error,
     });
+    await ackFires(host, head.id, applied.duplicateSeqs ?? []);
     return;
   }
   if (applied.gaveUp) {
     await notifyTrigger({
-      title: `Trigger "${applied.jobName ?? event.id}" could not deliver`,
+      title: `Trigger "${applied.jobName ?? head.id}" could not deliver`,
       body: applied.error ?? 'delivery kept failing',
-      dedupKey: `trigger-delivery:${event.id}:${event.epoch ?? ''}:${event.seq}`,
+      dedupKey: `trigger-delivery:${head.id}:${head.epoch ?? ''}:${applied.seq ?? Math.min(...seqs)}`,
     });
   }
-  await ackFire(host, event.id, event.seq);
+  await ackFires(host, head.id, seqs);
+}
+
+async function ackFires(host: string, id: string, seqs: readonly number[]): Promise<void> {
+  await Promise.all(seqs.map((seq) => ackFire(host, id, seq)));
 }
 
 /** Whether this server has pushed a trigger set to that host on its live connection. */
@@ -186,20 +203,92 @@ async function pushTriggers(host: string): Promise<void> {
  * "first" after a reconnect still delivers). The same event therefore arrives
  * here two or three times within a few milliseconds.
  *
- * A fire is guarded while it is being handled: the store's (epoch, seq) mark is
- * written only AFTER delivery, so concurrent copies would all pass the dedup and
- * deliver three times. The guard is released when handling ends, so the
- * daemon's minute-later replay of a fire whose delivery failed transiently is
- * NOT swallowed (that replay is the retry). A checked event has no ack and no
- * retry, so its copies are simply dropped for a minute.
+ * Fires of one trigger go through ONE lane, one delivery at a time. Deliveries
+ * of different fires must not overlap: each one decides where to deliver from
+ * the task's sessions, and with the store lock released during delivery, seven
+ * concurrent fires all saw "no session" and started seven (2026-09-21). Whatever
+ * queues up behind a delivery is taken as one batch, and a replay (the daemon
+ * sending everything it held, after a reconnect) waits a moment first so the
+ * whole burst becomes that batch.
+ *
+ * A fire's key stays in its lane from arrival until its delivery ends: the
+ * store's (epoch, seq) mark is written only AFTER delivery, so copies arriving
+ * meanwhile would pass the dedup. It is released afterwards, so the daemon's
+ * minute-later replay of a fire whose delivery failed transiently is NOT
+ * swallowed (that replay is the retry). A checked event has no ack and no retry,
+ * so its copies are simply dropped for a minute.
  */
-const firesInFlight = new Set<string>();
+interface FireLane {
+  queue: TriggerFiredEvent[];
+  keys: Set<string>;
+  draining: boolean;
+}
+
+const lanes = new Map<string, FireLane>();
+/** Long enough for a replay burst over two sockets; a delivery takes seconds anyway. */
+export const REPLAY_SETTLE_MS = 250;
 const recentChecked = new Map<string, number>();
 const RECENT_CHECKED_TTL_MS = 60_000;
 const RECENT_CHECKED_MAX = 5_000;
 
 function fireKey(host: string, e: TriggerFiredEvent): string {
   return `${host}|${e.id}|${e.epoch ?? ''}|${e.seq}`;
+}
+
+function enqueueFire(host: string, event: TriggerFiredEvent): void {
+  const laneKey = `${host}|${event.id}`;
+  let lane = lanes.get(laneKey);
+  if (!lane) {
+    lane = { queue: [], keys: new Set(), draining: false };
+    lanes.set(laneKey, lane);
+  }
+  const key = fireKey(host, event);
+  if (lane.keys.has(key)) {
+    log.cron.debug('trigger.fired duplicate while queued or in flight (fan-out copy)', { host, jobId: event.id, seq: event.seq });
+    return;
+  }
+  lane.keys.add(key);
+  lane.queue.push(event);
+  if (!lane.draining) void drainLane(host, laneKey, lane);
+}
+
+async function drainLane(host: string, laneKey: string, lane: FireLane): Promise<void> {
+  lane.draining = true;
+  try {
+    if (lane.queue.some((e) => (e as { replay?: unknown }).replay === true)) {
+      await new Promise((resolve) => setTimeout(resolve, REPLAY_SETTLE_MS));
+    }
+    while (lane.queue.length > 0) {
+      const taken = lane.queue.splice(0);
+      for (const group of groupByEpoch(taken)) {
+        try {
+          await handleTriggerFired(host, group);
+        } catch (err) {
+          log.cron.error('trigger fire handling failed', {
+            host, jobId: group[0].id, seqs: group.map((e) => e.seq),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        } finally {
+          for (const e of group) lane.keys.delete(fireKey(host, e));
+        }
+      }
+    }
+  } finally {
+    lane.draining = false;
+    if (lane.queue.length === 0 && lanes.get(laneKey) === lane) lanes.delete(laneKey);
+  }
+}
+
+/** The store's dedup window is per epoch, so a batch never mixes two numberings. */
+function groupByEpoch(events: TriggerFiredEvent[]): TriggerFiredEvent[][] {
+  const groups = new Map<string, TriggerFiredEvent[]>();
+  for (const e of events) {
+    const k = e.epoch ?? '';
+    const group = groups.get(k);
+    if (group) group.push(e);
+    else groups.set(k, [e]);
+  }
+  return [...groups.values()];
 }
 
 function checkedSeenBefore(host: string, e: TriggerCheckedEvent): boolean {
@@ -225,17 +314,7 @@ export function handleTriggerEvent(host: string, event: TriggerEvent): void {
       if (checkedSeenBefore(host, event)) return;
       await handleTriggerChecked(host, event);
     } else if (event.type === 'trigger.fired') {
-      const key = fireKey(host, event);
-      if (firesInFlight.has(key)) {
-        log.cron.debug('trigger.fired duplicate while in flight (fan-out copy)', { host, jobId: event.id, seq: event.seq });
-        return;
-      }
-      firesInFlight.add(key);
-      try {
-        await handleTriggerFired(host, event);
-      } finally {
-        firesInFlight.delete(key);
-      }
+      enqueueFire(host, event);
     }
   })().catch((err) => {
     log.cron.error('trigger event handling failed', {

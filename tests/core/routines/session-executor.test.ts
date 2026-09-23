@@ -3,7 +3,8 @@
  *
  * The four answers it must get right, in this order:
  *   live session on the task     → send into it;
- *   only a stopped one           → send anyway (a cold --resume keeps the transcript);
+ *   only a stopped one, or one the infrastructure killed
+ *                                → send anyway (a cold --resume keeps the transcript);
  *   no resumable session, task open → start a new session ON THAT TASK;
  *   task gone or completed       → error + notify, and never a new task.
  *
@@ -37,7 +38,8 @@ function fakeDelivery(over: Partial<SessionDelivery> = {}) {
     notify: async (input) => { calls.notified.push(input); },
     ...over,
   };
-  return { delivery, calls };
+  // No real launch behind these fakes, so nothing will ever show up to wait for.
+  return { delivery, calls, launchVisibleWaitMs: 0 };
 }
 
 function job(over: Partial<CronJob> = {}): CronJob {
@@ -89,7 +91,7 @@ describe('session executor: delivery', () => {
         { claudeSessionId: 'sid-abcdef12', process_status: 'idle', title: 'PR work' },
       ] as Sessions,
     });
-    const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
     expect(result.status).toBe('ok');
     expect(result.summary).toBe('sent to session PR work [sid-abcd]');
     expect(calls.sent).toHaveLength(1);
@@ -105,7 +107,7 @@ describe('session executor: delivery', () => {
       sessionsForTask: async () => [{ claudeSessionId: 'old', process_status: 'running', archived: true }] as Sessions,
       getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
     });
-    const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
     expect(result.status).toBe('ok');
     expect(calls.sent).toEqual([]);
     expect(calls.started).toHaveLength(1);
@@ -122,7 +124,7 @@ describe('session executor: delivery', () => {
       ] as Sessions,
       getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
     });
-    const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
     expect(result).toEqual({
       status: 'ok',
       summary: 'resumed session Watch the PR [sid-stop]',
@@ -142,17 +144,67 @@ describe('session executor: delivery', () => {
         { claudeSessionId: 'idle-new', process_status: 'idle', lastActiveAt: '2026-09-14T09:00:00Z' },
       ] as Sessions,
     });
-    const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
     expect(calls.sent[0].sessionId).toBe('idle-new');
     expect(result.summary).toMatch(/^sent to session/);
   });
 
-  it("an 'error' session is terminal: the task gets a new session, as everywhere else", async () => {
+  it("an 'error' of unknown cause is terminal: the task gets a new session, as everywhere else", async () => {
     const { delivery, calls } = fakeDelivery({
       sessionsForTask: async () => [{ claudeSessionId: 'crashed', process_status: 'error' }] as Sessions,
       getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
     });
-    await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
+    await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
+    expect(calls.sent).toEqual([]);
+    expect(calls.started).toHaveLength(1);
+  });
+
+  // A host outage is what piles fires up, and the replay arrives while the session
+  // the same outage killed still reads 'error'. Replacing it threw away a
+  // six-week conversation and, with seven fires in flight, started seven.
+  it('resumes a session the INFRASTRUCTURE killed instead of replacing it', async () => {
+    const { delivery, calls } = fakeDelivery({
+      sessionsForTask: async () => [
+        { claudeSessionId: 'sid-killed01', process_status: 'error', status_reason: 'remote_unreachable', title: 'Slack sweep' },
+      ] as Sessions,
+      getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
+    });
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
+    expect(result.summary).toBe('resumed session Slack sweep [sid-kill]');
+    expect(calls.sent.map((c) => c.sessionId)).toEqual(['sid-killed01']);
+    expect(calls.started).toEqual([]);
+  });
+
+  // A send to a session whose host is still down would only queue behind a
+  // resume that cannot happen; the fire proves only ITS OWN host is up.
+  it('does not resume an infrastructure-killed session on a host other than the fire\'s', async () => {
+    const { delivery, calls } = fakeDelivery({
+      sessionsForTask: async () => [
+        { claudeSessionId: 'elsewhere', process_status: 'error', status_reason: 'remote_unreachable', host: 'old-box' },
+      ] as Sessions,
+      getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
+    });
+    await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
+    expect(calls.sent).toEqual([]);
+    expect(calls.started).toHaveLength(1);
+    // A plain scheduled run has no fire, so no host is known to be up either.
+    const scheduled = fakeDelivery({
+      sessionsForTask: async () => [{ claudeSessionId: 'killed', process_status: 'error', status_reason: 'remote_unreachable' }] as Sessions,
+      getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
+    });
+    await createSessionExecutor({ delivery: scheduled.delivery, launchVisibleWaitMs: 0 }).run(job({ check: undefined }), REF, 'read them');
+    expect(scheduled.calls.started).toHaveLength(1);
+  });
+
+  it('an error the WORK caused stays terminal, whatever else the record says', async () => {
+    const { delivery, calls } = fakeDelivery({
+      sessionsForTask: async () => [
+        { claudeSessionId: 'refused', process_status: 'error', status_reason: 'remote_unreachable', errorKind: 'terminal' },
+        { claudeSessionId: 'user-ended', process_status: 'error', status_reason: 'user_terminated' },
+      ] as Sessions,
+      getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
+    });
+    await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
     expect(calls.sent).toEqual([]);
     expect(calls.started).toHaveLength(1);
   });
@@ -161,12 +213,12 @@ describe('session executor: delivery', () => {
     const { delivery, calls } = fakeDelivery({
       getTask: async () => ({ id: 'task-1', cwd: '/repo/checkout', phase: 'TODO' }),
     });
-    const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
     expect(result).toEqual({
       status: 'ok',
       summary: 'restarted session on task task-1',
-      // No session id: this launch has not linked one yet, and the audit says so
-      // rather than guessing. The text is still recorded.
+      // No session id: the launch reported none and no record showed up, so the
+      // audit says nothing rather than guessing. The text is still recorded.
       delivered: { text: FIRE },
     });
     expect(calls.started).toEqual([{
@@ -179,14 +231,14 @@ describe('session executor: delivery', () => {
   // and nothing renamed it afterwards (observed on prod).
   it('names a restarted session after the trigger, never after the envelope', async () => {
     const { delivery, calls } = fakeDelivery({ getTask: async () => ({ id: 'task-1', phase: 'TODO' }) });
-    await createSessionExecutor({ delivery }).run(job({ name: 'Nightly deploy watch' }), REF, FIRE);
+    await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job({ name: 'Nightly deploy watch' }), REF, FIRE);
     expect(calls.started[0].title).toBe('Trigger: Nightly deploy watch');
     expect(calls.started[0].title).not.toContain('walnut-message');
   });
 
   it('falls back to the check cwd, then to the Walnut home', async () => {
     const { delivery, calls } = fakeDelivery({ getTask: async () => ({ id: 'task-1', phase: 'TODO' }) });
-    const exec = createSessionExecutor({ delivery });
+    const exec = createSessionExecutor({ delivery, launchVisibleWaitMs: 0 });
     await exec.run(job(), REF, FIRE);
     expect(calls.started[0].cwd).toBe('/repo');
     await exec.run(job({ check: { run: 'x', host: '__local__' } }), REF, FIRE);
@@ -208,7 +260,7 @@ describe('session executor: delivery', () => {
 
   it('a missing task is an error plus a notification, never a new task', async () => {
     const { delivery, calls } = fakeDelivery({ getTask: async () => null });
-    const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
     expect(result.status).toBe('error');
     expect(result.error).toContain('task task-1 is gone');
     expect(result.error).toContain('will not resurrect it');
@@ -218,7 +270,7 @@ describe('session executor: delivery', () => {
 
   it('a COMPLETE task is the same refusal (the human closed it)', async () => {
     const { delivery, calls } = fakeDelivery({ getTask: async () => ({ id: 'task-1', phase: 'COMPLETE' }) });
-    const result = await createSessionExecutor({ delivery }).run(job(), REF, FIRE);
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
     expect(result.status).toBe('error');
     expect(result.error).toContain('is complete');
     expect(calls.started).toEqual([]);
@@ -229,10 +281,95 @@ describe('session executor: delivery', () => {
     const { delivery, calls } = fakeDelivery({
       sessionsForTask: async () => [{ claudeSessionId: 'sid-1', process_status: 'running' }] as Sessions,
     });
-    await createSessionExecutor({ delivery }).run(job({ check: undefined }), REF, 'read them');
+    await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job({ check: undefined }), REF, 'read them');
     const parsed = parseWalnutMessage(calls.sent[0].message)!;
     expect(parsed.kind).toBe('trigger');
     expect(parsed.attrs.note).toBe('scheduled');
     expect(parsed.body).toBe('read them');
+  });
+});
+
+describe('session executor: one delivery per task at a time', () => {
+  it('reports the id the launch minted, never the slot of the session it replaced', async () => {
+    const { delivery } = fakeDelivery({
+      getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
+      startSession: async () => ({ sessionId: 'minted-1' }),
+    });
+    const result = await createSessionExecutor({ delivery, launchVisibleWaitMs: 0 }).run(job(), REF, FIRE);
+    expect(result.delivered).toEqual({ sessionId: 'minted-1', text: FIRE });
+  });
+
+  // Two deliveries to one task that overlap both see "no session" and each start
+  // one; two triggers on one task firing at a reconnect is how that happens.
+  it('a delivery queued behind a launch sends into the session that launch started', async () => {
+    let launched = false;
+    const { delivery, calls } = fakeDelivery({
+      getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
+      sessionsForTask: async () => (launched
+        ? [{ claudeSessionId: 'new-1', process_status: 'idle', title: 'Trigger: PR comments' }]
+        : []) as Sessions,
+      // An engine that issues its own ids: the record appears a moment AFTER the
+      // launch returns, and the executor must wait for it.
+      startSession: async (params) => {
+        calls.started.push(params);
+        setTimeout(() => { launched = true; }, 30);
+      },
+    });
+    const exec = createSessionExecutor({ delivery, launchVisibleWaitMs: 2_000 });
+    const [first, second] = await Promise.all([
+      exec.run(job(), REF, FIRE),
+      exec.run(job({ id: 'job-2', name: 'CI status' }), REF, FIRE),
+    ]);
+    expect(calls.started).toHaveLength(1);
+    expect(calls.sent.map((c) => c.sessionId)).toEqual(['new-1']);
+    expect(first.delivered?.sessionId).toBe('new-1');
+    expect(second.summary).toBe('sent to session Trigger: PR comments [new-1]');
+  });
+
+  it('never makes one task wait on another', async () => {
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+    const order: string[] = [];
+    const { delivery } = fakeDelivery({
+      getTask: async (taskId) => ({ id: taskId, cwd: '/repo', phase: 'IN_PROGRESS' }),
+      startSession: async (params) => {
+        if (params.taskId === 'task-a') await gateA;
+        order.push(params.taskId);
+        return { sessionId: `sid-${params.taskId}` };
+      },
+    });
+    const exec = createSessionExecutor({ delivery, launchVisibleWaitMs: 0 });
+    const refFor = (target: string) => ({ type: 'session', config: { target, prompt: 'p', instructions: 'p' } });
+    const a = exec.run(job(), refFor('task-a'), FIRE);
+    await exec.run(job(), refFor('task-b'), FIRE);
+    expect(order).toEqual(['task-b']);
+    releaseA();
+    await a;
+    expect(order).toEqual(['task-b', 'task-a']);
+  });
+
+  // A delivery that ran after its caller had given up would deliver twice (the
+  // daemon replays the unacked fire), so a waiter gives up BEFORE doing anything.
+  it('a delivery stuck behind another gives up without delivering, and the task frees up', async () => {
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((resolve) => { releaseHolder = resolve; });
+    let sends = 0;
+    const { delivery } = fakeDelivery({
+      sessionsForTask: async () => [{ claudeSessionId: 'sid-1', process_status: 'idle' }] as Sessions,
+      sendToSession: async () => {
+        sends += 1;
+        if (sends === 1) await holderGate;
+      },
+    });
+    const exec = createSessionExecutor({ delivery, launchVisibleWaitMs: 0, taskWaitMaxMs: 50, taskHoldMaxMs: 200 });
+    const holder = exec.run(job(), REF, FIRE);
+    await expect(exec.run(job(), REF, FIRE)).rejects.toThrow(/still running/);
+    expect(sends).toBe(1);
+    // The hold lease ends a stuck holder's claim, so the task is not blocked forever.
+    await new Promise((r) => setTimeout(r, 250));
+    await expect(exec.run(job(), REF, FIRE)).resolves.toMatchObject({ status: 'ok' });
+    expect(sends).toBe(2);
+    releaseHolder();
+    await holder;
   });
 });
