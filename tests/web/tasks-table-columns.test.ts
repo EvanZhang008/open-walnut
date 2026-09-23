@@ -63,12 +63,12 @@ describe('toggleColumn', () => {
 });
 
 describe('visibleColumns', () => {
-  it('the default choice is Title · Priority · Due · Updated (Priority only with the flag on)', () => {
+  it('the default choice is Title · Priority · Updated (Priority only with the flag on)', () => {
     const vis = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: true, showPriority: true });
-    expect(vis.map((c) => c.label)).toEqual(['Priority', 'Due', 'Updated']);
-    // For most people (priority off) the table reads Title · Due · Updated.
+    expect(vis.map((c) => c.label)).toEqual(['Priority', 'Updated']);
+    // For most people (priority off) the table reads Title · Updated.
     const noPri = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: true, showPriority: false });
-    expect(noPri.map((c) => c.id)).toEqual(['due', 'updated']);
+    expect(noPri.map((c) => c.id)).toEqual(['updated']);
   });
 
   it('Project is only drawn in the All Tasks view', () => {
@@ -122,9 +122,9 @@ describe('gridTemplate', () => {
     expect(gridTemplate(vis)).toBe('minmax(280px, 1fr) 120px 90px 170px 140px');
     const noPri = visibleColumns(legacy, { isAll: false, showPriority: false });
     expect(gridTemplate(noPri)).toBe('minmax(280px, 1fr) 90px 170px');
-    // And the shipped default, priority off: Title · Due · Updated.
+    // And the shipped default, priority off: Title · Updated.
     const def = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: true, showPriority: false });
-    expect(gridTemplate(def)).toBe('minmax(280px, 1fr) 90px 90px');
+    expect(gridTemplate(def)).toBe('minmax(280px, 1fr) 90px');
   });
 });
 

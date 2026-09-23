@@ -41,12 +41,13 @@ export const TP_COLUMNS: readonly TpColumnDef[] = [
 const COLUMN_IDS = new Set<string>(TP_COLUMNS.map((c) => c.id));
 
 /**
- * The shipped layout: Title · Priority · Due · Updated (2026-09-23, the user's
- * pick after a day with the chooser: "this should be default"). Priority is listed
- * but only drawn when `ui.show_priority` is on, so for most people this reads as
- * Title · Due · Updated. Session and Project are one click away in the chooser.
+ * The shipped layout: Title · Priority · Updated (2026-09-23, the user's pick after
+ * a day with the chooser: "this should be default"). Priority is listed but only
+ * drawn when `ui.show_priority` is on, so for most people this reads as Title ·
+ * Updated: the list is a "what moved recently" view, and Due, Session and Project
+ * are one click away in the chooser.
  */
-export const TP_DEFAULT_COLUMNS: readonly TpColumnId[] = ['priority', 'due', 'updated'];
+export const TP_DEFAULT_COLUMNS: readonly TpColumnId[] = ['priority', 'updated'];
 
 export const LS_TASKS_PAGE_COLUMNS = 'walnut-tasks-page-columns';
 
