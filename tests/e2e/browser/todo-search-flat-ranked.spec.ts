@@ -10,8 +10,8 @@
  *   - server hits whose snippet shows the query append after them; the rest
  *     (semantic look-alikes) fold into "Related (N)";
  *   - with no literal or evidenced hit, the loose hits are the answer and show directly;
- *   - no Pinned tiers or Projects heading in the All view; a pinned hit carries its
- *     tier pill, every row a truncated project label;
+ *   - no Pinned tiers or Projects heading in the All view; under each title, a pinned
+ *     hit carries its tier pill and every row its project label;
  *   - the search box keeps the caret through all of it, including a task refetch
  *     pushed by the server mid-typing.
  */
@@ -106,7 +106,7 @@ test('literal hits lead and survive the server pass; loose hits fold into Relate
   await expect(page.locator('#home-task-navigation .todo-search-count')).toHaveText('4');
   expect(await searchFocused(page)).toBe(true);
 
-  // Flat: no tier regions, no Projects heading; the pin is a pill, the project a short label.
+  // Flat: no tier regions, no Projects heading; the pin is a pill, the project a label.
   await expect(page.locator('#home-task-navigation .todo-pinned-section')).toHaveCount(0);
   await expect(page.locator('#home-task-navigation .todo-tasks-header')).toHaveCount(0);
   const pinnedRow = page.locator(`.todo-search-results .todo-panel-item[data-task-id="${literalPinned}"]`);
@@ -114,11 +114,20 @@ test('literal hits lead and survive the server pass; loose hits fold into Relate
   await expect(page.locator(`.todo-search-results .todo-panel-item[data-task-id="${literalPlain}"] .todo-search-tier-pill`)).toHaveCount(0);
   const label = pinnedRow.locator('.todo-search-context-pill');
   await expect(label).toHaveAttribute('title', PROJECT);
-  const box = await label.boundingBox();
-  expect(box!.width).toBeLessThanOrEqual(72.5);
-  // One line: the label sits on the title's line, not under it.
-  const titleBox = await pinnedRow.locator('.todo-item-title').boundingBox();
-  expect(Math.abs((box!.y + box!.height / 2) - (titleBox!.y + titleBox!.height / 2))).toBeLessThan(4);
+  // Second line: the title keeps its whole line, and the tier pill + project label sit
+  // under it, starting where the title text starts, inside the row.
+  await expect(pinnedRow.locator('.todo-item-title-row .todo-search-tier-pill, .todo-item-title-row .todo-search-context-pill')).toHaveCount(0);
+  const [titleBox, pillBox, box, rowBox] = await Promise.all([
+    pinnedRow.locator('.todo-item-title').boundingBox(),
+    pinnedRow.locator('.todo-search-tier-pill').boundingBox(),
+    label.boundingBox(),
+    pinnedRow.boundingBox(),
+  ]);
+  expect(pillBox!.y).toBeGreaterThanOrEqual(titleBox!.y + titleBox!.height - 1);
+  expect(Math.abs(pillBox!.x - (titleBox!.x + 2))).toBeLessThan(2.5); // title has 2px inner padding
+  expect(Math.abs((box!.y + box!.height / 2) - (pillBox!.y + pillBox!.height / 2))).toBeLessThan(2);
+  expect(box!.x).toBeGreaterThan(pillBox!.x + pillBox!.width);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
 
   // Related opens in place, after the strong rows, and folds again.
   await related.click();
@@ -201,4 +210,57 @@ test('focus taken by code while the user types comes back; a click or Tab away d
   await page.keyboard.press('Tab');
   await page.waitForTimeout(150);
   expect(await searchFocused(page)).toBe(false);
+});
+
+test('a completed task is found by its own title: the three latest inline, the rest behind Completed', async ({ page, request }) => {
+  // User report 2026-09-23: the query was a done task's exact title, and the list hid it
+  // (open-only by default) with nothing on screen saying so. A broad word matches dozens
+  // of done titles, though, so only the three most recently completed show inline.
+  const token = `dn${Date.now().toString(36).slice(-5)}`;
+  const openLiteral = await createTask(request, `${token} open plan`);
+  const olderDone = [];
+  for (let i = 0; i < 3; i++) olderDone.push(await createTask(request, `${token} old note ${i}`));
+  const doneLiteral = await createTask(request, `${token} upgrade across the fleet`);
+  const serverOpen = await createTask(request, `Fleet audit ${Date.now()}`);
+  const serverDone = await createTask(request, `Fleet retro ${Date.now()}`);
+  const looseDone = await createTask(request, `Unrelated chore ${Date.now()}`);
+  // Completion order sets recency: olderDone[0] is the oldest, doneLiteral the newest.
+  for (const id of [...olderDone, doneLiteral, serverDone, looseDone]) {
+    expect((await request.patch(`/api/tasks/${id}`, { data: { phase: 'COMPLETE' } })).ok()).toBe(true);
+  }
+
+  await isolateUiPrefs(page);
+  const releaseServer = await routeSearch(page, {
+    [token]: [
+      { taskId: looseDone, score: 0.9, snippet: 'Unrelated chore' }, // no evidence: stays out
+      { taskId: doneLiteral, score: 0.8 },
+      { taskId: serverDone, score: 0.6, snippet: `...the ${token} retro notes...` },
+      { taskId: serverOpen, score: 0.5, snippet: `...audit before ${token}...` },
+    ],
+  }, true);
+  await page.goto('/');
+  await expect(page.locator('#home-task-navigation .todo-panel')).toBeVisible();
+  await page.locator(SEARCH).click();
+  await page.keyboard.type(token, { delay: 40 });
+
+  // Quick lane: the open title hit, then the newest three completed ones; the oldest waits.
+  const inline = [openLiteral, doneLiteral, olderDone[2], olderDone[1]];
+  await expect.poll(() => rowIds(page)).toEqual(inline);
+  const doneRow = page.locator(`#home-task-navigation .todo-search-results .todo-panel-item[data-task-id="${doneLiteral}"]`);
+  await expect(doneRow.locator('.task-phase-icon-btn')).toHaveAttribute('aria-label', 'Reopen (mark To Do)');
+  const completed = page.locator('#home-task-navigation .todo-search-completed-toggle');
+  await expect(completed).toHaveText(/Completed \(1\)/);
+  releaseServer();
+
+  // Server lane: the open server hit appends; the completed one with evidence joins the
+  // fold; the loose completed hit shows nowhere; the literal rows did not move.
+  await expect.poll(() => rowIds(page), { timeout: 10_000 }).toEqual([...inline, serverOpen]);
+  await expect(completed).toHaveText(/Completed \(2\)/);
+  await expect(page.locator('#home-task-navigation .todo-search-related-toggle')).toHaveCount(0);
+  await expect(page.locator('#home-task-navigation .todo-search-count')).toHaveText('5');
+
+  await completed.click();
+  await expect.poll(() => rowIds(page)).toEqual([...inline, serverOpen, olderDone[0], serverDone]);
+  await expect(page.locator('#home-task-navigation .todo-search-count')).toHaveText('7');
+  expect(await rowIds(page)).not.toContain(looseDone);
 });

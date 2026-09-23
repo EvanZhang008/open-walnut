@@ -50,19 +50,73 @@ export function serverRowShowsQuery(
   return terms.every((term) => text.includes(term));
 }
 
+export interface SearchMatchFacts<T> {
+  isOpen(task: T): boolean;
+  isLiteral(task: T): boolean;
+  /** Literal hit, exact reference, or a server row that shows the query. */
+  showsQuery(task: T): boolean;
+  /** Where the query starts in the title; Infinity for a project or tag hit. */
+  titlePosition(task: T): number;
+  completedAt(task: T): string | undefined;
+}
+
 /**
- * Split an ordered match list into the rows shown up front and the folded
- * "Related" rows, keeping order inside each part. When nothing strong is left
- * the related rows ARE the answer, so they are shown directly.
+ * Completed title hits shown inline: a finished task must be findable by its own
+ * title, but a broad word matches dozens of them (90 done vs 12 open for one
+ * word in real data), and a wall of history would push live work out of view.
  */
-export function splitRelatedMatches<T extends { id: string }>(
-  ordered: readonly T[],
-  weakIds: ReadonlySet<string>,
-): { primary: T[]; related: T[] } {
-  if (weakIds.size === 0) return { primary: [...ordered], related: [] };
-  const primary: T[] = [];
+export const INLINE_COMPLETED_HITS = 3;
+
+/**
+ * Arrange a search's matches for display. `matches` arrives quick lane first,
+ * then the server lane, each in rank order.
+ *   primary:   open literal hits; then up to three completed literal hits, the
+ *              query nearest the title's start first (a long pasted prompt that
+ *              merely contains the word ranks last), most recently completed next;
+ *              then open server hits that show the query.
+ *              Literal rows are all known before the server answers, so they
+ *              never move when it does.
+ *   completed: the other completed hits that show the query, behind "Completed (N)".
+ *   related:   open hits that don't show it, behind "Related (N)".
+ *   looseDone: completed hits that don't show it; only the Done chip brings them.
+ * With `includeAllDone` (the Done chip) everything that shows the query stays in
+ * pure rank order and every loose hit goes to related. When primary is empty the
+ * first non-empty fold is the answer, so it shows directly.
+ */
+export function arrangeSearchResults<T>(
+  matches: readonly T[],
+  facts: SearchMatchFacts<T>,
+  includeAllDone: boolean,
+): { primary: T[]; completed: T[]; related: T[]; looseDone: number } {
+  let looseDone = 0;
+  const strong: T[] = [];
   const related: T[] = [];
-  for (const task of ordered) (weakIds.has(task.id) ? related : primary).push(task);
-  if (primary.length === 0) return { primary: related, related: [] };
-  return { primary, related };
+  const literalOpen: T[] = [];
+  const literalDone: T[] = [];
+  const serverOpen: T[] = [];
+  const serverDone: T[] = [];
+  for (const task of matches) {
+    const open = facts.isOpen(task);
+    if (!facts.showsQuery(task)) {
+      if (!open) looseDone++;
+      if (open || includeAllDone) related.push(task);
+      continue;
+    }
+    if (includeAllDone) strong.push(task);
+    else if (facts.isLiteral(task)) (open ? literalOpen : literalDone).push(task);
+    else (open ? serverOpen : serverDone).push(task);
+  }
+  let primary = strong;
+  let completed: T[] = [];
+  if (!includeAllDone) {
+    literalDone.sort((a, b) => (facts.titlePosition(a) - facts.titlePosition(b))
+      || (facts.completedAt(b) ?? '').localeCompare(facts.completedAt(a) ?? ''));
+    primary = [...literalOpen, ...literalDone.slice(0, INLINE_COMPLETED_HITS), ...serverOpen];
+    completed = [...literalDone.slice(INLINE_COMPLETED_HITS), ...serverDone];
+  }
+  if (primary.length === 0) {
+    if (completed.length > 0) return { primary: completed, completed: [], related, looseDone };
+    return { primary: related, completed: [], related: [], looseDone };
+  }
+  return { primary, completed, related, looseDone };
 }

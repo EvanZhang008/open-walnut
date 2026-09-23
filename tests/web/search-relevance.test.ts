@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  arrangeSearchResults,
+  INLINE_COMPLETED_HITS,
   queryTerms,
   serverRowShowsQuery,
-  splitRelatedMatches,
   taskMatchesLiterally,
 } from '../../web/src/components/tasks/search-relevance';
 
@@ -51,24 +52,66 @@ describe('serverRowShowsQuery', () => {
   });
 });
 
-describe('splitRelatedMatches', () => {
-  it('keeps order inside both parts', () => {
-    const list = ['lit1', 'lit2', 'strong', 'weak1', 'weak2'].map(row);
-    const { primary, related } = splitRelatedMatches(list, new Set(['weak2', 'weak1']));
-    expect(primary.map((t) => t.id)).toEqual(['lit1', 'lit2', 'strong']);
-    expect(related.map((t) => t.id)).toEqual(['weak1', 'weak2']);
+describe('arrangeSearchResults', () => {
+  // A row id reads: l = literal (quick lane) / s = server only; o = open / d = done;
+  // a trailing x = no evidence of the query; digits after "d" = completion day; a "p"
+  // = the query sits deep in a long title.
+  const facts = {
+    isOpen: (t: { id: string }) => t.id[1] === 'o',
+    isLiteral: (t: { id: string }) => t.id.startsWith('l'),
+    showsQuery: (t: { id: string }) => !t.id.endsWith('x'),
+    titlePosition: (t: { id: string }) => (t.id.includes('p') ? 90 : 0),
+    completedAt: (t: { id: string }) => (t.id[1] === 'd' ? `2026-09-${t.id.slice(2, 4)}` : undefined),
+  };
+  const ids = (list: { id: string }[]) => list.map((t) => t.id);
+  const ranked = ['ld05', 'lo1', 'sd07', 'so2', 'sd08x', 'so3x', 'lo4'].map(row);
+
+  it('shows open literal hits, then completed title hits, then open server hits; folds the rest', () => {
+    const { primary, completed, related, looseDone } = arrangeSearchResults(ranked, facts, false);
+    expect(ids(primary)).toEqual(['lo1', 'lo4', 'ld05', 'so2']);
+    expect(ids(completed)).toEqual(['sd07']);
+    expect(ids(related)).toEqual(['so3x']);
+    expect(looseDone).toBe(1);
   });
 
-  it('shows the weak hits directly when nothing strong is left', () => {
-    const { primary, related } = splitRelatedMatches(['w1', 'w2'].map(row), new Set(['w1', 'w2']));
-    expect(primary.map((t) => t.id)).toEqual(['w1', 'w2']);
-    expect(related).toEqual([]);
+  it('keeps the most recently completed title hits inline and folds the older ones', () => {
+    const many = ['lo1', 'ld01', 'ld09', 'ld03', 'ld12', 'ld07'].map(row);
+    const { primary, completed } = arrangeSearchResults(many, facts, false);
+    expect(INLINE_COMPLETED_HITS).toBe(3);
+    expect(ids(primary)).toEqual(['lo1', 'ld12', 'ld09', 'ld07']);
+    expect(ids(completed)).toEqual(['ld03', 'ld01']);
   });
 
-  it('is a copy when nothing is weak', () => {
-    const list = [row('a')];
-    const { primary } = splitRelatedMatches(list, new Set());
-    expect(primary).toEqual(list);
-    expect(primary).not.toBe(list);
+  it('ranks a completed title that starts with the query above a long one that merely contains it', () => {
+    // Real data: dozens of auto-completed imports whose title is a pasted prompt.
+    const noisy = ['ld20p', 'ld21p', 'ld22p', 'ld02', 'ld01'].map(row);
+    const { primary, completed } = arrangeSearchResults(noisy, facts, false);
+    expect(ids(primary)).toEqual(['ld02', 'ld01', 'ld22p']);
+    expect(ids(completed)).toEqual(['ld21p', 'ld20p']);
+  });
+
+  it('never moves a literal row when server hits arrive', () => {
+    const quick = ids(arrangeSearchResults(ranked.filter((t) => t.id.startsWith('l')), facts, false).primary);
+    const settled = ids(arrangeSearchResults(ranked, facts, false).primary);
+    expect(quick).toEqual(['lo1', 'lo4', 'ld05']);
+    expect(settled.slice(0, quick.length)).toEqual(quick);
+  });
+
+  it('with the Done chip on, keeps pure rank order and sends every loose hit to related', () => {
+    const { primary, completed, related, looseDone } = arrangeSearchResults(ranked, facts, true);
+    expect(ids(primary)).toEqual(['ld05', 'lo1', 'sd07', 'so2', 'lo4']);
+    expect(completed).toEqual([]);
+    expect(ids(related)).toEqual(['sd08x', 'so3x']);
+    expect(looseDone).toBe(1);
+  });
+
+  it('shows the first non-empty fold directly when nothing else is left', () => {
+    const onlyDone = arrangeSearchResults(['sd07', 'so3x'].map(row), facts, false);
+    expect(ids(onlyDone.primary)).toEqual(['sd07']);
+    expect(ids(onlyDone.related)).toEqual(['so3x']);
+    const onlyLoose = arrangeSearchResults(['so3x', 'so5x', 'sd08x'].map(row), facts, false);
+    expect(ids(onlyLoose.primary)).toEqual(['so3x', 'so5x']);
+    expect(onlyLoose.related).toEqual([]);
+    expect(onlyLoose.looseDone).toBe(1);
   });
 });

@@ -58,7 +58,7 @@ import {
   mapServerTaskSearchResults,
   taskReferenceMatchField,
 } from './search-results';
-import { splitRelatedMatches, taskMatchesLiterally } from './search-relevance';
+import { arrangeSearchResults, taskMatchesLiterally } from './search-relevance';
 import '@/styles/todo-search.css';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
 import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
@@ -1188,16 +1188,6 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           {isDone && task.completed_at && (
             <span className="task-completed-time">{timeAgo(task.completed_at)}</span>
           )}
-          {searchTierLabel && pinnedTier && (
-            <span className={`todo-search-tier-pill todo-search-tier-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`} title={`Pinned in ${searchTierLabel}`}>
-              {searchTierLabel}
-            </span>
-          )}
-          {searchContext && (
-            <span className="todo-search-context-pill" title={searchContext}>
-              {searchContext}
-            </span>
-          )}
           {/* One-click ▶ Start — hover-revealed, before the kebab */}
           <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />
           {/* Kebab menu — all actions consolidated */}
@@ -1228,6 +1218,21 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             onDelete={onDelete}
           />
         </div>
+        {/* Where a search / flat-list hit lives, on its own line so the title keeps the row */}
+        {(searchContext || (searchTierLabel && pinnedTier)) && (
+          <div className="todo-search-meta-row">
+            {searchTierLabel && pinnedTier && (
+              <span className={`todo-search-tier-pill todo-search-tier-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`} title={`Pinned in ${searchTierLabel}`}>
+                {searchTierLabel}
+              </span>
+            )}
+            {searchContext && (
+              <span className="todo-search-context-pill" title={searchContext}>
+                {searchContext}
+              </span>
+            )}
+          </div>
+        )}
         {/* Filter override reason — shown below title when task is outside current filters */}
         {filterOverrideReason && (
           <div className="task-filter-override-row">
@@ -5199,12 +5204,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     ];
   }, [tasks, filterResult.list, isSearchMode, deferredSearchQuery, searchResults, taskQueryState, matchesCanonicalQuery]);
 
-  // Completed-results toggle (search only): the ranked list shows OPEN tasks by
-  // default — a broad query used to bury live work under strikethrough history.
-  // The "✓ Done N" chip in the section-tab strip reveals them, and revealed rows
-  // interleave in PURE relevance order — appending them below every open row
-  // forced a scroll to the bottom (user ruling 2026-08-31). The reveal is
-  // per-search: it resets when search closes, never persists.
+  // Completed results (search only): a finished task must be findable by its own
+  // title (2026-09-23: a done task titled with the exact query was hidden, with
+  // nothing on screen saying so), but a broad query used to bury live work under
+  // strikethrough history. So up to three completed title hits show inline after
+  // the open ones, other completed hits that show the query wait behind
+  // "Completed (N)", and loose ones behind the "✓ Done N" chip, which reveals
+  // everything in PURE relevance order (user ruling 2026-08-31). Both reveals are
+  // per-search. See arrangeSearchResults in search-relevance.ts.
   // Tasks completed THIS session keep their grace slot in the open list so
   // checking a box in search results doesn't rip the row out from under the
   // cursor (same recentlyCompleted grace the plain list uses).
@@ -5212,28 +5219,35 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => searchMatches.filter((t) => t.status !== 'done' || recentlyCompletedRef.current.has(t.id)),
     [searchMatches],
   );
-  const searchDoneCount = searchMatches.length - searchOpenMatches.length;
   const [showDoneResults, setShowDoneResults] = useState(false);
   useEffect(() => {
     if (!isSearchMode) setShowDoneResults(false);
   }, [isSearchMode]);
 
   // Server hits that don't show the query in their own text fold into one
-  // "Related (N)" row; a quick-lane hit never folds. See search-relevance.ts.
+  // "Related (N)" row; a quick-lane hit never folds.
   const [showRelatedResults, setShowRelatedResults] = useState(false);
-  useEffect(() => { setShowRelatedResults(false); }, [deferredSearchQuery]);
+  const [showCompletedResults, setShowCompletedResults] = useState(false);
+  useEffect(() => { setShowRelatedResults(false); setShowCompletedResults(false); }, [deferredSearchQuery]);
   const searchSplit = useMemo(() => {
-    const pool = showDoneResults ? searchMatches : searchOpenMatches;
-    if (!isSearchMode || !searchResults) return { primary: pool, related: [] as Task[] };
+    if (!isSearchMode) return { primary: searchOpenMatches, completed: [] as Task[], related: [] as Task[], looseDone: 0 };
     const lowerQuery = deferredSearchQuery.trim().toLowerCase();
-    const byId = new Map(pool.map((task) => [task.id, task]));
-    const weak = new Set<string>();
-    for (const result of searchResults) {
-      const task = byId.get(result.taskId);
-      if (task && !result.showsQuery && !taskMatchesLiterally(task, lowerQuery)) weak.add(task.id);
-    }
-    return splitRelatedMatches(pool, weak);
+    const openIds = new Set(searchOpenMatches.map((task) => task.id));
+    const evidenced = new Set(searchResults?.filter((result) => result.showsQuery).map((result) => result.taskId));
+    const isLiteral = (task: Task) => taskMatchesLiterally(task, lowerQuery);
+    return arrangeSearchResults(searchMatches, {
+      isOpen: (task) => openIds.has(task.id),
+      isLiteral,
+      // Before the server answers, every match is a literal hit or an exact reference.
+      showsQuery: (task) => !searchResults || isLiteral(task) || evidenced.has(task.id),
+      titlePosition: (task) => {
+        const at = task.title.toLowerCase().indexOf(lowerQuery);
+        return at < 0 ? Infinity : at;
+      },
+      completedAt: (task) => task.completed_at,
+    }, showDoneResults);
   }, [searchOpenMatches, searchMatches, showDoneResults, isSearchMode, searchResults, deferredSearchQuery]);
+  const searchDoneCount = searchSplit.looseDone;
 
   // Counts and cross-section visibility use the complete match set, but the main
   // list mounts a bounded number of rows so neither search phase can stall typing.
@@ -5241,15 +5255,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => searchSplit.primary.slice(0, 40),
     [searchSplit],
   );
+  const searchCompletedRows = useMemo(
+    () => (showCompletedResults ? searchSplit.completed.slice(0, 40) : []),
+    [searchSplit, showCompletedResults],
+  );
   const searchRelatedRows = useMemo(
     () => (showRelatedResults ? searchSplit.related.slice(0, 40) : []),
     [searchSplit, showRelatedResults],
   );
 
   // Count of search results (for display) — counts what the list SHOWS; the
-  // Done chip and the Related row carry the hidden remainder.
+  // Done chip and the Completed / Related rows carry the hidden remainder.
   const searchResultCount = isSearchMode
-    ? searchSplit.primary.length + (showRelatedResults ? searchSplit.related.length : 0)
+    ? searchSplit.primary.length
+      + (showCompletedResults ? searchSplit.completed.length : 0)
+      + (showRelatedResults ? searchSplit.related.length : 0)
     : null;
 
   // Pinned membership and ordering stay based on the complete tier arrays. Filters only
@@ -7875,22 +7895,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   );
                 });
               };
-              const relatedCount = searchSplit.related.length;
+              const renderFold = (kind: 'completed' | 'related', label: string, count: number, expanded: boolean, toggle: () => void, what: string) => count > 0 && (
+                <button
+                  type="button"
+                  className={`todo-search-fold-toggle todo-search-${kind}-toggle${expanded ? ' expanded' : ''}`}
+                  aria-expanded={expanded}
+                  title={`${expanded ? 'Hide' : 'Show'} ${what}`}
+                  onClick={toggle}
+                >
+                  <span>{label} ({count})</span>
+                  <span className="todo-search-fold-chevron" aria-hidden="true">{'\u203A'}</span>
+                </button>
+              );
               return (
                 <>
                   {renderSearchRows(searchFiltered)}
-                  {relatedCount > 0 && (
-                    <button
-                      type="button"
-                      className={`todo-search-related-toggle${showRelatedResults ? ' expanded' : ''}`}
-                      aria-expanded={showRelatedResults}
-                      title={showRelatedResults ? 'Hide loosely related results' : 'Show loosely related results'}
-                      onClick={() => setShowRelatedResults((v) => !v)}
-                    >
-                      <span>Related ({relatedCount})</span>
-                      <span className="todo-search-related-chevron" aria-hidden="true">{'\u203A'}</span>
-                    </button>
-                  )}
+                  {renderFold('completed', 'Completed', searchSplit.completed.length, showCompletedResults, () => setShowCompletedResults((v) => !v), 'more completed tasks that match')}
+                  {searchCompletedRows.length > 0 && renderSearchRows(searchCompletedRows)}
+                  {renderFold('related', 'Related', searchSplit.related.length, showRelatedResults, () => setShowRelatedResults((v) => !v), 'loosely related results')}
                   {searchRelatedRows.length > 0 && renderSearchRows(searchRelatedRows)}
                 </>
               );

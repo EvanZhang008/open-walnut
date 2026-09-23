@@ -33,17 +33,17 @@ describe('TodoPanel layout: task controls preserve title space', () => {
     expect(kebabIdx).toBeGreaterThan(titleRowIdx);
   });
 
-  it('keeps a search row on ONE line: phase, title, tier pill, project label, then the kebab', () => {
+  it('puts a search row\'s tier pill and project label on a second line, under the title', () => {
     const titleRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-title-row"');
-    const phaseStatusIdx = TODO_PANEL_SRC.indexOf('className={`task-phase-icon-btn', titleRowIdx);
+    const kebabIdx = TODO_PANEL_SRC.indexOf('<TaskKebabMenu', titleRowIdx);
+    const metaRowIdx = TODO_PANEL_SRC.indexOf('"todo-search-meta-row"', titleRowIdx);
     const tierPillIdx = TODO_PANEL_SRC.indexOf('todo-search-tier-pill', titleRowIdx);
     const projectIdx = TODO_PANEL_SRC.indexOf('"todo-search-context-pill"', titleRowIdx);
-    const kebabIdx = TODO_PANEL_SRC.indexOf('<TaskKebabMenu', titleRowIdx);
-    expect(phaseStatusIdx).toBeGreaterThan(titleRowIdx);
-    expect(tierPillIdx).toBeGreaterThan(phaseStatusIdx);
+    // The title row ends with the kebab; the meta line comes after it and holds both labels.
+    expect(kebabIdx).toBeGreaterThan(titleRowIdx);
+    expect(metaRowIdx).toBeGreaterThan(kebabIdx);
+    expect(tierPillIdx).toBeGreaterThan(metaRowIdx);
     expect(projectIdx).toBeGreaterThan(tierPillIdx);
-    expect(kebabIdx).toBeGreaterThan(projectIdx);
-    // The old second "meta" line is gone for good.
     expect(TODO_PANEL_SRC).not.toContain('"todo-item-meta-row"');
   });
 
