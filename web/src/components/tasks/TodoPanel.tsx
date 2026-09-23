@@ -24,7 +24,7 @@ import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
-import { TASK_SHORTCUTS_KEY, useNavigationPreference } from '@/hooks/useNavigationPreference';
+import { TAB_BAR_HIDDEN_TABS_KEY, TASK_SHORTCUTS_KEY, useNavigationList, useNavigationPreference } from '@/hooks/useNavigationPreference';
 import { useSessionPanelsViewGroup } from './session-panels-view-group';
 import { AgentSearchPanel } from './AgentSearchPanel';
 import { NewLauncherButton } from './NewLauncherButton';
@@ -184,8 +184,9 @@ interface TodoPanelProps {
   focusNonce?: number;
   /** Locate scope for the current focus action. 'pinned' (tier quick-adds) scrolls
    *  the Pinned region only — no TASKS tab switch, no project expansion.
-   *  'all' (default) = full locate incl. tab switch. */
-  focusScope?: 'all' | 'pinned';
+   *  'all' (default) = full locate incl. tab switch. 'locate' = 'all' asked from outside
+   *  the panel, which also moves the panel to the task's tier tab or to All. */
+  focusScope?: 'all' | 'pinned' | 'locate';
   favorites?: UseFavoritesReturn;
   ordering?: UseOrderingReturn;
   /** `project` is '' for Inbox. */
@@ -2891,6 +2892,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // collapse flag (a tab you just picked must never show up already folded).
   const [activeSection, setActiveSection] = useState<TodoSection>(readSection);
   const [quickViews, setQuickViews] = useNavigationPreference(TASK_SHORTCUTS_KEY);
+  const [tabBarHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY);
+  // Read by the locate effect, whose deps deliberately leave out view state.
+  const tabBarRef = useRef({ shown: quickViews, hidden: tabBarHidden });
+  tabBarRef.current = { shown: quickViews, hidden: tabBarHidden };
   const sessionPanelsGroup = useSessionPanelsViewGroup();
   // Per-tier view mode (project clustering vs raw pin order) — see TierViewMode.
   const [tierViewModes, setTierViewModes] = useState<Record<string, TierViewMode>>(readTierViewModes);
@@ -3342,11 +3347,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // tier/Recent/Notes tab is showing) switches — to the stacked All view,
       // which shows the task in its tier AND the list at once.
       const cur = activeSectionRef.current;
-      if (cur !== 'all' && cur !== 'tasks' && cur !== tierKey) handleSectionChange('all');
-    } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && activeSectionRef.current !== 'tasks') {
-      // Unpinned task located from outside (chat ref, session panel, search): it
-      // only exists in the main list, so that's the tab that must be showing.
-      handleSectionChange('tasks');
+      if (focusScope === 'locate') {
+        // Asked from outside the panel (a session panel's Locate): with the tab bar showing
+        // the task's tier, go straight to that tab; without it, All, which shows every tier.
+        const bar = tabBarRef.current;
+        const target = bar.shown && !bar.hidden.includes(tierKey) ? tierKey : 'all';
+        if (cur !== target) handleSectionChange(target);
+      } else if (cur !== 'all' && cur !== 'tasks' && cur !== tierKey) handleSectionChange('all');
+    } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && (focusScope === 'locate' || activeSectionRef.current !== 'tasks')) {
+      // A task in no tier only shows in the list, and All is the view with the list in it
+      // (Projects is a filter menu view, not a tab the user can see they are on).
+      handleSectionChange('all');
     }
 
     // Scroll to the focused task after state changes (expand/filter) have flushed to DOM.

@@ -266,8 +266,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // 'all' additionally switches the TASKS project tab to the task's project.
   // Tier quick-adds routed to the capture project used to switch the tab to e.g.
   // "Personal", filtering the whole task list down to 1 — read as "all my tasks
-  // disappeared".
-  const [focusScope, setFocusScope] = useState<'all' | 'pinned'>('all');
+  // disappeared". 'locate' is 'all' asked from OUTSIDE the task panel (a session
+  // panel's Locate, a chat or scratchpad task link), which also picks the panel's view.
+  const [focusScope, setFocusScope] = useState<'all' | 'pinned' | 'locate'>('all');
   // Which task + session the Ask Walnut slot is showing. The slot owns the
   // selection; MainPage only mirrors it, because the context inspector has to
   // describe the session actually on screen.
@@ -1837,10 +1838,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     sessionStorage.setItem(SS_SUPPRESS_DETAIL_KEY, suppressDetail ? '1' : '0');
   }, [suppressDetail]);
 
-  const handleFocusTask = useCallback((task: Task, opts?: { openDetail?: boolean }) => {
+  const handleFocusTask = useCallback((task: Task, opts?: { openDetail?: boolean; fromOutside?: boolean }) => {
     // Always focus (never toggle off) — unfocusing is done via detail panel close / Esc.
     // Increment nonce so TodoPanel re-scrolls even when the same task is re-clicked.
-    setFocusScope('all'); // explicit user locate — full behavior incl. tab switch
+    setFocusScope(opts?.fromOutside ? 'locate' : 'all'); // explicit user locate — full behavior incl. tab switch
     setFocusedTask(task);
     setFocusNonce(n => n + 1);
     setSuppressDetail(opts?.openDetail === false); // Auto-clears on next direct click (opts is undefined → false)
@@ -1861,7 +1862,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!task) return;
     const sid = resolveTaskSessionId(task);
     if (sid) handleToggleSession(sid);
-    handleFocusTask(task, { openDetail: false });
+    // A locate into a hidden task panel would select and scroll a row nobody can see.
+    setTodoVisible(true);
+    handleFocusTask(task, { openDetail: false, fromOutside: true });
   }, [handleFocusTask, handleToggleSession]);
 
   const handleClearFocus = useCallback(() => {

@@ -796,6 +796,121 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   await expect.poll(names).toEqual(kept);
 });
 
+test('Locate from a session panel opens the task tier tab when the tab bar shows it, and All otherwise', async ({ page, baseURL }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  // The fixture session belongs to pw-task-store-sync; where that task sits is routed, so each case
+  // moves it (a tier, a custom tier, no tier) without touching the shared fixture's pins.
+  await page.addInitScript(() => sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-store-sync-session', locked: false }])));
+  let where = 'wait';
+  const now = new Date().toISOString();
+  const task = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, title: `Locate ${id}`, project: 'Orchard', status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
+    created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
+  });
+  const located = 'pw-task-store-sync';
+  await page.route('**/api/tasks?*', async route => {
+    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
+    await route.fulfill({ json: { tasks: [
+      task(located, { session_ids: ['pw-store-sync-session'], ...(where ? { pinned: true, focus_tier: where } : {}) }),
+      task('locate-focus', { pinned: true, focus_tier: 'focus' }),
+      task('locate-list'),
+    ] } });
+  });
+  await page.route('**/api/focus/tasks', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({ json: {
+      pinned_tasks: where ? ['locate-focus', located] : ['locate-focus'], focus_tasks: ['locate-focus'], satellite_tasks: [], backlog_tasks: [],
+      wait_tasks: where === 'wait' ? [located] : [], custom_tier_tasks: { ct_locate_later: where === 'ct_locate_later' ? [located] : [] },
+    } });
+  });
+  await page.route('**/api/focus/tiers', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({ json: { tiers: [{ id: 'ct_locate_later', label: 'Later' }] } });
+  });
+  await boot(page, baseURL!);
+  await expect(navigation(page).locator('[data-task-id="locate-focus"]')).toBeVisible({ timeout: 30_000 });
+  const showTabBar = async () => {
+    await openViewMenu(page);
+    await page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' }).click();
+    await closeViewMenu(page);
+  };
+  await showTabBar();
+  const bar = page.locator('.todo-section-tabs');
+  const tab = (name: string) => bar.locator('[role="tab"]').filter({ has: page.locator('.todo-section-tab-label', { hasText: new RegExp(`^${name}$`) }) });
+  const locate = page.locator(`.main-page-session-column [data-session-id="pw-store-sync-session"]`).getByRole('button', { name: 'Locate task', exact: true });
+  const card = navigation(page).locator(`.todo-pinned-section [data-task-id="${located}"]`);
+  const landedOn = async (name: string) => {
+    await expect(tab(name)).toHaveAttribute('aria-selected', 'true');
+    await expect(card).toBeVisible();
+    await expect(card).toHaveClass(/todo-pinned-card-active/);
+  };
+  const reload = async () => {
+    await page.reload();
+    await expect(navigation(page).locator('[data-task-id="locate-focus"]')).toBeVisible({ timeout: 30_000 });
+  };
+
+  // With the bar showing the task's tier, Locate goes straight to that tab, from another tier or from All.
+  await tab('Focus').click();
+  await locate.click();
+  await landedOn('Wait');
+  await tab('All').click();
+  await locate.click();
+  await landedOn('Wait');
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-locate-tier-tab.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } });
+
+  // A tier the user took off the bar has no tab to open, so the task is found in All.
+  await tab('Focus').click();
+  await bar.getByRole('button', { name: 'Tab bar options' }).click();
+  await page.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Wait', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await locate.click();
+  await landedOn('All');
+
+  // Without the bar, All, even from a single tier picked in the filter menu.
+  await bar.getByRole('button', { name: 'Tab bar options' }).click();
+  await page.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Show tab bar', exact: true }).click();
+  await expect(bar).toHaveCount(0);
+  await chooseViewOption(page, 'focus');
+  await expect(card).toHaveCount(0);
+  await locate.click();
+  await expect(card).toBeVisible();
+  await expect(card).toHaveClass(/todo-pinned-card-active/);
+  expect(await activeView(page)).toBe('all');
+
+  // A hidden task panel opens: a locate must never select a row nobody can see.
+  const taskPanelToggle = page.locator('.sidebar-home-panels .sidebar-link', { hasText: 'Task panel' });
+  await taskPanelToggle.click();
+  await expect(navigation(page)).toHaveClass(/\bcollapsed\b/);
+  await locate.click();
+  await expect(navigation(page)).not.toHaveClass(/\bcollapsed\b/);
+  await expect(card).toBeVisible();
+
+  // A task in no tier is found in All, selected in the list, whichever tier tab was open.
+  where = '';
+  await reload();
+  await showTabBar();
+  await tab('Focus').click();
+  await locate.click();
+  await expect(tab('All')).toHaveAttribute('aria-selected', 'true');
+  const row = navigation(page).locator(`.todo-panel-list [data-task-id="${located}"]`);
+  await expect(row).toBeVisible();
+  await expect(row).toHaveClass(/task-focused/);
+
+  // A custom tier's task opens that tier's tab.
+  where = 'ct_locate_later';
+  await reload();
+  await tab('Focus').click();
+  await locate.click();
+  await landedOn('Later');
+
+  // A click inside the panel is not a locate: the view the user is reading stays.
+  await tab('All').click();
+  await navigation(page).locator('.todo-pinned-section [data-task-id="locate-focus"] .todo-pinned-title').click();
+  await expect(tab('All')).toHaveAttribute('aria-selected', 'true');
+  expect(errors).toEqual([]);
+});
+
 test('the Scratchpad is a Home panel in the rail, sharing the side column with the agenda', async ({ page, baseURL }) => {
   const original = (await (await page.request.get('/api/notes/global')).json()).content as string;
   const line = `Scratchpad line ${test.info().project.name} ${Date.now()}`;
