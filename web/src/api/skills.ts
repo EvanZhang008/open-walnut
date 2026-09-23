@@ -18,8 +18,11 @@ export interface RefFile {
   size: number;
 }
 
-export async function fetchSkills(): Promise<SkillInfo[]> {
-  const res = await apiGet<{ skills: SkillInfo[] }>('/api/skills');
+/** `priority: 'low'` for the "/" palette's background load: nobody is looking at
+ *  that list when it is fetched, so it must not hold a slot the page is waiting
+ *  for (see the admission notes in ./client). The Skills page keeps the default. */
+export async function fetchSkills(opts?: { priority?: 'low'; onDispatch?: () => void }): Promise<SkillInfo[]> {
+  const res = await apiGet<{ skills: SkillInfo[] }>('/api/skills', undefined, opts);
   return res.skills;
 }
 

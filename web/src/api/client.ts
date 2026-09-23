@@ -22,9 +22,24 @@ class ApiError extends Error {
 // instead: the timeout timer starts when the request is actually dispatched,
 // never while it waits for a connection. Writes (non-GET) jump the queue —
 // a user action must not wait behind a pile of background GETs.
+//
+// A third class, `priority: 'low'`, is for GETs nobody is looking at yet: the
+// "/" palette's skill and slash-command lists, a reload's workflow
+// reconstruction. They get a slot only while no normal request is waiting, and
+// never more than MAX_LOW_PRIORITY_IN_FLIGHT at once, so at least four slots
+// always stay free for what paints the screen. Without the cap a reload handed
+// the first slot to a 1.2MB skill list (11s under load) and two more to the
+// session palette (13.5s): the task list and the draft's quick folders queued
+// behind them and showed up 10.8s / 5s after the refresh (2026-09-23).
 const MAX_CONCURRENT_FETCHES = 6;
+const MAX_LOW_PRIORITY_IN_FLIGHT = 2;
 const MAX_QUEUE_WAIT_MS = 20_000;
+// Low requests yield to every normal one, so on a busy page they can
+// legitimately wait longer than a normal request ever should.
+const MAX_LOW_QUEUE_WAIT_MS = 60_000;
 const QUEUE_DEPTH_WARN_STEP = 10;
+
+type FetchPriority = 'urgent' | 'normal' | 'low';
 
 interface QueuedFetch {
   dispatch: () => void;
@@ -35,36 +50,53 @@ interface QueuedFetch {
 }
 
 let inFlightFetches = 0;
+let inFlightLowFetches = 0;
 const fetchQueue: QueuedFetch[] = [];
+const lowFetchQueue: QueuedFetch[] = [];
+
+function startQueued(next: QueuedFetch, low: boolean): void {
+  clearTimeout(next.waitTimer);
+  if (next.callerSignal && next.onCallerAbort) {
+    next.callerSignal.removeEventListener('abort', next.onCallerAbort);
+  }
+  inFlightFetches++;
+  if (low) inFlightLowFetches++;
+  next.dispatch();
+}
 
 function pumpFetchQueue(): void {
-  while (inFlightFetches < MAX_CONCURRENT_FETCHES && fetchQueue.length > 0) {
-    const next = fetchQueue.shift()!;
-    clearTimeout(next.waitTimer);
-    if (next.callerSignal && next.onCallerAbort) {
-      next.callerSignal.removeEventListener('abort', next.onCallerAbort);
+  while (inFlightFetches < MAX_CONCURRENT_FETCHES) {
+    if (fetchQueue.length > 0) {
+      startQueued(fetchQueue.shift()!, false);
+    } else if (lowFetchQueue.length > 0 && inFlightLowFetches < MAX_LOW_PRIORITY_IN_FLIGHT) {
+      startQueued(lowFetchQueue.shift()!, true);
+    } else {
+      break;
     }
-    inFlightFetches++;
-    next.dispatch();
   }
 }
 
-function acquireFetchSlot(urgent: boolean, label: string, callerSignal?: AbortSignal): Promise<void> {
+function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?: AbortSignal): Promise<void> {
   if (callerSignal?.aborted) {
     return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
   }
-  if (inFlightFetches < MAX_CONCURRENT_FETCHES && fetchQueue.length === 0) {
+  const low = priority === 'low';
+  const free = inFlightFetches < MAX_CONCURRENT_FETCHES && fetchQueue.length === 0;
+  if (free && (!low || (lowFetchQueue.length === 0 && inFlightLowFetches < MAX_LOW_PRIORITY_IN_FLIGHT))) {
     inFlightFetches++;
+    if (low) inFlightLowFetches++;
     return Promise.resolve();
   }
+  const queue = low ? lowFetchQueue : fetchQueue;
+  const waitMs = low ? MAX_LOW_QUEUE_WAIT_MS : MAX_QUEUE_WAIT_MS;
   return new Promise<void>((resolve, reject) => {
     const entry: QueuedFetch = {
       dispatch: resolve,
       fail: reject,
       callerSignal,
       waitTimer: setTimeout(() => {
-        const idx = fetchQueue.indexOf(entry);
-        if (idx >= 0) fetchQueue.splice(idx, 1);
+        const idx = queue.indexOf(entry);
+        if (idx >= 0) queue.splice(idx, 1);
         if (callerSignal && entry.onCallerAbort) {
           callerSignal.removeEventListener('abort', entry.onCallerAbort);
         }
@@ -72,44 +104,51 @@ function acquireFetchSlot(urgent: boolean, label: string, callerSignal?: AbortSi
         // fires: without a line here the request vanishes without a trace
         // (2026-09-17: the folder registry died this way and the only evidence
         // was the server's request log NOT having it).
-        console.error(`[api] ${label} rejected after ${MAX_QUEUE_WAIT_MS}ms in the connection queue (pool saturated)`, {
-          queued: fetchQueue.length, inFlight: inFlightFetches,
+        console.error(`[api] ${label} rejected after ${waitMs}ms in the connection queue (pool saturated)`, {
+          queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches, priority,
         });
         // TimeoutError so existing timeout handling applies; the message makes
         // the saturation case distinguishable from a real network timeout.
         reject(new DOMException(
-          `Request queued ${MAX_QUEUE_WAIT_MS}ms without a free connection — pool saturated`,
+          `Request queued ${waitMs}ms without a free connection — pool saturated`,
           'TimeoutError',
         ));
-      }, MAX_QUEUE_WAIT_MS),
+      }, waitMs),
     };
     if (callerSignal) {
       entry.onCallerAbort = () => {
         clearTimeout(entry.waitTimer);
-        const idx = fetchQueue.indexOf(entry);
-        if (idx >= 0) fetchQueue.splice(idx, 1);
+        const idx = queue.indexOf(entry);
+        if (idx >= 0) queue.splice(idx, 1);
         reject(new DOMException('The operation was aborted.', 'AbortError'));
       };
       callerSignal.addEventListener('abort', entry.onCallerAbort, { once: true });
     }
-    if (urgent) fetchQueue.unshift(entry);
-    else fetchQueue.push(entry);
-    if (fetchQueue.length % QUEUE_DEPTH_WARN_STEP === 0) {
+    if (priority === 'urgent') queue.unshift(entry);
+    else queue.push(entry);
+    if (!low && fetchQueue.length % QUEUE_DEPTH_WARN_STEP === 0) {
       console.warn('[api] fetch queue backing up', {
-        queued: fetchQueue.length, inFlight: inFlightFetches,
+        queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches,
       });
     }
   });
 }
 
-function releaseFetchSlot(): void {
+function releaseFetchSlot(priority: FetchPriority): void {
   inFlightFetches--;
+  if (priority === 'low') inFlightLowFetches--;
   pumpFetchQueue();
 }
 
 /** Test hook — not for product code. */
 export function getFetchQueueStats(): { inFlight: number; queued: number } {
-  return { inFlight: inFlightFetches, queued: fetchQueue.length };
+  // `queued` counts BOTH lanes: callers use it as "is anything still waiting".
+  return { inFlight: inFlightFetches, queued: fetchQueue.length + lowFetchQueue.length };
+}
+
+/** Test hook — the low-priority lane alone (its share of in-flight + its queue). */
+export function getLowFetchQueueStats(): { inFlight: number; queued: number } {
+  return { inFlight: inFlightLowFetches, queued: lowFetchQueue.length };
 }
 
 /** Sentinel: attemptRequest asks the wrapper to retry with cache bypass AFTER
@@ -117,21 +156,43 @@ export function getFetchQueueStats(): { inFlight: number; queued: number } {
  *  can deadlock the pool if several requests hit the cache race at once). */
 const RETRY_WITH_CACHE_BYPASS = Symbol('retry-with-cache-bypass');
 
-async function request<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; background?: boolean }): Promise<T> {
+interface RequestExtra {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  cacheBypass?: boolean;
+  quietStatuses?: number[];
+  background?: boolean;
+  /** GET only: yield to every normal request (see the admission notes above). */
+  priority?: 'low';
+  /** Called the moment the request leaves the admission queue for the network —
+   *  the earliest the server can see it. A caller reasoning about "is this
+   *  response newer than X" needs this, not the time it CALLED the API: a call
+   *  can sit in the queue for seconds. Fires again on the cache-bypass retry. */
+  onDispatch?: () => void;
+}
+
+function priorityOf(method: string, extra?: RequestExtra): FetchPriority {
   // A non-GET jumps the queue because it is normally a USER action. `background: true`
   // opts out: a write nobody is waiting on must not outrank the GETs that are
   // painting the screen. Without this, the draft composer's per-keystroke AI parse
   // (a POST) took all six slots ahead of the path picker's listings and held each
   // for its full 10s model timeout (2026-09-17).
-  await acquireFetchSlot(method !== 'GET' && !extra?.background, `${method} ${path}`, extra?.signal);
+  if (method !== 'GET') return extra?.background ? 'normal' : 'urgent';
+  return extra?.priority === 'low' ? 'low' : 'normal';
+}
+
+async function request<T>(method: string, path: string, body?: unknown, extra?: RequestExtra): Promise<T> {
+  const priority = priorityOf(method, extra);
+  await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal);
   let retryWithBypass = false;
   try {
+    extra?.onDispatch?.();
     return await attemptRequest<T>(method, path, body, extra);
   } catch (err) {
     if (err === RETRY_WITH_CACHE_BYPASS) retryWithBypass = true;
     else throw err;
   } finally {
-    releaseFetchSlot();
+    releaseFetchSlot(priority);
   }
   // Cache-race retry re-enters through the gate (fresh slot, fresh timer) —
   // retrying while still holding the slot would double-book the pool.
@@ -265,7 +326,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   return data;
 }
 
-export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number; quietStatuses?: number[] }): Promise<T> {
+export function apiGet<T>(path: string, params?: Record<string, string>, opts?: { signal?: AbortSignal; timeoutMs?: number; quietStatuses?: number[]; priority?: 'low'; onDispatch?: () => void }): Promise<T> {
   const url = params ? `${path}?${new URLSearchParams(params)}` : path;
   return request<T>('GET', url, undefined, opts);
 }
@@ -276,7 +337,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
   const headers: Record<string, string> = {};
   const deviceToken = getDeviceToken();
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
-  await acquireFetchSlot(false, `GET ${path}`);
+  await acquireFetchSlot('normal', `GET ${path}`);
   let res: Response;
   try {
     res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(opts?.timeoutMs ?? 30_000) });
@@ -290,7 +351,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
     }
     return await res.text();
   } finally {
-    releaseFetchSlot();
+    releaseFetchSlot('normal');
   }
 }
 

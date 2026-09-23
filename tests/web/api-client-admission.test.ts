@@ -9,13 +9,16 @@
  *  - the timeout timer starts at DISPATCH, not at enqueue
  *  - writes (non-GET) jump the queue ahead of background GETs, UNLESS the caller
  *    marks them `background: true` (2026-09-17 — see the `background` block below)
+ *  - `priority: 'low'` GETs (palette lists, workflow reconstruction) never hold
+ *    more than 2 slots and never leave ahead of a waiting normal request
+ *    (2026-09-23 — see the low-lane block at the end)
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // jsdom-free: the client only needs fetch/AbortSignal/performance, all present
 // in the node test environment.
-import { apiGet, apiPost, getFetchQueueStats } from '../../web/src/api/client';
+import { apiGet, apiPost, getFetchQueueStats, getLowFetchQueueStats } from '../../web/src/api/client';
 // The real product call site for `background: true`. tasks.ts pulls in the session
 // status store, which is DOM-free too, so it loads in this tier unchanged.
 import { quickParseTask } from '../../web/src/api/tasks';
@@ -173,7 +176,7 @@ describe('fetch admission control', () => {
       const line = errorSpy.mock.calls.find((c) => String(c[0]).includes('/api/tasks/groups'));
       expect(line, 'a queue rejection must be logged with the request it killed').toBeDefined();
       expect(String(line![0])).toContain('GET /api/tasks/groups rejected after 20000ms in the connection queue (pool saturated)');
-      expect(line![1]).toEqual({ queued: 0, inFlight: 6 });
+      expect(line![1]).toEqual({ queued: 0, queuedLow: 0, inFlight: 6, priority: 'normal' });
 
       for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
       await vi.advanceTimersByTimeAsync(0);
@@ -314,5 +317,141 @@ describe('fetch admission control', () => {
 
     for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
     await Promise.all(after);
+  });
+
+  // ── low-priority lane (2026-09-23) ─────────────────────────────────────────
+  // A reload handed three of the six connections to the "/" palette's skill list
+  // (1.2MB, up to 11s) and session slash commands (13.5s); the task list and the
+  // draft's quick folders waited behind them for 10.8s / 5s.
+
+  const urls = () => fetchMock.mock.calls.map((c) => String(c[0]));
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it('low GETs never hold more than 2 slots, even on an idle gate', async () => {
+    // Starting state: gate idle. Five low reads arrive together.
+    const lows = Array.from({ length: 5 }, (_, i) => apiGet(`/api/low${i}`, undefined, { priority: 'low' }).catch(() => {}));
+    await tick();
+    expect(urls()).toEqual(['/api/low0', '/api/low1']);
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 3 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: 2, queued: 3 });
+
+    // The other four connections stay free for what paints the screen: a
+    // normal GET leaves immediately, ahead of every queued low one.
+    const paint = apiGet('/api/tasks').catch(() => {});
+    await tick();
+    expect(urls()[2]).toBe('/api/tasks');
+    expect(getFetchQueueStats()).toEqual({ inFlight: 3, queued: 3 });
+
+    // Finishing one low read lets exactly one more low read go.
+    pending.find((p) => p.url === '/api/low0')!.resolve(jsonResponse({}));
+    pending.splice(pending.findIndex((p) => p.url === '/api/low0'), 1);
+    await tick();
+    expect(urls()).toHaveLength(4);
+    expect(urls()[3]).toBe('/api/low2');
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 2 });
+
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await tick();
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await tick();
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all([...lows, paint]);
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+  });
+
+  it('a queued low GET never leaves ahead of a queued normal one, whatever the arrival order', async () => {
+    // Starting state: six normal reads hold the pool. A low read queues FIRST,
+    // then a normal one.
+    const hold = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    await tick();
+    const low = apiGet('/api/skills', undefined, { priority: 'low' }).catch(() => {});
+    const normal = apiGet('/api/working-dirs').catch(() => {});
+    await tick();
+    expect(getFetchQueueStats()).toEqual({ inFlight: 6, queued: 2 });
+
+    pending.shift()!.resolve(jsonResponse({}));
+    await tick();
+    expect(urls()[6]).toBe('/api/working-dirs');
+    expect(urls()).not.toContain('/api/skills');
+
+    pending.shift()!.resolve(jsonResponse({}));
+    await tick();
+    expect(urls()[7]).toBe('/api/skills');
+
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all([...hold, low, normal]);
+  });
+
+  it('a new low GET queues behind a waiting low one instead of taking a free slot first', async () => {
+    // Two low reads in flight (the cap), one low read waiting; a normal read
+    // finishes and frees a general slot. A new low read must not use the free
+    // slot to overtake the one already waiting (or break the cap).
+    const lows = [0, 1, 2].map((i) => apiGet(`/api/low${i}`, undefined, { priority: 'low' }).catch(() => {}));
+    await tick();
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 1 });
+    const late = apiGet('/api/low3', undefined, { priority: 'low' }).catch(() => {});
+    await tick();
+    expect(urls()).toEqual(['/api/low0', '/api/low1']);
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 2 });
+
+    pending.shift()!.resolve(jsonResponse({}));
+    await tick();
+    expect(urls()[2]).toBe('/api/low2');
+
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await tick();
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all([...lows, late]);
+  });
+
+  it('onDispatch fires when the request leaves the queue, not when it is asked for', async () => {
+    const hold = Array.from({ length: 6 }, (_, i) => apiGet(`/api/hold${i}`).catch(() => {}));
+    await tick();
+    const onDispatch = vi.fn();
+    const queued = apiGet('/api/tasks', undefined, { onDispatch }).catch(() => {});
+    await tick();
+    expect(onDispatch).not.toHaveBeenCalled();
+
+    pending.shift()!.resolve(jsonResponse({}));
+    await tick();
+    expect(onDispatch).toHaveBeenCalledTimes(1);
+    expect(urls()[6]).toBe('/api/tasks');
+
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all([...hold, queued]);
+  });
+
+  it('aborting or failing low GETs returns both lanes to zero', async () => {
+    // One low read fails on the wire (HTTP 500), one is aborted while queued
+    // behind the cap: neither may leak a general or a low slot.
+    const ctrl = new AbortController();
+    const a = apiGet('/api/low-a', undefined, { priority: 'low' }).catch(() => 'failed');
+    const b = apiGet('/api/low-b', undefined, { priority: 'low' }).catch(() => {});
+    const aborted = apiGet('/api/low-c', undefined, { priority: 'low', signal: ctrl.signal });
+    await tick();
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 1 });
+
+    ctrl.abort();
+    await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 0 });
+
+    pending.find((p) => p.url === '/api/low-a')!.resolve(new Response('boom', { status: 500 }));
+    pending.find((p) => p.url === '/api/low-b')!.resolve(jsonResponse({}));
+    pending.splice(0);
+    expect(await a).toBe('failed');
+    await b;
+    await tick();
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+    expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 });
+    expect(urls()).not.toContain('/api/low-c');
+
+    // The cap is intact afterwards: two low reads leave at once again.
+    const again = [0, 1, 2].map((i) => apiGet(`/api/again${i}`, undefined, { priority: 'low' }).catch(() => {}));
+    await tick();
+    expect(getLowFetchQueueStats()).toEqual({ inFlight: 2, queued: 1 });
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await tick();
+    for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
+    await Promise.all(again);
   });
 });

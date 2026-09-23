@@ -180,16 +180,16 @@ export function refreshWebPlugins(): Promise<void> {
  * Imported dynamically: the command bridges reach into the API layer, and a static
  * import would tie the plugin loader to that graph (and risk a cycle) for a path that
  * only runs on a plugin change. Initial startup is untouched — index.ts still does the
- * first load exactly once.
+ * first load exactly once (initWebPlugins below loads only the plugin catalogue).
  */
-async function refreshPluginCommandCatalogue(): Promise<void> {
+async function refreshPluginCommandCatalogue(changedAt?: number): Promise<void> {
   try {
     const [markdown, skills] = await Promise.all([
       import('@/commands/markdown-bridge'),
       import('@/commands/skill-bridge'),
     ])
     await markdown.refreshMarkdownCommands()
-    await skills.refreshSkillCommands()
+    await skills.refreshSkillCommands({ changedAt })
   } catch (error) {
     log.warn('plugins', 'failed to refresh slash commands after a Plugin change', {
       error: error instanceof Error ? error.message : String(error),
@@ -198,9 +198,9 @@ async function refreshPluginCommandCatalogue(): Promise<void> {
 }
 
 /** Catalogue refresh + the slash commands/skills that came with those plugins. */
-export async function refreshWebPluginsWithCommands(): Promise<void> {
+export async function refreshWebPluginsWithCommands(changedAt?: number): Promise<void> {
   await Promise.all([refreshWebPlugins(), refreshAppsCatalogue()])
-  await refreshPluginCommandCatalogue()
+  await refreshPluginCommandCatalogue(changedAt)
 }
 
 export function initWebPlugins(): Promise<void> {
@@ -209,14 +209,29 @@ export function initWebPlugins(): Promise<void> {
   // A plugin came, went, or reloaded — its commands/skills changed with it. One update
   // announces itself several times within a second (a WS event per reloaded plugin, then
   // the client's own plugins-changed); they collapse into one catalogue read (N2-10).
-  const coalesced = coalesceRefresh(refreshWebPluginsWithCommands)
-  const refreshWithCommands = () => { void coalesced.request() }
+  //
+  // Each signal is stamped with when it arrived, and the run asks the skill bridge
+  // for a list that includes changes up to the LATEST stamp it serves: on a page
+  // load, the first socket connect then reuses the skill read index.ts already
+  // sent after it instead of reading the 1.2MB list again.
+  let latestSignalAt = 0
+  const coalesced = coalesceRefresh(() => refreshWebPluginsWithCommands(latestSignalAt))
+  const refreshWithCommands = () => {
+    latestSignalAt = performance.now()
+    void coalesced.request()
+  }
   window.addEventListener(PLUGINS_CHANGED_EVENT, refreshWithCommands)
   wsClient.onEvent('plugin:runtime-changed', refreshWithCommands)
   wsClient.onConnectionChange((state) => {
     if (state === 'connected') refreshWithCommands()
   })
-  return refreshWebPluginsWithCommands()
+  // The catalogue only: commands/index.ts owns the first command + skill load.
+  // Running the command refresh here too made every page load read the skill
+  // list (1.2MB) an extra time, concurrently with index.ts's own read. A first
+  // connect still asks (it is how a page loaded while the server was down
+  // recovers its palette); the skill bridge answers it from index.ts's read when
+  // that read left after the connect.
+  return Promise.all([refreshWebPlugins(), refreshAppsCatalogue()]).then(() => undefined)
 }
 
 export async function disposeWebPluginsForTesting(): Promise<void> {

@@ -332,7 +332,9 @@ export async function fetchSubagentHistory(
 export async function fetchWorkflowProgress(sessionId: string): Promise<WorkflowProgressSnapshot | null> {
   try {
     // apiGet yields `undefined` on a 204 (no workflow ran) — coalesce to null to honor the signature.
-    return (await apiGet<WorkflowProgressSnapshot>(`/api/sessions/${sessionId}/workflow`)) ?? null;
+    // Low priority: a reconstruction for a panel the user has not opened yet (the
+    // server walks the run manifest; 3.8s on a loaded reload, 2026-09-23).
+    return (await apiGet<WorkflowProgressSnapshot>(`/api/sessions/${sessionId}/workflow`, undefined, { priority: 'low' })) ?? null;
   } catch (err) {
     // A real failure (500 / timeout / malformed JSON) is NOT the same as "no
     // workflow ran" (204 → null above). Don't silently conflate them: warn so a

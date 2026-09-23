@@ -396,6 +396,13 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const opErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fetchGeneration = useRef(0);
+  /** When the current list request left the admission queue (`at: null` = still
+   *  queued). The post-connect refetch compares it with `wsConnectedAt`. */
+  const listDispatch = useRef<{ generation: number; at: number | null } | null>(null);
+  /** Last time the socket reached 'connected' (performance.now clock). A hook that
+   *  mounts with the socket already up counts its mount as the connect: its own
+   *  first request leaves after that. */
+  const wsConnectedAt = useRef<number | null>(wsClient.state === 'connected' ? performance.now() : null);
   // Server events newer than an in-flight snapshot must survive its eventual merge.
   const retainedAtGen = useRef(new Map<string, number>());
   const retainServerTask = (id: string) => { retainedAtGen.current.set(id, fetchGeneration.current); };
@@ -504,6 +511,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const refetch = useCallback((attempt = 0, existingGeneration?: number) => {
     const MAX_RETRIES = 3;
     const generation = existingGeneration ?? ++fetchGeneration.current;
+    // Not dispatched yet: the request is still in the admission queue (see
+    // listDispatch below for why that moment, not this one, is what counts).
+    listDispatch.current = { generation, at: null };
     if (attempt === 0) {
       if (retryTimer.current) {
         clearTimeout(retryTimer.current);
@@ -523,7 +533,12 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // fetchTasks takes no query: `/` and `/tasks` share this one cache, so every
     // condition is evaluated in the browser (see api/tasks.ts). `filter` stays a
     // refetch key + log field only.
-    tasksApi.fetchTasks({ minimal: true })
+    tasksApi.fetchTasks({
+      minimal: true,
+      onDispatch: () => {
+        if (listDispatch.current?.generation === generation) listDispatch.current.at = performance.now();
+      },
+    })
       .then((tasks) => {
         if (generation !== fetchGeneration.current) return;
         const elapsed = Math.round(performance.now() - t0);
@@ -553,6 +568,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       })
       .catch((e: Error) => {
         if (generation !== fetchGeneration.current) return;
+        // Nothing landed, so nothing is covered: a socket connect during the
+        // retry wait (or after a final failure) must fetch again right away.
+        listDispatch.current = null;
         const elapsed = Math.round(performance.now() - t0);
         endPerf?.('error');
         const isRetryable = isRetryableFetchError(e);
@@ -583,6 +601,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   useEffect(() => {
     const onStateChange = (state: ConnectionState) => {
       log.info('tasks', `ws state → ${state}`);
+      if (state === 'connected') wsConnectedAt.current = performance.now();
       setWsConnected(state === 'connected');
     };
     wsClient.onConnectionChange(onStateChange);
@@ -595,6 +614,24 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       // refetch the whole list per flap, contributing to reconnect-storm
       // main-thread freezes (starvation report 2026-07-15).
       const timer = setTimeout(() => {
+        // A list request that LEFT the admission queue after the socket came up
+        // was answered from a server read that already includes every commit
+        // this socket could have missed (the server adds a client to the
+        // broadcast set in the same tick it answers the upgrade, and API GETs
+        // are no-store, so they always reach the server). Refetching then only threw that
+        // answer away: on a reload the first list request sat queued ~2s, left
+        // well after the connect, and the "safety" refetch discarded it and
+        // pushed the list from ~5.5s to 10.8s (2026-09-23). A request still in
+        // the queue will leave later still, so it is covered too.
+        const d = listDispatch.current;
+        const connectedAt = wsConnectedAt.current ?? 0;
+        if (d && d.generation === fetchGeneration.current && (d.at === null || d.at >= connectedAt)) {
+          log.info('tasks', 'ws connected → list request left after the connect; no refetch', {
+            queued: d.at === null, sinceConnectMs: d.at === null ? null : Math.round(d.at - connectedAt),
+          });
+          refetchGroups();
+          return;
+        }
         log.info('tasks', 'ws connected → refetching tasks + folder registry');
         refetch();
         // The registry rides along: a socket that just came (back) up is the

@@ -25,10 +25,51 @@ async function seedTask<T extends Task>(task: T): Promise<T> {
   return task;
 }
 
-async function seedTasks<T extends Task>(tasks: T[]): Promise<T[]> {
+/**
+ * Seed the statuses a task list carries and hand the list back AT ONCE; the
+ * authoritative per-session snapshots are fetched in the background.
+ *
+ * This used to await the hydration before returning. On a board of 6,440 tasks
+ * that is ~50 sequential `/api/sessions/status` batches, and the list (already
+ * parsed, 0.5s after the request) waited ~2.5s for them before a single row
+ * could render (2026-09-23). Returning early is safe because the status store
+ * is versioned: a snapshot older than what a row already shows is rejected, and
+ * an unversioned seed never overrides a versioned one, so the order in which
+ * the seed, the hydration and WS events land cannot move a status backwards.
+ */
+function seedTasks<T extends Task>(tasks: T[]): T[] {
   sessionStatusStore.seedTaskList(tasks, 'rest:task-list');
-  await hydrateSessionStatuses(taskSessionIds(tasks));
+  hydrateListInBackground(taskSessionIds(tasks));
   return tasks;
+}
+
+// One hydration chain at a time. A list refetch that lands while a chain runs
+// (bulk-sync bursts refetch every few seconds) queues ONE follow-up with the
+// newest ids instead of starting a second 50-request chain beside the first.
+let listHydration: Promise<void> | null = null;
+let nextListHydration: string[] | null = null;
+
+function hydrateListInBackground(sessionIds: string[]): void {
+  if (listHydration) {
+    nextListHydration = sessionIds;
+    return;
+  }
+  // hydrateSessionStatuses logs and swallows per-batch failures; the catch is
+  // for anything unexpected, so a background chain can never surface as an
+  // unhandled rejection.
+  listHydration = hydrateSessionStatuses(sessionIds)
+    .catch(() => undefined)
+    .finally(() => {
+      listHydration = null;
+      const next = nextListHydration;
+      nextListHydration = null;
+      if (next) hydrateListInBackground(next);
+    });
+}
+
+/** Test hook: resolves when the background status hydration (and its follow-up) is done. */
+export async function settleTaskListHydrationForTesting(): Promise<void> {
+  while (listHydration) await listHydration;
 }
 
 export interface TaskDependencyReference {
@@ -194,7 +235,7 @@ export interface UpdateTaskInput {
   set_depends_on?: string[];
 }
 
-export async function fetchTasks(opts?: { slim?: boolean; minimal?: boolean }): Promise<Task[]> {
+export async function fetchTasks(opts?: { slim?: boolean; minimal?: boolean; onDispatch?: () => void }): Promise<Task[]> {
   const params: Record<string, string> = {};
   if (opts?.minimal) {
     // List payload: drops note/conversation_log AND summary/description/ext. The
@@ -210,7 +251,10 @@ export async function fetchTasks(opts?: { slim?: boolean; minimal?: boolean }): 
     // Slim omits note/conversation_log — the biggest single win (see above).
     params.slim = '1';
   }
-  const res = await apiGet<{ tasks: Task[] }>('/api/tasks', Object.keys(params).length ? params : undefined);
+  const query = Object.keys(params).length ? params : undefined;
+  const res = opts?.onDispatch
+    ? await apiGet<{ tasks: Task[] }>('/api/tasks', query, { onDispatch: opts.onDispatch })
+    : await apiGet<{ tasks: Task[] }>('/api/tasks', query);
   if (!Array.isArray(res?.tasks)) {
     throw new ApiError(200, 'Task list response is malformed');
   }
