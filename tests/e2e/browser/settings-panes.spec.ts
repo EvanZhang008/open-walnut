@@ -540,7 +540,7 @@ test('C69: a slow plugin runtime does not move the Configure group', async ({ pa
   await page.waitForTimeout(2500)
   const laterY = (await sessions.boundingBox())!.y
   expect(Math.abs(laterY - firstY)).toBeLessThanOrEqual(1)
-  // No cache: the first frame shows only Plugins in Add-ons, then the cache is written.
+  // No cache: the first frame shows only the Plugins row in its group, then the cache is written.
   await page.evaluate(() => window.localStorage.removeItem('walnut.settings.nav.pluginCount'))
   await page.reload()
   await expect(sessions).toBeVisible({ timeout: 30_000 })
@@ -656,10 +656,10 @@ test('evidence: pane screenshots at 1280, 900 and 620 wide', async ({ page, brow
   await page.screenshot({ path: `/tmp/settings-redesign/after/p2-rail-overlay-620-${browserName}.png` })
 })
 
-test('C83 + C64: the second group reads Add-ons; slack puts Plugins first', async ({ page }) => {
+test('C83 + C64: the second group reads Plugins; slack puts Plugins first', async ({ page }) => {
   await openSettings(page)
   const labels = await page.locator('.settings-nav-group-label').allTextContents()
-  expect(labels).toEqual(['Manage', 'Add-ons', 'Configure', 'Diagnostics'])
+  expect(labels).toEqual(['Manage', 'Plugins', 'Configure', 'Diagnostics'])
   expect(await page.locator('.settings-nav-group-label').first().evaluate((el) => getComputedStyle(el).textTransform)).toBe('none')
   await page.getByTestId('settings-filter').fill('slack')
   await expect.poll(async () => (await visibleNavKeys(page))[0]).toBe(NAV('plugin-store'))

@@ -170,15 +170,22 @@
   background: none;
 }
 
-/* 44px rows (the spec minimum, F19): a pane of N hooks stays within 140 + 48 * N px (C31). */
+/* A name over a one-line help needs air: at 44px with 4px padding the two lines
+   touched the dividers and the list read as a wall (user report). 56px rows,
+   like a macOS System Settings row with a subtitle; a pane of N hooks stays
+   within 140 + 60 * N px (C31). */
 .settings-group .hook-row {
-  min-height: 44px;
-  padding-top: 4px;
-  padding-bottom: 4px;
+  min-height: 56px;
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
+/* Positioned so the disclosure chevron can center on BOTH lines, level with
+   the switch beside it, instead of riding the name line. */
 .settings-group .hook-row .settings-row-copy {
-  gap: 1px;
+  position: relative;
+  gap: 3px;
+  padding-right: 28px;
 }
 
 /* A switch or an "Always on" tag: one slot width, so every chevron beside it
@@ -227,9 +234,14 @@
   white-space: nowrap;
 }
 
+/* Still inside the disclosure button (so it clicks and announces with it), but
+   centered on the copy column; margin-top, not a translate, so the expand
+   rotation keeps the transform. */
 .hook-row-disclose .settings-disclosure-chevron {
-  flex: 0 0 auto;
-  margin-left: auto;
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  margin-top: -6px;
   color: var(--fg-muted);
   transition: transform 120ms ease-out;
 }

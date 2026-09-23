@@ -286,7 +286,7 @@ test('C30: input sizes and units', async ({ page }) => {
   await expect(page.locator('#sdk-port')).not.toHaveValue(/,/)
 })
 
-test('C31: hooks are compact rows; the label discloses Fires on, Action and Order', async ({ page }) => {
+test('C31: hooks are roomy rows with a level chevron; the label discloses Fires on, Action and Order', async ({ page }) => {
   await openSettings(page)
   const hooks = await clickNav(page, 'hooks')
   await expect(hooks.locator('.hook-row').first()).toBeVisible({ timeout: 20_000 })
@@ -295,8 +295,27 @@ test('C31: hooks are compact rows; the label discloses Fires on, Action and Orde
   const rowHeights = await hooks.locator('.hook-row').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
   // N23: an empty "Your hooks" is a real 44px empty row in a group, like every pane's.
   const emptyRows = await hooks.locator('.settings-empty').count()
-  expect(height, `rows ${rowHeights.join(',')}`).toBeLessThanOrEqual(140 + 48 * (n + emptyRows))
+  expect(height, `rows ${rowHeights.join(',')}`).toBeLessThanOrEqual(140 + 60 * (n + emptyRows))
   const first = hooks.locator('.hook-row').first()
+  // Not a wall: every row has air around its two lines, and the chevron sits
+  // level with the switch beside it (both centered on the row), not on the
+  // name line above it.
+  for (const h of rowHeights) expect(h, `rows ${rowHeights.join(',')}`).toBeGreaterThanOrEqual(56)
+  const level = await first.evaluate((row) => {
+    const mid = (el: Element | null) => { const r = el!.getBoundingClientRect(); return r.top + r.height / 2 }
+    const copy = row.querySelector('.settings-row-copy')!.getBoundingClientRect()
+    const help = row.querySelector('.settings-row-help')!.getBoundingClientRect()
+    const label = row.querySelector('.settings-row-label')!.getBoundingClientRect()
+    return {
+      chevronVsSwitch: Math.abs(mid(row.querySelector('.settings-disclosure-chevron')) - mid(row.querySelector('.settings-row-actions > *'))),
+      topAir: label.top - row.getBoundingClientRect().top,
+      bottomAir: row.getBoundingClientRect().bottom - help.bottom,
+      copyH: copy.height,
+    }
+  })
+  expect(level.chevronVsSwitch, JSON.stringify(level)).toBeLessThanOrEqual(2)
+  expect(level.topAir, JSON.stringify(level)).toBeGreaterThanOrEqual(8)
+  expect(level.bottomAir, JSON.stringify(level)).toBeGreaterThanOrEqual(8)
   await expect(first.locator('.settings-row-help')).toHaveCSS('white-space', 'nowrap')
   const disclose = first.locator('.hook-row-disclose')
   await expect(disclose).toHaveAttribute('aria-expanded', 'false')

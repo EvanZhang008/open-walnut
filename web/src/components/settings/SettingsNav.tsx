@@ -1,12 +1,13 @@
 /**
  * The settings sidebar: `Settings` title, Find a setting, and four groups
- * (Manage / Add-ons / Configure / Diagnostics; the registry's `plugins` group
- * value is displayed as `Add-ons`). One pane shows at a time; a nav click only
- * changes the hash (replace), SettingsPage mounts that pane.
+ * (Manage / Plugins / Configure / Diagnostics; the heading uses the same word
+ * as the Plugins pane and the Plugins page, never a synonym). One pane shows at
+ * a time; a nav click only changes the hash (replace), SettingsPage mounts that
+ * pane.
  *
  * Off-page links (Agents, Skills, Commands, Memory, settings-placed plugin
  * apps) route away and carry an arrow-up-right mark. Plugin rows arrive
- * asynchronously, so until the plugin runtime is ready the Add-ons group
+ * asynchronously, so until the plugin runtime is ready the Plugins group
  * renders as many quiet placeholders as last time (localStorage) and the
  * Configure group does not jump when the real rows land.
  */
@@ -31,7 +32,7 @@ export const NAV_GROUPS: readonly NavGroup[] = ['manage', 'plugins', 'configure'
 /** Displayed group headings (sentence case, no uppercase transform). */
 export const NAV_GROUP_LABELS: Readonly<Record<NavGroup, string>> = {
   manage: 'Manage',
-  plugins: 'Add-ons',
+  plugins: 'Plugins',
   configure: 'Configure',
   diagnostics: 'Diagnostics',
 }
