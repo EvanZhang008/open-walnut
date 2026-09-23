@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, Fragment, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -57,6 +57,8 @@ import {
   mapServerTaskSearchResults,
   taskReferenceMatchField,
 } from './search-results';
+import { splitRelatedMatches, taskMatchesLiterally } from './search-relevance';
+import '@/styles/todo-search.css';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
 import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
 import {
@@ -562,7 +564,9 @@ interface SortableTaskItemProps {
   onMoveToProject?: (taskId: string, project: string) => void;  // Kebab "Project" select
   isPinned?: boolean;
   pinnedTier?: FocusTier;
-  searchContext?: string; // Project context pill shown in search mode
+  searchContext?: string; // Project label shown at the end of a search / flat-list row
+  /** Search rows only: the tier a pinned hit lives in, as a pill (search is one flat list). */
+  searchTierLabel?: string;
   filterOverrideReason?: string;  // Why this task is outside current filters (focus override)
   isFadingOverride?: boolean;     // Task is fading out after focus moved away
   /** Virtual-group rendering: present when this task is part of a multi-member group. */
@@ -896,7 +900,7 @@ interface TaskRowBodyProps extends SortableTaskItemProps {
   dragListeners: DraggableSyntheticListeners;
 }
 
-const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder, folderProject, onMoveFolderToProject, sortableRef, sortableTransform, sortableTransition, isDragging, dragAttributes: attributes, dragListeners: listeners }: TaskRowBodyProps) {
+const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, searchTierLabel, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder, folderProject, onMoveFolderToProject, sortableRef, sortableTransform, sortableTransition, isDragging, dragAttributes: attributes, dragListeners: listeners }: TaskRowBodyProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const setNodeRef = sortableRef;
@@ -1189,6 +1193,16 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           {isDone && task.completed_at && (
             <span className="task-completed-time">{timeAgo(task.completed_at)}</span>
           )}
+          {searchTierLabel && pinnedTier && (
+            <span className={`todo-search-tier-pill todo-search-tier-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`} title={`Pinned in ${searchTierLabel}`}>
+              {searchTierLabel}
+            </span>
+          )}
+          {searchContext && (
+            <span className="todo-search-context-pill" title={searchContext}>
+              {searchContext}
+            </span>
+          )}
           {/* One-click ▶ Start — hover-revealed, before the kebab */}
           <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />
           {/* Kebab menu — all actions consolidated */}
@@ -1224,13 +1238,6 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <div className="task-filter-override-row">
             <span className="task-filter-override-badge" title="This task is outside your current filters and is shown temporarily because you navigated to it. It will fade away when you select another task.">
               {filterOverrideReason}
-            </span>
-          </div>
-        )}
-        {searchContext && (
-          <div className="todo-item-meta-row">
-            <span className="todo-search-context-pill" title={searchContext}>
-              {searchContext}
             </span>
           </div>
         )}
@@ -2964,9 +2971,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const isSearchMode = deferredSearchQuery.trim().length > 0;
 
   // ── Section-tab view resolution ──
-  // Search defaults to the stacked All view so EVERY region (pinned tiers, Recent,
-  // Tasks) shows its matches at once — the user finds the hit at a glance no matter
-  // where it lives. Tabs stay usable during a search via the ephemeral
+  // Search defaults to the All view, where every match lands in ONE flat ranked
+  // list (a pinned hit carries its tier as a pill; the tier regions step aside),
+  // so the best hit is first no matter where it lives. Tabs stay usable during a
+  // search via the ephemeral
   // `searchSection` override; the persisted tab is untouched, so clearing the query
   // restores the pre-search view.
   isSearchModeRef.current = isSearchMode;
@@ -5138,11 +5146,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const lowerQuery = deferredSearchQuery.trim().toLowerCase();
     // Keep the urgent pass on small metadata fields; descriptions and summaries can
     // contain enough text to block an input frame across a large task collection.
-    const metadataMatches = eligibleTasks.filter((t) =>
-      t.title.toLowerCase().includes(lowerQuery) ||
-      (t.project ?? '').toLowerCase().includes(lowerQuery) ||
-      (t.tags && t.tags.some(tag => tag.toLowerCase().includes(lowerQuery)))
-    );
+    const metadataMatches = eligibleTasks.filter((t) => taskMatchesLiterally(t, lowerQuery));
 
     if (!searchResults) {
       const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
@@ -5199,17 +5203,38 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!isSearchMode) setShowDoneResults(false);
   }, [isSearchMode]);
 
+  // Server hits that don't show the query in their own text fold into one
+  // "Related (N)" row; a quick-lane hit never folds. See search-relevance.ts.
+  const [showRelatedResults, setShowRelatedResults] = useState(false);
+  useEffect(() => { setShowRelatedResults(false); }, [deferredSearchQuery]);
+  const searchSplit = useMemo(() => {
+    const pool = showDoneResults ? searchMatches : searchOpenMatches;
+    if (!isSearchMode || !searchResults) return { primary: pool, related: [] as Task[] };
+    const lowerQuery = deferredSearchQuery.trim().toLowerCase();
+    const byId = new Map(pool.map((task) => [task.id, task]));
+    const weak = new Set<string>();
+    for (const result of searchResults) {
+      const task = byId.get(result.taskId);
+      if (task && !result.showsQuery && !taskMatchesLiterally(task, lowerQuery)) weak.add(task.id);
+    }
+    return splitRelatedMatches(pool, weak);
+  }, [searchOpenMatches, searchMatches, showDoneResults, isSearchMode, searchResults, deferredSearchQuery]);
+
   // Counts and cross-section visibility use the complete match set, but the main
   // list mounts a bounded number of rows so neither search phase can stall typing.
   const searchFiltered = useMemo(
-    () => (showDoneResults ? searchMatches : searchOpenMatches).slice(0, 40),
-    [searchOpenMatches, searchMatches, showDoneResults],
+    () => searchSplit.primary.slice(0, 40),
+    [searchSplit],
+  );
+  const searchRelatedRows = useMemo(
+    () => (showRelatedResults ? searchSplit.related.slice(0, 40) : []),
+    [searchSplit, showRelatedResults],
   );
 
-  // Count of search results (for display) — counts what the list SHOWS, the
-  // Done chip carries the hidden remainder.
+  // Count of search results (for display) — counts what the list SHOWS; the
+  // Done chip and the Related row carry the hidden remainder.
   const searchResultCount = isSearchMode
-    ? (showDoneResults ? searchMatches.length : searchOpenMatches.length)
+    ? searchSplit.primary.length + (showRelatedResults ? searchSplit.related.length : 0)
     : null;
 
   // Pinned membership and ordering stay based on the complete tier arrays. Filters only
@@ -7447,8 +7472,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       <div className={`home-navigation-scroll${isAll ? ' is-stacked' : ''}${unpinZone ? ' is-unpin-dragging' : ''}`}>
       <NavigationSections storageKey="walnut-todo-navigation-order">
         <NavigationSection key="pinned" navId="pinned">
-      {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
-      {(anyTierVisible || recentVisible) && (
+      {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin.
+          A search in the All view is ONE ranked list (pinned hits carry a tier pill), so
+          the tier regions step aside; a single-tier view still searches inside its tier. */}
+      {!(isSearchMode && isAll) && (anyTierVisible || recentVisible) && (
         <DndContext sensors={pinnedSensors} collisionDetection={pinnedCollision} onDragStart={handlePinnedDragStart} onDragMove={handlePinnedDragMove} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
             ref={pinnedWrapperRef}
@@ -7679,7 +7706,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           PINNED / RECENT / Notes. The Tasks TAB doesn't get one: the tab strip
           already labels the region, and folding the only visible section away
           would leave an empty panel with no way back except another tab. */}
-      {isAll && (
+      {isAll && !isSearchMode && (
       <NavigationHeading id="tasks" label="Projects" className="todo-pinned-header todo-tasks-header" collapsed={tasksCollapsed} onClick={() => toggleSection('tasks')}
         actions={[
           { key: 'organize', label: 'Organize', section: true },
@@ -7741,92 +7768,75 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             <p className="text-sm">No tasks found</p>
           </div>
         )}
-        {/* Search mode: flat, score-sorted list (no project grouping) */}
+        {/* Search mode: ONE flat ranked list (no tier, project or parent grouping: a
+            hit tucked under a folded parent would read as "not found", and nesting
+            would move a literal hit after it was shown). Literal hits lead, server
+            hits append, the loose tail folds behind the Related row. */}
         {!loading && isSearchMode && searchFiltered.length > 0 && (
           <div className="todo-search-results">
             {(() => {
-              // Compute child maps from searchFiltered (cross-project)
-              const searchChildIds = new Set<string>();
-              const searchChildCount = new Map<string, number>();
-              const searchChildParent = new Map<string, string>();
-              for (const task of searchFiltered) {
-                if (task.parent_task_id) {
-                  const parent = searchFiltered.find(t => t.id.startsWith(task.parent_task_id!));
-                  if (parent) {
-                    searchChildIds.add(task.id);
-                    searchChildParent.set(task.id, parent.id);
-                    searchChildCount.set(parent.id, (searchChildCount.get(parent.id) ?? 0) + 1);
-                  }
-                }
-              }
-              // Sort: parents first, children right after their parent
-              const ordered: typeof searchFiltered = [];
-              const emitted = new Set<string>();
-              for (const task of searchFiltered) {
-                if (emitted.has(task.id)) continue;
-                if (searchChildIds.has(task.id)) continue; // skip children on first pass
-                emitted.add(task.id);
-                ordered.push(task);
-                // Insert children right after parent
-                for (const child of searchFiltered) {
-                  if (!emitted.has(child.id) && child.parent_task_id && task.id.startsWith(child.parent_task_id)) {
-                    emitted.add(child.id);
-                    ordered.push(child);
-                  }
-                }
-              }
-              // Append any remaining (orphan children whose parent wasn't found)
-              for (const task of searchFiltered) {
-                if (!emitted.has(task.id)) ordered.push(task);
-              }
-              return ordered.map((task) => {
-                // Hide children of collapsed parents
-                const searchParentId = searchChildParent.get(task.id);
-                if (searchParentId && !expandedParents.has(searchParentId)) return null;
-                return (
-                  <Fragment key={task.id}>
-                  <SortableTaskItem
-                    key={task.id}
-                    task={task}
-                    isFocused={focusedTaskId === task.id}
-                    isDetailOpen={focusedTaskId === task.id && !suppressDetail}
-                    isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                    isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide && graceExiting}
-                    isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
-                    depth={depthMap.get(task.id) ?? 0}
-                    childCount={searchChildCount.get(task.id)}
-                    isExpanded={expandedParents.has(task.id)}
-                    onToggleExpand={toggleParentExpand}
-                    onClick={handleTaskClick}
-                  isSelected={selectedIds.has(task.id)}
-                  selectMode={selectMode}
-                  onSelectToggle={onSelectToggle}
-                  onStartSelect={onStartSelect}
-                    onSetPhase={setPhaseOrComplete}
-                            onDelete={onDelete}
-                    onSetPriority={onSetPriority}
-                    onSetDate={onSetDate}
-                    onSetStartDate={onSetStartDate}
-                    onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
-                    onOpenSession={onOpenSession}
-                    onStartSession={onStartSession}
-                    onExpandDetail={handleExpandDetail}
-                    onClearFocus={onClearFocus}
-                    onPinTask={onPinTask}
-                    onUnpinTask={onUnpinTask}
-                    onSetTier={onSetTier}
-                    onUnparent={onReparentTask ? handleUnparent : undefined}
-                    onMoveUp={moveUpMap.has(task.id) ? handleMoveUpById : undefined}
-                    onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
-                    isPinned={pinnedTaskIds?.has(task.id)}
-                    pinnedTier={getTier(task.id)}
-                    searchContext={task.project || 'Inbox'}
-                    filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
-                    isFadingOverride={fadingOverrideId === task.id}
-                  />
-                  </Fragment>
-                );
-              });
+              const renderSearchRows = (rows: Task[]) => {
+                return rows.map((task) => {
+                  const tier = pinnedTaskIds?.has(task.id) ? getTier(task.id) : undefined;
+                  return (
+                    <SortableTaskItem
+                      key={task.id}
+                      task={task}
+                      isFocused={focusedTaskId === task.id}
+                      isDetailOpen={focusedTaskId === task.id && !suppressDetail}
+                      isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                      isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide && graceExiting}
+                      isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
+                      onClick={handleTaskClick}
+                      isSelected={selectedIds.has(task.id)}
+                      selectMode={selectMode}
+                      onSelectToggle={onSelectToggle}
+                      onStartSelect={onStartSelect}
+                      onSetPhase={setPhaseOrComplete}
+                      onDelete={onDelete}
+                      onSetPriority={onSetPriority}
+                      onSetDate={onSetDate}
+                      onSetStartDate={onSetStartDate}
+                      onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                      onOpenSession={onOpenSession}
+                      onStartSession={onStartSession}
+                      onExpandDetail={handleExpandDetail}
+                      onClearFocus={onClearFocus}
+                      onPinTask={onPinTask}
+                      onUnpinTask={onUnpinTask}
+                      onSetTier={onSetTier}
+                      onUnparent={onReparentTask ? handleUnparent : undefined}
+                      onMoveUp={moveUpMap.has(task.id) ? handleMoveUpById : undefined}
+                      onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
+                      isPinned={pinnedTaskIds?.has(task.id)}
+                      pinnedTier={getTier(task.id)}
+                      searchContext={task.project || 'Inbox'}
+                      searchTierLabel={tier ? tierDisplayLabel(tier, customTiers) : undefined}
+                      filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
+                      isFadingOverride={fadingOverrideId === task.id}
+                    />
+                  );
+                });
+              };
+              const relatedCount = searchSplit.related.length;
+              return (
+                <>
+                  {renderSearchRows(searchFiltered)}
+                  {relatedCount > 0 && (
+                    <button
+                      type="button"
+                      className={`todo-search-related-toggle${showRelatedResults ? ' expanded' : ''}`}
+                      aria-expanded={showRelatedResults}
+                      title={showRelatedResults ? 'Hide loosely related results' : 'Show loosely related results'}
+                      onClick={() => setShowRelatedResults((v) => !v)}
+                    >
+                      <span>Related ({relatedCount})</span>
+                      <span className="todo-search-related-chevron" aria-hidden="true">{'\u203A'}</span>
+                    </button>
+                  )}
+                  {searchRelatedRows.length > 0 && renderSearchRows(searchRelatedRows)}
+                </>
+              );
             })()}
           </div>
         )}

@@ -1,0 +1,28 @@
+/* Home task-panel search rows: one flat ranked list, so each row names where it
+   lives at its end. A pinned hit gets its tier as a pill; the project is a muted
+   label cut to its first few characters (the full name is the tooltip). */
+.todo-search-context-pill {
+  flex: 0 3 auto; min-width: 0; max-width: 72px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: 11px; color: var(--fg-muted);
+}
+/* In a narrow panel the title keeps a good share of the row and the project label gives
+   way first; a long custom tier name stops at 88px. */
+.todo-search-results .todo-item-title, .todo-flat-results .todo-item-title { min-width: min(40%, 140px); }
+.todo-search-tier-pill {
+  flex: none; max-width: 88px; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; border-radius: 8px; font-size: 10.5px; font-weight: 500; line-height: 16px; white-space: nowrap;
+  --pill-tier: var(--tier-custom, #af52de);
+  color: var(--pill-tier); background: color-mix(in srgb, var(--pill-tier) 13%, transparent);
+}
+.todo-search-tier-focus { --pill-tier: var(--tier-focus, var(--accent, #007aff)); }
+.todo-search-tier-satellite { --pill-tier: var(--tier-satellite, #5856d6); }
+.todo-search-tier-backlog { --pill-tier: var(--tier-backlog, #30b0c7); }
+.todo-search-tier-wait { --pill-tier: var(--tier-wait, #ff9f0a); }
+
+/* "Related (N) ›": loose server hits wait behind one heading-style row. */
+.todo-search-related-toggle {
+  display: flex; align-items: center; gap: 4px; width: 100%; min-height: 26px; margin-top: 4px; padding: 0 4px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--fg-secondary); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.todo-search-related-toggle:hover { background: var(--bg-hover); }
+.todo-search-related-chevron { font-size: 14px; line-height: 1; color: var(--fg-muted); transition: transform .15s; }
+.todo-search-related-toggle.expanded .todo-search-related-chevron { transform: rotate(90deg); }

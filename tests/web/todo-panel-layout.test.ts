@@ -28,22 +28,23 @@ describe('TodoPanel layout: task controls preserve title space', () => {
     const contentIdx = TODO_PANEL_SRC.indexOf('"todo-item-content"');
     const titleRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-title-row"', contentIdx);
     const kebabIdx = TODO_PANEL_SRC.indexOf('<TaskKebabMenu', titleRowIdx);
-    const metaRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-meta-row"', kebabIdx);
     expect(contentIdx).toBeGreaterThan(-1);
     expect(titleRowIdx).toBeGreaterThan(contentIdx);
     expect(kebabIdx).toBeGreaterThan(titleRowIdx);
-    expect(metaRowIdx).toBeGreaterThan(kebabIdx);
   });
 
-  it('keeps the phase status control in the title row, not the search meta row', () => {
+  it('keeps a search row on ONE line: phase, title, tier pill, project label, then the kebab', () => {
     const titleRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-title-row"');
     const phaseStatusIdx = TODO_PANEL_SRC.indexOf('className={`task-phase-icon-btn', titleRowIdx);
-    const metaRowIdx = TODO_PANEL_SRC.indexOf('"todo-item-meta-row"');
-    const ordinaryItemEnd = TODO_PANEL_SRC.indexOf('// ── Static task item', metaRowIdx);
+    const tierPillIdx = TODO_PANEL_SRC.indexOf('todo-search-tier-pill', titleRowIdx);
+    const projectIdx = TODO_PANEL_SRC.indexOf('"todo-search-context-pill"', titleRowIdx);
+    const kebabIdx = TODO_PANEL_SRC.indexOf('<TaskKebabMenu', titleRowIdx);
     expect(phaseStatusIdx).toBeGreaterThan(titleRowIdx);
-    expect(metaRowIdx).toBeGreaterThan(phaseStatusIdx);
-    expect(TODO_PANEL_SRC.slice(metaRowIdx, ordinaryItemEnd))
-      .not.toContain('className={`task-phase-icon-btn');
+    expect(tierPillIdx).toBeGreaterThan(phaseStatusIdx);
+    expect(projectIdx).toBeGreaterThan(tierPillIdx);
+    expect(kebabIdx).toBeGreaterThan(projectIdx);
+    // The old second "meta" line is gone for good.
+    expect(TODO_PANEL_SRC).not.toContain('"todo-item-meta-row"');
   });
 
   it('CSS lets task content and titles consume the available row width', () => {

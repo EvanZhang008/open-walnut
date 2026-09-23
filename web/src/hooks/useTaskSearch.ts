@@ -6,13 +6,20 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { apiGet } from '@/api/client';
 import { taskIdsFromSearchResults } from '@/components/tasks/search-results';
+import { queryTerms, serverRowShowsQuery } from '@/components/tasks/search-relevance';
 
 export interface TaskSearchResult {
   taskId: string;
+  /** Some row for this task shows the query in its own title or snippet; the
+   *  panel folds tasks without that evidence into "Related". */
+  showsQuery: boolean;
 }
 
 interface ServerSearchItem {
   taskId?: string;
+  title?: string;
+  snippet?: string;
+  matchField?: string;
 }
 
 export interface UseTaskSearchReturn {
@@ -115,8 +122,15 @@ export function useTaskSearch(): UseTaskSearchReturn {
           || generation !== requestGenerationRef.current
         ) return;
 
+        // A task can arrive as several rows (its own hit plus its sessions'); any
+        // one of them showing the query is evidence for the task.
+        const terms = queryTerms(q);
+        const showsQuery = new Set<string>();
+        for (const item of res.results) {
+          if (item.taskId && serverRowShowsQuery(item, terms)) showsQuery.add(item.taskId);
+        }
         const taskResults = taskIdsFromSearchResults(res.results)
-          .map((taskId) => ({ taskId }));
+          .map((taskId) => ({ taskId, showsQuery: showsQuery.has(taskId) }));
 
         setResults(taskResults);
       } catch (err) {

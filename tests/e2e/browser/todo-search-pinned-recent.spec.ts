@@ -5,7 +5,9 @@
  *
  * Search must be ONE lens over the whole panel: when a query is active, the
  * Pinned tiers and the Recent feed show only matching cards, exactly like the
- * main Tasks list — and clearing the query restores every card.
+ * main Tasks list — and clearing the query restores every card. Since
+ * 2026-09-23 the All view shows those hits as one flat ranked list (a pinned
+ * hit carries its tier as a pill); a single-tier view filters in place.
  *
  * Real-user flow: no page.goto for navigation beyond the initial load, no
  * mocked search route (the fixture runs WALNUT_DISABLE_SEARCH=1, so the
@@ -75,8 +77,20 @@ test('search filters the Pinned tiers and Recent feed like the Tasks list', asyn
   await page.locator('#home-task-navigation .todo-search-input').click();
   await page.locator('.todo-search-input').fill(token);
 
-  // The report's bug: pinned cards ignored the query. Matching cards stay,
-  // non-matching cards leave — in BOTH the Focus tier and the Recent feed.
+  // The All view searches as ONE ranked list (2026-09-23): the pinned hit is a
+  // row carrying its tier pill, the tier regions step aside, and a pin that
+  // doesn't match is nowhere.
+  const searchRow = (id: string) =>
+    page.locator(`.todo-search-results .todo-panel-item[data-task-id="${id}"]`);
+  await expect(searchRow(pinnedMatch)).toBeVisible({ timeout: 5_000 });
+  await expect(searchRow(pinnedMatch).locator('.todo-search-tier-pill')).toHaveText('Focus');
+  await expect(searchRow(pinnedMiss)).toHaveCount(0);
+  await expect(page.locator('#home-task-navigation .todo-focus-card')).toHaveCount(0);
+
+  // The report's bug: pinned cards ignored the query. A single-tier view still
+  // searches inside its tier: matching cards stay, non-matching cards leave, in
+  // BOTH the Focus tier and the Recent feed.
+  await selectSection(page, 'Focus');
   await expect(focusCard(pinnedMiss)).toHaveCount(0, { timeout: 5_000 });
   await expect(focusCard(pinnedMatch)).toBeVisible();
   await selectSection(page, 'Recent');

@@ -9921,20 +9921,7 @@ body.walnut-dragging {
   padding: 4px 0;
 }
 
-/* Context pill shown in search results (category / project) */
-.todo-search-context-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 5px;
-  font-size: 10px;
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  border-radius: 3px;
-  white-space: nowrap;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* Search-row project label + tier pill: styles/todo-search.css */
 
 /* ── Simplified toolbar: Search + View dropdown in one row ── */
 .todo-panel-toolbar {

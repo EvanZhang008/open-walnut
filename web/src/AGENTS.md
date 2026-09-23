@@ -9,7 +9,10 @@ chat, turn boundaries, or streaming block rendering** — that area has an incid
 [`docs/investigation/qmd-search-performance/README.md`](../../docs/investigation/qmd-search-performance/README.md)
 (historical, names the removed engine) before changing search requests, provisional results,
 stale-response handling, or result merging: the search races and merge rules it documents are
-still live on the client.
+still live on the client. The home panel shows a search as ONE flat ranked list: literal hits
+lead and never move, server hits only append, and a server hit whose title or snippet doesn't
+show the typed text folds into "Related (N)" (never by raw score: lanes score on different
+scales; [`search-relevance.ts`](./components/tasks/search-relevance.ts)).
 
 **Task and session status:** read [Task/session status decisions](../../docs/decision/task-session-status.md) before changing red rows, read markers, Waiting badges, or connection hydration. Task commits and session status have separate authority.
 
