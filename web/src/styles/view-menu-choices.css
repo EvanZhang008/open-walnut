@@ -1,0 +1,6 @@
+/* A filter-menu row with a few values (Session panels: 1 to 5, Auto): the label on the left and
+   the menu's own segmented control on the right, in the row shape of the "Show tab bar" switch.
+   Two classes: .vd-toggle (home-navigation.css) loads after this file and would win a tie. */
+.vd-toggle.vd-choice-row { cursor: default; padding-top: 4px; padding-bottom: 4px; }
+.vd-choice-row .vd-seg { width: auto; flex: none; background: var(--bg); }
+.vd-choice-row .vd-seg-btn { flex: none; min-width: 26px; font-variant-numeric: tabular-nums; }

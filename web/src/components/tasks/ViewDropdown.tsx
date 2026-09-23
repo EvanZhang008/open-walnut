@@ -30,6 +30,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ICON_SLIDERS } from '../common/Icons';
+import '@/styles/view-menu-choices.css';
 import { INBOX_TAB } from './task-tabs';
 import { log } from '@/utils/log';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -121,8 +122,16 @@ export interface ViewOption {
   /** An on/off setting: drawn as a switch row instead of a chip, `active` is its state. */
   toggle?: boolean;
   onSelect: () => void;
+  choices?: undefined;
 }
-export interface ViewOptionGroup { label: string; options: ViewOption[] }
+/** A setting with a few values: one row, its label on the left, a segmented pick on the right. */
+export interface ViewChoiceRow {
+  key: string;
+  label: string;
+  title?: string;
+  choices: { key: string; label: string; active: boolean; title?: string; onSelect: () => void }[];
+}
+export interface ViewOptionGroup { label: string; options: (ViewOption | ViewChoiceRow)[] }
 
 // Wide enough for the 168px rail (.vd-rail column in globals.css) plus a
 // readable 2-col detail pane; the placement math clamps to the viewport on
@@ -546,7 +555,19 @@ function SectionDetail(props: {
           <div key={group.label} className="vd-field vd-span2" data-view-group={group.label}>
             <span className="vd-label">{group.label}</span>
             <div className="vd-cats">
-              {group.options.map((o) => o.toggle ? (
+              {group.options.map((o) => o.choices ? (
+                <div key={o.key} className="vd-toggle vd-choice-row" data-view-option={o.key} title={o.title}>
+                  <span>{o.label}</span>
+                  <span className="vd-seg" role="group" aria-label={o.label}>
+                    {o.choices.map((c) => (
+                      <button key={c.key} type="button" aria-pressed={c.active}
+                        className={`vd-seg-btn${c.active ? ' vd-active' : ''}`} data-choice={c.key} title={c.title} onClick={c.onSelect}>
+                        {c.label}
+                      </button>
+                    ))}
+                  </span>
+                </div>
+              ) : o.toggle ? (
                 <label key={o.key} className="vd-toggle" data-view-option={o.key} title={o.title}>
                   <span>{o.label}</span>
                   <input type="checkbox" role="switch" className="vd-switch" checked={!!o.active} onChange={o.onSelect} />

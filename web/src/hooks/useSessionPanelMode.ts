@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { fetchConfig, updateConfig } from '@/api/config';
 import { useEvent } from '@/hooks/useWebSocket';
 
@@ -84,6 +84,28 @@ const modeListeners = new Set<(m: SessionPanelMode) => void>();
 function broadcastMode(m: SessionPanelMode) {
   cachedMode = m;
   for (const listener of modeListeners) listener(m);
+}
+
+/**
+ * The column count the home strip is budgeting right now, published by the one instance
+ * that measures the strip (MainPage passes its width). Under Auto that number depends on
+ * the window, so a control elsewhere (the task panel's filter menu) reads it here to say
+ * how many panels Auto means at this moment instead of guessing from a width it can't see.
+ */
+let liveCount: number | null = null;
+const liveCountListeners = new Set<() => void>();
+function publishLiveCount(n: number) {
+  if (liveCount === n) return;
+  liveCount = n;
+  for (const listener of liveCountListeners) listener();
+}
+const subscribeLiveCount = (listener: () => void) => {
+  liveCountListeners.add(listener);
+  return () => { liveCountListeners.delete(listener); };
+};
+/** How many session panels the home strip allows right now; null until the home page has measured it. */
+export function useLiveSessionPanelCount(): number | null {
+  return useSyncExternalStore(subscribeLiveCount, () => liveCount, () => null);
 }
 
 /**
@@ -173,6 +195,11 @@ export function useSessionPanelMode(containerWidth = 0) {
     explicitCount ??
     (containerWidth >= AUTO_MIN_WIDTH_FOR_THREE ? 3 :
      containerWidth >= AUTO_MIN_WIDTH_FOR_TWO ? 2 : 1);
+
+  // Only a caller that measured the strip knows the real count; the rest pass no width.
+  useEffect(() => {
+    if (containerWidth > 0) publishLiveCount(effectiveMaxPanels);
+  }, [containerWidth, effectiveMaxPanels]);
 
   return { mode, setMode, effectiveMaxPanels, loaded } as const;
 }

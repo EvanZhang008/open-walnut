@@ -25,6 +25,7 @@ import { TodoSearchBar } from './TodoSearchBar';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { TASK_SHORTCUTS_KEY, useNavigationPreference } from '@/hooks/useNavigationPreference';
+import { useSessionPanelsViewGroup } from './session-panels-view-group';
 import { AgentSearchPanel } from './AgentSearchPanel';
 import { NewLauncherButton } from './NewLauncherButton';
 import { TierPlusButton } from './ProjectHeaderMenus';
@@ -2849,6 +2850,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // collapse flag (a tab you just picked must never show up already folded).
   const [activeSection, setActiveSection] = useState<TodoSection>(readSection);
   const [quickViews, setQuickViews] = useNavigationPreference(TASK_SHORTCUTS_KEY);
+  const sessionPanelsGroup = useSessionPanelsViewGroup();
   // Per-tier view mode (project clustering vs raw pin order) — see TierViewMode.
   const [tierViewModes, setTierViewModes] = useState<Record<string, TierViewMode>>(readTierViewModes);
   const tierViewMode = useCallback(
@@ -7394,6 +7396,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   viewGroups.push({ label: 'Task panel', options: [
     { key: 'quick-views', label: 'Show tab bar', toggle: true, active: quickViews, title: 'All, Focus, Satellite and the other views as tabs across the top', onSelect: () => setQuickViews(!quickViews) },
   ] });
+  viewGroups.push(sessionPanelsGroup);
 
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}${activeDragPinnedId ? ' is-task-dragging' : ''}`} ref={splitterContainerRef}>
