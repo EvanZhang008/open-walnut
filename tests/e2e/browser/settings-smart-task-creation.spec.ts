@@ -11,13 +11,19 @@
  *   - the runner radio writes jev.decisions, shows Jev's fields only for Jev,
  *     and a round trip keeps the endpoint the user typed
  *   - the provider card opens on its `#providers` deep link
+ *   - a page left open never undoes a change made elsewhere: 2026-09-22, a
+ *     Settings window open since before `agent.main_provider` was switched to
+ *     Claude Code saved an unrelated field and wrote the old `agent` back
+ *
+ * Every test here writes `agent`, so they share this one serial file: two
+ * files running in parallel against the shared fixture would race each other.
  */
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(90_000)
 
-type Cfg = { agent?: Record<string, unknown>; jev?: Record<string, unknown> }
+type Cfg = { agent?: Record<string, unknown>; jev?: Record<string, unknown>; tools?: Record<string, unknown> }
 
 async function serverConfig(request: APIRequestContext): Promise<Cfg> {
   const res = await request.get('/api/config')
@@ -46,6 +52,7 @@ test.afterAll(async ({ request }) => {
   // The fixture server is shared by every spec: put back exactly what was there.
   await request.put('/api/config', { data: { agent: original.agent ?? {} } })
   await request.put('/api/config', { data: { jev: original.jev ?? null } })
+  await request.put('/api/config', { data: { tools: original.tools ?? {} } })
 })
 
 test('the nav has one engine choice: no AI Provider, no Jev Decisions', async ({ page }) => {
@@ -205,4 +212,43 @@ test('on Claude Code the card is folded to one line and opens on its deep link',
   // The app keeps polling /api/config; one intercepted read can still be in
   // flight when the page closes.
   await page.unrouteAll({ behavior: 'ignoreErrors' })
+})
+
+test('an autosave on a page opened earlier keeps what another window changed', async ({ page, request }) => {
+  await page.goto('/settings')
+  const nav = page.getByTestId('settings-nav-advanced')
+  await expect(nav).toBeVisible({ timeout: 30_000 })
+  await nav.click()
+  await page.locator('#advanced summary', { hasText: 'Exec Security' }).click()
+  const timeout = page.locator('#exec-timeout')
+  await expect(timeout).toBeVisible({ timeout: 15_000 })
+
+  // Another writer, after this page loaded.
+  const agent = (await serverConfig(request)).agent ?? {}
+  await request.put('/api/config', { data: { agent: { ...agent, session_organize: false, language: 'stale-page-marker' } } })
+
+  await timeout.fill('4321')
+  await expect.poll(async () => {
+    const tools = (await serverConfig(request)).tools as { exec?: { timeout?: number } } | undefined
+    return tools?.exec?.timeout
+  }, { timeout: 15_000 }).toBe(4321)
+
+  const after = (await serverConfig(request)).agent ?? {}
+  expect(after.session_organize).toBe(false)
+  expect(after.language).toBe('stale-page-marker')
+  expect(after.main_provider).toBe(agent.main_provider)
+})
+
+test('the page shows another window\'s change without a reload', async ({ page, request }) => {
+  await page.goto('/settings')
+  const nav = page.getByTestId('settings-nav-tasks')
+  await expect(nav).toBeVisible({ timeout: 30_000 })
+  await nav.click()
+  const fill = page.locator('#smart-fill-details')
+  await expect(fill).toBeVisible({ timeout: 15_000 })
+  const before = (await fill.getAttribute('aria-checked')) === 'true'
+
+  const agent = (await serverConfig(request)).agent ?? {}
+  await request.put('/api/config', { data: { agent: { ...agent, quick_parse: !before } } })
+  await expect(fill).toHaveAttribute('aria-checked', String(!before), { timeout: 10_000 })
 })

@@ -49,7 +49,10 @@ export function AudioCaptureSection({ config, onSave }: Props) {
     setLoadingApps(true);
     try {
       const apps = await fetchAudioApps();
-      setRunningApps(apps);
+      // One row per bundle id: several processes can share one (system text
+      // services run a copy per host app), and the id is the option's key.
+      const seen = new Set<string>();
+      setRunningApps(apps.filter(a => !seen.has(a.bundleIdentifier) && seen.add(a.bundleIdentifier)));
     } catch { /* ignore */ }
     finally { setLoadingApps(false); }
   }, []);
