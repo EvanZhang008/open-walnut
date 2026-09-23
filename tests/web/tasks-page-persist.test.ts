@@ -15,6 +15,10 @@ import {
   sanitizeQuery,
   readSearch,
   writeSearch,
+  readSort,
+  writeSort,
+  LS_TASKS_PAGE_SORT,
+  TASKS_PAGE_DEFAULT_SORT,
   type KeyStore,
 } from '../../web/src/components/tasks/tasks-page-persist';
 
@@ -110,6 +114,33 @@ describe('query', () => {
     expect(sanitizeQuery('x')).toEqual(TASKS_PAGE_DEFAULT_QUERY);
     expect(readQuery(fakeStore({ [LS_TASKS_PAGE_QUERY]: '[1,' }))).toEqual(TASKS_PAGE_DEFAULT_QUERY);
     expect(readQuery(brokenStore)).toEqual(TASKS_PAGE_DEFAULT_QUERY);
+  });
+});
+
+describe('sort', () => {
+  it('nothing stored → most recently updated first', () => {
+    expect(readSort(fakeStore())).toEqual({ key: 'updated', dir: 'desc' });
+    expect(readSort(fakeStore())).toEqual(TASKS_PAGE_DEFAULT_SORT);
+  });
+
+  it('round-trips a column sort', () => {
+    const s = fakeStore();
+    writeSort({ key: 'created', dir: 'asc' }, s);
+    expect(readSort(s)).toEqual({ key: 'created', dir: 'asc' });
+  });
+
+  it('"off" is a remembered choice, not a fall-through to the default', () => {
+    const s = fakeStore();
+    writeSort(null, s);
+    expect(s.map.get(LS_TASKS_PAGE_SORT)).toBe('null');
+    expect(readSort(s)).toBeNull();
+  });
+
+  it('an unknown key, a bad direction or garbage reads as the default', () => {
+    expect(readSort(fakeStore({ [LS_TASKS_PAGE_SORT]: JSON.stringify({ key: 'bogus', dir: 'asc' }) }))).toEqual(TASKS_PAGE_DEFAULT_SORT);
+    expect(readSort(fakeStore({ [LS_TASKS_PAGE_SORT]: JSON.stringify({ key: 'due', dir: 'up' }) }))).toEqual(TASKS_PAGE_DEFAULT_SORT);
+    expect(readSort(fakeStore({ [LS_TASKS_PAGE_SORT]: '{nope' }))).toEqual(TASKS_PAGE_DEFAULT_SORT);
+    expect(readSort(brokenStore)).toEqual(TASKS_PAGE_DEFAULT_SORT);
   });
 });
 

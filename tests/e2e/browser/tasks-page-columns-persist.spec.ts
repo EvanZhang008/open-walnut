@@ -72,16 +72,18 @@ async function setColumn(page: Page, id: string, on: boolean): Promise<void> {
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 
-test('column chooser adds Created / Updated / Phase, drops Session, stays aligned', async ({ page, baseURL }) => {
+test('column chooser adds Created / Session / Phase, drops Updated, stays aligned', async ({ page, baseURL }) => {
   await isolateUiPrefs(page)
   await openHome(page, baseURL!)
   await gotoTasks(page)
 
-  // Shipped layout: no timestamp columns, Session present.
+  // Shipped layout: Title · Due · Updated, sorted by Updated (newest first).
   const before = await headerLabels(page)
-  expect(before).toContain('Title')
-  expect(before).toContain('Session')
+  expect(before).toEqual(expect.arrayContaining(['Title', 'Due', 'Updated']))
+  expect(before).not.toContain('Session')
   expect(before).not.toContain('Created')
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toContainText('Updated')
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveText('▼')
   await expect(row(page, OPEN_RECENT)).toBeVisible({ timeout: 15_000 })
   await expectAligned(page, OPEN_RECENT)
   await page.screenshot({ path: `${SHOTS}/01-default-columns.png`, clip: { x: 0, y: 0, width: 1280, height: 420 } })
@@ -91,23 +93,23 @@ test('column chooser adds Created / Updated / Phase, drops Session, stays aligne
   // Title is not offered — it cannot be turned off.
   await expect(menu(page).locator('[data-column="title"]')).toHaveCount(0)
   await setColumn(page, 'created', true)
-  await setColumn(page, 'updated', true)
+  await setColumn(page, 'session', true)
   await setColumn(page, 'phase', true)
-  await setColumn(page, 'session', false)
+  await setColumn(page, 'updated', false)
 
   // The table re-lays out live behind the open menu.
   const after = await headerLabels(page)
-  expect(after).toEqual(expect.arrayContaining(['Title', 'Phase', 'Created', 'Updated']))
-  expect(after).not.toContain('Session')
-  // Display order is fixed: Phase precedes Due, timestamps come last.
+  expect(after).toEqual(expect.arrayContaining(['Title', 'Phase', 'Session', 'Created']))
+  expect(after).not.toContain('Updated')
+  // Display order is fixed: Phase precedes Due, Session precedes the timestamps.
   expect(after.indexOf('Phase')).toBeLessThan(after.indexOf('Due'))
-  expect(after.indexOf('Created')).toBeLessThan(after.indexOf('Updated'))
+  expect(after.indexOf('Session')).toBeLessThan(after.indexOf('Created'))
 
   const r = row(page, OPEN_RECENT)
   await expect(r.locator('[data-col="created"]')).toHaveText(/^\d+d ago$/)
-  await expect(r.locator('[data-col="updated"]')).toHaveText(/^\d+h ago$/)
   await expect(r.locator('[data-col="phase"]')).toHaveText('In Progress')
-  await expect(r.locator('[data-col="session"]')).toHaveCount(0)
+  await expect(r.locator('[data-col="session"]')).toHaveCount(1)
+  await expect(r.locator('[data-col="updated"]')).toHaveCount(0)
   // Tooltip carries the full timestamp.
   expect(await r.locator('[data-col="created"]').getAttribute('title')).toMatch(/\d/)
   await expectAligned(page, OPEN_RECENT)
@@ -132,10 +134,15 @@ test('column chooser adds Created / Updated / Phase, drops Session, stays aligne
   await menu(page).getByRole('button', { name: 'Reset to default' }).click()
   await page.keyboard.press('Escape')
   const reset = await headerLabels(page)
-  expect(reset).toContain('Session')
+  expect(reset).toContain('Updated')
+  expect(reset).not.toContain('Session')
   expect(reset).not.toContain('Created')
   expect(reset).not.toContain('Tags')
   await expectAligned(page, OPEN_RECENT)
+  // The table was sorted by Created, which the reset just hid: the sort falls back
+  // to the shipped order (Updated, newest first) instead of lingering invisibly.
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toContainText('Updated')
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveText('▼')
 })
 
 test('project, filter, search and columns survive leaving the page and a reload', async ({ page, baseURL }) => {
@@ -145,9 +152,13 @@ test('project, filter, search and columns survive leaving the page and a reload'
 
   // Make four distinct choices.
   await openColumns(page)
-  await setColumn(page, 'updated', true)
-  await setColumn(page, 'session', false)
+  await setColumn(page, 'created', true)
+  await setColumn(page, 'project', true)
+  await setColumn(page, 'due', false)
   await page.keyboard.press('Escape')
+  // Turn the sort OFF too: "off" must be remembered, not snap back to Updated.
+  await headers(page).filter({ hasText: 'Updated' }).click()   // desc → off
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toHaveCount(0)
   await page.locator('[data-testid="tasks-rail"] .tp-rail-item', { hasText: 'Lantern' }).click()
   await expect(page.locator('.tasks-page .tp-title')).toHaveText('Lantern')
   await chip(page, 'Done').click()
@@ -163,10 +174,11 @@ test('project, filter, search and columns survive leaving the page and a reload'
     await expect(chip(page, 'Done'), label).toHaveClass(/\bon\b/)
     await expect(chip(page, 'Todo'), label).toHaveClass(/\bon\b/)
     const labels = await headerLabels(page)
-    expect(labels, label).toContain('Updated')
-    expect(labels, label).not.toContain('Session')
+    expect(labels, label).toContain('Created')
+    expect(labels, label).not.toContain('Due')
     // A per-project board has no Project column, chosen or not.
     expect(labels, label).not.toContain('Project')
+    await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`), label).toHaveCount(0)
     await expect(row(page, OPEN_RECENT), label).toBeVisible()
     expect(await page.locator(`${TABLE} .tp-row`).count(), label).toBe(hitsBefore)
     await expect(page.locator('[data-testid="tasks-rail"] .tp-rail-item.active'), label).toHaveText(/Lantern/)

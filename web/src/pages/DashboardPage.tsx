@@ -14,7 +14,8 @@ import {
   LS_TASKS_PAGE_COLUMNS, parseColumns, serializeColumns, type TpColumnId,
 } from '@/components/tasks/tasks-table-columns';
 import {
-  readActiveProject, writeActiveProject, readQuery, writeQuery, readSearch, writeSearch,
+  readActiveProject, writeActiveProject, readQuery, writeQuery, readSearch, writeSearch, readSort, writeSort,
+  TASKS_PAGE_DEFAULT_SORT,
 } from '@/components/tasks/tasks-page-persist';
 import {
   ViewDropdown,
@@ -39,19 +40,8 @@ import type { Task } from '@open-walnut/core';
 import { visibleInterval } from '@/utils/page-visibility';
 import '@/styles/tasks-page.css';
 
-const LS_SORT = 'walnut-tasks-page-sort';
 const LS_GROUPED = 'walnut-tasks-page-grouped';
 const LS_COLLAPSED = 'walnut-tasks-page-collapsed';
-
-function readSort(): TpSort | null {
-  try {
-    const raw = localStorage.getItem(LS_SORT);
-    if (!raw) return null;
-    const v = JSON.parse(raw) as TpSort;
-    if (v && typeof v.key === 'string' && (v.dir === 'asc' || v.dir === 'desc')) return v;
-  } catch { /* ignore */ }
-  return null;
-}
 
 function readGrouped(): boolean {
   try { return localStorage.getItem(LS_GROUPED) !== '0'; } catch { return true; }
@@ -147,20 +137,24 @@ export function DashboardPage() {
   const [sort, setSort] = useState<TpSort | null>(readSort);
   const [grouped, setGrouped] = useState(readGrouped);
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+
+  const handleSortChange = useCallback((s: TpSort | null) => {
+    setSort(s);
+    writeSort(s);
+  }, []);
+
   const [columns, setColumns] = useState<TpColumnId[]>(readColumns);
 
   const handleColumnsChange = useCallback((next: TpColumnId[]) => {
     setColumns(next);
     try { localStorage.setItem(LS_TASKS_PAGE_COLUMNS, serializeColumns(next)); } catch { /* ignore */ }
-  }, []);
-
-  const handleSortChange = useCallback((s: TpSort | null) => {
-    setSort(s);
-    try {
-      if (s) localStorage.setItem(LS_SORT, JSON.stringify(s));
-      else localStorage.removeItem(LS_SORT);
-    } catch { /* ignore */ }
-  }, []);
+    // Hiding the column the table is sorted by would leave an invisible sort with
+    // no header to turn it off from; fall back to the shipped order instead. (Sort
+    // keys and column ids coincide except for Title, which cannot be hidden.)
+    if (sort && sort.key !== 'title' && !next.includes(sort.key as TpColumnId)) {
+      handleSortChange({ ...TASKS_PAGE_DEFAULT_SORT });
+    }
+  }, [sort, handleSortChange]);
 
   const handleGroupedToggle = useCallback(() => {
     setGrouped((v) => {

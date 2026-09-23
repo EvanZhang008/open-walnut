@@ -63,19 +63,26 @@ describe('toggleColumn', () => {
 });
 
 describe('visibleColumns', () => {
-  it('the default choice in the All Tasks view is exactly the pre-chooser layout', () => {
+  it('the default choice is Title · Priority · Due · Updated (Priority only with the flag on)', () => {
     const vis = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: true, showPriority: true });
-    expect(vis.map((c) => c.label)).toEqual(['Priority', 'Due', 'Session', 'Project']);
+    expect(vis.map((c) => c.label)).toEqual(['Priority', 'Due', 'Updated']);
+    // For most people (priority off) the table reads Title · Due · Updated.
+    const noPri = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: true, showPriority: false });
+    expect(noPri.map((c) => c.id)).toEqual(['due', 'updated']);
   });
 
   it('Project is only drawn in the All Tasks view', () => {
-    const vis = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: false, showPriority: true });
-    expect(vis.map((c) => c.id)).toEqual(['priority', 'due', 'session']);
+    const chosen: TpColumnId[] = ['due', 'session', 'project'];
+    expect(visibleColumns(chosen, { isAll: true, showPriority: true }).map((c) => c.id))
+      .toEqual(['due', 'session', 'project']);
+    expect(visibleColumns(chosen, { isAll: false, showPriority: true }).map((c) => c.id))
+      .toEqual(['due', 'session']);
   });
 
   it('Priority follows the app-wide show_priority flag even when chosen', () => {
-    const vis = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: true, showPriority: false });
-    expect(vis.map((c) => c.id)).toEqual(['due', 'session', 'project']);
+    const chosen: TpColumnId[] = ['priority', 'due', 'session', 'project'];
+    expect(visibleColumns(chosen, { isAll: true, showPriority: false }).map((c) => c.id))
+      .toEqual(['due', 'session', 'project']);
   });
 
   it('every column can be shown at once, in display order', () => {
@@ -109,11 +116,15 @@ describe('gridTemplate', () => {
     }
   });
 
-  it('the default layout reproduces the tracks the CSS used to hard-code', () => {
-    const vis = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: true, showPriority: true });
+  it('the pre-chooser layout still reproduces the tracks the CSS used to hard-code', () => {
+    const legacy: TpColumnId[] = ['priority', 'due', 'session', 'project'];
+    const vis = visibleColumns(legacy, { isAll: true, showPriority: true });
     expect(gridTemplate(vis)).toBe('minmax(280px, 1fr) 120px 90px 170px 140px');
-    const noPri = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: false, showPriority: false });
+    const noPri = visibleColumns(legacy, { isAll: false, showPriority: false });
     expect(gridTemplate(noPri)).toBe('minmax(280px, 1fr) 90px 170px');
+    // And the shipped default, priority off: Title · Due · Updated.
+    const def = visibleColumns(TP_DEFAULT_COLUMNS, { isAll: true, showPriority: false });
+    expect(gridTemplate(def)).toBe('minmax(280px, 1fr) 90px 90px');
   });
 });
 

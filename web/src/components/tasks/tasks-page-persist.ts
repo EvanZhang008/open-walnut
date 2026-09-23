@@ -14,8 +14,10 @@
  * Tested in tests/web/tasks-page-persist.test.ts.
  */
 import { DEFAULT_TASK_QUERY_FILTER_STATE, type TaskQueryFilterState } from './view-filter-model';
+import type { TpSort } from './tasks-page-sort';
 
 export const LS_TASKS_PAGE_PROJECT = 'walnut-tasks-page-project';
+export const LS_TASKS_PAGE_SORT = 'walnut-tasks-page-sort';
 export const LS_TASKS_PAGE_QUERY = 'walnut-tasks-page-query';
 export const LS_TASKS_PAGE_SEARCH = 'walnut-tasks-page-search';
 
@@ -24,6 +26,9 @@ export const TASKS_PAGE_DEFAULT_QUERY: TaskQueryFilterState = {
   ...DEFAULT_TASK_QUERY_FILTER_STATE,
   completion: ['todo', 'in_progress'],
 };
+
+/** The sort /tasks ships with: most recently updated first (the home panel's default too). */
+export const TASKS_PAGE_DEFAULT_SORT: TpSort = { key: 'updated', dir: 'desc' };
 
 /** Minimal Storage surface, so tests can pass a Map-backed fake. */
 export interface KeyStore {
@@ -109,6 +114,37 @@ export function readQuery(store: KeyStore | null = safeStore()): TaskQueryFilter
 
 export function writeQuery(query: TaskQueryFilterState, store: KeyStore | null = safeStore()): void {
   try { store?.setItem(LS_TASKS_PAGE_QUERY, JSON.stringify(query)); } catch { /* see writeActiveProject */ }
+}
+
+const SORT_KEYS = new Set([
+  'title', 'priority', 'due', 'start', 'session', 'project', 'phase', 'created', 'updated', 'completed',
+]);
+
+/**
+ * Column sort. Absent = the shipped default; the literal `null` (stored when the
+ * user cycles a header to "off") = manual/server order, which must NOT snap back
+ * to the default on the next visit — turning sort off is a choice too.
+ */
+export function readSort(store: KeyStore | null = safeStore()): TpSort | null {
+  try {
+    const raw = store?.getItem(LS_TASKS_PAGE_SORT);
+    if (raw === null || raw === undefined || raw === '') return { ...TASKS_PAGE_DEFAULT_SORT };
+    const v: unknown = JSON.parse(raw);
+    if (v === null) return null;
+    if (v && typeof v === 'object') {
+      const { key, dir } = v as { key?: unknown; dir?: unknown };
+      if (typeof key === 'string' && SORT_KEYS.has(key) && (dir === 'asc' || dir === 'desc')) {
+        return { key: key as TpSort['key'], dir };
+      }
+    }
+    return { ...TASKS_PAGE_DEFAULT_SORT };
+  } catch {
+    return { ...TASKS_PAGE_DEFAULT_SORT };
+  }
+}
+
+export function writeSort(sort: TpSort | null, store: KeyStore | null = safeStore()): void {
+  try { store?.setItem(LS_TASKS_PAGE_SORT, JSON.stringify(sort)); } catch { /* see writeActiveProject */ }
 }
 
 export function readSearch(store: KeyStore | null = safeStore()): string {
