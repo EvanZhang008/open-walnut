@@ -155,7 +155,7 @@ Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project �
 
 - **Parse harness-owned data the harness's official way — never invent Walnut-side bookkeeping on top of a file Walnut doesn't own.** If the CLI/agent already defines the format's semantics (e.g. transcript JSONL is a `parentUuid` tree and the CLI chain-walks to the active leaf), port that exact logic. Offsets/fingerprints/side records reinterpreting someone else's file go stale the moment the owner writes in a way Walnut didn't initiate. Walnut-invented logic belongs only in Walnut-owned formats (stream capture, ACP journal).
 - `task_create` takes an optional `project`; an unknown name auto-creates the registry row (`task_projects`, source `'local'`). Inbox (`''`) has no registry row and can never be claimed by a sync provider
-- Phase: `TODO` → … → `NEED_ACTION` → … → `COMPLETE` (agent sets NEED_ACTION, human marks COMPLETE)
+- Phase: `TODO` → … → `NEED_ACTION` → … → `COMPLETE` (agent sets NEED_ACTION, human marks COMPLETE). A new message from a human or a peer task into a completed task's session reopens it to `IN_PROGRESS` (`session:input` with an allowlisted send source is the one path past the terminal guard, see `sendSourceReopensTerminal`); late results, hints and automated sends (auto-continue, routines, hooks) never do
 - **NEVER force-kill Claude Code processes** — bypasses on-stop hook
 - **Sessions render in TWO surfaces, both on the Homepage (`/`): the session columns
   (`SessionPanel`) and the chat slot.** The dedicated `/sessions` page was removed (2026-07-25);

@@ -16,9 +16,12 @@ import {
   PHASE_TO_STATUS,
   sessionStreamingPhase,
   sessionTurnStartPhase,
+  sessionInputPhase,
   sessionErrorPhase,
   readMarkerForPhase,
   TERMINAL_PHASES,
+  sendSourceReopensTerminal,
+  REOPENING_SEND_SOURCES,
 } from '../../src/core/phase.js';
 
 describe('PHASE_ORDER', () => {
@@ -185,6 +188,49 @@ describe('readMarkerForPhase', () => {
     expect(readMarkerForPhase('IN_PROGRESS')).toEqual({ unread: false });
     expect(readMarkerForPhase('COMPLETE')).toEqual({ unread: false });
     expect(readMarkerForPhase('TODO')).toEqual({});
+  });
+});
+
+// A message delivered to a task's session is the ONE session event allowed to
+// reopen a finished task (2026-09-23 user call). Marking a task done kills its
+// CLI, so a later message can only be a human or a peer deliberately handing
+// it more work — and then "completed" on the board would be a lie.
+describe('sessionInputPhase (reopens COMPLETE, 2026-09-23)', () => {
+  // The hand-back phase by construction (what an ended turn lands on), so this
+  // file does not pin its spelling.
+  const HANDBACK = sessionErrorPhase('IN_PROGRESS')!;
+
+  it('pulls every non-running phase to IN_PROGRESS, COMPLETE included', () => {
+    expect(sessionInputPhase('TODO')).toBe('IN_PROGRESS');
+    expect(sessionInputPhase(HANDBACK)).toBe('IN_PROGRESS');
+    expect(sessionInputPhase('COMPLETE')).toBe('IN_PROGRESS');
+  });
+
+  it('is idempotent on IN_PROGRESS (every send re-fires the trigger)', () => {
+    expect(sessionInputPhase('IN_PROGRESS')).toBeNull();
+  });
+
+  it('only a human or peer send may reopen — automated provenance never does', () => {
+    // Allowlist by design: a deliberate path missing here keeps the old behavior
+    // (task stays done); a missed AUTOMATED path on a denylist would reopen a
+    // finished task on every auto-continue nudge / routine tick.
+    for (const source of ['ui', 'mobile', 'cli', 'peer', 'web-api', 'human-inbox']) {
+      expect(sendSourceReopensTerminal(source), source).toBe(true);
+    }
+    for (const source of ['auto-continue', 'auto-recover', 'routine-trigger', 'routine-watcher',
+      'hook:abc', 'side-thread', 'side-thread-digest', 'session-start', 'retry', 'restart', 'unknown', '']) {
+      expect(sendSourceReopensTerminal(source), source).toBe(false);
+    }
+    expect(sendSourceReopensTerminal(undefined)).toBe(false);
+    expect([...REOPENING_SEND_SOURCES].sort()).toEqual(['cli', 'human-inbox', 'mobile', 'peer', 'ui', 'web-api']);
+  });
+
+  it('is the ONLY session trigger that leaves the terminal phase', () => {
+    // Background echoes of a turn that may predate the human's "done" click
+    // must still lose to COMPLETE — only a new message reopens.
+    expect(sessionTurnStartPhase('COMPLETE')).toBeNull();
+    expect(sessionErrorPhase('COMPLETE')).toBeNull();
+    expect(sessionStreamingPhase('COMPLETE')).toBeNull();
   });
 });
 

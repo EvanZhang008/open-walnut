@@ -122,6 +122,34 @@ describe('terminal phase guard — updateTask', () => {
 });
 
 describe('terminal phase guard — updateTaskRaw', () => {
+  it('reopenTerminal lets the ONE opted-in caller leave COMPLETE and clears completed_at', async () => {
+    // applySessionPhase('session:input') is that caller: a new message to a
+    // completed task's session reopens it (2026-09-23). The raw path has to
+    // drop the completion timestamp too, or the reopened row still counts as
+    // finished in every completed_at-based query.
+    const { task } = await addTask({ title: 'Raw reopen' });
+    await updateTask(task.id, { phase: 'COMPLETE' }, { source: 'api' });
+    const done = (await listTasks()).find(t => t.id === task.id)!;
+    expect(typeof done.completed_at).toBe('string');
+
+    const res = await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' }, { reopenTerminal: true });
+    expect(res.changed).toBe(true);
+    const after = (await listTasks()).find(t => t.id === task.id)!;
+    expect(after.phase).toBe('IN_PROGRESS');
+    expect(after.status).toBe('in_progress');
+    expect(after.completed_at).toBeUndefined();
+  });
+
+  it('reopenTerminal is inert on a non-terminal row (no spurious completed_at write)', async () => {
+    const { task } = await addTask({ title: 'Raw reopen noop' });
+    await updateTask(task.id, { phase: 'TODO' }, { source: 'api' });
+    const res = await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' }, { reopenTerminal: true });
+    expect(res.changed).toBe(true);
+    const after = (await listTasks()).find(t => t.id === task.id)!;
+    expect(after.phase).toBe('IN_PROGRESS');
+    expect(after.completed_at).toBeUndefined();
+  });
+
   it('blocks sync from overwriting COMPLETE phase but allows other field updates', async () => {
     const { task } = await addTask({ title: 'Raw guard test' });
 

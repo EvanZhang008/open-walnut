@@ -9,7 +9,18 @@
  *                        turnGen is older than the live session's current turnGen
  *                        (a newer turn already started — the late flip would
  *                        repaint a streaming session as completed)
- *   session:input      → IN_PROGRESS         unconditional (fires at SEND time)
+ *   session:input      → IN_PROGRESS         unconditional (fires at SEND time).
+ *                        The ONE trigger that also reopens COMPLETE, and only
+ *                        when the send came from a human or a peer task
+ *                        (REOPENING_SEND_SOURCES): someone deliberately gave the
+ *                        task more work and the agent is working again, so
+ *                        "completed" would be a lie on the board (2026-09-23 user
+ *                        call: "if a completed task gets re-messaged it should go
+ *                        back to in progress"). Automated sends (auto-continue
+ *                        nudges, routines, hook actions, side threads) never
+ *                        reopen — a routine bound to a finished task would
+ *                        otherwise reopen it on every tick and it could never
+ *                        be closed.
  *   session:turn-start → IN_PROGRESS         unconditional (fires when the CLI
  *                        actually STARTS the turn — session_state_changed{running},
  *                        or an `init` arriving after this turn's result when the CLI
@@ -45,7 +56,10 @@
  *   Only Rule A: all primary sessions dead + task IN_PROGRESS → AGENT_COMPLETE.
  *   No Rule B: never infer phase from session status (could propagate stale data).
  *
- * Terminal phase: COMPLETE — the session machine never overwrites it.
+ * Terminal phase: COMPLETE — the session machine never overwrites it, with the
+ * single exception of session:input above (a NEW MESSAGE from a human or a peer
+ * reopens; a late result, a turn start, an error, a permission prompt or an
+ * automated send never does).
  *
  * Task Phases (4) — WAIT was removed 2026-08-18 (user call: "blocked on
  * something external" IS just TODO — a separate parked state confused both
@@ -96,9 +110,13 @@ export const VALID_PHASES = new Set<string>(PHASE_ORDER);
 /** Phases the BACKGROUND session machine must never overwrite.
  *  COMPLETE is terminal because it is a deliberate statement that the work is
  *  done — whoever made it, human or agent. If a background event could
- *  overwrite it (e.g. session:input → IN_PROGRESS, a late session:result →
- *  AGENT_COMPLETE), a finished task would silently reopen itself the next time
+ *  overwrite it (a late session:result → handback, a replayed turn-start →
+ *  IN_PROGRESS), a finished task would silently reopen itself the next time
  *  anything touched its session.
+ *  A NEW MESSAGE from a human or a peer is not background: session:input is
+ *  the one session trigger that reopens COMPLETE (see sessionInputPhase and
+ *  sendSourceReopensTerminal) — someone deliberately sent the task more work,
+ *  and the agent is now running it.
  *  This gates ONLY applySessionPhase (the event-driven machine) and the sync-pull
  *  path in updateTaskRaw. A deliberate write through updateTask — from a human in
  *  the UI or from an agent tool call — may both set COMPLETE and move a task back
@@ -213,10 +231,44 @@ export function sessionResultPhase(current: TaskPhase): TaskPhase | null {
   return 'AGENT_COMPLETE'
 }
 
-/** Session received input → IN_PROGRESS. Unconditional. */
+/** Session received input → IN_PROGRESS. Unconditional, INCLUDING from COMPLETE.
+ *
+ *  This is the only session trigger allowed past the terminal guard, and
+ *  applySessionPhase lets it through only for a send whose provenance says a
+ *  human or a peer task wrote it (sendSourceReopensTerminal). Marking a task done
+ *  kills its CLI and clears its slot (applyPhase / completeTaskSessions), so such
+ *  a message reaching the session afterwards is someone deliberately resuming
+ *  the work: a human typing in the still-visible session column, or a peer
+ *  task's send. From then on the agent IS working, its result will hand the task
+ *  back the normal way, and the human decides again whether it is done.
+ *  Before 2026-09-23 the task stayed COMPLETE through all of that, so a reopened
+ *  task never went red again and its new output was never announced. */
 export function sessionInputPhase(current: TaskPhase): TaskPhase | null {
-  if (TERMINAL_PHASES.has(current) || current === 'IN_PROGRESS') return null
+  if (current === 'IN_PROGRESS') return null
   return 'IN_PROGRESS'
+}
+
+/** Send provenance (the SESSION_SEND bus `source`) that means a human or a peer
+ *  task deliberately addressed this task, so the send may reopen a COMPLETE one.
+ *  An allowlist on purpose: a new deliberate path that is missing here merely
+ *  keeps the old behavior (the task stays done), while a missed AUTOMATED path
+ *  on a denylist would reopen finished tasks forever (auto-continue's "continue"
+ *  nudge fires ~3 min after the human clicked done; a routine bound to a finished
+ *  task would reopen it on every trigger). Not listed, deliberately: the retry /
+ *  restart drain kicks (they re-deliver a message whose own send already ran
+ *  this check), 'session-start' (a task being started is never COMPLETE),
+ *  'auto-continue', 'auto-recover', 'routine-*', 'hook:*', 'side-thread*'. */
+export const REOPENING_SEND_SOURCES: ReadonlySet<string> = new Set([
+  'ui',          // console composer (web/routes/session-chat.ts)
+  'mobile',      // iOS app (web/routes/session-stream-v1.ts)
+  'cli',         // a human at the `walnut` CLI (session-send-core.ts)
+  'peer',        // another task's send / task_start resume (session-send-core.ts)
+  'web-api',     // Execute-continue button (session-lifecycle.ts)
+  'human-inbox', // a letter delivered to the session (human-inbox/letter-ops.ts)
+])
+
+export function sendSourceReopensTerminal(source: string | undefined): boolean {
+  return source !== undefined && REOPENING_SEND_SOURCES.has(source)
 }
 
 /**
@@ -308,6 +360,10 @@ interface ApplySessionPhaseOpts {
   newPhase?: TaskPhase
   turnGen?: number
   shouldApply?: (current: Readonly<Task>) => boolean
+  /** For 'session:input': the send came from a human or a peer
+   *  (sendSourceReopensTerminal), so it may pull a COMPLETE task back to
+   *  IN_PROGRESS. Every other trigger ignores it. */
+  reopenTerminal?: boolean
 }
 
 /**
@@ -371,6 +427,14 @@ export async function applySessionPhase(
   }
 
   let oldPhase = task.phase
+  const reopensTerminal = trigger === 'session:input' && opts?.reopenTerminal === true
+  // applyPhase(COMPLETE) cleared the task's session slot; a reopen re-points it
+  // at the session that just received the message, so slot-driven paths (hook
+  // actions, start/send-by-task) reuse the running session instead of reporting
+  // "no session attached" or opening a second one.
+  const restoreSlot = reopensTerminal && TERMINAL_PHASES.has(task.phase) && opts?.sessionId
+    ? { session_id: opts.sessionId }
+    : {}
 
   // Push with retry (Layer 1 must be reliable on its own)
   const MAX_RETRIES = 2
@@ -391,11 +455,17 @@ export async function applySessionPhase(
       const updated = await updateTaskRaw(taskId, {
         phase: newPhase,
         ...readMarkerForPhase(newPhase),
+        ...restoreSlot,
       }, {
         emitEvent: true, push: true, source,
+        // A reopen must also get past updateTaskRaw's own terminal guard (the
+        // sync-pull one) and drop completed_at, which only that layer can do
+        // consistently for both the phase and the timestamp.
+        reopenTerminal: reopensTerminal,
         shouldUpdate: (current) => {
           oldPhase = current.phase
-          if (TERMINAL_PHASES.has(current.phase) || current.phase === newPhase) return false
+          if (current.phase === newPhase) return false
+          if (TERMINAL_PHASES.has(current.phase) && !reopensTerminal) return false
           if (opts?.shouldApply && !opts.shouldApply(current)) {
             skipReason = 'superseded-snapshot'
             return false

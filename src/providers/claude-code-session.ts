@@ -7610,7 +7610,10 @@ export class SessionRunner {
 
         case EventNames.SESSION_SEND: {
           const sendData = eventData<'session:send'>(event)
-          log.session.info('session send requested', { sessionId: sendData.sessionId, messageLength: sendData.message.length })
+          // Provenance rides the bus envelope, not the payload: it decides whether
+          // this send may reopen a COMPLETE task (phase.ts sendSourceReopensTerminal).
+          const sendSource = event.source
+          log.session.info('session send requested', { sessionId: sendData.sessionId, messageLength: sendData.message.length, source: sendSource })
           let acpSession = this.findAcpSession(sendData.sessionId)
           if (!acpSession && !this.sdkSessionMap.has(sendData.sessionId)) {
             // Server restarted since this ACP session was created? Re-attach from
@@ -7635,12 +7638,12 @@ export class SessionRunner {
             }
             const providerSessionId = acpSession.sessionId ?? sendData.sessionId
             await this.drainAcpQueue(acpSession, providerSessionId)
-            void this.syncPhaseAfterSend(providerSessionId)
+            void this.syncPhaseAfterSend(providerSessionId, sendSource)
           } else if (this.sdkSessionMap.has(sendData.sessionId)) {
             // Route to SDK if this session is tracked as an SDK session
-            await this.handleSendSdk(sendData.sessionId, sendData.message, sendData.mode as SessionMode | undefined, sendData.interrupt)
+            await this.handleSendSdk(sendData.sessionId, sendData.message, sendData.mode as SessionMode | undefined, sendData.interrupt, sendSource)
           } else {
-            await this.handleSend(sendData)
+            await this.handleSend({ ...sendData, source: sendSource })
           }
         }
           break
@@ -9669,7 +9672,7 @@ export class SessionRunner {
   /**
    * Send a follow-up message to an SDK session.
    */
-  private async handleSendSdk(sessionId: string, message: string, mode?: SessionMode, interrupt?: boolean): Promise<void> {
+  private async handleSendSdk(sessionId: string, message: string, mode?: SessionMode, interrupt?: boolean, source?: string): Promise<void> {
     if (!this.sdkClient) throw new Error('SDK client not configured')
 
     // Unconditional phase transition: session input → IN_PROGRESS
@@ -9684,8 +9687,10 @@ export class SessionRunner {
           if (cancelled > 0) log.session.info('handleSendSdk: cancelled stale triage', { taskId: record.taskId, cancelled })
         } catch { /* non-fatal */ }
 
-        const { applySessionPhase } = await import('../core/phase.js')
-        await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSendSdk', { sessionId })
+        const { applySessionPhase, sendSourceReopensTerminal } = await import('../core/phase.js')
+        await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSendSdk', {
+          sessionId, reopenTerminal: sendSourceReopensTerminal(source),
+        })
         // Touch last_session_update on resume for "Recent" sidebar sort
         const { touchLastSessionUpdate } = await import('../core/task-manager.js')
         touchLastSessionUpdate(record.taskId).catch(err =>
@@ -9722,8 +9727,10 @@ export class SessionRunner {
     message: string
     mode?: string
     interrupt?: boolean
+    /** SESSION_SEND bus source (who sent it) — see syncPhaseAfterSend. */
+    source?: string
   }): Promise<void> {
-    const { sessionId, mode, interrupt } = data
+    const { sessionId, mode, interrupt, source } = data
 
     if (interrupt) {
       // Interrupt: gracefully stop the running session (SIGINT + wait for exit),
@@ -9797,11 +9804,18 @@ export class SessionRunner {
     // so the global task write-lock never blocks message delivery above.
     // applySessionPhase is an idempotent state machine (reads current phase, no-ops if
     // no transition needed), so running it after delivery is safe.
-    void this.syncPhaseAfterSend(sessionId)
+    void this.syncPhaseAfterSend(sessionId, source)
   }
 
-  /** Fire-and-forget phase/status bookkeeping after a send. Never blocks delivery. */
-  private async syncPhaseAfterSend(sessionId: string): Promise<void> {
+  /** Fire-and-forget phase/status bookkeeping after a send. Never blocks delivery.
+   *
+   *  `source` is the SESSION_SEND bus provenance. It only matters for a COMPLETE
+   *  task: a human's or a peer's message reopens it (IN_PROGRESS), an automated
+   *  one does not (phase.ts sendSourceReopensTerminal). Like every other input
+   *  transition this runs at SEND time, before delivery is confirmed — a send that
+   *  is later parked or fails leaves the task IN_PROGRESS, and the error path or
+   *  the reconciler hands it back (red row) the same way it does for any task. */
+  private async syncPhaseAfterSend(sessionId: string, source?: string): Promise<void> {
     try {
       const {
         emitSessionStatusChanged,
@@ -9820,8 +9834,10 @@ export class SessionRunner {
           if (cancelled > 0) log.session.info('handleSend: cancelled stale triage', { taskId: record.taskId, cancelled })
         } catch { /* non-fatal */ }
 
-        const { applySessionPhase } = await import('../core/phase.js')
-        await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSend', { sessionId })
+        const { applySessionPhase, sendSourceReopensTerminal } = await import('../core/phase.js')
+        await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSend', {
+          sessionId, reopenTerminal: sendSourceReopensTerminal(source),
+        })
         // Touch last_session_update on resume for "Recent" sidebar sort
         const { touchLastSessionUpdate } = await import('../core/task-manager.js')
         touchLastSessionUpdate(record.taskId).catch(err =>

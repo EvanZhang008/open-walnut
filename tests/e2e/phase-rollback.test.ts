@@ -3,8 +3,9 @@
  *
  * When send_to_session is called and the task is in a post-completion phase
  * (AGENT_COMPLETE — WAIT was the other one until its removal 2026-08-18), the
- * phase should auto-rollback to IN_PROGRESS. COMPLETE and pre-completion phases
- * are unaffected.
+ * phase should auto-rollback to IN_PROGRESS. Since 2026-09-23 that includes
+ * COMPLETE: a message to a finished task's session reopens the task (the
+ * agent is working again). Only an already-running task is unaffected.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -74,9 +75,9 @@ describe('sessionInputPhase (replaces shouldRollbackToInProgress)', () => {
     expect(sessionInputPhase('TODO')).toBe('IN_PROGRESS');
   });
 
-  it('returns null for terminal and already-IN_PROGRESS phases', async () => {
+  it('returns null only for an already-IN_PROGRESS phase (COMPLETE reopens)', async () => {
     const { sessionInputPhase } = await import('../../src/core/phase.js');
-    expect(sessionInputPhase('COMPLETE')).toBeNull();
+    expect(sessionInputPhase('COMPLETE')).toBe('IN_PROGRESS');
     expect(sessionInputPhase('IN_PROGRESS')).toBeNull();
   });
 });
@@ -111,24 +112,64 @@ describe('Phase rollback on send_to_session', () => {
     expect(fetched.status).toBe('in_progress');
   });
 
-  it('does NOT rollback COMPLETE phase', async () => {
+  it('REOPENS a COMPLETE task when its session is messaged (2026-09-23)', async () => {
     const task = await createTask('Rollback test - COMPLETE');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'COMPLETE' });
+    // The human's completion (REST PATCH = deliberate source): stamps completed_at.
+    const done = await patchTask(taskId, { phase: 'COMPLETE' });
+    expect(done.phase).toBe('COMPLETE');
+    expect(typeof done.completed_at).toBe('string');
 
     const { createSessionRecord } = await import('../../src/core/session-tracker.js');
     await createSessionRecord('rollback-sess-2', taskId, 'test-project');
 
-    const { getTask } = await import('../../src/core/task-manager.js');
-    const { sessionInputPhase } = await import('../../src/core/phase.js');
+    // The exact call the send path makes (handleSend → syncPhaseAfterSend) for
+    // a console send (bus source 'ui').
+    const { applySessionPhase, sendSourceReopensTerminal } = await import('../../src/core/phase.js');
+    const res = await applySessionPhase(taskId, 'session:input', 'e2e:send', {
+      sessionId: 'rollback-sess-2', reopenTerminal: sendSourceReopensTerminal('ui'),
+    });
+    expect(res.changed).toBe(true);
+    expect(res.oldPhase).toBe('COMPLETE');
 
-    const loaded = await getTask(taskId);
-    expect(loaded).toBeTruthy();
-    expect(sessionInputPhase(loaded!.phase)).toBeNull();
-
-    // Verify phase unchanged via REST
+    // Verify via REST: back in progress, no longer "done on <date>".
     const fetched = await fetchTask(taskId);
-    expect(fetched.phase).toBe('COMPLETE');
+    expect(fetched.phase).toBe('IN_PROGRESS');
+    expect(fetched.status).toBe('in_progress');
+    expect(fetched.completed_at).toBeUndefined();
+  });
+
+  // Runner wiring: the SESSION_SEND bus envelope's `source` is what decides the
+  // reopen, so drive the real session-runner through the bus with both kinds.
+  it('through the runner: a routine send leaves COMPLETE alone, a console send reopens it', async () => {
+    const { bus, EventNames } = await import('../../src/core/event-bus.js');
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js');
+    const { sendSourceReopensTerminal } = await import('../../src/core/phase.js');
+
+    const task = await createTask('Rollback test - runner provenance');
+    const taskId = task.id as string;
+    await patchTask(taskId, { phase: 'COMPLETE' });
+    await createSessionRecord('rollback-sess-runner', taskId, 'test-project');
+
+    // Automated provenance (what a routine/auto-continue stamps): must NOT reopen.
+    expect(sendSourceReopensTerminal('routine-trigger')).toBe(false);
+    bus.emit(EventNames.SESSION_SEND, { sessionId: 'rollback-sess-runner', taskId, message: 'tick' },
+      ['session-runner'], { source: 'routine-trigger' });
+    await new Promise((r) => setTimeout(r, 1500));
+    expect((await fetchTask(taskId)).phase).toBe('COMPLETE');
+
+    // Human provenance (the console composer): reopens. The fake session has no
+    // process, so the runner's delivery attempt may fail and hand the task back —
+    // either way it is no longer COMPLETE.
+    bus.emit(EventNames.SESSION_SEND, { sessionId: 'rollback-sess-runner', taskId, message: 'again' },
+      ['session-runner'], { source: 'ui' });
+    let phase = 'COMPLETE';
+    for (let i = 0; i < 40 && phase === 'COMPLETE'; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      phase = (await fetchTask(taskId)).phase as string;
+    }
+    expect(phase).not.toBe('COMPLETE');
+    expect((await fetchTask(taskId)).completed_at).toBeUndefined();
   });
 
   it('does NOT rollback IN_PROGRESS phase', async () => {

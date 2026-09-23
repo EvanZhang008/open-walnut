@@ -6581,7 +6581,11 @@ function isDayPrecisionEcho(existing: string | undefined, incoming: unknown): bo
  * the bulk path can reuse identical semantics. Must NEVER mutate `task` or
  * `updates` — it works on a shallow copy of the patch.
  */
-function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | null {
+function prepareRawUpdate(
+  task: Task,
+  updates: Partial<Task>,
+  opts?: { reopenTerminal?: boolean },
+): Partial<Task> | null {
   const { id: _ignoreId, ...safeUpdates } = updates as Record<string, unknown>;
   if (safeUpdates.priority !== undefined) {
     safeUpdates.priority = sanitizePriority(safeUpdates.priority as string);
@@ -6599,16 +6603,29 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
     delete safeUpdates.end_date;
   }
   // Terminal phase guard: sync pull cannot overwrite COMPLETE
-  // (reopening a completed task takes a deliberate updateTask with source='api')
+  // (reopening a completed task takes a deliberate updateTask with source='api',
+  // or the ONE session trigger that means "someone sent this task more work":
+  // applySessionPhase('session:input') passes reopenTerminal — see phase.ts).
   const incomingPhase = (safeUpdates.phase as TaskPhase | undefined)
     ?? (safeUpdates.status ? phaseFromStatus(safeUpdates.status as TaskStatus) : undefined);
   if (TERMINAL_PHASES.has(task.phase) && incomingPhase && !TERMINAL_PHASES.has(incomingPhase)) {
-    log.task.warn('terminal phase guard (raw): blocked sync phase change', {
-      taskId: task.id, currentPhase: task.phase, requestedPhase: incomingPhase,
-    });
-    delete safeUpdates.phase;
-    delete safeUpdates.status;
-    delete safeUpdates.completed_at;
+    if (opts?.reopenTerminal) {
+      // Leaving COMPLETE un-completes the task: applyPhase() clears completed_at
+      // on the updateTask path, and a reopened row that still carries a
+      // completion timestamp would keep counting as finished in every
+      // completed_at-based query and "done on <date>" label. null is the
+      // explicit-clear marker (SQL NULL); an explicit caller value wins.
+      if (safeUpdates.completed_at === undefined) {
+        (safeUpdates as Record<string, unknown>).completed_at = null;
+      }
+    } else {
+      log.task.warn('terminal phase guard (raw): blocked sync phase change', {
+        taskId: task.id, currentPhase: task.phase, requestedPhase: incomingPhase,
+      });
+      delete safeUpdates.phase;
+      delete safeUpdates.status;
+      delete safeUpdates.completed_at;
+    }
   }
 
   // A folder never follows a task across projects (raw twin of the updateTask
@@ -6659,7 +6676,17 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
 export async function updateTaskRaw(
   id: string,
   updates: Partial<Task>,
-  opts?: { emitEvent?: boolean; push?: boolean; source?: string; shouldUpdate?: (current: Readonly<Task>) => boolean },
+  opts?: {
+    emitEvent?: boolean;
+    push?: boolean;
+    source?: string;
+    shouldUpdate?: (current: Readonly<Task>) => boolean;
+    /** Let this write move the task OUT of a terminal phase (and clear
+     *  completed_at). Only applySessionPhase('session:input') sets it — a new
+     *  message to a completed task's session reopens the task. Sync pulls and
+     *  every other raw caller stay blocked by the terminal guard. */
+    reopenTerminal?: boolean;
+  },
 ): Promise<{ changed: boolean; task?: Task }> {
   await ensureInit();
   let rawOldPhase: TaskPhase | undefined;
@@ -6671,7 +6698,7 @@ export async function updateTaskRaw(
     if (opts?.shouldUpdate && !opts.shouldUpdate(task)) return undefined;
     rawOldPhase = task.phase;
 
-    const prepared = prepareRawUpdate(task, updates);
+    const prepared = prepareRawUpdate(task, updates, { reopenTerminal: opts?.reopenTerminal });
     if (!prepared) return undefined;
 
     // Build the UPDATE dynamically from the fields that actually changed.

@@ -37,7 +37,7 @@ vi.mock('../../src/providers/claude-code-session.js', () => ({
   },
 }))
 
-import { applySessionPhase, sessionResultPhase } from '../../src/core/phase.js'
+import { applySessionPhase, sessionResultPhase, sendSourceReopensTerminal } from '../../src/core/phase.js'
 import { addTask, updateTaskRaw, getTask } from '../../src/core/task-manager.js'
 import * as taskManager from '../../src/core/task-manager.js'
 import {
@@ -424,5 +424,164 @@ describe('applySessionPhase: read/unread marker rides the phase write', () => {
     await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-cycle' })
     await applySessionPhase(taskId, 'session:result', 'test', { sessionId: 'sid-cycle' })
     expect((await getTask(taskId)).unread).toBe(true)
+  })
+})
+
+// ── session:input reopens a COMPLETE task (2026-09-23 user call) ──
+//
+// "if a completed task gets re-messaged it should go back to in progress".
+// Completing a task kills its CLI (completeTaskSessions), so a message that
+// reaches the session afterwards is someone deliberately resuming the work.
+// The reopen has to be the FULL leave-COMPLETE: phase, read marker AND the
+// completion timestamp, or the row keeps counting as finished in every
+// completed_at query. Every other session trigger stays behind the guard, and
+// so does an input whose provenance is automated (reopenTerminal not set: the
+// runner derives it from the SESSION_SEND bus source via sendSourceReopensTerminal).
+const HUMAN_SEND = { reopenTerminal: sendSourceReopensTerminal('ui') }
+const ROUTINE_SEND = { reopenTerminal: sendSourceReopensTerminal('routine-trigger') }
+
+describe('applySessionPhase: session:input reopens COMPLETE', () => {
+  async function completedTask(): Promise<string> {
+    const { task } = await addTask({ title: 'done task', project: 'p' })
+    // The human's deliberate completion path (stamps completed_at, clears slot).
+    await taskManager.updateTask(task.id, { phase: 'COMPLETE' }, { source: 'api' })
+    const done = await getTask(task.id)
+    expect(done.phase).toBe('COMPLETE')
+    expect(done.status).toBe('done')
+    expect(typeof done.completed_at).toBe('string')
+    return task.id
+  }
+
+  it('a new message pulls COMPLETE → IN_PROGRESS, clears completed_at, marks read', async () => {
+    const taskId = await completedTask()
+    await updateTaskRaw(taskId, { unread: true })
+
+    const res = await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-reopen', ...HUMAN_SEND })
+    expect(res).toEqual({ changed: true, oldPhase: 'COMPLETE', newPhase: 'IN_PROGRESS' })
+
+    const task = await getTask(taskId)
+    expect(task.phase).toBe('IN_PROGRESS')
+    expect(task.status).toBe('in_progress')
+    expect(task.completed_at).toBeUndefined()
+    expect(task.unread).toBe(false)
+  })
+
+  it('an AUTOMATED send never reopens (auto-continue nudge, routine, hook action)', async () => {
+    // The 2026-09-23 review case: auto-continue fires its "continue" ~3 min after
+    // the human clicked done; a routine bound to a finished task fires forever.
+    // Either would reopen the task on every tick and it could never be closed.
+    const taskId = await completedTask()
+    const before = await getTask(taskId)
+    for (const source of ['auto-continue', 'auto-recover', 'routine-trigger', 'routine-watcher', 'hook:h1', 'side-thread', 'unknown', undefined]) {
+      const res = await applySessionPhase(taskId, 'session:input', 'test', {
+        sessionId: 'sid-auto', reopenTerminal: sendSourceReopensTerminal(source),
+      })
+      expect(res.changed, String(source)).toBe(false)
+      const task = await getTask(taskId)
+      expect(task.phase, String(source)).toBe('COMPLETE')
+      expect(task.completed_at, String(source)).toBe(before.completed_at)
+    }
+    // ...while the same message from a human or a peer does.
+    for (const source of ['ui', 'mobile', 'cli', 'peer', 'web-api', 'human-inbox']) {
+      const id = await completedTask()
+      const res = await applySessionPhase(id, 'session:input', 'test', {
+        sessionId: 'sid-human', reopenTerminal: sendSourceReopensTerminal(source),
+      })
+      expect(res.changed, source).toBe(true)
+      expect((await getTask(id)).phase, source).toBe('IN_PROGRESS')
+    }
+  })
+
+  it('the automated flag changes nothing for a NON-terminal task (input still pulls to IN_PROGRESS)', async () => {
+    const taskId = await taskInPhase(HANDBACK_PHASE)
+    const res = await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-auto2', ...ROUTINE_SEND })
+    expect(res.changed).toBe(true)
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('background echoes never reopen: result / error / turn-start / awaiting-human / human-answered', async () => {
+    const taskId = await completedTask()
+    const before = await getTask(taskId)
+    liveTurnGens.set('sid-echo', 1)
+    for (const trigger of [
+      'session:result', 'session:error', 'session:turn-start',
+      'session:awaiting-human', 'session:human-answered', 'session:streaming',
+    ] as const) {
+      const res = await applySessionPhase(taskId, trigger, 'test', { sessionId: 'sid-echo', turnGen: 1 })
+      expect(res.changed, trigger).toBe(false)
+      const task = await getTask(taskId)
+      expect(task.phase, trigger).toBe('COMPLETE')
+      expect(task.completed_at, trigger).toBe(before.completed_at)
+    }
+  })
+
+  it('a reopened task runs the normal hand-back cycle and can be completed again', async () => {
+    const taskId = await completedTask()
+
+    // Round 1: message → agent works → hands back (red + unread).
+    await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-cycle-r', ...HUMAN_SEND })
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+    await applySessionPhase(taskId, 'session:result', 'test', { sessionId: 'sid-cycle-r' })
+    let task = await getTask(taskId)
+    expect(task.phase).toBe(HANDBACK_PHASE)
+    expect(task.unread).toBe(true)
+    expect(task.completed_at).toBeUndefined()
+
+    // Human decides it is done again → COMPLETE with a FRESH timestamp.
+    await taskManager.updateTask(taskId, { phase: 'COMPLETE' }, { source: 'api' })
+    task = await getTask(taskId)
+    expect(task.phase).toBe('COMPLETE')
+    const secondCompletion = task.completed_at
+    expect(typeof secondCompletion).toBe('string')
+
+    // Round 2: the same message path reopens it again — not a one-shot.
+    const res = await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-cycle-r', ...HUMAN_SEND })
+    expect(res.changed).toBe(true)
+    task = await getTask(taskId)
+    expect(task.phase).toBe('IN_PROGRESS')
+    expect(task.completed_at).toBeUndefined()
+  })
+
+  it('a second send while already reopened is a no-op (idempotent)', async () => {
+    const taskId = await completedTask()
+    await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-twice', ...HUMAN_SEND })
+    const res = await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-twice', ...HUMAN_SEND })
+    expect(res.changed).toBe(false)
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('still honours the caller snapshot guard (a superseded send does not reopen)', async () => {
+    const taskId = await completedTask()
+    const res = await applySessionPhase(taskId, 'session:input', 'test', {
+      sessionId: 'sid-stale', shouldApply: () => false, ...HUMAN_SEND,
+    })
+    expect(res.changed).toBe(false)
+    expect((await getTask(taskId)).phase).toBe('COMPLETE')
+  })
+
+  it('re-points the session slot at the session that got the message (COMPLETE had cleared it)', async () => {
+    const { task } = await addTask({ title: 'linked', project: 'p' })
+    await createSessionRecord('sid-linked', task.id, 'p')
+    await taskManager.linkSessionSlot(task.id, 'sid-linked', 'exec')
+    await taskManager.updateTask(task.id, { phase: 'COMPLETE' }, { source: 'api' })
+    const done = await getTask(task.id)
+    expect(done.session_ids).toContain('sid-linked')
+    expect(done.session_id).toBeUndefined() // applyPhase(COMPLETE) clears the slot
+
+    await applySessionPhase(task.id, 'session:input', 'test', { sessionId: 'sid-linked', ...HUMAN_SEND })
+    const reopened = await getTask(task.id)
+    expect(reopened.phase).toBe('IN_PROGRESS')
+    expect(reopened.session_id).toBe('sid-linked')
+    expect(reopened.session_ids).toContain('sid-linked')
+  })
+
+  it('does not touch the slot when the input merely pulls a NON-terminal task forward', async () => {
+    const { task } = await addTask({ title: 'two sessions', project: 'p' })
+    await taskManager.linkSessionSlot(task.id, 'sid-primary', 'exec')
+    await updateTaskRaw(task.id, { phase: HANDBACK_PHASE, session_id: 'sid-primary' })
+    await applySessionPhase(task.id, 'session:input', 'test', { sessionId: 'sid-secondary', ...HUMAN_SEND })
+    const task2 = await getTask(task.id)
+    expect(task2.phase).toBe('IN_PROGRESS')
+    expect(task2.session_id).toBe('sid-primary')
   })
 })

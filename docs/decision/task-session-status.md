@@ -13,7 +13,7 @@ These are the maintenance decisions from the September 2026 status regression. T
 | Task `TODO` | Not started | An unfamiliar stored phase |
 | Task `IN_PROGRESS` | Work continues, including background work | The foreground reply must remain open |
 | Task `NEED_ACTION` | Human action is needed | Unread content or completed work |
-| Task `COMPLETE` | The human confirmed completion | A late Running hint may reopen it |
+| Task `COMPLETE` | The human confirmed completion; a new message from a human or a peer task reopens it | A late Running hint or an automated send may reopen it |
 | `unread` | Output has not been read | The task needs a different phase after reading |
 | Session Running | Foreground or background execution, an active team, or a valid future wakeup | The current foreground reply is unfinished |
 | Session Waiting | Permission, question, or plan approval is pending | A new API process-status enum |
@@ -22,6 +22,16 @@ These are the maintenance decisions from the September 2026 status regression. T
 `AGENT_COMPLETE` is the previous name of `NEED_ACTION`, with the same handback meaning. Waiting is derived from API `running` plus pending permission. A historical `cronActive` flag alone does not prove current work. Process death takes precedence over background hints.
 
 ## Failures and rejected shortcuts
+
+### A new message reopens a completed task; a late hint does not
+
+A completed task whose session received another message stayed `COMPLETE` while its agent ran the new turn, and its output was never announced: no red row, no unread dot (2026-09-23 report). The terminal guard treated every session trigger as background noise, but a message is not noise. Completing a task kills its CLI, so a message that reaches the session afterwards is a human typing in the still-visible column or a peer task sending work, and the agent is now running.
+
+The rule since 2026-09-23: `session:input` is the one session trigger allowed past the terminal guard, and only when the send's provenance (the `SESSION_SEND` bus source) names a human or a peer task: the console, the iOS app, the `walnut` CLI, a peer send, the Execute-continue button, a delivered letter. It then moves `COMPLETE` to `IN_PROGRESS`, clears the read marker and `completed_at`, re-points the task's session slot at the session that got the message, and lets the turn hand the task back the normal way. A late result, a turn start, an error, a permission prompt and the reconciler still lose to `COMPLETE`, because each may describe work that predates the human's decision. So does every automated send: the auto-continue nudge fires about three minutes after the human may have clicked done, and a routine bound to a finished task would reopen it on every trigger, so the task could never be closed. The allowed sources are an allowlist on purpose: a deliberate path missing from it keeps the old behavior, while a missed automated path on a denylist would reopen finished tasks forever. Sync pulls stay blocked. The raw single-row write takes an explicit `reopenTerminal` flag for this one caller, so no other path can leave the terminal phase by accident.
+
+Known trade-off, shared with every input transition: the phase moves at send time, before delivery is confirmed. A human's send that is later parked or fails leaves the task `IN_PROGRESS`; the error path or the reconciler then hands it back as a red row, and completing it again stamps a fresh `completed_at`.
+
+Code: [`sessionInputPhase`, `sendSourceReopensTerminal`, `applySessionPhase`](../../src/core/phase.ts), [`prepareRawUpdate`](../../src/core/task-manager.ts), the `SESSION_SEND` handler and `syncPhaseAfterSend` in [`claude-code-session.ts`](../../src/providers/claude-code-session.ts). Regression: [`tests/core/phase-triage-gate.test.ts`](../../tests/core/phase-triage-gate.test.ts) (reopen, background echoes, repeat cycle), [`tests/core/terminal-phase-guard.test.ts`](../../tests/core/terminal-phase-guard.test.ts) (raw opt-in), [`tests/e2e/phase-rollback.test.ts`](../../tests/e2e/phase-rollback.test.ts), browser flow [`tests/e2e/browser/task-reopen-on-message.spec.ts`](../../tests/e2e/browser/task-reopen-on-message.spec.ts).
 
 ### Unknown phases are data, not TODO
 
