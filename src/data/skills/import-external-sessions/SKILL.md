@@ -38,7 +38,10 @@ there is no extra timer and no model call.
 Existing installs converge on their own: old imports without a folder are filed
 into their cwd folder (at most 300 per tick), placeholder titles are re-read by
 id (`sessions.describeExternal`, so a transcript older than the scan window is
-still fixed) until a real title exists, and idle imports are swept.
+still fixed) until a real title exists, imports an older scanner took in by
+mistake (Walnut's own forks, reply-less probes) are removed together with their
+session row (each import is re-read once per server start, at most 100 per
+tick, open tasks first), and idle imports are swept.
 
 ## Run an import now
 
@@ -50,7 +53,7 @@ curl -s -X POST http://localhost:3456/api/sessions/import-external \
 - `days` widens/narrows the lookback window (default 30).
 - Response fields: `imported` new tasks, `retitled` placeholder titles replaced,
   `completed` idle imports auto-completed, `foldered` old imports filed into a
-  cwd folder, `skipped` candidates already tracked or excluded. `hostsScanned` /
+  cwd folder, `removed` imports that were never outside sessions, `skipped` candidates already tracked or excluded. `hostsScanned` /
   `hostsSkipped` say whether a host was reached; a daemon that is not connected
   or too old is skipped. `truncated` means a cap was hit, not that the import is
   finished.
@@ -78,7 +81,8 @@ If it's missing after an import run, the usual reasons:
 | Terminal `claude` / Claude Desktop | Yes, unless a directory rule excludes it |
 | codex TUI / Codex Desktop | Yes, unless a directory rule excludes it |
 | Other SDK apps | Yes, when the cwd is a real directory and no rule excludes it |
-| Walnut's own sessions | Never (already tracked) |
+| Walnut's own sessions | Never. Tracked ones are skipped by id; an SDK session carrying a Walnut envelope (the side-thread cache warm-up, the output-mode reminder) is skipped even when this server has no record of it, such as a fork minted by another Walnut instance on the same host |
+| Sessions with no real reply | Never, when the whole transcript was read: a probe or a first turn that only errored has nothing to adopt |
 | Subagent sidechains | Never |
 | SDK runs under temp directories | Never; a `cli` run in a temp dir needs an explicit rule |
 

@@ -82,6 +82,7 @@ import {
   adoptImportedTask,
   importFolderLabel,
   isStaleImportTitle,
+  _resetImportAuditForTesting,
 } from '../../src/core/sessions/external-session-import.js';
 import { EXTERNAL_SESSION_IMPORT_TAG } from '../../src/core/types.js';
 import {
@@ -153,6 +154,7 @@ async function resetAll(): Promise<void> {
   closeTaskDb();
   _resetSessionTrackerForTesting();
   _resetTaskManager();
+  _resetImportAuditForTesting();
   await rmWalnutHome();
 }
 
@@ -1050,5 +1052,125 @@ describe('importExternalSessions — placeholder re-read rotates', () => {
     const asked = host.describeCalls.flat();
     expect(new Set(asked)).toEqual(new Set(ids));
     expect(host.describeCalls.every((call) => call.length <= 2)).toBe(true);
+  });
+});
+
+// ── Provenance audit: imports that were never outside sessions ─────────────
+
+describe('importExternalSessions — removes imports that were never outside sessions', () => {
+  const described = (sessionId: string, notExternal: string | null = null) => candidate({ sessionId, notExternal });
+
+  it('removes a Walnut fork and a reply-less probe with their session rows, keeps a real one, and never re-imports', async () => {
+    setHost('__local__', { candidates: [
+      candidate({ sessionId: 'fork-1', title: 'continue [Rich output mode is still on' }),
+      candidate({ sessionId: 'probe-1', title: 'Say only Z.' }),
+      candidate({ sessionId: 'real-1' }),
+    ] });
+    await importExternalSessions();
+    // An older scanner took these in; the server restarts on the new build.
+    _resetImportAuditForTesting();
+    const fork = await taskForSession('fork-1');
+    const real = await taskForSession('real-1');
+
+    // The next tick: the scan (new rule) offers none of them again; describe
+    // says why the first two are not outside sessions.
+    const host = setHost('__local__', { candidates: [], described: {
+      'fork-1': described('fork-1', 'walnut-driven'),
+      'probe-1': described('probe-1', 'no-reply'),
+      'real-1': described('real-1'),
+    } });
+    const emit = vi.spyOn(bus, 'emit');
+    const res = await importExternalSessions();
+    expect(res.removed).toBe(2);
+    await expect(getTask(fork.id)).rejects.toThrow();
+    expect(await getSessionByClaudeId('fork-1')).toBeNull();
+    expect(await getSessionByClaudeId('probe-1')).toBeNull();
+    expect((await getTask(real.id)).tags).toContain(TAG);
+    expect(emit).toHaveBeenCalledWith(EventNames.TASK_UPDATED, {}, [], expect.objectContaining({ source: 'external-session-import' }));
+    expect(host.describeCalls.flat().sort()).toEqual(['fork-1', 'probe-1', 'real-1']);
+
+    // Audited once per process: the next tick asks nothing.
+    host.describeCalls.length = 0;
+    expect((await importExternalSessions()).removed).toBe(0);
+    expect(host.describeCalls.flat()).toEqual([]);
+  });
+
+  it('leaves an adopted task, one filed elsewhere, and everything on a host with no answer', async () => {
+    setHost('__local__', { candidates: [candidate({ sessionId: 'kept-a' }), candidate({ sessionId: 'kept-b' })] });
+    setHost('buildbox', { candidates: [candidate({ sessionId: 'far-1' })] });
+    configHosts = { buildbox: { hostname: 'buildbox.example' } };
+    await importExternalSessions();
+    _resetImportAuditForTesting();
+    const adopted = await taskForSession('kept-a');
+    const moved = await taskForSession('kept-b');
+    const far = await taskForSession('far-1');
+    await adoptImportedTask(adopted.id, 'test');
+    await updateTask(moved.id, { project: 'My Work' });
+
+    setHost('__local__', { candidates: [], described: {
+      'kept-a': described('kept-a', 'walnut-driven'), 'kept-b': described('kept-b', 'walnut-driven'),
+    } });
+    // buildbox: daemon gone (no connection) → no evidence.
+    hosts.delete('buildbox');
+    expect((await importExternalSessions()).removed).toBe(0);
+    expect((await getTask(adopted.id)).id).toBe(adopted.id);
+    expect((await getTask(moved.id)).project).toBe('My Work');
+    expect((await getTask(far.id)).tags).toContain(TAG);
+
+    // The host comes back: it is asked then (not marked audited while silent).
+    setHost('buildbox', { candidates: [], described: { 'far-1': described('far-1', 'no-reply') } });
+    expect((await importExternalSessions()).removed).toBe(1);
+    await expect(getTask(far.id)).rejects.toThrow();
+  });
+
+  it('a disconnected host with a big backlog does not starve a reachable one', async () => {
+    configHosts = { buildbox: { hostname: 'buildbox.example' } };
+    setHost('buildbox', { candidates: [1, 2, 3].map((n) => candidate({ sessionId: 'far-' + n })) });
+    setHost('__local__', { candidates: [candidate({ sessionId: 'near-1' })] });
+    await importExternalSessions();
+    _resetImportAuditForTesting();
+    hosts.delete('buildbox');
+    const local = setHost('__local__', { candidates: [], described: { 'near-1': described('near-1', 'no-reply') } });
+    expect((await importExternalSessions({ limits: { audit: 2 } })).removed).toBe(1);
+    expect(local.describeCalls.flat()).toEqual(['near-1']);
+  });
+
+  it('asks again when an older daemon answered without a verdict', async () => {
+    setHost('__local__', { candidates: [candidate({ sessionId: 'old-d' })] });
+    await importExternalSessions();
+    _resetImportAuditForTesting();
+    const task = await taskForSession('old-d');
+    // Pre-rule daemon: the candidate comes back without the notExternal key.
+    const host = setHost('__local__', { candidates: [], described: { 'old-d': candidate({ sessionId: 'old-d' }) } });
+    expect((await importExternalSessions()).removed).toBe(0);
+    expect((await importExternalSessions()).removed).toBe(0);
+    expect(host.describeCalls).toEqual([['old-d'], ['old-d']]);
+    // After the upgrade it answers, and the fork is removed.
+    host.described = { 'old-d': described('old-d', 'walnut-driven') };
+    expect((await importExternalSessions()).removed).toBe(1);
+    await expect(getTask(task.id)).rejects.toThrow();
+  });
+
+  it('does not re-ask about a session this process imported (the scan already applied the rule)', async () => {
+    const host = setHost('__local__', { candidates: [candidate({ sessionId: 'new-1' })] });
+    await importExternalSessions();
+    await importExternalSessions();
+    expect(host.describeCalls.flat()).toEqual([]);
+  });
+
+  it('removes a completed import too, open ones first under the cap', async () => {
+    setHost('__local__', { candidates: [
+      candidate({ sessionId: 'done-1' }), candidate({ sessionId: 'open-1' }), candidate({ sessionId: 'open-2' }),
+    ] });
+    await importExternalSessions();
+    _resetImportAuditForTesting();
+    const done = await taskForSession('done-1');
+    await updateTask(done.id, { phase: 'COMPLETE' });
+    const all = { 'done-1': described('done-1', 'walnut-driven'), 'open-1': described('open-1', 'walnut-driven'), 'open-2': described('open-2', 'walnut-driven') };
+    const host = setHost('__local__', { candidates: [], described: all });
+    expect((await importExternalSessions({ limits: { audit: 2 } })).removed).toBe(2);
+    expect(host.describeCalls.flat().sort()).toEqual(['open-1', 'open-2']);
+    expect((await importExternalSessions({ limits: { audit: 2 } })).removed).toBe(1);
+    await expect(getTask(done.id)).rejects.toThrow();
   });
 });

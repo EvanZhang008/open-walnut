@@ -54,7 +54,21 @@ export interface ExternalSessionCandidate {
   messageCount: number
   /** Absolute transcript path on this host. */
   transcriptPath: string
+  /**
+   * Set only by describe: why this known transcript should never have been
+   * imported (the scan simply skips such files), or null when it is a real
+   * outside session. The server removes an import that carries a reason; an
+   * answer without the key comes from a scanner that predates the rule.
+   */
+  notExternal?: NotExternalReason | null
 }
+
+/**
+ * 'walnut-driven': a Walnut envelope sits in a user turn, so some Walnut drove
+ * the session. 'no-reply': the whole transcript holds no real model reply (a
+ * probe, or a first turn that only ever errored), so there is nothing to adopt.
+ */
+export type NotExternalReason = 'walnut-driven' | 'no-reply'
 
 export interface ScanExternalSessionsOptions {
   /** Only consider transcripts written within this window. */
@@ -90,6 +104,35 @@ const HUMAN_CLAUDE_ENTRYPOINTS = new Set(['cli', 'claude-desktop'])
 const PROGRAMMATIC_CLAUDE_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ts'])
 /** Codex originators that mean "a human started this". */
 const HUMAN_CODEX_ORIGINATORS = new Set(['codex-tui', 'Codex Desktop', 'codex_desktop'])
+
+/**
+ * Envelopes only Walnut writes into a user turn. Mirrors CACHE_WARMUP_TAG
+ * (core/sessions/side-thread-warmup.ts) and the two output-mode markers
+ * (core/sessions/output-mode.ts); this file can import neither, so a test pins
+ * the equality. knownSessionIds only covers THIS server's records, and a Walnut
+ * session can reach the disk without one: a side-thread fork minted by another
+ * Walnut instance sharing the host (a dev or test server), or a fork whose
+ * record was lost. Its copied history carries these envelopes, which is how the
+ * scan still recognises it. Line-anchored like stripOutputModeWrappers, so a
+ * sentence that merely mentions the mode is not mistaken for one.
+ */
+export const WALNUT_ENVELOPE_MARKERS = {
+  cacheWarmup: '<walnut-cache-warmup>',
+  outputModeInstruction: '[Rich output mode: ',
+  outputModeReminder: '[Rich output mode is still on',
+}
+
+export function isWalnutEnvelopeText(text: string): boolean {
+  const m = WALNUT_ENVELOPE_MARKERS
+  if (text.trimStart().startsWith(m.cacheWarmup)) return true
+  if (!text.includes(m.outputModeInstruction) && !text.includes(m.outputModeReminder)) return false
+  for (const line of text.split('\n')) {
+    const t = line.trim()
+    if (t.startsWith(m.outputModeInstruction)) return true
+    if (t.startsWith(m.outputModeReminder) && t.endsWith(']')) return true
+  }
+  return false
+}
 
 /** Temp/test locations whose programmatic sessions are throwaway debris. */
 function isTempCwd(cwd: string | undefined): boolean {
@@ -357,15 +400,49 @@ interface ClaudeHead extends TitleLines {
   firstUserText?: string
   messageCount: number
   isSidechain: boolean
+  /** A Walnut envelope was seen in a user turn or a queued input. */
+  walnutDriven: boolean
+  /** A real model reply was seen (not an API error, not a synthetic stub). */
+  replied: boolean
+  /** The whole file fit the head budget, so a missing reply is a fact. */
+  readWhole: boolean
+}
+
+/** Why a programmatic claude transcript is not an outside session, if it isn't.
+ *  The envelope rule is programmatic-only: a person who forks a Walnut session
+ *  in a terminal started real outside work, even though the history they
+ *  copied carries Walnut's envelopes. */
+function claudeNotExternal(head: ClaudeHead): NotExternalReason | undefined {
+  const human = head.entrypoint !== undefined && HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)
+  if (head.walnutDriven && !human) return 'walnut-driven'
+  if (head.readWhole && !head.replied) return 'no-reply'
+  return undefined
+}
+
+function isRealReply(entry: Record<string, unknown>): boolean {
+  if (entry.isApiErrorMessage === true) return false
+  const message = entry.message as Record<string, unknown> | undefined
+  return !(message && message.model === '<synthetic>')
 }
 
 function parseClaudeHead(filePath: string, size: number): ClaudeHead {
-  const out: ClaudeHead = { messageCount: 0, isSidechain: false }
+  const out: ClaudeHead = {
+    messageCount: 0, isSidechain: false, walnutDriven: false, replied: false,
+    readWhole: size <= MAX_HEAD_BYTES,
+  }
   walkHeadLines(filePath, size, (entry) => {
     const type = entry.type
     if (!out.startedAt && typeof entry.timestamp === 'string') out.startedAt = entry.timestamp
     if (!out.cwd && typeof entry.cwd === 'string') out.cwd = entry.cwd
     if (type === 'user' || type === 'assistant') out.messageCount++
+    if (type === 'assistant' && !out.replied && isRealReply(entry)) out.replied = true
+    // A queued input (a warm-up is enqueued before the fork's first turn) or a
+    // user turn carrying a Walnut envelope.
+    if (!out.walnutDriven) {
+      const texts = type === 'queue-operation' && typeof entry.content === 'string' ? [entry.content]
+        : type === 'user' ? messageTexts(entry.message) : []
+      if (texts.some(isWalnutEnvelopeText)) out.walnutDriven = true
+    }
     if (type === 'user' && !out.entrypoint) {
       out.entrypoint = typeof entry.entrypoint === 'string' ? entry.entrypoint : 'unknown'
       if (entry.isSidechain === true) out.isSidechain = true
@@ -379,6 +456,8 @@ function parseClaudeHead(filePath: string, size: number): ClaudeHead {
       if (!human && !program) return true
       if (program && !human && isTempCwd(out.cwd)) return true
     }
+    // Settled: a Walnut-driven programmatic session is never imported.
+    if (out.walnutDriven && out.entrypoint && !HUMAN_CLAUDE_ENTRYPOINTS.has(out.entrypoint)) return true
     if (type === 'user' && !out.firstUserText && isTitleBearingUserLine(entry)) {
       out.firstUserText = titleFromMessage(entry.message)
     }
@@ -436,6 +515,7 @@ function scanClaude(
       // only with a real working directory — temp-dir ones are test debris.
       const isProgram = PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(head.entrypoint) && !isTempCwd(head.cwd)
       if (!isHuman && !isProgram) continue
+      if (claudeNotExternal(head)) continue
 
       out.push(claudeCandidate(sessionId, filePath, stat, head))
     }
@@ -644,7 +724,8 @@ function locateTranscripts(homeDir: string, ids: string[]): Map<string, { engine
  * imported session someone keeps using in a terminal is never re-scanned (it
  * is known), so this is the only way the server learns it is still alive. No
  * entrypoint/originator classification: the ids are ones Walnut already owns.
- * An id with no transcript is simply absent from the answer.
+ * An id with no transcript is simply absent from the answer. A transcript
+ * the scan would have skipped says why in notExternal.
  */
 export function describeExternalSessions(
   options: DescribeExternalSessionsOptions,
@@ -664,9 +745,13 @@ export function describeExternalSessions(
       if (head.isSidechain) continue
       let stat: fs.Stats
       try { stat = fs.statSync(hit.file.filePath) } catch { continue }
-      candidates.push(claudeCandidate(sessionId, hit.file.filePath, stat, head))
+      const candidate = claudeCandidate(sessionId, hit.file.filePath, stat, head)
+      candidate.notExternal = claudeNotExternal(head) ?? null
+      candidates.push(candidate)
     } else {
-      candidates.push(codexCandidate(sessionId, hit.file, parseCodexHead(hit.file.filePath, hit.file.size)))
+      const candidate = codexCandidate(sessionId, hit.file, parseCodexHead(hit.file.filePath, hit.file.size))
+      candidate.notExternal = null
+      candidates.push(candidate)
     }
   }
   return { candidates, activity }

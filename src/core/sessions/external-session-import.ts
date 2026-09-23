@@ -75,6 +75,8 @@ const PER_RUN_IMPORT_LIMIT = 100;
 const SWEEP_LIMIT_PER_RUN = 300;
 /** Per-run cap on folder backfills for imports that predate cwd folders. */
 const FOLDER_BACKFILL_LIMIT_PER_RUN = 300;
+/** Per-run cap on imports re-read to check they really were outside sessions. */
+const AUDIT_LIMIT_PER_RUN = 100;
 /** Idle window before an imported task is auto-completed (config override:
  *  external_session_import.auto_complete_after_days). */
 export const DEFAULT_AUTO_COMPLETE_AFTER_DAYS = 7;
@@ -151,6 +153,9 @@ export interface ExternalImportResult {
   completed: number;
   /** Imports that predate cwd folders and were filed into one this run. */
   foldered: number;
+  /** Imports removed because they were never outside sessions (Walnut's own
+   *  forks, reply-less probes). */
+  removed: number;
   /** Candidates found but skipped (already tracked, or bad data). */
   skipped: number;
   /** Hosts actually scanned. */
@@ -545,6 +550,101 @@ async function sweepIdleImports(imports: Task[], idleMs: number, now: number, li
   return completed;
 }
 
+// ── provenance audit ──────────────────────────────────────────────────────
+
+/** Session ids whose host already answered the audit in this process, and
+ *  their tasks (so a settled task costs no session lookup on later ticks). */
+const auditedSessions = new Set<string>();
+const auditedTasks = new Set<string>();
+
+/** Test seam: forget which imports were audited (module state outlives a test). */
+export function _resetImportAuditForTesting(): void {
+  auditedSessions.clear();
+  auditedTasks.clear();
+}
+
+/**
+ * Remove imports that were never outside sessions. Older scanners imported
+ * Walnut's own forks (side threads minted by another Walnut instance on the same
+ * host, whose records this server never held) and one-shot probes that never
+ * got a reply; the scan now skips both, and this pass cleans up what they left.
+ * Each import is re-read once per process through describe, open tasks first
+ * (one imported by this process was classified by the current rule already);
+ * a host with no answer is asked again next tick. Only tasks still tagged and
+ * still in a per-host import project are touched: an adopted task, or one the
+ * user filed elsewhere, is theirs. The session row goes too, so nothing points
+ * at the removed task; the scan keeps skipping the transcript by the same rule.
+ */
+async function auditImports(imports: Task[], limit: number): Promise<number> {
+  const { getSessionsForTask, deleteSessionRecords } = await import('../session-tracker.js');
+  const { getTask, deleteTasksByIds } = await import('../task-manager.js');
+  const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
+  const importProjects = await importProjectNames();
+  // Only hosts that can answer now take a slot: a disconnected host's backlog
+  // would otherwise fill the batch every tick and starve the reachable ones.
+  const reachable = new Map<string, boolean>();
+  const canAnswer = (host: string): boolean => {
+    if (!reachable.has(host)) reachable.set(host, getConnectedDaemonConnection(host)?.hasCapability(DESCRIBE_CAPABILITY) === true);
+    return reachable.get(host) === true;
+  };
+  const pending: Array<{ task: Task; sessionId: string; host: string }> = [];
+  const ordered = [...imports].sort((a, b) => Number(a.phase === 'COMPLETE') - Number(b.phase === 'COMPLETE'));
+  for (const task of ordered) {
+    if (pending.length >= limit) break;
+    if (auditedTasks.has(task.id) || isLegacyBucket(task)) continue;
+    if (!importProjects.has((task.project ?? '').toLowerCase())) continue;
+    const sessions = await getSessionsForTask(task.id);
+    // One session per import; anything else was reshaped by hand, leave it.
+    if (sessions.length !== 1 || auditedSessions.has(sessions[0].claudeSessionId)) {
+      auditedTasks.add(task.id);
+      continue;
+    }
+    const host = sessions[0].host || '__local__';
+    if (canAnswer(host)) pending.push({ task, sessionId: sessions[0].claudeSessionId, host });
+  }
+
+  const idsByHost = new Map<string, string[]>();
+  for (const p of pending) idsByHost.set(p.host, [...(idsByHost.get(p.host) ?? []), p.sessionId]);
+  const verdicts = new Map<string, string>();
+  for (const [host, ids] of idsByHost) {
+    const answer = await describeHost(host, ids, false);
+    if (!answer) continue;
+    const byId = new Map(answer.candidates.map((c) => [c.sessionId, c]));
+    for (const p of pending) {
+      if (p.host !== host) continue;
+      const c = byId.get(p.sessionId);
+      // No key = a daemon older than the rule: no verdict, ask again after it
+      // upgrades. No candidate = no transcript left, nothing to judge.
+      if (c && c.notExternal === undefined) continue;
+      auditedSessions.add(p.sessionId);
+      auditedTasks.add(p.task.id);
+      if (c?.notExternal) verdicts.set(p.sessionId, c.notExternal);
+    }
+  }
+
+  let removed = 0;
+  for (const { task, sessionId } of pending) {
+    const reason = verdicts.get(sessionId);
+    if (!reason) continue;
+    try {
+      // Re-read: a message sent meanwhile adopted it, and then it stays.
+      const current = await getTask(task.id).catch(() => null);
+      if (!current || !isExternalImportTask(current) || (current.project ?? '') !== (task.project ?? '')) continue;
+      await deleteSessionRecords(new Set([sessionId]), 'external-import: not an outside session (' + reason + ')');
+      const res = await deleteTasksByIds([task.id], { force: true });
+      if (res.deleted.length) removed++;
+      log.session.info('removed an import that was not an outside session', {
+        taskId: task.id, sessionId, reason, title: task.title,
+      });
+    } catch (err) {
+      log.session.warn('external import audit removal failed', {
+        taskId: task.id, sessionId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return removed;
+}
+
 /**
  * Someone sent the session a message: the task is adopted and leaves the
  * imported type. Idempotent; a no-op for anything the importer never owned.
@@ -687,7 +787,7 @@ export interface ImportExternalSessionsOptions {
   /** Clock for the idle sweep (tests advance it; production leaves it unset). */
   now?: number;
   /** Per-run caps (test seam; production uses the module constants). */
-  limits?: { sweep?: number; folderBackfill?: number; retitle?: number };
+  limits?: { sweep?: number; folderBackfill?: number; retitle?: number; audit?: number };
 }
 
 export function importExternalSessions(options: ImportExternalSessionsOptions = {}): Promise<ExternalImportResult> {
@@ -700,7 +800,7 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
   const windowMs = options.windowMs ?? DEFAULT_EXTERNAL_SCAN_WINDOW_MS;
   const now = options.now ?? Date.now();
   const result: ExternalImportResult = {
-    imported: 0, retitled: 0, completed: 0, foldered: 0, skipped: 0, hostsScanned: [], hostsSkipped: [],
+    imported: 0, retitled: 0, completed: 0, foldered: 0, removed: 0, skipped: 0, hostsScanned: [], hostsSkipped: [],
     truncated: false, projectByHost: {}, cleanedLegacyBuckets: 0,
   };
 
@@ -719,20 +819,23 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
   }
 
   // Maintenance of what is already imported needs no daemon, so it runs even
-  // when no host is warm: folders for old imports, then the idle sweep.
+  // when no host is warm: the provenance audit (it asks hosts, and skips any
+  // that don't answer), folders for old imports, then the idle sweep.
   const { queryTasks } = await import('../task-manager.js');
   const imports = await queryTasks({ tagsAll: [HOLDER_TAG] });
-  result.foldered = await backfillImportFolders(folders, imports, options.limits?.folderBackfill ?? FOLDER_BACKFILL_LIMIT_PER_RUN);
-  result.completed = await sweepIdleImports(imports, idleMs, now, options.limits?.sweep ?? SWEEP_LIMIT_PER_RUN);
+  result.removed = await auditImports(imports, options.limits?.audit ?? AUDIT_LIMIT_PER_RUN);
+  const kept = result.removed > 0 ? await queryTasks({ tagsAll: [HOLDER_TAG] }) : imports;
+  result.foldered = await backfillImportFolders(folders, kept, options.limits?.folderBackfill ?? FOLDER_BACKFILL_LIMIT_PER_RUN);
+  result.completed = await sweepIdleImports(kept, idleMs, now, options.limits?.sweep ?? SWEEP_LIMIT_PER_RUN);
 
-  if (result.imported > 0 || result.retitled > 0 || result.completed > 0 || result.foldered > 0) {
+  if (result.imported > 0 || result.retitled > 0 || result.completed > 0 || result.foldered > 0 || result.removed > 0) {
     // One coarse refresh — addTask already emitted per-task events; this nudges
     // list surfaces that coalesce on task:updated (and is the ONLY signal for the
     // sweep/backfill writes, which deliberately emit nothing per row).
     bus.emit(EventNames.TASK_UPDATED, {}, [], { source: 'external-session-import' });
     log.session.info('imported external sessions', {
       imported: result.imported, retitled: result.retitled, completed: result.completed,
-      foldered: result.foldered, skipped: result.skipped,
+      foldered: result.foldered, removed: result.removed, skipped: result.skipped,
       hosts: result.hostsScanned.join(','),
       projects: Object.values(result.projectByHost).join(','),
     });
@@ -788,7 +891,11 @@ async function scanAndImport(
         const outcome = isExcludedExternalCwd(candidate.cwd, hostExclusions)
           ? 'skipped' : await importCandidate(candidate, host, folders);
         result[outcome]++;
-        if (outcome === 'imported') result.projectByHost[host] = externalImportProject(host);
+        if (outcome === 'imported') {
+          result.projectByHost[host] = externalImportProject(host);
+          // Classified by the current rule just now: nothing for the audit to ask.
+          auditedSessions.add(candidate.sessionId);
+        }
       } catch (err) {
         result.skipped++;
         log.session.warn('external session import failed', {

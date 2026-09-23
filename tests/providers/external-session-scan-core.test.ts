@@ -321,6 +321,8 @@ describe('scanExternalSessions — deep-head reads (regression)', () => {
       type: 'user', message: { role: 'user', content: 'buried first words' },
       timestamp: '2026-08-10T10:00:00.000Z', cwd: '/Users/dev/proj', entrypoint: 'cli', isSidechain: false,
     })
+    // A reply, as every importable transcript has (a reply-less one is skipped).
+    lines.push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } })
     writeJsonl(path.join(home, '.claude', 'projects', 'dir', 'straddle.jsonl'), lines)
     expect(fs.statSync(path.join(home, '.claude', 'projects', 'dir', 'straddle.jsonl')).size)
       .toBeGreaterThan(131072)
@@ -535,5 +537,108 @@ describe('describeExternalSessions — by id, regardless of age', () => {
   it('returns nothing for an empty ask or an unreadable home', () => {
     expect(describeExternalSessions({ sessionIds: [], homeDir: home }).candidates).toEqual([])
     expect(describeExternalSessions({ sessionIds: ['x'], homeDir: path.join(home, 'nope') }).candidates).toEqual([])
+  })
+})
+
+/**
+ * Provenance: Walnut's own sessions the server holds no record of (a side-thread
+ * fork minted by another Walnut instance on the same host) and probes that never
+ * got a reply were imported as outside sessions. Shapes copied from real host
+ * transcripts: a fork opens with the queued cache warm-up, then the parent's
+ * copied history, whose sends end with the output-mode reminder.
+ */
+describe('scanExternalSessions — Walnut-driven and reply-less transcripts', () => {
+  const PROJ = '/Users/dev/proj'
+  const REMINDER = "[Rich output mode is still on — markdown first; add HTML only for colour, diagrams, or layout markdown can't do.]"
+  const file = (sid: string) => path.join(home, '.claude', 'projects', '-Users-dev-proj', sid + '.jsonl')
+  const user = (sid: string, content: unknown, extra: Record<string, unknown> = {}) => ({
+    type: 'user', message: { role: 'user', content }, cwd: PROJ, sessionId: sid, entrypoint: 'sdk-cli',
+    timestamp: '2026-09-18T17:55:38.049Z', ...extra,
+  })
+  const reply = (text = 'ok', extra: Record<string, unknown> = {}) => ({
+    type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text }] }, ...extra,
+  })
+
+  it('skips a side-thread fork: queued warm-up, copied compaction summary, reminder-wrapped sends', () => {
+    writeJsonl(file('fork-1'), [
+      { type: 'permission-mode', permissionMode: 'bypassPermissions', sessionId: 'fork-1' },
+      { type: 'queue-operation', operation: 'enqueue', sessionId: 'fork-1', content: '<walnut-cache-warmup>This is a cache warm-up. Reply with exactly one word: Ready.' },
+      user('fork-1', 'This session is being continued from a previous conversation that ran out of context.', { isCompactSummary: true }),
+      reply('HLD keeps both designs.'),
+      user('fork-1', 'continue\n\n' + REMINDER),
+      reply(),
+    ])
+    expect(scan().candidates).toEqual([])
+  })
+
+  it('skips a Walnut-driven session found by the reminder alone, and by the mode switch line', () => {
+    writeJsonl(file('rem-1'), [user('rem-1', [{ type: 'text', text: 'fix the flaky test\n\n' + REMINDER }]), reply()])
+    writeJsonl(file('edge-1'), [user('edge-1', 'hello\n\n[Rich output mode: ON] Keep writing markdown.'), reply()])
+    expect(scan().candidates).toEqual([])
+  })
+
+  it('keeps a session whose text merely mentions the markers mid-sentence', () => {
+    writeJsonl(file('talk-1'), [
+      user('talk-1', 'why does my reply end with [Rich output mode is still on]? and what is <walnut-cache-warmup> for'),
+      reply(),
+    ])
+    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['talk-1'])
+  })
+
+  it('keeps a terminal fork of a Walnut session: a person started that work', () => {
+    writeJsonl(file('term-fork'), [
+      user('term-fork', 'continue\n\n' + REMINDER, { entrypoint: 'cli' }),
+      reply(),
+      user('term-fork', 'now split the doc in two', { entrypoint: 'cli' }),
+      reply(),
+    ])
+    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['term-fork'])
+  })
+
+  it('skips a probe whose only reply is an API error, and one answered by a synthetic stub', () => {
+    writeJsonl(file('probe-1'), [
+      { type: 'queue-operation', operation: 'enqueue', content: 'Say only Z.' },
+      user('probe-1', 'Say only Z.'),
+      reply('API Error: 400 capture-only probe', { isApiErrorMessage: true }),
+    ])
+    writeJsonl(file('stub-1'), [
+      user('stub-1', 'ping'),
+      { type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] } },
+    ])
+    writeJsonl(file('asked-1'), [user('asked-1', 'still thinking about this one')])
+    writeJsonl(file('ok-1'), [user('ok-1', 'Say only Z.'), reply('Z')])
+    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['ok-1'])
+  })
+
+  it('does not call a transcript reply-less when the head budget could not reach the reply', () => {
+    const big = 'x'.repeat(2.5 * 1024 * 1024)
+    writeJsonl(file('big-1'), [user('big-1', 'review this log'), user('big-1', big), reply('done')])
+    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['big-1'])
+  })
+
+  it('describe reports why a known import is not an outside session', () => {
+    writeJsonl(file('fork-2'), [
+      { type: 'queue-operation', operation: 'enqueue', content: '<walnut-cache-warmup>Reply Ready.' },
+      user('fork-2', 'What is a VPC CIDR versus a subnet?'),
+      reply(),
+    ])
+    writeJsonl(file('probe-2'), [user('probe-2', 'Say only Z.'), reply('err', { isApiErrorMessage: true })])
+    writeJsonl(file('real-2'), [user('real-2', 'fix the login bug', { entrypoint: 'cli' }), reply()])
+    const byId = Object.fromEntries(describeExternalSessions({ sessionIds: ['fork-2', 'probe-2', 'real-2'], homeDir: home })
+      .candidates.map((c) => [c.sessionId, c.notExternal]))
+    expect(byId).toEqual({ 'fork-2': 'walnut-driven', 'probe-2': 'no-reply', 'real-2': null })
+  })
+
+  it('mirrors the markers Walnut actually writes', async () => {
+    const { WALNUT_ENVELOPE_MARKERS } = await import('../../src/providers/external-session-scan-core.js')
+    const { CACHE_WARMUP_TAG } = await import('../../src/core/sessions/side-thread-warmup.js')
+    const { OUTPUT_MODE_INSTRUCTION_MARKER, OUTPUT_MODE_REMINDER_MARKER, RICH_OUTPUT_MODE_REMINDER } =
+      await import('../../src/core/sessions/output-mode.js')
+    expect(WALNUT_ENVELOPE_MARKERS).toEqual({
+      cacheWarmup: CACHE_WARMUP_TAG,
+      outputModeInstruction: OUTPUT_MODE_INSTRUCTION_MARKER,
+      outputModeReminder: OUTPUT_MODE_REMINDER_MARKER,
+    })
+    expect(RICH_OUTPUT_MODE_REMINDER).toBe(REMINDER)
   })
 })
