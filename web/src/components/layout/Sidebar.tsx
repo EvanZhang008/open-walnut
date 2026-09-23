@@ -26,6 +26,7 @@ import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/
 const LS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const LS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
 const LS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
+const LS_SCRATCHPAD_VISIBLE_KEY = 'open-walnut-home-scratchpad-visible';
 
 // Home Dock controls stay outside the shared Core, Native Plugin, and Webview App Registry.
 
@@ -86,6 +87,9 @@ export function Sidebar({
   const [calendarPanelVisible, setCalendarPanelVisible] = useState<boolean>(
     () => localStorage.getItem(LS_CALENDAR_VISIBLE_KEY) === 'true'
   );
+  const [scratchpadVisible, setScratchpadVisible] = useState<boolean>(
+    () => localStorage.getItem(LS_SCRATCHPAD_VISIBLE_KEY) === 'true'
+  );
 
   useEffect(() => {
     const handleChatVisible = (e: Event) => {
@@ -97,21 +101,26 @@ export function Sidebar({
     const handleCalendarVisible = (e: Event) => {
       setCalendarPanelVisible((e as CustomEvent).detail?.visible ?? false);
     };
+    const handleScratchpadVisible = (e: Event) => {
+      setScratchpadVisible((e as CustomEvent).detail?.visible ?? false);
+    };
     // Clicking a persistent toast's body opens the notification center.
     const handleOpenCenter = () => setNotifOpen(true);
     window.addEventListener('main:chat-visible', handleChatVisible);
     window.addEventListener('main:todo-visible', handleTodoVisible);
     window.addEventListener('main:calendar-visible', handleCalendarVisible);
+    window.addEventListener('main:scratchpad-visible', handleScratchpadVisible);
     window.addEventListener('notification:open-center', handleOpenCenter);
     return () => {
       window.removeEventListener('main:chat-visible', handleChatVisible);
       window.removeEventListener('main:todo-visible', handleTodoVisible);
       window.removeEventListener('main:calendar-visible', handleCalendarVisible);
+      window.removeEventListener('main:scratchpad-visible', handleScratchpadVisible);
       window.removeEventListener('notification:open-center', handleOpenCenter);
     };
   }, []);
 
-  // These three control panels OF the home page: from another route they bring
+  // These four control panels OF the home page: from another route they bring
   // the user home first, and only ever open a panel there, never hide it.
   const homeToggle = (event: string, visible: boolean) => () => {
     if (location.pathname === '/') { window.dispatchEvent(new CustomEvent(event)); return; }
@@ -121,6 +130,7 @@ export function Sidebar({
   const handleToggleChat = homeToggle('dock:activate-chat', chatVisible);
   const handleToggleTodo = homeToggle('sidebar:toggle-todo', todoVisible);
   const handleToggleCalendarPanel = homeToggle('sidebar:toggle-calendar', calendarPanelVisible);
+  const handleToggleScratchpad = homeToggle('sidebar:toggle-scratchpad', scratchpadVisible);
   const homePanelToggles = (
     <div className="sidebar-home-panels" role="group" aria-label="Home panels">
       <button
@@ -149,6 +159,15 @@ export function Sidebar({
       >
         <CalendarIcon />
         <span className="sidebar-label">Agenda</span>
+      </button>
+      <button
+        className={`sidebar-link sidebar-panel-toggle${scratchpadVisible ? ' active' : ''}`}
+        onClick={handleToggleScratchpad}
+        title={collapsed ? 'Scratchpad' : undefined}
+        data-testid="sidebar-toggle-scratchpad"
+      >
+        <ScratchpadIcon />
+        <span className="sidebar-label">Scratchpad</span>
       </button>
     </div>
   );
@@ -387,6 +406,16 @@ function ChatBubbleIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function ScratchpadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 3.5h9.5l4.5 4.5v12.5H5z" />
+      <path d="M14.5 3.5V8H19" />
+      <path d="M8.5 12.5h7M8.5 16.5h4.5" />
     </svg>
   );
 }

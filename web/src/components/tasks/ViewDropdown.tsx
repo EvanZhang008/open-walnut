@@ -308,6 +308,8 @@ export function ViewDropdown({
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      // Claimed, so the page's own Escape (deselect the task) does not run as well.
+      e.preventDefault();
       if (searchRef.current?.value) { setSearch(''); return; }
       setOpen(false);
     };

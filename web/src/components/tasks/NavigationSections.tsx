@@ -60,11 +60,13 @@ interface HeadingProps {
   label: string;
   className?: string;
   collapsed?: boolean;
+  /** A group's glyph (a tier's), drawn before the name. Section headings have none. */
+  icon?: ReactNode;
   onClick: () => void;
   actions?: ContextMenuItem[];
 }
 
-export function NavigationHeading({ id, label, className = '', collapsed, onClick, actions = [] }: HeadingProps) {
+export function NavigationHeading({ id, label, className = '', collapsed, icon, onClick, actions = [] }: HeadingProps) {
   const order = useContext(NavigationOrder);
   const [tabBar, setTabBar] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
@@ -95,6 +97,7 @@ export function NavigationHeading({ id, label, className = '', collapsed, onClic
         onClick={onClick}
         onKeyDown={event => { if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && order) { event.preventDefault(); const target = order.ids[index + (event.key === 'ArrowUp' ? -1 : 1)]; if (target !== undefined) order.move(id, target); } }}
         onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData(`text/${order?.storageKey}`, id); event.dataTransfer.effectAllowed = 'move'; }}>
+        {icon && <span className="navigation-icon" aria-hidden="true">{icon}</span>}
         <span className="navigation-label">{label}</span>
         {collapsed !== undefined && <NavigationChevron collapsed={collapsed} />}
       </button>

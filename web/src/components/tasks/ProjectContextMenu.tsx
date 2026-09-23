@@ -27,6 +27,13 @@
 import { type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useProjectActions } from '@/hooks/useProjectActions';
+import type { SortBy } from './ViewDropdown';
+
+/** The task orders a project can have, in menu order. The Projects heading offers the
+ *  same list to set every project at once. */
+export const PROJECT_SORT_OPTIONS: ReadonlyArray<readonly [SortBy, string]> = [
+  ['updated', 'Last updated'], ['priority', 'Priority'], ['date', 'Created'], ['manual', 'Manual order'],
+];
 
 /** The project a right-click landed on. */
 export interface ProjectMenuTarget {
@@ -36,6 +43,8 @@ export interface ProjectMenuTarget {
   collapsed?: boolean;
   /** Current favorite state — only used to word the Favorite/Unfavorite row. */
   favorite?: boolean;
+  /** How this project's tasks are ordered now; checks one of the Sort rows. */
+  sort?: SortBy;
 }
 
 /** Handlers a surface supports; an omitted one drops its row from the menu. */
@@ -56,6 +65,9 @@ export interface ProjectMenuActions {
   onViewDetails?: (project: string) => void;
   onMoveUp?: (project: string) => void;
   onMoveDown?: (project: string) => void;
+  /** Order this project's tasks, this project only. The main list only: a tier's
+   *  project run keeps the tier's pinned order, so the tier label passes nothing. */
+  onSetSort?: (project: string, sort: SortBy) => void;
   /** Forwarded to useProjectActions: rename/delete finished on the server. */
   onChanged?: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
 }
@@ -133,6 +145,12 @@ export function buildProjectMenuItems(
       when: !!onNewSeparator,
       onSelect: () => onNewSeparator?.(target.project),
     },
+    { divider: true },
+    { key: 'sort', label: 'Sort tasks by', section: true, when: !!actions.onSetSort },
+    ...PROJECT_SORT_OPTIONS.map(([value, label]) => ({
+      key: `sort-${value}`, label, checked: target.sort === value, when: !!actions.onSetSort,
+      onSelect: () => actions.onSetSort?.(target.project, value),
+    })),
     { divider: true },
     {
       key: 'rename',

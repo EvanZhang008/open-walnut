@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { isolateUiPrefs } from './todo-panel-helpers';
+import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
 
 const SHOTS = '/tmp/walnut-home-navigation';
@@ -16,6 +16,15 @@ const heading = (page: Page, id: string) => navigation(page).locator(`[data-navi
 const railApp = (page: Page, id: string) => page.getByTestId(`sidebar-core-app-${id}`);
 const overflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
 const right = async (page: Page, selector: string) => page.locator(selector).first().evaluate(el => el.getBoundingClientRect().left);
+// Pinned cards these tests make leave the shared Focus tier when the test ends: left there, they push
+// later specs' drag targets below the window (project-collapse-menu's drags failed that way).
+const unpinAfter: string[] = [];
+test.afterEach(async ({ request }) => {
+  for (const id of unpinAfter.splice(0)) {
+    await request.delete(`/api/focus/tasks/${id}`).catch(() => {});
+    await request.delete(`/api/tasks/${id}`).catch(() => {});
+  }
+});
 
 test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts', async ({ page, baseURL }) => {
   const errors: string[] = [];
@@ -28,9 +37,19 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   expect((await page.request.patch(`/api/tasks/${taskId}`, { data: { phase: 'AGENT_COMPLETE' } })).ok()).toBe(true);
   // New tasks are pinned by default; this one belongs to the Projects list.
   expect((await page.request.delete(`/api/focus/tasks/${taskId}`)).ok()).toBe(true);
+  // A folder in the same project, for the folder row's place on the grid (a folder needs two tasks).
+  const memberIds: string[] = [];
+  for (const n of [1, 2]) {
+    const member = await page.request.post('/api/tasks', { data: { title: `Navigation folder member ${n} ${tag}`, project: `Navigation layout ${tag}`, source: 'local' } });
+    const memberId = (await member.json()).task.id;
+    expect((await page.request.delete(`/api/focus/tasks/${memberId}`)).ok()).toBe(true);
+    memberIds.push(memberId);
+  }
+  expect((await page.request.post('/api/tasks/groups', { data: { task_ids: memberIds, label: `Navigation folder ${tag}` } })).ok()).toBe(true);
   // An empty tier is hidden, so give Focus a card of its own for the Pinned checks below.
   const pinned = await page.request.post('/api/tasks', { data: { title: `Navigation focus pin ${tag}`, project: `Navigation layout ${tag}`, source: 'local' } });
   const pinnedId = (await pinned.json()).task.id;
+  unpinAfter.push(pinnedId);
   expect((await page.request.post(`/api/focus/tasks/${pinnedId}`)).ok()).toBe(true);
   expect((await page.request.put(`/api/focus/tasks/${pinnedId}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true);
   await boot(page, baseURL!);
@@ -78,12 +97,11 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await project.scrollIntoViewIfNeeded();
   const nameX = await project.locator('.todo-group-name-btn').evaluate(el => el.getBoundingClientRect().left);
   expect(await project.locator('.collapse-chevron').evaluate(el => el.getBoundingClientRect().left)).toBeGreaterThan(nameX);
-  await expect(project.locator('.todo-group-project-icon')).toBeHidden();
   const row = navigation(page).locator(`[data-task-id="${taskId}"]`).first();
   if (!(await row.isVisible())) await project.locator('.todo-group-name-btn').click();
   await expect(row).toBeVisible();
   expect(await row.locator('.todo-row-pill').evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
-  // One grid: heading text, project names and the status dots share the column 12px in
+  // One grid: heading text, group icons and the status dots share the column 12px in
   // from the panel edge (where the search field starts), circles sit at 22px with or
   // without a dot, titles at 46px.
   const leftOf = (locator: ReturnType<Page['locator']>) => locator.evaluate(el => el.getBoundingClientRect().left);
@@ -98,6 +116,26 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   expect(Math.round(await leftOf(project.locator('.todo-group-name-btn')) - panelX)).toBe(12);
   expect(Math.round(await leftOf(homeToolbar(page).locator('.todo-search-bar')) - panelX)).toBe(12);
   expect(Math.round(circleX - panelX)).toBe(22);
+  // A tier heading carries its coloured icon on that column and its name at 32px; a project
+  // is its name alone (no folder icon), with air above it. A folder sits one step in, its
+  // icon on the circle column. Section headings (Pinned, Projects) stay plain text.
+  const textStart = (locator: ReturnType<Page['locator']>) => locator.evaluate(el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return range.getClientRects()[0].left;
+  });
+  await expect(heading(page, 'pinned').locator('.navigation-icon')).toHaveCount(0);
+  const focusHeading = heading(page, 'focus');
+  expect(Math.round(await leftOf(focusHeading.locator('.navigation-icon')) - panelX)).toBe(12);
+  expect(Math.round(await textStart(focusHeading.locator('.navigation-label')) - panelX)).toBe(32);
+  expect(await focusHeading.locator('.todo-tier-icon-focus').evaluate(el => getComputedStyle(el).color)).toBe('rgb(0, 122, 255)');
+  await expect(project.locator('.todo-group-project-icon')).toBeHidden();
+  expect(Math.round(await textStart(project.locator('.todo-group-project-name')) - panelX)).toBe(12);
+  expect(await project.evaluate(el => getComputedStyle(el).marginTop)).toBe('12px');
+  const folder = navigation(page).locator('.todo-group-project .task-group-chip').filter({ hasText: `Navigation folder ${tag}` });
+  await expect(folder).toBeVisible();
+  expect(Math.round(await leftOf(folder.locator('.task-group-chip-icon')) - panelX)).toBe(22);
+  expect(Math.round(await textStart(folder.locator('.task-group-chip-label')) - panelX)).toBe(42);
   const textLeft = await row.locator('.todo-item-title').evaluate(el => {
     const range = document.createRange();
     range.selectNodeContents(el);
@@ -419,11 +457,177 @@ test('quick view tabs stay in sync across windows', async ({ page, context, base
   await other.close();
 });
 
+test('a single tier, Recent and the Projects list draw on the same grid as All', async ({ page, baseURL }) => {
+  const tag = `${test.info().project.name}-${test.info().repeatEachIndex}-${Date.now()}`;
+  // Two projects pinned in Focus, so the tier draws project labels, and one task that needs you.
+  const ids: string[] = [];
+  for (const n of [1, 2]) {
+    const created = await page.request.post('/api/tasks', { data: { title: `Grid card ${n} ${tag}`, project: `Grid ${n} ${tag}`, source: 'local' } });
+    const id = (await created.json()).task.id;
+    unpinAfter.push(id);
+    expect((await page.request.post(`/api/focus/tasks/${id}`)).ok()).toBe(true);
+    expect((await page.request.put(`/api/focus/tasks/${id}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true);
+    ids.push(id);
+  }
+  expect((await page.request.patch(`/api/tasks/${ids[0]}`, { data: { phase: 'AGENT_COMPLETE' } })).ok()).toBe(true);
+  // A folder in Focus whose first member needs you: its dot steps in with it.
+  const members: string[] = [];
+  for (const n of [1, 2]) {
+    const created = await page.request.post('/api/tasks', { data: { title: `Grid member ${n} ${tag}`, project: `Grid 1 ${tag}`, source: 'local' } });
+    const id = (await created.json()).task.id;
+    unpinAfter.push(id);
+    expect((await page.request.post(`/api/focus/tasks/${id}`)).ok()).toBe(true);
+    expect((await page.request.put(`/api/focus/tasks/${id}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true);
+    members.push(id);
+  }
+  expect((await page.request.post('/api/tasks/groups', { data: { task_ids: members, label: `Grid folder ${tag}` } })).ok()).toBe(true);
+  expect((await page.request.patch(`/api/tasks/${members[0]}`, { data: { phase: 'AGENT_COMPLETE' } })).ok()).toBe(true);
+  await boot(page, baseURL!);
+  const grid = (selectors: Record<string, [string, 'box' | 'text']>) => navigation(page).evaluate((nav, selectors) => {
+    const x0 = nav.getBoundingClientRect().left;
+    const out: Record<string, number | null> = {};
+    for (const [key, [selector, kind]] of Object.entries(selectors)) {
+      const el = [...nav.querySelectorAll(selector)].find(e => e.getBoundingClientRect().width > 0);
+      if (!el) { out[key] = null; continue; }
+      if (kind === 'box') { out[key] = Math.round(el.getBoundingClientRect().left - x0); continue; }
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      out[key] = Math.round(range.getClientRects()[0].left - x0);
+    }
+    return out;
+  }, selectors);
+  const card = `[data-task-id="${ids[0]}"]`;
+  const row = { circle: [`${card} .task-phase-icon-btn`, 'box'], dot: [`${card} .task-unread-dot`, 'box'] } as const;
+  const member = `[data-task-id="${members[0]}"]`;
+  // A folder member's dot is 10px left of its own circle, like every other row's (it used to
+  // stay on the 12px column while the member stepped in to 38).
+  const memberRow = { memberCircle: [`${member} .task-phase-icon-btn`, 'box'], memberDot: [`${member} .task-unread-dot`, 'box'] } as const;
+
+  // In All, the second section stands clearly apart: 28px above Projects, 12px between tiers.
+  const gapAbove = (selector: string) => navigation(page).evaluate((nav, selector) => {
+    const target = nav.querySelector(selector)!;
+    const top = target.getBoundingClientRect().top;
+    const above = [...nav.querySelectorAll('[data-task-id], .navigation-heading, .tier-project-label, .task-group-chip, .todo-show-more')]
+      .filter(el => !target.contains(el) && el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().bottom <= top + 0.5)
+      .map(el => el.getBoundingClientRect().bottom);
+    return Math.round(top - Math.max(...above));
+  }, selector);
+  await expect(heading(page, 'tasks')).toBeVisible();
+  await expect(navigation(page).locator(member)).toBeVisible();
+  expect(await gapAbove('[data-navigation-id="tasks"]')).toBe(28);
+  if (await heading(page, 'satellite').count()) expect(await gapAbove('[data-navigation-id="satellite"]')).toBe(12);
+
+  await chooseViewOption(page, 'focus');
+  await expect(page.getByTestId('tier-view-bar')).toContainText('Focus');
+  await expect(navigation(page).locator(card)).toBeVisible();
+  expect(await grid({
+    icon: ['.tier-solo-heading .navigation-icon', 'box'], heading: ['.tier-solo-heading-label', 'text'],
+    project: ['.tier-project-label-name', 'text'], ...row, ...memberRow,
+  })).toEqual({ icon: 12, heading: 32, project: 12, circle: 22, dot: 12, memberCircle: 38, memberDot: 28 });
+  // The selected task (what Locate lands on) is the one filled row, in the rail's active blue.
+  const fill = (selector: string) => navigation(page).locator(selector).first().evaluate(el => getComputedStyle(el).backgroundColor);
+  await navigation(page).locator(`${member} .todo-pinned-title`).click();
+  await expect(navigation(page).locator(member)).toHaveClass(/todo-pinned-card-active/);
+  await page.mouse.move(900, 500);
+  expect(await fill(member)).toBe('rgba(0, 122, 255, 0.08)');
+  expect(await fill(`[data-task-id="${members[1]}"]`)).not.toBe('rgba(0, 122, 255, 0.08)');
+  // Escape with a task selected closes an open menu, and only the menu: the selection stays.
+  await navigation(page).locator('.tier-project-label', { hasText: `Grid 1 ${tag}` }).locator('.tier-project-label-name').click({ button: 'right' });
+  const cardMenu = page.locator('.wn-context-menu');
+  await expect(cardMenu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(cardMenu).toHaveCount(0);
+  await expect(navigation(page).locator(member)).toHaveClass(/todo-pinned-card-active/);
+
+  await chooseViewOption(page, 'recent');
+  await expect(navigation(page).locator(card)).toBeVisible();
+  expect(await grid(row)).toEqual({ circle: 22, dot: 12 });
+
+  await chooseViewOption(page, 'tasks');
+  await openListProject(page, `Grid 1 ${tag}`);
+  await expect(navigation(page).locator(card)).toBeVisible();
+  expect(await grid({ project: ['.todo-group-project-header .todo-group-project-name', 'text'], ...row, ...memberRow }))
+    .toEqual({ project: 12, circle: 22, dot: 12, memberCircle: 38, memberDot: 28 });
+  // In the list the selected row fills the same blue.
+  await page.mouse.move(900, 500);
+  // (Closing the filter menu with Escape on the way here must not have dropped the selection.)
+  await expect(navigation(page).locator(`.todo-panel-item${member}`)).toHaveClass(/task-focused/);
+  expect(await navigation(page).locator(`.todo-panel-item${member} .todo-row-pill`).evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 122, 255, 0.08)');
+  await chooseViewOption(page, 'all');
+});
+
+test('each project sorts its own tasks from its right-click menu, newest update first by default', async ({ page, baseURL }) => {
+  const tag = `${test.info().project.name}-${test.info().repeatEachIndex}-${Date.now()}`;
+  const make = async (title: string, project: string) => {
+    const created = await page.request.post('/api/tasks', { data: { title: `${title} ${tag}`, project, source: 'local' } });
+    const id = (await created.json()).task.id as string;
+    expect((await page.request.delete(`/api/focus/tasks/${id}`)).ok()).toBe(true);
+    return id;
+  };
+  const projectA = `Sort A ${tag}`, projectB = `Sort B ${tag}`;
+  const [a1, a2, a3] = [await make('a1', projectA), await make('a2', projectA), await make('a3', projectA)];
+  const [b1, b2] = [await make('b1', projectB), await make('b2', projectB)];
+  // Last touched: a3, then a1. By priority: a1 (immediate), a3 (important), a2. By creation: a3, a2, a1.
+  expect((await page.request.patch(`/api/tasks/${a1}`, { data: { priority: 'immediate' } })).ok()).toBe(true);
+  expect((await page.request.patch(`/api/tasks/${a3}`, { data: { priority: 'important' } })).ok()).toBe(true);
+  await boot(page, baseURL!);
+  const bucket = (project: string) => navigation(page).locator('.todo-group-project').filter({ has: page.locator('.todo-group-project-name', { hasText: project }) });
+  const order = (project: string, ids: string[]) => () => bucket(project).locator('.todo-panel-item[data-task-id]')
+    .evaluateAll((rows, ids) => rows.map(row => row.getAttribute('data-task-id')).filter(id => ids.includes(id!)), ids);
+  const orderA = order(projectA, [a1, a2, a3]), orderB = order(projectB, [b1, b2]);
+  const projectMenu = async (project: string) => {
+    await bucket(project).locator('.todo-group-project-header').click({ button: 'right' });
+    return page.getByTestId('project-ctx-menu');
+  };
+  await openListProject(page, projectA);
+  await openListProject(page, projectB);
+
+  // No choice made yet: every project reads newest update first.
+  await expect.poll(orderA).toEqual([a3, a1, a2]);
+  await expect.poll(orderB).toEqual([b2, b1]);
+  let menu = await projectMenu(projectA);
+  await expect(menu.getByText('Sort tasks by', { exact: true })).toBeVisible();
+  await expect(menu.getByRole('menuitemradio', { name: 'Last updated' })).toHaveAttribute('aria-checked', 'true');
+  await menu.getByRole('menuitemradio', { name: 'Priority' }).click();
+  await expect.poll(orderA).toEqual([a1, a3, a2]);
+  await expect.poll(orderB).toEqual([b2, b1]);
+
+  // The choice is the project's own and survives a reload.
+  await page.reload();
+  await expect.poll(orderA, { timeout: 30_000 }).toEqual([a1, a3, a2]);
+  await expect.poll(orderB).toEqual([b2, b1]);
+
+  // The Projects heading sets every project at once.
+  await heading(page, 'tasks').click({ button: 'right' });
+  await expect(page.getByText('Sort every project by', { exact: true })).toBeVisible();
+  await page.getByRole('menuitemradio', { name: 'Created', exact: true }).click();
+  await expect.poll(orderA).toEqual([a3, a2, a1]);
+  await expect.poll(orderB).toEqual([b2, b1]);
+  menu = await projectMenu(projectA);
+  await expect(menu.getByRole('menuitemradio', { name: 'Created' })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+
+  // Moving a task by hand switches only its own project to Manual order.
+  const rowB1 = bucket(projectB).locator(`.todo-panel-item[data-task-id="${b1}"]`);
+  await rowB1.hover();
+  await rowB1.getByRole('button', { name: 'More actions', exact: true }).click();
+  await page.locator('.task-kebab-item').filter({ hasText: 'Move up' }).click();
+  await expect.poll(orderB).toEqual([b1, b2]);
+  menu = await projectMenu(projectB);
+  await expect(menu.getByRole('menuitemradio', { name: 'Manual order' })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  menu = await projectMenu(projectA);
+  await expect(menu.getByRole('menuitemradio', { name: 'Created' })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  await expect.poll(orderA).toEqual([a3, a2, a1]);
+});
+
 test('the tab bar is one switch, in the filter menu and in every heading menu', async ({ page, baseURL }) => {
   const tag = `${test.info().project.name}-${test.info().repeatEachIndex}-${Date.now()}`;
   // An empty tier is hidden, so give Focus a card for its heading to show.
   const pinned = await page.request.post('/api/tasks', { data: { title: `Tab bar pin ${tag}`, project: `Tab bar ${tag}`, source: 'local' } });
   const pinnedId = (await pinned.json()).task.id;
+  unpinAfter.push(pinnedId);
   expect((await page.request.post(`/api/focus/tasks/${pinnedId}`)).ok()).toBe(true);
   expect((await page.request.put(`/api/focus/tasks/${pinnedId}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true);
   await boot(page, baseURL!);
@@ -508,4 +712,150 @@ test('the calendar panel keeps an active draft and the homepage URL', async ({ p
   await expect(calendar).toBeVisible();
   await expect(draft.locator('.chat-input-textarea')).toHaveValue('Keep this unsent conversation draft');
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-calendar-beside-draft.png` });
+});
+
+test('the tab bar keeps the tabs the user picks, hides empty ones, and turns itself off', async ({ page, baseURL }) => {
+  // One Focus card and one Wait card, no custom tier: Satellite and Backlog are empty. Routed, because
+  // the shared fixture holds whatever pins and tiers earlier specs left behind.
+  const now = new Date().toISOString();
+  const task = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, title: `Tab pick ${id}`, project: 'Orchard', status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
+    created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
+  });
+  await page.route('**/api/tasks?*', async route => {
+    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
+    await route.fulfill({ json: { tasks: [task('tabs-focus', { pinned: true, focus_tier: 'focus' }), task('tabs-wait', { pinned: true, focus_tier: 'wait' }), task('tabs-list')] } });
+  });
+  await page.route('**/api/focus/tasks', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({ json: { pinned_tasks: ['tabs-focus', 'tabs-wait'], focus_tasks: ['tabs-focus'], satellite_tasks: [], backlog_tasks: [], wait_tasks: ['tabs-wait'], custom_tier_tasks: {} } });
+  });
+  await page.route('**/api/focus/tiers', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({ json: { tiers: [] } });
+  });
+  await boot(page, baseURL!);
+  await expect(navigation(page).locator('[data-task-id="tabs-focus"]')).toBeVisible({ timeout: 30_000 });
+  await openViewMenu(page);
+  await page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' }).click();
+  await closeViewMenu(page);
+  const bar = page.locator('.todo-section-tabs');
+  const tabs = bar.locator('[role="tab"]');
+  const tab = (name: string) => tabs.filter({ has: page.locator('.todo-section-tab-label', { hasText: new RegExp(`^${name}$`) }) });
+  const names = () => tabs.evaluateAll(els => els.map(el => el.querySelector('.todo-section-tab-label')?.textContent ?? ''));
+
+  // Out of the box: All is the word alone, Projects and Notes are gone, and the empty tiers hide.
+  await expect(tab('All')).toHaveCount(1);
+  await expect(tab('All').locator('.todo-section-tab-icon')).toHaveCount(0);
+  await expect.poll(names).toEqual(expect.arrayContaining(['All', 'Focus', 'Wait']));
+  for (const gone of ['Satellite', 'Backlog', 'Tasks', 'Notes', 'Projects', 'Scratchpad']) expect(await names()).not.toContain(gone);
+
+  // The bar's own menu: a switch per tab, "Hide empty tabs", and the bar itself.
+  await bar.getByRole('button', { name: 'Tab bar options' }).click();
+  const menu = page.getByRole('menu', { name: 'Tab bar options' });
+  const row = (name: string) => menu.getByRole('menuitemcheckbox', { name, exact: true });
+  for (const name of ['All', 'Focus', 'Satellite', 'Backlog', 'Wait', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'true');
+  await expect(row('Hide empty tabs')).toHaveAttribute('aria-checked', 'true');
+  await expect(row('Show tab bar')).toHaveAttribute('aria-checked', 'true');
+  // The switches leave the menu open, so several can be flipped in a row.
+  await row('Hide empty tabs').click();
+  await expect(row('Hide empty tabs')).toHaveAttribute('aria-checked', 'false');
+  await expect.poll(names).toEqual(expect.arrayContaining(['Satellite', 'Backlog']));
+  await row('Satellite').click();
+  await expect(row('Satellite')).toHaveAttribute('aria-checked', 'false');
+  await expect.poll(names).not.toContain('Satellite');
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-tab-bar-menu.png`, clip: { x: 0, y: 0, width: 760, height: 520 } });
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+
+  // The tab the panel is on stays while it is on it; right-clicking the bar opens the same menu.
+  await tab('Wait').click();
+  await tab('Focus').click({ button: 'right' });
+  await row('Wait').click();
+  await page.keyboard.press('Escape');
+  await expect(tab('Wait')).toHaveAttribute('aria-selected', 'true');
+  await tab('All').click();
+  await expect.poll(names).not.toContain('Wait');
+
+  // The choices survive a reload.
+  const kept = await names();
+  await page.reload();
+  await expect(homeToolbar(page).getByRole('button', { name: 'View options', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect.poll(names).toEqual(kept);
+
+  // "Show tab bar" in the bar's menu turns it off, and focus lands on the filter menu, where it comes back.
+  await bar.getByRole('button', { name: 'Tab bar options' }).click();
+  await row('Show tab bar').click();
+  await expect(bar).toHaveCount(0);
+  await expect(homeToolbar(page).getByRole('button', { name: 'View options', exact: true })).toBeFocused();
+  await openViewMenu(page);
+  const panelSwitch = page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' });
+  await expect(panelSwitch).not.toBeChecked();
+  await panelSwitch.click();
+  await closeViewMenu(page);
+  await expect.poll(names).toEqual(kept);
+});
+
+test('the Scratchpad is a Home panel in the rail, sharing the side column with the agenda', async ({ page, baseURL }) => {
+  const original = (await (await page.request.get('/api/notes/global')).json()).content as string;
+  const line = `Scratchpad line ${test.info().project.name} ${Date.now()}`;
+  try {
+    await boot(page, baseURL!);
+    // No longer a view of the task panel.
+    await openViewMenu(page);
+    await expect(page.locator('.vd-panel [data-view-option="notes"]')).toHaveCount(0);
+    await closeViewMenu(page);
+
+    const toggle = page.getByTestId('sidebar-toggle-scratchpad');
+    await expect(page.locator('.sidebar-home-panels .sidebar-link')).toHaveCount(4);
+    await expect(page.locator('.sidebar-home-panels .sidebar-link').last()).toHaveAttribute('data-testid', 'sidebar-toggle-scratchpad');
+    await expect(toggle).not.toHaveClass(/\bactive\b/);
+    await toggle.click();
+    const pane = page.getByTestId('home-companion-scratchpad');
+    await expect(pane).toBeVisible();
+    await expect(toggle).toHaveClass(/\bactive\b/);
+    await expect(pane.locator('.global-notes-label')).toHaveText('Scratchpad');
+    const editor = pane.locator('.notes-editor .tiptap');
+    // Opening it is a request to write: the caret is already in the editor.
+    await expect(editor).toBeFocused();
+    const saved = page.waitForResponse(res => new URL(res.url()).pathname === '/api/notes/global' && res.request().method() === 'PUT');
+    await page.keyboard.type(line);
+    expect((await saved).ok()).toBe(true);
+    await expect.poll(async () => (await (await page.request.get('/api/notes/global')).json()).content).toContain(line);
+    // Escape belongs to the editor; it does not close the pane.
+    await page.keyboard.press('Escape');
+    await expect(pane).toBeVisible();
+
+    // With the agenda on too, both share the column, agenda on top.
+    await page.getByTestId('sidebar-toggle-calendar').click();
+    const calendar = page.getByTestId('cal-side-panel');
+    await expect(calendar).toBeVisible();
+    const [cal, pad, column] = await Promise.all([calendar, pane, page.locator('.home-companion')].map(l => l.boundingBox()));
+    expect(cal!.y + cal!.height).toBeLessThanOrEqual(pad!.y + 1);
+    expect(cal!.height).toBeGreaterThan(column!.height * 0.3);
+    expect(pad!.height).toBeGreaterThan(column!.height * 0.3);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.mouse.move(900, 500);
+    await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-scratchpad-with-agenda.png`, clip: { x: 0, y: 0, width: 1280, height: 840 } });
+
+    // A reload keeps both open with the text, and does not pull focus into the editor.
+    await page.reload();
+    await expect(homeToolbar(page).getByRole('button', { name: 'View options', exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(editor).toContainText(line);
+    await expect(calendar).toBeVisible();
+    expect(await editor.evaluate(el => el.contains(document.activeElement))).toBe(false);
+
+    // The × closes the pane and hands focus back to the rail; the agenda stays.
+    await pane.getByRole('button', { name: 'Close Scratchpad' }).click();
+    await expect(pane).toBeHidden();
+    await expect(toggle).toBeFocused();
+    await expect(toggle).not.toHaveClass(/\bactive\b/);
+    await expect(calendar).toBeVisible();
+    await toggle.click();
+    await expect(editor).toContainText(line);
+    await toggle.click();
+    await expect(pane).toBeHidden();
+  } finally {
+    await page.request.put('/api/notes/global', { data: { content: original } });
+  }
 });

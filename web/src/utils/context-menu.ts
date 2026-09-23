@@ -128,6 +128,8 @@ export interface ContextMenuItem {
   checked?: boolean;
   /** An on/off setting rather than one option of a group: with `checked`, the row is a `menuitemcheckbox`. */
   toggle?: boolean;
+  /** Running the row leaves the menu open, for a set of switches flipped one after another. */
+  keepOpen?: boolean;
   /** Convenience for conditional items: `when: false` drops the row. */
   when?: boolean;
 }

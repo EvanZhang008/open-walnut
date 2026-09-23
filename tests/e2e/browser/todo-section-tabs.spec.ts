@@ -8,17 +8,18 @@
  * needs source and target mounted together.
  *
  * These assertions are about the LAYOUT CONTRACT, not styling:
- *   1. the strip renders all 8 tabs
+ *   1. the strip renders its 6 tabs (Projects moved to the filter menu, the Scratchpad to the rail)
  *   2. picking a tier tab mounts that tier and UNMOUNTS the others
  *   3. the picked section actually gets the height (not a few-rows sliver)
  *   4. `All` restores the stacked view (every section header back)
  *   5. the choice survives a reload (localStorage)
  *   6. searching from a tier tab still shows results (auto-routes to Tasks)
+ *   7. the bar's own menu picks the tabs, hides empty ones, and turns the bar off
  */
 
 import { test, expect } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
-import { isolateUiPrefs, openListProject, showMoreUntil } from './todo-panel-helpers'
+import { isolateUiPrefs, openListProject, selectProject, selectSection, showMoreUntil } from './todo-panel-helpers'
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
@@ -27,20 +28,20 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-const TABS = ['All', 'Focus', 'Satellite', 'Backlog', 'Wait', 'Recent', 'Tasks', 'Notes'] as const
+const TABS = ['All', 'Focus', 'Satellite', 'Backlog', 'Wait', 'Recent'] as const
 
 function tab(page: Page, name: (typeof TABS)[number]) {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
 }
 
 /** Seed pinned tasks across all three tiers so every tier tab has real content. */
-async function seedPinnedTasks(page: Page) {
+async function seedPinnedTasks(page: Page, project = 'Work') {
   const stamp = Date.now()
   const created: string[] = []
   for (const [tier, n] of [['focus', 3], ['satellite', 2], ['wait', 2]] as const) {
     for (let i = 0; i < n; i++) {
       const res = await page.request.post('/api/tasks', {
-        data: { title: `tabs probe ${tier} ${i} ${stamp}`, source: 'local', project: 'Work' },
+        data: { title: `tabs probe ${tier} ${i} ${stamp}`, source: 'local', project },
       })
       if (!res.ok()) throw new Error(`seed create failed: ${res.status()} ${await res.text()}`)
       const body = await res.json() as { task?: { id?: string } }
@@ -78,10 +79,16 @@ test.describe('todo panel section tabs', () => {
     }).click()
     await page.keyboard.press('Escape')
 
-    // 1. all eight tabs present
+    // 1. all six tabs present (the shortcut fixture keeps empty tabs on the bar); All is its
+    // word alone, and neither Projects nor the Scratchpad is a tab any more.
     for (const name of TABS) {
       await expect(tab(page, name)).toBeVisible()
     }
+    // (Custom tiers other specs made on the shared fixture add tabs of their own.)
+    await expect(page.locator('.todo-section-tabs [role="tab"]:not(.todo-section-tab-custom)')).toHaveCount(TABS.length)
+    await expect(tab(page, 'All').locator('.todo-section-tab-icon')).toHaveCount(0)
+    await expect(tab(page, 'All')).toHaveText('All')
+    await expect(page.locator('.todo-section-tab-tasks, .todo-section-tab-notes')).toHaveCount(0)
 
     // 2 + 3. Focus tab: the Focus tier is mounted, the other tiers are not, and
     // the tier list gets real height rather than the old few-row sliver.
@@ -119,19 +126,22 @@ test.describe('todo panel section tabs', () => {
     await expect(page.locator('.todo-pinned-wrapper-solo')).toHaveCount(0)
   })
 
-  test('the active tab survives a reload', async ({ page }) => {
+  test('the active tab survives a reload, and the retired Notes tab falls back to All', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
 
-    await tab(page, 'Notes').click()
-    await expect(page.locator('.global-notes-section-fill')).toBeVisible()
+    await tab(page, 'Wait').click()
+    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
 
     await page.reload()
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
-    await expect(tab(page, 'Notes')).toHaveAttribute('aria-selected', 'true')
-    // Fill mode: Notes owns the panel and has no collapse chevron to hide behind.
-    await expect(page.locator('.global-notes-section-fill')).toBeVisible()
-    await expect(page.locator('.global-notes-chevron')).toHaveCount(0)
+    await expect(tab(page, 'Wait')).toHaveAttribute('aria-selected', 'true')
+
+    // A panel that was left on the Notes tab opens on All; the Scratchpad lives in the rail now.
+    await page.evaluate(() => localStorage.setItem('walnut-todo-active-section', 'notes'))
+    await page.reload()
+    await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true', { timeout: 20_000 })
+    await expect(page.locator('.todo-panel .global-notes-section')).toHaveCount(0)
   })
 
   test('searching from a tier tab still surfaces results', async ({ page }) => {
@@ -149,10 +159,10 @@ test.describe('todo panel section tabs', () => {
     await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true')
     await expect(page.locator('.todo-panel-list')).toHaveCount(1)
 
-    // Tabs stay usable during a search — narrowing to Tasks is ephemeral and
-    // must not overwrite the user's persisted tab.
-    await tab(page, 'Tasks').click()
-    await expect(tab(page, 'Tasks')).toHaveAttribute('aria-selected', 'true')
+    // Views stay switchable during a search: narrowing to Projects (the filter menu) is
+    // ephemeral and must not overwrite the user's persisted tab.
+    await selectSection(page, 'Tasks')
+    await expect(page.locator('.todo-section-tabs [role="tab"][aria-selected="true"]')).toHaveCount(0)
     await expect(page.locator('.todo-panel-list')).toHaveCount(1)
 
     // Clearing the query drops back to the tab the user had actually picked.
@@ -180,8 +190,8 @@ test.describe('todo panel section tabs', () => {
     }).click()
     await page.keyboard.press('Escape')
 
-    await tab(page, 'Tasks').click()
-    await expect(tab(page, 'Tasks')).toHaveAttribute('aria-selected', 'true')
+    await selectSection(page, 'Tasks')
+    await expect(page.locator('.todo-section-tabs [role="tab"][aria-selected="true"]')).toHaveCount(0)
 
     // Click the pinned task's row in the main list — the view must NOT teleport
     // to the task's pin tier (the old behavior); the user is working in Tasks.
@@ -192,7 +202,8 @@ test.describe('todo panel section tabs', () => {
     await showMoreUntil(page.locator('.todo-panel-list'), row)
     await expect(row).toBeVisible()
     await row.click()
-    await expect(tab(page, 'Tasks')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.todo-section-tabs [role="tab"][aria-selected="true"]')).toHaveCount(0)
     await expect(page.locator('.todo-panel-list')).toHaveCount(1)
+    await expect(page.locator('.todo-pinned-wrapper-solo')).toHaveCount(0)
   })
 })

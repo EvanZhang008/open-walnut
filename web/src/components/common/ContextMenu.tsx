@@ -229,11 +229,19 @@ export function ContextMenu({
   // mount commit's own frame, so anything arriving in a LATER frame is a real
   // scroll and still closes; a user cannot scroll inside the frame in which their
   // own right-click opened the menu.
+  // The dismissal listeners subscribe ONCE, reading the latest `onClose` from a ref. Hosts pass an
+  // inline arrow, so with `[onClose]` as the dependency every host re-render re-subscribed them, and a
+  // re-render that happened INSIDE a keystroke (the page's own Escape handler deselects the task, which
+  // re-renders the panel) removed this Escape listener before the window reached it: the menu stayed
+  // open and the task lost its selection instead (2026-09-23, after a Locate).
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
+    const close = () => closeRef.current();
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
-      onClose();
+      close();
       // ESCAPE ONLY, and that narrowness is the design. Escape is the one dismissal whose whole point is
       // "put me back where I was": without this `document.activeElement` was `<body>`, so a keyboard user
       // in a fifty-row list restarted at the top of the document. The other dismissals must NOT do this:
@@ -260,20 +268,20 @@ export function ContextMenu({
       const anchor = back.current;
       const scrolled = e.target;
       if (anchor?.isConnected && scrolled instanceof Node && !scrolled.contains(anchor)) return;
-      onClose();
+      close();
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onClose);
-    window.addEventListener('blur', onClose);
+    window.addEventListener('resize', close);
+    window.addEventListener('blur', close);
     return () => {
       cancelAnimationFrame(arm);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onClose);
-      window.removeEventListener('blur', onClose);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('blur', close);
     };
-  }, [onClose]);
+  }, []);
 
   // Did the KEYBOARD move the highlight? Only then may the box scroll to it (see the effect below): a
   // hovered item is visible by definition, and scrolling under the pointer moves the row out from under
@@ -316,7 +324,7 @@ export function ContextMenu({
         e.preventDefault();
         if (!canRunItem(row)) return;
         row.onSelect?.();
-        onClose();
+        if (!row.keepOpen) onClose();
       }
     }
   };
@@ -490,7 +498,7 @@ export function ContextMenu({
                 onClick={(e) => {
                   e.stopPropagation();
                   row.onSelect?.();
-                  onClose();
+                  if (!row.keepOpen) onClose();
                 }}
               >
                 {row.checked !== undefined

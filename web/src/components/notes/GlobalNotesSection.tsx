@@ -29,10 +29,14 @@ interface GlobalNotesSectionProps extends UseGlobalNotesReturn {
    *  collapse chevron and the drag handle are dropped — there's nothing to collapse
    *  into or resize against — and the editor flexes to the available space. */
   fill?: boolean;
+  /** Fill mode's header names the panel (the home Scratchpad column, which has no tab above it). */
+  title?: string;
+  /** A × at the end of the header, for a panel the user opened and closes. */
+  onClose?: () => void;
 }
 
 export function GlobalNotesSection(props: GlobalNotesSectionProps) {
-  const { content, onEditorUpdate, saving, saveError, collapsed: collapsedProp, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, onTaskClick, fill } = props;
+  const { content, onEditorUpdate, saving, saveError, collapsed: collapsedProp, toggleCollapse, popupOpen, openPopup, closePopup, tasks, focusedTaskId, onTaskClick, fill, title, onClose } = props;
   // Fill mode can't honor the persisted collapse flag: this IS the visible section,
   // so a stale `collapsed` from the drawer era would render an empty Notes tab.
   const collapsed = fill ? false : collapsedProp;
@@ -78,7 +82,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           {/* In fill mode the section tab above already reads "Notes" \u2014 repeating it
               here is pure duplication. The row itself stays: it carries the
               saving/error status and the pop-out + fullscreen buttons. */}
-          {!fill && <span className="global-notes-label">Notes</span>}
+          {(!fill || title) && <span className="global-notes-label">{fill ? title : 'Notes'}</span>}
           {saving && <span className="global-notes-saving">Saving...</span>}
           {saveError && <span className="global-notes-error" title={saveError}>Save failed</span>}
           {/* Open in a new browser tab (standalone, lightweight) */}
@@ -99,6 +103,16 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           >
             {ICON_EXPAND}
           </button>
+          {onClose && (
+            <button
+              className="global-notes-expand-btn global-notes-close-btn"
+              onClick={e => { e.stopPropagation(); onClose(); }}
+              aria-label={`Close ${title ?? 'notes'}`}
+              title={`Close ${title ?? 'notes'}`}
+            >
+              ×
+            </button>
+          )}
         </div>
         {!collapsed && (
           <div className="global-notes-body" style={fill ? undefined : { height }}>

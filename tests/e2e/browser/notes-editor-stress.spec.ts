@@ -11,7 +11,7 @@
  * - Save race conditions (focus/blur cycle)
  */
 import { test, expect, type Page } from '@playwright/test'
-import { selectSection } from './todo-panel-helpers'
+import { openScratchpad } from './todo-panel-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -22,10 +22,9 @@ async function openNotesEditor(page: Page) {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // The todo panel's section tabs mean Notes isn't mounted unless it's the active
-  // section (the panel defaults to Focus). Pick the Notes tab — in that view Notes
-  // owns the whole panel and is always expanded, so no chevron click is needed.
-  await selectSection(page, 'Notes')
+  // The scratchpad is a Home panel opened from the rail (it was a task panel tab); it
+  // owns its pane and is always expanded, so no chevron click is needed.
+  await openScratchpad(page)
 
   const header = page.locator('.global-notes-header')
   await expect(header).toBeVisible({ timeout: 5000 })

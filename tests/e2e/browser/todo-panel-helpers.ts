@@ -48,27 +48,39 @@ export async function showMoreUntil(scope: Locator, target: Locator, maxClicks =
   await expect(target.first()).toBeAttached()
 }
 
-/** A section tab by visible name. */
-export function sectionTab(page: Page, name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent' | 'Tasks' | 'Notes') {
+/** A tab on the tab bar, by visible name. Projects is not a tab (it is picked from the filter menu). */
+export function sectionTab(page: Page, name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent') {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
 }
 
-/** Switch to a section tab (no-op when it's already active). */
+/** Switch the panel's view (no-op when it's already on it): the tab when the bar shows it, else the filter menu. */
 export async function selectSection(
   page: Page,
-  name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent' | 'Tasks' | 'Notes',
+  name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent' | 'Tasks',
 ): Promise<void> {
-  const tab = sectionTab(page, name)
-  if (await tab.isVisible()) {
-    if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click()
-    return
+  if (name !== 'Tasks') {
+    const tab = sectionTab(page, name)
+    if (await tab.isVisible()) {
+      if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click()
+      return
+    }
   }
-  // Without the quick-view tabs the list is chosen in the filter menu's View section.
-  const key = name === 'Tasks' ? 'tasks' : name.toLowerCase()
+  // Without the tab (bar off, the tab taken off it, or Projects) the view is chosen in the filter menu's View section.
+  const key = name.toLowerCase()
   await page.locator('#home-task-navigation .todo-panel-toolbar button[aria-label="View options"]').click()
   await page.locator(`.vd-panel [data-view-option="${key}"]`).click()
   await page.keyboard.press('Escape')
   await expect(page.locator('.vd-panel')).toHaveCount(0)
+}
+
+/** Open the home Scratchpad from the rail (no-op when it is open) and return its editor. */
+export async function openScratchpad(page: Page): Promise<Locator> {
+  const pane = page.getByTestId('home-companion-scratchpad')
+  if (!(await pane.isVisible())) await page.getByTestId('sidebar-toggle-scratchpad').click()
+  await expect(pane).toBeVisible({ timeout: 10_000 })
+  const editor = pane.locator('.notes-editor .tiptap')
+  await expect(editor).toBeVisible({ timeout: 10_000 })
+  return editor
 }
 
 /**

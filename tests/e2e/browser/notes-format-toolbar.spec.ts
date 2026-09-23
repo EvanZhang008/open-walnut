@@ -176,8 +176,8 @@ test('keyboard: a focused toolbar button activates on Enter', async ({ page }) =
 test('Global Notes popup (home): the toolbar row is there and its picker paints ABOVE the popup', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  const { selectSection } = await import('./todo-panel-helpers')
-  await selectSection(page, 'Notes')
+  const { openScratchpad } = await import('./todo-panel-helpers')
+  await openScratchpad(page)
   await page.getByRole('button', { name: 'Expand notes to fullscreen' }).click()
   const popup = page.locator('.notes-popup-overlay')
   await expect(popup).toBeVisible()

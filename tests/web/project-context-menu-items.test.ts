@@ -208,3 +208,34 @@ describe('buildProjectMenuItems: a request in flight', () => {
     expect(row(target, tierActions(), 'delete')?.danger).toBe(true)
   })
 })
+
+describe('buildProjectMenuItems: a project orders its own tasks', () => {
+  const sortRows = (target: ProjectMenuTarget, actions: ProjectMenuActions) =>
+    normalizeContextMenuItems(buildProjectMenuItems(target, actions, dialogs()))
+      .filter((i) => i.key?.startsWith('sort-'))
+
+  it('the main list offers the four orders under one heading, checked on the current one', () => {
+    const onSetSort = vi.fn()
+    const target: ProjectMenuTarget = { project: 'Marina', sort: 'updated' }
+    expect(labels(target, listActions({ onSetSort }))).toContain('Sort tasks by')
+    const rows = sortRows(target, listActions({ onSetSort }))
+    expect(rows.map((i) => [String(i.label), i.checked])).toEqual([
+      ['Last updated', true], ['Priority', false], ['Created', false], ['Manual order', false],
+    ])
+    rows[3].onSelect?.()
+    expect(onSetSort).toHaveBeenCalledWith('Marina', 'manual')
+  })
+
+  it('works for the Inbox, which has no registry row but does have tasks', () => {
+    const onSetSort = vi.fn()
+    const rows = sortRows({ project: '', sort: 'priority' }, listActions({ onSetSort }))
+    expect(rows.find((i) => i.checked)?.key).toBe('sort-priority')
+    rows[0].onSelect?.()
+    expect(onSetSort).toHaveBeenCalledWith('', 'updated')
+  })
+
+  it('a pinned tier label passes no sort handler, so it draws no sort rows', () => {
+    expect(sortRows({ project: 'Marina', sort: 'updated' }, tierActions())).toEqual([])
+    expect(labels({ project: 'Marina' }, tierActions())).not.toContain('Sort tasks by')
+  })
+})

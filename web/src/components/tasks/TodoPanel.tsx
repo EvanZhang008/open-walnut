@@ -129,11 +129,9 @@ import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { ProjectDetailPane } from './ProjectDetailPane';
-import { GlobalNotesSection } from '../notes/GlobalNotesSection';
-import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { SortableTierCard, TierDropZone, GroupChip } from './FocusSatelliteCards';
 import { useFolderContextMenu } from './FolderContextMenu';
-import { useProjectContextMenu } from './ProjectContextMenu';
+import { PROJECT_SORT_OPTIONS, useProjectContextMenu } from './ProjectContextMenu';
 import { TierProjectLabelRow } from './TierProjectLabel';
 import {
   groupSortableId, parseGroupSentinelGid, isGroupSentinel, taskIdsOnly, withGroupSentinels,
@@ -384,6 +382,8 @@ const LS_COLLAPSED_PROJS_KEY = 'walnut-todo-collapsed-projs';
 const LS_EXPANDED_PARENTS_KEY = 'walnut-todo-expanded-parents';
 // LS_FILTERS_COLLAPSED_KEY removed — filters now inside ViewDropdown
 const LS_SORT_KEY = 'walnut-todo-sortBy';
+/** Per-project task order, `{ [project]: SortBy }`; a project absent here follows LS_SORT_KEY. */
+const LS_PROJECT_SORT_KEY = 'walnut-todo-project-sort';
 const LS_GROUP_KEY = 'walnut-todo-groupBy';
 const LS_DATE_FILTER_KEY = 'walnut-todo-dateFilter';
 const LS_SECTION_KEY = 'walnut-todo-active-section';
@@ -1327,11 +1327,14 @@ function DroppableHeader({ id, project, disabled, children }: DroppableHeaderPro
 function ProjectHeaderRow({
   project, taskCount, collapsed, source, droppableDisabled, dragHandleProps,
   isFavorite, onToggleFavorite, onToggleCollapse, onViewDetails, onAddTask, onAddFolder, onAddSession,
-  onMoveUp, onMoveDown,
+  onMoveUp, onMoveDown, sort, onSetSort,
 }: {
   /** '' = Inbox. */
   project: string;
   taskCount: number;
+  /** How this project's tasks are ordered, and the menu rows that change it. */
+  sort?: SortBy;
+  onSetSort?: (project: string, sort: SortBy) => void;
   collapsed: boolean;
   /** Provider that claims this project ('ms-todo', …), for the badge. */
   source?: string;
@@ -1359,6 +1362,7 @@ function ProjectHeaderRow({
     onViewDetails,
     onMoveUp,
     onMoveDown,
+    onSetSort,
   });
   return (
     <>
@@ -1372,7 +1376,7 @@ function ProjectHeaderRow({
             // dnd-kit swallows the click once its 5px activation fired, so a real
             // project drag can never also fold the group.
             onClick={() => onToggleCollapse(project)}
-            onContextMenu={(e) => projectMenu.open(e, { project, collapsed, favorite: isFavorite })}
+            onContextMenu={(e) => projectMenu.open(e, { project, collapsed, favorite: isFavorite, sort })}
           >
             <div className="todo-group-header-controls">
               {/* pointerdown too, not just click: the row carries dragHandleProps and
@@ -1439,7 +1443,7 @@ function ProjectHeaderRow({
                 // See the chevron above: the row is a dnd-kit activator, so a 5px
                 // slip on this glyph would arm a project reorder and eat the click.
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => projectMenu.open(e, { project, collapsed, favorite: isFavorite })}
+                onClick={(e) => projectMenu.open(e, { project, collapsed, favorite: isFavorite, sort })}
               >
                 ···
               </button>
@@ -1547,13 +1551,30 @@ const PRIORITY_RANK: Record<string, number> = { immediate: 0, important: 1, back
 function readSortBy(): SortBy {
   try {
     const v = localStorage.getItem(LS_SORT_KEY);
-    if (v === 'manual' || v === 'priority' || v === 'date' || v === 'updated') return v;
+    if (isSortBy(v)) return v;
   } catch { /* ignore */ }
-  return 'priority';
+  // Newest activity first unless the user picked otherwise (the user's call, 2026-09-23).
+  return 'updated';
 }
 
 function persistSortBy(v: SortBy) {
   try { localStorage.setItem(LS_SORT_KEY, v); } catch { /* ignore */ }
+}
+
+function isSortBy(v: unknown): v is SortBy {
+  return v === 'manual' || v === 'priority' || v === 'date' || v === 'updated';
+}
+
+function readProjectSorts(): Record<string, SortBy> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(LS_PROJECT_SORT_KEY) ?? '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw).filter(([, v]) => isSortBy(v))) as Record<string, SortBy>;
+  } catch { return {}; }
+}
+
+function persistProjectSorts(v: Record<string, SortBy>) {
+  try { localStorage.setItem(LS_PROJECT_SORT_KEY, JSON.stringify(v)); } catch { /* ignore */ }
 }
 
 function readGroupBy(): GroupBy {
@@ -2279,6 +2300,7 @@ function TierNavigationGroup({ def, isAll, folded, collapsed, onToggle, visibleI
           id={def.id}
           label={def.label}
           className="todo-pinned-sublabel"
+          icon={<span className={`todo-tier-icon-${isBuiltinTier(def.id) ? def.id : 'custom'}`}>{ICONS.tierIcon(def.id)}</span>}
           collapsed={collapsed}
           onClick={() => onToggle(def.id)}
           actions={actions}
@@ -2703,6 +2725,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const completedBypassRef = useRef<(t: Task) => boolean>(() => false);
   const [dateFilter, setDateFilter] = useState<DateFilter>(readDateFilter);
   const [sortBy, setSortBy] = useState<SortBy>(readSortBy);
+  // A project's own order (its right-click "Sort tasks by"); the rest follow sortBy.
+  // Only the By-project list reads it: "In one list" has one order for everything.
+  const [projectSorts, setProjectSorts] = useState<Record<string, SortBy>>(readProjectSorts);
   // Ephemeral toast shown when a manual action (drag / move up / move left)
   // auto-switches the sort mode to 'manual'. Routed through the unified toaster
   // (kind:'sort', non-persistent, 3s lifetime) — no local toast state needed.
@@ -2711,6 +2736,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     notify({ kind: 'sort', severity: 'info', title: 'Sort', body: msg, persistent: false, dedupKey: 'sort' });
   }, [notify]);
   const [groupBy, setGroupBy] = useState<GroupBy>(readGroupBy);
+  const sortForProject = useCallback((project: string): SortBy =>
+    (groupBy === 'project' ? projectSorts[project] : undefined) ?? sortBy, [groupBy, projectSorts, sortBy]);
+  // One project's order. Picking the order every other project has just drops its own.
+  const setProjectSort = useCallback((project: string, v: SortBy) => {
+    setProjectSorts((prev) => {
+      const next = { ...prev };
+      if (v === sortBy) delete next[project]; else next[project] = v;
+      persistProjectSorts(next);
+      return next;
+    });
+  }, [sortBy]);
+  // Every project at once (the Projects heading, the filter menu): per-project choices go.
+  const setSortForAll = useCallback((v: SortBy) => {
+    setSortBy(v); persistSortBy(v);
+    setProjectSorts({}); persistProjectSorts({});
+  }, []);
   // Active project tab. '' = All, INBOX_TAB = Inbox, else a project name.
   const [activeProject, setActiveProject] = useState(readTab);
 
@@ -2964,9 +3005,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Search state
   const { query: searchQuery, setQuery: setSearchQuery, results: searchResults, isSearching, clearSearch } = useTaskSearch();
 
-  // Global notes
-  const globalNotes = useGlobalNotes();
-
   // Vertical splitter for list/detail ratio
   const { ratio: detailRatio, containerRef: splitterContainerRef, handleProps: splitterHandleProps, isResizing: splitterResizing } = useVerticalSplitter();
   // GONE (deliberately): the PINNED-vs-list splitter and the four per-tier resize
@@ -3021,7 +3059,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const isAll = effectiveSection === 'all';
   /** True when `section` should be mounted: either we're in the stacked view or it IS the active tab. */
   const showSection = useCallback(
-    (section: TodoSection) => (isAll && section !== 'notes' && section !== 'recent') || effectiveSection === section,
+    (section: TodoSection) => (isAll && section !== 'recent') || effectiveSection === section,
     [isAll, effectiveSection],
   );
   /** Within the active view, is this region folded? Only the stacked view honors
@@ -5480,11 +5518,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
 
     // Manual mode: keep store order as-is. Priority/date/updated: re-sort siblings.
-    if (sortBy !== 'manual') {
-      const cmpMap: Record<Exclude<SortBy, 'manual'>, (a: Task, b: Task) => number> = { priority: comparePriority, date: compareDate, updated: compareUpdated };
-      const cmp = cmpMap[sortBy] ?? compareDate;
-      topLevel.sort(cmp);
-      for (const children of childrenOf.values()) children.sort(cmp);
+    // Each project sorts by its own order; projects are drawn in the project order
+    // (grouped below), so how their runs interleave here does not matter.
+    const cmpMap: Record<Exclude<SortBy, 'manual'>, (a: Task, b: Task) => number> = { priority: comparePriority, date: compareDate, updated: compareUpdated };
+    const sortRun = (run: Task[], mode: SortBy) => { if (mode !== 'manual') run.sort(cmpMap[mode] ?? compareDate); };
+    if (groupBy === 'project') {
+      const runs = new Map<string, Task[]>();
+      for (const task of topLevel) {
+        const key = task.project || '';
+        const run = runs.get(key);
+        if (run) run.push(task); else runs.set(key, [task]);
+      }
+      topLevel.length = 0;
+      for (const [project, run] of runs) { sortRun(run, sortForProject(project)); topLevel.push(...run); }
+      for (const children of childrenOf.values()) sortRun(children, sortForProject(children[0]?.project || ''));
+    } else {
+      sortRun(topLevel, sortBy);
+      for (const children of childrenOf.values()) sortRun(children, sortBy);
     }
 
     // Virtual-group clustering: top-level members sharing a group_id are kept
@@ -5529,13 +5579,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       for (const m of members) emitWithChildren(m);
     }
     return order;
-  }, [sortBy]);
+  }, [sortBy, groupBy, sortForProject]);
 
   // --- Debounced sort order ---
   // Badge/data updates instantly (always use latest `filtered` task objects).
   // Only the POSITION (sort order) is debounced by 3s on reorder-only changes.
   const [sortOrder, setSortOrder] = useState<string[]>(() => computeSortOrder(filtered));
-  const sortByRef = useRef(sortBy);
+  // The sort settings the current order was computed with (computeSortOrder is rebuilt
+  // exactly when sortBy, groupBy or a project's own order changes).
+  const sortSettingsRef = useRef(computeSortOrder);
   const prevFilteredIdsRef = useRef<Set<string>>(new Set(filtered.map((t) => t.id)));
   // Equality check for sort order — prevents no-op re-renders when task data changes
   // but the sorted order is identical (e.g. focus_tier change doesn't affect sort position).
@@ -5549,29 +5601,35 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   useEffect(() => {
     const newOrder = computeSortOrder(filtered);
 
-    // sortBy toggle or structural change (IDs added/removed): flush immediately
+    // Sort settings changed or structural change (IDs added/removed): flush immediately
     const currIds = new Set(filtered.map((t) => t.id));
     const prevIds = prevFilteredIdsRef.current;
     const structural = currIds.size !== prevIds.size || !filtered.every((t) => prevIds.has(t.id));
-    if (sortByRef.current !== sortBy || structural) {
-      sortByRef.current = sortBy;
+    if (sortSettingsRef.current !== computeSortOrder || structural) {
+      sortSettingsRef.current = computeSortOrder;
       prevFilteredIdsRef.current = currIds;
       stableSortUpdate(newOrder);
       return;
     }
     prevFilteredIdsRef.current = currIds;
 
-    // Manual mode: store order IS the truth — flush immediately, no debounce.
-    // This prevents a stray debounced re-sort from overriding the user's drag result.
-    if (sortBy === 'manual') {
-      stableSortUpdate(newOrder);
-      return;
+    // Manual order: store order IS the truth, so a change among manually ordered
+    // tasks (a drag, Move up) lands at once. A stray debounced re-sort must never
+    // override the user's drag result. Projects can mix modes, hence the projection.
+    const manualIds = new Set(filtered.filter((t) => sortForProject(t.project || '') === 'manual').map((t) => t.id));
+    if (manualIds.size > 0) {
+      setSortOrder((prev) => {
+        const was = prev.filter((id) => manualIds.has(id));
+        const now = newOrder.filter((id) => manualIds.has(id));
+        const moved = was.length !== now.length || was.some((id, i) => id !== now[i]);
+        return moved ? newOrder : prev;
+      });
     }
 
     // Same set of tasks, just reordered (e.g. priority change): debounce 3s
     const timer = setTimeout(() => stableSortUpdate(newOrder), 3000);
     return () => clearTimeout(timer);
-  }, [filtered, sortBy, computeSortOrder, stableSortUpdate]);
+  }, [filtered, computeSortOrder, sortForProject, stableSortUpdate]);
 
   // --- Combine: latest task data arranged in deferred sort order ---
   // This ensures badges/fields update INSTANTLY while position delays.
@@ -6091,14 +6149,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // store so manual mode renders the SAME order the user was looking at. Without
   // this step the entire list re-shuffles from priority/date order to raw store
   // order — which is the "flash + I lost my task" feeling.
-  const ensureManualSort = useCallback(() => {
+  //
+  // In the By-project list only the project the action happened in switches: every
+  // project keeps its own order.
+  const ensureManualSort = useCallback((project?: string) => {
+    if (groupBy === 'project' && project !== undefined) {
+      if (sortForProject(project) === 'manual') return;
+      if (onBakeOrder && sortOrder.length > 0) onBakeOrder(sortOrder);
+      setProjectSort(project, 'manual');
+      showSortToast(`${project || 'Inbox'} switched to Manual order`);
+      return;
+    }
     if (sortBy !== 'manual') {
       if (onBakeOrder && sortOrder.length > 0) onBakeOrder(sortOrder);
       setSortBy('manual');
       persistSortBy('manual');
       showSortToast('Switched to Manual sort');
     }
-  }, [sortBy, sortOrder, onBakeOrder, showSortToast]);
+  }, [groupBy, sortBy, sortForProject, setProjectSort, sortOrder, onBakeOrder, showSortToast]);
 
   // Cross-project move with a cross-provider gate: when the destination project is
   // claimed by a DIFFERENT provider, the backend migrates the task (old remote twin
@@ -6130,7 +6198,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     // Only a CONFIRMED move switches the list to manual sort — a cancelled one must
     // leave the user's sort mode alone.
-    if (opts?.ensureSort) ensureManualSort();
+    if (opts?.ensureSort) ensureManualSort(project);
     onMoveTask(taskId, project, opts?.insertNearTaskId);
     // A migration rewrites the destination project's claim server-side without a
     // project:created event, so the registry snapshot goes stale — refresh it or
@@ -6339,7 +6407,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         // Preserve scroll position: mark the moved task so the post-refetch
         // useEffect scrolls it back into view (otherwise list jumps to top).
         scrollAfterReparentRef.current = activeId;
-        ensureManualSort();
+        ensureManualSort(activeTaskProject);
         // Pass the drag drop target so reparent places the task where the
         // user actually dropped it — not some arbitrary fallback position.
         onReparentTask(activeId, newParentId, insertNearTaskId ? { insertAfterId: insertNearTaskId } : undefined);
@@ -6351,7 +6419,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Same project: existing reorder logic
       if (!onReorder) return;
       if (!insertNearTaskId) return; // dropped on own header, nothing to do
-      ensureManualSort();
+      ensureManualSort(activeTaskProject);
 
       const project = activeTaskProject;
       const visibleTasks = grouped.find((g) => g.project === project)?.tasks;
@@ -6397,10 +6465,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Also primes scroll restoration so the task stays visible after refetch.
   const handleUnparent = useCallback((taskId: string) => {
     if (!onReparentTask) return;
-    ensureManualSort();
+    ensureManualSort(tasks.find((t) => t.id === taskId)?.project || '');
     scrollAfterReparentRef.current = taskId;
     onReparentTask(taskId, null);
-  }, [onReparentTask, ensureManualSort]);
+  }, [onReparentTask, ensureManualSort, tasks]);
 
   // Kebab "Project" select — same mutation as dragging the task onto another
   // project group, minus the drag (no insertNearTaskId: append to the target).
@@ -6490,7 +6558,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             if (a === -1 || b === -1) return;
             const newOrder = [...fullIds];
             [newOrder[a], newOrder[b]] = [newOrder[b], newOrder[a]];
-            ensureManualSort();
+            ensureManualSort(project);
             scrollAfterReparentRef.current = task.id;
             onReorder(project, newOrder);
           });
@@ -7370,7 +7438,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     { label: 'Show', options: [
       { id: 'all', label: 'All tasks' }, { id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' },
       { id: 'backlog', label: 'Backlog' }, { id: 'wait', label: 'Wait' }, ...(customTiers ?? []),
-      { id: 'recent', label: 'Recent' }, { id: 'tasks', label: 'Projects' }, { id: 'notes', label: 'Scratchpad' },
+      { id: 'recent', label: 'Recent' }, { id: 'tasks', label: 'Projects' },
     ].map((view) => ({ key: view.id, label: view.label, active: effectiveSection === view.id, onSelect: () => handleSectionChange(view.id as TodoSection) })) },
   ];
   const activeFilterOptions = [
@@ -7419,7 +7487,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           dateFilter={dateFilter}
           onDateFilterChange={(v) => { setDateFilter(v); persistDateFilter(v); clearFocusOverride(); }}
           sortBy={sortBy}
-          onSortByChange={(v) => { setSortBy(v); persistSortBy(v); }}
+          onSortByChange={setSortForAll}
           groupBy={groupBy}
           onGroupByChange={(v) => { setGroupBy(v); persistGroupBy(v); }}
           showCompleted={showCompleted}
@@ -7468,6 +7536,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           tier headings carry the same control). View modes live in the filter menu. */}
       {tierSectionActive && (
         <div className="tier-solo-heading" data-testid="tier-view-bar">
+          <span className={`navigation-icon todo-tier-icon-${isBuiltinTier(effectiveSection) ? effectiveSection : 'custom'}`} aria-hidden="true">{ICONS.tierIcon(effectiveSection)}</span>
           <span className="tier-solo-heading-label">{tierDisplayLabel(effectiveSection, customTiers)}</span>
           <TierPlusButton
             tier={effectiveSection}
@@ -7490,6 +7559,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         active={effectiveSection}
         onChange={handleSectionChange}
         counts={sectionCounts}
+        countsReady={!loading}
         customTiers={customTiers}
         searchDone={isSearchMode && searchDoneCount > 0
           ? { count: searchDoneCount, shown: showDoneResults, onToggle: () => setShowDoneResults((v) => !v) }
@@ -7525,8 +7595,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onClick={() => {
               const cycle: SortBy[] = ['manual', 'priority', 'date', 'updated'];
               const next = cycle[(cycle.indexOf(sortBy) + 1) % cycle.length];
-              setSortBy(next);
-              persistSortBy(next);
+              setSortForAll(next);
             }}
           >
             ↕ {sortBy === 'manual' ? 'Manual' : sortBy === 'priority' ? 'Priority' : sortBy === 'date' ? 'Date' : 'Updated'}
@@ -7794,10 +7863,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             key: `group-${value}`, label, checked: groupBy === value,
             onSelect: () => { setGroupBy(value); persistGroupBy(value); },
           })),
-          { key: 'sort', label: 'Sort by', section: true },
-          ...([['manual', 'Manual order'], ['priority', 'Priority'], ['updated', 'Last updated'], ['date', 'Created']] as const).map(([value, label]) => ({
+          // Sets every project at once; a project's own right-click menu sets just that one.
+          { key: 'sort', label: groupBy === 'project' ? 'Sort every project by' : 'Sort by', section: true },
+          ...PROJECT_SORT_OPTIONS.map(([value, label]) => ({
             key: `sort-${value}`, label, checked: sortBy === value,
-            onSelect: () => { setSortBy(value); persistSortBy(value); },
+            onSelect: () => setSortForAll(value),
           })),
           { key: 'folds', divider: true },
           { key: 'collapse-all', label: allCollapsed ? 'Expand all projects' : 'Collapse all projects', onSelect: handleCollapseExpandAll, when: groupBy === 'project' },
@@ -8023,6 +8093,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         // may hold a project with no tasks in view.
                         onMoveUp={(p) => moveProjectBy(allGroupKeys, p, -1)}
                         onMoveDown={(p) => moveProjectBy(allGroupKeys, p, 1)}
+                        sort={sortForProject(project)}
+                        onSetSort={setProjectSort}
                       />
                       {!isListProjectCollapsed(project) && (() => {
                         const batch = cutRows(project, projTasks.filter((t) => !isChildHidden(t.id)));
@@ -8163,21 +8235,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           input detached from the list couldn't answer "which project does this
           land in". Creation now lives IN the list — each group's ghost add row
           (title-aligned) — plus the header "+" composer for richer input. */}
-      {/* Notes — a bottom drawer in the stacked view, the whole panel on its own tab
-          (`fill`: no header row, no drag handle, editor takes the remaining height). */}
-      {showSection('notes') && (
-        <GlobalNotesSection
-          {...globalNotes}
-          fill={!isAll}
-          tasks={tasks}
-          focusedTaskId={focusedTaskId ?? undefined}
-          onTaskClick={(taskId) => {
-            const task = tasks.find(t => t.id === taskId);
-            if (task) handleTaskClick(task);
-          }}
-        />
-      )}
-
       {/* Multi-select action bar — shown in explicit select mode, or whenever ≥2 tasks
           are selected (incl. the Cmd/Ctrl-click path). "Group" is enabled once ≥2 tasks
           are picked (no project scope rule). "Cancel" abandons the selection and

@@ -78,6 +78,7 @@ const LS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const LS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
 const LS_ROUTINES_VISIBLE_KEY = 'open-walnut-home-routines-visible';
 const LS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
+const LS_SCRATCHPAD_VISIBLE_KEY = 'open-walnut-home-scratchpad-visible';
 /** Write a panel flag only when it changed. The persist effects also run on mount,
  *  and an unconditional write would re-stamp the ui-prefs mirror on every page
  *  load (a PUT + a fresh timestamp that can outrank another device's real change).
@@ -313,14 +314,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     () => localStorage.getItem(LS_CALENDAR_VISIBLE_KEY) === 'true'
   );
 
-  const closeCompanion = useCallback(() => {
-    setCalendarVisible(false);
+  // The scratchpad, beside the agenda in the same column: hidden by default, toggled from the Sidebar
+  const [scratchpadVisible, setScratchpadVisible] = useState<boolean>(
+    () => localStorage.getItem(LS_SCRATCHPAD_VISIBLE_KEY) === 'true'
+  );
+
+  // Closing a companion pane hands focus back to the rail toggle that opens it.
+  const closeCompanionPane = useCallback((setVisible: (visible: boolean) => void, toggle: string) => {
+    setVisible(false);
     requestAnimationFrame(() => {
-      const opener = document.querySelector<HTMLButtonElement>('[data-testid="sidebar-toggle-calendar"]');
+      const opener = document.querySelector<HTMLButtonElement>(`[data-testid="${toggle}"]`);
       if (opener?.getClientRects().length) opener.focus();
       else document.querySelector<HTMLButtonElement>('.app-task-panel-toggle')?.focus();
     });
   }, []);
+  const closeCompanion = useCallback(() => closeCompanionPane(setCalendarVisible, 'sidebar-toggle-calendar'), [closeCompanionPane]);
+  const closeScratchpad = useCallback(() => closeCompanionPane(setScratchpadVisible, 'sidebar-toggle-scratchpad'), [closeCompanionPane]);
 
   // Session columns state — up to 2 sessions displayed side by side
   const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(loadSessionColumns);
@@ -723,6 +732,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     window.dispatchEvent(new CustomEvent('main:calendar-visible', { detail: { visible: calendarVisible } }));
   }, [calendarVisible]);
 
+  useEffect(() => {
+    persistPanelFlag(LS_SCRATCHPAD_VISIBLE_KEY, scratchpadVisible, false);
+    window.dispatchEvent(new CustomEvent('main:scratchpad-visible', { detail: { visible: scratchpadVisible } }));
+  }, [scratchpadVisible]);
+
   // ── Listen for FocusDock events ──
   useEffect(() => {
     const handleDockTask = (e: Event) => {
@@ -764,6 +778,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     };
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
     const handleToggleCalendar = () => setCalendarVisible(prev => !prev);
+    const handleToggleScratchpad = () => setScratchpadVisible(prev => !prev);
     // openSessionOnHome (utils/open-session.ts) — deep links (e.g. notification
     // cards) open the session as a home-page column instead of /sessions.
     const handleOpenSession = (e: Event) => {
@@ -777,6 +792,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     window.addEventListener('sidebar:toggle-todo', handleToggleTodo);
     window.addEventListener('sidebar:toggle-routines', handleToggleRoutines);
     window.addEventListener('sidebar:toggle-calendar', handleToggleCalendar);
+    window.addEventListener('sidebar:toggle-scratchpad', handleToggleScratchpad);
     window.addEventListener('main:open-session', handleOpenSession);
     return () => {
       window.removeEventListener('dock:activate-task', handleDockTask);
@@ -786,6 +802,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       window.removeEventListener('sidebar:toggle-todo', handleToggleTodo);
       window.removeEventListener('sidebar:toggle-routines', handleToggleRoutines);
       window.removeEventListener('sidebar:toggle-calendar', handleToggleCalendar);
+      window.removeEventListener('sidebar:toggle-scratchpad', handleToggleScratchpad);
       window.removeEventListener('main:open-session', handleOpenSession);
     };
   }, []);
@@ -1875,6 +1892,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Don't unfocus if a modal/dialog/popover is open (they handle Escape themselves)
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;
+        // An open menu takes this Escape for itself (it listens later on the same window).
+        if (document.querySelector('.wn-context-menu')) return;
         setFocusedTask(null);
       }
     };
@@ -2748,7 +2767,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       </div>{/* end .main-page-right */}
 
-      <HomeCompanionPanel open={calendarVisible} onClose={closeCompanion} />
+      <HomeCompanionPanel
+        calendarOpen={calendarVisible}
+        scratchpadOpen={scratchpadVisible}
+        onCloseCalendar={closeCompanion}
+        onCloseScratchpad={closeScratchpad}
+        tasks={tasks}
+        focusedTaskId={focusedTask?.id}
+        onTaskClick={handleFocusTaskById}
+      />
 
       {/* Full-screen task detail — shared by TodoPanel clicks AND the Session panel
           kebab "Task detail" item (both drive focusedTask). suppressDetail (set by

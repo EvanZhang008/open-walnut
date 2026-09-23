@@ -69,7 +69,7 @@
  * project group changes what they see.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { isolateUiPrefs, openListProject, presetPanelView } from './todo-panel-helpers'
+import { isolateUiPrefs, openListProject, presetPanelView, showMoreUntil } from './todo-panel-helpers'
 import { presetTierViewModes } from './draft-surface-helpers'
 import { chooseViewOption } from './home-navigation-helpers'
 
@@ -731,7 +731,9 @@ test('a tier with ONE project draws no label, and a fold from the main list cann
   // concurrent spec pinning a second project into Focus would make the label
   // appear and turn this into a test of something else.
   const tierId = await createCustomTierViaApi(`Pone${stamp}`)
-  const project = `PoneProj${stamp}`
+  // Short on purpose: clickListHeaderBody needs a 40px empty strip on the header, and
+  // with a 19-character name WebKit measured it at 36.9 and 39.2px on some random stamps.
+  const project = `PoneP${stamp}`
   const t1 = await createTaskViaApi('Single project member 1', { project })
   const t2 = await createTaskViaApi('Single project member 2', { project })
   await pinToTierViaApi(t1.id, tierId)
@@ -932,6 +934,10 @@ test('Delete driven from the project context menu: the confirm names the count, 
   // screen and the server (a registry row that vanished while its tasks kept
   // pointing at it is the failure this pins).
   await expect(projectBucket(page, project)).toHaveCount(0, { timeout: 15_000 })
+  // An Inbox that was empty at load first appears now, and a group first seen after load
+  // starts folded; a long one draws in batches. Open it the way a user would.
+  await openListProject(page, 'Inbox')
+  for (const t of [t1, t2]) await showMoreUntil(projectBucket(page, 'Inbox'), listRow(page, 'Inbox', t.id))
   await expect(listRow(page, 'Inbox', t1.id)).toBeVisible({ timeout: 15_000 })
   await expect(listRow(page, 'Inbox', t2.id)).toBeVisible()
   expect(await taskProjectViaApi(t1.id)).toBe('')
@@ -1097,7 +1103,9 @@ test('dragging one project label onto another still reorders the runs, and folds
     : [f.projB, f.projA]
 
   // The row is an HTML5 drag handle (native DnD, outside dnd-kit): dragging the
-  // earlier label onto the later one splices it into that slot.
+  // earlier label onto the later one splices it into that slot. Both labels in view
+  // first: on a crowded shared Focus tier the drag cannot scroll mid-gesture.
+  await tierLabel(page, first).evaluate((el) => el.scrollIntoView({ block: 'start' }))
   await tierLabel(page, first).dragTo(tierLabel(page, second), { targetPosition: { x: 30, y: 6 } })
 
   await expect.poll(async () => {
@@ -1212,6 +1220,10 @@ test('a card drag while another project run is folded lands where it was dropped
   await expect(tierCard(page, a2.id)).toBeHidden()
 
   // ── Gesture 1: an ordinary reorder inside the VISIBLE run.
+  // Bring the run to the middle of the panel first. The Focus tier is shared, and once earlier
+  // specs have pinned enough cards the run starts below the window, where a pointer gesture
+  // cannot reach it (it passed alone and failed after home-navigation.spec, 2026-09-23).
+  await tierCard(page, b1.id).evaluate((el) => el.scrollIntoView({ block: 'center' }))
   const b1Box = await tierCard(page, b1.id).boundingBox()
   const b2Box = await tierCard(page, b2.id).boundingBox()
   if (!b1Box || !b2Box) throw new Error('pinned card has no box')
@@ -1317,6 +1329,8 @@ test('while a pinned card drag is live, the project label refuses to fold', asyn
   await pinToFocusViaApi(b2.id)
   const card = tierCard(page, b2.id)
   await expect(card).toBeVisible({ timeout: 15_000 })
+  // In the middle of the window, where a pointer can reach it on a crowded shared Focus tier.
+  await card.evaluate((el) => el.scrollIntoView({ block: 'center' }))
   const box = await card.boundingBox()
   if (!box) throw new Error('pinned card has no box')
 
