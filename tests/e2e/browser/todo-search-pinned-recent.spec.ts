@@ -72,7 +72,7 @@ test('search filters the Pinned tiers and Recent feed like the Tasks list', asyn
   await expect(recentCard(recentMatch)).toBeVisible();
   await expect(recentCard(recentMiss)).toBeVisible();
   await selectSection(page, 'All');
-  await page.getByRole('button', { name: 'Search tasks', exact: true }).click();
+  await page.locator('#home-task-navigation .todo-search-input').click();
   await page.locator('.todo-search-input').fill(token);
 
   // The report's bug: pinned cards ignored the query. Matching cards stay,

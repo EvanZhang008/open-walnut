@@ -49,6 +49,9 @@ export interface FolderMenuActions {
 export interface FolderContextMenuHandle {
   /** `onContextMenu={(e) => menu.open(e, target)}` on the folder row. */
   open: (event: ReactMouseEvent, target: FolderMenuTarget) => boolean;
+  /** The row's "···" button: the same menu, anchored under the button, because a
+   *  keyboard press carries no pointer position. */
+  openFrom: (event: ReactMouseEvent<HTMLElement>, target: FolderMenuTarget) => void;
   /** Render as a SIBLING of the row (see the note above). */
   node: ReactNode;
 }
@@ -155,5 +158,18 @@ export function useFolderContextMenu(actions: FolderMenuActions): FolderContextM
     </>
   );
 
-  return { open: menu.open, node };
+  const openFrom = (event: ReactMouseEvent<HTMLElement>, target: FolderMenuTarget) => {
+    const button = event.currentTarget;
+    const rect = button.getBoundingClientRect();
+    menu.open({
+      target: button,
+      currentTarget: button,
+      clientX: rect.left,
+      clientY: rect.bottom,
+      preventDefault: () => event.preventDefault(),
+      stopPropagation: () => event.stopPropagation(),
+    } as unknown as MouseEvent, target);
+  };
+
+  return { open: menu.open, openFrom, node };
 }

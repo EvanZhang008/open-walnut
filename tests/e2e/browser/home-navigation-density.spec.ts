@@ -1,15 +1,10 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { isolateUiPrefs } from './todo-panel-helpers';
+import { openHome } from './home-navigation-helpers';
 
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
 test.setTimeout(120_000);
 const SHOTS = '/tmp/walnut-home-navigation';
-
-async function openHome(page: Page, baseURL: string) {
-  await page.setContent(`<a href="${baseURL}">Open Walnut</a>`);
-  await page.getByRole('link', { name: 'Open Walnut' }).click();
-  await expect(page.locator('.task-view-menu-trigger')).toBeVisible({ timeout: 45_000 });
-}
 
 test('6481 tasks remain browsable without duplicate pins or expanded project walls', async ({ page, baseURL }) => {
   await isolateUiPrefs(page);
@@ -58,6 +53,12 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
   await page.reload();
   await expect(page.locator('.todo-group-project').filter({ has: page.locator('.todo-group-project-name', { hasText: /^Project 1$/ }) }).locator('.todo-panel-item').first()).toBeVisible({ timeout: 30_000 });
   await page.waitForLoadState('networkidle');
+  // Rows off screen are not rendered yet (content-visibility) and stand at their size
+  // estimate. It must equal a rendered row, or the list shifts under the pointer as rows
+  // scroll in (WebKit measured 34px unrendered against 28px rendered).
+  const rowHeights = await page.locator('#home-task-navigation .todo-group-project .todo-panel-item')
+    .evaluateAll(rows => [...new Set(rows.map(row => Math.round(row.getBoundingClientRect().height)))]);
+  expect(rowHeights).toEqual([28]);
   const scroller = page.locator('#home-task-navigation .home-navigation-scroll');
   const rect = (await scroller.boundingBox())!;
   await page.mouse.move(rect.x + 30, rect.y + 40);

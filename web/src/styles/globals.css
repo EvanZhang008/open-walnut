@@ -10083,11 +10083,11 @@ body.walnut-dragging {
    `flex: 1` + `height`: flex-basis:0% overrides height for a flex item, making
    the body grow with content (probe-measured 466→886px). grow:0 pins it;
    shrink:1 + min-height:0 lets a clamped panel maxHeight squeeze the body
-   instead of pushing the footer out. 320 ≥ the tallest rail (12 sections)
-   so the rail never scrolls on an empty panel. */
+   instead of pushing the footer out. 372 ≥ the tallest rail (12 sections,
+   View included, ~29px each) so the rail never scrolls on an empty panel. */
 .vd-body {
   display: grid; grid-template-columns: 168px 1fr;
-  flex: 0 1 320px; min-height: 0;
+  flex: 0 1 372px; min-height: 0;
 }
 .vd-rail {
   border-right: 1px solid var(--border); overflow-y: auto;
@@ -11414,7 +11414,6 @@ body.walnut-dragging {
 /* --bg-hover, not the --hover-bg fallback some older rules use: that token is
    never defined, so its literal black-alpha fallback is invisible in dark mode. */
 .task-group-chip-clickable:hover { background: var(--bg-hover); }
-.task-group-chip-clickable .task-group-chip-label { cursor: text; }
 .task-group-chip-icon {
   font-size: 11px;
   opacity: 0.85;
@@ -11498,64 +11497,10 @@ body.walnut-dragging {
 .task-group-chip-grip:active { cursor: grabbing; }
 .task-group-chip-dragging { opacity: 0.6; }
 .task-group-chip-label {
-  cursor: text;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 320px;
-}
-.task-group-chip-label:hover {
-  text-decoration: underline dotted;
-}
-/* Dissolve-group button on the chip — the discoverable inverse of grouping.
-   Subtle until the chip is hovered, then clearly clickable. */
-.task-group-chip-dissolve {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 2px;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--accent);
-  font-size: 10px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s, background 0.12s;
-}
-.task-group-chip:hover .task-group-chip-dissolve { opacity: 0.7; }
-.task-group-chip-dissolve:hover {
-  opacity: 1;
-  background: rgba(0, 122, 255, 0.14);
-}
-/* Hide-from-Focus button (⊘) — same affordance as dissolve, sits to its left.
-   Collapses the group out of the Focus area without touching membership. */
-.task-group-chip-hide {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 2px;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--accent);
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s, background 0.12s;
-}
-.task-group-chip:hover .task-group-chip-hide { opacity: 0.7; }
-.task-group-chip-hide:hover {
-  opacity: 1;
-  background: rgba(0, 122, 255, 0.14);
 }
 /* Hidden-groups strip — compact restore chips shown at the bottom of the Pinned
    section for groups collapsed out of the tiers (the in-Focus way to unhide). */
@@ -33293,6 +33238,8 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   flex: 0 0 14px;
   color: var(--fg-muted);
 }
+
+.wn-context-menu-check { color: var(--accent); }
 
 .wn-context-menu-label {
   flex: 1;

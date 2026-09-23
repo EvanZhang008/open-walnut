@@ -477,7 +477,8 @@ export function ContextMenu({
               <button
                 id={itemId(index)}
                 type="button"
-                role="menuitem"
+                role={row.checked === undefined ? 'menuitem' : 'menuitemradio'}
+                aria-checked={row.checked}
                 // OUT of the tab order: Tab is answered above as a step of the same highlight, and a
                 // tabbable item is what let DOM focus and the highlight point at different rows.
                 tabIndex={-1}
@@ -492,7 +493,9 @@ export function ContextMenu({
                   onClose();
                 }}
               >
-                {row.icon && <span className="wn-context-menu-icon">{row.icon}</span>}
+                {row.checked !== undefined
+                  ? <span className="wn-context-menu-icon wn-context-menu-check" aria-hidden="true">{row.checked ? '✓' : ''}</span>
+                  : row.icon && <span className="wn-context-menu-icon">{row.icon}</span>}
                 <span className="wn-context-menu-label">{row.ai && aiMark()}{row.label}</span>
               </button>
               {/* WHY the group above is disabled, for anyone not holding a mouse: the reason used to live

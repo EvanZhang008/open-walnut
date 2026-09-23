@@ -1,7 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { useNotifications } from '@/contexts/notifications';
 
-export const APP_SHORTCUTS_KEY = 'open-walnut-app-shortcuts-visible';
 export const TASK_SHORTCUTS_KEY = 'walnut-todo-quick-views-visible';
 const CHANGE_EVENT = 'walnut:navigation-preference';
 

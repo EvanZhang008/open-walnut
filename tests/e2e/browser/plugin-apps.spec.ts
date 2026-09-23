@@ -64,7 +64,7 @@ test('with no plugins installed the sidebar carries no app entries', async ({ pa
 
   const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
   expect(labels).toEqual([
-    'Chat', 'Todo', 'Agenda', 'Home', 'Tasks', 'Notes', 'Calendar', 'Routines', 'Settings',
+    'Home', 'Task panel', 'Chat', 'Agenda', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Settings',
   ])
 
   // The other entry surface stays empty too: an App only reaches Settings → Manage by

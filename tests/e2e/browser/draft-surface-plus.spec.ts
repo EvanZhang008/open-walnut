@@ -130,8 +130,8 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
 
   // Which view mode is active BEFORE the click, so the after-check below is a real
   // "unchanged", not a value that was never set.
-  const modeBtn = bar.locator('.todo-minibar-btn', { hasText: 'By project' })
-  const modeWasOn = await modeBtn.evaluate((el) => el.classList.contains('on'))
+  const tierModes = () => page.evaluate(() => localStorage.getItem('walnut-todo-tier-view-modes'))
+  const modesBefore = await tierModes()
 
   // Armed BEFORE the click: a tier is a local value, so this route must touch
   // nothing server-side at all (contrast the project routes, which fetch a detail).
@@ -151,10 +151,7 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
   // A tier seed leaves everything else neutral — this is not a project route.
   await expect(draftProjectPill(panel)).toHaveText('Inbox')
 
-  // The "+" sits INSIDE the view-mode bar, so its click must not also hit the
-  // mode buttons it shares that row with.
-  expect(await modeBtn.evaluate((el) => el.classList.contains('on')),
-    'the tier "+" must not flip the tier view mode').toBe(modeWasOn)
+  expect(await tierModes(), 'the tier "+" must not flip the tier view mode').toBe(modesBefore)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-01-tier-tab-plus.png`, fullPage: false })
 
@@ -368,31 +365,69 @@ test('▶ on a title-only pinned tier card opens a bound draft, exactly like a l
 
 // ── 5. The toolbar names the task-first verb responsively (GAP-5) ─────────────
 
-test('the toolbar keeps New task named while search expands on demand', async ({ page }) => {
+test('the toolbar says "New task" until the panel is genuinely narrow', async ({ page }) => {
+  // Both exits from the draft create a task: one remains sessionless and one starts
+  // a session. Name that shared object at normal widths, but keep the create action
+  // reachable as a compact plus when the task panel has almost no horizontal room.
+  // Pin syncable layout prefs before boot: other serial specs drag this same panel,
+  // and the fixture server can otherwise hydrate their saved width into our context.
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-todo-width', '25')
     localStorage.setItem('open-walnut-sidebar-collapsed', 'true')
   })
-  await page.setViewportSize({ width: 1280, height: 840 })
+  await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
+
   const toolbar = page.locator('.todo-panel-toolbar')
-  const button = toolbar.locator('.new-launcher-btn')
+  const btn = toolbar.locator('.new-launcher-btn')
+  const label = btn.locator('.new-launcher-label')
   const search = toolbar.getByPlaceholder(/Search tasks/)
-  for (const width of [1280, 1000, 820]) {
-    await page.setViewportSize({ width, height: 840 })
-    await expect(button.locator('.new-launcher-label')).toBeVisible()
-    await expect(button).toHaveAttribute('aria-label', 'New task')
-    await expect(search).toBeHidden()
-    await toolbar.getByRole('button', { name: 'Search tasks', exact: true }).click()
-    await expect(search).toBeFocused()
-    await expect(toolbar.getByRole('button', { name: 'View options' })).toBeVisible()
-    const bounds = await toolbar.boundingBox()
-    const searchBounds = await search.boundingBox()
-    expect(searchBounds!.width).toBeGreaterThan(30)
-    expect(searchBounds!.x + searchBounds!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width)
-    await search.press('Escape')
-  }
-  await button.click()
+  const view = toolbar.getByRole('button', { name: 'View options' })
+  const collapsedButtonPx = 28
+  const toolbarContentWidth = () => toolbar.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+  })
+
+  await expect(btn).toBeVisible({ timeout: 25_000 })
+  await expect(label).toBeVisible()
+  await expect(label).toHaveText('New task')
+  await expect(btn).toHaveAttribute('title', 'New task')
+  await expect(btn).toHaveAttribute('aria-label', 'New task')
+  await expect(search).toBeVisible()
+  await expect(view).toBeVisible()
+  expect(await toolbarContentWidth()).toBeGreaterThan(275)
+  const normalBox = await btn.boundingBox()
+  const normalSearchBox = await search.boundingBox()
+  expect(normalBox?.width ?? 0).toBeGreaterThan(collapsedButtonPx * 2)
+  expect(normalSearchBox?.width ?? 0).toBeGreaterThan(100)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-wide.png`, fullPage: false })
+
+  // With the pinned 25% panel and collapsed sidebar, a 4px viewport step moves
+  // the toolbar content box from 276px to 275px. This pins both sides of the
+  // container breakpoint instead of merely sampling far-away wide/narrow states.
+  await page.setViewportSize({ width: 1244, height: 900 })
+  await expect(label).toBeVisible()
+  expect(await toolbarContentWidth()).toBe(276)
+  const boundaryWideSearchBox = await search.boundingBox()
+  // The home toolbar's hide button costs 32px, so at the breakpoint the input is ~68px.
+  expect(boundaryWideSearchBox?.width ?? 0).toBeGreaterThan(60)
+
+  await page.setViewportSize({ width: 1240, height: 900 })
+  await expect(label).toBeHidden()
+  await expect(btn).toBeVisible()
+  await expect(btn.locator('svg')).toBeVisible()
+  await expect(search).toBeVisible()
+  await expect(view).toBeVisible()
+  expect(await toolbarContentWidth()).toBe(275)
+  const narrowBox = await btn.boundingBox()
+  const narrowSearchBox = await search.boundingBox()
+  expect(narrowBox?.width ?? 0).toBeCloseTo(collapsedButtonPx, 0)
+  expect(narrowSearchBox?.width ?? 0).toBeGreaterThan(60)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-06-toolbar-new-task-narrow.png`, fullPage: false })
+
+  // Responsive presentation must not change the established one-click behavior.
+  await btn.click()
   await expect(draftPanel(page)).toBeVisible({ timeout: 10_000 })
   await expect(draftPanels(page)).toHaveCount(1)
 })

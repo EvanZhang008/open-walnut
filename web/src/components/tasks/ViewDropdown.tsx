@@ -104,7 +104,23 @@ export interface ViewDropdownProps {
   queryProjectOptions?: string[];
   querySourceOptions?: string[];
   querySprintOptions?: string[];
+
+  /**
+   * View-scoped controls (which list the panel shows, and toggles that only
+   * make sense for it). When present they become the first rail section, so the
+   * panel opens on them; the surface keeps no strip of its own for them.
+   */
+  viewGroups?: ViewOptionGroup[];
 }
+
+export interface ViewOption {
+  key: string;
+  label: string;
+  active?: boolean;
+  title?: string;
+  onSelect: () => void;
+}
+export interface ViewOptionGroup { label: string; options: ViewOption[] }
 
 // Wide enough for the 168px rail (.vd-rail column in globals.css) plus a
 // readable 2-col detail pane; the placement math clamps to the viewport on
@@ -148,6 +164,7 @@ export function ViewDropdown({
   sortBy, onSortByChange, groupBy, onGroupByChange,
   showCompleted, onShowCompletedChange, onClearAll,
   query, onQueryChange, queryProjectOptions, querySourceOptions, querySprintOptions,
+  viewGroups,
 }: ViewDropdownProps) {
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<string | null>(null);
@@ -184,6 +201,7 @@ export function ViewDropdown({
   // dimensions.
   const sections = useMemo<RailSection[]>(() => {
     const list: RailSection[] = [];
+    if (viewGroups?.length) list.push({ id: 'view', name: 'View' });
     if (hasLegacySelects) {
       const set = [phaseFilter, dateFilter].filter(Boolean).length;
       list.push({ id: 'quick', name: 'Quick filters', badge: set });
@@ -212,7 +230,7 @@ export function ViewDropdown({
     // NOT `.length` deps: contents can change at the same length (rename a
     // project) and the memo would go stale. `query` changes on every filter
     // click anyway, so this memo mostly documents the inputs.
-  }, [hasProjectChips, hasLegacySelects, hasLegacySortGroup, hasQuery, query,
+  }, [viewGroups?.length, hasProjectChips, hasLegacySelects, hasLegacySortGroup, hasQuery, query,
       activeProject, phaseFilter, dateFilter, showPriority,
       projectOptions, sourceOptions, sprintOptions]);
 
@@ -236,8 +254,11 @@ export function ViewDropdown({
       const r = containerRef.current?.getBoundingClientRect();
       if (!r) return;
       const width = Math.min(PANEL_WIDTH, window.innerWidth - margin * 2);
-      // Right edge of panel aligns with right edge of trigger, then clamp.
-      let left = r.right - width;
+      // Inside the home task panel the panel starts at the panel's own left edge
+      // and runs right over the chat, like the New task popover beside it.
+      // Elsewhere its right edge aligns with the trigger's. Then clamp.
+      const host = containerRef.current?.closest('.todo-panel')?.getBoundingClientRect();
+      let left = host ? host.left + margin : r.right - width;
       if (left + width + margin > window.innerWidth) left = window.innerWidth - width - margin;
       if (left < margin) left = margin;
       const top = r.bottom + 4;
@@ -463,6 +484,7 @@ export function ViewDropdown({
               ) : (
                 <SectionDetail
                   id={activeSection?.id ?? ''}
+                  viewGroups={viewGroups}
                   catChips={catChips} activeProject={activeProject} onProjectChange={onProjectChange}
                   phaseFilter={phaseFilter} onPhaseFilterChange={onPhaseFilterChange}
                   dateFilter={dateFilter} onDateFilterChange={onDateFilterChange}
@@ -501,6 +523,7 @@ export function ViewDropdown({
 
 function SectionDetail(props: {
   id: string;
+  viewGroups?: ViewOptionGroup[];
   catChips: { id: string; label: string; count?: number }[];
   activeProject?: string;
   onProjectChange?: (p: string) => void;
@@ -513,6 +536,26 @@ function SectionDetail(props: {
   projectOptions: string[]; sourceOptions: string[]; sprintOptions: string[];
 }) {
   const { id, query, patchQuery } = props;
+
+  if (id === 'view') {
+    return (
+      <div className="vd-grid">
+        {props.viewGroups?.map((group) => (
+          <div key={group.label} className="vd-field vd-span2" data-view-group={group.label}>
+            <span className="vd-label">{group.label}</span>
+            <div className="vd-cats">
+              {group.options.map((o) => (
+                <button key={o.key} className={`vd-cat${o.active ? ' vd-active' : ''}`} data-view-option={o.key}
+                  aria-pressed={o.active} title={o.title} onClick={o.onSelect}>
+                  <span className="vd-cat-name">{o.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   if (id === 'projects') {
     return (

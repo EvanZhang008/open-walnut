@@ -61,10 +61,9 @@ interface HeadingProps {
   collapsed?: boolean;
   onClick: () => void;
   actions?: ContextMenuItem[];
-  pressed?: boolean;
 }
 
-export function NavigationHeading({ id, label, className = '', collapsed, onClick, actions = [], pressed }: HeadingProps) {
+export function NavigationHeading({ id, label, className = '', collapsed, onClick, actions = [] }: HeadingProps) {
   const order = useContext(NavigationOrder);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
   const [over, setOver] = useState(false);
@@ -87,15 +86,20 @@ export function NavigationHeading({ id, label, className = '', collapsed, onClic
       onDragLeave={() => setOver(false)}
       onDrop={event => { const from = event.dataTransfer.getData(`text/${order?.storageKey}`); setOver(false); if (from) { event.preventDefault(); event.stopPropagation(); order?.move(from, id); } }}>
       <button type="button" className="navigation-heading-open" draggable={!!order}
-        aria-expanded={collapsed === undefined ? undefined : !collapsed} aria-pressed={pressed}
+        aria-expanded={collapsed === undefined ? undefined : !collapsed}
         onClick={onClick}
         onKeyDown={event => { if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && order) { event.preventDefault(); const target = order.ids[index + (event.key === 'ArrowUp' ? -1 : 1)]; if (target !== undefined) order.move(id, target); } }}
         onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData(`text/${order?.storageKey}`, id); event.dataTransfer.effectAllowed = 'move'; }}>
-        {collapsed !== undefined && <span className={`navigation-chevron${collapsed ? '' : ' expanded'}`} aria-hidden="true">▸</span>}
-        <span>{label}</span>
+        <span className="navigation-label">{label}</span>
+        {collapsed !== undefined && <NavigationChevron collapsed={collapsed} />}
       </button>
       <button type="button" className="navigation-more" aria-label={`${label} menu`} aria-haspopup="menu" onClick={event => openMenu(event)} onPointerDown={event => event.stopPropagation()}>···</button>
     </div>
     {menu && <ContextMenu point={menu} items={items} onClose={() => setMenu(null)} returnFocus={menu.origin} ariaLabel={`${label} actions`} />}
   </>;
+}
+
+/** Trails the name, Claude-sidebar style: `⌄` open, `›` folded. */
+export function NavigationChevron({ collapsed }: { collapsed: boolean }) {
+  return <svg className={`navigation-chevron${collapsed ? '' : ' expanded'}`} width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3.5 2 6.5 5 3.5 8" /></svg>;
 }

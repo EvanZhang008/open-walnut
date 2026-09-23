@@ -61,7 +61,7 @@ const slot = (page: Page) => page.locator('[data-testid="ask-walnut-slot"]')
  *  when there is no conversation to go back to; see AskWalnutSlot's closeDraft). */
 const slotPanel = (page: Page) => page.locator('[data-testid="ask-walnut-session"], [data-testid="ask-walnut-draft"]').first()
 const sidebarChat = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Chat' })
-const sidebarTodo = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Todo' })
+const sidebarTodo = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Task panel' })
 const sidebarAgenda = (page: Page) => page.locator('[data-testid="sidebar-toggle-calendar"]')
 const dockChat = (page: Page) => page.locator('.dock-chat-item')
 const todoColumn = (page: Page) => page.locator('.main-page-todo')

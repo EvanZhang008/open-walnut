@@ -121,6 +121,11 @@ export interface ContextMenuItem {
    * own span, so every console's AI rows look alike and one attribute finds them all.
    */
   ai?: boolean;
+  /**
+   * One option of a pick-one group ("Sort by: Priority"). Set on every option of the group, true on
+   * the chosen one: the row becomes a `menuitemradio` and draws a check in the icon column.
+   */
+  checked?: boolean;
   /** Convenience for conditional items: `when: false` drops the row. */
   when?: boolean;
 }

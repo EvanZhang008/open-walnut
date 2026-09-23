@@ -43,6 +43,7 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { chooseViewOption } from './home-navigation-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -105,7 +106,8 @@ async function createTaskViaApi(title: string, opts: Record<string, unknown> = {
   const res = await fetch(`${API}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: uniqueTitle, source: 'local', ...opts }),
+    // Off the board unless a test pins it: the All view lists a pinned task only in its tier.
+    body: JSON.stringify({ title: uniqueTitle, source: 'local', pinned: false, ...opts }),
   })
   if (!res.ok) throw new Error(`task create failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string; title: string } }
@@ -296,8 +298,8 @@ test('main list: clicking the folder header row body folds it, and the fold surv
   await expect(rowB).toBeVisible()
   await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
 
-  // Click the row BODY (the member count), not the chevron and not the label.
-  await header.locator('.task-group-chip-count').click()
+  // Click the folder NAME, not the chevron: the whole row folds, the name included.
+  await header.locator('.task-group-chip-label').click()
 
   await expect(rowA).toBeHidden()
   await expect(rowB).toBeHidden()
@@ -347,7 +349,7 @@ test('pinned tier: clicking the folder chip folds it, and the main list folds wi
   await expect(chip.locator('.task-group-chip-count')).toHaveText('2')
   await page.screenshot({ path: '/tmp/folder-collapse-menu/tier-chip-expanded.png' })
 
-  await chip.locator('.task-group-chip-count').click()
+  await chip.locator('.task-group-chip-label').click()
 
   await expect(cardA).toBeHidden()
   await expect(cardB).toBeHidden()
@@ -355,7 +357,10 @@ test('pinned tier: clicking the folder chip folds it, and the main list folds wi
   await expect(chip.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
   await page.screenshot({ path: '/tmp/folder-collapse-menu/tier-chip-collapsed.png' })
 
-  // ONE collapse set, two surfaces: the main list folded too.
+  // ONE collapse set, two surfaces: the main list folded too. The All view lists a
+  // pinned task only in its tier, so read the list side from the Projects view.
+  await chooseViewOption(page, 'tasks')
+  await expect(listHeader(page, groupId)).toBeVisible()
   await expect(page.locator(`.todo-group-project .todo-panel-item[data-task-id="${a.id}"]`).first()).toBeHidden()
   await expect(listHeader(page, groupId).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
 
@@ -384,7 +389,15 @@ test('flat list mode: the folder header still folds (one collapse set, every lis
   await expect(rowB).toBeVisible()
   await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
 
-  await header.locator('.task-group-chip-count').click()
+  // Rows above render lazily (content-visibility) as the list scrolls, so let the
+  // header settle before aiming at it; otherwise the click lands on its neighbour.
+  await header.scrollIntoViewIfNeeded()
+  await expect.poll(async () => {
+    const before = (await header.boundingBox())?.y
+    await page.waitForTimeout(150)
+    return (await header.boundingBox())?.y === before
+  }).toBe(true)
+  await header.locator('.task-group-chip-label').click()
 
   await expect(rowA).toBeHidden()
   await expect(rowB).toBeHidden()

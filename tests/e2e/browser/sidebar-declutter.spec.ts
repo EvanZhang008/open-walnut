@@ -37,7 +37,7 @@ test('app sidebar shows only the daily surfaces — no management pages, no Othe
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
   await expandSidebar(page)
 
-  const CORE_PREFIX = ['Chat', 'Todo', 'Agenda', 'Home', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines']
+  const CORE_PREFIX = ['Home', 'Task panel', 'Chat', 'Agenda', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines']
   const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
 
   // The core 8 come first, in this exact order, and Settings is always last.

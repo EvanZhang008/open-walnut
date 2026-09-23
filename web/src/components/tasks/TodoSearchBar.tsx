@@ -22,9 +22,7 @@ export function TodoSearchBar({
   resultCount,
 }: TodoSearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [expanded, setExpanded] = useState(false);
   const reveal = useCallback(() => {
-    setExpanded(true);
     requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
   // Keep keystrokes urgent while the parent list update runs as interruptible work.
@@ -69,13 +67,12 @@ export function TodoSearchBar({
     if (e.key === 'Escape') {
       clear();
       inputRef.current?.blur();
-      setExpanded(false);
     }
   }, [clear]);
 
   return (
-    <div className={`todo-search-bar${expanded || draftQuery ? ' is-expanded' : ' is-compact'}`}>
-      <button type="button" className="todo-search-reveal" aria-label="Search tasks" onClick={reveal}>{ICON_SEARCH}</button>
+    <div className="todo-search-bar">
+      <span className="todo-search-icon">{ICON_SEARCH}</span>
       <input
         ref={inputRef}
         type="text"

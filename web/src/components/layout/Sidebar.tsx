@@ -1,6 +1,5 @@
 import { useState, useEffect, type RefObject } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { AppTopBar } from './AppTopBar';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useAppCatalog } from '@/apps/hooks';
@@ -50,6 +49,7 @@ export function Sidebar({
   const { hasIssues } = useSystemHealth();
   const apps = useAppCatalog();
   const navigate = useNavigate();
+  const location = useLocation();
   // overrideLinks: a rail row is an <a> only because SPA routing needs one —
   // "Open Link in New Tab" is not what right-clicking an app icon is for.
   const appMenu = useContextMenu<RegisteredApp>({ overrideLinks: true });
@@ -110,15 +110,47 @@ export function Sidebar({
     };
   }, []);
 
-  const handleToggleChat = () => {
-    window.dispatchEvent(new CustomEvent('dock:activate-chat'));
+  // These three control panels OF the home page: from another route they bring
+  // the user home first, and only ever open a panel there, never hide it.
+  const homeToggle = (event: string, visible: boolean) => () => {
+    if (location.pathname === '/') { window.dispatchEvent(new CustomEvent(event)); return; }
+    navigate('/');
+    if (!visible) window.dispatchEvent(new CustomEvent(event));
   };
-  const handleToggleTodo = () => {
-    window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
-  };
-  const handleToggleCalendarPanel = () => {
-    window.dispatchEvent(new CustomEvent('sidebar:toggle-calendar'));
-  };
+  const handleToggleChat = homeToggle('dock:activate-chat', chatVisible);
+  const handleToggleTodo = homeToggle('sidebar:toggle-todo', todoVisible);
+  const handleToggleCalendarPanel = homeToggle('sidebar:toggle-calendar', calendarPanelVisible);
+  const homePanelToggles = (
+    <div className="sidebar-home-panels" role="group" aria-label="Home panels">
+      <button
+        className={`sidebar-link sidebar-panel-toggle app-task-panel-toggle${todoVisible ? ' active' : ''}`}
+        onClick={handleToggleTodo}
+        aria-label={todoVisible ? 'Hide task panel' : 'Show task panel'}
+        aria-expanded={todoVisible} aria-controls="home-task-navigation"
+        title={collapsed ? (todoVisible ? 'Hide task panel' : 'Show task panel') : undefined}
+      >
+        <TaskPanelIcon />
+        <span className="sidebar-label">Task panel</span>
+      </button>
+      <button
+        className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
+        onClick={handleToggleChat}
+        title={collapsed ? 'Chat' : undefined}
+      >
+        <ChatBubbleIcon />
+        <span className="sidebar-label">Chat</span>
+      </button>
+      <button
+        className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
+        onClick={handleToggleCalendarPanel}
+        title={collapsed ? 'Day agenda' : undefined}
+        data-testid="sidebar-toggle-calendar"
+      >
+        <CalendarIcon />
+        <span className="sidebar-label">Agenda</span>
+      </button>
+    </div>
+  );
   const handleNavClick = (event: React.MouseEvent<HTMLElement>) => {
     if ((event.target as Element).closest('a[href]')) onNavigate();
   };
@@ -171,11 +203,6 @@ export function Sidebar({
   };
 
   return (
-    <>
-    <AppTopBar todoVisible={todoVisible} onToggleTodo={handleToggleTodo}
-      onNotifications={() => setNotifOpen(true)} onVoice={() => setVoiceOpen(true)}
-      attentionCount={attentionCount} recording={!!audio.available && audio.recording}
-      onStopRecording={audio.toggleRecording} />
     <aside
       id="primary-sidebar"
       ref={asideRef}
@@ -200,33 +227,6 @@ export function Sidebar({
         </span>
       </div>
       <nav className="sidebar-nav" onClick={handleNavClick}>
-        {/* Panel toggle buttons */}
-        <button
-          className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
-          onClick={handleToggleChat}
-          title={collapsed ? 'Chat' : undefined}
-        >
-          <ChatBubbleIcon />
-          <span className="sidebar-label">Chat</span>
-        </button>
-        <button
-          className={`sidebar-link sidebar-panel-toggle${todoVisible ? ' active' : ''}`}
-          onClick={handleToggleTodo}
-          title={collapsed ? 'Todo' : undefined}
-        >
-          <TodoListIcon />
-          <span className="sidebar-label">Todo</span>
-        </button>
-        <button
-          className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
-          onClick={handleToggleCalendarPanel}
-          title={collapsed ? 'Day agenda' : undefined}
-          data-testid="sidebar-toggle-calendar"
-        >
-          <CalendarIcon />
-          <span className="sidebar-label">Agenda</span>
-        </button>
-        <div className="sidebar-nav-divider" />
         {/* `sidebar`, not `pinned`: an App whose effective placement is 'settings'
             (declared by the App, or moved by the user from its plugin's row in
             Settings → Plugins) has its row in Settings → Manage and never here. */}
@@ -247,7 +247,7 @@ export function Sidebar({
           ) : app.iconUrl ? (
             <img src={app.iconUrl} alt="" className="sidebar-app-icon" />
           ) : <PuzzleIcon />;
-          return (
+          const link = (
             <NavLink
               key={`${app.key}:${app.generation}`}
               to={app.path}
@@ -269,6 +269,7 @@ export function Sidebar({
               ) : null}
             </NavLink>
           );
+          return app.path === '/' ? <div key={`${app.key}:${app.generation}`} className="sidebar-home-group">{link}{homePanelToggles}</div> : link;
         })}
       </nav>
 
@@ -337,7 +338,6 @@ export function Sidebar({
         sidebarCollapsed={collapsed}
       />
     </aside>
-    </>
   );
 }
 
@@ -381,15 +381,11 @@ function ChatBubbleIcon() {
   );
 }
 
-function TodoListIcon() {
+function TaskPanelIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="8" y1="6" x2="21" y2="6" />
-      <line x1="8" y1="12" x2="21" y2="12" />
-      <line x1="8" y1="18" x2="21" y2="18" />
-      <line x1="3" y1="6" x2="3.01" y2="6" />
-      <line x1="3" y1="12" x2="3.01" y2="12" />
-      <line x1="3" y1="18" x2="3.01" y2="18" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M9 4v16" />
     </svg>
   );
 }

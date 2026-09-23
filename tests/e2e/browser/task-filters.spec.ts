@@ -21,7 +21,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { selectSection, selectProject } from './todo-panel-helpers'
+import { presetPanelView, selectSection, selectProject } from './todo-panel-helpers'
 
 const SHOTS = '/tmp/task-query-filters'
 
@@ -201,6 +201,7 @@ const tableRow = (page: Page, taskId: string) =>
 /** Home: stacked sections + the unscoped project chip, so nothing is hidden by
  *  an axis this spec isn't testing. */
 async function openHomePanel(page: Page): Promise<void> {
+  await presetPanelView(page)
   await page.goto('/')
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 20_000 })
   await selectSection(page, 'All')

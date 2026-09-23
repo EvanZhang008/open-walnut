@@ -14,7 +14,7 @@
  * fixture server.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { showEverything } from './todo-panel-helpers'
+import { presetPanelView, showEverything } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -23,12 +23,15 @@ async function createTaskViaApi(title: string, opts: Record<string, unknown> = {
   const res = await fetch(`${API}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: uniqueTitle, source: 'local', ...opts }),
+    // Off the board: the All view lists a pinned task only in its tier.
+    body: JSON.stringify({ title: uniqueTitle, source: 'local', pinned: false, ...opts }),
   })
   if (!res.ok) throw new Error(`task create failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string; title: string } }
   return body.task
 }
+
+test.beforeEach(async ({ page }) => { await presetPanelView(page) })
 
 test('grouped tasks render as a folder; deleting the folder releases members in place', async ({ page }) => {
   const project = `FolderProj${Date.now().toString(36)}`
@@ -58,9 +61,10 @@ test('grouped tasks render as a folder; deleting the folder releases members in 
   await expect(page.locator(`[data-task-id="${b.id}"]`).first()).toBeVisible()
   await page.screenshot({ path: '/tmp/folder-model/folder-chip.png', fullPage: false })
 
-  // 3. Delete the folder via its ✕ — members must stay, chip must go.
+  // 3. Delete the folder from its "···" menu — members must stay, chip must go.
   await chip.hover()
-  await chip.locator('.task-group-chip-dissolve').click()
+  await chip.locator('.task-group-chip-more').click()
+  await page.locator('[data-testid="folder-ctx-menu"]').getByRole('menuitem', { name: 'Delete folder' }).click()
   await expect(page.locator(`.task-group-chip:has-text("Migrated Folder")`)).toHaveCount(0, { timeout: 10000 })
   await expect(page.locator(`[data-task-id="${a.id}"]`).first()).toBeVisible()
   await expect(page.locator(`[data-task-id="${b.id}"]`).first()).toBeVisible()
@@ -98,7 +102,7 @@ test('an empty folder renders as a droppable row in its project bucket', async (
   await fetch(`${API}/api/tasks/folders/${folder.group_id}`, { method: 'DELETE' })
 })
 
-test('the project + menu creates an empty folder through the in-app prompt', async ({ page }) => {
+test('the project menu creates an empty folder through the in-app prompt', async ({ page }) => {
   const project = `PlusFolderProj${Date.now().toString(36)}`
   await createTaskViaApi('Plus menu anchor', { project })
   const label = `Menu Folder ${Date.now().toString(36)}`
@@ -110,8 +114,8 @@ test('the project + menu creates an empty folder through the in-app prompt', asy
   const header = page.locator('.todo-group-project-header', { hasText: project }).first()
   await header.scrollIntoViewIfNeeded()
   await header.hover()
-  await header.locator('[data-testid="plus-menu-trigger"]').click()
-  await page.locator('[data-testid="plus-menu"] .task-kebab-item', { hasText: 'New folder' }).click()
+  await header.locator('.navigation-more').click()
+  await page.locator('[data-testid="project-ctx-menu"]').getByRole('menuitem', { name: 'New folder' }).click()
 
   const modal = page.locator('.app-modal')
   await expect(modal).toBeVisible()

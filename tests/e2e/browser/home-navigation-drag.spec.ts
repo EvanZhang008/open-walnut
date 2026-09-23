@@ -13,6 +13,8 @@ async function drag(page: Page, source: Locator, target: Locator, cancel = false
   await page.mouse.down();
   await page.mouse.move(start.x + start.width * 0.4 + 12, start.y + start.height / 2, { steps: 4 });
   const scroller = page.locator('#home-task-navigation .home-navigation-scroll');
+  // An empty tier is drawn only once a pinned drag is live.
+  await target.waitFor({ state: 'visible', timeout: 5_000 });
   for (let round = 0; round < 12; round++) {
     const end = await target.boundingBox(), viewport = await scroller.boundingBox();
     if (!end || !viewport) throw new Error('Drop target disappeared');
@@ -39,7 +41,8 @@ async function drag(page: Page, source: Locator, target: Locator, cancel = false
 test('native reorder, drag cancellation, folded tiers, failure recovery and explicit unpin', async ({ page, baseURL }) => {
   await isolateUiPrefs(page);
   await page.addInitScript(() => {
-    if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '[]');
+    // Backlog was folded earlier. Empty, it is not drawn until a drag needs it as a target.
+    if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '["backlog"]');
     if (localStorage.getItem('walnut-todo-collapsed-projs') === null) localStorage.setItem('walnut-todo-collapsed-projs', '[]');
   });
   const ids: string[] = [];
@@ -130,7 +133,6 @@ test('native reorder, drag cancellation, folded tiers, failure recovery and expl
   await page.unroute(`**/api/focus/tasks/${ids[0]}/tier`);
   await drag(page, card(), heading('focus'));
   await expectTier('focus');
-  await heading('backlog').locator('.navigation-heading-open').click();
   await drag(page, card(), heading('backlog'));
   await expectTier('backlog');
   await expect(heading('backlog').locator('.navigation-heading-open')).toHaveAttribute('aria-expanded', 'true');

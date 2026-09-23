@@ -99,7 +99,7 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
     onDelete: onDissolve,
   });
   // Click anywhere on the chip = fold/unfold, mirroring the main list's header
-  // row. The label (rename), the chevron and the ⊘/✕ buttons all stopPropagation,
+  // row. Only the chevron and the "···" menu button stopPropagation,
   // so they never reach this — that IS the mechanism, no target sniffing needed.
   // dnd-kit swallows the click once its 5px activation fired, so a real drag
   // can't also toggle; isDragging/inert covers the rest of the gesture window.
@@ -127,7 +127,7 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
         ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}, press and drag to move the whole folder`
         : 'Folder — press and drag to move the whole folder'}
       // A+B drag: the whole chip is the activator (5px distance keeps the label's
-      // click-to-rename and the ⊘/✕ buttons working); the gutter grip is a hint.
+      // click-to-fold and the "···" button working); the gutter grip is a hint.
       {...attributes}
       {...listeners}
       onClick={toggleCollapse}
@@ -154,34 +154,20 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
           {project || 'Inbox'}&nbsp;/
         </span>
       )}
-      <span
-        className="task-group-chip-label"
-        onClick={(e) => { e.stopPropagation(); onRename?.(groupId, label); }}
-        title="Rename folder"
-      >
-        {label}
-      </span>
+      <span className="task-group-chip-label">{label}</span>
       {count !== undefined && count > 0 && (
         <span className="task-group-chip-count" aria-hidden="true">{count}</span>
       )}
-      {onHide && (
+      {(onRename || onHide || onDissolve || onMoveToProject) && (
         <button
-          className="task-group-chip-hide"
-          onClick={(e) => { e.stopPropagation(); onHide(groupId); }}
-          aria-label="Hide this folder from Focus"
-          title="Hide from Focus — collapse this folder (unhide from the strip below)"
+          type="button"
+          className="navigation-more task-group-chip-more"
+          aria-haspopup="menu"
+          aria-label={`${label} folder menu`}
+          title="Folder actions"
+          onClick={(e) => folderMenu.openFrom(e, { groupId, label, project, collapsed })}
         >
-          ⊘
-        </button>
-      )}
-      {onDissolve && (
-        <button
-          className="task-group-chip-dissolve"
-          onClick={(e) => { e.stopPropagation(); onDissolve(groupId); }}
-          aria-label="Delete this folder"
-          title="Delete folder — tasks stay, back in the project"
-        >
-          ✕
+          ···
         </button>
       )}
     </div>
@@ -435,8 +421,10 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       ) : null}
       {/* Unread dot — same affordance as the main list row, so the Focus and
           Satellite strips read the same way as the list. */}
-      {unread && (
+      {unread ? (
         <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
+      ) : needsAction && !isDone && (
+        <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button

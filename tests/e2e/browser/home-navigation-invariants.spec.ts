@@ -1,24 +1,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { isolateUiPrefs, selectProject } from './todo-panel-helpers';
+import { arrange, chooseViewOption, homeToolbar, openHome, setShowCompleted } from './home-navigation-helpers';
 
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
 test.setTimeout(90_000);
 
 async function boot(page: Page, baseURL: string) {
   await isolateUiPrefs(page);
-  await page.setContent(`<a href="${baseURL}">Open Walnut</a>`);
-  await page.getByRole('link', { name: 'Open Walnut' }).click();
-  await expect(page.locator('.task-view-menu-trigger')).toBeVisible({ timeout: 45_000 });
-}
-async function taskViewAction(page: Page, name: string) {
-  await page.getByRole('button', { name: 'Task view', exact: true }).click();
-  await page.getByRole('menu', { name: 'Task views', exact: true }).getByRole('menuitem', { name, exact: true }).click();
-}
-async function arrange(page: Page, label: string) {
-  await page.getByRole('button', { name: 'View options', exact: true }).click();
-  await page.locator('[data-rail-section="arrange"]').click();
-  await page.locator('.vd-detail').getByRole('button', { name: label, exact: true }).click();
-  await page.keyboard.press('Escape');
+  await openHome(page, baseURL);
 }
 
 test('completed pins remain available and filtering never expands unrelated projects', async ({ page, baseURL }) => {
@@ -32,38 +21,41 @@ test('completed pins remain available and filtering never expands unrelated proj
   expect((await page.request.post(`/api/focus/tasks/${ids[0]}`)).ok()).toBe(true);
   expect((await page.request.patch(`/api/tasks/${ids[0]}`, { data: { phase: 'COMPLETE' } })).ok()).toBe(true);
   await boot(page, baseURL!);
-  await taskViewAction(page, 'Show completed tasks');
+  await setShowCompleted(page, true);
   await selectProject(page, 'Navigation Alpha');
   const project = (name: string) => page.locator('.todo-group-project').filter({ has: page.locator('.todo-group-project-name', { hasText: new RegExp(`^${name}$`) }) });
   await project('Navigation Alpha').locator('.todo-group-name-btn').click();
   await expect(project('Navigation Alpha').locator(`[data-task-id="${ids[0]}"]`)).toBeVisible();
   await selectProject(page, 'All');
   await expect(project('Navigation Beta').locator('.todo-panel-item')).toHaveCount(0);
-  const collapsed = await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-list-collapsed-projs') ?? '[]'));
-  expect(collapsed).toContain('Navigation Beta');
+  // The list remembers what the user opened; everything else stays folded.
+  const opened = await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-list-open-projs') ?? '[]'));
+  expect(opened).toContain('Navigation Alpha');
+  expect(opened).not.toContain('Navigation Beta');
   await arrange(page, 'Flat');
-  await taskViewAction(page, 'Collapse all projects');
+  await chooseViewOption(page, 'collapse');
   await arrange(page, 'By project');
   await expect(project('Navigation Alpha').locator('.todo-panel-item')).toHaveCount(0);
   await expect(project('Navigation Beta').locator('.todo-panel-item')).toHaveCount(0);
-  await taskViewAction(page, 'Expand all projects');
+  await chooseViewOption(page, 'collapse');
   await expect(project('Navigation Alpha').locator(`[data-task-id="${ids[0]}"]`)).toBeAttached();
   await expect(project('Navigation Beta').locator(`[data-task-id="${ids[1]}"]`)).toBeAttached();
   await page.reload();
-  await expect(page.locator('.task-view-menu-trigger')).toBeVisible({ timeout: 30_000 });
-  await taskViewAction(page, 'Show completed tasks');
+  await expect(homeToolbar(page).getByRole('button', { name: 'View options', exact: true })).toBeVisible({ timeout: 30_000 });
+  await setShowCompleted(page, true);
   await expect(project('Navigation Alpha').locator(`[data-task-id="${ids[0]}"]`)).toBeAttached();
 });
 
-test('calendar day and task scheduling survive companion switches without leaked popovers', async ({ page, baseURL }) => {
+test('calendar day and task scheduling survive closing the panel without leaked popovers', async ({ page, baseURL }) => {
   await boot(page, baseURL!);
-  const heading = (id: string) => page.locator(`#home-task-navigation [data-navigation-id="${id}"] .navigation-heading-open`);
-  await heading('calendar').click();
+  const agenda = page.getByTestId('sidebar-toggle-calendar');
+  await agenda.click();
   const calendar = page.getByTestId('cal-side-panel');
   for (let step = 0; step < (test.info().project.name === 'webkit' ? 3 : 2); step++) await calendar.getByRole('button', { name: 'Next day' }).click();
   const day = await calendar.locator('.cal-day-col').getAttribute('data-day');
-  await heading('notes').click();
-  await heading('calendar').click();
+  await agenda.click();
+  await expect(calendar).toBeHidden();
+  await agenda.click();
   await expect(calendar.locator('.cal-day-col')).toHaveAttribute('data-day', day!);
   await calendar.getByRole('button', { name: 'Choose calendars' }).click();
   await expect(page.locator('.cal-cals-popover')).toBeVisible();
@@ -84,10 +76,9 @@ test('calendar day and task scheduling survive companion switches without leaked
   await expect(calendar).toContainText('Companion scheduled task');
   await calendar.locator('[title="Close calendar panel"]').click();
   await expect(page.locator('.cal-popover-backdrop')).toHaveCount(0);
-  await heading('notes').click();
-  await expect(page.getByTestId('home-companion-notes')).toBeVisible();
+  await expect(calendar).toBeHidden();
   await expect(page.locator('.cal-cals-popover,.cal-create-popover,.cal-item-popover')).toHaveCount(0);
-  await heading('calendar').click();
+  await agenda.click();
   await expect(calendar.locator('.cal-day-col')).toHaveAttribute('data-day', day!);
 });
 
@@ -168,8 +159,7 @@ test('project title drag and keyboard menu sorting preserve task ownership', asy
 
 test('navigation undo reports storage failure without silently reverting the order', async ({ page, baseURL }) => {
   await boot(page, baseURL!);
-  const calendar = page.locator('[data-navigation-id="calendar"]');
-  await calendar.click({ button: 'right' });
+  await page.locator('#home-task-navigation [data-navigation-id="tasks"]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Move up', exact: true }).click();
   const before = await page.evaluate(() => localStorage.getItem('walnut-todo-navigation-order'));
   await page.evaluate(() => {
@@ -188,5 +178,5 @@ test('navigation undo reports storage failure without silently reverting the ord
   await expect(page.getByText('Could not restore navigation order', { exact: true }).first()).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('walnut-todo-navigation-order'))).toBe(before);
   await page.reload();
-  await expect.poll(() => page.locator('.navigation-app-entry').evaluateAll(rows => rows.map(row => row.getAttribute('data-navigation-id')))).toEqual(['calendar', 'notes']);
+  await expect.poll(() => page.locator('#home-task-navigation .navigation-heading.todo-pinned-header').evaluateAll(rows => rows.map(row => row.getAttribute('data-navigation-id')))).toEqual(['tasks', 'pinned']);
 });

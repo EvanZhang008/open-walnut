@@ -13,7 +13,6 @@ import { perf } from '@/utils/perf-logger';
 import { installTimeTracker } from '@/utils/time-tracking';
 import { useAppCatalog } from '@/apps/hooks';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
-import { APP_SHORTCUTS_KEY, useNavigationPreference } from '@/hooks/useNavigationPreference';
 
 interface AppShellProps {
   children: ReactNode;
@@ -55,7 +54,6 @@ export function AppShell({ children }: AppShellProps) {
 function AppShellInner({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
-  const [appShortcuts] = useNavigationPreference(APP_SHORTCUTS_KEY);
   const [isMobileSidebar, setIsMobileSidebar] = useState(
     () => window.matchMedia(MOBILE_SIDEBAR_QUERY).matches,
   );
@@ -178,7 +176,7 @@ function AppShellInner({ children }: AppShellProps) {
   }, []);
 
   return (
-    <div className={`app-shell app-shell-navigation${appShortcuts ? ' has-app-shortcuts' : ''}`}>
+    <div className="app-shell app-shell-navigation">
       <button
         ref={sidebarToggleRef}
         className="sidebar-toggle"

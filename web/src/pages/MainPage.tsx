@@ -313,19 +313,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     () => localStorage.getItem(LS_CALENDAR_VISIBLE_KEY) === 'true'
   );
 
-  const [notesVisible, setNotesVisible] = useState(false);
-  const companionOpenerRef = useRef<HTMLElement | null>(null);
-  const openCompanion = useCallback((kind: 'notes' | 'calendar') => {
-    companionOpenerRef.current = document.querySelector(`[data-navigation-id="${kind}"] .navigation-heading-open`);
-    setNotesVisible(kind === 'notes');
-    setCalendarVisible(kind === 'calendar');
-  }, []);
   const closeCompanion = useCallback(() => {
-    setNotesVisible(false);
     setCalendarVisible(false);
     requestAnimationFrame(() => {
-      const opener = companionOpenerRef.current;
-      if (opener?.getClientRects().length && !opener.closest('[inert]')) opener.focus();
+      const opener = document.querySelector<HTMLButtonElement>('[data-testid="sidebar-toggle-calendar"]');
+      if (opener?.getClientRects().length) opener.focus();
       else document.querySelector<HTMLButtonElement>('.app-task-panel-toggle')?.focus();
     });
   }, []);
@@ -771,7 +763,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       setTodoVisible(prev => !prev);
     };
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
-    const handleToggleCalendar = () => { setNotesVisible(false); setCalendarVisible(prev => !prev); };
+    const handleToggleCalendar = () => setCalendarVisible(prev => !prev);
     // openSessionOnHome (utils/open-session.ts) — deep links (e.g. notification
     // cards) open the session as a home-page column instead of /sessions.
     const handleOpenSession = (e: Event) => {
@@ -2530,8 +2522,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOperationError={showOperationError}
           externalProject={activeProject}
           onProjectChange={setActiveProject}
-          onOpenCompanion={openCompanion}
-          activeCompanion={notesVisible ? 'notes' : calendarVisible ? 'calendar' : null}
           onOpenLauncher={handleToolbarOpenLauncher}
           onOpenLauncherForProject={handleOpenLauncherForProject}
           onOpenLauncherForTier={handleOpenLauncherForTier}
@@ -2751,7 +2741,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       </div>{/* end .main-page-right */}
 
-      <HomeCompanionPanel active={notesVisible ? 'notes' : calendarVisible ? 'calendar' : null} onClose={closeCompanion} />
+      <HomeCompanionPanel open={calendarVisible} onClose={closeCompanion} />
 
       {/* Full-screen task detail — shared by TodoPanel clicks AND the Session panel
           kebab "Task detail" item (both drive focusedTask). suppressDetail (set by

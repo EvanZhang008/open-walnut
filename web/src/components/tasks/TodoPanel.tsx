@@ -22,7 +22,6 @@ import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
-import { TaskViewMenu } from './TaskViewMenu';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { TASK_SHORTCUTS_KEY, useNavigationPreference } from '@/hooks/useNavigationPreference';
@@ -73,6 +72,9 @@ import {
   type DragOverEvent,
   type DragMoveEvent,
   type DragEndEvent,
+  type DragCancelEvent,
+  type DraggableAttributes,
+  type DraggableSyntheticListeners,
   type CollisionDetection,
   type Modifier,
 } from '@dnd-kit/core';
@@ -100,6 +102,7 @@ import {
   type GroupBy,
   type DateFilter,
   type TaskQueryFilterState,
+  type ViewOptionGroup,
 } from './ViewDropdown';
 import { TaskFilterChips } from './TaskFilterChips';
 import {
@@ -226,8 +229,6 @@ interface TodoPanelProps {
   /** Toolbar "+" — opens the todo-anchored launcher popover (Session | Task
    *  tabs, Session default) rendered by MainPage inside the task panel. */
   onOpenLauncher?: () => void;
-  onOpenCompanion?: (kind: 'notes' | 'calendar') => void;
-  activeCompanion?: 'notes' | 'calendar' | null;
   /** Project header "+": open a draft session column seeded with this project
    *  (path prefilled from the project's default cwd/host). */
   onOpenLauncherForProject?: (project: string) => void;
@@ -395,6 +396,34 @@ function readSetFromStorage(key: string): Set<string> {
 
 function persistSet(key: string, set: Set<string>) {
   try { localStorage.setItem(key, JSON.stringify([...set])); } catch { /* ignore */ }
+}
+
+/** The Projects list remembers the projects the user OPENED, so every other one,
+ *  a project that appears later included, starts folded. `shut` is the older stored
+ *  shape (the folded ones); it is read as-is until the next change rewrites it. */
+type ListFolds = { open: Set<string> } | { shut: Set<string> };
+const LS_LIST_OPEN_PROJS_KEY = 'walnut-todo-list-open-projs';
+const LS_LIST_SHUT_PROJS_KEY = 'walnut-todo-list-collapsed-projs';
+
+function readListFolds(): ListFolds {
+  try {
+    if (localStorage.getItem(LS_LIST_SHUT_PROJS_KEY) !== null) return { shut: readSetFromStorage(LS_LIST_SHUT_PROJS_KEY) };
+    if (localStorage.getItem(LS_LIST_OPEN_PROJS_KEY) !== null) return { open: readSetFromStorage(LS_LIST_OPEN_PROJS_KEY) };
+  } catch { /* Storage off: the first-visit folds. */ }
+  return { open: new Set() };
+}
+
+function isListProjectOpen(folds: ListFolds, project: string): boolean {
+  return 'open' in folds ? folds.open.has(project) : !folds.shut.has(project);
+}
+
+/** Apply `change` to the open set (converting the older shape against `live`) and store it. */
+function writeListFolds(folds: ListFolds, live: Iterable<string>, change: (open: Set<string>) => void): ListFolds {
+  const open = 'open' in folds ? new Set(folds.open) : new Set([...live].filter((p) => !folds.shut.has(p)));
+  change(open);
+  persistSet(LS_LIST_OPEN_PROJS_KEY, open);
+  try { localStorage.removeItem(LS_LIST_SHUT_PROJS_KEY); } catch { /* ignore */ }
+  return { open };
 }
 
 function readTab(): string {
@@ -782,8 +811,8 @@ function FolderHeaderRow({ groupId, label, count, project, depth, collapsed, onT
         title={onToggleCollapse
           ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}`
           : 'Folder — independent tasks kept together inside this project'}
-        // Click ANYWHERE on the row folds/unfolds. The label (rename) and the ✕
-        // stopPropagation, so they never reach this.
+        // Click ANYWHERE on the row, the name included, folds/unfolds. Only the
+        // chevron and the "···" menu button stopPropagation.
         onClick={() => onToggleCollapse?.(groupId)}
         onContextMenu={(e) => folderMenu.open(e, { groupId, label, project, collapsed })}
       >
@@ -800,25 +829,20 @@ function FolderHeaderRow({ groupId, label, count, project, depth, collapsed, onT
         <span className="task-group-chip-icon" aria-hidden="true">
           {ICONS.ICON_FOLDER_OUTLINE}
         </span>
-        <span
-          className="task-group-chip-label"
-          onClick={(e) => { e.stopPropagation(); onRename?.(groupId, label); }}
-          title="Rename folder"
-        >
-          {label}
-        </span>
+        <span className="task-group-chip-label">{label}</span>
         {/* ONE rule for the badge, shared with the tier chip: draw it only when
             there is something to count (a "0" badge names no members). */}
         {count > 0 && <span className="task-group-chip-count" aria-hidden="true">{count}</span>}
-        {/* Delete the folder — tasks fall back to the project in place. */}
-        {onDelete && (
+        {(onRename || onDelete || onMoveToProject) && (
           <button
-            className="task-group-chip-dissolve"
-            onClick={(e) => { e.stopPropagation(); onDelete(groupId); }}
-            aria-label="Delete this folder"
-            title="Delete folder — tasks stay, back in the project"
+            type="button"
+            className="navigation-more task-group-chip-more"
+            aria-haspopup="menu"
+            aria-label={`${label} folder menu`}
+            title="Folder actions"
+            onClick={(e) => folderMenu.openFrom(e, { groupId, label, project, collapsed })}
           >
-            ✕
+            ···
           </button>
         )}
       </div>
@@ -832,18 +856,13 @@ function FolderHeaderRow({ groupId, label, count, project, depth, collapsed, onT
 // into a main-thread block. All props are stable references (useCallback
 // handlers, per-task objects reused by the useTasks identity-preserving merge),
 // so shallow compare skips unchanged rows.
-const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder, folderProject, onMoveFolderToProject }: SortableTaskItemProps) {
-  // Live circle: error red / waiting red-pulse / running green-pulse.
-  const circleClass = useTaskCircle(task);
-  const {
-    attributes,
-    listeners,
-    setNodeRef: setSortableRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
-    id: task.id,
+// The sortable half of a list row. Every useSortable consumer re-renders whenever the
+// drag context changes (a drag starting, the pointer crossing a row), so this wrapper
+// stays thin and hands the body only values that change for THIS row. With a thousand
+// rows open, re-rendering each body on a project drag froze the drag's first frame.
+const SortableTaskItem = memo(function SortableTaskItem(props: SortableTaskItemProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: props.task.id,
     data: { type: 'task' },
     animateLayoutChanges: noAnimateAfterDrag,
     // Drop off while the row is hidden by a collapsed folder. dnd-kit measures every
@@ -853,17 +872,38 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
     // collapsed folder. The id still stays in the SortableContext, which is what keeps
     // dnd-kit's indices from shifting. (A row hidden by a folded PROJECT is unmounted
     // here, so it never registers at all.)
-    disabled: { draggable: false, droppable: !!folderCollapsed },
+    disabled: { draggable: false, droppable: !!props.folderCollapsed },
   });
+  return (
+    <TaskRowBody
+      {...props}
+      sortableRef={setNodeRef}
+      sortableTransform={CSS.Transform.toString(transform)}
+      sortableTransition={transition}
+      isDragging={isDragging}
+      dragAttributes={attributes}
+      dragListeners={listeners}
+    />
+  );
+});
 
-  // Combined ref for sortable
-  const setNodeRef = useCallback((node: HTMLDivElement | null) => {
-    setSortableRef(node);
-  }, [setSortableRef]);
+interface TaskRowBodyProps extends SortableTaskItemProps {
+  sortableRef: (node: HTMLElement | null) => void;
+  sortableTransform: string | undefined;
+  sortableTransition: string | undefined;
+  isDragging: boolean;
+  dragAttributes: DraggableAttributes;
+  dragListeners: DraggableSyntheticListeners;
+}
+
+const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder, folderProject, onMoveFolderToProject, sortableRef, sortableTransform, sortableTransition, isDragging, dragAttributes: attributes, dragListeners: listeners }: TaskRowBodyProps) {
+  // Live circle: error red / waiting red-pulse / running green-pulse.
+  const circleClass = useTaskCircle(task);
+  const setNodeRef = sortableRef;
 
   const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
+    transform: sortableTransform,
+    transition: sortableTransition,
     opacity: isDragging ? 0 : undefined,
     // Subtasks indent: 22px = phase-icon(18px) + gap(4px), aligns with parent's first letter
     ...(depth > 0 ? { marginLeft: `${depth * 22}px` } : {}),
@@ -1094,9 +1134,11 @@ const SortableTaskItem = memo(function SortableTaskItem({ task, isFocused, isDet
         <div className="todo-item-title-row">
           {/* Unread dot — leftmost, keeps everything on one line. Clears when the
               user opens the task (MainPage.handleFocusTask marks it read). */}
-          {task.unread && !isDone && (
+          {!isDone && (task.unread ? (
             <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
-          )}
+          ) : needsAction && (
+            <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
+          ))}
           {/* Phase icon — one click toggles To Do ↔ Complete */}
           <button
             className={`task-phase-icon-btn ${circleClass}`}
@@ -1405,8 +1447,8 @@ function ProjectHeaderRow({
 
 // ── Empty folder row — a created-but-unfilled folder inside a project bucket ──
 // Renders where the folder's members will live and is a drop target: dragging a
-// same-project task onto it files the task (the folder's first member). Rename
-// and ✕ (delete) match the member-backed chip so the affordances stay uniform.
+// same-project task onto it files the task (the folder's first member). Its "···"
+// menu matches the member-backed chip so the affordances stay uniform.
 export const EMPTY_FOLDER_DROP_PREFIX = 'folder-empty:';
 
 function EmptyFolderRow({ groupId, label, project, onRename, onDelete, onMoveToProject }: {
@@ -1435,22 +1477,18 @@ function EmptyFolderRow({ groupId, label, project, onRename, onDelete, onMoveToP
       <span className="task-group-chip-icon" aria-hidden="true">
         {ICONS.ICON_FOLDER_OUTLINE}
       </span>
-      <span
-        className="task-group-chip-label"
-        onClick={(e) => { e.stopPropagation(); onRename?.(groupId, label); }}
-        title="Rename folder"
-      >
-        {label}
-      </span>
+      <span className="task-group-chip-label">{label}</span>
       <span className="task-group-chip-empty-hint" aria-hidden="true">empty — drag a task here</span>
-      {onDelete && (
+      {(onRename || onDelete || onMoveToProject) && (
         <button
-          className="task-group-chip-dissolve"
-          onClick={(e) => { e.stopPropagation(); onDelete(groupId); }}
-          aria-label="Delete this folder"
-          title="Delete folder"
+          type="button"
+          className="navigation-more task-group-chip-more"
+          aria-haspopup="menu"
+          aria-label={`${label} folder menu`}
+          title="Folder actions"
+          onClick={(e) => folderMenu.openFrom(e, { groupId, label, project })}
         >
-          ✕
+          ···
         </button>
       )}
     </div>
@@ -2541,8 +2579,10 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       )}
       {/* Unread dot — the tinted background alone was too subtle on a dense
           pinned strip, and the user asked for the dot on these cards too. */}
-      {unread && (
+      {unread ? (
         <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
+      ) : needsAction && !isDone && (
+        <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
@@ -2603,7 +2643,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenCompanion, activeCompanion, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -2710,12 +2750,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  row (or any other row) under a folded project is a dead click. Shared by the
    *  main list's add row and the pinned tiers' per-run add row. */
   const expandProject = useCallback((project: string) => {
-    setListCollapsedProjects(prev => {
-      const next = new Set(prev ?? tasksRef.current.map(task => task.project || ''));
-      next.delete(project);
-      persistSet('walnut-todo-list-collapsed-projs', next);
-      return next;
-    });
+    setListFolds(prev => isListProjectOpen(prev, project) ? prev
+      : writeListFolds(prev, tasksRef.current.map(task => task.project || ''), open => open.add(project)));
     setCollapsedProjects((prev) => {
       if (!prev.has(project)) return prev;
       const next = new Set(prev);
@@ -2787,7 +2823,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // independent — in single-section mode the region renders regardless of its
   // collapse flag (a tab you just picked must never show up already folded).
   const [activeSection, setActiveSection] = useState<TodoSection>(readSection);
-  const [quickViews] = useNavigationPreference(TASK_SHORTCUTS_KEY);
+  const [quickViews, setQuickViews] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   // Per-tier view mode (project clustering vs raw pin order) — see TierViewMode.
   const [tierViewModes, setTierViewModes] = useState<Record<string, TierViewMode>>(readTierViewModes);
   const tierViewMode = useCallback(
@@ -2840,13 +2876,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (isDeleted(searchSection)) setSearchSection('focus');
   }, [activeSection, searchSection, customTiersLive, customTiersLoaded]);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
-  const [listCollapsedProjects, setListCollapsedProjects] = useState<Set<string> | null>(() => {
-    try {
-      if (localStorage.getItem('walnut-todo-list-collapsed-projs') !== null) return readSetFromStorage('walnut-todo-list-collapsed-projs');
-      if (localStorage.getItem(LS_COLLAPSED_PROJS_KEY) !== null) return readSetFromStorage(LS_COLLAPSED_PROJS_KEY);
-    } catch { /* Use the first-visit folds. */ }
-    return null;
-  });
+  const [listFolds, setListFolds] = useState<ListFolds>(readListFolds);
   // Tracks which parent tasks the user has EXPANDED (default = all collapsed)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => readSetFromStorage(LS_EXPANDED_PARENTS_KEY));
   // Auto-expand parents with active (non-completed) children on initial load.
@@ -3155,12 +3185,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           return next;
         });
       }
-      setListCollapsedProjects(prev => {
-        const next = new Set(prev ?? tasks.map(task => task.project || ''));
-        next.delete(proj);
-        persistSet('walnut-todo-list-collapsed-projs', next);
-        return next;
-      });
+      setListFolds(prev => isListProjectOpen(prev, proj) ? prev
+        : writeListFolds(prev, tasks.map(task => task.project || ''), open => open.add(proj)));
 
       // Expand collapsed parent if focused task is a child (temporary — not persisted,
       // so parents collapse back on page reload unless user manually expanded them)
@@ -3421,6 +3447,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // they can freeze on it (useFrozenWhile) while a drag is live.
   const [activeDragPinnedId, setActiveDragPinnedId] = useState<string | null>(null);
   const isPinnedDragActive = activeDragPinnedId !== null;
+  // The All view mounts empty tiers only while a pinned drag is live, so the rows
+  // above the dragged card grow at the gesture's start and shrink at its end. The
+  // list scrolls by the same amount so the anchor stays under the pointer.
+  const scrollAnchorRef = useRef<{ selector: string; top: number } | null>(null);
+  const holdScrollAnchor = useCallback((selector: string) => {
+    const el = document.querySelector(selector);
+    scrollAnchorRef.current = el ? { selector, top: el.getBoundingClientRect().top } : null;
+  }, []);
+  useLayoutEffect(() => {
+    const anchor = scrollAnchorRef.current;
+    if (!anchor) return;
+    scrollAnchorRef.current = null;
+    const el = document.querySelector(anchor.selector);
+    const scroller = el?.closest('.home-navigation-scroll');
+    if (!el || !scroller) return;
+    const delta = el.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) >= 1) scroller.scrollTop += delta;
+  }, [activeDragPinnedId]);
   // The tier REGISTRY freezes too: a cross-client tier create/delete mid-drag
   // (config:changed{focus_tiers} → refetch) would otherwise swap DROP_ZONE_TIERS,
   // unmount a TierNavigationGroup's SortableContext inside the active DndContext,
@@ -4017,6 +4061,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
 
+    const sourceTier = [...tierArrays].find(([, ids]) => ids.includes(activeId))?.[0];
+    scrollAnchorRef.current = null;
+    if (sourceTier) holdScrollAnchor(`#home-task-navigation [data-navigation-id="${window.CSS.escape(sourceTier)}"]`);
     setActiveDragPinnedId(activeId);
     // Reserve the viewport's bottom strip without moving any existing row.
     if (!isGroupSentinel(activeId) && pinnedTaskIds?.has(activeId) && onUnpinTask) {
@@ -4044,7 +4091,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const pe = event.activatorEvent as PointerEvent | undefined;
       dragBus.begin({ kind: 'task', task: busTask }, pe?.clientX !== undefined ? { x: pe.clientX, y: pe.clientY } : undefined);
     }
-  }, [focusTasksLocal, satelliteTasksLocal, backlogTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap, clusterForTier, pinnedTaskIds, onUnpinTask]);
+  }, [focusTasksLocal, satelliteTasksLocal, backlogTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap, clusterForTier, pinnedTaskIds, onUnpinTask, holdScrollAnchor]);
 
   // Shared live-drag tier accessors: dragTierIdsRef is the live state during a
   // drag with the frozen snapshot as fallback. `findTierOf` answers "which tier
@@ -4235,12 +4282,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setUnpinHot(false);
   }, []);
 
-  const handlePinnedDragCancel = useCallback(() => {
+  const handlePinnedDragCancel = useCallback((event: DragCancelEvent) => {
+    holdScrollAnchor(`#home-task-navigation .todo-pinned-section [data-task-id="${window.CSS.escape(String(event.active.id))}"]`);
     dragBus.cancel();
     clearDragState();
-  }, [clearDragState]);
+  }, [clearDragState, holdScrollAnchor]);
 
   const handlePinnedDragEnd = useCallback((event: DragEndEvent) => {
+    holdScrollAnchor(`#home-task-navigation .todo-pinned-section [data-task-id="${window.CSS.escape(String(event.active.id))}"]`);
     // Cross-panel drop first: if a bus target (calendar side panel) consumed
     // the pointer-up, skip ALL in-panel drop semantics — dnd-kit's
     // closestCenter still reports an in-panel `over` even when the pointer is
@@ -4726,7 +4775,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // the other side of it now (the strategy's preview was the truth).
     syncCustomSepAnchors([{ tier: origTier, arr: reorderedTier }]);
     onReorderPinned?.(taskIdsOnly(newOrder));
-  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedJoinIntent, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
+  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedJoinIntent, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
 
   // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
   // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
@@ -4780,6 +4829,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       for (const k of stale) next.delete(k);
       persistSet(LS_COLLAPSED_PROJS_KEY, next);
       return next;
+    });
+    // The list's own set too: an opened name left behind by a rename would open a
+    // later project that reuses it.
+    setListFolds((prev) => {
+      const stored = 'open' in prev ? prev.open : prev.shut;
+      const stale = [...stored].filter((k) => !liveGroupKeys.has(k));
+      if (stale.length === 0) return prev;
+      const next = new Set(stored);
+      for (const k of stale) next.delete(k);
+      if ('open' in prev) { persistSet(LS_LIST_OPEN_PROJS_KEY, next); return { open: next }; }
+      persistSet(LS_LIST_SHUT_PROJS_KEY, next);
+      return { shut: next };
     });
   }, [loading, tasks.length, liveGroupKeys]);
 
@@ -5728,9 +5789,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return m;
   }, [grouped]);
 
-  // ONE collapse set for projects, shared by the main list's group headers and the
-  // pinned tiers' project label rows (same contract the folder collapse set has):
-  // folding a project in one surface folds it in the other, and it survives a
+  // The pinned tiers' project label rows fold through this set. The main list keeps
+  // its own (`listFolds`, folded by default), so folding a
+  // project in a tier leaves its list group alone and vice versa. Both survive a
   // reload. useCallback because the tier render pass depends on it.
   const toggleProject = useCallback((key: string) => {
     setCollapsedProjects((prev) => {
@@ -5760,31 +5821,43 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Collapse all / expand all — collapse keys are plain project names ('' = Inbox)
   const allGroupKeys = useMemo(() => grouped.map((g) => g.project), [grouped]);
 
+  // A query's hits must be on screen, so while one is active every project group
+  // starts open and folds only for that query; the saved fold set is untouched.
+  const queryActive = hasActiveTaskQuery(taskQueryState);
+  const [queryFoldedProjects, setQueryFoldedProjects] = useState<Set<string>>(() => new Set());
+  useEffect(() => { if (!queryActive) setQueryFoldedProjects(new Set()); }, [queryActive]);
   const isListProjectCollapsed = useCallback(
-    (project: string) => listCollapsedProjects?.has(project) ?? true,
-    [listCollapsedProjects],
+    (project: string) => queryActive ? queryFoldedProjects.has(project) : !isListProjectOpen(listFolds, project),
+    [queryActive, queryFoldedProjects, listFolds],
   );
   const toggleListProject = useCallback((project: string) => {
-    setListCollapsedProjects(prev => {
-      const next = new Set(prev ?? liveGroupKeys);
-      if (next.has(project)) next.delete(project); else next.add(project);
-      persistSet('walnut-todo-list-collapsed-projs', next);
-      return next;
-    });
-  }, [liveGroupKeys]);
+    if (queryActive) {
+      setQueryFoldedProjects(prev => {
+        const next = new Set(prev);
+        if (next.has(project)) next.delete(project); else next.add(project);
+        return next;
+      });
+      return;
+    }
+    setListFolds(prev => writeListFolds(prev, liveGroupKeys, open => {
+      if (open.has(project)) open.delete(project); else open.add(project);
+    }));
+  }, [queryActive, liveGroupKeys]);
 
   const allCollapsed = liveGroupKeys.size > 0 &&
     [...liveGroupKeys].every(project => isListProjectCollapsed(project));
 
   const handleCollapseExpandAll = useCallback(() => {
-    const next = new Set<string>(allCollapsed ? [] : liveGroupKeys);
-    setListCollapsedProjects(next);
-    persistSet('walnut-todo-list-collapsed-projs', next);
+    if (queryActive) { setQueryFoldedProjects(new Set<string>(allCollapsed ? [] : liveGroupKeys)); return; }
+    setListFolds(prev => writeListFolds(prev, liveGroupKeys, open => {
+      open.clear();
+      if (allCollapsed) for (const project of liveGroupKeys) open.add(project);
+    }));
     if (!allCollapsed) {
       setExpandedParents(new Set());
       persistSet(LS_EXPANDED_PARENTS_KEY, new Set());
     }
-  }, [allCollapsed, liveGroupKeys]);
+  }, [queryActive, allCollapsed, liveGroupKeys]);
 
   // ── Mini-bar "Running (n)" — tasks whose linked session is actively running.
   // Cycles through them on repeated clicks (focus-scroll each in turn).
@@ -6907,6 +6980,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const anyTaskVisible = ids.some((id) => pinnedTaskMap.has(id));
 
     let prevProject: string | null = null;
+    // A drag preview can split one project's run in two. Each project's lines and
+    // add row go out once, and a repeated label needs its own key: a duplicate key
+    // leaves an orphaned label in the DOM after the drop.
+    const runsSeen = new Map<string, number>();
+    let runAddShown = false;
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
       if (isSeparatorId(id)) {
@@ -6969,18 +7047,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         // AFTER opening the row would otherwise leave an "Add to X…" row floating
         // under a shut label, and typing in it would create a task into a run the
         // user cannot see.
-        if (runAddSignal?.tier === tier && runAddSignal.project === prevProject && !runHidden(prevProject)) out.push(runAddRow(tier, prevProject));
+        if (!runAddShown && runAddSignal?.tier === tier && runAddSignal.project === prevProject && !runHidden(prevProject)) {
+          out.push(runAddRow(tier, prevProject));
+          runAddShown = true;
+        }
       }
+      const runIndex = proj !== prevProject ? (runsSeen.get(proj) ?? 0) : -1;
+      if (runIndex >= 0) runsSeen.set(proj, runIndex + 1);
       // A line placed between folders draws ABOVE this folder's label, outside the
       // folder entirely — a folder is one unit in this mode, and a line between a
       // label and its own cards would read as a split folder, not a band boundary.
-      if (sepPlacement && proj !== prevProject) {
+      if (sepPlacement && runIndex === 0) {
         for (const sep of sepPlacement.aboveProject.get(proj) ?? []) out.push(sepRow(sep));
       }
-      if (showFolders && proj !== prevProject) {
+      if (showFolders && runIndex >= 0) {
         out.push(
           <TierProjectLabelRow
-            key={`projlabel:${tier}:${proj}`}
+            key={runIndex === 0 ? `projlabel:${tier}:${proj}` : `projlabel:${tier}:${proj}:${runIndex}`}
             project={proj}
             count={projectRowCount.get(proj) ?? 0}
             collapsed={isProjectCollapsed(proj)}
@@ -7078,7 +7161,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (sepPlacement) for (const sep of sepPlacement.tail) out.push(sepRow(sep));
     const lastScope = prevProject ?? '';
     // Same runHidden gate as the mid-list push above.
-    if (sepMode === 'project' && runAddSignal?.tier === tier && runAddSignal.project === lastScope && !runHidden(lastScope)) {
+    if (sepMode === 'project' && !runAddShown && runAddSignal?.tier === tier && runAddSignal.project === lastScope && !runHidden(lastScope)) {
       out.push(runAddRow(tier, lastScope));
     }
     return out;
@@ -7090,6 +7173,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // behind a chevron the user folded before searching.
   const tasksCollapsed = isAll && !isSearchMode && collapsedSections.has('tasks');
   const tasksVisible = showSection('tasks');
+  // "Collapse all" for the Pinned heading's menu: folds every tier at once.
+  const allTiersFolded = allTierKeys.every((tier) => collapsedSections.has(tier));
+  const setAllTiersFolded = (fold: boolean) => {
+    if (isSearchModeRef.current) return;
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      for (const tier of allTierKeys) { if (fold) next.add(tier); else next.delete(tier); }
+      persistSet(LS_COLLAPSED_SECTIONS_KEY, next);
+      return next;
+    });
+  };
   // Any pinned tier showing? Drives whether the pinned wrapper mounts at all.
   const anyTierVisible = showSection('focus') || showSection('satellite') || showSection('backlog') || showSection('wait')
     || (customTiers ?? []).some((t) => showSection(t.id));
@@ -7135,6 +7229,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
   };
+  // The All view draws a built-in tier only once it holds a task (and no Pinned heading
+  // when nothing is drawn), so a first visit is not a wall of empty headings. A custom
+  // tier always draws: the user just made it and needs its add row. Every tier mounts
+  // while a pinned card is dragged, so an empty one can still take the drop; a
+  // single-tier view always draws its tier.
+  const tierHiddenWhenEmpty = (tier: FocusTier, model: { display: unknown[] }) =>
+    isAll && !isPinnedDragActive && isBuiltinTier(tier) && model.display.length === 0;
+  const anyTierDrawn = allTierKeys.some((tier) => {
+    const model = tierSectionModel(tier);
+    return !!model && !tierHiddenWhenEmpty(tier, model);
+  });
 
   // Date quick chip (tier bar + tasks mini-bar): one click flips between the
   // two everyday values — Now (hide deferred) and All. From a long-tail value
@@ -7160,11 +7265,37 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     </button>
   );
 
+  const tierSectionActive = isTierSection(effectiveSection) && !isSearchMode;
+  const viewGroups: ViewOptionGroup[] = [
+    { label: 'Show', options: [
+      { id: 'all', label: 'All tasks' }, { id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' },
+      { id: 'backlog', label: 'Backlog' }, { id: 'wait', label: 'Wait' }, ...(customTiers ?? []),
+      { id: 'recent', label: 'Recent' }, { id: 'tasks', label: 'Projects' }, { id: 'notes', label: 'Scratchpad' },
+    ].map((view) => ({ key: view.id, label: view.label, active: effectiveSection === view.id, onSelect: () => handleSectionChange(view.id as TodoSection) })) },
+  ];
+  const activeFilterOptions = [
+    ...(dateFilter ? [{ key: 'date', label: `Date: ${dateQuickLabel} ×`, title: 'Remove this filter', onSelect: () => { setDateFilter(''); persistDateFilter(''); clearFocusOverride(); } }] : []),
+    ...(phaseFilter ? [{ key: 'phase', label: `Phase: ${PHASE_LABEL[phaseFilter] ?? phaseFilter} ×`, title: 'Remove this filter', onSelect: () => { setPhaseFilter(''); clearFocusOverride(); } }] : []),
+    ...(activeProject ? [{ key: 'project', label: `Project: ${activeProject === INBOX_TAB ? 'Inbox' : activeProject} ×`, title: 'Remove this filter', onSelect: () => { setActiveProject(''); persistTab(''); onProjectChange?.(''); } }] : []),
+    ...(isSearchMode && searchDoneCount > 0 ? [{ key: 'search-done', label: `Done ${searchDoneCount}`, active: showDoneResults, title: 'Include completed matches', onSelect: () => setShowDoneResults((v) => !v) }] : []),
+  ];
+  if (activeFilterOptions.length) viewGroups.push({ label: 'Active filters', options: activeFilterOptions });
+  viewGroups.push({ label: 'Layout', options: [
+    ...(tierSectionActive ? [
+      { key: 'tier-project', label: 'Group by project', active: tierViewMode(effectiveSection) === 'project', onSelect: () => setTierViewMode(effectiveSection, 'project') },
+      { key: 'tier-custom', label: 'Custom order', active: tierViewMode(effectiveSection) === 'custom', onSelect: () => setTierViewMode(effectiveSection, 'custom') },
+    ] : []),
+    ...(effectiveSection === 'recent' && !isSearchMode ? [
+      { key: 'recent-updated', label: 'Sort by update', active: recentSortMode === 'updated', onSelect: () => handleRecentSortChange('updated') },
+      { key: 'recent-created', label: 'Sort by creation time', active: recentSortMode === 'created', onSelect: () => handleRecentSortChange('created') },
+    ] : []),
+    { key: 'collapse', label: allCollapsed ? 'Expand all projects' : 'Collapse all projects', onSelect: handleCollapseExpandAll },
+    { key: 'quick-views', label: 'Quick view tabs', active: quickViews, onSelect: () => setQuickViews(!quickViews) },
+  ] });
+
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}${activeDragPinnedId ? ' is-task-dragging' : ''}`} ref={splitterContainerRef}>
-      {/* Search bar + View dropdown — single row replaces old tabs + filters + sort */}
       <div className="todo-panel-toolbar">
-        {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
         <TodoSearchBar
           query={searchQuery}
           onQueryChange={setSearchQuery}
@@ -7172,6 +7303,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           isSearching={isSearching}
           resultCount={searchResultCount}
         />
+        {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
         <ViewDropdown
           projects={projectTabs}
           activeProject={activeProject}
@@ -7199,9 +7331,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           queryProjectOptions={queryProjectOptions}
           querySourceOptions={querySourceOptions}
           querySprintOptions={querySprintOptions}
+          viewGroups={viewGroups}
         />
-        {/* Multi-select grouping is entered from each task's ⋮ menu ("Select…") or
-            Cmd/Ctrl/Shift-click — no separate toolbar button (keeps the bar clean). */}
+        <button
+          type="button"
+          className="todo-panel-hide"
+          aria-label="Hide task panel"
+          title="Hide task panel"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
+            requestAnimationFrame(() => document.querySelector<HTMLElement>('.app-task-panel-toggle')?.focus({ preventScroll: true }));
+          }}
+        >
+          {ICONS.ICON_SIDE_PANEL}
+        </button>
       </div>
 
       {/* ✦ AI lane: an in-process agent searches tasks AND session transcripts,
@@ -7216,24 +7359,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         />
       )}
 
-      {/* Active conditions strip: one removable chip per value, above the tabs so
-          it reads as "what this whole panel is showing". */}
+      {/* A single-tier view names its tier and keeps the tier's "+" (the All view's
+          tier headings carry the same control). View modes live in the filter menu. */}
+      {tierSectionActive && (
+        <div className="tier-solo-heading" data-testid="tier-view-bar">
+          <span className="tier-solo-heading-label">{tierDisplayLabel(effectiveSection, customTiers)}</span>
+          <TierPlusButton
+            tier={effectiveSection}
+            label={tierDisplayLabel(effectiveSection, customTiers)}
+            onAddSession={onOpenLauncherForTier}
+            onAddTask={addTaskToTier}
+            onAddSeparator={addSeparator}
+          />
+        </div>
+      )}
+
+      {/* Only present while the user has set a query condition themselves. */}
       <TaskFilterChips
         query={taskQueryState}
         onQueryChange={handleQueryChange}
         onClearAll={clearFocusOverride}
       />
 
-      <div className="task-view-row">
-        <TaskViewMenu active={effectiveSection} onChange={handleSectionChange} customTiers={customTiers} actions={[
-          { key: 'collapse', label: allCollapsed ? 'Expand all projects' : 'Collapse all projects', onSelect: handleCollapseExpandAll },
-          { key: 'complete', label: showCompleted ? 'Hide completed tasks' : 'Show completed tasks', onSelect: () => { setShowCompleted(!showCompleted); clearFocusOverride(); } },
-        ]} />
-        {dateFilter && <button className="navigation-filter-chip" onClick={() => { setDateFilter(''); persistDateFilter(''); clearFocusOverride(); }}>Date: {dateQuickLabel} ×</button>}
-        {phaseFilter && <button className="navigation-filter-chip" onClick={() => { setPhaseFilter(''); clearFocusOverride(); }}>Phase: {PHASE_LABEL[phaseFilter] ?? phaseFilter} ×</button>}
-        {activeProject && <button className="navigation-filter-chip" onClick={() => { setActiveProject(''); persistTab(''); onProjectChange?.(''); }}>Project: {activeProject === INBOX_TAB ? 'Inbox' : activeProject} ×</button>}
-        {isSearchMode && searchDoneCount > 0 && <button className="navigation-filter-chip" aria-pressed={showDoneResults} onClick={() => setShowDoneResults(v => !v)}>Done {searchDoneCount}</button>}
-      </div>
       {quickViews && <TodoSectionTabs
         active={effectiveSection}
         onChange={handleSectionChange}
@@ -7297,76 +7444,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </div>
       )}
 
-      {/* Tier view-mode bar — on single-TIER tabs only (not All/Recent/Notes):
-          group by project (clustered + folder labels) vs the raw custom pin
-          order. Persisted per tier; the two underlying orders are separate
-          stores, so flipping the mode never rewrites either. */}
-      {!isSearchMode
-        && (['focus', 'satellite', 'backlog', 'wait'].includes(effectiveSection) || effectiveSection.startsWith('ct_'))
-        && (
-        <div className="todo-minibar" data-testid="tier-view-bar">
-          {/* ONE toggle, not two buttons (user ruling 2026-08-23, same pattern
-              as the Date chip): the label shows the ACTIVE mode, a click
-              switches to the other. */}
-          <button
-            type="button"
-            className="todo-minibar-btn on"
-            data-testid="tier-mode-toggle"
-            title={tierViewMode(effectiveSection) === 'project'
-              ? 'Grouped by project, with folder labels. Click for your custom pin order.'
-              : 'Your custom pin order (drag to arrange). Click to group by project.'}
-            onClick={() => setTierViewMode(effectiveSection, tierViewMode(effectiveSection) === 'project' ? 'custom' : 'project')}
-          >
-            {tierViewMode(effectiveSection) === 'project'
-              ? <>{ICONS.ICON_FOLDER} By project</>
-              : <>↕ Custom order</>}
-          </button>
-          {dateQuickChip}
-          {/* The tier's "+" (GAP-1). In the stacked All view every tier owns a
-              sublabel row that carries this button; a single-tier tab has no
-              sublabel (the tab itself names the tier), so the tier view bar is where
-              the same control belongs — otherwise the tier tabs are the only place in
-              the panel with no route to a session. Same handlers and same
-              `meta.pinTier` seed as the All-view sublabel "+". */}
-          <TierPlusButton
-            tier={effectiveSection}
-            label={tierDisplayLabel(effectiveSection, customTiers)}
-            onAddSession={onOpenLauncherForTier}
-            onAddTask={addTaskToTier}
-            onAddSeparator={addSeparator}
-          />
-        </div>
-      )}
-
-      {/* Recent view-mode bar — the Recent tab's counterpart to the tier bar:
-          sort the activity feed by last update (default) or by creation time.
-          Pure sort toggle; the underlying feed isn't rewritten. */}
-      {!isSearchMode && effectiveSection === 'recent' && (
-        <div className="todo-minibar" data-testid="recent-sort-bar">
-          {/* Same one-button toggle grammar as the tier mode / Date chips. */}
-          <button
-            type="button"
-            className="todo-minibar-btn on"
-            title={recentSortMode === 'updated'
-              ? 'Sorted by latest activity (updates, sessions, completion). Click to sort by creation time.'
-              : 'Sorted by creation time. Click to sort by latest activity.'}
-            onClick={() => handleRecentSortChange(recentSortMode === 'updated' ? 'created' : 'updated')}
-          >
-            ↕ {recentSortMode === 'updated' ? 'Sort by update' : 'Sort by creation time'}
-          </button>
-        </div>
-      )}
-
       <div className={`home-navigation-scroll${isAll ? ' is-stacked' : ''}${unpinZone ? ' is-unpin-dragging' : ''}`}>
       <NavigationSections storageKey="walnut-todo-navigation-order">
-        <NavigationSection key="notes" navId="notes">
-          <NavigationHeading id="notes" label="Notes" className="navigation-app-entry" pressed={activeCompanion === 'notes'} onClick={() => onOpenCompanion?.('notes')}
-            actions={[{ key: 'open', label: 'Open Notes side panel', onSelect: () => onOpenCompanion?.('notes') }]} />
-        </NavigationSection>
-        <NavigationSection key="calendar" navId="calendar">
-          <NavigationHeading id="calendar" label="Calendar" className="navigation-app-entry" pressed={activeCompanion === 'calendar'} onClick={() => onOpenCompanion?.('calendar')}
-            actions={[{ key: 'open', label: 'Open Calendar side panel', onSelect: () => onOpenCompanion?.('calendar') }]} />
-        </NavigationSection>
         <NavigationSection key="pinned" navId="pinned">
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
       {(anyTierVisible || recentVisible) && (
@@ -7383,12 +7462,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           >
           {/* PINNED section — Focus + Satellite + Backlog + Wait sub-groups. In a single-tier
               view the "Pinned" wrapper header is dropped (the tab already names the
-              tier) and only that tier's subgroup renders. */}
-          {anyTierVisible && (
+              tier) and only that tier's subgroup renders. A pinned query condition
+              routes every pin through the list, so the tier area steps aside. */}
+          {anyTierVisible && !pinnedQueryActive && anyTierDrawn && (
             <div className={`todo-pinned-section${isAll ? '' : ' todo-pinned-section-solo'}`}>
               {isAll && (
               <NavigationHeading id="pinned" label="Pinned" className="todo-pinned-header" collapsed={isFolded('pinned')} onClick={() => toggleSection('pinned')}
-                actions={[{ key: 'collapse', label: isFolded('pinned') ? 'Expand Pinned' : 'Collapse Pinned', onSelect: () => toggleSection('pinned') }]} />
+                actions={[
+                  { key: 'collapse', label: isFolded('pinned') ? 'Expand Pinned' : 'Collapse Pinned', onSelect: () => toggleSection('pinned') },
+                  { key: 'collapse-all', label: allTiersFolded ? 'Expand all tiers' : 'Collapse all tiers', onSelect: () => setAllTiersFolded(!allTiersFolded) },
+                ]} />
               )}
               {!isFolded('pinned') && (
                 <NavigationSections storageKey="walnut-todo-tier-order">
@@ -7396,6 +7479,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     if (!showSection(tier)) return null;
                     const model = tierSectionModel(tier);
                     if (!model) return null;
+                    if (tierHiddenWhenEmpty(tier, model)) return null;
                     return (
                       <NavigationSection key={tier} navId={tier}>
                         <TierNavigationGroup
@@ -7597,7 +7681,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           would leave an empty panel with no way back except another tab. */}
       {isAll && (
       <NavigationHeading id="tasks" label="Projects" className="todo-pinned-header todo-tasks-header" collapsed={tasksCollapsed} onClick={() => toggleSection('tasks')}
-        actions={[{ key: 'collapse', label: tasksCollapsed ? 'Expand Projects' : 'Collapse Projects', onSelect: () => toggleSection('tasks') }]} />
+        actions={[
+          { key: 'organize', label: 'Organize', section: true },
+          ...([['project', 'By project'], ['none', 'In one list']] as const).map(([value, label]) => ({
+            key: `group-${value}`, label, checked: groupBy === value,
+            onSelect: () => { setGroupBy(value); persistGroupBy(value); },
+          })),
+          { key: 'sort', label: 'Sort by', section: true },
+          ...([['manual', 'Manual order'], ['priority', 'Priority'], ['updated', 'Last updated'], ['date', 'Created']] as const).map(([value, label]) => ({
+            key: `sort-${value}`, label, checked: sortBy === value,
+            onSelect: () => { setSortBy(value); persistSortBy(value); },
+          })),
+          { key: 'folds', divider: true },
+          { key: 'collapse-all', label: allCollapsed ? 'Expand all projects' : 'Collapse all projects', onSelect: handleCollapseExpandAll, when: groupBy === 'project' },
+          { key: 'collapse', label: tasksCollapsed ? 'Expand Projects' : 'Collapse Projects', onSelect: () => toggleSection('tasks') },
+        ]} />
       )}
 
       {/* No pinned/list flex share any more (see the pinned wrapper): the stacked

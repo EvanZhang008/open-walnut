@@ -1,69 +1,35 @@
-.app-shell-navigation {
-  position: relative;
-  padding-top: 40px;
-  box-sizing: border-box;
-}
-.app-topbar {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 10px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  z-index: 60;
-}
-.app-topbar.is-native-mac { padding-left: 82px; }
-body:has(.app-shell-navigation) .notification-panel { top: 40px; }
-body:has(.app-shell-navigation:not(.has-app-shortcuts)) .notification-panel { left: 0; }
-.app-topbar-button, .navigation-more, .navigation-heading-open, .task-view-menu-trigger, .todo-search-reveal {
-  color: var(--fg-secondary);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  font: inherit;
-  cursor: pointer;
-}
-.app-topbar-button {
-  min-height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-.app-topbar-button:hover, .navigation-more:hover, .navigation-heading-open:hover, .task-view-menu-trigger:hover, .todo-search-reveal:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-.app-menu-trigger { font-weight: 600; }
-.app-menu-trigger > span { color: var(--fg-muted); }
-.app-topbar-page { color: var(--fg-muted); font-size: 12px; margin-left: 10px; }
-.app-topbar-actions { display: flex; align-items: center; margin-left: auto; }
-.app-topbar-count { color: var(--fg-secondary); font-size: 10px; }
-.app-topbar .recording-active { color: var(--error); }
-.app-shell-navigation:not(.has-app-shortcuts) > .sidebar,
-.app-shell-navigation:not(.has-app-shortcuts) > .sidebar-toggle { display: none; }
 .app-shell-navigation .main-content { min-height: 0; }
-.app-shell-navigation .sidebar-header { height: 38px; min-height: 38px; }
-.app-shell-navigation .main-page-todo { background: var(--bg-secondary); }
+/* The rail header shares the task toolbar's 42px line, and its hamburger sits on the icon column. */
+.app-shell-navigation .sidebar-header { height: 42px; box-sizing: border-box; padding: 0 13px; font-size: 15px; }
+.app-shell-navigation .sidebar.collapsed .sidebar-header { padding: 0; gap: 0; }
+
+/* Home owns three panel toggles; they sit under the Home icon so the rail says whose they are. */
+.sidebar-home-panels { margin: -2px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--border); }
+.sidebar-home-panels .sidebar-link { padding: 6px 10px 6px 12px; font-size: 13px; margin-bottom: 1px; }
+.sidebar-home-panels .sidebar-link svg { width: 16px; height: 16px; }
+.sidebar.collapsed .sidebar-home-group { border: 1px solid var(--border); border-radius: 10px; padding: 2px; margin: 0 -3px 4px; }
+.sidebar.collapsed .sidebar-home-group > .sidebar-link { margin-bottom: 0; }
+.sidebar.collapsed .sidebar-home-panels { margin: 0; padding: 0; border-left: 0; }
+.sidebar.collapsed .sidebar-home-panels .sidebar-link { padding: 7px 0; }
+
 .app-shell-navigation .todo-panel { min-height: 0; background: transparent; }
-.app-shell-navigation .todo-panel-toolbar { gap: 6px; padding: 12px 12px 4px; flex-wrap: nowrap; }
-.app-shell-navigation .new-launcher-btn { background: none; color: var(--fg); border: 0; box-shadow: none; padding: 5px 2px; font-weight: 500; }
-.app-shell-navigation .new-launcher-label { display: inline; }
-.app-shell-navigation .todo-search-bar { margin: 0 0 0 auto; border: 0; background: transparent; min-width: 0; }
-.app-shell-navigation .todo-search-bar.is-compact { flex: 0 0 28px; width: 28px; padding: 0; }
-.todo-search-bar.is-compact input { display: none; }
-.todo-search-reveal { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 5px; flex-shrink: 0; }
-.todo-search-reveal svg { width: 15px; height: 15px; }
-.todo-search-bar.is-expanded { flex: 1; background: var(--bg); }
-.task-view-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; padding: 3px 12px 8px; }
-.task-view-menu-trigger { font-size: 12px; text-align: left; padding: 4px 2px; }
-.navigation-filter-chip { max-width: 100%; font: inherit; font-size: 11px; color: var(--fg-secondary); background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 3px 5px; cursor: pointer; overflow-wrap: anywhere; }
-.home-navigation-scroll { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; padding: 0 8px 18px; scrollbar-width: thin; }
+.app-shell-navigation .todo-panel-toolbar { gap: 8px; padding: 7px 8px 6px 12px; flex-wrap: nowrap; }
+.app-shell-navigation .todo-panel-toolbar .todo-search-input { text-overflow: ellipsis; }
+.todo-panel-hide {
+  width: 24px; height: 28px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer;
+}
+.todo-panel-hide:hover { color: var(--fg); background: var(--bg-hover); }
+.tier-solo-heading { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 8px 0 16px; flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--fg-secondary); }
+.tier-solo-heading > :last-child { margin-left: auto; }
+.app-shell-navigation .todo-panel-toolbar .todo-search-bar {
+  height: 28px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg);
+}
+.app-shell-navigation .todo-panel-toolbar .todo-search-bar:focus-within { border-color: var(--accent); }
+
+/* Headings and task circles share one column 16px in from the panel edge, titles a second
+   one at 40px (the user's call, 2026-09-22, after a flush edge read as cramped). */
+.home-navigation-scroll { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; padding: 0 8px 16px 12px; scrollbar-width: thin; }
 .home-navigation-scroll.is-unpin-dragging { margin-bottom: 46px; }
 .todo-unpin-zone { pointer-events: auto; background: var(--bg); }
 .home-navigation-scroll.is-stacked > .todo-pinned-wrapper,
@@ -71,86 +37,145 @@ body:has(.app-shell-navigation:not(.has-app-shortcuts)) .notification-panel { le
 .home-navigation-scroll.is-stacked .todo-pinned-section { padding: 0; }
 .home-navigation-scroll.is-stacked .todo-pinned-list-scroll { overflow: visible; max-height: none !important; }
 .home-navigation-scroll .todo-pinned-section { border-bottom: 0; }
-.home-navigation-scroll .todo-pinned-sublabel { text-transform: none; letter-spacing: normal; font-weight: 500; }
-.home-navigation-scroll .todo-focus-drop-zone-empty { border: 0; justify-content: flex-start; padding-left: 20px; }
-.home-navigation-scroll .todo-pinned-subgroup { margin: 4px 0 12px; border: 0; padding: 0 0 0 8px; }
-.home-navigation-scroll .todo-pinned-subgroup + .todo-pinned-subgroup { border-top: 0; }
-.navigation-heading { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 2px; flex-shrink: 0; }
-.navigation-heading-open { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 0; min-height: 30px; padding: 4px 5px; font-size: 12px; text-align: left; touch-action: pan-y; }
+
+/* One heading grammar for every group: name first, chevron trailing, actions on hover. */
+.navigation-heading { display: flex; align-items: center; min-height: 26px; padding: 0; flex-shrink: 0; border-radius: 6px; }
+.navigation-heading:hover { background: var(--bg-hover); }
+.navigation-heading-open, .navigation-more {
+  color: var(--fg-secondary); background: transparent; border: 0; border-radius: 6px; font: inherit; cursor: pointer;
+}
+.navigation-heading-open { display: flex; gap: 5px; align-items: center; flex: 1; min-width: 0; min-height: 26px; padding: 0 4px; font-size: 12px; text-align: left; touch-action: pan-y; }
 .navigation-heading-open[draggable="true"] { -webkit-user-drag: element; user-select: none; }
-.navigation-heading-open > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.navigation-app-entry .navigation-heading-open { font-size: 13px; color: var(--fg); padding-left: 8px; }
-.navigation-app-entry .navigation-heading-open[aria-pressed="true"] { background: var(--bg-hover); }
-.navigation-app-entry:last-of-type { margin-bottom: 12px; }
-.navigation-heading.todo-pinned-header { background: none; border: 0; margin: 14px 0 4px; padding: 0 2px; }
-.navigation-heading.todo-pinned-header .navigation-heading-open { color: var(--fg-muted); font-size: 11px; font-weight: 500; }
-.navigation-chevron { width: 10px; flex-shrink: 0; color: var(--fg-muted); }
-.navigation-chevron.expanded { transform: rotate(90deg); opacity: 0; }
-.navigation-heading:hover .navigation-chevron, .navigation-heading:focus-within .navigation-chevron { opacity: 1; }
-.navigation-more { font-size: 15px; width: 28px; height: 28px; flex-shrink: 0; padding: 0; opacity: 0; pointer-events: none; }
+.navigation-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.navigation-chevron { flex-shrink: 0; color: var(--fg-muted); opacity: .7; transition: transform .15s; }
+.navigation-chevron.expanded { transform: rotate(90deg); }
+.navigation-more { font-size: 14px; width: 24px; height: 24px; flex-shrink: 0; padding: 0; opacity: 0; pointer-events: none; }
 .navigation-heading:hover .navigation-more, .navigation-heading:focus-within .navigation-more,
 .tier-project-label:hover .navigation-more, .tier-project-label:focus-within .navigation-more,
-.todo-group-project-header:hover .navigation-more, .todo-group-project-header:focus-within .navigation-more { opacity: 1; pointer-events: auto; }
+.todo-group-project-header:hover .navigation-more, .todo-group-project-header:focus-within .navigation-more,
+.task-group-chip:hover .navigation-more, .task-group-chip:focus-within .navigation-more { opacity: 1; pointer-events: auto; }
 .navigation-drop-target { box-shadow: 0 -2px 0 var(--accent); }
-.home-navigation-scroll .todo-focus-card, .home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-panel-item { border-radius: 5px; border-left-color: transparent; box-shadow: none; touch-action: pan-y; }
-.home-navigation-scroll .todo-group-project-header { touch-action: pan-y; }
+
+.navigation-heading.todo-pinned-header { margin: 8px 0 2px; }
+.navigation-heading.todo-pinned-header .navigation-heading-open { color: var(--fg-muted); font-size: 11px; font-weight: 600; }
+
+/* Tier sub-groups inside Pinned: flat, no rails, same left edge as every heading. */
+.home-navigation-scroll .todo-pinned-subgroup,
+.home-navigation-scroll .todo-pinned-subgroup + .todo-pinned-subgroup { margin: 0; border: 0; padding: 0; }
+.home-navigation-scroll .todo-pinned-sublabel { padding: 0; text-transform: none; letter-spacing: normal; font-weight: 500; }
+.home-navigation-scroll .todo-focus-drop-zone-empty { border: 0; justify-content: flex-start; padding-left: 6px; min-height: 0; }
+.home-navigation-scroll .todo-focus-placeholder { display: none; }
+.is-task-dragging .home-navigation-scroll .todo-focus-drop-zone-empty { min-height: 28px; }
+.is-task-dragging .home-navigation-scroll .todo-focus-placeholder { display: inline; }
+
+/* Rows: no drag grips, no rails, no pink fill. Headings and task circles share ONE left
+   column; only folder members step in, by 16px. */
+.home-navigation-scroll .todo-focus-card, .home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-panel-item { border-radius: 6px; border-left-color: transparent; box-shadow: none; touch-action: pan-y; }
+.home-navigation-scroll .todo-panel-item { border-bottom: 0; }
 .home-navigation-scroll .todo-pinned-title, .home-navigation-scroll .todo-item-title { font-size: 13px; }
+.home-navigation-scroll .todo-item-title { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
+/* One row rhythm (29px pitch). */
+.home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-focus-card { min-height: 27px; padding: 2px 6px 2px 4px; margin-left: 0; }
+.home-navigation-scroll .todo-focus-card.task-grouped, .home-navigation-scroll .todo-pinned-card.task-grouped { margin-left: 16px; }
+.home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { padding: 3px 6px 3px 4px; }
+.home-navigation-scroll .todo-item-title-row { gap: 6px; }
+.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: 20px; }
+.home-navigation-scroll .todo-panel-item .todo-row-pill { left: 0; }
+/* The estimate is the CONTENT box: 22 + the 6px padding = the rendered 28px row. At 28 an
+   unrendered row stood 34px tall in WebKit and every row shrank as it came into view,
+   shifting the list under the pointer. */
+.home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { contain-intrinsic-size: auto 22px; }
+/* The unread dot (filled: output you have not opened) and the needs-action dot (hollow: opened,
+   still waiting on you) trail the row, so they never push the left edge. */
+.home-navigation-scroll .todo-pinned-card > .task-unread-dot, .home-navigation-scroll .todo-focus-card > .task-unread-dot,
+.home-navigation-scroll .todo-pinned-card.task-grouped > .task-unread-dot, .home-navigation-scroll .todo-focus-card.task-grouped > .task-unread-dot { left: auto; right: 8px; }
+.home-navigation-scroll .todo-pinned-card:has(> .task-unread-dot), .home-navigation-scroll .todo-focus-card:has(> .task-unread-dot) { padding-right: 20px; }
+/* A card whose session is open draws a chevron on that same right edge: the dot steps left of it. */
+.home-navigation-scroll .todo-pinned-card-session-open > .task-unread-dot { right: 24px; }
+.home-navigation-scroll .todo-pinned-card-session-open:has(> .task-unread-dot) { padding-right: 36px; }
+.home-navigation-scroll .todo-pinned-card-session-open:hover > .task-unread-dot { right: 8px; }
+.home-navigation-scroll .todo-pinned-card-session-open:hover:has(> .task-unread-dot) { padding-right: 20px; }
+.home-navigation-scroll .todo-item-title-row .task-unread-dot { left: auto; right: 2px; }
+.home-navigation-scroll .todo-item-title-row:has(> .task-unread-dot) { padding-right: 14px; }
 .home-navigation-scroll .todo-pinned-drag-handle, .home-navigation-scroll .todo-item-drag-handle { display: none; }
-.home-navigation-scroll .project-kind-tag, .home-navigation-scroll .todo-group-count, .home-navigation-scroll .tier-project-label-count { display: none; }
-.home-navigation-scroll .todo-group-project-header, .home-navigation-scroll .tier-project-label { background: transparent; border: 0; margin-top: 8px; }
+.home-navigation-scroll .todo-pinned-card-needs-action,
+.home-navigation-scroll .todo-focus-card.todo-pinned-card-needs-action { background: transparent; }
+.home-navigation-scroll .todo-pinned-card-needs-action:hover,
+.home-navigation-scroll .todo-focus-card.todo-pinned-card-needs-action:hover { background: var(--bg-hover); }
+.home-navigation-scroll .todo-panel-item-needs-action { --row-pill-bg: transparent; }
+.home-navigation-scroll .todo-panel-item-needs-action:hover { --row-pill-bg: var(--bg-hover); }
+.task-attention-dot { display: none; }
+.home-navigation-scroll .task-attention-dot { display: inline-block; background: transparent; box-shadow: inset 0 0 0 1.5px var(--error); }
+
+/* Project and folder headers: no project folder icon, no tag or count, chevron after the name. */
+.home-navigation-scroll .project-kind-tag, .home-navigation-scroll .todo-group-count, .home-navigation-scroll .tier-project-label-count,
+.home-navigation-scroll .todo-group-project-icon, .home-navigation-scroll .tier-project-label-icon,
+.home-navigation-scroll .todo-group-project-header .project-src-badge { display: none; }
+.home-navigation-scroll .todo-group-project-header, .home-navigation-scroll .tier-project-label {
+  background: transparent; border: 0; margin-top: 6px; min-height: 26px; padding: 0 0 0 4px; font-size: 12px; touch-action: pan-y; border-radius: 6px;
+}
+.home-navigation-scroll .tier-project-label { margin-top: 2px; }
 .home-navigation-scroll .todo-group-project { border: 0; }
-.home-navigation-scroll .todo-group-name-btn { color: var(--fg-secondary); }
+.home-navigation-scroll .todo-group-header-controls { gap: 0; }
+/* No left padding on the name: a project name starts on the same line as the headings and
+   the Pinned project labels, and a row title starts where a pinned card's title does. */
+.home-navigation-scroll .todo-group-project-header .todo-group-name-btn { order: 1; padding: 2px 4px 2px 0; font-size: 12px; font-weight: 600; color: var(--fg-secondary); }
+.home-navigation-scroll .tier-project-label-name { order: 1; padding-left: 0; }
+.home-navigation-scroll .todo-group-project-header .collapse-chevron,
+.home-navigation-scroll .tier-project-label .collapse-chevron,
+.home-navigation-scroll .task-group-chip .collapse-chevron { order: 2; --chevron-size: 16px; margin: 0; font-size: 0; opacity: .7; }
+.home-navigation-scroll .todo-group-header-controls > :not(.todo-group-name-btn):not(.collapse-chevron),
+.home-navigation-scroll .tier-project-label > :not(.tier-project-label-name):not(.collapse-chevron) { order: 3; }
+.home-navigation-scroll .tier-project-label-actions { margin-left: auto; }
+.home-navigation-scroll .task-group-chip-icon { order: 0; }
+.home-navigation-scroll .task-group-chip-label { order: 1; }
+.home-navigation-scroll .task-group-chip > :not(.task-group-chip-icon):not(.task-group-chip-label):not(.collapse-chevron) { order: 3; }
 .home-navigation-scroll .todo-group-action-btn-plus { opacity: 0; }
 .home-navigation-scroll .todo-group-project-header:hover .todo-group-action-btn-plus,
 .home-navigation-scroll .todo-group-project-header:focus-within .todo-group-action-btn-plus,
 .home-navigation-scroll .tier-project-label:hover .todo-group-action-btn-plus,
 .home-navigation-scroll .tier-project-label:focus-within .todo-group-action-btn-plus { opacity: 1; }
+
 .home-navigation-scroll.is-stacked .focus-inline-add-trigger { display: none; }
-.home-navigation-scroll .todo-focus-drop-zone-empty { min-height: 0; }
-.home-navigation-scroll .todo-focus-placeholder { display: none; }
-.is-task-dragging .home-navigation-scroll .todo-focus-drop-zone-empty { min-height: 28px; }
-.is-task-dragging .home-navigation-scroll .todo-focus-placeholder { display: inline; }
+.home-navigation-scroll .focus-inline-add-trigger { border-color: transparent; }
 .home-navigation-scroll .todo-pinned-subgroup:hover .focus-inline-add-trigger,
 .home-navigation-scroll .todo-pinned-subgroup:focus-within .focus-inline-add-trigger,
 .home-navigation-scroll .todo-group-project:hover .focus-inline-add-trigger,
 .home-navigation-scroll .todo-group-project:focus-within .focus-inline-add-trigger { opacity: 1; }
+
 .home-companion { flex: 0 0 400px; width: 400px; max-width: 100%; min-height: 0; height: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg); }
 .home-companion[hidden], .home-companion [hidden] { display: none !important; }
-.home-companion-header { height: 40px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; border-bottom: 1px solid var(--border); }
-.home-companion-header h2 { margin: 0; font-size: 13px; font-weight: 600; }
-.home-companion-header button { background: transparent; color: var(--fg-secondary); border: 0; min-width: 28px; height: 28px; cursor: pointer; }
 .home-companion-body, .home-companion-content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.home-companion .cal-side-panel { width: 100% !important; flex: 1; min-width: 0; border: 0; }
-.home-companion .notes-split-view { flex: 1; min-height: 0; min-width: 0; }
-.home-companion .notes-editor-pane { min-width: 0; }
-.home-companion .notes-editor-content .tiptap { padding: 20px; min-height: 100%; }
-.home-companion .notes-editor-content .tiptap h1 { font-size: 24px; }
-.home-companion .notes-editor-content .tiptap h2 { font-size: 20px; }
-.home-navigation-scroll .todo-panel-item { border-bottom: 0; }
-.home-navigation-scroll .todo-item-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.home-navigation-scroll .todo-pinned-subgroup { margin-bottom: 6px; }
-.home-navigation-scroll .focus-inline-add-trigger { border-color: transparent; }
-.home-companion .notes-tree-pane { width: 100% !important; flex: 1 !important; }
-.notes-embedded-bar { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; gap: 8px; border-bottom: 1px solid var(--border); }
-.notes-embedded-bar button { background: transparent; color: var(--fg-secondary); font: inherit; font-size: 12px; padding: 5px 7px; border: 0; border-radius: 5px; cursor: pointer; }
-.notes-embedded-bar button:hover { color: var(--fg); background: var(--bg-hover); }
-.home-companion-title { font-size: 13px; font-weight: 600; }
-.home-companion .cal-side-panel { border-right: 0; }
+.home-companion .cal-side-panel { width: 100% !important; flex: 1; min-width: 0; border: 0; border-right: 0; }
 @media (max-width: 1100px) {
   .home-companion { position: absolute; top: 0; right: 0; bottom: 0; z-index: 45; box-shadow: -10px 0 36px rgb(0 0 0 / 10%); }
 }
-@media (max-width: 768px) {
-  .app-shell-navigation .app-content-area { padding-top: 0; }
-  .app-shell-navigation .todo-panel-toolbar { padding-left: 12px; }
-  .app-shell-navigation .sidebar { top: 40px; }
-  .app-shell-navigation .sidebar-toggle { top: 5px; left: auto; right: 8px; font-size: 14px; padding: 3px 6px; z-index: 70; }
-  .app-shell-navigation.has-app-shortcuts .app-topbar-actions { margin-right: 36px; }
-  .app-shell-navigation .main-page { flex-direction: row; }
-  .app-shell-navigation .main-page-todo:not(.collapsed) { width: min(320px, 100%) !important; max-height: none; height: 100%; position: absolute; inset: 0 auto 0 0; z-index: 42; }
-  .app-shell-navigation .main-page.has-mobile-session .main-page-sessions-area { top: 40px; }
-}
 @media (hover: none) {
   .navigation-more { opacity: .65; pointer-events: auto; }
-  .navigation-chevron.expanded { opacity: .6; }
   .home-navigation-scroll .focus-inline-add-trigger { opacity: .65; }
 }
+.sidebar-home-panels .sidebar-link.active { background: none; color: var(--fg); font-weight: 500; }
+.sidebar-home-panels .sidebar-link.active:hover { background: var(--accent-subtle); }
+.home-navigation-scroll .task-grouped::before { display: none; }
+/* The shared ▶ glyph reads as a filled triangle at this size; draw the same stroke chevron the headings use. */
+.home-navigation-scroll .todo-group-project-header .collapse-chevron::before,
+.home-navigation-scroll .tier-project-label .collapse-chevron::before,
+.home-navigation-scroll .task-group-chip .collapse-chevron::before {
+  content: ''; width: 4.5px; height: 4.5px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: translateX(-1px) rotate(-45deg);
+}
+/* Groups are quieter than the task rows they hold (12px under 13px rows). A section's own groups
+   (a tier, a project under Projects) are 600; a tier's project and a folder step down to muted. */
+.home-navigation-scroll .todo-pinned-sublabel .navigation-heading-open,
+.home-navigation-scroll .todo-group-project-header .todo-group-name-btn { font-size: 12px; font-weight: 600; color: var(--fg-secondary); }
+.home-navigation-scroll .tier-project-label { font-size: 12px; font-weight: 500; color: var(--fg-muted); }
+.home-navigation-scroll .task-group-chip { font-size: 12px; font-weight: 400; color: var(--fg-muted); padding-left: 4px; }
+.home-navigation-scroll .task-group-chip-count { display: none; }
+.home-navigation-scroll .task-group-chip-more { margin-left: auto; }
+.home-navigation-scroll .tier-project-label:hover, .home-navigation-scroll .task-group-chip:hover { background: var(--bg-hover); }
+.home-navigation-scroll .todo-pinned-subgroup + .todo-pinned-subgroup { margin-top: 6px; }
+/* Parent tasks: the same stroke chevron as the headings, trailing the row, and a plain count instead of a blue pill. */
+.home-navigation-scroll .todo-panel-item > .collapse-chevron { position: static; order: 2; align-self: center; font-size: 0; --chevron-size: 16px; opacity: .7; }
+.home-navigation-scroll .todo-panel-item > .collapse-chevron::before {
+  content: ''; width: 4.5px; height: 4.5px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: translateX(-1px) rotate(-45deg);
+}
+.home-navigation-scroll .task-children-badge { background: none; color: var(--fg-muted); padding: 0; font-weight: 400; }

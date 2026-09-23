@@ -18,7 +18,7 @@
  * now needs `showAllSections()` (or an explicit tab) first.
  */
 
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 
 /** A section tab by visible name. */
 export function sectionTab(page: Page, name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent' | 'Tasks' | 'Notes') {
@@ -35,9 +35,12 @@ export async function selectSection(
     if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click()
     return
   }
-  const label = name === 'All' ? 'All tasks' : name === 'Tasks' ? 'Projects' : name === 'Notes' ? 'Scratchpad' : name
-  await page.getByRole('button', { name: 'Task view', exact: true }).click()
-  await page.getByRole('menu', { name: 'Task views', exact: true }).getByRole('menuitem', { name: label, exact: true }).click()
+  // Without the quick-view tabs the list is chosen in the filter menu's View section.
+  const key = name === 'Tasks' ? 'tasks' : name.toLowerCase()
+  await page.locator('#home-task-navigation .todo-panel-toolbar button[aria-label="View options"]').click()
+  await page.locator(`.vd-panel [data-view-option="${key}"]`).click()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.vd-panel')).toHaveCount(0)
 }
 
 /**
@@ -84,7 +87,9 @@ export async function showEverything(page: Page): Promise<void> {
  * exist on load (no post-load tab dance, no waiting for the strip to mount).
  *
  * Keys must match TodoPanel's `LS_SECTION_KEY` / `LS_TAB_KEY`. `project: ''` is
- * the All chip (no scoping).
+ * the All chip (no scoping). Project groups start collapsed when no fold set is
+ * saved, so a context without one starts with every project open; a fold the
+ * spec makes itself is kept across reloads.
  */
 export async function presetPanelView(
   page: Page,
@@ -96,6 +101,11 @@ export async function presetPanelView(
     try {
       localStorage.setItem('walnut-todo-active-section', s as string)
       localStorage.setItem('walnut-todo-active-tab', p as string)
+      // No list fold state yet: open every project (the older "folded ones" shape, empty).
+      // Once a spec toggles a project the list writes its own open set, which a reload keeps.
+      if (localStorage.getItem('walnut-todo-list-collapsed-projs') === null && localStorage.getItem('walnut-todo-list-open-projs') === null) {
+        localStorage.setItem('walnut-todo-list-collapsed-projs', '[]')
+      }
     } catch { /* ignore */ }
   }, [section, project])
 }

@@ -11,13 +11,16 @@
  *      chevron un-rotates, and the rows stay in the DOM (hidden, never
  *      unmounted: their ids must stay in the tier's SortableContext or dnd-kit's
  *      indices shift under a live drag). "Anywhere" is measured, not claimed:
- *      the name, the kind tag, the count badge and the row's own slack strip.
- *   2. ONE collapse set, both surfaces: folding in the tier folds the same project
- *      in the main list, the fold survives a reload (`walnut-todo-collapsed-projs`),
- *      and unfolding from the MAIN LIST brings the tier's run back.
- *   3. Main list: clicking the header row BODY folds the group, while clicking the
- *      NAME still opens the project detail pane and folds nothing.
- *   4. Inbox (stored as '', which is FALSY) folds and unfolds on BOTH surfaces.
+ *      the name, the chevron and the row's own slack strip (the home CSS hides
+ *      the kind tag and the count badge, so those are no longer click targets).
+ *   2. TWO collapse sets: the tier and the main list fold a project independently
+ *      (the list's set is folded by default for density), and each fold survives a
+ *      reload. The main-list half is read in the Projects view: the All view lists
+ *      a pinned task only in its tier (`dedupePinned`).
+ *   3. Main list: clicking the header row BODY folds the group, and so does the
+ *      NAME (one row, one meaning); the project detail pane opens from the "···"
+ *      menu instead, and opening it folds nothing.
+ *   4. Inbox (stored as '', which is FALSY) folds and unfolds on each surface.
  *      Every gate in this feature had to be written around that empty string, so
  *      Inbox gets its own end-to-end fold test, not just a menu test.
  *   5. A tier with ONE project draws NO project label, and a fold that arrives
@@ -33,11 +36,12 @@
  *   9. Rename driven from the context menu really renames the project.
  *  10. Delete driven from the context menu (local claim): the confirm names the
  *      task count, the tasks land in the Inbox, and the group disappears.
- *  11. Renaming a folded project LOSES the fold rather than stranding it: the
- *      collapse key is the project NAME, and the prune effect drops the stale key
- *      when the tasks reload. Folding after a rename still works.
- *  12. Pressing "+" on a project row does NOT fold it (neither surface).
- *  13. A real pointer SLIP (press, move a few px, release) on the tier's "+" and on
+ *  11. A renamed project starts folded in the main list like any new project, and
+ *      its old opened name is pruned when the tasks reload, so it cannot open a
+ *      later project that reuses it. Opening the new name works and is remembered.
+ *  12. Pressing the "···" on a project row opens the project menu and does NOT fold
+ *      it (neither surface). The "···" replaced the rows' old "+" menu.
+ *  13. A real pointer SLIP (press, move a few px, release) on the tier's "···" and on
  *      the main-list chevron and star still performs the control's own action and
  *      never turns into a project drag. A click at one coordinate cannot catch
  *      this: both surfaces disarm their drag handle on pointer ENTER / pointerdown.
@@ -67,6 +71,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { presetTierViewModes } from './draft-surface-helpers'
+import { chooseViewOption } from './home-navigation-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -147,12 +152,18 @@ test.afterEach(async () => {
   }
 })
 
+/**
+ * `pinned: false` by default: POST /api/tasks pins a new task (into Satellite)
+ * unless the body says otherwise (`newTaskPinDefault`), and a pinned task is not
+ * drawn in the All view's main list at all. Tests that want a pin say so with
+ * pinToFocusViaApi / pinToTierViaApi.
+ */
 async function createTaskViaApi(title: string, opts: Record<string, unknown> = {}): Promise<{ id: string; title: string }> {
   const uniqueTitle = `${title} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const res = await fetch(`${API}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: uniqueTitle, source: 'local', ...opts }),
+    body: JSON.stringify({ title: uniqueTitle, source: 'local', pinned: false, ...opts }),
   })
   if (!res.ok) throw new Error(`task create failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string; title: string } }
@@ -279,30 +290,40 @@ function listProjectOrder(page: Page): Promise<string[]> {
 }
 
 /**
- * Click the header row's BODY: the empty strip right of the name button.
+ * Where a row's leading controls END, in page x: the name and the chevron, whichever
+ * ends later. The home CSS draws the chevron AFTER the name (`order: 2`), so the end
+ * of the name alone is not where the row's own slack begins.
+ */
+async function leadingEnd(row: Locator, nameSelector: string): Promise<number> {
+  const nbox = await row.locator(nameSelector).boundingBox()
+  const cbox = await row.locator('.collapse-chevron').first().boundingBox()
+  if (!nbox || !cbox) throw new Error('project row has no name or chevron box')
+  return Math.max(nbox.x + nbox.width, cbox.x + cbox.width)
+}
+
+/**
+ * Click the header row's BODY: the empty strip right of the name and the chevron.
  *
  * Two things this encodes. The measurement is a real assertion, not setup: that
- * empty strip IS the feature (the name button shrink-wraps so the row has a fold
- * target of its own), and a hardcoded offset would keep passing if the button went
- * back to filling the row, where this click would open the detail pane instead.
- * And the click is a RELATIVE position on the controls element rather than absolute
- * page coordinates: Playwright re-resolves the element (and scrolls it into view)
- * at click time, whereas absolute `page.mouse.click` coordinates measured a moment
- * earlier land somewhere else entirely once the list settle-scrolls or the detail
- * pane resizes the panel. That cost a debugging round.
+ * empty strip IS the row's own fold target (the name button shrink-wraps, and the
+ * name has a handler of its own), and a hardcoded offset would keep passing if the
+ * button went back to filling the row. And the click is a RELATIVE position on the
+ * header rather than absolute page coordinates: Playwright re-resolves the element
+ * (and scrolls it into view) at click time, whereas absolute `page.mouse.click`
+ * coordinates measured a moment earlier land somewhere else entirely once the list
+ * settle-scrolls or the detail pane resizes the panel. That cost a debugging round.
  */
 async function clickListHeaderBody(page: Page, project: string): Promise<void> {
   const header = listHeader(page, project)
-  // The strip runs from the end of the NAME BUTTON (the "open the pane" target) to
-  // the start of the right-hand cluster (the star when there is one, else the "+").
-  // Everything in between (the kind tag, the count, the slack) belongs to the row.
+  // The strip runs from the end of the name + chevron to the start of the
+  // right-hand cluster (the star when there is one, else the "···"). Everything in
+  // between (the hidden kind tag and count, the slack) belongs to the row.
   const fav = header.locator('.todo-group-fav-btn')
   const rightCluster = (await fav.count()) ? fav : header.locator('.todo-group-header-actions')
   const hbox = await header.boundingBox()
-  const nbox = await header.locator('.todo-group-name-btn').boundingBox()
   const rbox = await rightCluster.boundingBox()
-  if (!hbox || !nbox || !rbox) throw new Error('project header has no box')
-  const stripStart = nbox.x + nbox.width - hbox.x
+  if (!hbox || !rbox) throw new Error('project header has no box')
+  const stripStart = (await leadingEnd(header, '.todo-group-name-btn')) - hbox.x
   const stripEnd = rbox.x - hbox.x
   expect(stripEnd - stripStart, 'the header row must keep a strip of its own to click').toBeGreaterThan(40)
   await header.click({ position: { x: (stripStart + stripEnd) / 2, y: hbox.height / 2 } })
@@ -320,17 +341,16 @@ async function headerSlackPoint(page: Page, project: string): Promise<{ x: numbe
   const fav = header.locator('.todo-group-fav-btn')
   const rightCluster = (await fav.count()) ? fav : header.locator('.todo-group-header-actions')
   const hbox = await header.boundingBox()
-  const nbox = await header.locator('.todo-group-name-btn').boundingBox()
   const rbox = await rightCluster.boundingBox()
-  if (!hbox || !nbox || !rbox) throw new Error('project header has no box')
-  const stripStart = nbox.x + nbox.width
+  if (!hbox || !rbox) throw new Error('project header has no box')
+  const stripStart = await leadingEnd(header, '.todo-group-name-btn')
   const stripEnd = rbox.x
   expect(stripEnd - stripStart, 'the header row must keep a strip of its own to grab').toBeGreaterThan(40)
   return { x: (stripStart + stripEnd) / 2, y: hbox.y + hbox.height / 2 }
 }
 
 /**
- * Click the tier label's own SLACK: the gap between the count badge and the "+".
+ * Click the tier label's own SLACK: the gap between the name + chevron and the "···".
  *
  * Same reasoning as clickListHeaderBody, and the same reason it is measured rather
  * than hardcoded: `.tier-project-label-actions` is pushed right by `margin-left:
@@ -339,10 +359,9 @@ async function headerSlackPoint(page: Page, project: string): Promise<{ x: numbe
 async function clickTierLabelSlack(page: Page, project: string, tier = 'focus'): Promise<void> {
   const label = tierLabel(page, project, tier)
   const lbox = await label.boundingBox()
-  const cbox = await label.locator('.tier-project-label-count').boundingBox()
   const abox = await label.locator('.tier-project-label-actions').boundingBox()
-  if (!lbox || !cbox || !abox) throw new Error('tier project label has no box')
-  const slackStart = cbox.x + cbox.width - lbox.x
+  if (!lbox || !abox) throw new Error('tier project label has no box')
+  const slackStart = (await leadingEnd(label, '.tier-project-label-name')) - lbox.x
   const slackEnd = abox.x - lbox.x
   expect(slackEnd - slackStart, 'the label row must keep a strip of its own to click').toBeGreaterThan(24)
   await label.click({ position: { x: (slackStart + slackEnd) / 2, y: lbox.height / 2 } })
@@ -362,9 +381,16 @@ async function clickTierLabelSlack(page: Page, project: string, tier = 'focus'):
  */
 async function scrollOnScreen(page: Page, target: Locator, what: string): Promise<{ x: number; y: number; width: number; height: number }> {
   await target.scrollIntoViewIfNeeded()
-  const box = await target.boundingBox()
+  let box = await target.boundingBox()
   if (!box) throw new Error(`${what} has no box`)
   const view = page.viewportSize()
+  // "If needed" stops at the nearest edge, so a row that was below the fold ends flush
+  // with the viewport's bottom: on screen, but with no room left for the gesture.
+  if (view && (box.y <= 0 || box.y + box.height >= view.height)) {
+    await target.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    box = await target.boundingBox()
+    if (!box) throw new Error(`${what} has no box`)
+  }
   if (view) {
     expect(box.y, `${what} must be ON SCREEN for a coordinate gesture`).toBeGreaterThan(0)
     expect(box.y + box.height, `${what} must be ON SCREEN for a coordinate gesture`).toBeLessThan(view.height)
@@ -444,6 +470,23 @@ async function clickProjectMenuItem(page: Page, row: Locator, item: string): Pro
   }).toPass({ timeout: 25_000 })
 }
 
+/**
+ * Open the project menu from the row's own "···" button (whole gesture retried, for
+ * the same scroll-dismiss reason as openProjectMenu). The button only takes the
+ * pointer while its row is hovered (`.navigation-more` is `pointer-events: none`
+ * otherwise, home-navigation.css), so the gesture hovers the row first, as a mouse
+ * user does on the way to it.
+ */
+async function openProjectMenuFromButton(page: Page, row: Locator, anItem: string): Promise<Locator> {
+  const menu = page.locator('[data-testid="project-ctx-menu"]')
+  await expect(async () => {
+    await row.hover()
+    await row.locator('.navigation-more').click({ timeout: 2_000 })
+    await expect(menu.getByRole('menuitem', { name: anItem, exact: true })).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  return menu
+}
+
 /** Two projects pinned into Focus: the minimum for the tier to draw labels at
  *  all (a single label separates nothing, so the panel suppresses it). */
 async function pinnedTwoProjectFixture(page: Page, stamp: string) {
@@ -473,13 +516,14 @@ test('pinned tier: clicking the project label folds its run — cards and folder
   const label = tierLabel(page, f.projA)
   await expect(label).toBeVisible({ timeout: 15_000 })
   await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
-  // Visible rows this project contributes to THIS tier.
+  // Rows this project contributes to THIS tier. The home CSS hides the badge, but
+  // it is still rendered (toHaveText reads textContent, visible or not).
   await expect(label.locator('.tier-project-label-count')).toHaveText('2')
   await expect(tierCard(page, f.a1.id)).toBeVisible()
   await expect(tierChip(page, f.groupId)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/tier-project-expanded.png' })
 
-  // Click the row BODY (the name text), not the chevron and not the "+".
+  // Click the row BODY (the name text), not the chevron and not the "···".
   await label.locator('.tier-project-label-name').click()
 
   await expect(tierCard(page, f.a1.id)).toBeHidden()
@@ -495,55 +539,78 @@ test('pinned tier: clicking the project label folds its run — cards and folder
   await expect(tierCard(page, f.b1.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/tier-project-collapsed.png' })
 
-  // "Anywhere on the row" is a claim about FOUR targets, so all four get used:
-  // the name above, then the count badge, the kind tag, and the slack strip
-  // between the count and the "+". Each one toggles, so each assertion below is
-  // the inverse of the one before it.
-  await label.locator('.tier-project-label-count').click()
-  await expect(tierCard(page, f.a1.id)).toBeVisible()
-  await label.locator('.project-kind-tag').click()
-  await expect(tierCard(page, f.a1.id)).toBeHidden()
+  // "Anywhere on the row" is a claim about every VISIBLE target, so each gets used:
+  // the name above, then the slack strip between the name + chevron and the "···"
+  // (the kind tag and the count badge used to be targets too; the home CSS hides
+  // both now). Each one toggles, so each assertion below is the inverse of the one
+  // before it.
   await clickTierLabelSlack(page, f.projA)
   await expect(tierCard(page, f.a1.id)).toBeVisible()
+  await clickTierLabelSlack(page, f.projA)
+  await expect(tierCard(page, f.a1.id)).toBeHidden()
 
   // And the chevron, which is the one target that is a real button.
+  await label.locator('.collapse-chevron').click()
+  await expect(tierCard(page, f.a1.id)).toBeVisible()
   await label.locator('.collapse-chevron').click()
   await expect(tierCard(page, f.a1.id)).toBeHidden()
   await label.locator('.collapse-chevron').click()
   await expect(tierCard(page, f.a1.id)).toBeVisible()
 })
 
-test('one collapse set: folding in the tier folds the main list, survives a reload, and unfolds from either side', async ({ page }) => {
+test('two collapse sets: the tier and the main list fold independently, and each fold survives a reload', async ({ page }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   const f = await pinnedTwoProjectFixture(page, stamp)
 
   await expect(tierLabel(page, f.projA)).toBeVisible({ timeout: 15_000 })
+  // The main-list half of this test is read in the PROJECTS view. The All view
+  // lists a pinned task only in its tier (`dedupePinned`), and every task here is
+  // pinned, so the All view draws no main-list group for projA at all.
+  await chooseViewOption(page, 'tasks')
   const row = listRow(page, f.projA, f.a1.id)
-  await expect(row).toBeVisible()
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  await chooseViewOption(page, 'all')
 
   await tierLabel(page, f.projA).locator('.tier-project-label-name').click()
+  await expect(tierCard(page, f.a1.id)).toBeHidden()
 
-  // Same project, other surface: the main list group folded with it. The main
-  // list UNMOUNTS a folded group's rows (no live SortableContext to protect),
-  // hence toHaveCount(0) here and toBeHidden() in the tier.
+  // Same project, other surface: the main list keeps its own set (folded by
+  // default for density), so a tier fold leaves the list group open.
+  await chooseViewOption(page, 'tasks')
+  await expect(listHeader(page, f.projA)).toBeVisible({ timeout: 15_000 })
+  await expect(row).toBeVisible()
+  await expect(listHeader(page, f.projA).locator('.collapse-chevron')).toHaveClass(/expanded/)
+
+  // Fold the list group itself. The main list UNMOUNTS a folded group's rows (no
+  // live SortableContext to protect), hence toHaveCount(0) here and toBeHidden()
+  // in the tier.
+  await clickListHeaderBody(page, f.projA)
   await expect(row).toHaveCount(0)
-  await expect(listHeader(page, f.projA).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
-  await page.screenshot({ path: '/tmp/project-collapse/shared-fold-main-list.png' })
+  await page.screenshot({ path: '/tmp/project-collapse/separate-folds-main-list.png' })
 
-  // Persisted: a reload comes back folded on BOTH surfaces.
+  // Persisted: a reload comes back folded on BOTH surfaces. The reload lands in
+  // the All view again (presetPanelView's init script re-runs on every load).
   await page.reload()
   await page.waitForLoadState('networkidle')
   await expect(tierLabel(page, f.projA)).toBeVisible({ timeout: 15_000 })
   await expect(tierCard(page, f.a1.id)).toBeHidden()
+  await chooseViewOption(page, 'tasks')
+  await expect(listHeader(page, f.projA)).toBeVisible({ timeout: 15_000 })
   await expect(listRow(page, f.projA, f.a1.id)).toHaveCount(0)
 
-  // ...and vice versa: unfolding from the MAIN LIST body brings the tier run back.
+  // Unfolding the list group leaves the tier's fold alone, and the tier unfolds
+  // from its own label.
   await clickListHeaderBody(page, f.projA)
-  await expect(tierCard(page, f.a1.id)).toBeVisible({ timeout: 10_000 })
+  await expect(listRow(page, f.projA, f.a1.id)).toBeVisible()
+  await chooseViewOption(page, 'all')
+  await expect(tierLabel(page, f.projA)).toBeVisible({ timeout: 10_000 })
+  await expect(tierCard(page, f.a1.id)).toBeHidden()
+  await tierLabel(page, f.projA).locator('.tier-project-label-name').click()
+  await expect(tierCard(page, f.a1.id)).toBeVisible()
   await expect(tierLabel(page, f.projA).locator('.collapse-chevron')).toHaveClass(/expanded/)
 })
 
-test('main list: the header body folds the group, the NAME still opens the project pane', async ({ page }) => {
+test('main list: the header body and the NAME fold the group, the "···" menu opens the project pane', async ({ page }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   const project = `PheadProj${stamp}`
   const task = await createTaskViaApi('Header fold member', { project })
@@ -559,13 +626,27 @@ test('main list: the header body folds the group, the NAME still opens the proje
   await expect(row).toBeVisible()
   await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
 
-  // The NAME is not the row: it opens the detail pane and folds nothing.
-  await header.locator('.todo-group-name-btn').click()
+  // The NAME folds, like every other pixel of the row (one row, one meaning). It
+  // used to open the detail pane; that moved to the "···" / right-click menu,
+  // because a name that navigated away inside a row that folded left the user
+  // guessing which half did what. So: fold, no pane, and the name unfolds again.
   const pane = page.locator('.project-detail-pane')
+  await header.locator('.todo-group-name-btn').click()
+  await expect(row).toHaveCount(0)
+  await expect(header.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(pane).toHaveCount(0)
+  await header.locator('.todo-group-name-btn').click()
+  await expect(listRow(page, project, task.id)).toBeVisible()
+  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
+
+  // The pane now opens from the row's "···" menu, and opening it folds nothing.
+  const menu = await openProjectMenuFromButton(page, header, 'View project details')
+  await menu.getByRole('menuitem', { name: 'View project details', exact: true }).click()
   await expect(pane).toBeVisible({ timeout: 10_000 })
   await expect(pane.locator('.todo-detail-project')).toHaveText(project)
   await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
-  await page.screenshot({ path: '/tmp/project-collapse/main-list-name-opens-pane.png' })
+  await expect(listRow(page, project, task.id)).toBeVisible()
+  await page.screenshot({ path: '/tmp/project-collapse/main-list-menu-opens-pane.png' })
   await pane.locator('.todo-detail-close').click()
   await expect(pane).toHaveCount(0)
 
@@ -580,7 +661,7 @@ test('main list: the header body folds the group, the NAME still opens the proje
   await expect(listRow(page, project, task.id)).toBeVisible()
 })
 
-test('Inbox (the falsy empty-string project) folds and unfolds on BOTH surfaces', async ({ page }) => {
+test('Inbox (the falsy empty-string project) folds and unfolds on each surface', async ({ page }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   // Inbox is stored as '', which is FALSY: every gate in this feature (the label
   // row, the collapse key, the drag participant, the menu's registry rows) had to
@@ -603,29 +684,43 @@ test('Inbox (the falsy empty-string project) folds and unfolds on BOTH surfaces'
   await expect(label).toBeVisible({ timeout: 15_000 })
   await expect(label.locator('.tier-project-label-name')).toHaveText('Inbox')
   await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
-  const header = listHeader(page, 'Inbox')
-  await expect(header).toBeVisible()
-  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
   await expect(tierCard(page, inboxTask.id)).toBeVisible()
+  // The main-list half is read in the PROJECTS view: both tasks are pinned, and the
+  // All view lists a pinned task only in its tier (`dedupePinned`).
+  await chooseViewOption(page, 'tasks')
+  const header = listHeader(page, 'Inbox')
+  await expect(header).toBeVisible({ timeout: 15_000 })
+  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
   await expect(listRow(page, 'Inbox', inboxTask.id)).toBeVisible()
+  await chooseViewOption(page, 'all')
 
   // Fold from the TIER row body.
-  await label.locator('.tier-project-label-name').click()
+  await tierLabel(page, '').locator('.tier-project-label-name').click()
   await expect(tierCard(page, inboxTask.id)).toBeHidden()
   await expect(tierCard(page, inboxTask.id)).toBeAttached()
-  await expect(label.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
-  // ONE collapse set, and '' is a legal key in it: the main list folded too.
-  await expect(listRow(page, 'Inbox', inboxTask.id)).toHaveCount(0)
-  await expect(listHeader(page, 'Inbox').locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(tierLabel(page, '').locator('.collapse-chevron')).not.toHaveClass(/expanded/)
   // The named neighbour is untouched, so this really was Inbox's own run.
   await expect(tierCard(page, other.id)).toBeVisible()
+
+  // The main list has its own set, and '' is a legal key in it: Inbox is still
+  // open there until it is folded from its own header.
+  await chooseViewOption(page, 'tasks')
+  await expect(listHeader(page, 'Inbox')).toBeVisible({ timeout: 15_000 })
+  await expect(listRow(page, 'Inbox', inboxTask.id)).toBeVisible()
+  await clickListHeaderBody(page, 'Inbox')
+  await expect(listRow(page, 'Inbox', inboxTask.id)).toHaveCount(0)
+  await expect(listHeader(page, 'Inbox').locator('.collapse-chevron')).not.toHaveClass(/expanded/)
   await expect(listRow(page, neighbour, other.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/inbox-folded-both-surfaces.png' })
 
-  // Unfold from the MAIN LIST body: the other direction, same '' key.
+  // Unfold on each side, same '' key.
   await clickListHeaderBody(page, 'Inbox')
-  await expect(tierCard(page, inboxTask.id)).toBeVisible({ timeout: 10_000 })
   await expect(listRow(page, 'Inbox', inboxTask.id)).toBeVisible()
+  await chooseViewOption(page, 'all')
+  await expect(tierLabel(page, '')).toBeVisible({ timeout: 10_000 })
+  await expect(tierCard(page, inboxTask.id)).toBeHidden()
+  await tierLabel(page, '').locator('.tier-project-label-name').click()
+  await expect(tierCard(page, inboxTask.id)).toBeVisible()
   await expect(tierLabel(page, '').locator('.collapse-chevron')).toHaveClass(/expanded/)
 })
 
@@ -642,6 +737,13 @@ test('a tier with ONE project draws no label, and a fold from the main list cann
   await pinToTierViaApi(t1.id, tierId)
   await pinToTierViaApi(t2.id, tierId)
 
+  // The TIER's own fold set already names this project, the way a fold made while
+  // the tier still drew two runs outlives the other run leaving. Seeded directly,
+  // so the gate below is exercised whichever surface's click wrote the set (the
+  // main-list fold further down is the other way in).
+  await page.addInitScript((p) => {
+    try { localStorage.setItem('walnut-todo-collapsed-projs', JSON.stringify([p])) } catch { /* storage off */ }
+  }, project)
   await presetPanelView(page, { section: 'all', project: '' })
   await presetProjectGrouping(page)
   await presetTierViewModes(page, { [tierId]: 'project' })
@@ -658,14 +760,19 @@ test('a tier with ONE project draws no label, and a fold from the main list cann
   await expect(zone.locator('.tier-project-label')).toHaveCount(0)
 
   // Now fold that project from the MAIN LIST, the surface that DOES draw a header.
+  // Read in the Projects view: both tasks are pinned, so the All view lists them
+  // only in the tier (`dedupePinned`) and draws no main-list group for them.
+  await chooseViewOption(page, 'tasks')
+  await expect(listHeader(page, project)).toBeVisible({ timeout: 15_000 })
   await clickListHeaderBody(page, project)
   await expect(listRow(page, project, t1.id)).toHaveCount(0)
   await expect(listHeader(page, project).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await chooseViewOption(page, 'all')
+  await expect(zone).toBeVisible({ timeout: 15_000 })
 
   // THE assertion, and the reason `runHidden` is gated on `showFolders`: the
-  // collapse set is shared, so the fold DID reach this tier's state, but a tier
-  // that draws no label has no way back. Hiding the cards here would be a one-way
-  // door, so it must not happen.
+  // collapse set says this project is folded, but a tier that draws no label has no
+  // way back. Hiding the cards here would be a one-way door, so it must not happen.
   await expect(tierCard(page, t1.id, tierId)).toBeVisible()
   await expect(tierCard(page, t2.id, tierId)).toBeVisible()
   await expect(tierCard(page, t1.id, tierId)).not.toHaveClass(/tier-project-collapsed/)
@@ -674,6 +781,7 @@ test('a tier with ONE project draws no label, and a fold from the main list cann
   await page.screenshot({ path: '/tmp/project-collapse/single-project-tier-keeps-cards.png' })
 
   // Leave the shared collapse set as we found it.
+  await chooseViewOption(page, 'tasks')
   await clickListHeaderBody(page, project)
   await expect(listRow(page, project, t1.id)).toBeVisible()
 })
@@ -741,7 +849,7 @@ test('"Add separator" is a TIER row only, never a main-list one', async ({ page 
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   const f = await pinnedTwoProjectFixture(page, stamp)
 
-  // The tier owns divider lines, so its label offers the same verb its "+" does.
+  // The tier owns divider lines, so its label menu offers "Add separator".
   const label = tierLabel(page, f.projA)
   await expect(label).toBeVisible({ timeout: 15_000 })
   const tierMenu = await openProjectMenu(page, label, 'Rename project')
@@ -752,7 +860,10 @@ test('"Add separator" is a TIER row only, never a main-list one', async ({ page 
   // The main list has no view mode, so a line there would have no defined
   // position. The row is absent, and the menu around it is demonstrably the real
   // one (openProjectMenu already waited for Rename), so this is an absence, not a
-  // menu that failed to open.
+  // menu that failed to open. Read in the Projects view: projA's tasks are all
+  // pinned, and the All view lists a pinned task only in its tier.
+  await chooseViewOption(page, 'tasks')
+  await expect(listHeader(page, f.projA)).toBeVisible({ timeout: 15_000 })
   const listMenu = await openProjectMenu(page, listHeader(page, f.projA), 'Rename project')
   await expect(listMenu.getByRole('menuitem', { name: 'New folder', exact: true })).toBeVisible()
   await expect(listMenu.getByRole('menuitem', { name: 'Add separator', exact: true })).toHaveCount(0)
@@ -825,7 +936,7 @@ test('Delete driven from the project context menu: the confirm names the count, 
   await page.screenshot({ path: '/tmp/project-collapse/project-deleted-from-menu.png' })
 })
 
-test('renaming a folded project loses the fold rather than stranding it, and the new name folds normally', async ({ page }) => {
+test('a renamed project starts folded like any new one, and its old opened name is pruned', async ({ page }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   const before = `PfoldRenA${stamp}`
   const after = `PfoldRenB${stamp}`
@@ -836,19 +947,25 @@ test('renaming a folded project loses the fold rather than stranding it, and the
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  const collapsedKeys = () => page.evaluate(() => {
-    try { return JSON.parse(localStorage.getItem('walnut-todo-collapsed-projs') ?? '[]') as string[] } catch { return [] }
+  // The MAIN LIST remembers the projects the user OPENED (every other one, a new
+  // project included, starts folded). presetPanelView opens everything with the
+  // older "folded ones" shape; the first toggle rewrites it as the open set.
+  const openKeys = () => page.evaluate(() => {
+    try { return JSON.parse(localStorage.getItem('walnut-todo-list-open-projs') ?? '[]') as string[] } catch { return [] }
   })
 
   await expect(listHeader(page, before)).toBeVisible({ timeout: 15_000 })
+  await expect(listRow(page, before, task.id)).toBeVisible()
   await clickListHeaderBody(page, before)
   await expect(listRow(page, before, task.id)).toHaveCount(0)
-  expect(await collapsedKeys()).toContain(before)
+  expect(await openKeys()).not.toContain(before)
+  await clickListHeaderBody(page, before)
+  await expect(listRow(page, before, task.id)).toBeVisible()
+  expect(await openKeys()).toContain(before)
 
-  // FOLD then RENAME. The collapse key IS the project name and is deliberately
-  // not migrated: the prune effect drops a key no live group answers to, so the
-  // fold is LOST (the group comes back open) instead of stranded on a name that
-  // no longer renders a header to unfold.
+  // OPEN then RENAME. The key IS the project name and is deliberately not migrated:
+  // the new name is one the list never opened, so it starts folded, and the prune
+  // effect drops the old name so it cannot open a later project that reuses it.
   await clickProjectMenuItem(page, listHeader(page, before), 'Rename project')
   const modal = page.locator('.app-modal')
   await expect(modal).toBeVisible()
@@ -857,48 +974,49 @@ test('renaming a folded project loses the fold rather than stranding it, and the
   await modal.getByRole('button', { name: 'Rename' }).click()
 
   await expect(projectBucket(page, after)).toBeVisible({ timeout: 15_000 })
-  await expect(listRow(page, after, task.id)).toBeVisible()
-  await expect(listHeader(page, after).locator('.collapse-chevron')).toHaveClass(/expanded/)
-  // The stale key is pruned, and the new name was never added: nothing is left
-  // behind to fold a future project that happens to reuse the old name.
-  await expect.poll(collapsedKeys, { timeout: 10_000 }).not.toContain(before)
-  expect(await collapsedKeys()).not.toContain(after)
-  await page.screenshot({ path: '/tmp/project-collapse/renamed-project-unfolded.png' })
-
-  // RENAME then FOLD: the new name is a first-class collapse key.
-  await clickListHeaderBody(page, after)
   await expect(listRow(page, after, task.id)).toHaveCount(0)
   await expect(listHeader(page, after).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
-  expect(await collapsedKeys()).toContain(after)
+  await expect.poll(openKeys, { timeout: 10_000 }).not.toContain(before)
+  expect(await openKeys()).not.toContain(after)
+  await page.screenshot({ path: '/tmp/project-collapse/renamed-project-folded.png' })
 
-  // Leave the shared collapse set as we found it.
+  // The new name is a first-class key: opening it works and is remembered.
   await clickListHeaderBody(page, after)
   await expect(listRow(page, after, task.id)).toBeVisible()
+  await expect(listHeader(page, after).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  expect(await openKeys()).toContain(after)
 })
 
-test('pressing "+" on a project row never folds it (tier label and main list header)', async ({ page }) => {
+// The rows' "+" menu is gone: both surfaces now carry ONE "···" button that opens
+// the same project menu a right-click does. It sits on the row it must not fold,
+// so the contract this test pins carried over to it unchanged.
+test('pressing the "···" on a project row opens its menu and never folds it (tier label and main list header)', async ({ page }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   const f = await pinnedTwoProjectFixture(page, stamp)
 
   const label = tierLabel(page, f.projA)
   await expect(label).toBeVisible({ timeout: 15_000 })
-  await label.locator('[data-testid="plus-menu-trigger"]').click()
-  await expect(page.getByTestId('plus-menu')).toBeVisible()
-  // The whole point: the press reached the "+", not the row underneath it.
+  const tierMenu = await openProjectMenuFromButton(page, label, 'Collapse project')
+  // The whole point: the press reached the "···", not the row underneath it.
   await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
   await expect(tierCard(page, f.a1.id)).toBeVisible()
   await page.keyboard.press('Escape')
+  await expect(tierMenu).toHaveCount(0)
 
+  // The main-list half in the Projects view: projA's tasks are all pinned, and the
+  // All view lists a pinned task only in its tier.
+  await chooseViewOption(page, 'tasks')
   const header = listHeader(page, f.projA)
-  await header.locator('[data-testid="plus-menu-trigger"]').click()
-  await expect(page.getByTestId('plus-menu')).toBeVisible()
+  await expect(header).toBeVisible({ timeout: 15_000 })
+  const listMenu = await openProjectMenuFromButton(page, header, 'Collapse project')
   await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
   await expect(listRow(page, f.projA, f.a1.id)).toBeVisible()
+  await page.screenshot({ path: '/tmp/project-collapse/more-button-does-not-fold.png' })
   await page.keyboard.press('Escape')
-  await page.screenshot({ path: '/tmp/project-collapse/plus-does-not-fold.png' })
+  await expect(listMenu).toHaveCount(0)
 })
 
-test('a pointer SLIP on the "+", the chevron and the star still does what the user pressed', async ({ page }) => {
+test('a pointer SLIP on the "···", the chevron and the star still does what the user pressed', async ({ page }) => {
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
   const f = await pinnedTwoProjectFixture(page, stamp)
 
@@ -908,18 +1026,27 @@ test('a pointer SLIP on the "+", the chevron and the star still does what the us
   // shared Focus tier mid-test, and that is not this test's business.
   const mine = (all: string[]) => all.filter((p) => p === f.projA || p === f.projB)
   const tierOrderBefore = mine(await tierProjectOrder(page))
-  const listOrderBefore = mine(await listProjectOrder(page))
 
-  // TIER "+": the label is an HTML5 drag handle, so a slip past Chromium's native
-  // threshold would start a project reorder and swallow this click. The disarm
-  // (pointerenter → draggable = false on the row) is what keeps it a press.
-  await slipClick(page, label.locator('[data-testid="plus-menu-trigger"]'))
-  await expect(page.getByTestId('plus-menu')).toBeVisible()
+  // TIER "···" (it replaced the label's "+"): the label is an HTML5 drag handle, so
+  // a slip past Chromium's native threshold would start a project reorder and
+  // swallow this click. The disarm (pointerenter on the actions span → draggable =
+  // false on the row) is what keeps it a press. slipClick moves onto the button
+  // before pressing, which is also the hover that lets the "···" take the pointer.
+  const menu = page.locator('[data-testid="project-ctx-menu"]')
+  await slipClick(page, label.locator('.navigation-more'))
+  await expect(menu.getByRole('menuitem', { name: 'Collapse project', exact: true })).toBeVisible()
   await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
   await expect(tierCard(page, f.a1.id)).toBeVisible()
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('plus-menu')).toHaveCount(0)
+  await expect(menu).toHaveCount(0)
   expect(mine(await tierProjectOrder(page)), 'the slip reordered the tier runs').toEqual(tierOrderBefore)
+
+  // The main-list half in the Projects view: projA's tasks are all pinned, and the
+  // All view lists a pinned task only in its tier, so it draws no header for them.
+  await chooseViewOption(page, 'tasks')
+  await expect(listHeader(page, f.projA)).toBeVisible({ timeout: 15_000 })
+  await expect(listHeader(page, f.projB)).toBeVisible()
+  const listOrderBefore = mine(await listProjectOrder(page))
 
   // MAIN-LIST chevron: 4px on each axis is 5.7px of travel, past dnd-kit's
   // `distance: 5`, so without the pointerdown guard the header's activator arms
@@ -1421,30 +1548,22 @@ test('a twitch on the first card of a project run never moves it to the run abov
 
 /**
  * The other half of the same rule: a CROSS-TIER drop into another tier's project
- * run must still reproject the card.
+ * run changes the card's TIER and never its PROJECT.
  *
- * This is the behaviour the fix above deliberately KEEPS, and the reason the
- * inference is gated on "the tier changed" rather than deleted outright. Here
- * dragOver really does splice the dragged card into the destination tier's array,
- * at the over-card's index, so the landing slot describes where the card went
- * instead of where it already was.
+ * This used to be the opposite promise (the drop joined the run it landed in). The
+ * panel now treats a drag that crosses tiers as a tier-assignment gesture, full
+ * stop: the run the card happens to land in on the way is not a request to
+ * reproject it (`maybeMoveProject` returns first when the card changed tier, and
+ * home-navigation-drag.spec.ts pins the same rule for custom-order tiers). What
+ * stays true is the hard case this test was built around: the release lands on a
+ * ROW inside another project's run, where a project move would be most tempting,
+ * not on the tier's own drop zone, where leaving the project alone is trivial.
  *
- * What the assertion says, and what it deliberately does not: the card must come out
- * of the drop owning one of the DESTINATION tier's run projects, rather than keeping
- * the one it arrived with. Which of them it adopts is left open on purpose, because
- * the panel has two legitimate answers for the same gesture and picks by geometry:
- * a release that still reports a destination row as `over` reads that row's project,
- * and a release that reports the dragged card ITSELF (common after a cross-tier
- * relocation, since the dragged centre follows the pointer) walks its new
- * neighbours. Pinning one of the two would pin dnd-kit's collision arithmetic, which
- * is not the contract. Keeping the arriving project is the regression this catches.
- *
- * The drop must land on a ROW and not on the tier's own drop zone: a drop zone names
- * a TIER, not a slot inside it, so the panel retiers and deliberately leaves the
- * project alone. The mid-drag preview check below is what proves the aim: dragOver
- * splices the card at the over-row's index but APPENDS it when the target is the
- * zone, so "some card still follows it" is the difference between the two, read off
- * the DOM while the button is down.
+ * The mid-drag preview check below is what proves the aim: dragOver splices the card
+ * at the over-row's index but APPENDS it when the target is the zone, so "some card
+ * still follows it" is the difference between the two, read off the DOM while the
+ * button is down. After the drop, the traveller forms its own run in the destination
+ * tier, and every project there is drawn by exactly one label.
  *
  * Two things about the GEOMETRY, both learned by watching this test fail, and both
  * the reason the gesture goes UPWARD from Satellite into Focus rather than down into
@@ -1466,7 +1585,7 @@ test('a twitch on the first card of a project run never moves it to the run abov
 test.describe('cross-tier project drop', () => {
   test.use({ viewport: { width: 1280, height: 1040 } })
 
-  test('a card dragged from another tier into a project run still joins that project', async ({ page }) => {
+  test('a card dragged from another tier into a project run changes tier, never project', async ({ page }) => {
     const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
     // Destination: FOCUS, because it is the tier at the TOP of the pinned scroller
     // (see the geometry note above). Two projects, because a tier drawing one run
@@ -1504,7 +1623,7 @@ test.describe('cross-tier project drop', () => {
     // mean anything at all), and the traveller starts OUTSIDE it, which is a fact
     // only the server has. "At least" rather than "exactly": Focus is shared fixture
     // state, and a concurrent spec's pin adds a run without changing what this
-    // gesture does, since the assertion below accepts any of the tier's own runs.
+    // gesture does.
     const runs = await tierRuns(page)
     expect(runs.length, 'Focus must draw at least two project runs').toBeGreaterThan(1)
     const runProjects = runs.map((r) => r.project)
@@ -1520,6 +1639,7 @@ test.describe('cross-tier project drop', () => {
     const rows = runs.flatMap((r) => r.cards)
     expect(rows.length, 'the destination needs rows to aim between').toBeGreaterThan(2)
     const aimAt = rows[1]
+    const projectPatches = watchProjectPatches(page, mover.id)
     const src = await scrollOnScreen(page, pinnedAreaCard(page, mover.id), 'the travelling card')
     const dst = await scrollOnScreen(page, tierCard(page, aimAt), 'the aim row')
     // Press and release 4px below a row's TOP edge, which is the band that means
@@ -1539,8 +1659,8 @@ test.describe('cross-tier project drop', () => {
     await page.waitForTimeout(250)
     // Mid-drag proofs, and the LAST pointer event before the release on purpose: a
     // re-aim after this measurement is what handed the drop to the tier's drop zone
-    // the first time this test was written, and the zone deliberately reprojects
-    // nothing. First proof: the live preview already renders the traveller inside
+    // the first time this test was written, and a zone drop proves nothing about
+    // runs. First proof: the live preview already renders the traveller inside
     // this tier. Second: a card still FOLLOWS it there, which only happens when
     // dragOver spliced it at a row's index; a drop-zone target appends it to the end.
     await expect(zone.locator(`[data-task-id="${mover.id}"]`)).toHaveCount(1, { timeout: 5_000 })
@@ -1552,21 +1672,37 @@ test.describe('cross-tier project drop', () => {
     await expect(zone.locator('.todo-panel-item-group-target')).toHaveCount(0)
     await page.mouse.up()
 
-    // Server truth, both halves of the drop: the card changed TIER and PROJECT.
+    // Server truth, both halves of the drop: the card changed TIER, and kept its
+    // PROJECT. Give a stray PATCH time to appear before declaring there was none
+    // (the same way the twitch ratchets above prove an absence).
     await expect.poll(() => pinnedTierOf(mover.id), {
       timeout: 15_000,
       message: 'the cross-tier drop never moved the card into the destination tier',
     }).toBe('focus')
-    await expect.poll(() => taskProjectViaApi(mover.id), {
-      timeout: 15_000,
-      message: 'a cross-tier drop into a project run no longer reprojects the card',
-    }).not.toBe(projFar)
-    // And what it adopted is one of the DESTINATION tier's runs, not some third
-    // project: the drop followed the slot it landed in (see the note above for why
-    // this stops short of naming which run).
-    expect(runProjects, 'the card landed in a project the destination tier does not draw')
-      .toContain(await taskProjectViaApi(mover.id))
-    await page.screenshot({ path: '/tmp/project-collapse/cross-tier-drop-reprojects.png' })
+    await page.waitForTimeout(1_500)
+    expect(projectPatches, 'a cross-tier drop fired a project move').toEqual([])
+    expect(await taskProjectViaApi(mover.id), 'a cross-tier drop reprojected the card')
+      .toBe(projFar)
+
+    // On screen: the traveller is a card of Focus under its OWN project's label, and
+    // every project in the tier is drawn by exactly one label. The live preview split
+    // a run around the traveller (label B, b1, traveller, label B, b2), so a label
+    // left behind by that preview is a second, stale copy of a project's label.
+    await expect(tierCard(page, mover.id)).toBeVisible()
+    await expect.poll(async () => (await tierProjectOrder(page)).includes(projFar), {
+      timeout: 10_000,
+      message: 'the traveller did not form its own run in the destination tier',
+    }).toBe(true)
+    // Our three projects only: Focus is shared, and another spec's runs are not ours.
+    const ours = [projA, projB, projFar]
+    await expect.poll(async () => {
+      const order = (await tierProjectOrder(page)).filter((p) => ours.includes(p))
+      return order.filter((p, i) => order.indexOf(p) !== i)
+    }, {
+      timeout: 10_000,
+      message: 'a project label is drawn twice in the destination tier after the drop',
+    }).toEqual([])
+    await page.screenshot({ path: '/tmp/project-collapse/cross-tier-drop-keeps-project.png' })
     expect(errors).toEqual([])
   })
 })

@@ -24,7 +24,9 @@ test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
   await page.addInitScript(() => {
     if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '[]')
-    if (localStorage.getItem('walnut-todo-list-collapsed-projs') === null) localStorage.setItem('walnut-todo-list-collapsed-projs', '[]')
+    if (localStorage.getItem('walnut-todo-list-collapsed-projs') === null && localStorage.getItem('walnut-todo-list-open-projs') === null) {
+      localStorage.setItem('walnut-todo-list-collapsed-projs', '[]')
+    }
   })
 })
 
@@ -145,7 +147,7 @@ test.describe('todo panel section tabs', () => {
 
     // Typing a query auto-routes to the stacked All view (pinned tiers AND the
     // task list all show their matches) rather than silently showing nothing.
-    await page.getByRole('button', { name: 'Search tasks', exact: true }).click()
+    await page.locator('#home-task-navigation .todo-search-input').click()
     await page.locator('.todo-search-bar input').fill('probe')
     await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true')
     await expect(page.locator('.todo-panel-list')).toHaveCount(1)
