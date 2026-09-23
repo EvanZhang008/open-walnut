@@ -991,8 +991,8 @@ export function ProvidersSection({ config, onSave }: Props) {
   return (
     <SectionCard
       id="providers"
-      title="Background Model Calls"
-      description="The model Walnut calls for its own small jobs: session titles, project summaries, memory upkeep. Your chat and coding sessions do NOT use this (they run on an engine — see Ask Walnut and Engines). Each provider's API key lives here and is shared: Jev Decisions references the OpenRouter key instead of keeping its own copy."
+      title="Ask Walnut: Model &amp; API Keys"
+      description="Which model answers the jobs listed above, and where each provider's API key lives. Conversations do not use this (they run on the engine picked above); coding sessions do not either. A key saved here is shared: Jev Decisions references the OpenRouter key instead of keeping its own copy."
       showSave={false}
     >
       {loading ? (

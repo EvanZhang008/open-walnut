@@ -69,7 +69,11 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'ask-walnut', label: 'Ask Walnut', title: 'Ask Walnut', group: 'configure', render: ({ config, saveSection }) => <AskWalnutSection config={config} onSave={saveSection} /> },
   // Providers/keys for the model calls WALNUT makes itself (titles, summaries,
   // memory upkeep). Nothing a user chats with reads this.
-  { owner: 'walnut', id: 'providers', label: 'Background Model', title: 'Background Model Calls', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
+  // The model + keys behind Ask Walnut's own jobs. It renders directly under
+  // Ask Walnut and shares its nav entry (navHidden): on its own it reads as a
+  // separate feature, which is exactly the confusion 'Background Model Calls'
+  // created — it is one of Ask Walnut's two runners, not a third thing.
+  { owner: 'walnut', id: 'providers', label: 'Model & Keys', title: 'Ask Walnut: Model & API Keys', group: 'configure', navHidden: true, render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure', render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} /> },
   // Tasks = where new tasks land + how a finished session reports back onto its
   // task. Focus Tiers is part of the same story (the pinned-task tiers), so it
