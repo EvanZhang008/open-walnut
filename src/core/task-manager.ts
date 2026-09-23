@@ -780,6 +780,9 @@ export interface AddTaskInput {
   depends_on?: string[];
   cwd?: string;
   sprint?: string;
+  /** Create the task directly inside an existing folder of the target project
+   *  (one write, one event). The folder must exist and belong to that project. */
+  group_id?: string;
   /** Explicit source override. Only needed for the first task in a new project (e.g. source='local'). */
   source?: TaskSource;
   /**
@@ -2411,6 +2414,16 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // check and write.
     const bornPin = resolveNewTaskTier(input, (store.custom_tiers ?? []).map((t) => t.id));
 
+    // A folder is a project's private sub-structure: born-in-folder obeys the
+    // same rule addToGroup enforces (folder exists, same project).
+    if (input.group_id !== undefined) {
+      const folder = folderRecord(store, input.group_id);
+      if (!folder) throw new Error(`Folder "${input.group_id}" not found.`);
+      if (!sameProject(folderProject(store, input.group_id), project)) {
+        throw new Error(`Folder "${folder.label}" belongs to "${folderProject(store, input.group_id) || 'Inbox'}", not "${project || 'Inbox'}".`);
+      }
+    }
+
     const newTask: Task = {
       id: generateId(),
       title: input.title,
@@ -2431,6 +2444,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(parentTask ? { parent_task_id: parentTask.id } : {}),
       ...(input.tags?.length ? { tags: [...new Set(input.tags)] } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
+      ...(input.group_id ? { group_id: input.group_id } : {}),
       ...(input.sprint ? { sprint: input.sprint } : {}),
       ...(input.walnut_agent ? { walnut_agent: true } : {}),
       ...(input.walnut_agent && input.agent_id ? { agent_id: input.agent_id } : {}),

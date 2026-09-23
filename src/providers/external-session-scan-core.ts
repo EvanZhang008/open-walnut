@@ -13,10 +13,10 @@
  *     first `user` line's `entrypoint` is a HUMAN entrypoint ('cli' = typed in a
  *     terminal, 'claude-desktop' = the desktop app). Walnut's own spawns are
  *     'sdk-cli' (it drives `claude -p --input-format stream-json`), so the
- *     entrypoint field alone separates "a human ran claude" from "Walnut ran
- *     claude" — no allowlist of pids or dirs needed. Title: the CLI's own
- *     `ai-title` line when present (it writes one per session), else the first
- *     user message.
+ *     entrypoint can also be inherited by child processes; it does not prove
+ *     human intent. Title: the CLI's own rule, ported verbatim (a `/rename`
+ *     `custom-title` line wins, then the AI-generated `ai-title` line, then the
+ *     first user message that is neither a meta line nor a compaction summary).
  *   - codex: ~/.codex/sessions/<y>/<m>/<d>/rollout-<ts>-<id>.jsonl. The first
  *     line is a `session_meta` whose `originator` names the surface:
  *     'codex-tui' / 'Codex Desktop' are human, 'open-walnut' is ours. Codex
@@ -63,6 +63,7 @@ export interface ScanExternalSessionsOptions {
   knownSessionIds?: string[]
   /** Cap on returned candidates (newest first). Guards a pathological host. */
   limit?: number
+  excludedCwds?: string[]
   /** Test seam: override ~. */
   homeDir?: string
 }
@@ -100,6 +101,15 @@ function isTempCwd(cwd: string | undefined): boolean {
   return false
 }
 
+export function isExcludedExternalCwd(cwd: string | undefined, excludedCwds: string[]): boolean {
+  if (!cwd) return false
+  const normalized = path.posix.normalize(cwd)
+  return excludedCwds.some(excluded => {
+    const root = path.posix.normalize(excluded).replace(/\/+$/, '')
+    return root !== '' && (normalized === root || normalized.startsWith(root + '/'))
+  })
+}
+
 /** One read step when walking a transcript head. */
 const CHUNK_BYTES = 131072
 /**
@@ -113,7 +123,7 @@ const CHUNK_BYTES = 131072
  * the common case still reads one chunk.
  */
 const MAX_HEAD_BYTES = 2 * 1024 * 1024
-/** Bytes read from the tail when hunting for the newest ai-title line. */
+/** Bytes read from the tail when hunting for the newest title lines. */
 const TAIL_BYTES = 131072
 const MAX_TITLE_LEN = 120
 
@@ -188,47 +198,159 @@ function toTitle(raw: unknown): string | undefined {
   return cleaned.length > MAX_TITLE_LEN ? cleaned.slice(0, MAX_TITLE_LEN - 1) + '…' : cleaned
 }
 
-/**
- * Text of a message payload, whatever shape it takes (string, content array,
- * nested content string). Both engines nest differently and both shapes have
- * changed across CLI versions, so this is deliberately permissive.
- */
-function messageText(message: unknown): string | undefined {
-  if (typeof message === 'string') return message
-  if (!message || typeof message !== 'object') return undefined
+/** Every text block of a message payload, in order (string content = one). */
+function messageTexts(message: unknown): string[] {
+  if (typeof message === 'string') return [message]
+  if (!message || typeof message !== 'object') return []
   const m = message as Record<string, unknown>
-  if (typeof m.content === 'string') return m.content
+  if (typeof m.content === 'string') return [m.content]
+  const out: string[] = []
   if (Array.isArray(m.content)) {
     for (const part of m.content) {
       if (part && typeof part === 'object') {
         const p = part as Record<string, unknown>
-        if (typeof p.text === 'string' && p.text.trim()) return p.text
+        if (p.type !== undefined && p.type !== 'text' && p.type !== 'input_text') continue
+        if (typeof p.text === 'string' && p.text) out.push(p.text)
       }
     }
   }
-  if (typeof m.text === 'string') return m.text
+  if (out.length === 0 && typeof m.text === 'string') out.push(m.text)
+  return out
+}
+
+/**
+ * The CLI's skip rule for a first prompt, verbatim (sessionStorage
+ * SKIP_FIRST_PROMPT_PATTERN): any text that opens with a markup tag (hook
+ * output, system reminders, IDE metadata, task notifications, and every
+ * envelope Walnut injects) or an interrupt marker is never a title.
+ */
+const SKIP_FIRST_PROMPT_PATTERN = /^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/
+
+/** Beyond the CLI's rule: codex's AGENTS.md replay, the old CLI resume caveat,
+ *  and a compaction summary in a transcript written before the CLI flagged it
+ *  (isCompactSummary). None of these is ever a human's first words. */
+function isLegacyPreamble(text: string): boolean {
+  const t = text.trimStart()
+  return t.startsWith('# AGENTS.md') || t.startsWith('# CLAUDE.md') || t.startsWith('Caveat:')
+    || t.startsWith(COMPACT_SUMMARY_PREFIX)
+}
+
+/**
+ * The CLI's own commands and aliases (commands.ts builtInCommandNames, CLI
+ * 2.1.280). A built-in like "/model sonnet" says nothing about the session, so
+ * the CLI skips it; a custom command or skill with arguments is a fair title.
+ * Refresh when the CLI adds commands; a miss only means one title reads as the
+ * command instead of the next message.
+ */
+const BUILTIN_CLI_COMMANDS = new Set([
+  'add-dir', 'advisor', 'agents', 'branch', 'bridge-kick', 'brief', 'btw', 'chrome', 'clear',
+  'color', 'commit', 'commit-push-pr', 'compact', 'config', 'context', 'copy', 'cost',
+  'desktop', 'diff', 'doctor', 'effort', 'exit', 'export', 'extra-usage', 'fast', 'feedback',
+  'files', 'heapdump', 'help', 'hooks', 'ide', 'init', 'init-verifiers', 'insights', 'install',
+  'install-github-app', 'install-slack-app', 'keybindings', 'login', 'logout', 'mcp', 'memory',
+  'mobile', 'model', 'output-style', 'passes', 'permissions', 'plan', 'plugin', 'pr-comments',
+  'privacy-settings', 'rate-limit-options', 'release-notes', 'reload-plugins',
+  'remote-control', 'remote-env', 'rename', 'resume', 'review', 'rewind', 'sandbox',
+  'security-review', 'session', 'skills', 'stats', 'status', 'statusline', 'stickers',
+  'suggestions', 'tag', 'tasks', 'terminal-setup', 'theme', 'think-back', 'thinkback-play',
+  'ultraplan', 'ultrareview', 'upgrade', 'usage', 'version', 'vim', 'voice', 'web-setup',
+  'fork', 'workflows', 'allowed-tools', 'android', 'app', 'bashes', 'bug', 'checkpoint',
+  'continue', 'ios', 'marketplace', 'new', 'plugins', 'quit', 'rc', 'remote', 'reset',
+  'settings',
+])
+
+function extractTag(text: string, tag: string): string | undefined {
+  const match = new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)</' + tag + '>').exec(text)
+  return match ? match[1] : undefined
+}
+
+/**
+ * One text block through the CLI's first-prompt rule: a slash command becomes
+ * "/name args" (none when it has no args), bash-mode input becomes "! cmd", and
+ * anything the skip rule matches yields null (keep looking).
+ */
+function titleFromText(text: string): string | null {
+  const commandName = extractTag(text, 'command-name')
+  if (commandName !== undefined) {
+    if (BUILTIN_CLI_COMMANDS.has(commandName.trim().replace(/^\//, ''))) return null
+    const args = (extractTag(text, 'command-args') ?? '').trim()
+    return args ? commandName.trim() + ' ' + args : null
+  }
+  const bashInput = extractTag(text, 'bash-input')
+  if (bashInput) return '! ' + bashInput
+  if (SKIP_FIRST_PROMPT_PATTERN.test(text) || isLegacyPreamble(text)) return null
+  return text
+}
+
+/** The first title-bearing text of a message, if any. */
+function titleFromMessage(message: unknown): string | undefined {
+  for (const text of messageTexts(message)) {
+    const title = titleFromText(text)
+    if (title) return title
+  }
   return undefined
 }
 
 /**
- * True for the synthetic preambles both CLIs inject ahead of the human's real
- * first words (AGENTS.md/CLAUDE.md dumps, slash-command envelopes, resume
- * caveats). Titling a session with one of these produces 200 identical rows.
+ * True for text the title rule skips (see titleFromText). Exported so the
+ * server can recognise a title an older scanner took from such a line and
+ * replace it (one rule, both sides).
  */
-function isPreamble(text: string): boolean {
-  const t = text.trimStart()
-  return (
-    t.startsWith('# AGENTS.md') ||
-    t.startsWith('# CLAUDE.md') ||
-    t.startsWith('<local-command') ||
-    t.startsWith('<command-message') ||
-    t.startsWith('<command-name') ||
-    t.startsWith('Caveat:') ||
-    t.startsWith('<system-reminder')
-  )
+export function isSyntheticUserText(text: string): boolean {
+  if (titleFromText(text) === null) return true
+  // A title an older scanner formatted from a built-in command ("/model x").
+  const command = /^\/([a-z][\w-]*)(?:\s|$)/.exec(text.trimStart())
+  return command !== null && BUILTIN_CLI_COMMANDS.has(command[1])
 }
 
-interface ClaudeHead {
+/** First words of every compaction summary the CLI has ever written. */
+const COMPACT_SUMMARY_PREFIX = 'This session is being continued from a previous conversation'
+
+/**
+ * The CLI's own first-prompt rule (sessionStorage getFirstMeaningfulUserMessage
+ * TextContent): a user line is skipped when it is meta (an injected instruction)
+ * or a compaction summary. Titling a session with either produced hundreds of
+ * identical "This session is being continued..." rows.
+ */
+function isTitleBearingUserLine(entry: Record<string, unknown>): boolean {
+  return entry.isMeta !== true && entry.isCompactSummary !== true
+}
+
+/** The two title lines the CLI appends: user rename beats AI title. */
+interface TitleLines {
+  customTitle?: string
+  aiTitle?: string
+}
+
+/**
+ * Newest `custom-title` / `ai-title` in a chunk of transcript text. The CLI
+ * prefers customTitle over aiTitle regardless of append order, and an empty
+ * customTitle is an explicit "cleared" (so the newest value wins, even '').
+ */
+function findTitleLines(text: string): TitleLines {
+  const out: TitleLines = {}
+  for (const line of text.split('\n')) {
+    if (!line.includes('"custom-title"') && !line.includes('"ai-title"')) continue
+    try {
+      const entry = JSON.parse(line) as Record<string, unknown>
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
+        out.customTitle = entry.customTitle
+      } else if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
+        out.aiTitle = entry.aiTitle
+      }
+    } catch { /* partial first line of the chunk — skip */ }
+  }
+  return out
+}
+
+/** CLI display priority: custom-title, then ai-title, then the first prompt.
+ *  Tail lines are newer than head lines (custom-title is re-appended on resume). */
+function pickClaudeTitle(head: ClaudeHead, tail: TitleLines): string | undefined {
+  const custom = tail.customTitle !== undefined ? tail.customTitle : head.customTitle
+  return toTitle(custom) ?? toTitle(tail.aiTitle ?? head.aiTitle) ?? toTitle(head.firstUserText)
+}
+
+interface ClaudeHead extends TitleLines {
   entrypoint?: string
   cwd?: string
   startedAt?: string
@@ -257,10 +379,14 @@ function parseClaudeHead(filePath: string, size: number): ClaudeHead {
       if (!human && !program) return true
       if (program && !human && isTempCwd(out.cwd)) return true
     }
-    if (type === 'user' && !out.firstUserText) {
-      const text = messageText(entry.message)
-      if (text && !isPreamble(text)) out.firstUserText = text
+    if (type === 'user' && !out.firstUserText && isTitleBearingUserLine(entry)) {
+      out.firstUserText = titleFromMessage(entry.message)
     }
+    // Title lines can sit in the head too: an ai-title written early scrolls
+    // out of the tail window on a long session, and the CLI's own readers fall
+    // back to the head buffer for exactly that case.
+    if (type === 'custom-title' && typeof entry.customTitle === 'string') out.customTitle = entry.customTitle
+    if (type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) out.aiTitle = entry.aiTitle
     // No "all fields found" early exit: a claude user line carries entrypoint +
     // cwd + message all at once, so exiting there would report messageCount=1
     // for a 200-message session. Accepted files read to the head budget, which
@@ -271,25 +397,11 @@ function parseClaudeHead(filePath: string, size: number): ClaudeHead {
   return out
 }
 
-/** Newest `ai-title` in the tail chunk — the CLI's own session title. */
-function findAiTitle(text: string): string | undefined {
-  let found: string | undefined
-  for (const line of text.split('\n')) {
-    if (!line.includes('"ai-title"')) continue
-    try {
-      const entry = JSON.parse(line) as Record<string, unknown>
-      if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
-        found = entry.aiTitle
-      }
-    } catch { /* partial first line of the chunk — skip */ }
-  }
-  return found
-}
-
 function scanClaude(
   homeDir: string,
   cutoff: number,
   known: Set<string>,
+  excludedCwds: string[],
   out: ExternalSessionCandidate[],
 ): number {
   const root = path.join(homeDir, '.claude', 'projects')
@@ -318,28 +430,33 @@ function scanClaude(
       const head = parseClaudeHead(filePath, stat.size)
       if (!head.entrypoint) continue
       // A sidechain file is a subagent transcript, not a session someone opened.
-      if (head.isSidechain) continue
+      if (head.isSidechain || isExcludedExternalCwd(head.cwd, excludedCwds)) continue
       const isHuman = HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)
       // Programmatic (other SDK apps, e.g. an investigation orchestrator):
       // only with a real working directory — temp-dir ones are test debris.
       const isProgram = PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(head.entrypoint) && !isTempCwd(head.cwd)
       if (!isHuman && !isProgram) continue
 
-      const aiTitle = findAiTitle(readChunk(filePath, stat.size, TAIL_BYTES, true))
-      out.push({
-        sessionId,
-        engine: 'claude',
-        cwd: head.cwd,
-        title: toTitle(aiTitle) ?? toTitle(head.firstUserText),
-        origin: head.entrypoint,
-        startedAt: head.startedAt,
-        lastActiveAt: new Date(stat.mtimeMs).toISOString(),
-        messageCount: head.messageCount,
-        transcriptPath: filePath,
-      })
+      out.push(claudeCandidate(sessionId, filePath, stat, head))
     }
   }
   return scanned
+}
+
+/** The descriptor for one claude transcript whose head is already parsed. */
+function claudeCandidate(sessionId: string, filePath: string, stat: fs.Stats, head: ClaudeHead): ExternalSessionCandidate {
+  const tail = findTitleLines(readChunk(filePath, stat.size, TAIL_BYTES, true))
+  return {
+    sessionId,
+    engine: 'claude',
+    cwd: head.cwd,
+    title: pickClaudeTitle(head, tail),
+    origin: head.entrypoint ?? 'unknown',
+    startedAt: head.startedAt,
+    lastActiveAt: new Date(stat.mtimeMs).toISOString(),
+    messageCount: head.messageCount,
+    transcriptPath: filePath,
+  }
 }
 
 interface CodexHead {
@@ -372,28 +489,40 @@ function parseCodexHead(filePath: string, size: number): CodexHead {
       if (payload.type === 'user_message' || payload.type === 'agent_message') out.messageCount++
       if (payload.type === 'user_message' && !out.firstUserText) {
         const text = typeof payload.message === 'string' ? payload.message : undefined
-        if (text && !isPreamble(text)) out.firstUserText = text
+        if (text) out.firstUserText = titleFromText(text) ?? undefined
       }
       return false
     }
     if (entry.type === 'response_item' && payload.role === 'user' && !out.firstUserText) {
-      const text = messageText(payload)
-      if (text && !isPreamble(text)) out.firstUserText = text
+      out.firstUserText = titleFromMessage(payload)
     }
     return false
   })
   return out
 }
 
-function scanCodex(
-  homeDir: string,
-  cutoff: number,
-  known: Set<string>,
-  out: ExternalSessionCandidate[],
-): number {
+function codexCandidate(
+  sessionId: string,
+  file: { filePath: string; mtimeMs: number },
+  head: CodexHead,
+): ExternalSessionCandidate {
+  return {
+    sessionId,
+    engine: 'codex',
+    cwd: head.cwd,
+    title: toTitle(head.firstUserText),
+    origin: head.originator ?? 'unknown',
+    startedAt: head.startedAt,
+    lastActiveAt: new Date(file.mtimeMs).toISOString(),
+    messageCount: head.messageCount,
+    transcriptPath: file.filePath,
+  }
+}
+
+/** Every codex rollout file under ~/.codex/sessions (a bounded 3-level walk). */
+function listCodexRollouts(homeDir: string): Array<{ filePath: string; size: number; mtimeMs: number }> {
   const root = path.join(homeDir, '.codex', 'sessions')
   const files: Array<{ filePath: string; size: number; mtimeMs: number }> = []
-  // Layout is <year>/<month>/<day>/rollout-*.jsonl — a bounded 3-level walk.
   const walk = (dir: string, depth: number): void => {
     let entries: fs.Dirent[]
     try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
@@ -406,11 +535,23 @@ function scanCodex(
       if (!entry.name.endsWith('.jsonl')) continue
       let stat: fs.Stats
       try { stat = fs.statSync(full) } catch { continue }
-      if (!stat.isFile() || stat.mtimeMs < cutoff || stat.size === 0) continue
+      if (!stat.isFile() || stat.size === 0) continue
       files.push({ filePath: full, size: stat.size, mtimeMs: stat.mtimeMs })
     }
   }
   walk(root, 0)
+  return files
+}
+
+function scanCodex(
+  homeDir: string,
+  cutoff: number,
+  known: Set<string>,
+  excludedCwds: string[],
+  out: ExternalSessionCandidate[],
+): number {
+  // Layout is <year>/<month>/<day>/rollout-*.jsonl — a bounded 3-level walk.
+  const files = listCodexRollouts(homeDir).filter((f) => f.mtimeMs >= cutoff)
 
   // Resume writes a fresh rollout file per session id — newest file wins.
   const byId = new Map<string, ExternalSessionCandidate>()
@@ -418,18 +559,8 @@ function scanCodex(
     const head = parseCodexHead(file.filePath, file.size)
     if (!head.sessionId || !head.originator) continue
     if (!HUMAN_CODEX_ORIGINATORS.has(head.originator)) continue
-    if (known.has(head.sessionId)) continue
-    const candidate: ExternalSessionCandidate = {
-      sessionId: head.sessionId,
-      engine: 'codex',
-      cwd: head.cwd,
-      title: toTitle(head.firstUserText),
-      origin: head.originator,
-      startedAt: head.startedAt,
-      lastActiveAt: new Date(file.mtimeMs).toISOString(),
-      messageCount: head.messageCount,
-      transcriptPath: file.filePath,
-    }
+    if (known.has(head.sessionId) || isExcludedExternalCwd(head.cwd, excludedCwds)) continue
+    const candidate = codexCandidate(head.sessionId, file, head)
     const prev = byId.get(head.sessionId)
     if (!prev || Date.parse(prev.lastActiveAt) < file.mtimeMs) {
       // Keep the earliest start + a title from whichever rollout has one.
@@ -446,6 +577,101 @@ function scanCodex(
   return files.length
 }
 
+export interface DescribeExternalSessionsOptions {
+  /** Provider session ids to look up (claude UUIDs and/or codex ids). */
+  sessionIds: string[]
+  /** Stat only: answer each id's last activity (transcript mtime) without
+   *  parsing it. The idle sweep asks this before completing anything. */
+  activityOnly?: boolean
+  /** Test seam: override ~. */
+  homeDir?: string
+}
+
+/** One located transcript's last activity (activityOnly answers). */
+export interface ExternalSessionActivity {
+  sessionId: string
+  lastActiveAt: string
+}
+
+/** Ids looked up per call (the server's per-run caps are at or below this). */
+const DESCRIBE_LIMIT = 300
+
+type LocatedFile = { filePath: string; size: number; mtimeMs: number }
+
+/** Find each wanted id's transcript: claude by one readdir per project dir,
+ *  codex by rollout suffix (newest rollout wins, resume writes a new one). */
+function locateTranscripts(homeDir: string, ids: string[]): Map<string, { engine: 'claude' | 'codex'; file: LocatedFile }> {
+  const wanted = new Set(ids)
+  const found = new Map<string, { engine: 'claude' | 'codex'; file: LocatedFile }>()
+  const root = path.join(homeDir, '.claude', 'projects')
+  let dirs: string[] = []
+  try { dirs = fs.readdirSync(root) } catch { dirs = [] }
+  for (const dirName of dirs) {
+    if (wanted.size === 0) break
+    let names: string[]
+    try { names = fs.readdirSync(path.join(root, dirName)) } catch { continue }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue
+      const sessionId = name.slice(0, -'.jsonl'.length)
+      if (!wanted.has(sessionId)) continue
+      const filePath = path.join(root, dirName, name)
+      let stat: fs.Stats
+      try { stat = fs.statSync(filePath) } catch { continue }
+      if (!stat.isFile() || stat.size === 0) continue
+      found.set(sessionId, { engine: 'claude', file: { filePath, size: stat.size, mtimeMs: stat.mtimeMs } })
+      wanted.delete(sessionId)
+    }
+  }
+  if (wanted.size > 0) {
+    for (const file of listCodexRollouts(homeDir)) {
+      const base = path.basename(file.filePath, '.jsonl')
+      for (const sessionId of wanted) {
+        if (!base.endsWith('-' + sessionId)) continue
+        const prev = found.get(sessionId)
+        if (!prev || prev.file.mtimeMs < file.mtimeMs) found.set(sessionId, { engine: 'codex', file })
+      }
+    }
+  }
+  return found
+}
+
+/**
+ * Re-read specific transcripts by session id, regardless of age. The scan is
+ * windowed by mtime, so a session imported with a placeholder title whose file
+ * has since aged out of the window would otherwise keep that title forever;
+ * the server asks for exactly those ids and retitles from the answer. With
+ * activityOnly it answers each id's current transcript mtime instead: an
+ * imported session someone keeps using in a terminal is never re-scanned (it
+ * is known), so this is the only way the server learns it is still alive. No
+ * entrypoint/originator classification: the ids are ones Walnut already owns.
+ * An id with no transcript is simply absent from the answer.
+ */
+export function describeExternalSessions(
+  options: DescribeExternalSessionsOptions,
+): { candidates: ExternalSessionCandidate[]; activity: ExternalSessionActivity[] } {
+  const homeDir = options.homeDir ?? os.homedir()
+  const ids = [...new Set(options.sessionIds.filter((id) => typeof id === 'string' && id.length > 0))].slice(0, DESCRIBE_LIMIT)
+  const candidates: ExternalSessionCandidate[] = []
+  const activity: ExternalSessionActivity[] = []
+  if (ids.length === 0) return { candidates, activity }
+  for (const [sessionId, hit] of locateTranscripts(homeDir, ids)) {
+    if (options.activityOnly) {
+      activity.push({ sessionId, lastActiveAt: new Date(hit.file.mtimeMs).toISOString() })
+      continue
+    }
+    if (hit.engine === 'claude') {
+      const head = parseClaudeHead(hit.file.filePath, hit.file.size)
+      if (head.isSidechain) continue
+      let stat: fs.Stats
+      try { stat = fs.statSync(hit.file.filePath) } catch { continue }
+      candidates.push(claudeCandidate(sessionId, hit.file.filePath, stat, head))
+    } else {
+      candidates.push(codexCandidate(sessionId, hit.file, parseCodexHead(hit.file.filePath, hit.file.size)))
+    }
+  }
+  return { candidates, activity }
+}
+
 /**
  * Scan this host for sessions started outside Walnut. Pure host-local I/O —
  * safe to call from either daemon twin.
@@ -459,8 +685,8 @@ export function scanExternalSessions(
   const candidates: ExternalSessionCandidate[] = []
 
   let scanned = 0
-  scanned += scanClaude(homeDir, cutoff, known, candidates)
-  scanned += scanCodex(homeDir, cutoff, known, candidates)
+  scanned += scanClaude(homeDir, cutoff, known, options.excludedCwds ?? [], candidates)
+  scanned += scanCodex(homeDir, cutoff, known, options.excludedCwds ?? [], candidates)
 
   candidates.sort((a, b) => Date.parse(b.lastActiveAt) - Date.parse(a.lastActiveAt))
   const limit = options.limit ?? 200

@@ -148,6 +148,13 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * succeeds. Optional: without it the server falls back to the whole-file read
  * (and says "the host needs the current daemon" when that read is refused).
  *
+ * 'external-describe-v1' — sessions.describeExternal: re-read specific
+ * transcripts by session id regardless of age. The scan is windowed by mtime,
+ * so an import that got a placeholder title (fallback name or a compaction
+ * summary) and whose file then aged out of the window would keep it forever;
+ * the server asks for exactly those ids and retitles from the answer. Optional:
+ * without it only sessions still inside the scan window are retitled.
+ *
  * 'external-scan-v1' — host-local discovery of sessions started OUTSIDE
  * Walnut (sessions.discoverExternal). The daemon walks its own
  * ~/.claude/projects + ~/.codex/sessions, classifies each transcript by its
@@ -257,6 +264,8 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'changes-v1',
   'rewind-probe-v1',
   'external-scan-v1',
+  'external-scan-filter-v1',
+  'external-describe-v1',
   'path-resolve-v1',
   // 'vscode-v1' — host-local embedded VS Code (vscode.ensure / vscode.status):
   // the daemon installs/starts code-server bound to 127.0.0.1 and returns

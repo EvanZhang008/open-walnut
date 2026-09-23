@@ -46,6 +46,7 @@ import {
 } from './tier-separators';
 import { TaskStartButton } from './TaskStartButton';
 import { TriggerPill } from '@/components/routines/TriggerPill';
+import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -1164,6 +1165,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             {task.title}
           </span>
           <TriggerPill taskId={task.id} />
+          <ImportedPill task={task} />
           {/* Info pills + kebab — same line as title, no second row */}
           {startDateLabel && (
             <span className="todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>

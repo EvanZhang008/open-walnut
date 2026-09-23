@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { scanExternalSessions } from '../../src/providers/external-session-scan-core.js'
+import { describeExternalSessions, scanExternalSessions } from '../../src/providers/external-session-scan-core.js'
 
 let home: string
 
@@ -137,6 +137,27 @@ describe('scanExternalSessions — claude classification', () => {
     // was captured, so every SDK import fell back to "Claude session <id>".
     expect(candidates[0].title).toBe('Investigate ticket 12345')
     expect(candidates[0].messageCount).toBe(2)
+  })
+
+  it('excludes configured directories for every entrypoint, without matching sibling paths', () => {
+    for (const entrypoint of ['cli', 'claude-desktop', 'sdk-cli']) {
+      claudeSession({ sid: `probe-${entrypoint}`, entrypoint, cwd: '/Users/dev/probes/run-1' })
+    }
+    claudeSession({ sid: 'real', entrypoint: 'cli', cwd: '/Users/dev/probes-app' })
+    claudeSession({ sid: 'scratch', entrypoint: 'cli', cwd: '/tmp/real-work' })
+    codexSession({ id: 'probe-codex', originator: 'codex-tui', cwd: '/Users/dev/probes/run-2' })
+    expect(scan({ excludedCwds: ['/Users/dev/probes/'] }).candidates.map(c => c.sessionId).sort())
+      .toEqual(['real', 'scratch'])
+  })
+
+  it('filters before the candidate limit so excluded probes cannot starve real sessions', () => {
+    for (let i = 0; i < 205; i++) {
+      claudeSession({ sid: `probe-${i}`, entrypoint: 'cli', cwd: '/Users/dev/probes' })
+    }
+    claudeSession({ sid: 'real', entrypoint: 'sdk-cli', cwd: '/Users/dev/work', mtimeMs: Date.now() - 10_000 })
+    expect(scan({ excludedCwds: ['/Users/dev/probes'], limit: 1 }).candidates.map(c => c.sessionId))
+      .toEqual(['real'])
+    expect(scan({ excludedCwds: ['/Users/dev/probes'], limit: 1 }).truncated).toBe(false)
   })
 
   it('still excludes tracked sdk sessions via knownSessionIds (Walnut\'s own)', () => {
@@ -348,5 +369,171 @@ describe('scanExternalSessions — result shape', () => {
       expect(typeof c.lastActiveAt).toBe('string')
       expect(c.transcriptPath.startsWith(home)).toBe(true)
     }
+  })
+})
+
+/**
+ * Title rule parity with the CLI (sessionStorage: customTitle > aiTitle > the
+ * first user line that is neither meta nor a compaction summary). The bug this
+ * pins: a compacted session resumed into a fresh transcript starts with the
+ * compaction summary as its first user line, and titling by "first user line"
+ * produced screens full of "This session is being continued from a previous…".
+ */
+describe('scanExternalSessions — title rule (CLI parity)', () => {
+  const COMPACT = 'This session is being continued from a previous conversation that ran out of context. The conversation is summarized below:\nAnalysis: …'
+  const user = (text: string, extra: Record<string, unknown> = {}) => ({
+    type: 'user', message: { role: 'user', content: text }, uuid: 'u', timestamp: '2026-08-10T10:00:00.000Z',
+    cwd: '/Users/dev/proj', sessionId: 'sid', entrypoint: 'cli', isSidechain: false, ...extra,
+  })
+  const assistant = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }, timestamp: '2026-08-10T10:00:05.000Z' }
+  const transcript = (sid: string, lines: unknown[]): void =>
+    writeJsonl(path.join(home, '.claude', 'projects', '-Users-dev-proj', `${sid}.jsonl`), lines)
+  const titleOf = (sid: string): string | undefined => scan().candidates.find((c) => c.sessionId === sid)?.title
+
+  it('skips a flagged compaction summary and titles by the human message after it', () => {
+    transcript('cont-1', [user(COMPACT, { isCompactSummary: true }), assistant, user('now fix the flaky test'), assistant])
+    expect(titleOf('cont-1')).toBe('now fix the flaky test')
+  })
+
+  it('skips the compaction summary by its text when an older CLI left no flag', () => {
+    transcript('cont-2', [user(COMPACT), assistant, user('continue with the migration'), assistant])
+    expect(titleOf('cont-2')).toBe('continue with the migration')
+  })
+
+  it('yields no title when the summary is the only user line (server mints the fallback)', () => {
+    transcript('cont-3', [user(COMPACT, { isCompactSummary: true }), assistant])
+    expect(titleOf('cont-3')).toBeUndefined()
+  })
+
+  it('skips any line that opens with a markup tag, as the CLI does (Walnut envelopes included)', () => {
+    transcript('warm-1', [user('<walnut-cache-warmup>This is a cache warm-up from Walnut.</walnut-cache-warmup>'), assistant, user('look at the failing build'), assistant])
+    transcript('digest-1', [user('<walnut-side-thread-digest>summary</walnut-side-thread-digest>'), assistant, user('next step please'), assistant])
+    transcript('ctx-1', [user('<context_entry> You are an agent</context_entry>'), assistant, user('check the queue'), assistant])
+    transcript('only-tag', [user('<walnut-message from="task x">please rebase</walnut-message>'), assistant])
+    expect(titleOf('warm-1')).toBe('look at the failing build')
+    expect(titleOf('digest-1')).toBe('next step please')
+    expect(titleOf('ctx-1')).toBe('check the queue')
+    expect(titleOf('only-tag')).toBeUndefined()
+  })
+
+  it('skips interrupt markers', () => {
+    transcript('int-1', [user('[Request interrupted by user for tool use]'), assistant, user('[Request interrupted by user]'), user('try the other approach'), assistant])
+    expect(titleOf('int-1')).toBe('try the other approach')
+  })
+
+  it('skips built-in commands even with args, titles a custom one with args as "/name args"', () => {
+    transcript('cmd-1', [user('<command-name>/model</command-name>\n<command-args>sonnet</command-args>'), assistant, user('start over'), assistant])
+    transcript('cmd-2', [user('<command-name>/clear</command-name>\n<command-args></command-args>'), assistant, user('start over on the parser'), assistant])
+    transcript('cmd-3', [user('<command-name>/deploy</command-name>\n<command-args>staging now</command-args>'), assistant])
+    expect(titleOf('cmd-1')).toBe('start over')
+    expect(titleOf('cmd-2')).toBe('start over on the parser')
+    expect(titleOf('cmd-3')).toBe('/deploy staging now')
+  })
+
+  it('titles bash-mode input as "! cmd"', () => {
+    transcript('bash-1', [user('<bash-input>git status</bash-input>'), assistant])
+    expect(titleOf('bash-1')).toBe('! git status')
+  })
+
+  it('looks past leading metadata blocks inside one message', () => {
+    transcript('ide-1', [{
+      type: 'user', uuid: 'u', timestamp: '2026-08-10T10:00:00.000Z', cwd: '/Users/dev/proj', sessionId: 'ide-1', entrypoint: 'cli',
+      message: { role: 'user', content: [
+        { type: 'text', text: '<ide_opened_file>The user opened src/a.ts</ide_opened_file>' },
+        { type: 'image', source: { type: 'base64', data: 'x' } },
+        { type: 'text', text: 'why does this throw' },
+      ] },
+    }, assistant])
+    expect(titleOf('ide-1')).toBe('why does this throw')
+  })
+
+  it('skips meta user lines exactly like the CLI', () => {
+    transcript('meta-1', [user('<injected instruction>', { isMeta: true }), assistant, user('real question here'), assistant])
+    expect(titleOf('meta-1')).toBe('real question here')
+  })
+
+  it('prefers a /rename custom-title over the ai-title and the first prompt', () => {
+    transcript('custom-1', [
+      user('first prompt'), assistant,
+      { type: 'ai-title', aiTitle: 'AI picked this', sessionId: 'custom-1' },
+      { type: 'custom-title', customTitle: 'Human named it', sessionId: 'custom-1' },
+    ])
+    expect(titleOf('custom-1')).toBe('Human named it')
+  })
+
+  it('treats an emptied custom-title as cleared and falls back to the ai-title', () => {
+    transcript('custom-2', [
+      user('first prompt'), assistant,
+      { type: 'custom-title', customTitle: 'Old name', sessionId: 'custom-2' },
+      { type: 'ai-title', aiTitle: 'AI picked this', sessionId: 'custom-2' },
+      { type: 'custom-title', customTitle: '', sessionId: 'custom-2' },
+    ])
+    expect(titleOf('custom-2')).toBe('AI picked this')
+  })
+
+  it('finds an ai-title that scrolled out of the tail window', () => {
+    // 128KB tail: bury the title line under ~300KB of later turns.
+    const filler = Array.from({ length: 300 }, (_, i) => ({
+      type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'x'.repeat(1000) }] },
+      timestamp: `2026-08-10T10:${String(i % 60).padStart(2, '0')}:00.000Z`,
+    }))
+    transcript('head-title', [user('first prompt'), { type: 'ai-title', aiTitle: 'Early AI title', sessionId: 'head-title' }, ...filler])
+    expect(titleOf('head-title')).toBe('Early AI title')
+  })
+
+  it('leaves codex titling unchanged (first human message)', () => {
+    codexSession({ id: 'cdx-1', originator: 'codex-tui', firstUserText: 'refactor the parser' })
+    expect(scan().candidates.find((c) => c.sessionId === 'cdx-1')?.title).toBe('refactor the parser')
+  })
+})
+
+/**
+ * describeExternalSessions: the retitle path for imports whose transcript aged
+ * out of the scan window. Looks up exact ids, applies the same title rule, and
+ * never classifies (the ids are ones Walnut already owns).
+ */
+describe('describeExternalSessions — by id, regardless of age', () => {
+  const YEAR_AGO = Date.now() - 400 * 24 * 60 * 60 * 1000
+
+  it('finds a claude transcript by id in any project dir even when the scan window misses it', () => {
+    claudeSession({ sid: 'old-1', entrypoint: 'cli', firstUserText: 'old but gold', mtimeMs: YEAR_AGO, encodedDir: '-Users-dev-somewhere' })
+    expect(scan().candidates.map((c) => c.sessionId)).not.toContain('old-1')
+    const { candidates } = describeExternalSessions({ sessionIds: ['old-1', 'missing-9'], homeDir: home })
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({ sessionId: 'old-1', engine: 'claude', title: 'old but gold', cwd: '/Users/dev/proj' })
+  })
+
+  it('applies the CLI title rule (custom-title over the first prompt) and skips sidechains', () => {
+    const file = claudeSession({ sid: 'named-1', entrypoint: 'sdk-cli', firstUserText: 'first prompt', mtimeMs: YEAR_AGO })
+    fs.appendFileSync(file, JSON.stringify({ type: 'custom-title', customTitle: 'Renamed by hand', sessionId: 'named-1' }) + '\n')
+    claudeSession({ sid: 'side-1', entrypoint: 'cli', isSidechain: true, mtimeMs: YEAR_AGO })
+    const { candidates } = describeExternalSessions({ sessionIds: ['named-1', 'side-1'], homeDir: home })
+    expect(candidates.map((c) => c.sessionId)).toEqual(['named-1'])
+    expect(candidates[0].title).toBe('Renamed by hand')
+  })
+
+  it('finds a codex session by rollout suffix, newest rollout wins', () => {
+    codexSession({ id: 'cdx-old', originator: 'codex-tui', firstUserText: 'older rollout', stamp: '2025-01-01T10-00-00', day: '2025/01/01', mtimeMs: YEAR_AGO - 1000 })
+    codexSession({ id: 'cdx-old', originator: 'codex-tui', firstUserText: 'newer rollout', stamp: '2025-01-02T10-00-00', day: '2025/01/02', mtimeMs: YEAR_AGO })
+    const { candidates } = describeExternalSessions({ sessionIds: ['cdx-old'], homeDir: home })
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({ sessionId: 'cdx-old', engine: 'codex', title: 'newer rollout' })
+  })
+
+  it('answers stat-only activity without parsing, and omits ids with no transcript', () => {
+    claudeSession({ sid: 'act-1', entrypoint: 'cli', mtimeMs: YEAR_AGO })
+    codexSession({ id: 'act-cdx', originator: 'codex-tui', mtimeMs: YEAR_AGO })
+    const { candidates, activity } = describeExternalSessions({ sessionIds: ['act-1', 'act-cdx', 'gone'], activityOnly: true, homeDir: home })
+    expect(candidates).toEqual([])
+    expect(activity).toEqual(expect.arrayContaining([
+      { sessionId: 'act-1', lastActiveAt: new Date(YEAR_AGO).toISOString() },
+      { sessionId: 'act-cdx', lastActiveAt: new Date(YEAR_AGO).toISOString() },
+    ]))
+    expect(activity).toHaveLength(2)
+  })
+
+  it('returns nothing for an empty ask or an unreadable home', () => {
+    expect(describeExternalSessions({ sessionIds: [], homeDir: home }).candidates).toEqual([])
+    expect(describeExternalSessions({ sessionIds: ['x'], homeDir: path.join(home, 'nope') }).candidates).toEqual([])
   })
 })

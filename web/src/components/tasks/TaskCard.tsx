@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { TagChip } from './TagChip';
+import { ImportedPill } from './ImportedPill';
 import { TaskSessionPill } from './SessionPill';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -100,6 +101,8 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
   const navigate = useNavigate();
   const confirm = useConfirm();
   const showPriority = useShowPriority();
+  // Machine tags ("walnut:…") are types with their own pill, not labels to chip.
+  const userTags = (task.tags ?? []).filter((tag) => !tag.startsWith('walnut:'));
 
   const className = [
     'task-card',
@@ -193,14 +196,15 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
         <div className="task-card-meta">
           {showPriority && <PriorityBadge priority={task.priority} />}
           <TaskSessionPill task={task} />
+          <ImportedPill task={task} className="task-card-imported-pill" />
           <span className="task-card-project text-xs text-muted">{task.project}</span>
-          {task.tags && task.tags.length > 0 && (
+          {userTags.length > 0 && (
             <span className="task-card-tags">
-              {task.tags.slice(0, 2).map(tag => (
+              {userTags.slice(0, 2).map(tag => (
                 <TagChip key={tag} tag={tag} inline />
               ))}
-              {task.tags.length > 2 && (
-                <span className="tag-chip tag-chip-overflow">+{task.tags.length - 2}</span>
+              {userTags.length > 2 && (
+                <span className="tag-chip tag-chip-overflow">+{userTags.length - 2}</span>
               )}
             </span>
           )}

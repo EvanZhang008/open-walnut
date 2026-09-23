@@ -140,7 +140,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -2140,6 +2140,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id, cmd);
     case 'list': return cmdList(ws, id);
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id, cmd);
+    case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id, cmd);
     case 'bridge.configure': return cmdBridgeConfigure(ws, id, cmd);
     // NOT in BRIDGE_ALLOWED_COMMANDS: rule content may only arrive over the
     // trusted SSH-tunneled walnut socket, never from the cloud bridge.
@@ -6784,6 +6785,8 @@ function daemonCapabilities() {
   const caps = __DAEMON_CAPABILITIES__.slice();
   if (changesCore) caps.push('changes-v1');
   if (externalScanCore) caps.push('external-scan-v1');
+  if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');
+  if (externalScanCore && externalScanCore.describeExternalSessions) caps.push('external-describe-v1');
   if (pathResolveCore) caps.push('path-resolve-v1');
   if (vscodeServerCore) caps.push('vscode-v1');
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
@@ -6861,8 +6864,10 @@ async function cmdDiscoverExternalSessions(ws, id, cmd) {
       : [];
     const limit = typeof cmd.limit === 'number' && cmd.limit > 0 ? cmd.limit : undefined;
     const t0 = Date.now();
+    const excludedCwds = Array.isArray(cmd.excludedCwds)
+      ? cmd.excludedCwds.filter(function (value) { return typeof value === 'string'; }) : [];
     const result = externalScanCore.scanExternalSessions({
-      sinceMs: sinceMs, knownSessionIds: knownSessionIds, limit: limit, homeDir: HOME_DIR,
+      sinceMs: sinceMs, knownSessionIds: knownSessionIds, excludedCwds: excludedCwds, limit: limit, homeDir: HOME_DIR,
     });
     logMsg('info', 'external session scan', {
       scanned: result.scanned, found: result.candidates.length,
@@ -6873,6 +6878,37 @@ async function cmdDiscoverExternalSessions(ws, id, cmd) {
     });
   } catch (err) {
     sendError(ws, id, 'sessions.discoverExternal failed: ' + err.message);
+  } finally {
+    release();
+  }
+}
+
+// Re-read specific external transcripts by id (capability 'external-describe-v1'):
+// the scan is windowed by mtime, this answers for placeholder-titled imports
+// whose files aged out of the window. Same serialization as the scan.
+async function cmdDescribeExternalSessions(ws, id, cmd) {
+  if (!externalScanCore || !externalScanCore.describeExternalSessions) {
+    sendError(ws, id, 'sessions.describeExternal unsupported: external-scan-core sidecar not loaded');
+    return;
+  }
+  const prev = externalScanInflight;
+  let release;
+  externalScanInflight = new Promise((r) => { release = r; });
+  await prev.catch(() => {});
+  try {
+    const sessionIds = Array.isArray(cmd.sessionIds)
+      ? cmd.sessionIds.filter(function (s) { return typeof s === 'string'; })
+      : [];
+    const activityOnly = cmd.activityOnly === true;
+    const t0 = Date.now();
+    const result = externalScanCore.describeExternalSessions({ sessionIds: sessionIds, activityOnly: activityOnly, homeDir: HOME_DIR });
+    logMsg('info', 'external session describe', {
+      asked: sessionIds.length, activityOnly: activityOnly,
+      found: activityOnly ? result.activity.length : result.candidates.length, ms: Date.now() - t0,
+    });
+    sendOk(ws, id, { candidates: result.candidates, activity: result.activity });
+  } catch (err) {
+    sendError(ws, id, 'sessions.describeExternal failed: ' + err.message);
   } finally {
     release();
   }

@@ -1886,7 +1886,10 @@ export async function updateSessionRecordConditionally(
   claudeSessionId: string,
   updates: SessionRecordUpdates,
   shouldUpdate: (current: SessionRecord) => boolean,
-  options?: { preserveLastActiveAt?: boolean },
+  // setLastActiveAt: write this activity time instead of "now" (a clock read
+  // from the transcript, e.g. the importer learning an external session is
+  // still in use). Wins over preserveLastActiveAt.
+  options?: { preserveLastActiveAt?: boolean; setLastActiveAt?: string },
 ): Promise<SessionRecord | null> {
   await ensureSessionInit();
   return withWriteLock(async () => {
@@ -1905,10 +1908,11 @@ export async function updateSessionRecordConditionally(
       if (!shouldUpdate(session)) return null;
       const lastActiveAt = session.lastActiveAt;
 
-      if (!applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition (conditional)')) {
-        return session;
-      }
+      const applied = applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition (conditional)');
+      // An explicit activity time is a change of its own, even with no field patch.
+      if (!applied && !options?.setLastActiveAt) return session;
       if (options?.preserveLastActiveAt) session.lastActiveAt = lastActiveAt;
+      if (options?.setLastActiveAt) session.lastActiveAt = options.setLastActiveAt;
       writeSessionRowSqlite(handle, session);
       log.session.info('session record updated (conditional)', { sessionId: claudeSessionId, fields: Object.keys(updates) });
       return session;

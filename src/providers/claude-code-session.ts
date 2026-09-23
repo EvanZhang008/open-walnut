@@ -9691,6 +9691,11 @@ export class SessionRunner {
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSendSdk', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
         })
+        // A message into an imported session adopts its task: the import tag
+        // comes off, so it leaves the imported type (no pill, never auto-completed).
+        const { adoptImportedTask } = await import('../core/sessions/external-session-import.js')
+        adoptImportedTask(record.taskId, 'handleSendSdk').catch(err =>
+          log.session.warn('adoptImportedTask failed', { taskId: record.taskId, error: String(err) }))
         // Touch last_session_update on resume for "Recent" sidebar sort
         const { touchLastSessionUpdate } = await import('../core/task-manager.js')
         touchLastSessionUpdate(record.taskId).catch(err =>
@@ -9838,6 +9843,11 @@ export class SessionRunner {
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSend', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
         })
+        // A message into an imported session adopts its task: the import tag
+        // comes off, so it leaves the imported type (no pill, never auto-completed).
+        const { adoptImportedTask } = await import('../core/sessions/external-session-import.js')
+        adoptImportedTask(record.taskId, 'handleSend').catch(err =>
+          log.session.warn('adoptImportedTask failed', { taskId: record.taskId, error: String(err) }))
         // Touch last_session_update on resume for "Recent" sidebar sort
         const { touchLastSessionUpdate } = await import('../core/task-manager.js')
         touchLastSessionUpdate(record.taskId).catch(err =>

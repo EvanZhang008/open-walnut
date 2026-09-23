@@ -7,6 +7,21 @@ export type TaskPhase =
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none';
 /** Canonical list of valid priority values — use for runtime validation. */
 export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'important', 'backlog', 'none'] as const;
+
+/**
+ * Tag on every task the external-session importer minted for a session that was
+ * started outside Walnut. It is the task's "imported" TYPE, not a label: the UI
+ * shows it as an Imported pill, the import tick auto-completes such a task once
+ * its session has been idle for a while, and the first message anyone sends to
+ * the session removes the tag (the task is adopted and leaves the imported type).
+ * Shared with the web through the `@open-walnut/core` alias.
+ */
+export const EXTERNAL_SESSION_IMPORT_TAG = 'walnut:external-sessions';
+
+/** True for a task the importer still owns (see EXTERNAL_SESSION_IMPORT_TAG). */
+export function isExternalImportTask(task: { tags?: string[] | undefined }): boolean {
+  return (task.tags ?? []).includes(EXTERNAL_SESSION_IMPORT_TAG);
+}
 export type TaskSource = string;
 
 export interface QuickTaskParse {
@@ -1010,6 +1025,11 @@ export interface Config {
   session_limits?: Record<string, number>;
   external_session_import?: {
     excluded_cwds?: Record<string, string[]>;
+    /** Days an imported session may sit idle before its task is auto-completed
+     *  by the import tick (rolling: a task crossing the line on a later tick is
+     *  completed then). Default 7. 0 disables the sweep. A task someone has sent
+     *  a message to is adopted (tag removed) and never swept. */
+    auto_complete_after_days?: number;
   };
   session?: {
     /** Cron scheduling policy for Walnut-managed CLI sessions.

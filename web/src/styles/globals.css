@@ -11882,6 +11882,21 @@ body.walnut-dragging {
   color: var(--error);
 }
 
+/* Imported pill — the task still belongs to the external-session importer
+   (auto-completes after a week idle; a message adopts it and the pill goes).
+   Neutral grey with a dashed edge: informational, never urgent. */
+.todo-item-imported-pill {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px dashed var(--border);
+  padding: 0 5px;
+}
+
+.task-card-imported-pill {
+  font-size: 10px;
+  border-radius: 8px;
+}
+
 /* Deferred-start pill — future start_date; blue tint to read as "scheduled",
    not "late" */
 .todo-item-start-pill {

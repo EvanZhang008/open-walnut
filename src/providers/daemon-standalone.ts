@@ -75,7 +75,7 @@ import {
   type FileAccum as ChangesFileAccum,
 } from './session-changes-core.js'
 import { probeTranscriptRewindHostLocal, type RewindProbeInput, type RewindProbeOutput } from './transcript-rewind-core.js'
-import { scanExternalSessions } from './external-session-scan-core.js'
+import { describeExternalSessions, scanExternalSessions } from './external-session-scan-core.js'
 import {
   ackFire,
   applyCheckError,
@@ -1504,6 +1504,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id as number, cmd)
+    case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id as number, cmd)
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
     // NOT in BRIDGE_ALLOWED_COMMANDS: rule content may only arrive over the
     // trusted SSH-tunneled walnut socket, never from the public cloud bridge.
@@ -5965,7 +5966,9 @@ async function cmdDiscoverExternalSessions(
       : []
     const limit = typeof cmd.limit === 'number' && cmd.limit > 0 ? cmd.limit : undefined
     const t0 = Date.now()
-    const result = scanExternalSessions({ sinceMs, knownSessionIds, limit })
+    const excludedCwds = Array.isArray(cmd.excludedCwds)
+      ? cmd.excludedCwds.filter((value): value is string => typeof value === 'string') : []
+    const result = scanExternalSessions({ sinceMs, knownSessionIds, excludedCwds, limit })
     logMsg('info', 'external session scan', {
       scanned: result.scanned,
       found: result.candidates.length,
@@ -5979,6 +5982,38 @@ async function cmdDiscoverExternalSessions(
     })
   } catch (err) {
     sendError(ws, id, 'sessions.discoverExternal failed: ' + (err as Error).message)
+  } finally {
+    release()
+  }
+}
+
+// ── Re-read specific external transcripts by id (capability 'external-describe-v1') ──
+// The scan above is windowed by mtime; the server asks here for the sessions it
+// imported with a placeholder title whose files may have aged out of that
+// window, and retitles from the answer. Same serialization as the scan.
+async function cmdDescribeExternalSessions(
+  ws: ServerWebSocket<WsData>,
+  id: number,
+  cmd: Record<string, unknown>,
+) {
+  const prev = externalScanInflight
+  let release!: () => void
+  externalScanInflight = new Promise<void>((r) => { release = r })
+  await prev.catch(() => {})
+  try {
+    const sessionIds = Array.isArray(cmd.sessionIds)
+      ? (cmd.sessionIds as unknown[]).filter((s): s is string => typeof s === 'string')
+      : []
+    const activityOnly = cmd.activityOnly === true
+    const t0 = Date.now()
+    const result = describeExternalSessions({ sessionIds, activityOnly })
+    logMsg('info', 'external session describe', {
+      asked: sessionIds.length, activityOnly,
+      found: activityOnly ? result.activity.length : result.candidates.length, ms: Date.now() - t0,
+    })
+    sendOk(ws, id, { candidates: result.candidates, activity: result.activity })
+  } catch (err) {
+    sendError(ws, id, 'sessions.describeExternal failed: ' + (err as Error).message)
   } finally {
     release()
   }
