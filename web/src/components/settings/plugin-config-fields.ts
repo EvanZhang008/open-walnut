@@ -68,3 +68,34 @@ export function listPlaceholder(schema: PluginFieldSchema | undefined): string {
   if (Array.isArray(fallback) && fallback.length > 0) return `default: ${fallback.join(', ')}`;
   return 'One per line, or comma-separated';
 }
+
+/**
+ * Plugin config keys another Settings pane already edits with a proper control
+ * (N3-04). One place per setting: the plugin's own rows leave these keys out
+ * and show one line that links to the pane that owns them, the same rule that
+ * moved the task sync block out of Integrations.
+ */
+export interface FieldOwner {
+  keys: readonly string[];
+  /** Settings pane id (the hash the link opens). */
+  pane: string;
+  label: string;
+  help: string;
+  link: string;
+}
+
+const FIELD_OWNERS: Record<string, FieldOwner> = {
+  calendar: {
+    keys: ['source_enabled', 'hidden_calendar_ids', 'visible_calendar_ids'],
+    pane: 'calendar',
+    label: 'Which calendars show',
+    help: 'Calendar Accounts turns Mac calendars on and picks which ones show.',
+    link: 'Open Calendar Accounts',
+  },
+};
+
+/** The pane that owns this plugin field, or null when the plugin's rows edit it. Pure. */
+export function fieldOwnerFor(pluginId: string, key: string): FieldOwner | null {
+  const owner = FIELD_OWNERS[pluginId];
+  return owner && owner.keys.includes(key) ? owner : null;
+}

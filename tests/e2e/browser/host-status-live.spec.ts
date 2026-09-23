@@ -414,6 +414,8 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
   await pushStatus(page, status('connected'))
   await expect(row).toContainText('Connected')
   await expect(row.locator('.status-dot')).toHaveClass(/status-dot-connected/)
+  // F25: a connected host offers no connect action.
+  await expect(row.locator('.rh-connect-btn')).toHaveCount(0)
 
   await pushStatus(page, status('failed', { error: 'Connection timed out', kind: 'network', hint: 'Check the VPN.' }))
   await expect(row).toContainText('Connection timed out')

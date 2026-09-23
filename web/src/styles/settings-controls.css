@@ -1,0 +1,556 @@
+@import './settings-controls-misc.css';
+/*
+ * Settings controls: switch, checkbox, segmented, buttons, inputs, tags,
+ * disclosure rows, mono blocks. Tokens only from globals.css variables.
+ */
+
+:root {
+  --settings-switch-off: var(--bg-tertiary);
+  --settings-input-bg: var(--bg-secondary);
+  --settings-tag-success-fg: #1f7a35;
+  --settings-focus-ring: 0 0 0 3px var(--accent-subtle);
+}
+
+:root[data-theme='dark'] {
+  --settings-switch-off: rgba(120, 120, 128, 0.36);
+  --settings-input-bg: rgba(255, 255, 255, 0.06);
+  --settings-tag-success-fg: var(--success);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --settings-switch-off: rgba(120, 120, 128, 0.36);
+    --settings-input-bg: rgba(255, 255, 255, 0.06);
+    --settings-tag-success-fg: var(--success);
+  }
+}
+
+.settings-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.settings-glyph {
+  flex: 0 0 auto;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.settings-spinner {
+  animation: settings-spin 900ms linear infinite;
+}
+
+@keyframes settings-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Switch (ToggleSwitch): 38x22, thumb 18, 140ms ── */
+.toggle-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.toggle-text {
+  font-size: 14px;
+  line-height: 19px;
+  color: var(--fg);
+}
+
+.toggle-switch.settings-switch {
+  position: relative;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  background: var(--settings-switch-off);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color 140ms ease-out;
+}
+
+.toggle-switch.settings-switch .toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  transition: transform 140ms ease-out;
+}
+
+.toggle-switch.settings-switch.toggle-on {
+  background: var(--accent);
+}
+
+.toggle-switch.settings-switch.toggle-on .toggle-thumb {
+  transform: translateX(16px);
+}
+
+.toggle-switch.settings-switch:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.toggle-switch.settings-switch[aria-busy='true'] {
+  cursor: progress;
+}
+
+.toggle-switch.settings-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Checkbox list row (SettingsCheckbox): the native input IS the box ── */
+.settings-row.settings-checkbox-row {
+  justify-content: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.settings-checkbox-control {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+}
+
+.settings-checkbox-input {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--settings-group-bg);
+  cursor: pointer;
+}
+
+.settings-checkbox-input:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Dark: an unchecked box needs a border you can see on the group (F37). */
+:root[data-theme='dark'] .settings-checkbox-input:not(:checked) {
+  border-color: rgba(255, 255, 255, 0.36);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .settings-checkbox-input:not(:checked) {
+    border-color: rgba(255, 255, 255, 0.36);
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+.settings-checkbox-input:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings-checkbox-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-checkbox-box {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-checkbox-input:checked + .settings-checkbox-box {
+  opacity: 1;
+}
+
+.settings-checkbox-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 19px;
+  color: var(--fg);
+}
+
+.settings-checkbox-trailing {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ── Segmented control: 26px, content width, scrolls when it cannot fit ── */
+:root {
+  --settings-segmented-bg: var(--bg-tertiary);
+  --settings-segment-selected: var(--card-bg);
+}
+
+:root[data-theme='dark'] {
+  --settings-segmented-bg: rgba(118, 118, 128, 0.24);
+  /* A solid step clearly lighter than the track on a #2C2C2E group (F37). */
+  --settings-segment-selected: #636366;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --settings-segmented-bg: rgba(118, 118, 128, 0.24);
+    --settings-segment-selected: #636366;
+  }
+}
+
+.settings-segmented {
+  box-sizing: border-box;
+  display: inline-flex;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px;
+  overflow-x: auto;
+  border-radius: 7px;
+  background: var(--settings-segmented-bg);
+  vertical-align: middle;
+  scrollbar-width: none;
+}
+
+.settings-segmented::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-segment {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 17px;
+  color: var(--fg);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color 120ms ease-out, box-shadow 120ms ease-out;
+}
+
+.settings-segment:hover:not(.is-selected) {
+  background: var(--bg-hover);
+}
+
+.settings-segment.is-selected {
+  background: var(--settings-segment-selected);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.settings-segment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.settings-segment-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-segmented[aria-disabled='true'] {
+  opacity: 0.45;
+}
+
+.settings-segmented[aria-disabled='true'] .settings-segment {
+  cursor: default;
+}
+
+/* ── Buttons (SettingsButton): 28px, width never changes with the label ── */
+.settings-button {
+  box-sizing: border-box;
+  /* WebKit keeps its native push-button look under a custom background and
+     rings a primary button in dark blue (N14): no native appearance, ever. */
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--settings-group-bg, var(--card-bg));
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 17px;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.settings-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.settings-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings-button[aria-busy='true'] {
+  opacity: 1;
+  cursor: progress;
+  color: var(--fg-muted);
+}
+
+.settings-button.settings-button-primary {
+  background: var(--accent);
+  border-color: transparent;
+  box-shadow: none;
+  color: #fff;
+}
+
+.settings-button.settings-button-primary:hover:not(:disabled) {
+  background: var(--accent-hover, var(--accent));
+}
+
+/* A disabled default button loses its fill, as on macOS: every disabled push
+   button reads the same, whatever its kind when live (N15). */
+.settings-button.settings-button-primary:disabled:not([aria-busy='true']) {
+  background: var(--settings-group-bg, var(--card-bg));
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.settings-button.settings-button-text,
+.settings-button.settings-button-danger {
+  padding: 0 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+
+.settings-button.settings-button-danger {
+  color: var(--settings-error-text, var(--error));
+}
+
+.settings-button.settings-button-text:hover:not(:disabled),
+.settings-button.settings-button-danger:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline;
+}
+
+/* A text button that ends a row sits optically on the content edge: its 6px
+   of padding hangs past it, so the glyphs end where switches end (N11). */
+.settings-row-actions > :is(.settings-button-text, .settings-button-danger):last-child,
+.settings-row-actions > :last-child > :is(.settings-button-text, .settings-button-danger):last-child {
+  margin-right: -6px;
+}
+
+.settings-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-button-stack {
+  display: inline-grid;
+}
+
+.settings-button-stack > *,
+.settings-button-stack::before,
+.settings-button-stack::after {
+  grid-area: 1 / 1;
+  text-align: center;
+}
+
+/* A text button's label hugs the right edge of its reserved width, so it lines
+   up with the other controls in the column (F26). */
+.settings-button.settings-button-text .settings-button-stack > *,
+.settings-button.settings-button-danger .settings-button-stack > * {
+  text-align: right;
+}
+
+.settings-button-stack::before {
+  content: attr(data-r1);
+  visibility: hidden;
+}
+
+.settings-button-stack::after {
+  content: attr(data-r2);
+  visibility: hidden;
+}
+
+/* ── Text inputs, numbers, selects ── */
+.settings-input {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--settings-input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--settings-focus-ring);
+}
+
+.settings-input[aria-invalid='true'] {
+  border-color: var(--settings-error-text, var(--error));
+}
+
+.settings-input.settings-input--short { width: 240px; }
+.settings-input.settings-input--number { width: 120px; font-variant-numeric: tabular-nums; }
+.settings-input.settings-input--long { width: 380px; }
+.settings-input.settings-input--mono { font-family: var(--font-mono); font-size: 12.5px; }
+
+textarea.settings-input {
+  width: 100%;
+  height: auto;
+  min-height: 160px;
+  padding: 8px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.settings-input-with-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.settings-input-unit:empty {
+  display: none;
+}
+
+.settings-input-unit {
+  /* One unit slot width, so number boxes in consecutive rows share both edges
+     whatever the unit word (N3-08). 64px holds "characters". */
+  box-sizing: border-box;
+  min-width: 64px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+
+/* No reserved unit slot (N03): the field plus its unit ends on the row's
+   content edge like every switch and select, and a unitless field is just
+   the field. */
+
+.settings-select {
+  box-sizing: border-box;
+  width: auto;
+  max-width: min(100%, 60cqi);
+  height: 28px;
+  padding: 0 28px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background-color: var(--settings-input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--settings-focus-ring);
+}
+
+.settings-secret,
+.settings-secret-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.settings-secret-saved {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings-secret {
+  position: relative;
+}
+
+.settings-secret > .secret-input {
+  padding-right: 48px;
+}
+
+.settings-secret > .settings-button.secret-toggle {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  height: 22px;
+  transform: translateY(-50%);
+  font-size: 12px;
+}
+
+.settings-secret-saved-text {
+  margin-right: 4px;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+}
+
+/* ── Reduced motion: controls snap ── */
+@media (prefers-reduced-motion: reduce) {
+  .settings-switch,
+  .settings-switch .toggle-thumb,
+  .settings-segment,
+  .settings-disclosure-chevron,
+  .settings-collapsible-title::before,
+  .settings-spinner,
+  .status-dot-testing {
+    transition: none !important;
+    animation: none !important;
+  }
+}

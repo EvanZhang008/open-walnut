@@ -30,7 +30,7 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-const API = 'http://localhost:3457'
+const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const FOLDER = 'SyncSurfaces'
 const NOTE = `${FOLDER}/Two Views.md`
 const SEED = '# Two Views\n\nseed line\n'

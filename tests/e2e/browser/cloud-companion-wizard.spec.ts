@@ -28,10 +28,12 @@ async function openCloudSection(page: Page) {
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
   // The Cloud Companion card has no nav button of its own: it renders right under
-  // the Phones & Cloud (devices) card and shares that entry.
-  const nav = page.locator('.settings-nav-item', { hasText: /^Phones & Cloud$/ })
+  // the Phones & Cloud (devices) card and shares that pane.
+  const nav = page.getByTestId('settings-nav-devices')
   await expect(nav).toHaveCount(1)
+  await expect(nav).toContainText('Phones & Cloud')
   await nav.click()
+  await expect(nav).toHaveAttribute('aria-current', /page|true/)
 
   const section = page.locator('#cloud')
   await section.scrollIntoViewIfNeeded()
@@ -59,8 +61,11 @@ test.describe('Settings → Cloud Companion', () => {
     // the hint that the Personal AI can do this too (the plan's discoverability promise).
     // Generous timeout: the mount probe (GET /job + GET /api/devices) must finish
     // first, and under heavy machine load that easily outlives the default 5s.
-    await expect(section.getByRole('heading', { name: /Set up your own cloud companion/i })).toBeVisible({ timeout: 60_000 })
-    await expect(section).toContainText(/ask your Personal AI/i)
+    const hero = section.locator('.cloud-hero')
+    await expect(hero).toBeVisible({ timeout: 60_000 })
+    await expect(section.getByRole('heading', { name: 'Set up', exact: true })).toBeVisible()
+    await expect(hero).toContainText('Your own cloud companion')
+    await expect(section).toContainText(/tell Ask Walnut/i) // N24: one name for the chat agent
 
     await section.getByRole('button', { name: /Get started/i }).click()
 
@@ -90,8 +95,8 @@ test.describe('Settings → Cloud Companion', () => {
     await expect(whatHappens).toContainText(/you pay for it/i)
     // The cost shown is the driver's own costHint, so the wizard and the provider
     // card can never quote different numbers.
-    const awsCost = await section.locator('.cloud-configure-provider').innerText()
-    const quoted = awsCost.split('—').pop()!.trim()
+    const quoted = (await section.locator('.cloud-configure-provider .settings-row-help').innerText()).trim()
+    expect(quoted.length).toBeGreaterThan(0)
     await expect(whatHappens.locator('.cloud-whathappens-cost')).toContainText(quoted)
 
     // The profile picker only appears when the host really has several ~/.aws
@@ -172,14 +177,17 @@ test.describe('Settings → Cloud Companion', () => {
 
     // Progress log lines arrived over SSE (the stream, not a poll) — preflight
     // logs the provider it resolved.
-    await section.locator('.cloud-log > summary').click()
-    await expect(section.locator('.cloud-log-body')).toContainText(/Fake provider/i, { timeout: 30_000 })
+    const log = section.getByTestId('cloud-setup-log')
+    await expect(log).toHaveAttribute('aria-expanded', 'false')
+    await log.click()
+    await expect(log).toHaveAttribute('aria-expanded', 'true')
+    await expect(section.getByTestId('cloud-log-body')).toContainText(/Fake provider/i, { timeout: 30_000 })
 
     await section.getByRole('button', { name: /Cancel setup/i }).click()
     await expect(section).toContainText(/Setup was cancelled/i, { timeout: 30_000 })
 
     // Start over deletes the record and returns to the hero.
     await section.getByRole('button', { name: /Start over/i }).click()
-    await expect(section.getByRole('heading', { name: /Set up your own cloud companion/i })).toBeVisible({ timeout: 30_000 })
+    await expect(section.locator('.cloud-hero')).toContainText('Your own cloud companion', { timeout: 30_000 })
   })
 })

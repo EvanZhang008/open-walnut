@@ -21,7 +21,7 @@
 import { type MouseEvent, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement'
-import type { UpdateButtonMode } from './plugin-update-view'
+import { plainText, updateDisabledTitle, type UpdateButtonMode } from './plugin-update-view'
 import '@/styles/plugin-updates.css'
 
 export interface PluginUpdateButtonProps {
@@ -33,13 +33,13 @@ export interface PluginUpdateButtonProps {
 export const reasonIdFor = (rowId: string): string => `plugin-update-reason-${rowId.replace(/[^a-zA-Z0-9_-]/g, '_')}`
 
 /** The widest label the button can carry; every state reserves its width. */
-const WIDEST_LABEL = 'Updating…'
+const WIDEST_LABEL = 'Updating...'
 
 /** The label in a one-cell grid with the invisible widest label, so width never changes. */
 export function UpdateLabel({ label }: { label: string }) {
   return (
     <span className="plugin-update-label" data-wide={WIDEST_LABEL}>
-      <span>{label}</span>
+      <span>{plainText(label)}</span>
     </span>
   )
 }
@@ -76,7 +76,7 @@ export function PluginUpdateButton({ rowId, mode, onClick }: PluginUpdateButtonP
         type="button"
         className="btn btn-primary btn-sm plugin-update-button"
         data-testid={testId}
-        title={mode.title}
+        title={mode.title ? plainText(mode.title) : undefined}
         onClick={(e: MouseEvent<HTMLButtonElement>) => { e.preventDefault(); onClick() }}
       >
         <UpdateLabel label={mode.label} />
@@ -93,13 +93,14 @@ export function PluginUpdateButton({ rowId, mode, onClick }: PluginUpdateButtonP
   }
 
   const id = reasonIdFor(rowId)
-  const reason = mode.reason
+  const reason = plainText(mode.reason)
+  const hoverTitle = updateDisabledTitle(mode.reason)
   return (
     <span
       ref={wrapRef}
       className="plugin-update-disabled"
       tabIndex={0}
-      title={reason}
+      title={hoverTitle}
       aria-describedby={id}
       data-testid={`plugin-update-wrap-${rowId}`}
       onFocus={() => setTipOpen(true)}
@@ -111,7 +112,7 @@ export function PluginUpdateButton({ rowId, mode, onClick }: PluginUpdateButtonP
         className="btn btn-secondary btn-sm plugin-update-button"
         data-testid={testId}
         disabled
-        title={reason}
+        title={hoverTitle}
         style={{ pointerEvents: 'none' }}
       >
         <UpdateLabel label={mode.label} />

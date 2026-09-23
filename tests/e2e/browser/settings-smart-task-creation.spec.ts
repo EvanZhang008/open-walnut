@@ -23,7 +23,7 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(90_000)
 
-type Cfg = { agent?: Record<string, unknown>; jev?: Record<string, unknown>; tools?: Record<string, unknown> }
+type Cfg = { agent?: Record<string, unknown>; jev?: Record<string, unknown>; tools?: Record<string, unknown>; providers?: Record<string, unknown> }
 
 async function serverConfig(request: APIRequestContext): Promise<Cfg> {
   const res = await request.get('/api/config')
@@ -141,6 +141,7 @@ test('the runner radio shows Jev settings only for Jev and keeps what was typed'
 
   const endpoint = 'https://openrouter.ai/api/alpha/decisions'
   await card.locator('#jev-endpoint').fill(endpoint)
+  await card.locator('#jev-endpoint').press('Enter') // text fields commit on blur or Enter
   await expect.poll(async () => (await serverConfig(request)).jev?.endpoint, { timeout: 10_000 }).toBe(endpoint)
 
   await card.getByTestId('smart-runner-default').check()
@@ -154,7 +155,7 @@ test('the runner radio shows Jev settings only for Jev and keeps what was typed'
   await expect.poll(async () => (await serverConfig(request)).jev?.decisions, { timeout: 10_000 })
     .toEqual({ quick_parse: true, session_organize: true })
 
-  await card.screenshot({ path: '/tmp/smart-task-creation/tasks-jev.png' })
+  await card.screenshot({ path: '/tmp/settings-redesign/smart-task-creation-jev.png' })
 
   // Jev then Default back to back: the last pick is what sticks, on screen and on disk.
   await card.getByTestId('smart-runner-default').check()
@@ -168,20 +169,23 @@ test('the runner radio shows Jev settings only for Jev and keeps what was typed'
   expect((await serverConfig(request)).jev?.endpoint).toBe(endpoint)
 })
 
-test('the API alternative is open when an API is in use', async ({ page, request }) => {
-  // The fixture server really runs on an API provider (its fake CLI adapter),
-  // which is exactly the case where the card must NOT hide itself.
-  const provider = String((await serverConfig(request)).agent?.main_provider ?? '')
+test('a named provider entry that runs on the Claude CLI reads as Claude Code (N01)', async ({ page, request }) => {
+  // The fixture's main provider is a user-named entry whose api is claude-cli
+  // (its fake CLI adapter). It runs on Claude Code, so the API card stays Off
+  // and nothing calls it an unknown provider.
+  const cfg = await serverConfig(request)
+  const provider = String(cfg.agent?.main_provider ?? '')
   expect(provider).not.toBe('')
   expect(provider).not.toBe('claude_cli')
+  expect((cfg.providers as Record<string, { api?: string }> | undefined)?.[provider]?.api).toBe('claude-cli')
   await page.goto('/settings')
   const nav = page.getByTestId('settings-nav-advanced')
   await expect(nav).toBeVisible({ timeout: 30_000 })
   await nav.click()
   const card = page.locator('#providers')
   await expect(card.locator('.settings-section-title')).toHaveText('Use an API instead of Claude Code')
-  await expect(card.getByTestId('providers-summary')).toContainText(`On: small jobs use ${provider}`)
-  await expect(card.getByTestId('provider-modes')).toBeVisible({ timeout: 15_000 })
+  await expect(card.getByTestId('providers-summary')).toHaveText('Off')
+  await expect(card).not.toContainText('Unknown provider')
 })
 
 test('on Claude Code the card is folded to one line and opens on its deep link', async ({ page }) => {
@@ -199,9 +203,10 @@ test('on Claude Code the card is folded to one line and opens on its deep link',
   await expect(nav).toBeVisible({ timeout: 30_000 })
   await nav.click()
   const card = page.locator('#providers')
-  await expect(card.getByTestId('providers-summary')).toContainText('Off: small jobs use Claude Code')
-  await expect(card.getByTestId('provider-modes')).toHaveCount(0)
-  await card.screenshot({ path: '/tmp/smart-task-creation/providers-collapsed.png' })
+  await expect(card.getByTestId('providers-summary')).toHaveText('Off')
+  // Folded rows stay mounted (hidden) so a pane switch keeps their state.
+  await expect(card.getByTestId('provider-modes')).toBeHidden()
+  await card.screenshot({ path: '/tmp/settings-redesign/providers-collapsed.png' })
 
   await card.getByTestId('providers-expand').click()
   await expect(card.getByTestId('provider-modes')).toBeVisible({ timeout: 15_000 })
@@ -219,7 +224,7 @@ test('an autosave on a page opened earlier keeps what another window changed', a
   const nav = page.getByTestId('settings-nav-advanced')
   await expect(nav).toBeVisible({ timeout: 30_000 })
   await nav.click()
-  await page.locator('#advanced summary', { hasText: 'Exec Security' }).click()
+  await page.getByTestId('advanced-disclosure-exec').click()
   const timeout = page.locator('#exec-timeout')
   await expect(timeout).toBeVisible({ timeout: 15_000 })
 
@@ -227,11 +232,12 @@ test('an autosave on a page opened earlier keeps what another window changed', a
   const agent = (await serverConfig(request)).agent ?? {}
   await request.put('/api/config', { data: { agent: { ...agent, session_organize: false, language: 'stale-page-marker' } } })
 
-  await timeout.fill('4321')
+  // The field is in seconds (N3-24); config keeps milliseconds.
+  await timeout.fill('43')
   await expect.poll(async () => {
     const tools = (await serverConfig(request)).tools as { exec?: { timeout?: number } } | undefined
     return tools?.exec?.timeout
-  }, { timeout: 15_000 }).toBe(4321)
+  }, { timeout: 15_000 }).toBe(43000)
 
   const after = (await serverConfig(request)).agent ?? {}
   expect(after.session_organize).toBe(false)

@@ -6,9 +6,16 @@ import {
   type TimelineResponse,
   type TimelineEntry,
 } from '@/api/timeline';
-import { SettingsSection, SettingsEmpty, SettingsNotice } from '../SettingsSection';
+import { SettingsSection, SettingsNotice, SettingsGroup, SettingsRow, SettingsLoadingRow } from '../SettingsSection';
+import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { couldntSave } from '../inputs/useOptimisticSetting';
+import { saveErrorMessage } from '../settings-pane-context';
+import { ChevronGlyph } from '../settings-glyphs';
+import '@/styles/settings-sections-addons.css';
+import { usageDay } from './UsageTables';
 
-// ── Category colors ──
+// Category colors (data colours of the activity chart, not UI chrome).
 
 const CATEGORY_COLORS: Record<string, string> = {
   coding: '#007AFF',
@@ -26,7 +33,7 @@ function getCategoryColor(cat: string): string {
   return CATEGORY_COLORS[cat] || CATEGORY_COLORS.other;
 }
 
-// ── Time helpers ──
+// Time helpers
 
 function timeToMinutes(time: string): number {
   const [h, m] = time.split(':').map(Number);
@@ -41,7 +48,7 @@ function formatDuration(minutes: number): string {
   return `${h}h ${m}m`;
 }
 
-// ── Sub-components ──
+// Sub-components
 
 function CategoryBar({ entries }: { entries: TimelineEntry[] }) {
   const totalMinutes = entries.reduce(
@@ -65,7 +72,7 @@ function CategoryBar({ entries }: { entries: TimelineEntry[] }) {
     }));
 
   return (
-    <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', height: 28 }}>
+    <div className="settings-addons-catbar">
       {segments.map((seg) => (
         <div
           key={seg.category}
@@ -91,154 +98,51 @@ function CategoryBar({ entries }: { entries: TimelineEntry[] }) {
   );
 }
 
-function ActivityBlock({ entry }: { entry: TimelineEntry }) {
+function ActivityRow({ entry }: { entry: TimelineEntry }) {
   const duration = Math.max(1, timeToMinutes(entry.endTime) - timeToMinutes(entry.startTime));
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 12,
-        padding: '10px 14px',
-        borderLeft: `3px solid ${getCategoryColor(entry.category)}`,
-        backgroundColor: 'var(--bg-secondary)',
-        borderRadius: '0 8px 8px 0',
-        marginBottom: 6,
-        alignItems: 'center',
-      }}
-    >
-      <div style={{ minWidth: 90, fontSize: 13, color: 'var(--fg-muted)', fontVariantNumeric: 'tabular-nums' }}>
-        {entry.startTime} - {entry.endTime}
-      </div>
-      <div
-        style={{
-          fontSize: 10,
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          color: getCategoryColor(entry.category),
-          minWidth: 80,
-        }}
-      >
-        {entry.category}
-      </div>
-      <div style={{ flex: 1, fontSize: 13, color: 'var(--fg)' }}>
-        <strong>{entry.application}</strong> &mdash; {entry.description}
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--fg-muted)', minWidth: 40, textAlign: 'right' }}>
-        {formatDuration(duration)}
-      </div>
-    </div>
+    <SettingsRow
+      className="timeline-activity-row"
+      label={
+        <span className="settings-addons-inline">
+          <span className="settings-addons-dot" style={{ background: getCategoryColor(entry.category) }} aria-hidden="true" />
+          <span className="settings-addons-muted">{`${entry.startTime} to ${entry.endTime}`}</span>
+          <span className="settings-addons-ellipsis" title={entry.application}>{entry.application}</span>
+        </span>
+      }
+      help={`${entry.category}: ${entry.description}`}
+      control={<span className="settings-addons-muted">{formatDuration(duration)}</span>}
+    />
   );
 }
 
-function SummaryCards({ summary }: { summary: Record<string, string> }) {
-  const items = Object.entries(summary);
-  if (items.length === 0) return null;
-
-  return (
-    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-      {items.map(([cat, dur]) => (
-        <div
-          key={cat}
-          style={{
-            padding: '10px 16px',
-            backgroundColor: 'var(--bg-secondary)',
-            borderRadius: 10,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            minWidth: 120,
-          }}
-        >
-          <div
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              backgroundColor: getCategoryColor(cat),
-            }}
-          />
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-muted)', textTransform: 'capitalize' }}>
-              {cat}
-            </div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg)' }}>{dur}</div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+function shiftDay(value: string, days: number): string {
+  const d = new Date(value);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
-function DatePicker({
-  value,
-  availableDates,
-  onChange,
-}: {
-  value: string;
-  availableDates: string[];
-  onChange: (date: string) => void;
-}) {
+function DatePicker({ value, onChange }: { value: string; onChange: (date: string) => void }) {
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-      <button
-        onClick={() => {
-          const d = new Date(value);
-          d.setDate(d.getDate() - 1);
-          onChange(d.toISOString().slice(0, 10));
-        }}
-        style={{
-          background: 'var(--bg-secondary)',
-          border: 'none',
-          borderRadius: 6,
-          padding: '6px 10px',
-          cursor: 'pointer',
-          color: 'var(--fg)',
-          fontSize: 14,
-        }}
-      >
-        &larr;
-      </button>
+    <span className="settings-addons-inline">
+      <SettingsButton aria-label="Previous day" onClick={() => onChange(shiftDay(value, -1))}>
+        <ChevronGlyph size={12} className="settings-addons-flip" />
+      </SettingsButton>
       <input
         type="date"
+        className="settings-input settings-input--short"
+        aria-label="Day"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        style={{
-          background: 'var(--bg-secondary)',
-          border: '1px solid var(--border)',
-          borderRadius: 6,
-          padding: '6px 12px',
-          color: 'var(--fg)',
-          fontSize: 14,
-        }}
       />
-      <button
-        onClick={() => {
-          const d = new Date(value);
-          d.setDate(d.getDate() + 1);
-          onChange(d.toISOString().slice(0, 10));
-        }}
-        style={{
-          background: 'var(--bg-secondary)',
-          border: 'none',
-          borderRadius: 6,
-          padding: '6px 10px',
-          cursor: 'pointer',
-          color: 'var(--fg)',
-          fontSize: 14,
-        }}
-      >
-        &rarr;
-      </button>
-      {availableDates.length > 0 && (
-        <span style={{ fontSize: 12, color: 'var(--fg-muted)', marginLeft: 8 }}>
-          {availableDates.length} day{availableDates.length !== 1 ? 's' : ''} recorded
-        </span>
-      )}
-    </div>
+      <SettingsButton aria-label="Next day" onClick={() => onChange(shiftDay(value, 1))}>
+        <ChevronGlyph size={12} />
+      </SettingsButton>
+    </span>
   );
 }
 
-// ── Main Section ──
+// Main section
 
 export function TimelineSection() {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -266,17 +170,23 @@ export function TimelineSection() {
     loadTimeline(date);
   }, [date, loadTimeline]);
 
-  const handleToggle = useCallback(async () => {
-    setToggling(true);
+  // Optimistic switch: the thumb moves at once; a failed write puts it back
+  // and leaves a row error until the next flip. A diagnostic pane: no Saved.
+  const [pendingTracking, setPendingTracking] = useState<boolean | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
+  const handleToggle = useCallback(async (next: boolean) => {
+    setPendingTracking(next);
+    setToggleError(null);
     try {
       const result = await toggleTracking();
       setData((prev) => (prev ? { ...prev, tracking: result.enabled } : prev));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setToggleError(saveErrorMessage(err));
     } finally {
-      setToggling(false);
+      setPendingTracking(null);
     }
   }, []);
+  const tracking = pendingTracking ?? data?.tracking ?? false;
 
   const totalMinutes = useMemo(() => {
     if (!data?.entries.length) return 0;
@@ -287,62 +197,72 @@ export function TimelineSection() {
   }, [data]);
 
   return (
-    <SettingsSection
-      id="timeline"
-      title="Screen Tracking"
-      description="Screen-activity tracking: periodic screenshots, categorised into what you were doing."
-      actions={(
-        <button
-          type="button"
-          className={data?.tracking ? 'btn-danger-outline' : 'btn btn-primary'}
-          onClick={handleToggle}
-          disabled={toggling}
-        >
-          {toggling ? '…' : data?.tracking ? 'Stop Tracking' : 'Start Tracking'}
-        </button>
-      )}
-    >
-      {/* Date picker */}
-      <div style={{ marginBottom: 20 }}>
-        <DatePicker value={date} availableDates={dates} onChange={setDate} />
-      </div>
+    <SettingsSection id="timeline" title="Screen Tracking">
+      <SettingsGroup>
+        <SettingsRow
+          label="Screen tracking"
+          htmlFor="timeline-tracking"
+          help="Takes periodic screenshots and sorts them into what you were doing."
+          error={toggleError ? couldntSave(toggleError) : undefined}
+          control={
+            <ToggleSwitch
+              id="timeline-tracking"
+              checked={tracking}
+              busy={pendingTracking !== null}
+              disabled={!data}
+              onChange={(v) => void handleToggle(v)}
+              data-testid="timeline-tracking-switch"
+            />
+          }
+        />
+        <SettingsRow
+          label="Day"
+          help={dates.length > 0 ? `${dates.length} day${dates.length !== 1 ? 's' : ''} recorded` : undefined}
+          control={<DatePicker value={date} onChange={setDate} />}
+        />
+      </SettingsGroup>
 
-      {error && <SettingsNotice kind="error">{error}</SettingsNotice>}
+      {error && <SettingsNotice kind="error" role="alert">{`Couldn't load activity: ${error}`}</SettingsNotice>}
 
       {loading ? (
-        <SettingsEmpty>Loading…</SettingsEmpty>
+        <SettingsGroup><SettingsLoadingRow /></SettingsGroup>
       ) : !data?.entries.length ? (
-        <SettingsEmpty>
-          <p style={{ margin: '0 0 4px' }}>No activity recorded for {date}</p>
-          <p style={{ margin: 0, fontSize: 12 }}>
-            {data?.tracking
-              ? 'Tracking is active — activity will appear here as screenshots are analyzed.'
-              : 'Enable tracking to start recording your daily activity.'}
-          </p>
-        </SettingsEmpty>
+        <SettingsGroup>
+          <SettingsRow
+            label={`No activity recorded for ${usageDay(date)}.`}
+            help={data?.tracking
+              ? 'Tracking is on; activity appears here as screenshots are analyzed.'
+              : 'Turn on screen tracking to start recording your day.'}
+          />
+        </SettingsGroup>
       ) : (
         <>
-          {/* Category bar */}
-          <div style={{ marginBottom: 20 }}>
-            <CategoryBar entries={data.entries} />
-          </div>
-
-          {/* Summary cards */}
-          <div style={{ marginBottom: 24 }}>
-            <SummaryCards summary={data.summary} />
-          </div>
-
-          {/* Stats line */}
-          <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 16 }}>
-            {data.entries.length} activities &middot; {formatDuration(totalMinutes)} tracked
-          </div>
-
-          {/* Activity timeline */}
-          <div>
-            {data.entries.map((entry, i) => (
-              <ActivityBlock key={`${entry.startTime}-${i}`} entry={entry} />
+          <SettingsGroup
+            heading="Summary"
+            footer={`${data.entries.length} activities, ${formatDuration(totalMinutes)} tracked.`}
+          >
+            <div className="settings-row settings-row-stacked" data-wide="true">
+              <CategoryBar entries={data.entries} />
+            </div>
+            {Object.entries(data.summary).map(([cat, dur]) => (
+              <SettingsRow
+                key={cat}
+                label={
+                  <span className="settings-addons-inline">
+                    <span className="settings-addons-dot" style={{ background: getCategoryColor(cat) }} aria-hidden="true" />
+                    <span>{cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+                  </span>
+                }
+                control={<span className="settings-addons-muted">{dur}</span>}
+              />
             ))}
-          </div>
+          </SettingsGroup>
+
+          <SettingsGroup heading="Activity">
+            {data.entries.map((entry, i) => (
+              <ActivityRow key={`${entry.startTime}-${i}`} entry={entry} />
+            ))}
+          </SettingsGroup>
         </>
       )}
     </SettingsSection>

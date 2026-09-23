@@ -535,3 +535,24 @@ export function failureFeedback(status: number, body: FailureBody | null | undef
   const lead = /^[A-Z][a-z]/.test(sentence) ? sentence.charAt(0).toLowerCase() + sentence.slice(1) : sentence
   return withDetail(`Could not update: ${lead}${/[.!?…]$/.test(lead) ? '' : '.'}`)
 }
+
+/**
+ * The display form of any string from this module. The view-model strings keep
+ * their compact separators (the unit tests pin them); the settings UI renders
+ * copy with commas, `...` and words instead of `·`, `…`, arrows or dashes.
+ */
+export function plainText(text: string): string {
+  return text
+    .replace(/Settings\s*\u2192\s*Plugins/g, 'Settings: Plugins')
+    .replace(/\s*\u2192\s*/g, ' to ')
+    .replace(/\s+\u00b7\s+/g, ', ')
+    .replace(/\u00b7/g, ',')
+    .replace(/\u2026/g, '...')
+    .replace(/\s+[\u2013\u2014]\s+/g, ', ')
+    .replace(/[\u2013\u2014]/g, ', ')
+}
+
+/** Hover title for a disabled Update, in the words the settings spec uses. */
+export function updateDisabledTitle(reason: string): string {
+  return reason === REASON_DIRTY ? 'Local changes would be overwritten.' : plainText(reason)
+}

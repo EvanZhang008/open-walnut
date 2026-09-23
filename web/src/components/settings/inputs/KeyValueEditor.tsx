@@ -1,4 +1,6 @@
 import { useState, type KeyboardEvent } from 'react';
+import { CloseGlyph } from '../settings-glyphs';
+import '@/styles/settings-controls.css';
 
 interface KeyValueEditorProps {
   entries: Record<string, string | number>;
@@ -57,7 +59,8 @@ export function KeyValueEditor({
             type={valueType === 'number' ? 'number' : 'text'}
             value={val}
             onChange={(e) => updateValue(key, e.target.value)}
-            className="kv-editor-value"
+            className="kv-editor-value settings-input settings-input--short"
+            aria-label={`Value for ${key}`}
           />
           <button
             type="button"
@@ -65,7 +68,7 @@ export function KeyValueEditor({
             onClick={() => removeEntry(key)}
             aria-label={`Remove ${key}`}
           >
-            ×
+            <CloseGlyph size={12} />
           </button>
         </div>
       ))}
@@ -76,6 +79,8 @@ export function KeyValueEditor({
           onChange={(e) => setNewKey(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={keyPlaceholder}
+          aria-label={keyPlaceholder}
+          className="settings-input settings-input--short"
         />
         <input
           type={valueType === 'number' ? 'number' : 'text'}
@@ -83,8 +88,10 @@ export function KeyValueEditor({
           onChange={(e) => setNewValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={valuePlaceholder}
+          aria-label={valuePlaceholder}
+          className="settings-input settings-input--number"
         />
-        <button type="button" className="btn btn-sm" onClick={addEntry} disabled={!newKey.trim()}>
+        <button type="button" className="btn btn-sm settings-button settings-button-default" onClick={addEntry} disabled={!newKey.trim()}>
           Add
         </button>
       </div>

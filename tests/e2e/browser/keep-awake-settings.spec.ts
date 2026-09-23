@@ -6,17 +6,20 @@ test('Keep-Awake settings show system-sleep-only behavior and a 5-minute offline
   if ((await page.locator('.sidebar.collapsed').count()) > 0) {
     await page.locator('.sidebar-collapse-btn').click()
   }
-  await page.locator('.sidebar-nav a[href="/settings"]').click()
-  await page.locator('.settings-nav-item', { hasText: 'Advanced' }).click()
+  await page.locator('.sidebar-nav a[href^="/settings"]').click()
+  await page.getByTestId('settings-nav-advanced').click()
 
   const section = page.locator('#advanced')
   await expect(section).toBeVisible()
-  await section.getByText(/Keep Mac Awake During Sessions/).click()
+  const disclose = section.getByTestId('advanced-disclosure-keep-awake')
+  await expect(disclose).toContainText('Keep Mac awake during sessions')
+  await disclose.click()
+  await expect(section.locator('#ka-offline')).toBeVisible()
 
   await expect(section).toContainText('prevents system sleep')
-  await expect(section).toContainText('Closing the lid turns connected screens off')
+  await expect(section).toContainText(/closing the lid turns connected screens off/i)
   await expect(section).toContainText('Connect an iPhone hotspot yourself')
-  await expect(section).toContainText('If internet stays unavailable for 5 minutes')
+  await expect(section).toContainText(/if internet stays unavailable for 5 minutes/i)
   await expect(section.locator('#ka-offline')).toHaveAttribute('placeholder', '5')
   await expect(section.locator('#ka-ssid')).toHaveCount(0)
   await expect(section.locator('#ka-password')).toHaveCount(0)

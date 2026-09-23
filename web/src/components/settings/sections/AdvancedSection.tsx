@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
+import { SettingsDisclosure, SettingsGroup, SettingsMonoBlock, SettingsRow } from '../SettingsSection';
+import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { CopyButton } from '../inputs/CopyButton';
+import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
+import { couldntSave } from '../inputs/useOptimisticSetting';
 import { AUTOSAVE_DELAY_MS } from '@/hooks/useAutoSave';
 import { apiGet, apiPost } from '@/api/client';
+import type { OnSave } from './GeneralSection';
 
-interface KeepAwakeStatus {
+export interface KeepAwakeStatus {
   state: {
     supported: boolean;
     enabled: boolean;
@@ -20,18 +27,146 @@ interface KeepAwakeStatus {
   sudoSetupCommand: string;
 }
 
-interface Props { config: Config; onSave: (partial: Partial<Config>) => Promise<void>; }
+interface Props { config: Config; onSave: OnSave; }
+
+/** Keep awake disclosure summary: plain words, no symbols (pure, unit tested). */
+export function keepAwakeSummary(enabled: boolean, status: KeepAwakeStatus['state'] | null | undefined): string {
+  if (!enabled) return 'Off';
+  if (status?.needsSudo || status?.setupDone === false) return 'Needs setup';
+  if (status?.holding) return 'Active';
+  return 'On';
+}
+
+/** Git disclosure summary (pure, unit tested). */
+export function gitSummary(enabled: boolean, push: boolean): string {
+  return `Auto commit ${enabled ? 'on' : 'off'}, push ${push ? 'on' : 'off'}`;
+}
+
+/** One status line for Keep awake, joined with commas. */
+export function keepAwakeStatusLine(s: KeepAwakeStatus['state']): string {
+  const parts = [
+    s.holding ? 'Staying awake, safe to close the lid' : s.enabled ? `Will sleep normally (${s.reason})` : 'Disabled',
+    `${s.runningLocalSessions} local session${s.runningLocalSessions === 1 ? '' : 's'} running`,
+  ];
+  if (s.battery) parts.push(`battery ${s.battery.pct}%${s.battery.onAc ? ' (AC)' : ''}`);
+  if (s.online === false) parts.push('offline');
+  return parts.join(', ');
+}
+
+const SECOND = 1_000;
+const MINUTE = 60_000;
+
+/** Intervals show in seconds or minutes, never raw milliseconds (N3-24). Pure. */
+export function fromMs(ms: number | undefined, unit: number): number | undefined {
+  return ms === undefined ? undefined : Math.round((ms / unit) * 100) / 100;
+}
+
+/**
+ * Back to milliseconds. A field the user did not touch shows `original`
+ * rounded for display; it saves `original` exactly, so an autosave of an
+ * unrelated switch never rewrites 12345 as 12350.
+ */
+export function toMs(value: number | undefined, unit: number, original?: number): number | undefined {
+  if (value === undefined || Number.isNaN(value)) return undefined;
+  if (original !== undefined && fromMs(original, unit) === value) return original;
+  return Math.round(value * unit);
+}
+
+/**
+ * The whole section as a config patch, read from the uncontrolled form. Every
+ * field of every disclosure is read, collapsed or not (collapsed rows stay
+ * mounted), and a block whose fields are absent keeps the config's value
+ * instead of writing false/undefined over it.
+ */
+export function readAdvancedForm(form: HTMLFormElement, config: Config): Partial<Config> {
+  const fd = new FormData(form);
+  const has = (name: string) => form.elements.namedItem(name) !== null;
+  const val = (name: string) => (fd.get(name) as string) ?? '';
+  const num = (name: string) => { const v = val(name); return v ? Number(v) : undefined; };
+  const bool = (name: string) => fd.get(name) === 'on';
+  const patch: Partial<Config> = {
+    git_versioning: {
+      ...config.git_versioning,
+      enabled: bool('git-enabled'),
+      push_enabled: bool('git-push'),
+      commit_debounce_ms: toMs(num('git-debounce'), SECOND, config.git_versioning?.commit_debounce_ms),
+      push_interval_ms: toMs(num('git-interval'), MINUTE, config.git_versioning?.push_interval_ms),
+    },
+    tools: {
+      ...config.tools,
+      exec: { ...config.tools?.exec, timeout: toMs(num('exec-timeout'), SECOND, config.tools?.exec?.timeout), max_output: num('exec-max') },
+    },
+    agent: {
+      ...config.agent,
+      subagent: {
+        ...config.agent?.subagent,
+        model: val('sub-model') || undefined,
+        max_concurrent: num('sub-concurrent'),
+        max_tool_rounds: num('sub-rounds'),
+      },
+    } as Config['agent'],
+    session_server: { ...config.session_server, enabled: bool('sdk-enabled'), port: num('sdk-port') ?? 7890 },
+  };
+  if (has('ka-enabled')) {
+    patch.keep_awake = {
+      ...config.keep_awake,
+      enabled: bool('ka-enabled'),
+      battery_floor_pct: num('ka-battery'),
+      offline_grace_minutes: num('ka-offline'),
+      linger_minutes: num('ka-linger'),
+    };
+  }
+  return patch;
+}
+
+/** A number field of the uncontrolled form (FormData reads it by `name`). */
+function FormNumber({ id, defaultValue, unit, placeholder, min, max, step, readOnly }: {
+  id: string; defaultValue: number | string | undefined; unit?: string; placeholder?: string;
+  min?: number; max?: number; step?: number | 'any'; readOnly?: boolean;
+}) {
+  return (
+    <span className="number-input-wrapper settings-input-with-unit">
+      <input
+        id={id}
+        name={id}
+        type="number"
+        inputMode="decimal"
+        className="number-input settings-input settings-input--number"
+        defaultValue={defaultValue ?? ''}
+        placeholder={placeholder}
+        min={min}
+        max={max}
+        step={step}
+        readOnly={readOnly}
+        tabIndex={readOnly ? -1 : undefined}
+      />
+      {/* Only with a unit: the field plus unit ends on the content edge (N03). */}
+      {unit && <span className="number-input-suffix settings-input-unit">{unit}</span>}
+    </span>
+  );
+}
 
 export function AdvancedSection({ config, onSave }: Props) {
-
-  // Read helpers
   const git = config.git_versioning ?? {};
   const exec = config.tools?.exec ?? {};
   const sub = config.agent?.subagent ?? {};
   const keepAwake = config.keep_awake ?? {};
   const offlineReleaseMinutes = keepAwake.offline_grace_minutes ?? 5;
+  const { notifySaved } = useSettingsSaved();
 
-  // Keep-Awake live status (macOS console feature; route 404s elsewhere → hidden)
+  // Switches are controlled locally; their hidden mirrors feed FormData.
+  const [gitEnabled, setGitEnabled] = useState(git.enabled !== false);
+  const [gitPush, setGitPush] = useState(git.push_enabled === true);
+  const [kaEnabled, setKaEnabled] = useState(keepAwake.enabled === true);
+  const [sdkEnabled, setSdkEnabled] = useState(config.session_server?.enabled ?? false);
+  // Follow a change made elsewhere; otherwise the next autosave of this form
+  // would send the switch's stale state back.
+  useEffect(() => { setGitEnabled(git.enabled !== false); }, [git.enabled]);
+  useEffect(() => { setGitPush(git.push_enabled === true); }, [git.push_enabled]);
+  useEffect(() => { setKaEnabled(keepAwake.enabled === true); }, [keepAwake.enabled]);
+  useEffect(() => { setSdkEnabled(config.session_server?.enabled ?? false); }, [config.session_server?.enabled]);
+
+  // Keep-Awake live status (macOS console feature; route 404s elsewhere -> hidden)
   const [kaStatus, setKaStatus] = useState<KeepAwakeStatus | null>(null);
   useEffect(() => {
     apiGet<KeepAwakeStatus>('/api/keep-awake').then(setKaStatus).catch(() => setKaStatus(null));
@@ -51,6 +186,7 @@ export function AdvancedSection({ config, onSave }: Props) {
       const res = await apiPost<{ ok: boolean; detail: string; state: KeepAwakeStatus['state'] }>('/api/keep-awake/setup');
       if (res.ok) {
         setKaStatus((prev) => prev ? { ...prev, state: res.state } : prev);
+        notifySaved();
       } else if (res.detail !== 'canceled') {
         setKaSetupError(res.detail);
       }
@@ -59,271 +195,174 @@ export function AdvancedSection({ config, onSave }: Props) {
     } finally {
       setKaSettingUp(false);
     }
-  }, []);
+  }, [notifySaved]);
 
-  const handleSave = useCallback(async () => {
-    // SectionCard renders a <form id="advanced"> — look it up directly.
-    // (A ref on the inner <div> won't work with FormData.)
-    const f = document.getElementById('advanced') as HTMLFormElement | null;
-    if (!f) return;
-    const fd = new FormData(f);
-    const val = (name: string) => (fd.get(name) as string) ?? '';
-    const num = (name: string) => { const v = val(name); return v ? Number(v) : undefined; };
-    const bool = (name: string) => fd.get(name) === 'on';
-
-    await onSave({
-      git_versioning: {
-        enabled: bool('git-enabled'),
-        push_enabled: bool('git-push'),
-        commit_debounce_ms: num('git-debounce'),
-        push_interval_ms: num('git-interval'),
-      },
-      tools: {
-        ...config.tools,
-        exec: {
-          ...config.tools?.exec,
-          timeout: num('exec-timeout'),
-          max_output: num('exec-max'),
-        },
-      },
-      agent: {
-        ...config.agent,
-        subagent: {
-          ...config.agent?.subagent,
-          model: val('sub-model') || undefined,
-          max_concurrent: num('sub-concurrent'),
-          max_tool_rounds: num('sub-rounds'),
-        },
-      },
-      keep_awake: {
-        enabled: bool('ka-enabled'),
-        battery_floor_pct: num('ka-battery'),
-        offline_grace_minutes: num('ka-offline'),
-        linger_minutes: num('ka-linger'),
-      },
-      session_server: {
-        ...config.session_server,
-        enabled: bool('sdk-enabled'),
-        port: num('sdk-port') ?? 7890,
-      },
-    });
+  const configRef = useRef(config);
+  configRef.current = config;
+  // A failed autosave stays under the group until the next save lands.
+  const [formError, setFormError] = useState<string | null>(null);
+  const save = useCallback(async (patch: Partial<Config>) => {
+    try {
+      await onSave(patch, { rowKey: 'advanced.form' });
+      setFormError(null);
+    } catch (err) {
+      setFormError(couldntSave(saveErrorMessage(err)));
+      throw err;
+    }
     // Re-evaluate immediately so the toggle takes effect without waiting a minute.
     refreshKaStatus();
-  }, [config, onSave, refreshKaStatus]);
+  }, [onSave, refreshKaStatus]);
+  const handleSave = useCallback(async () => {
+    // SectionCard renders a <form id="advanced">; FormData needs the form itself.
+    const f = document.getElementById('advanced') as HTMLFormElement | null;
+    if (!f) return;
+    await save(readAdvancedForm(f, configRef.current));
+  }, [save]);
 
-  // Auto-save: this section uses uncontrolled inputs (defaultValue/defaultChecked + FormData),
-  // so there's no React state to fingerprint — and config-prop refreshes don't reset the DOM
-  // inputs, so there's no save→reset loop to guard against. Just debounce on form edits.
-  const handleSaveRef = useRef(handleSave);
-  handleSaveRef.current = handleSave;
+  // Auto-save: uncontrolled inputs + FormData, debounced on form edits. The
+  // patch is snapshotted at edit time, so a pane switch (unmount) inside the
+  // debounce window still saves what was typed instead of dropping it.
+  const saveRef = useRef(save);
+  saveRef.current = save;
   useEffect(() => {
-    const form = document.getElementById('advanced');
+    const form = document.getElementById('advanced') as HTMLFormElement | null;
     if (!form) return;
     let t: ReturnType<typeof setTimeout> | undefined;
-    const onEdit = () => {
+    let pending: Partial<Config> | null = null;
+    const flush = () => {
       clearTimeout(t);
-      t = setTimeout(() => handleSaveRef.current().catch(() => {}), AUTOSAVE_DELAY_MS);
+      if (!pending) return;
+      const patch = pending;
+      pending = null;
+      saveRef.current(patch).catch(() => {});
     };
+    const onEdit = () => {
+      pending = readAdvancedForm(form, configRef.current);
+      clearTimeout(t);
+      t = setTimeout(() => {
+        // Re-read at fire time: later edits in the window are in the form now.
+        pending = readAdvancedForm(form, configRef.current);
+        flush();
+      }, AUTOSAVE_DELAY_MS);
+    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
     form.addEventListener('input', onEdit);
     form.addEventListener('change', onEdit);
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      clearTimeout(t);
       form.removeEventListener('input', onEdit);
       form.removeEventListener('change', onEdit);
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+      flush();
     };
   }, []);
 
+  const kaState = kaStatus?.state ?? null;
+  const kaSupported = kaState?.supported !== false;
+  const needsSetup = kaState?.setupDone === false;
+
   return (
-    <SectionCard id="advanced" title="Advanced" description="Git versioning, exec security, subagent defaults, developer options. Changes save automatically." onSave={handleSave} showSave={false}>
-      <div style={{ display: 'contents' }}>
-        {/* Git Versioning */}
-        <details className="settings-collapsible" open>
-          <summary className="settings-collapsible-title">Git Versioning</summary>
-          <div className="settings-collapsible-body">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <input type="checkbox" name="git-enabled" defaultChecked={git.enabled !== false} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              Enable Git Auto-Commit
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <input type="checkbox" name="git-push" defaultChecked={git.push_enabled === true} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-              Enable Push to Remote
-            </label>
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="git-debounce">Commit Debounce (ms)</label>
-                <input id="git-debounce" name="git-debounce" type="number" defaultValue={git.commit_debounce_ms ?? 30000} min={1000} />
-              </div>
-              <div className="form-group">
-                <label htmlFor="git-interval">Push Interval (ms)</label>
-                <input id="git-interval" name="git-interval" type="number" defaultValue={git.push_interval_ms ?? 600000} min={10000} />
-              </div>
-            </div>
-          </div>
-        </details>
+    <SectionCard id="advanced" title="Advanced" onSave={handleSave} showSave={false}>
+      <SettingsGroup data-testid="advanced-group">
+        <SettingsDisclosure id="advanced-git" data-testid="advanced-disclosure-git" label="Git versioning" summary={gitSummary(gitEnabled, gitPush)}>
+          <SettingsRow indent label="Auto commit" htmlFor="git-enabled"
+            control={<ToggleSwitch id="git-enabled" name="git-enabled" checked={gitEnabled} onChange={setGitEnabled} />} />
+          <SettingsRow indent label="Push to remote" htmlFor="git-push"
+            control={<ToggleSwitch id="git-push" name="git-push" checked={gitPush} onChange={setGitPush} />} />
+          <SettingsRow indent label="Commit debounce" htmlFor="git-debounce"
+            control={<FormNumber id="git-debounce" defaultValue={fromMs(git.commit_debounce_ms ?? 30000, SECOND)} unit="seconds" min={1} step="any" />} />
+          <SettingsRow indent label="Push interval" htmlFor="git-interval" disabled={!gitPush}
+            control={<FormNumber id="git-interval" defaultValue={fromMs(git.push_interval_ms ?? 600000, MINUTE)} unit="minutes" min={1} step="any" readOnly={!gitPush} />} />
+        </SettingsDisclosure>
 
-        {/* Exec Security */}
-        <details className="settings-collapsible">
-          <summary className="settings-collapsible-title">Exec Security</summary>
-          <div className="settings-collapsible-body">
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="exec-timeout">Timeout (ms)</label>
-                <input id="exec-timeout" name="exec-timeout" type="number" defaultValue={exec.timeout ?? ''} placeholder="Default" min={0} />
-              </div>
-              <div className="form-group">
-                <label htmlFor="exec-max">Max Output (chars)</label>
-                <input id="exec-max" name="exec-max" type="number" defaultValue={exec.max_output ?? ''} placeholder="Default" min={0} />
-              </div>
-            </div>
-            {exec.deny?.length ? (
-              <p className="text-sm text-muted">Deny patterns: {exec.deny.join(', ')}</p>
-            ) : null}
-            {exec.allow?.length ? (
-              <p className="text-sm text-muted">Allow patterns: {exec.allow.join(', ')}</p>
-            ) : null}
-          </div>
-        </details>
+        <SettingsDisclosure id="advanced-exec" data-testid="advanced-disclosure-exec" label="Command safety"
+          summary={exec.timeout || exec.max_output || exec.deny?.length || exec.allow?.length ? 'Custom limits' : 'Defaults'}>
+          <SettingsRow indent label="Timeout" htmlFor="exec-timeout"
+            control={<FormNumber id="exec-timeout" defaultValue={fromMs(exec.timeout, SECOND)} unit="seconds" placeholder="Default" min={0} step="any" />} />
+          <SettingsRow indent label="Max output" htmlFor="exec-max"
+            control={<FormNumber id="exec-max" defaultValue={exec.max_output} unit="characters" placeholder="Default" min={0} />} />
+          {exec.deny?.length ? (
+            <SettingsRow indent label="Deny patterns" help={<code>{exec.deny.join(', ')}</code>} />
+          ) : null}
+          {exec.allow?.length ? (
+            <SettingsRow indent label="Allow patterns" help={<code>{exec.allow.join(', ')}</code>} />
+          ) : null}
+        </SettingsDisclosure>
 
-        {/* Subagent Defaults */}
-        <details className="settings-collapsible">
-          <summary className="settings-collapsible-title">Subagent Defaults</summary>
-          <div className="settings-collapsible-body">
-            <div className="form-group">
-              <label htmlFor="sub-model">Default Model</label>
-              <input id="sub-model" name="sub-model" type="text" defaultValue={sub.model ?? ''} placeholder="Same as main model" />
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="sub-concurrent">Max Concurrent</label>
-                <input id="sub-concurrent" name="sub-concurrent" type="number" defaultValue={sub.max_concurrent ?? ''} placeholder="20" min={1} />
-              </div>
-              <div className="form-group">
-                <label htmlFor="sub-rounds">Max Tool Rounds</label>
-                <input id="sub-rounds" name="sub-rounds" type="number" defaultValue={sub.max_tool_rounds ?? ''} placeholder="30" min={1} />
-              </div>
-            </div>
-          </div>
-        </details>
+        <SettingsDisclosure id="advanced-subagent" data-testid="advanced-disclosure-subagent" label="Subagent defaults"
+          summary={sub.model ? 'Own model' : 'Main model'}>
+          <SettingsRow indent wide label="Subagent model" help="Leave empty to use the main model." htmlFor="sub-model"
+            control={
+              <input id="sub-model" name="sub-model" type="text" defaultValue={sub.model ?? ''} placeholder="Model id"
+                className="settings-input settings-input--long settings-input--mono" spellCheck={false} />
+            } />
+          <SettingsRow indent label="Max concurrent" htmlFor="sub-concurrent"
+            control={<FormNumber id="sub-concurrent" defaultValue={sub.max_concurrent} placeholder="20" min={1} />} />
+          <SettingsRow indent label="Max tool rounds" htmlFor="sub-rounds"
+            control={<FormNumber id="sub-rounds" defaultValue={sub.max_tool_rounds} placeholder="30" min={1} />} />
+        </SettingsDisclosure>
 
-        {/* Keep Awake (macOS console only — hidden when the route reports unsupported) */}
-        {kaStatus?.state.supported !== false && (
-          <details className="settings-collapsible" onToggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) refreshKaStatus(); }}>
-            <summary className="settings-collapsible-title">
-              Keep Mac Awake During Sessions (Even Lid Closed)
-              {kaStatus?.state.enabled && (
-                kaStatus.state.needsSudo
-                  ? <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--warning, #b58900)' }}>⚠️ Setup needed</span>
-                  : kaStatus.state.holding
-                    ? <span style={{ marginLeft: 8, fontWeight: 400 }}>🟢 Active</span>
-                    : <span className="text-muted" style={{ marginLeft: 8, fontWeight: 400 }}>✓ On</span>
-              )}
-            </summary>
-            <div className="settings-collapsible-body">
-              <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
-                While local sessions run, Walnut prevents <strong>system sleep</strong>,
-                including with the lid closed. Closing the lid turns connected screens off
-                while sessions keep running. Connect an iPhone hotspot yourself. If internet stays unavailable
-                for {offlineReleaseMinutes} minutes, Walnut restores normal sleep.
-              </p>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <input type="checkbox" name="ka-enabled" defaultChecked={keepAwake.enabled === true} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
-                Enable Keep-Awake
-              </label>
-              {kaStatus?.state.setupDone === false ? (
-                <div style={{ border: '1px solid var(--warning, #b58900)', borderRadius: 6, padding: '10px 12px', marginBottom: 12 }}>
-                  <p style={{ margin: '0 0 8px 0', fontWeight: 600, color: 'var(--warning, #b58900)' }}>
-                    ⚠️ One-time setup needed — click below and enter your Mac password
-                  </p>
-                  <button type="button" className="btn-primary" onClick={runKaSetup} disabled={kaSettingUp}>
-                    {kaSettingUp ? 'Waiting for password dialog…' : 'Set Up Now'}
-                  </button>
-                  {kaSetupError && (
-                    <p className="text-sm" style={{ margin: '8px 0 0 0', color: 'var(--error, #dc322f)' }}>
-                      Failed: {kaSetupError}. Manual fallback — run in Terminal:
-                      <br /><code style={{ wordBreak: 'break-all' }}>{kaStatus.sudoSetupCommand}</code>
-                    </p>
-                  )}
-                </div>
-              ) : kaStatus?.state.setupDone === true ? (
-                <p className="text-sm" style={{ margin: '0 0 12px 0', color: 'var(--success, #2aa198)' }}>
-                  ✅ Setup complete — Walnut can keep the Mac awake.
-                </p>
-              ) : null}
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="ka-battery">Battery Floor (%)</label>
-                  <input id="ka-battery" name="ka-battery" type="number" defaultValue={keepAwake.battery_floor_pct ?? ''} placeholder="30" min={5} max={95} />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="ka-offline">Offline Release (min)</label>
-                  <input id="ka-offline" name="ka-offline" type="number" defaultValue={keepAwake.offline_grace_minutes ?? ''} placeholder="5" min={1} />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="ka-linger">Linger After Last Session (min)</label>
-                  <input id="ka-linger" name="ka-linger" type="number" defaultValue={keepAwake.linger_minutes ?? ''} placeholder="5" min={0} />
-                </div>
-              </div>
-              <p className="text-sm text-muted" style={{ margin: '4px 0 12px 0' }}>
-                Using an iPhone hotspot? Connect it yourself from the macOS Wi-Fi menu.
-                Walnut does not control Wi-Fi. If internet stays unavailable for the
-                offline-release window, normal system sleep is restored.
-              </p>
-              {kaStatus && (
-                <div className="text-sm" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span>
-                    Status: {kaStatus.state.holding
-                      ? '🟢 Staying awake — safe to close the lid'
-                      : kaStatus.state.enabled ? `⚪ Will sleep normally (${kaStatus.state.reason})` : '⚪ Disabled'}
-                    {' · '}{kaStatus.state.runningLocalSessions} local session{kaStatus.state.runningLocalSessions === 1 ? '' : 's'} running
-                    {kaStatus.state.battery ? ` · battery ${kaStatus.state.battery.pct}%${kaStatus.state.battery.onAc ? ' (AC)' : ''}` : ''}
-                    {kaStatus.state.online === false ? ' · offline' : ''}
-                  </span>
-                </div>
-              )}
-            </div>
-          </details>
+        {/* Keep Awake: macOS console only, hidden when the route reports unsupported. */}
+        {kaSupported && (
+          <SettingsDisclosure
+            id="advanced-keep-awake"
+            data-testid="advanced-disclosure-keep-awake"
+            label="Keep Mac awake during sessions"
+            help="Also with the lid closed."
+            summary={<span data-testid="ka-summary">{keepAwakeSummary(kaEnabled, kaState)}</span>}
+          >
+            <SettingsRow indent label="Keep Mac awake" htmlFor="ka-enabled"
+              help="While local sessions run, Walnut prevents system sleep; closing the lid turns connected screens off while sessions keep running."
+              control={<ToggleSwitch id="ka-enabled" name="ka-enabled" checked={kaEnabled} onChange={setKaEnabled} />} />
+            {needsSetup && (
+              <SettingsRow indent label="One-time setup" help="Needs your Mac password once." state="warning"
+                data-testid="ka-setup-row"
+                error={kaSetupError ? <span title={kaSetupError}>Setup didn&apos;t finish.</span> : undefined}
+                control={
+                  <SettingsButton variant="primary" busy={kaSettingUp} busyLabel="Setting up..." onClick={() => void runKaSetup()} data-testid="ka-setup">
+                    Set up
+                  </SettingsButton>
+                } />
+            )}
+            {needsSetup && kaSetupError && kaStatus && (
+              <SettingsRow indent wide label="Run in Terminal" data-testid="ka-setup-command"
+                help={<code className="settings-mono-value">{kaStatus.sudoSetupCommand}</code>}
+                control={<CopyButton text={kaStatus.sudoSetupCommand} data-testid="ka-setup-copy" />} />
+            )}
+            {kaState?.setupDone === true && (
+              <SettingsRow indent label="Setup" help="Done; Walnut can keep the Mac awake." />
+            )}
+            <SettingsRow indent label="Battery floor" htmlFor="ka-battery" disabled={!kaEnabled}
+              help="On battery at or below this charge, normal sleep returns."
+              control={<FormNumber id="ka-battery" defaultValue={keepAwake.battery_floor_pct} unit="%" placeholder="30" min={5} max={95} readOnly={!kaEnabled} />} />
+            <SettingsRow indent label="Offline release" htmlFor="ka-offline" disabled={!kaEnabled}
+              help={`Connect an iPhone hotspot yourself; if internet stays unavailable for ${offlineReleaseMinutes} minutes, Walnut restores normal sleep.`}
+              control={<FormNumber id="ka-offline" defaultValue={keepAwake.offline_grace_minutes} unit="minutes" placeholder="5" min={1} readOnly={!kaEnabled} />} />
+            <SettingsRow indent label="Linger after last session" htmlFor="ka-linger" disabled={!kaEnabled}
+              control={<FormNumber id="ka-linger" defaultValue={keepAwake.linger_minutes} unit="minutes" placeholder="5" min={0} readOnly={!kaEnabled} />} />
+            {kaState && (
+              <SettingsRow indent label="Status" help={keepAwakeStatusLine(kaState)} data-testid="ka-status" />
+            )}
+          </SettingsDisclosure>
         )}
 
-        {/* SDK Session Server — a developer switch (Agent SDK server instead of CLI
-            sessions). It used to sit in the Sessions card next to everyday knobs. */}
-        <details className="settings-collapsible">
-          <summary className="settings-collapsible-title">SDK Session Server</summary>
-          <div className="settings-collapsible-body">
-            <div className="form-group">
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  name="sdk-enabled"
-                  id="sdk-enabled"
-                  defaultChecked={config.session_server?.enabled ?? false}
-                  style={{ width: 16, height: 16, accentColor: 'var(--accent)' }}
-                />
-                Use the Agent SDK server instead of CLI sessions
-              </label>
-            </div>
-            <div className="form-group">
-              <label htmlFor="sdk-port">SDK Server Port</label>
-              <input
-                type="number"
-                name="sdk-port"
-                id="sdk-port"
-                defaultValue={config.session_server?.port ?? 7890}
-                min={1024}
-                max={65535}
-                style={{ maxWidth: 160 }}
-              />
-            </div>
-          </div>
-        </details>
+        {/* SDK Session Server: a developer switch (Agent SDK server instead of CLI sessions). */}
+        <SettingsDisclosure id="advanced-sdk" data-testid="advanced-disclosure-sdk" label="SDK session server" summary={sdkEnabled ? 'On' : 'Off'}>
+          <SettingsRow indent label="Use the Agent SDK server" help="Runs sessions through the SDK server instead of the CLI." htmlFor="sdk-enabled"
+            control={<ToggleSwitch id="sdk-enabled" name="sdk-enabled" checked={sdkEnabled} onChange={setSdkEnabled} />} />
+          {/* Depends on the switch above: dimmed and read-only while it is off,
+              like Push interval (N3-23). */}
+          <SettingsRow indent label="Port" htmlFor="sdk-port" disabled={!sdkEnabled}
+            control={<FormNumber id="sdk-port" defaultValue={config.session_server?.port ?? 7890} min={1024} max={65535} readOnly={!sdkEnabled} />} />
+        </SettingsDisclosure>
 
-        {/* Raw Config */}
-        <details className="settings-collapsible">
-          <summary className="settings-collapsible-title">Raw Config</summary>
-          <div className="settings-collapsible-body">
-            <pre className="settings-raw-config">{JSON.stringify(config, null, 2)}</pre>
-          </div>
-        </details>
-      </div>
+        <SettingsDisclosure id="advanced-raw" data-testid="advanced-disclosure-raw" label="Raw config" summary="Read only">
+          <SettingsMonoBlock label="Current config" text={JSON.stringify(config, null, 2)} data-testid="advanced-raw-config" />
+        </SettingsDisclosure>
+        {formError && <p className="settings-row-error" role="alert" data-testid="advanced-save-error">{formError}</p>}
+      </SettingsGroup>
     </SectionCard>
   );
 }

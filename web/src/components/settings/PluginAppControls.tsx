@@ -1,6 +1,6 @@
 /**
- * The apps a plugin contributes, rendered INSIDE that plugin's row in the
- * Plugins section — because to the user an app IS the plugin, not a separate
+ * The apps a plugin contributes, rendered as indented rows under that plugin's
+ * row in the Plugins section, because to the user an app IS the plugin, not a separate
  * thing to manage on another panel. Open it, choose whether its entry lives in
  * the Sidebar or here in Settings, or hide the entry (a hidden app keeps its
  * deep link; the plugin itself stays on).
@@ -15,6 +15,9 @@ import {
   updateAppDisposition,
   updateAppPlacement,
 } from '@/apps/store'
+import { SettingsRow, SettingsTag } from './SettingsSection'
+import { SettingsButton } from './inputs/SettingsButton'
+import '@/styles/settings-sections-addons.css'
 
 export function PluginAppControls({ pluginId }: { pluginId: string }) {
   const navigate = useNavigate()
@@ -31,49 +34,49 @@ export function PluginAppControls({ pluginId }: { pluginId: string }) {
   const hidden = new Set(preferences.hidden)
 
   return (
-    <div className="plugin-app-controls">
+    <div className="settings-addons-rows plugin-app-controls">
       {mine.map((app) => {
         const placement = effectiveAppPlacement(app, preferences)
         const isHidden = hidden.has(app.key)
         return (
-          <div key={app.key} className="plugin-app-controls-row" data-testid={`plugin-app-row-${app.key}`}>
-            <span className="plugin-app-controls-label">
-              App: <strong>{app.title}</strong>
-              {isHidden && <span className="plugin-app-chip">Hidden</span>}
-              {!isHidden && <span className="plugin-app-chip">{placement === 'settings' ? 'In Settings' : 'In Sidebar'}</span>}
-            </span>
-            <span className="plugin-app-controls-actions">
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                data-testid={`plugin-app-open-${app.key}`}
-                onClick={() => navigate(app.path)}
-              >
-                Open
-              </button>
-              {/* Only a native plugin app can choose its surface; a legacy webview
-                  has no settings placement (supportsPlacementOverride). Stays
-                  available while hidden so the user picks where Show restores it. */}
-              {supportsPlacementOverride(app) && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  data-testid={`plugin-app-placement-${app.key}`}
-                  onClick={() => updateAppPlacement(app.key, placement === 'settings' ? 'sidebar' : 'settings')}
+          <SettingsRow
+            key={app.key}
+            indent
+            className="plugin-app-controls-row"
+            data-testid={`plugin-app-row-${app.key}`}
+            label={
+              <span className="settings-addons-inline plugin-app-controls-label">
+                <span className="settings-addons-ellipsis" title={app.title}>{`App: ${app.title}`}</span>
+                <SettingsTag>{isHidden ? 'Hidden' : placement === 'settings' ? 'In settings' : 'In sidebar'}</SettingsTag>
+              </span>
+            }
+            control={
+              <span className="settings-addons-inline plugin-app-controls-actions">
+                <SettingsButton data-testid={`plugin-app-open-${app.key}`} onClick={() => navigate(app.path)}>
+                  Open
+                </SettingsButton>
+                {/* Only a native plugin app can choose its surface; a legacy webview
+                    has no settings placement (supportsPlacementOverride). Stays
+                    available while hidden so the user picks where Show restores it. */}
+                {supportsPlacementOverride(app) && (
+                  <SettingsButton
+                    data-testid={`plugin-app-placement-${app.key}`}
+                    reserve={['Move to sidebar', 'Move to settings']}
+                    onClick={() => updateAppPlacement(app.key, placement === 'settings' ? 'sidebar' : 'settings')}
+                  >
+                    {placement === 'settings' ? 'Move to sidebar' : 'Move to settings'}
+                  </SettingsButton>
+                )}
+                <SettingsButton
+                  data-testid={`plugin-app-visibility-${app.key}`}
+                  reserve={['Show', 'Hide']}
+                  onClick={() => updateAppDisposition(app.key, isHidden ? 'pinned' : 'hidden')}
                 >
-                  {placement === 'settings' ? 'Move to Sidebar' : 'Move to Settings'}
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                data-testid={`plugin-app-visibility-${app.key}`}
-                onClick={() => updateAppDisposition(app.key, isHidden ? 'pinned' : 'hidden')}
-              >
-                {isHidden ? 'Show' : 'Hide'}
-              </button>
-            </span>
-          </div>
+                  {isHidden ? 'Show' : 'Hide'}
+                </SettingsButton>
+              </span>
+            }
+          />
         )
       })}
     </div>

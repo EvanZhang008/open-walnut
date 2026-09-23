@@ -101,18 +101,21 @@ test('the Settings SIDEBAR carries every management entry, no Tasks table', asyn
   await expect(page).toHaveURL(/\/skills$/)
   await expect(page.locator('.skills-page')).toBeVisible({ timeout: 30_000 })
 
-  // And a Manage SECTION scrolls to its section on the settings page itself.
-  await page.locator('.sidebar a[href="/settings"]').click()
+  // And a Manage SECTION opens its own pane on the settings page itself.
+  await page.locator('.sidebar a[href^="/settings"]').click()
   await expect(nav).toBeVisible({ timeout: 30_000 })
   await nav.getByTestId('settings-nav-hooks').click()
   await expect(page).toHaveURL(/\/settings#hooks$/)
   await expect(page.locator('#hooks')).toBeVisible()
+  await expect(nav.getByTestId('settings-nav-hooks')).toHaveAttribute('aria-current', 'page')
 })
 
 test('recording starts from Settings → Audio Capture, not the sidebar', async ({ page }) => {
   await page.goto('/settings')
-  await expect(page.locator('#audio-capture')).toBeAttached({ timeout: 30_000 })
-  await page.locator('.settings-nav-item', { hasText: 'Audio Capture' }).click()
+  // Pane mode: Audio Capture is not mounted until its nav entry opens it.
+  await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('#audio-capture')).toHaveCount(0)
+  await page.getByTestId('settings-nav-audio-capture').click()
 
   const section = page.locator('#audio-capture')
   await expect(section).toBeVisible()

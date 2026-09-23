@@ -39,7 +39,7 @@ import { type Page } from '@playwright/test'
  * shared :3457 fixture installs no plugins by design.
  */
 
-const SCREENSHOT_DIR = '/tmp/settings-unify'
+const SCREENSHOT_DIR = '/tmp/settings-redesign'
 
 interface Fixture {
   port: number
@@ -177,19 +177,23 @@ test('lists what is installed and what the catalog offers, in one section', asyn
 
   await openPlugins(page)
 
-  // Installed: the linked plugin, on, with what it adds.
+  // Installed: the linked plugin, on, with what it adds. The switch says "on" (no On
+  // tag), and what it adds rides the row's title sentence.
   const timeRow = page.getByTestId('plugin-row-walnut-time')
   await expect(timeRow).toBeVisible({ timeout: 30_000 })
   await expect(timeRow).toHaveAttribute('data-plugin-status', 'active')
-  await expect(timeRow).toContainText('on')
-  await expect(timeRow).toContainText('adds App')
+  await expect(page.locator('#plugin-toggle-walnut-time')).toHaveAttribute('aria-checked', 'true')
+  await expect(timeRow).toHaveAttribute('title', /Adds app/i)
+  await expect(page.getByTestId('plugin-store-installed').getByTestId('plugin-row-walnut-time')).toHaveCount(1)
 
   // Available: a catalog entry that is NOT on this machine.
   const available = page.getByTestId('plugin-store-available')
   await expect(available).toBeVisible()
   const fixtureRow = page.getByTestId(`plugin-row-${fixture!.overlayEntryId}`)
   await expect(fixtureRow).toHaveAttribute('data-plugin-status', 'available')
-  await expect(fixtureRow).toContainText('not installed')
+  // Not installed is said by the group it sits in, not by a word on the row.
+  await expect(available.getByTestId(`plugin-row-${fixture!.overlayEntryId}`)).toHaveCount(1)
+  await expect(page.getByTestId(`plugin-install-${fixture!.overlayEntryId}`)).toHaveText('Install...')
 
   // Builtin sync plugins ship with Walnut and need credentials, so they are honest
   // about it rather than showing a switch that would refuse to flip.
@@ -201,7 +205,8 @@ test('lists what is installed and what the catalog offers, in one section', asyn
     // registry, so its schema has to come from the loader's set-aside list; without
     // that the plugins most in need of configuring had no Configure button at all.
     await expect(page.getByTestId('plugin-configure-jira')).toBeVisible()
-    await expect(jira).toContainText('Missing configuration: base_url')
+    await expect(jira).toContainText('Needs setup')
+    await expect(jira).toContainText(/Needs setup: base URL/)
 
     // Configure opens the plugin's own form UNDER its row — configured where it is
     // turned on. It must not be open on mount: an eight-field form expanded by default
@@ -244,7 +249,7 @@ test('installing still requires the trust acknowledgement, prefill included', as
 
   // The sentence a person has to READ must not be shouted. `.form-group label`
   // uppercases every label, which caught this one too.
-  await expect(store.locator('label.plugin-trust-label')).toHaveCSS('text-transform', 'none')
+  await expect(store.locator('.plugin-trust-label')).toHaveCSS('text-transform', 'none')
   await shoot(page, 'store-1680-install-trust')
 
   // And unticking takes the ability away again.
@@ -272,7 +277,7 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0, { timeout: 60_000 })
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('plugin-row-walnut-time')).toHaveAttribute('data-plugin-status', 'disabled')
-  await expect(page.getByTestId('plugin-row-walnut-time')).toContainText('off')
+  await expect(page.locator('#plugin-toggle-walnut-time')).toHaveAttribute('aria-checked', 'false')
   await shoot(page, 'store-1680-toggled-off')
 
   // One registry, so the plugin's app row forgets it in the same beat as the nav row.
@@ -306,7 +311,7 @@ test('a plugin that runs on another comes up with it, and the catalog stays quie
     const row = page.getByTestId(`plugin-row-${id}`)
     await expect(row).toBeVisible({ timeout: 30_000 })
     await expect(row).toHaveAttribute('data-plugin-status', 'active')
-    await expect(row).toContainText('on')
+    await expect(page.locator(`#plugin-toggle-${id}`)).toHaveAttribute('aria-checked', 'true')
   }
   await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'active')
 
@@ -332,7 +337,7 @@ test('installing a dependency asks before it clones anything', async ({ page }) 
 
   // The action on a blocked row is an ASK, not an install.
   const install = page.getByTestId('plugin-dependency-install-epsilon-zeta')
-  await expect(install).toHaveText('Install Zeta…')
+  await expect(install).toHaveText('Install Zeta...')
   await expect(page.getByTestId('plugin-pending-dependencies')).toHaveCount(0)
 
   await install.click()
@@ -386,12 +391,12 @@ test('turning off a plugin others run on asks first, and never writes them off',
   await page.getByTestId('plugin-cascade-confirm').click()
 
   await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 60_000 })
-  await expect(page.getByTestId('plugin-row-alpha')).toContainText('off')
+  await expect(alphaToggle).toHaveAttribute('aria-checked', 'false')
   const beta = page.getByTestId('plugin-row-beta')
   const delta = page.getByTestId('plugin-row-delta')
   for (const row of [beta, delta]) {
     await expect(row).toHaveAttribute('data-plugin-status', 'needs-dependency', { timeout: 60_000 })
-    await expect(row).toContainText('needs another plugin')
+    await expect(row).toContainText('Needs another plugin')
   }
   // Each row names what IT waits for, by display name, in the server's own words — and
   // owns its own action, keyed by row + dependency so neither shadows the other.
@@ -418,7 +423,9 @@ test('turning off a plugin others run on asks first, and never writes them off',
   // Both dependents return, because neither was ever written off.
   for (const row of [beta, delta]) {
     await expect(row).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
-    await expect(row).toContainText('on')
+  }
+  for (const id of ['beta', 'delta']) {
+    await expect(page.locator(`#plugin-toggle-${id}`)).toHaveAttribute('aria-checked', 'true')
   }
   await expect.poll(() => configEnabled('alpha'), { timeout: 15_000 }).toBe(true)
   await shoot(page, 'store-1680-dependency-restored')

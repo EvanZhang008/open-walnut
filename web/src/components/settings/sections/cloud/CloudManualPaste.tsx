@@ -1,6 +1,6 @@
 /**
  * Manual path: the provider console steps plus the first-boot script in a copy
- * box. This is the ONE surface that shows a blob containing the pairing code —
+ * box. This is the ONE surface that shows a blob containing the pairing code;
  * that's the point (it's what gets pasted into the VM), so it warns rather than
  * redacts.
  *
@@ -12,6 +12,9 @@
 import { useEffect, useState } from 'react';
 import { getUserData, type CloudSetupJob } from '@/api/cloud-setup';
 import { log } from '@/utils/log';
+import { SettingsGroup, SettingsRow, SettingsNotice } from '../../SettingsSection';
+import { SettingsButton } from '../../inputs/SettingsButton';
+import '@/styles/settings-sections-addons.css';
 
 interface Props {
   job: CloudSetupJob;
@@ -50,45 +53,40 @@ export function CloudManualPaste({ job }: Props) {
     // Re-fetch when the job's identity or address changes, not on every tick.
   }, [job.id, job.provider, job.domainMode, job.domain]);
 
+  const copy = () => {
+    if (!userData) return;
+    void navigator.clipboard?.writeText(userData).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
+      () => { /* clipboard blocked: the script text is selectable */ },
+    );
+  };
+
   return (
-    <div className="cloud-manual">
-      <h4 className="cloud-manual-title">Create the VM yourself</h4>
-      {steps.length > 0 && (
-        <ol className="cloud-manual-steps">
-          {steps.map((step, i) => <li key={i}>{step}</li>)}
-        </ol>
-      )}
+    <SettingsGroup heading="Create the VM yourself" className="cloud-manual">
+      {steps.map((step, i) => (
+        <SettingsRow key={i} className="cloud-manual-step" label={`${i + 1}. ${step}`} />
+      ))}
       {consoleUrl && (
-        <p className="cloud-manual-console">
-          <a href={consoleUrl} target="_blank" rel="noreferrer noopener">Open the provider console</a>
-        </p>
+        <SettingsRow
+          className="cloud-manual-console"
+          label="Provider console"
+          control={<a className="settings-addons-link" href={consoleUrl} target="_blank" rel="noreferrer noopener">Open the provider console</a>}
+        />
       )}
-
-      {error && <p className="devices-error">{error}</p>}
-
+      {error && <SettingsNotice kind="error" role="alert">{error}</SettingsNotice>}
       {userData && (
-        <div className="cloud-userdata">
-          <div className="cloud-userdata-head">
-            <span className="cloud-userdata-label">First-boot script (cloud-init / user-data)</span>
-            <button
-              type="button"
-              className="cloud-copy-btn"
-              onClick={() => {
-                void navigator.clipboard?.writeText(userData).then(
-                  () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
-                  () => { /* clipboard blocked — the textarea is selectable */ },
-                );
-              }}
-            >
+        <div className="settings-row settings-row-stacked cloud-userdata" data-wide="true">
+          <div className="settings-mono-head">
+            <span className="settings-row-label cloud-userdata-label">First-boot script (cloud-init user data)</span>
+            <SettingsButton onClick={copy} reserve={['Copy script', 'Copied']}>
               {copied ? 'Copied' : 'Copy script'}
-            </button>
+            </SettingsButton>
           </div>
-          <p className="cloud-userdata-warn">
-            This script contains a one-time pairing code. Treat it like a password: paste it into
-            your VM and nowhere else.
+          <p className="settings-row-help cloud-userdata-warn" data-state="warning">
+            It holds a one-time pairing code, so paste it into your VM and nowhere else.
           </p>
           <textarea
-            className="cloud-userdata-box"
+            className="cloud-userdata-box settings-input settings-input--mono"
             readOnly
             rows={12}
             spellCheck={false}
@@ -97,6 +95,6 @@ export function CloudManualPaste({ job }: Props) {
           />
         </div>
       )}
-    </div>
+    </SettingsGroup>
   );
 }

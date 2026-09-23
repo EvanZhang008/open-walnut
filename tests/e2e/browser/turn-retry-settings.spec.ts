@@ -34,25 +34,32 @@ test('turn-retry is configurable from the Hooks page via real UI clicks', async 
   })
 
   // Real SPA navigation to Settings (never page.goto).
-  await page.locator('a[href="/settings"]').first().click()
+  await page.locator('a[href^="/settings"]').first().click()
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(1000)
 
-  // Into the Hooks section.
-  await page.getByRole('button', { name: /^Hooks$/i }).first().click()
-  await page.waitForTimeout(1500)
+  // Into the Hooks pane (a real nav click).
+  await page.getByTestId('settings-nav-hooks').click()
+  await expect(page.locator('#hooks.settings-section')).toBeVisible({ timeout: 20_000 })
 
   const toggle = page.locator('#hook-toggle-turn-error-auto-retry')
   await expect(toggle).toHaveCount(1)
   await toggle.scrollIntoViewIfNeeded()
 
-  // The hook card must show it as a DAEMON policy (that's the whole point of
-  // where the retry runs), with its config key visible.
-  const card = page.locator('.hook-card', { has: toggle })
-  await expect(card).toContainText(/daemon-policy/i)
-  await expect(card).toContainText('session.turn_retry.enabled')
-  await expect(card).toContainText(/daemon:turn-result/i)
-  await page.screenshot({ path: '/tmp/turn-retry-verify/10-hooks-card.png' })
+  // The hook must read as a DAEMON policy (that's the whole point of where the
+  // retry runs): it sits in the Daemon hooks group, whose heading says so once
+  // instead of a tag repeated on every row (N3-11), and its details name the
+  // daemon-policy source and its config key.
+  const hookRow = page.getByTestId('hook-row-turn-error-auto-retry')
+  await expect(page.getByTestId('hooks-group-daemon').getByTestId('hook-row-turn-error-auto-retry')).toHaveCount(1)
+  await expect(hookRow).not.toContainText('Daemon policy')
+  await page.getByTestId('hook-disclose-turn-error-auto-retry').click()
+  const details = page.locator('#hook-details-turn-error-auto-retry')
+  await expect(details).toBeVisible()
+  await expect(details).toContainText(/daemon-policy/i)
+  await expect(details).toContainText('session.turn_retry.enabled')
+  await expect(details).toContainText(/daemon:turn-result/i)
+  await page.screenshot({ path: '/tmp/settings-redesign/turn-retry-hook-row.png' })
 
   // Declared knobs render with their current values.
   const budget = page.locator('#hook-setting-turn-error-auto-retry-budget_hours')
@@ -65,7 +72,6 @@ test('turn-retry is configurable from the Hooks page via real UI clicks', async 
   await budget.fill('6')
   await budget.blur()
   await page.waitForTimeout(2500)
-  await page.screenshot({ path: '/tmp/turn-retry-verify/11-budget-6.png' })
 
   const afterEdit = await page.evaluate(async () => {
     const r = await fetch('/api/config'); const j = await r.json()
@@ -85,7 +91,6 @@ test('turn-retry is configurable from the Hooks page via real UI clicks', async 
   await toggle.click()
   await page.waitForTimeout(2500)
   await expect(page.locator('#hook-setting-turn-error-auto-retry-budget_hours')).toHaveCount(0)
-  await page.screenshot({ path: '/tmp/turn-retry-verify/12-toggled-off.png' })
 
   const afterOff = await page.evaluate(async () => {
     const r = await fetch('/api/config'); const j = await r.json()
@@ -102,7 +107,6 @@ test('turn-retry is configurable from the Hooks page via real UI clicks', async 
 
   // The daemon-restart banner appears, since this is enforced in the daemon.
   await expect(page.locator('.hook-banner')).toContainText(/daemon restarts/i)
-  await page.screenshot({ path: '/tmp/turn-retry-verify/13-back-on.png' })
 
   console.log('FAILED REQUESTS:', JSON.stringify(failedUrls, null, 2))
   console.log('CONSOLE ERRORS:', JSON.stringify(errors, null, 2))
@@ -122,7 +126,7 @@ test('turn-retry is configurable from the Hooks page via real UI clicks', async 
 test('Sessions does not duplicate the retry editor', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('a[href="/settings"]').first().click()
+  await page.locator('a[href^="/settings"]').first().click()
   await page.waitForLoadState('networkidle')
   await page.getByTestId('settings-nav-sessions').click()
   await page.waitForTimeout(1200)
@@ -131,10 +135,9 @@ test('Sessions does not duplicate the retry editor', async ({ page }) => {
   await expect(page.locator('#turn-retry-budget')).toHaveCount(0)
   // The section itself still renders its own controls.
   await expect(page.locator('#idle-timeout')).toBeVisible()
-  await page.screenshot({ path: '/tmp/turn-retry-verify/20-sessions-no-dup.png' })
 
   // Hooks is the single home for it.
-  await page.getByRole('button', { name: /^Hooks$/i }).first().click()
-  await page.waitForTimeout(1200)
+  await page.getByTestId('settings-nav-hooks').click()
+  await expect(page.locator('#hooks.settings-section')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('#hook-toggle-turn-error-auto-retry')).toHaveCount(1)
 })

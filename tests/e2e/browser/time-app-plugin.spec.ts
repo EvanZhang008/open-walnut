@@ -118,7 +118,8 @@ async function expandSidebar(page: Page): Promise<void> {
 async function openSettings(page: Page): Promise<void> {
   await expandSidebar(page)
   await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page).toHaveURL(/\/settings$/)
+  // The link returns to the last pane Settings showed, so a pane hash may follow.
+  await expect(page).toHaveURL(/\/settings(#[\w-]+)?$/)
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
 }
 
@@ -727,9 +728,9 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   const appRow = page.getByTestId('plugin-app-row-walnut-time:main')
   await expect(appRow).toBeVisible({ timeout: 60_000 })
   // Where it starts: what the App declared.
-  await expect(appRow).toContainText('In Settings')
+  await expect(appRow).toContainText('In settings')
   const move = page.getByTestId('plugin-app-placement-walnut-time:main')
-  await expect(move).toHaveText('Move to Sidebar')
+  await expect(move).toHaveText('Move to sidebar')
   await shoot(page, 'apps-manager-placement-control')
 
   // A Core App is not the user's to move: it is not a plugin, so it has no row
@@ -740,10 +741,10 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   await move.click()
 
   // Live, with no reload: the declared placement was only a default.
-  await expect(appRow).toContainText('In Sidebar')
+  await expect(appRow).toContainText('In sidebar')
   await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
-  await expect(move).toHaveText('Move to Settings')
+  await expect(move).toHaveText('Move to settings')
   await shoot(page, 'placement-moved-to-sidebar')
 
   // It survives a reload, and the App itself is unchanged by the move: same route,
@@ -761,7 +762,7 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   await openSettings(page)
   await page.getByTestId('settings-nav-plugin-store').click()
   await page.getByTestId('plugin-app-placement-walnut-time:main').click()
-  await expect(page.getByTestId('plugin-app-row-walnut-time:main')).toContainText('In Settings')
+  await expect(page.getByTestId('plugin-app-row-walnut-time:main')).toContainText('In settings')
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
 

@@ -1,11 +1,11 @@
 /**
- * Settings › Engines: which engine a new session starts on, then each
+ * Settings, Engines: which engine a new session starts on, then each
  * coding-agent engine's OWN settings (the ones its command-line config screen
  * edits), on the host where its sessions run.
  *
  * The default-engine picker at the top is the only control here that writes
  * WALNUT config (`defaults.engine`); everything below it edits files the engine
- * owns. It saves on pick — deliberately not through useAutoSave, so merely
+ * owns. It saves on pick: deliberately not through useAutoSave, so merely
  * opening this page can never write the config back.
  *
  * This section edits files the ENGINE owns, not Walnut config. The load and
@@ -23,11 +23,15 @@
  * compiled-in fallback catalog says false for every engine, so a cold page shows
  * tabs only once GET /api/engines has hydrated.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { Config, SessionEngine } from '@open-walnut/core';
-import { SettingsSection, SettingsEmpty, SettingsNotice, SettingsSubCard } from '../SettingsSection';
-import { StatusIndicator } from '../inputs/StatusIndicator';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import {
+  SettingsDisclosure, SettingsEmpty, SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow, SettingsSection, SettingsTag,
+} from '../SettingsSection';
+import { SegmentedControl } from '../inputs/SegmentedControl';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
+import { CloseGlyph } from '../settings-glyphs';
 import { useEngineCatalog, useEngineCatalogHydration, type EngineCatalogEntry } from '@/hooks/useEngineCatalog';
 import { useEngineSettings } from '@/hooks/useEngineSettings';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
@@ -35,13 +39,21 @@ import { useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { envUncheckedSentence } from '@/utils/engine-settings-copy';
 import { hostIndicatorStatus, hostStatusText } from '@/utils/host-connect';
 import { LOCAL_HOST, type EngineSettingView } from '@/api/engine-settings';
-import { EngineSettingRow } from './EngineSettingRows';
+import { EngineSettingRow, firstSentence as firstSentenceOf } from './EngineSettingRows';
 import {
   currentDefaultEngine, defaultEngineOptions, defaultEnginePickerReady, defaultEngineSave,
 } from './default-engine-select';
+import { useSerialSave, type OnSave } from './GeneralSection';
+import { resolveMainProvider } from './main-provider';
+import { CodeText } from './code-text';
+import { categorizeSettings } from './engine-setting-categories';
 import '@/styles/engine-settings.css';
+import '@/styles/settings-engines-grid.css';
 
-const ENGINES_DESCRIPTION = "Which engine new sessions start on, and each engine's own settings (the ones its command-line config screen edits) on the host where your sessions run. Changes save automatically.";
+/** Segmented up to this many choices, a select beyond it. */
+const MAX_SEGMENTS = 5;
+/** A group longer than this splits into chunks so no box runs past a screen. */
+const MAX_GROUP_ROWS = 10;
 
 /** The group that only the engine's interactive command reads, collapsed by default. */
 const TERMINAL_GROUP_ID = 'terminal';
@@ -49,8 +61,7 @@ const TERMINAL_GROUP_ID = 'terminal';
 /**
  * How long a catalog with no settings-capable engine is treated as "still
  * loading". The fallback catalog reports none, so without this grace a cold page
- * flashes "no engine exposes its own settings" before hydration lands, which
- * reads as a verdict rather than a wait.
+ * flashes "no engine exposes its own settings" before hydration lands.
  */
 const CATALOG_GRACE_MS = 1_500;
 
@@ -68,62 +79,85 @@ function availabilityText(entry: EngineCatalogEntry): string | null {
 }
 
 /**
- * One host button. Its own component because `useHostStatus` subscribes per host
- * and a pushed phase should re-render one button, not the whole section.
- *
- * The dot carries the verdict and the sentence lives in the tooltip: a phase
- * sentence ("Opening an SSH connection to …") does not fit in a tab, and the
- * local machine has no connect chain to report at all.
+ * Whose setting a row is, as the settings page names it elsewhere: the Claude
+ * engine is "Claude Code" (the CLI it runs), so a bare model row reads
+ * `Claude Code model` (pure, unit tested).
  */
-function HostButton({ host, active, onPick }: { host: HostChoice; active: boolean; onPick: (value: string) => void }) {
+export function engineOwnerName(id: string | undefined, displayName: string | undefined): string | undefined {
+  return id === 'claude' ? 'Claude Code' : displayName;
+}
+
+/** The engine is "Claude Code" wherever it is named, never bare "Claude" (N30). */
+export function engineName(label: string): string {
+  return label.replace(/^Claude\b(?! Code)/, 'Claude Code');
+}
+
+/** "user settings" -> "User settings": labels start with a capital (N12). */
+export function sentenceCase(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+/**
+ * Split a long group into chunks of at most `max` rows, balanced so a group
+ * never ends in a lone leftover row (11 is 6 + 5, not 10 + 1; N12). Pure.
+ */
+export function chunkRows<T>(items: readonly T[], max = MAX_GROUP_ROWS): T[][] {
+  if (items.length === 0) return [];
+  const n = Math.ceil(items.length / max);
+  const size = Math.ceil(items.length / n);
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** The status tag word for a host indicator (pure, unit tested). */
+export function hostTagOf(kind: 'connected' | 'error' | 'unknown' | 'testing'): { text: string; tone: 'success' | 'warning' | 'neutral' } {
+  if (kind === 'connected') return { text: 'Reachable', tone: 'success' };
+  if (kind === 'error') return { text: 'Offline', tone: 'warning' };
+  return { text: 'Checking', tone: 'neutral' };
+}
+
+/**
+ * One host's status tag. Its own component because `useHostStatus` subscribes
+ * per host and a pushed phase should re-render one tag, not the whole section.
+ * The local machine has no connect chain, so it is always reachable.
+ */
+function HostStatusTag({ host }: { host: HostChoice }) {
   const isLocal = host.value === LOCAL_HOST;
   const status = useHostStatus(isLocal ? null : host.value);
   const hydration = useHostStatusHydration();
-  const sentence = isLocal ? '' : hostStatusText(status, hydration);
+  const tag = isLocal ? hostTagOf('connected') : hostTagOf(hostIndicatorStatus(status, hydration));
+  const sentence = isLocal ? 'This machine.' : hostStatusText(status, hydration);
   return (
-    <button
-      type="button"
-      className={`engine-settings-choice${active ? ' is-active' : ''}`}
-      aria-pressed={active}
-      data-host={host.value}
-      title={sentence ? `${host.label}: ${sentence}` : host.label}
-      aria-label={sentence ? `${host.label}, ${sentence}` : host.label}
-      onClick={() => onPick(host.value)}
-    >
-      <span className="engine-settings-choice-name">{host.label}</span>
-      {!isLocal && <StatusIndicator status={hostIndicatorStatus(status, hydration)} text="" />}
-    </button>
+    <span data-host={host.value} data-testid={`engine-settings-host-status-${host.value}`}>
+      <SettingsTag tone={tag.tone} title={`${host.label}: ${sentence}`}>{tag.text}</SettingsTag>
+    </span>
   );
 }
 
-export function EnginesSection({ config, onSave }: { config: Config; onSave: (partial: Partial<Config>) => Promise<void> }) {
+export function EnginesSection({ config, onSave }: { config: Config; onSave: OnSave }) {
   const catalog = useEngineCatalog();
   const { health } = useSystemHealth();
   const catalogHydration = useEngineCatalogHydration();
   const engines = useMemo(() => catalog.filter((e) => e.capabilities.settings), [catalog]);
 
   // Default engine for new sessions. Its option list is the WHOLE catalog (minus
-  // what isn't installed), not the settings-capable subset the tabs below use:
-  // an engine can run sessions without exposing any settings of its own.
-  const defaultEngine = currentDefaultEngine(config);
-  const defaultOptions = useMemo(() => defaultEngineOptions(catalog, defaultEngine), [catalog, defaultEngine]);
+  // what isn't installed), not the settings-capable subset the tabs below use.
+  const savedDefault = currentDefaultEngine(config);
+  const save = useSerialSave(config, onSave);
+  const defaultPick = useOptimisticSetting<SessionEngine>(
+    savedDefault,
+    (id) => save((c) => defaultEngineSave(c, id), { rowKey: 'engines.default-engine' }),
+    { rowKey: 'engines.default-engine' },
+  );
+  const defaultEngine = defaultPick.value;
+  const defaultOptions = useMemo(() => defaultEngineOptions(catalog, savedDefault), [catalog, savedDefault]);
   const defaultPickerReady = defaultEnginePickerReady(catalogHydration);
-  const [savingDefault, setSavingDefault] = useState(false);
-  const [defaultError, setDefaultError] = useState<string | null>(null);
-  const pickDefaultEngine = async (id: SessionEngine) => {
-    if (id === defaultEngine) return;
-    setSavingDefault(true);
-    setDefaultError(null);
-    try {
-      await onSave(defaultEngineSave(config, id));
-    } catch (err) {
-      // The select keeps showing the SAVED value (it renders from config), so a
-      // failed write must say so — otherwise the row silently snaps back.
-      setDefaultError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSavingDefault(false);
-    }
-  };
+  const provider = config.agent?.main_provider ?? health.mainProvider;
+  const usesApi = resolveMainProvider(provider, config.providers).kind !== 'cli';
+  const smallJobs = usesApi ? (
+    <>Small background jobs use an API instead (<a href="#providers">Advanced</a>).</>
+  ) : defaultEngine !== 'claude' ? 'Small background jobs stay on Claude Code.' : null;
 
   const hosts = useMemo<HostChoice[]>(() => {
     const remote = Object.entries(config.hosts ?? {})
@@ -142,11 +176,11 @@ export function EnginesSection({ config, onSave }: { config: Config; onSave: (pa
     ?? null;
   const engine = activeEngine?.id ?? null;
   const host = hosts.some((h) => h.value === hostId) ? hostId : LOCAL_HOST;
+  const hostLabel = hosts.find((h) => h.value === host)?.label ?? host;
 
   const [catalogGrace, setCatalogGrace] = useState(true);
-  // The load/save machinery (generation + abort per load, optimistic rows, the
-  // late-answer rule, outcome-aware revert vs re-read) is shared with the
-  // composer's per-session popover; this page is the `{ host }` target.
+  // The load/save machinery is shared with the composer's per-session popover;
+  // this page is the `{ host }` target.
   const {
     view, loading, refreshing, loadError, banner, dismissBanner, savingKeys, onSet, onReset, reload,
   } = useEngineSettings(engine ?? undefined, { host }, engine !== null);
@@ -157,198 +191,230 @@ export function EnginesSection({ config, onSave }: { config: Config; onSave: (pa
     return () => clearTimeout(timer);
   }, [engines.length]);
 
-  const renderRows = (items: EngineSettingView[]) => (
-    <div className="settings-row-list engine-settings-rows">
-      {items.map((item) => (
-        <EngineSettingRow
-          key={item.key}
-          engine={engine ?? ''}
-          item={item}
-          files={view?.files ?? []}
-          saving={savingKeys.includes(item.key)}
-          onSet={onSet}
-          onReset={onReset}
-        />
-      ))}
-    </div>
-  );
+  const renderRows = (items: EngineSettingView[], indent = false) =>
+    items.map((item) => (
+      <EngineSettingRow
+        key={item.key}
+        variant="pane"
+        indent={indent}
+        engineLabel={engineOwnerName(activeEngine?.id, activeEngine?.displayName)}
+        engine={engine ?? ''}
+        item={item}
+        files={view?.files ?? []}
+        saving={savingKeys.includes(item.key)}
+        onSet={onSet}
+        onReset={onReset}
+      />
+    ));
 
   const body = () => {
     if (engines.length === 0) {
       return catalogGrace
-        ? <LoadingSpinner />
-        : <SettingsEmpty>No engine on this machine keeps settings Walnut can edit yet.</SettingsEmpty>;
+        ? <SettingsGroup><SettingsLoadingRow /></SettingsGroup>
+        : <SettingsGroup><SettingsEmpty>No engine on this machine keeps settings Walnut can edit yet.</SettingsEmpty></SettingsGroup>;
     }
-    if (loading || refreshing) return <LoadingSpinner />;
+    if (loading || refreshing) return <SettingsGroup><SettingsLoadingRow /></SettingsGroup>;
     if (loadError) {
       return (
-        <SettingsEmpty>
+        <SettingsNotice
+          kind="warn"
+          role="alert"
+          action={<SettingsButton className="engine-settings-retry" onClick={reload}>Retry</SettingsButton>}
+        >
           {loadError.message}
-          <button
-            type="button"
-            className="btn btn-sm engine-settings-retry"
-            onClick={reload}
-          >
-            Retry
-          </button>
-        </SettingsEmpty>
+        </SettingsNotice>
       );
     }
-    if (!view) return <SettingsEmpty>This engine reported no settings.</SettingsEmpty>;
+    if (!view) return <SettingsGroup><SettingsEmpty>This engine reported no settings.</SettingsEmpty></SettingsGroup>;
 
     return (
       <>
-        {view.note && <p className="engine-settings-note">{view.note}</p>}
         {/* The rows say when a variable overrides the file; on a host whose
-            environment was not visible they cannot, and silence would read as
-            "no override", so the gap is named once here. */}
+            environment was not visible they cannot, so the gap is named once. */}
         {!view.envChecked && (
-          <p className="engine-settings-note engine-settings-env-unchecked" data-testid="engine-settings-env-unchecked">
-            {envUncheckedSentence(hosts.find((h) => h.value === host)?.label ?? host)}
-          </p>
+          <div data-testid="engine-settings-env-unchecked">
+            <SettingsNotice kind="warn">{envUncheckedSentence(hostLabel)}</SettingsNotice>
+          </div>
         )}
         <div className="engine-settings-groups">
           {view.groups.map((group) => {
             if (group.items.length === 0) return null;
             if (group.id !== TERMINAL_GROUP_ID) {
-              return (
-                <SettingsSubCard key={group.id} title={group.title} description={group.help}>
-                  {renderRows(group.items)}
-                </SettingsSubCard>
-              );
+              // A long group splits by topic, each with a real heading (N3-02);
+              // a topic past 10 rows keeps one box with a break every 10.
+              return categorizeSettings(group.id, sentenceCase(group.title), group.items, MAX_GROUP_ROWS).map((cat, i) => (
+                <SettingsGroup
+                  key={`${group.id}-${cat.id}`}
+                  heading={cat.title}
+                  footer={i === 0 && group.help ? <CodeText text={firstSentenceOf(group.help)} /> : undefined}
+                  data-testid={i === 0 ? `engine-settings-group-${group.id}` : undefined}
+                >
+                  <div className="engine-settings-grid">
+                    {chunkRows(cat.items).map((chunk, j) => (
+                      <Fragment key={j}>
+                        {j > 0 && <div className="engine-settings-chunk-break" role="presentation" />}
+                        {renderRows(chunk)}
+                      </Fragment>
+                    ))}
+                  </div>
+                </SettingsGroup>
+              ));
             }
-            // Collapsed: nothing in here changes a Walnut session. The title is
-            // the summary, so the card inside carries the help text only.
+            // Collapsed: nothing in here changes a Walnut session.
             return (
-              <details key={group.id} className="settings-collapsible engine-settings-collapsible">
-                <summary className="settings-collapsible-title">
-                  {group.title} · {group.items.length} settings
-                </summary>
-                <div className="settings-collapsible-body">
-                  <SettingsSubCard description={group.help}>
-                    {renderRows(group.items)}
-                  </SettingsSubCard>
-                </div>
-              </details>
+              <SettingsGroup key={group.id} data-testid={`engine-settings-group-${group.id}`}>
+                <SettingsDisclosure
+                  id={`engines-${group.id}`}
+                  label={sentenceCase(group.title)}
+                  help={group.help ? <CodeText text={firstSentenceOf(group.help)} /> : undefined}
+                  summary={`${group.items.length} settings`}
+                >
+                  {/* Indented children, a break every 10 rows (N12). */}
+                  <div className="engine-settings-grid">
+                    {chunkRows(group.items).map((chunk, i) => (
+                      <Fragment key={i}>
+                        {i > 0 && <div className="engine-settings-chunk-break" role="presentation" />}
+                        {renderRows(chunk, true)}
+                      </Fragment>
+                    ))}
+                  </div>
+                </SettingsDisclosure>
+              </SettingsGroup>
             );
           })}
         </div>
-        <div className="engine-settings-files">
+        <SettingsGroup heading="Files" data-testid="engine-settings-files">
           {view.files.map((file) => (
-            <p key={file.id} className="engine-settings-file">
-              Stored in <code>{file.path}</code>
-              {!file.exists && ' (not created yet)'}
-              {file.error && <span className="engine-settings-file-error">{file.error}</span>}
-            </p>
+            <SettingsRow
+              key={file.id}
+              className="engine-settings-file"
+              data-file-id={file.id}
+              label={sentenceCase(file.label)}
+              help={<code className="settings-mono-value" title={file.path}>{file.path}</code>}
+              error={file.error ? <span className="engine-settings-file-error">{file.error}</span> : undefined}
+              control={!file.exists ? <SettingsTag>Not created yet</SettingsTag> : undefined}
+            />
           ))}
-        </div>
+        </SettingsGroup>
       </>
     );
   };
+
+  const engineControl = engines.length > 0 && (
+    <SegmentedControl<string>
+      aria-label="Engine"
+      value={engine ?? ''}
+      onChange={setEngineId}
+      options={engines.map((entry) => {
+        const avail = host === LOCAL_HOST ? availabilityText(entry) : null;
+        const reason = host === LOCAL_HOST ? entry.availability.reason ?? undefined : undefined;
+        return {
+          value: entry.id,
+          label: engineName(entry.displayName),
+          testId: `engine-settings-tab-${entry.id}`,
+          title: [avail, reason].filter(Boolean).join(', ') || undefined,
+        };
+      })}
+    />
+  );
+
+  // The picked host's status sits beside the picker, never as a second list of
+  // the same hosts (N12).
+  const hostControl = hosts.length <= MAX_SEGMENTS ? (
+    <span className="settings-control-cluster">
+      <HostStatusTag host={hosts.find((h) => h.value === host) ?? hosts[0]} />
+      <SegmentedControl<string>
+        aria-label="Host"
+        value={host}
+        onChange={setHostId}
+        options={hosts.map((h) => ({ value: h.value, label: h.label, testId: `engine-settings-host-${h.value}` }))}
+      />
+    </span>
+  ) : (
+    <span className="settings-control-cluster">
+      <select className="settings-select" aria-label="Host" value={host} onChange={(e) => setHostId(e.target.value)}>
+        {hosts.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+      </select>
+      <HostStatusTag host={hosts.find((h) => h.value === host) ?? hosts[0]} />
+    </span>
+  );
+
+  const defaultControl = defaultOptions.length <= MAX_SEGMENTS ? (
+    <span data-testid="default-engine-select" data-value={defaultEngine}>
+      <SegmentedControl<SessionEngine>
+        id="default-engine-select"
+        aria-label="Default engine"
+        value={defaultEngine}
+        disabled={!defaultPickerReady}
+        onChange={defaultPick.set}
+        options={defaultOptions.map((o) => ({ value: o.id, label: engineName(o.label), testId: `default-engine-option-${o.id}` }))}
+      />
+    </span>
+  ) : (
+    <select
+      id="default-engine-select"
+      data-testid="default-engine-select"
+      className="settings-select"
+      value={defaultEngine}
+      disabled={!defaultPickerReady}
+      onChange={(e) => defaultPick.set(e.target.value as SessionEngine)}
+    >
+      {defaultOptions.map((option) => (
+        <option key={option.id} value={option.id}>{engineName(option.label)}</option>
+      ))}
+    </select>
+  );
 
   return (
     <SettingsSection
       id="engines"
       title="Engines"
-      description={ENGINES_DESCRIPTION}
       banner={banner ? (
         <div data-testid="engine-settings-banner">
-          <SettingsNotice kind="error" role="alert">
+          <SettingsNotice
+            kind="error"
+            role="alert"
+            action={
+              <button type="button" className="engine-settings-banner-dismiss" aria-label="Dismiss" onClick={dismissBanner}>
+                <CloseGlyph size={12} />
+              </button>
+            }
+          >
             {banner}
-            <button
-              type="button"
-              className="engine-settings-banner-dismiss"
-              aria-label="Dismiss"
-              onClick={dismissBanner}
-            >
-              ×
-            </button>
           </SettingsNotice>
         </div>
       ) : undefined}
     >
-      {/* Always rendered, independent of the tabs below: this is about which
-          engine RUNS a new session, which every engine does whether or not it
-          exposes settings Walnut can edit. */}
-      <SettingsSubCard>
-        <div className="form-group">
-          <label htmlFor="default-engine-select">Default engine</label>
-          <select
-            id="default-engine-select"
-            data-testid="default-engine-select"
-            value={defaultEngine}
-            disabled={savingDefault || !defaultPickerReady}
-            onChange={(e) => { void pickDefaultEngine(e.target.value as SessionEngine); }}
-            style={{ maxWidth: 260 }}
-          >
-            {defaultOptions.map((option) => (
-              <option key={option.id} value={option.id}>{option.label}</option>
-            ))}
-          </select>
-          <p className="text-sm text-muted" style={{ marginTop: 2 }} data-testid="default-engine-used-for">
-            Everything Walnut runs uses this: coding sessions, Ask Walnut and agent chats, AI actions,
-            Inbox Triage, routines and Walnut&rsquo;s small background jobs. A session can still pick its own.
-          </p>
-          {/* Only when it is not the plain case: small one-shot jobs have no
-              Codex path, and an API picked under Advanced takes them over. */}
-          {(() => {
-            // Explicit choice, else the server's default (an API on a machine
-            // without Claude Code).
-            const provider = config.agent?.main_provider ?? health.mainProvider;
-            const api = provider && provider !== 'claude_cli';
-            if (api) {
-              return (
-                <p className="text-sm text-muted" style={{ marginTop: 2 }} data-testid="default-engine-small-jobs">
-                  Small background jobs use an API instead (<a href="#providers">Advanced</a>).
-                </p>
-              );
-            }
-            if (defaultEngine !== 'claude') {
-              return (
-                <p className="text-sm text-muted" style={{ marginTop: 2 }} data-testid="default-engine-small-jobs">
-                  Small background jobs stay on Claude Code.
-                </p>
-              );
-            }
-            return null;
-          })()}
-          {defaultError && (
-            <SettingsNotice kind="error" role="alert">{defaultError}</SettingsNotice>
-          )}
-        </div>
-      </SettingsSubCard>
-
-      {/* One host: nothing to choose, so no picker at all. */}
-      {engines.length > 0 && hosts.length > 1 && (
-        <div className="engine-settings-picker" data-testid="engine-settings-host" role="group" aria-label="Host">
-          {hosts.map((h) => (
-            <HostButton key={h.value} host={h} active={h.value === host} onPick={setHostId} />
-          ))}
-        </div>
-      )}
+      {/* Always rendered: which engine RUNS a new session, whether or not that
+          engine exposes settings Walnut can edit. */}
+      <SettingsGroup>
+        <SettingsRow
+          label="Default engine"
+          help={<span data-testid="default-engine-used-for">Everything Walnut starts uses it; a session can still pick its own.</span>}
+          error={defaultPick.error}
+          data-testid="default-engine-row"
+          control={defaultControl}
+        >
+          {smallJobs && <span className="settings-help-warning" data-testid="default-engine-small-jobs">{smallJobs}</span>}
+        </SettingsRow>
+      </SettingsGroup>
 
       {engines.length > 0 && (
-        <div className="engine-settings-picker engine-settings-tabs" role="group" aria-label="Engine">
-          {engines.map((entry) => {
-            const avail = host === LOCAL_HOST ? availabilityText(entry) : null;
-            return (
-              <button
-                key={entry.id}
-                type="button"
-                className={`engine-settings-choice${entry.id === engine ? ' is-active' : ''}`}
-                aria-pressed={entry.id === engine}
-                data-testid={`engine-settings-tab-${entry.id}`}
-                // Availability is about THIS machine, so a remote host tab makes
-                // no claim about it; the reason stays reachable as a tooltip.
-                title={host === LOCAL_HOST ? entry.availability.reason ?? undefined : undefined}
-                onClick={() => setEngineId(entry.id)}
-              >
-                <span className="engine-settings-choice-name">{entry.displayName}</span>
-                {avail && <span className="engine-settings-choice-note">{avail}</span>}
-              </button>
-            );
-          })}
-        </div>
+        <SettingsGroup
+          data-testid="engine-settings-pickers"
+          // The engine's own note (where its keys are saved) is this group's
+          // footer: one sentence, paths in code, the whole note on hover (N12).
+          footer={view?.note ? (
+            <span className="engine-settings-note" title={view.note} data-testid="engine-settings-note">
+              <CodeText text={firstSentenceOf(view.note)} />
+            </span>
+          ) : undefined}
+        >
+          <SettingsRow label="Engine" data-testid="engine-settings-tabs" control={engineControl} />
+          {hosts.length > 1 && (
+            <SettingsRow label="Host" data-testid="engine-settings-host" control={hostControl} />
+          )}
+        </SettingsGroup>
       )}
 
       {body()}

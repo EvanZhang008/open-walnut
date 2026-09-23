@@ -1,0 +1,27 @@
+/*
+ * Settings nav states added after the nav sheet: the scrolled-list edge and
+ * two-line match hints. Loaded right after settings-nav.css.
+ */
+/* N3-14: once the list scrolls, a hairline under the pinned filter gives the
+   rows an edge to pass under, like the pane's compact bar. */
+.settings-container .settings-nav.is-list-scrolled .settings-filter-wrap::after {
+  content: '';
+  position: absolute;
+  left: -8px;
+  right: -8px;
+  bottom: -2px;
+  height: 1px;
+  background: var(--settings-hairline, var(--border));
+  pointer-events: none;
+}
+
+/* N3-13: a match hint may take two lines, cut on words by truncateHint,
+   so the matched word is never sliced by an ellipsis. */
+.settings-container .settings-nav-hint {
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}

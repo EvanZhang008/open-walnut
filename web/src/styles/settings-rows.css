@@ -1,0 +1,405 @@
+/*
+ * Settings groups and rows: the group box, heading/footer, rows, hairlines,
+ * disclosure content, row errors, empty/notice/loading lines and the
+ * container-query wrapping rules (container `sgroup`, never the viewport).
+ * Tokens come from settings-shell.css.
+ */
+
+/* ── Group: the only surface. Heading above, footer below, never nested ── */
+.settings-group-block {
+  margin: 0 0 22px;
+}
+
+.settings-group.settings-subcard,
+.settings-group {
+  box-sizing: border-box;
+  margin: 0 0 22px;
+  padding: 0;
+  background: var(--settings-group-bg);
+  border: 1px solid var(--settings-group-border);
+  border-radius: 10px;
+  box-shadow: none;
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: sgroup;
+}
+
+.settings-group-block > .settings-group {
+  margin: 0;
+}
+
+/* A group that is off: the card surface stays solid and its contents fade,
+   once. The rule lands on the same elements a disabled row dims, so a row
+   that is off inside a group that is off is still 45%, never 20% (N07). */
+.settings-group-block[aria-disabled='true'] > .settings-group-heading,
+.settings-group-block[aria-disabled='true'] > .settings-group-footer,
+:is(.settings-group-block[aria-disabled='true'] > .settings-group, .settings-group[aria-disabled='true'])
+  > :not(.settings-rows-contents, .settings-disclosure-content),
+:is(.settings-group-block[aria-disabled='true'], .settings-group[aria-disabled='true'])
+  :is(.settings-rows-contents, .settings-disclosure-content) > :not(.settings-rows-contents, .settings-disclosure-content) {
+  opacity: 0.45;
+}
+
+.settings-group-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 6px;
+  /* +1px: the group's border, so the heading shares the row labels' x (F29). */
+  padding: 0 calc(var(--settings-row-pad-x) + 1px);
+}
+
+.settings-group-title.settings-subcard-title,
+.settings-group-title {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.settings-group-heading-trailing {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-group-footer.settings-subcard-desc,
+.settings-group-footer {
+  margin: 6px 0 0;
+  padding: 0 calc(var(--settings-row-pad-x) + 1px);
+  max-width: 72ch;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+}
+
+/* ── Row ── */
+.settings-row {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  /* 8px, not 10px: a 28px field and a 22px switch both make a 44px row, so a
+     group never mixes 44px and 48px single-line rows (N25). */
+  padding: 8px var(--settings-row-pad-x);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.settings-row-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 14px;
+  line-height: 19px;
+  color: var(--fg);
+}
+
+.settings-row-label {
+  font-size: 14px;
+  line-height: 19px;
+  font-weight: 400;
+  color: var(--fg);
+  text-transform: none;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-row-help {
+  display: block;
+  margin: 0;
+  max-width: 60ch;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+}
+
+.settings-row-copy code,
+.settings-group-footer code,
+.settings-row-help code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.settings-row[data-state='warning'] .settings-row-help {
+  color: var(--priority-important-text);
+}
+
+.settings-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+.settings-row-actions > * {
+  max-width: 100%;
+}
+
+.settings-row[aria-disabled='true'] {
+  opacity: 0.45;
+}
+
+/* The row (or group) already carries the 45%: its disabled controls do not
+   fade a second time (N07). */
+:is(.settings-row[aria-disabled='true'], [aria-disabled='true'] .settings-row)
+  :is(.toggle-switch.settings-switch:disabled, .settings-checkbox-input:disabled,
+    .settings-segmented[aria-disabled='true'], .settings-button:disabled, .settings-input:disabled) {
+  opacity: 1;
+}
+
+.settings-row.settings-row-indent,
+.settings-disclosure-content > .settings-row {
+  padding-left: var(--settings-row-indent);
+}
+
+/* Hairline between rows, inset from the label edge; the first row has none. */
+.settings-group .settings-row:not(:first-child)::before,
+.settings-disclosure-content > .settings-row:first-child::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--settings-row-pad-x);
+  right: 0;
+  height: 1px;
+  background: var(--settings-hairline);
+  pointer-events: none;
+}
+
+.settings-group .settings-row.settings-row-indent::before,
+.settings-disclosure-content > .settings-row::before {
+  left: var(--settings-row-indent);
+}
+
+/* Disclosure children are rows of the SAME group: the wrapper takes no box. */
+.settings-disclosure-content:not([hidden]) {
+  display: contents;
+}
+
+.settings-disclosure-content:not([hidden]) > * {
+  animation: settings-fade-in 120ms ease-out backwards;
+}
+
+.settings-row-error {
+  margin: -4px 0 0;
+  padding: 0 var(--settings-row-pad-x) 10px;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--settings-error-text);
+  overflow-wrap: anywhere;
+}
+
+.settings-row-error.settings-row-error-indent,
+.settings-disclosure-content > .settings-row-error {
+  padding-left: var(--settings-row-indent);
+}
+
+/* Anchored rows and sections land below the 44px compact bar. */
+.settings-row-anchored,
+.settings-row[id],
+.settings-group[id],
+.settings-group-block[id] {
+  scroll-margin-top: 52px;
+}
+
+.settings-checklist .settings-row {
+  min-height: 36px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+/* Label above, full-width content below (mono blocks, editors). */
+.settings-row.settings-row-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* A stacked row's control sits under its copy, from the left edge (F18): the
+   label and help keep the full width instead of a 155px column. */
+.settings-row.settings-row-stacked > .settings-row-actions {
+  justify-content: flex-start;
+  max-width: 100%;
+  /* The row's `margin-left: auto` would push a column item to the right
+     edge: a stacked control spans from the label's x to the padding (N3-18). */
+  margin-left: 0;
+  align-self: stretch;
+}
+
+.settings-row.settings-row-stacked > .settings-row-actions > :is(span, div):has(> :is(input, textarea)) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-row.settings-row-stacked > .settings-row-actions .settings-input--long {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.settings-row.settings-row-stacked > .settings-row-actions > textarea.settings-input--long {
+  width: 100%;
+}
+
+/* ── Empty, notice, loading ── */
+/* An empty row is a row: same 44px, same hairline between it and its
+   neighbours (N23). */
+.settings-group .settings-empty:not(:first-child)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--settings-row-pad-x);
+  right: 0;
+  height: 1px;
+  background: var(--settings-hairline);
+  pointer-events: none;
+}
+
+.settings-empty {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px var(--settings-row-pad-x);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--fg-muted);
+}
+
+.settings-notice {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.settings-notice-with-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-notice-with-action .settings-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-notice-action {
+  flex: 0 0 auto;
+}
+
+.settings-notice-info { background: var(--bg-tertiary); color: var(--fg-secondary); }
+.settings-notice-success { background: rgba(52, 199, 89, 0.12); color: var(--fg); }
+.settings-notice-warn { background: rgba(255, 149, 0, 0.12); color: var(--priority-important-text); }
+.settings-notice-error { background: rgba(255, 59, 48, 0.12); color: var(--settings-error-text); }
+
+/* Inside a group a notice is a row with coloured text, never a box in a box. */
+.settings-group .settings-notice {
+  box-sizing: border-box;
+  min-height: 44px;
+  margin: 0;
+  padding: 12px var(--settings-row-pad-x);
+  border-radius: 0;
+  background: transparent;
+}
+
+.settings-group .settings-notice-info,
+.settings-group .settings-notice-success {
+  color: var(--fg-secondary);
+}
+
+.settings-loading-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--fg-muted);
+}
+
+.settings-stack {
+  display: grid;
+  gap: 22px;
+}
+
+/* ── Row wrapping by GROUP width (container sgroup), never the viewport ── */
+@container sgroup (max-width: 599px) {
+  .settings-row[data-wide] {
+    flex-wrap: wrap;
+  }
+
+  .settings-row[data-wide] > .settings-row-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .settings-row[data-wide] > .settings-row-actions > :is(input, textarea, select, .settings-input) {
+    width: 100%;
+  }
+
+  /* N3-01: in a narrow group the label keeps at least 45% of the row; a
+     control that would take more drops under the copy, never squeezing the
+     label into a word-per-line column. */
+  .settings-row:not([data-wide]):has(> .settings-row-copy) {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .settings-row:not([data-wide]) > .settings-row-copy {
+    flex: 1 1 45%;
+  }
+
+  .settings-row:not([data-wide]) > .settings-row-copy:empty {
+    flex: 0 0 0;
+  }
+}
+
+@container sgroup (max-width: 359px) {
+  .settings-row {
+    flex-wrap: wrap;
+  }
+
+  .settings-row > .settings-row-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+}
+
+/* Usage's breakdown grid sized by a real minimum, scrolled inside its panel. */
+.settings-card .usage-breakdown-grid,
+.settings-section .usage-breakdown-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr));
+}
+
+.settings-card .usage-breakdown-panel,
+.settings-section .usage-breakdown-panel {
+  overflow-x: auto;
+}
+
+/* A product word that must not break across lines (Wi-Fi, Claude Code). */
+.settings-nowrap {
+  white-space: nowrap;
+}

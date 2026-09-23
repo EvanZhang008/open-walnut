@@ -1,5 +1,5 @@
 /**
- * Settings → Plugins, the two pieces that are about SOURCES rather than plugin rows:
+ * Settings: Plugins, the two pieces that are about SOURCES rather than plugin rows:
  *
  *   - `UpdatesHead`: the Installed header's right half (one "Checked 3 min ago" for the
  *     whole list, Retry, Check now).
@@ -16,8 +16,11 @@ import { PluginUpdateChip } from '../PluginUpdateChip';
 import { PluginUpdateButton } from '../PluginUpdateButton';
 import { PluginUpdateFeedback } from '../PluginUpdateFeedback';
 import { PluginProvenanceFlyout } from '../PluginProvenanceFlyout';
-import { timeAgo } from '@/utils/time';
-import { resolveRowState, sourceShortLabel, updateButtonMode, type Feedback } from '../plugin-update-view';
+import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
+import { formatAbsoluteTime } from './addons-format';
+import { plainText, resolveRowState, sourceShortLabel, updateButtonMode, type Feedback } from '../plugin-update-view';
 import { sourceRowKey } from '../plugin-update-types';
 
 /** One plugin dir inside a source, as GET /api/plugin-sources reports it. */
@@ -53,14 +56,16 @@ export interface PluginSource {
   shareSnippet?: string;
 }
 
-export const STATUS_LABELS: Record<StorePlugin['status'], { label: string; className: string }> = {
-  loaded: { label: 'active', className: 'badge badge-done' },
-  'needs-config': { label: 'needs setup', className: 'badge badge-important' },
-  'needs-dependency': { label: 'needs another plugin', className: 'badge badge-important' },
-  unsupported: { label: 'needs newer Walnut', className: 'badge badge-none' },
-  duplicate: { label: 'shadowed', className: 'badge badge-none' },
-  error: { label: 'invalid', className: 'badge badge-immediate' },
-  'pending-restart': { label: 'restart to activate', className: 'badge badge-important' },
+type Tone = 'neutral' | 'warning' | 'success';
+
+export const STATUS_LABELS: Record<StorePlugin['status'], { label: string; tone: Tone }> = {
+  loaded: { label: 'Active', tone: 'success' },
+  'needs-config': { label: 'Needs setup', tone: 'warning' },
+  'needs-dependency': { label: 'Needs another plugin', tone: 'warning' },
+  unsupported: { label: 'Needs newer Walnut', tone: 'neutral' },
+  duplicate: { label: 'Shadowed', tone: 'neutral' },
+  error: { label: 'Invalid', tone: 'warning' },
+  'pending-restart': { label: 'Restart to activate', tone: 'warning' },
 };
 
 /** The four Provenance rows of a git or npm source: full URL, installed ref, integrity, id. */
@@ -98,61 +103,51 @@ export function UpdatesHead({ updates, slowLoad, onCheckAll }: {
   slowLoad: boolean;
   onCheckAll: () => void;
 }) {
-  // Re-render every 30 s so "3 min ago" keeps up without any request.
+  // Absolute time (never `ago`), so the line never goes stale on screen; the
+  // 30 s tick only moves `today` to a weekday after midnight.
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(timer);
   }, []);
-  const ago = updates.checkedAt ? timeAgo(updates.checkedAt, { long: true }) : null;
+  const ago = updates.checkedAt ? formatAbsoluteTime(updates.checkedAt) : null;
   const lastChecked = ago ? `last checked ${ago}` : 'not checked yet';
   const checking = updates.refreshing || (slowLoad && !updates.loaded);
   let text: string;
   let retry = false;
-  if (updates.offline) text = `Offline · ${lastChecked}`;
+  if (updates.offline) text = `Offline, ${lastChecked}`;
   else if (updates.error) { text = 'Could not check'; retry = true; }
-  else if (checking) text = 'Checking for updates…';
+  else if (checking) text = 'Checking for updates...';
   // Before the first GET answers the header says nothing: "Not checked yet" is the SERVER's
   // answer (checkedAt null), not the client's not-having-asked (N8). A load past 3 s is
   // covered by `checking` above.
   else if (!updates.loaded) text = '';
-  else if (updates.allNetworkFailed) text = `Remote not reachable · ${lastChecked}`;
+  else if (updates.allNetworkFailed) text = `Remote not reachable, ${lastChecked}`;
   else if (!ago) text = 'Not checked yet';
-  else if (updates.failed > 0) text = `Checked ${ago} · ${updates.failed} of ${updates.attempted} could not be reached`;
+  else if (updates.failed > 0) text = `Checked ${ago}, ${updates.failed} of ${updates.attempted} could not be reached`;
   else text = `Checked ${ago}`;
   return (
-    <div className="plugin-store-updates-head" data-loaded={updates.loaded ? 'true' : 'false'}>
-      <span data-testid="plugin-updates-checked-at" aria-live="polite">{text}</span>
+    <span className="settings-addons-inline plugin-store-updates-head" data-loaded={updates.loaded ? 'true' : 'false'}>
+      <span className="settings-addons-muted" data-testid="plugin-updates-checked-at" aria-live="polite">{text}</span>
       {/* After a failed GET the ONE verb is Retry: a second "Check now" next to it would be the
           same request under a second name (N9). */}
       {retry ? (
-        <>
-          <span aria-hidden="true">·</span>
-          <button
-            type="button"
-            className="btn-link btn-sm"
-            data-testid="plugin-updates-retry"
-            onClick={() => updates.retry()}
-          >
-            Retry
-          </button>
-        </>
+        <button type="button" className="settings-addons-link" data-testid="plugin-updates-retry" onClick={() => updates.retry()}>
+          Retry
+        </button>
       ) : (
-        <>
-          {text ? <span aria-hidden="true">·</span> : null}
-          <button
-            type="button"
-            className="btn-link btn-sm"
-            data-testid="plugin-updates-check-now"
-            disabled={checking || updates.offline}
-            title={updates.offline ? OFFLINE_TITLE : undefined}
-            onClick={onCheckAll}
-          >
-            Check now
-          </button>
-        </>
+        <button
+          type="button"
+          className="settings-addons-link"
+          data-testid="plugin-updates-check-now"
+          disabled={checking || updates.offline}
+          title={updates.offline ? OFFLINE_TITLE : undefined}
+          onClick={onCheckAll}
+        >
+          Check now
+        </button>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -175,15 +170,16 @@ export function PluginSourcesGroup(props: PluginSourcesGroupProps) {
   const { sources, ownedSlugs, updates, busy, copiedKey, feedback } = props;
   if (sources.length === 0) return null;
   return (
-    <div className="plugin-store-group plugin-sources-group" data-testid="plugin-store-sources">
-      <div className="plugin-store-group-head">
-        <h4 className="settings-subcard-title">Sources</h4>
-        <span className="plugin-store-count">{sources.length}</span>
-      </div>
+    <SettingsGroup
+      heading="Sources"
+      headingTrailing={<span className="settings-addons-muted">{sources.length}</span>}
+      className="plugin-store-group plugin-sources-group"
+      data-testid="plugin-store-sources"
+    >
       {sources.map((source) => {
         // The Installed row owns the verbs (Update AND Remove, N3-17) while a plugin from
-        // this source is loaded; the card offers Restore / Update / Remove only when no row
-        // does (missing, failed load). Copy share snippet is the card's own verb.
+        // this source is loaded; the row here offers Restore / Update / Remove only when no
+        // plugin row does (missing, failed load). Copy share snippet is its own verb.
         const rowId = `source-${source.slug}`;
         const rowKey = sourceRowKey(source.slug);
         const kind: 'git' | 'npm' = source.kind === 'npm' || source.type === 'npm' ? 'npm' : 'git';
@@ -198,27 +194,26 @@ export function PluginSourcesGroup(props: PluginSourcesGroupProps) {
         const names = known.map((plugin) => plugin.name ?? plugin.id).filter((name): name is string => Boolean(name));
         const title = names.length > 0 ? names.join(', ') : source.slug;
         // A source carrying ONE plugin folds that plugin's version and status into the
-        // title row instead of repeating its name on a list of one (N16).
+        // title line instead of repeating its name on a list of one (N16).
         const only = source.cloned && source.plugins.length === 1 ? source.plugins[0] : null;
         const onlyStatus = only ? (STATUS_LABELS[only.status] ?? STATUS_LABELS.error) : null;
         return (
           <div
             key={`${kind}:${source.slug}:${source.spec ?? source.url ?? ''}`}
-            className="settings-collapsible plugin-store-source"
+            className="settings-addons-rows plugin-store-source"
             data-testid={`plugin-source-${source.slug}`}
-            style={{ padding: '10px 12px' }}
           >
-            {/* The same two clusters as an Installed row (spec 6.2, N2-2, N3-15): a copy column
-                (title line with badges and chip, then the origin line) and an actions cluster
-                that never splits and drops UNDER the copy, flush right, when the two no longer
-                fit side by side. No GIT / NPM badge: the origin line already says `git ·`,
-                and the badge was what pushed the chip onto a second line at 1280 (N3-10). */}
-            <div className="plugin-store-source-head">
-              <div className="plugin-store-source-copy">
-                <div className="plugin-store-source-title">
-                  <strong>{title}</strong>
-                  {onlyStatus && <span className={onlyStatus.className} data-testid={`plugin-source-status-${source.slug}`}>{onlyStatus.label}</span>}
-                  {only?.version && <span className="plugin-store-version">v{only.version}</span>}
+            <SettingsRow
+              className="plugin-store-source-head"
+              label={
+                <span className="settings-addons-inline plugin-store-source-title">
+                  <span className="settings-addons-ellipsis" title={title}>{title}</span>
+                  {only?.version && <span className="settings-addons-muted plugin-store-version">v{only.version}</span>}
+                  {onlyStatus && (
+                    <span data-testid={`plugin-source-status-${source.slug}`}>
+                      <SettingsTag tone={onlyStatus.tone}>{onlyStatus.label}</SettingsTag>
+                    </span>
+                  )}
                   <PluginUpdateChip
                     rowId={rowId}
                     state={state}
@@ -233,67 +228,75 @@ export function PluginSourcesGroup(props: PluginSourcesGroupProps) {
                       void updates.checkRow(rowKey, { kind: 'source', slug: source.slug });
                     }}
                   />
-                </div>
-                <div className="text-xs text-muted plugin-store-origin">
-                  {sourceShortLabel(source)}
+                </span>
+              }
+              help={
+                <span className="settings-addons-inline plugin-store-origin">
+                  {plainText(sourceShortLabel(source))}
                   <PluginProvenanceFlyout
                     rowId={rowId}
                     kind="source"
                     rows={sourceProvenance(source.slug, kind, source)}
                     checkedAt={updateRow?.checkedAt ?? null}
                   />
-                </div>
+                </span>
+              }
+              control={
+                <span className="settings-addons-inline plugin-store-source-actions">
+                  {source.shareSnippet && (
+                    <SettingsButton reserve={['Copy share snippet', 'Copied']} onClick={() => props.onCopy(source.shareSnippet!, source.slug)}>
+                      {copiedKey === source.slug ? 'Copied' : 'Copy share snippet'}
+                    </SettingsButton>
+                  )}
+                  {buttonMode.render && (
+                    <PluginUpdateButton rowId={rowId} mode={buttonMode} onClick={() => props.onUpdate(source.slug, kind, rowId)} />
+                  )}
+                  {!owned && (
+                    <InlineConfirmButton
+                      disabled={busy === source.slug}
+                      aria-label={`Remove ${title}`}
+                      onConfirm={() => props.onRemove(source.slug)}
+                    />
+                  )}
+                </span>
+              }
+            />
+            {feedback[rowId] && (
+              <div className="settings-row settings-row-indent">
+                <PluginUpdateFeedback rowId={rowId} feedback={feedback[rowId]} />
               </div>
-              <div className="plugin-store-source-actions">
-                {source.shareSnippet && (
-                  <button type="button" className="btn btn-sm" onClick={() => props.onCopy(source.shareSnippet!, source.slug)}>
-                    {copiedKey === source.slug ? 'Copied' : 'Copy share snippet'}
-                  </button>
-                )}
-                {buttonMode.render && (
-                  <PluginUpdateButton
-                    rowId={rowId}
-                    mode={buttonMode}
-                    onClick={() => props.onUpdate(source.slug, kind, rowId)}
-                  />
-                )}
-                {!owned && (
-                  <button type="button" className="btn-danger-outline btn-sm" disabled={busy === source.slug} onClick={() => props.onRemove(source.slug)}>
-                    Remove
-                  </button>
-                )}
-              </div>
-            </div>
-            <PluginUpdateFeedback rowId={rowId} feedback={feedback[rowId]} />
+            )}
             {source.lastError && (
-              <p className="text-xs" style={{ color: 'var(--priority-immediate)', marginTop: 4 }}>{source.lastError}</p>
+              <p className="settings-row-error settings-row-error-indent" role="alert">{source.lastError}</p>
             )}
             {/* Not cloned: the chip says "Not installed here" and Restore is the verb. One
-                plugin: its facts are on the title row already, only its error is left. */}
+                plugin: its facts are on the title line already, only its error is left. */}
             {!source.cloned ? null : only ? (
-              only.error ? <p className="text-xs text-muted" style={{ marginTop: 4 }}>{only.error}</p> : null
+              only.error ? <SettingsRow indent label="Error" help={only.error} state="warning" /> : null
             ) : source.plugins.length === 0 ? (
-              <p className="text-xs text-muted" style={{ marginTop: 6 }}>
-                No plugins found in this {kind === 'npm' ? 'package' : 'repo'}.
-              </p>
+              <SettingsRow indent label={`No plugins found in this ${kind === 'npm' ? 'package' : 'repo'}.`} />
             ) : (
-              <ul style={{ listStyle: 'none', padding: 0, margin: '6px 0 0' }}>
-                {source.plugins.map((plugin) => {
-                  const status = STATUS_LABELS[plugin.status] ?? STATUS_LABELS.error;
-                  return (
-                    <li key={plugin.dir} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
-                      <span>{plugin.name ?? plugin.id ?? 'unnamed'}</span>
-                      {plugin.version && <span className="text-xs text-muted">v{plugin.version}</span>}
-                      <span className={status.className}>{status.label}</span>
-                      {plugin.error && <span className="text-xs text-muted">{plugin.error}</span>}
-                    </li>
-                  );
-                })}
-              </ul>
+              source.plugins.map((plugin) => {
+                const status = STATUS_LABELS[plugin.status] ?? STATUS_LABELS.error;
+                return (
+                  <SettingsRow
+                    key={plugin.dir}
+                    indent
+                    label={
+                      <span className="settings-addons-inline">
+                        <span>{plugin.name ?? plugin.id ?? 'Unnamed'}</span>
+                        {plugin.version && <span className="settings-addons-muted">v{plugin.version}</span>}
+                      </span>
+                    }
+                    help={plugin.error}
+                    control={<SettingsTag tone={status.tone}>{status.label}</SettingsTag>}
+                  />
+                );
+              })
             )}
           </div>
         );
       })}
-    </div>
+    </SettingsGroup>
   );
 }

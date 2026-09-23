@@ -1,27 +1,27 @@
 /**
- * Settings → Plugins: the whole life of a plugin on one surface.
+ * Settings: Plugins, the whole life of a plugin on one surface.
  *
- * Discover → install → turn on/off → configure → update → remove. Before this it was
+ * Discover, install, turn on/off, configure, update, remove. Before this it was
  * three places: the store listed SOURCES you had installed (so a builtin plugin was
  * invisible here), Integrations held the config forms, and nothing in the UI could
- * turn a plugin off at all — the only way was a POST from a terminal.
+ * turn a plugin off at all; the only way was a POST from a terminal.
  *
  * Three lists, in the order someone actually needs them:
  *
- *   1. Installed — every discovered plugin, builtin or external or dev-linked, with
+ *   1. Installed: every discovered plugin, builtin or external or dev-linked, with
  *      its real state (on / off / needs setup / failed / restart to activate), a
  *      switch, and Configure right there.
- *   2. Available — catalog entries not on this machine. A `builtin` one only needs
+ *   2. Available: catalog entries not on this machine. A `builtin` one only needs
  *      turning on; a `git`/`npm` one PREFILLS the install form below (it never
  *      installs by itself); an `example` one lives in this checkout, so it shows the
  *      `walnut-plugin link` command instead of a button that could not work.
- *   3. Install from a git repo or an npm package — the free-form input, unchanged,
+ *   3. Install from a git repo or an npm package: the free-form input, unchanged,
  *      for anything the catalog does not know.
  *
  * Installing a plugin gives it full access to Walnut and this machine, so the trust
  * checkbox stays a per-install stop: the Add button is disabled until it is ticked and
  * it resets after every successful add. Prefilling from the catalog does NOT pre-tick
- * it — a curated listing is not the user's consent.
+ * it: a curated listing is not the user's consent.
  *
  * Turning a plugin off persists: the disable route writes `plugins.<id>.enabled: false`
  * to config.yaml (integration-loader.disableLoadedPlugin), so it stays off across a
@@ -36,8 +36,13 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Config } from '@open-walnut/core';
-import { SettingsSection, SettingsRow, SettingsSubCard, SettingsEmpty, SettingsNotice } from '../SettingsSection';
+import { SettingsSection, SettingsRow, SettingsGroup, SettingsNotice, SettingsTag, SettingsLoadingRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { couldntSave } from '../inputs/useOptimisticSetting';
+import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
+import { firstSentence, needsSetupHelp, originSentence, providerFallbackState, rowTags } from './plugin-row-view';
 import { PluginConfigCards } from './PluginConfigCards';
 import { PluginSourcesGroup, UpdatesHead, sourceProvenance, type PluginSource } from './PluginSourcesGroup';
 import {
@@ -50,7 +55,7 @@ import {
   type MissingDependencyView,
 } from './PluginDependencyRows';
 import { PluginAppControls } from '../PluginAppControls';
-import { PluginConnectionPanel, CONNECTION_BADGE, type ConnectionReport } from '../PluginConnectionPanel';
+import { PluginConnectionPanel, CONNECTION_BADGE, connectedHelp, type ConnectionReport } from '../PluginConnectionPanel';
 import { BuildPluginCard } from '../BuildPluginCard';
 // Deliberately NOT '@/plugins/hooks': that module reaches the plugin loader, which
 // reaches every view a plugin may mount (NotesPage, CalendarPage, SessionPanel …).
@@ -66,6 +71,7 @@ import { PluginUpdateFeedback } from '../PluginUpdateFeedback';
 import { PluginProvenanceFlyout } from '../PluginProvenanceFlyout';
 import {
   CLOUD_LINKED_NOTE,
+  plainText,
   failureFeedback,
   resolveRowState,
   sourceShortLabel,
@@ -74,7 +80,7 @@ import {
   type Feedback,
 } from '../plugin-update-view';
 import { RESTART_PENDING_STATE, sourceRowKey, type UpdateState, type UpdateStatusRow } from '../plugin-update-types';
-import '@/styles/plugin-store.css';
+import '@/styles/settings-sections-addons.css';
 
 /** Mirrors PluginRegistryRow in src/core/plugins/plugin-catalog.ts. */
 interface RegistryRow {
@@ -154,29 +160,14 @@ function looksLikeGitUrl(value: string): boolean {
   return /^(https?:\/\/|ssh:\/\/|git@[\w.-]+:|file:\/\/)/.test(value);
 }
 
-/** One word per state, and the same word everywhere it appears. */
-const ROW_STATUS: Record<RegistryRow['status'], { label: string; className: string }> = {
-  active: { label: 'on', className: 'badge badge-done' },
-  disabled: { label: 'off', className: 'badge badge-none' },
-  'needs-config': { label: 'needs setup', className: 'badge badge-important' },
-  'needs-dependency': { label: 'needs another plugin', className: 'badge badge-important' },
-  unsupported: { label: 'needs newer Walnut', className: 'badge badge-none' },
-  failed: { label: 'failed', className: 'badge badge-immediate' },
-  quarantined: { label: 'quarantined', className: 'badge badge-immediate' },
-  'pending-restart': { label: 'restart to activate', className: 'badge badge-important' },
-  available: { label: 'not installed', className: 'badge badge-none' },
-};
-/** A state this build has no word for: say so, never assert "off" about it. */
-const UNKNOWN_ROW_STATUS = { label: 'unknown', className: 'badge badge-none' };
-
 /**
  * Where an installed plugin came from, in the user's terms: `Built in`, `Linked`,
- * `Local folder`, `git · host/owner/repo`, `npm · @acme/plugin`. Never a path, a slug or
+ * `Local folder`, `git, host/owner/repo`, `npm, @acme/plugin`. Never a path, a slug or
  * a bare URL: the Provenance flyout next to it carries those.
  */
 function originLabel(row: RegistryRow, source: PluginSource | undefined): string {
   if (row.builtin) return 'Built in';
-  // What the plugin ADDS (`· sync`, `· adds Task sync`) is appended by the caller from the
+  // What the plugin ADDS (`Adds task sync.`) is appended by the caller from the
   // manifest; the label names only where the code comes from.
   if (row.source.kind === 'linked') return 'Linked';
   if (row.source.kind === 'local') return 'Local folder';
@@ -250,6 +241,12 @@ export function PluginStoreSection({ config, onSave }: Props) {
     { slug: string; plan: DependencyPlanItem[]; rowId?: string } | null
   >(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
+  // Optimistic switch per row: the thumb moves at once (aria-busy while the write is
+  // out); a failure puts it back and leaves `Couldn't save` under the row until the
+  // next flip of that row. A cascade question keeps the switch ON and busy.
+  const [pendingToggle, setPendingToggle] = useState<Record<string, boolean>>({});
+  const [toggleError, setToggleError] = useState<Record<string, string>>({});
+  const saved = useSettingsSaved();
 
   // One read at a time: a second call while one is in flight shares it. StrictMode mounts the
   // effect twice in development, which used to issue the registry GET twice in the same
@@ -562,6 +559,12 @@ export function PluginStoreSection({ config, onSave }: Props) {
     setBusy(busyKey ?? row.id);
     setError(null);
     setNotice(null);
+    setPendingToggle((prev) => ({ ...prev, [row.id]: next }));
+    setToggleError((prev) => {
+      if (!(row.id in prev)) return prev;
+      const { [row.id]: _gone, ...rest } = prev;
+      return rest;
+    });
     try {
       const res = await fetch(
         `/api/plugin-runtime/${encodeURIComponent(row.id)}/${next ? 'reload' : 'disable'}`,
@@ -571,21 +574,26 @@ export function PluginStoreSection({ config, onSave }: Props) {
       );
       const body = await res.json().catch(() => ({} as { error?: string; code?: string; dependents?: string[] }));
       if (res.status === 409 && body.code === 'has-dependents') {
+        // Not an error: a question. Nothing was written; the switch stays on until the
+        // user picks Turn off all.
         setCascadeAsk({ target: row, dependents: body.dependents ?? [] });
         return;
       }
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
       setCascadeAsk(null);
-      setNotice(next
-        ? `${row.name} is on.`
-        : cascade
-          ? `${row.name} is off, and everything that runs on it is waiting for it. Turn it back on and they come back.`
-          : `${row.name} is off. It stays off until you turn it back on.`);
+      saved.notifySaved();
       emitPluginsChanged();
       await requestRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = saveErrorMessage(err);
+      setToggleError((prev) => ({ ...prev, [row.id]: message }));
+      saved.notifySaveFailed(message, `plugin:${row.id}`);
     } finally {
+      setPendingToggle((prev) => {
+        if (!(row.id in prev)) return prev;
+        const { [row.id]: _gone, ...rest } = prev;
+        return rest;
+      });
       setBusy(null);
     }
   };
@@ -648,11 +656,11 @@ export function PluginStoreSection({ config, onSave }: Props) {
     }
   };
 
-  /** Catalog → the existing install form. Trust is deliberately NOT pre-ticked. */
+  /** Catalog to the existing install form. Trust is deliberately NOT pre-ticked. */
   const prefillSource = (source: RegistryRow['source'] | undefined, label: string) => {
     setUrl(source?.kind === 'npm' ? source.spec ?? label : source?.url ?? '');
     setError(null);
-    setNotice(`Ready to install ${label}. Tick the trust box, then press Add.`);
+    setNotice(`Ready to install ${label}; turn on the trust switch, then press Add.`);
     urlInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     urlInputRef.current?.focus();
   };
@@ -675,419 +683,422 @@ export function PluginStoreSection({ config, onSave }: Props) {
     .filter((slug): slug is string => Boolean(slug) && updates.rows[sourceRowKey(slug!)]?.state.kind !== 'missing'));
   const available = rows.filter((row) => !row.installed);
 
-  return (
-    <SettingsSection
-      id="plugin-store"
-      title="Plugins"
-      description="Everything installed on this machine, what each one adds, and a switch for each. Install more from a git repository or an npm package."
-    >
-      {/* Only Remove needs a page-level word: no row survives to carry the badge. An
-          update says "restart" on its own row (feedback + RESTART TO ACTIVATE), once. */}
-      {restartNeeded && (
-        <SettingsNotice kind="warn">Restart Walnut to finish removing that plugin&apos;s code.</SettingsNotice>
-      )}
-      {error && <SettingsNotice kind="error">{error}</SettingsNotice>}
-      {notice && <SettingsNotice kind="success">{notice}</SettingsNotice>}
-
-      {/* This section is the start point for everything plugin-shaped, and the
-          simplest way in leads: describe a plugin, click, and a session builds it. */}
-      <BuildPluginCard />
-
-      {/* ── Installed ── */}
-      <div className="plugin-store-group plugin-store-installed" data-testid="plugin-store-installed">
-        <div className="plugin-store-group-head">
-          <h4 className="settings-subcard-title">Installed</h4>
-          <span className="plugin-store-count">{installed.length}</span>
-          {/* Only when something here CAN be updated: a list of built-ins has no
-              "Not checked yet" to report. */}
-          {updatable.length > 0 && <UpdatesHead updates={updates} slowLoad={slowLoad} onCheckAll={checkAll} />}
-        </div>
-        {installed.length === 0 ? (
-          <SettingsEmpty>
-            {registry ? 'No plugins on this machine yet.' : 'Loading plugins…'}
-          </SettingsEmpty>
-        ) : (
-          <div className="settings-row-list">
-            {installed.map((row) => {
-              const status = row.state === RESTART_PENDING_STATE
-                ? { label: 'update not active', className: 'badge badge-important' }
-                : ROW_STATUS[row.status] ?? UNKNOWN_ROW_STATUS;
-              // A plugin whose files an update replaced is STILL running its old code: the
-              // switch stays on next to the RESTART TO ACTIVATE badge (N7).
-              const isOn = row.status === 'active' || row.state === RESTART_PENDING_STATE;
-              // Never auto-open. In a LIST, expanding an eight-field form on mount
-              // buries every row under it — the row already says NEEDS SETUP, names
-              // the missing field, and offers Configure.
-              const open = configuring === row.id;
-              const connection = connections[row.id];
-              // Only when the account needs the human: a healthy link says so on
-              // the panel below, not as a second "on" badge in the title.
-              const connectionBadge = connection && connection.state !== 'connected'
-                ? CONNECTION_BADGE[connection.state] : null;
-              // Update status: one shared row per checkout or source; built-ins have none.
-              const isUpdatable = isUpdatableRow(row);
-              const rowKey = isUpdatable ? rowKeyFor(row) : undefined;
-              const updateRow = rowKey ? updates.rows[rowKey] : undefined;
-              const updateState = isUpdatable ? stateFor(row, rowKey) : undefined;
-              const rowBusy = rowKey ? updates.busy[rowKey] : undefined;
-              const updating = rowBusy === 'updating';
-              // A replica reads the Mac's checkouts and cannot touch them: static chip, no verbs.
-              const cloudLinked = Boolean(registry?.cloud) && row.source.kind === 'linked';
-              const source = row.sourceSlug ? sources.find((entry) => entry.slug === row.sourceSlug) : undefined;
-              const sourceKind: 'git' | 'npm' = row.source.kind === 'npm' || source?.kind === 'npm' ? 'npm' : 'git';
-              // A source whose clone is gone (`missing`) is restored from its Sources card,
-              // which owns Restore; this row keeps the chip and reserves the button's space.
-              const buttonMode = isUpdatable && !cloudLinked && updateState?.kind !== 'missing'
-                ? updateButtonMode(updateState, rowBusy, Boolean(pressedRows[row.id]), { siblingNames: siblingNamesOf(row, rowKey), pendingActivation: row.state === RESTART_PENDING_STATE })
-                : { render: false as const };
-              return (
-                <div key={row.id} className="plugin-store-entry">
-                  <SettingsRow
-                    data-testid={`plugin-row-${row.id}`}
-                    data-plugin-status={row.status}
-                    actions={(
-                      <>
-                        {row.configurable && (
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            data-testid={`plugin-configure-${row.id}`}
-                            disabled={updating}
-                            onClick={() => setConfiguring(open ? null : row.id)}
-                          >
-                            {open ? 'Done' : 'Configure'}
-                          </button>
-                        )}
-                        {row.status === 'quarantined' && (
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            disabled={busy === row.id}
-                            onClick={() => void handleClearQuarantine(row)}
-                          >
-                            Clear quarantine
-                          </button>
-                        )}
-                        {/* The ONE update verb. Rendered only when there is something to do
-                            (available, missing), or disabled with its reason when a local
-                            state blocks it; an up-to-date row shows nothing here, the chip
-                            already answered. Remove and the switch stay live while it runs:
-                            updating is not deleting. */}
-                        {isUpdatable && !cloudLinked && (
-                          <PluginUpdateButton
-                            rowId={row.id}
-                            mode={buttonMode}
-                            onClick={() => (isLinkedRow(row) && rowKey
-                              ? void handleLinkedUpdate(row, rowKey)
-                              : void handleUpdate(row.sourceSlug!, sourceKind, row.id))}
-                          />
-                        )}
-                        {row.sourceSlug && (
-                          <button
-                            type="button"
-                            className="btn-danger-outline btn-sm"
-                            disabled={busy === row.sourceSlug}
-                            onClick={() => void handleRemove(row.sourceSlug!)}
-                          >
-                            Remove
-                          </button>
-                        )}
-                        {/* needs-config, needs-dependency, unsupported and quarantined are
-                            refused by the plugin manager itself, so a switch would flip straight back.
-                            Those rows carry their reason in the copy on the left and
-                            whatever action can actually help on the right, so nothing
-                            is repeated here. */}
-                        {row.toggleable && (
-                          <ToggleSwitch
-                            id={`plugin-toggle-${row.id}`}
-                            checked={isOn}
-                            onChange={(next) => void handleToggle(row, next)}
-                          />
-                        )}
-                      </>
-                    )}
-                  >
-                    <strong>
-                      {row.name}
-                      <span className={status.className}>{status.label}</span>
-                      {connectionBadge && (
-                        <span className={connectionBadge.className} data-testid={`plugin-row-connection-${row.id}`}>
-                          {connectionBadge.label}
-                        </span>
-                      )}
-                      {row.version && <span className="plugin-store-version">v{row.version}</span>}
-                      {/* "Is it current?" sits on the title line next to "is it running?":
-                          the eye scans titles, and the two badges are styled apart (solid
-                          pill vs outline chip). Pending until the first GET answers. */}
-                      {isUpdatable && (
-                        <PluginUpdateChip
-                          rowId={row.id}
-                          state={updateState}
-                          checkedAt={updateRow?.checkedAt ?? null}
-                          busy={rowBusy}
-                          transient={updateRow?.transient}
-                          toRef={updateRow?.target?.toRef}
-                          offline={updates.offline}
-                          isStatic={cloudLinked}
-                          staticTitle={cloudLinked ? CLOUD_LINKED_NOTE : undefined}
-                          onCheck={rowKey && !cloudLinked ? () => checkRow(rowKey, row, row.id) : undefined}
-                        />
-                      )}
-                    </strong>
-                    {row.description && <span>{row.description}</span>}
-                    <span className="plugin-store-origin">
-                      {originLabel(row, source)}
-                      {row.adds?.length ? ` · adds ${row.adds.join(', ')}` : ''}
-                      {!row.adds?.length && row.capabilities?.length ? ` · ${row.capabilities.join(', ')}` : ''}
-                      {/* Where the code really runs from, one click away and never inline:
-                          a path, a branch and a sha are answers to a question rarely asked. */}
-                      {row.source.kind === 'linked' && (
-                        <PluginProvenanceFlyout
-                          rowId={row.id}
-                          kind="linked"
-                          rows={{
-                            checkout: row.source.checkout ?? row.source.path ?? '',
-                            branch: row.source.branch ?? 'HEAD',
-                            sha: row.source.sha ?? '',
-                            remote: row.source.remote,
-                          }}
-                          homeDir={homeDirFor(row.source, registry?.homeDir)}
-                          checkedAt={updateRow?.checkedAt ?? null}
-                        />
-                      )}
-                      {row.source.kind !== 'linked' && row.sourceSlug && (
-                        <PluginProvenanceFlyout
-                          rowId={row.id}
-                          kind="source"
-                          rows={sourceProvenance(row.sourceSlug, sourceKind, source, row.source)}
-                          checkedAt={updateRow?.checkedAt ?? null}
-                        />
-                      )}
-                    </span>
-                    {/* The result of the row's last action. Nothing here at rest: no fourth line. */}
-                    {isUpdatable && (
-                      <PluginUpdateFeedback rowId={row.id} feedback={feedback[row.id]} />
-                    )}
-                    {/* A blocked row says which plugin it waits for and offers the one
-                        thing that can fix it; every other non-active row keeps the
-                        server's own sentence. */}
-                    {row.status === 'needs-dependency' ? (
-                      <PluginDependencyNeeds
-                        rowId={row.id}
-                        missing={row.missingDependencies}
-                        plan={row.dependencyPlan}
-                        busyKey={busy}
-                        copiedKey={copiedSlug}
-                        nameFor={nameOf}
-                        // "Install…" ASKS: it opens the consent list for this source (every
-                        // URL it would add) instead of cloning on one click. Without a
-                        // source of its own, the row falls back to the ordinary install
-                        // form, which still has its own trust tick.
-                        onInstall={(item) => {
-                          if (row.sourceSlug) {
-                            setError(null);
-                            setNotice(null);
-                            setPending({ slug: row.sourceSlug, plan: row.dependencyPlan ?? [], rowId: row.id });
-                          } else prefillSource(item.source as RegistryRow['source'], nameOf(item.id));
-                        }}
-                        onTurnOn={(item) => void turnOnDependency(row.id, item)}
-                        onCopy={copy}
-                      />
-                    ) : row.status !== 'active' && (row.reason || row.error) ? (
-                      <span className="plugin-store-why">{row.error ?? row.reason}</span>
-                    ) : null}
-                  </SettingsRow>
-                  {/* Names sorted for reading: the server returns teardown order, which is
-                      the reverse of the order a list of names wants to be in. */}
-                  {cascadeAsk?.target.id === row.id && (
-                    <PluginCascadeConfirm
-                      name={row.name}
-                      dependents={cascadeAsk.dependents.map(nameOf).sort((a, b) => a.localeCompare(b))}
-                      busy={busy === row.id}
-                      onConfirm={() => void handleToggle(row, false, { cascade: true })}
-                      onCancel={() => setCascadeAsk(null)}
-                    />
-                  )}
-                  {/* The consent list for THIS row's dependencies, where the question was
-                      asked. Same component the install form uses. */}
-                  {pending?.rowId === row.id && (
-                    <div className="plugin-store-config">
-                      <PluginPendingDependencies
-                        plan={pending.plan}
-                        busy={busy === `pending:${pending.slug}`}
-                        nameFor={nameOf}
-                        onInstall={() => void installDependencies(pending.slug, `pending:${pending.slug}`)}
-                        onDismiss={() => setPending(null)}
-                      />
-                    </div>
-                  )}
-                  {/* The plugin's app entries live HERE, on the plugin itself —
-                      an app is not a separate thing to manage on another panel. */}
-                  <PluginAppControls pluginId={row.id} />
-                  {/* The account link lives on the row too, always visible: whether
-                      the credential is alive is the first thing to check when sync
-                      looks off, and it must not hide behind Configure. */}
-                  {connection && isOn && (
-                    <PluginConnectionPanel pluginId={row.id} initial={connection} onReport={onConnectionReport} />
-                  )}
-                  {open && row.configurable && (
-                    <div className="plugin-store-config" data-testid={`plugin-config-${row.id}`}>
-                      <PluginConfigCards config={config} onSave={onSave} onlyIds={[row.id]} bare />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+  /** One installed plugin: its row, then its indented sub-rows in the same group. */
+  const renderInstalledRow = (row: RegistryRow) => {
+    const restartPending = row.state === RESTART_PENDING_STATE;
+    // A plugin whose files an update replaced is STILL running its old code: the
+    // switch stays on next to the Restart to activate tag (N7).
+    const isOn = row.status === 'active' || restartPending;
+    const asking = cascadeAsk?.target.id === row.id;
+    const switchOn = asking ? true : (pendingToggle[row.id] ?? isOn);
+    // Never auto-open. In a LIST, expanding an eight-field form on mount buries every
+    // row under it; the row already says Needs setup, names the field, and offers Configure.
+    const open = configuring === row.id;
+    const connection = connections[row.id];
+    // Only when the account needs the human: a healthy link says so on the account
+    // row below, not as a second tag in the title.
+    const connectionBadge = connection && connection.state !== 'connected' ? CONNECTION_BADGE[connection.state] : null;
+    // Update status: one shared row per checkout or source; built-ins have none.
+    const isUpdatable = isUpdatableRow(row);
+    const rowKey = isUpdatable ? rowKeyFor(row) : undefined;
+    const updateRow = rowKey ? updates.rows[rowKey] : undefined;
+    const updateState = isUpdatable ? stateFor(row, rowKey) : undefined;
+    const rowBusy = rowKey ? updates.busy[rowKey] : undefined;
+    const updating = rowBusy === 'updating';
+    // A replica reads the Mac's checkouts and cannot touch them: static chip, no verbs.
+    const cloudLinked = Boolean(registry?.cloud) && row.source.kind === 'linked';
+    const source = row.sourceSlug ? sources.find((entry) => entry.slug === row.sourceSlug) : undefined;
+    const sourceKind: 'git' | 'npm' = row.source.kind === 'npm' || source?.kind === 'npm' ? 'npm' : 'git';
+    // A source whose clone is gone (`missing`) is restored from its Sources row, which
+    // owns Restore; this row keeps the chip and reserves the button's space.
+    const buttonMode = isUpdatable && !cloudLinked && updateState?.kind !== 'missing'
+      ? updateButtonMode(updateState, rowBusy, Boolean(pressedRows[row.id]), { siblingNames: siblingNamesOf(row, rowKey), pendingActivation: restartPending })
+      : { render: false as const };
+    const failed = row.status === 'failed' || row.status === 'quarantined';
+    const needsSetup = row.status === 'needs-config';
+    const reason = row.error ?? row.reason;
+    const help = failed && reason
+      ? firstSentence(reason)
+      : needsSetup
+        ? needsSetupHelp(row.missingConfig)
+        : row.status !== 'active' && row.status !== 'needs-dependency' && reason
+          ? firstSentence(reason)
+          : firstSentence(row.description);
+    const helpState = failed || needsSetup ? 'warning' as const : undefined;
+    const origin = originSentence(originLabel(row, source), row.adds, row.capabilities);
+    return (
+      <div key={row.id} className="settings-addons-rows plugin-store-entry">
+        <SettingsRow
+          data-testid={`plugin-row-${row.id}`}
+          data-plugin-status={row.status}
+          className="plugin-store-row"
+          title={origin}
+          label={
+            <span className="settings-addons-inline plugin-store-title">
+              <span className="settings-addons-ellipsis plugin-store-name">{row.name}</span>
+              {row.version && <span className="settings-addons-muted plugin-store-version">v{row.version}</span>}
+              {rowTags({ status: row.status, restartPending }).map((tag) => (
+                <SettingsTag key={tag.text} tone={tag.tone}>{tag.text}</SettingsTag>
+              ))}
+              {connectionBadge && (
+                <span data-testid={`plugin-row-connection-${row.id}`}>
+                  <SettingsTag tone={connectionBadge.tone}>{connectionBadge.label}</SettingsTag>
+                </span>
+              )}
+              {/* "Is it current?" sits next to "is it running?": the update chip is the
+                  Local changes / Update available tag, and a click re-checks the row. */}
+              {isUpdatable && (
+                <PluginUpdateChip
+                  rowId={row.id}
+                  state={updateState}
+                  checkedAt={updateRow?.checkedAt ?? null}
+                  busy={rowBusy}
+                  transient={updateRow?.transient}
+                  toRef={updateRow?.target?.toRef}
+                  offline={updates.offline}
+                  isStatic={cloudLinked}
+                  staticTitle={cloudLinked ? plainText(CLOUD_LINKED_NOTE) : undefined}
+                  onCheck={rowKey && !cloudLinked ? () => checkRow(rowKey, row, row.id) : undefined}
+                />
+              )}
+              {/* Where the code really runs from, one click away and never inline. */}
+              {row.source.kind === 'linked' && (
+                <PluginProvenanceFlyout
+                  rowId={row.id}
+                  kind="linked"
+                  rows={{
+                    checkout: row.source.checkout ?? row.source.path ?? '',
+                    branch: row.source.branch ?? 'HEAD',
+                    sha: row.source.sha ?? '',
+                    remote: row.source.remote,
+                  }}
+                  homeDir={homeDirFor(row.source, registry?.homeDir)}
+                  checkedAt={updateRow?.checkedAt ?? null}
+                />
+              )}
+              {row.source.kind !== 'linked' && row.sourceSlug && (
+                <PluginProvenanceFlyout
+                  rowId={row.id}
+                  kind="source"
+                  rows={sourceProvenance(row.sourceSlug, sourceKind, source, row.source)}
+                  checkedAt={updateRow?.checkedAt ?? null}
+                />
+              )}
+            </span>
+          }
+          help={help ? <span title={failed && reason ? plainText(reason) : undefined}>{help}</span> : undefined}
+          state={helpState}
+          error={toggleError[row.id] ? couldntSave(toggleError[row.id]) : undefined}
+          control={
+            <>
+              {row.configurable && (
+                <SettingsButton
+                  variant={needsSetup ? 'primary' : 'default'}
+                  data-testid={`plugin-configure-${row.id}`}
+                  aria-expanded={open}
+                  disabled={updating}
+                  reserve={['Configure', 'Done']}
+                  onClick={() => setConfiguring(open ? null : row.id)}
+                >
+                  {open ? 'Done' : 'Configure'}
+                </SettingsButton>
+              )}
+              {failed && (
+                <SettingsButton
+                  data-testid={`plugin-try-again-${row.id}`}
+                  busy={busy === row.id}
+                  busyLabel="Trying..."
+                  onClick={() => (row.status === 'quarantined'
+                    ? void handleClearQuarantine(row)
+                    : void handleToggle(row, true))}
+                >
+                  Try again
+                </SettingsButton>
+              )}
+              {/* The ONE update verb, only when there is something to do, or disabled with
+                  its reason when a local state blocks it. Remove and the switch stay live
+                  while it runs: updating is not deleting. */}
+              {isUpdatable && !cloudLinked && (
+                <PluginUpdateButton
+                  rowId={row.id}
+                  mode={buttonMode}
+                  onClick={() => (isLinkedRow(row) && rowKey
+                    ? void handleLinkedUpdate(row, rowKey)
+                    : void handleUpdate(row.sourceSlug!, sourceKind, row.id))}
+                />
+              )}
+              {row.sourceSlug && (
+                <InlineConfirmButton
+                  disabled={busy === row.sourceSlug}
+                  aria-label={`Remove ${row.name}`}
+                  data-testid={`plugin-remove-${row.id}`}
+                  onConfirm={() => handleRemove(row.sourceSlug!)}
+                />
+              )}
+              {/* needs-config, needs-dependency, unsupported and quarantined are refused by
+                  the plugin manager itself, so a switch would flip straight back. Those rows
+                  carry their reason on the left and the action that can help on the right. */}
+              {row.toggleable ? (
+                <ToggleSwitch
+                  id={`plugin-toggle-${row.id}`}
+                  checked={switchOn}
+                  busy={asking || row.id in pendingToggle}
+                  aria-label={`Turn ${row.name} ${switchOn ? 'off' : 'on'}`}
+                  onChange={(next) => void handleToggle(row, next)}
+                />
+              ) : (
+                // The switch's slot stays, so Configure lines up with every other row (F17).
+                <span className="settings-switch-slot" aria-hidden="true" />
+              )}
+            </>
+          }
+        />
+        {/* The result of the row's last update. Nothing here at rest. */}
+        {isUpdatable && feedback[row.id] && (
+          <div className="settings-row settings-row-indent plugin-store-feedback-row">
+            <PluginUpdateFeedback rowId={row.id} feedback={feedback[row.id]} />
+          </div>
+        )}
+        {/* Names sorted for reading: the server returns teardown order. */}
+        {asking && cascadeAsk && (
+          <PluginCascadeConfirm
+            name={row.name}
+            dependents={cascadeAsk.dependents.map(nameOf).sort((a, b) => a.localeCompare(b))}
+            busy={busy === row.id}
+            onConfirm={() => void handleToggle(row, false, { cascade: true })}
+            onCancel={() => setCascadeAsk(null)}
+          />
+        )}
+        {/* A blocked row says which plugin it waits for and offers the one thing that
+            can fix it, as indented rows. */}
+        {row.status === 'needs-dependency' && (
+          <PluginDependencyNeeds
+            rowId={row.id}
+            missing={row.missingDependencies}
+            plan={row.dependencyPlan}
+            busyKey={busy}
+            copiedKey={copiedSlug}
+            nameFor={nameOf}
+            // "Install..." ASKS: it opens the consent rows for this source (every URL it
+            // would add) instead of cloning on one click. Without a source of its own the
+            // row falls back to the install form, which has its own trust switch.
+            onInstall={(item) => {
+              if (row.sourceSlug) {
+                setError(null);
+                setNotice(null);
+                setPending({ slug: row.sourceSlug, plan: row.dependencyPlan ?? [], rowId: row.id });
+              } else prefillSource(item.source as RegistryRow['source'], nameOf(item.id));
+            }}
+            onTurnOn={(item) => void turnOnDependency(row.id, item)}
+            onCopy={copy}
+          />
+        )}
+        {/* The consent rows for THIS row's dependencies, where the question was asked. */}
+        {pending?.rowId === row.id && (
+          <PluginPendingDependencies
+            plan={pending.plan}
+            busy={busy === `pending:${pending.slug}`}
+            nameFor={nameOf}
+            onInstall={() => void installDependencies(pending.slug, `pending:${pending.slug}`)}
+            onDismiss={() => setPending(null)}
+          />
+        )}
+        {/* The plugin's app entries live HERE, on the plugin itself. */}
+        <PluginAppControls pluginId={row.id} />
+        {/* The account link, always visible while the plugin is on: whether the credential
+            is alive is the first thing to check when sync looks off. A base plugin (mail)
+            has no report of its own; its providers each get an account row. */}
+        {connection && isOn && (
+          <PluginConnectionPanel pluginId={row.id} initial={connection} onReport={onConnectionReport} />
+        )}
+        {!connection && isOn && providersOf(row.id).map((provider) => (
+          <ProviderRow key={provider.id} provider={provider} connection={connections[provider.id]} />
+        ))}
+        {open && row.configurable && (
+          <div
+            className="settings-addons-rows plugin-store-config"
+            data-testid={`plugin-config-${row.id}`}
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return;
+              e.stopPropagation();
+              setConfiguring(null);
+              document.querySelector<HTMLButtonElement>(`[data-testid="plugin-configure-${row.id}"]`)?.focus();
+            }}
+          >
+            <PluginConfigCards config={config} onSave={onSave} onlyIds={[row.id]} bare />
           </div>
         )}
       </div>
+    );
+  };
 
-      {/* ── Available ── */}
+  /**
+   * Provider plugins of a base plugin (mail): an installed row whose plan names the base,
+   * or, since the registry does not expose an active row's manifest dependencies, whose
+   * id extends the base id (`mail-imap` under `mail`). Only rows that are on count.
+   */
+  const providersOf = (baseId: string) => installed.filter((other) =>
+    other.id !== baseId
+    && (other.status === 'active' || other.state === RESTART_PENDING_STATE)
+    && ((other.dependencyPlan ?? []).some((item) => item.id === baseId) || other.id.startsWith(`${baseId}-`)));
+
+  const availableRows = available.map((row) => (
+    <SettingsRow
+      key={row.id}
+      data-testid={`plugin-row-${row.id}`}
+      data-plugin-status={row.status}
+      label={row.name}
+      title={row.source.kind === 'example'
+        ? `In this checkout at ${row.source.path}; install it with walnut-plugin link.`
+        : row.source.kind === 'npm'
+          ? `npm ${row.source.spec ?? row.id}`
+          : row.source.kind === 'git' ? `git ${row.source.url ?? ''}` : 'Ships with Walnut, but not in this build.'}
+      help={
+        <>
+          {firstSentence(row.description) || (row.source.kind === 'builtin' ? 'Ships with Walnut, but not in this build.' : '')}
+          {/* What installing it would ALSO pull in, before anything is added. */}
+          {row.dependencyPlan?.length ? ' ' : null}
+          <PluginAlsoNeeds rowId={row.id} plan={row.dependencyPlan} blockedBy={row.blockedBy} nameFor={nameOf} />
+        </>
+      }
+      control={
+        <>
+          {(row.source.kind === 'git' || row.source.kind === 'npm') && (
+            <SettingsButton
+              data-testid={`plugin-install-${row.id}`}
+              busy={busy === 'add' && url.trim() !== '' && url === (row.source.kind === 'npm' ? row.source.spec : row.source.url)}
+              busyLabel="Installing..."
+              onClick={() => prefillInstall(row)}
+            >
+              Install...
+            </SettingsButton>
+          )}
+          {row.source.kind === 'example' && row.source.path && (
+            <SettingsButton
+              reserve={['Copy link command', 'Copied']}
+              title={`walnut-plugin link ${row.source.path}`}
+              onClick={() => copy(`walnut-plugin link ${row.source.path}`, `example:${row.id}`)}
+            >
+              {copiedSlug === `example:${row.id}` ? 'Copied' : 'Copy link command'}
+            </SettingsButton>
+          )}
+          {/* Last, so it takes the same slot on every row with or without an action (F17). */}
+          {row.homepage && (
+            <a className="settings-addons-link" href={row.homepage} target="_blank" rel="noreferrer">Read more</a>
+          )}
+        </>
+      }
+    />
+  ));
+
+  return (
+    <SettingsSection id="plugin-store" title="Plugins">
+      {/* Only Remove needs a page-level word: no row survives to carry the tag. An
+          update says "restart" on its own row (feedback + Restart to activate), once. */}
+      {restartNeeded && (
+        <SettingsNotice kind="warn">Restart Walnut to finish removing that plugin&apos;s code.</SettingsNotice>
+      )}
+      {error && <SettingsNotice kind="error" role="alert">{error}</SettingsNotice>}
+      {notice && <SettingsNotice kind="success">{notice}</SettingsNotice>}
+
+      <SettingsGroup
+        heading="Installed"
+        headingTrailing={updatable.length > 0 ? <UpdatesHead updates={updates} slowLoad={slowLoad} onCheckAll={checkAll} /> : undefined}
+        className="plugin-store-group plugin-store-installed"
+        data-testid="plugin-store-installed"
+      >
+        {!registry ? (
+          <SettingsLoadingRow>Loading plugins...</SettingsLoadingRow>
+        ) : installed.length === 0 ? (
+          <SettingsRow label="No plugins yet." />
+        ) : (
+          installed.map(renderInstalledRow)
+        )}
+      </SettingsGroup>
+
       {available.length > 0 && (
-        <div className="plugin-store-group" data-testid="plugin-store-available">
-          <div className="plugin-store-group-head">
-            <h4 className="settings-subcard-title">Available</h4>
-            <span className="plugin-store-count">{available.length}</span>
-          </div>
-          <div className="settings-row-list">
-            {available.map((row) => (
-              <SettingsRow
-                key={row.id}
-                data-testid={`plugin-row-${row.id}`}
-                data-plugin-status={row.status}
-                actions={(
-                  <>
-                    {row.homepage && (
-                      <a
-                        className="btn btn-secondary btn-sm"
-                        href={row.homepage}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Read more
-                      </a>
-                    )}
-                    {(row.source.kind === 'git' || row.source.kind === 'npm') && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        data-testid={`plugin-install-${row.id}`}
-                        onClick={() => prefillInstall(row)}
-                      >
-                        Install…
-                      </button>
-                    )}
-                    {row.source.kind === 'example' && row.source.path && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => copy(`walnut-plugin link ${row.source.path}`, `example:${row.id}`)}
-                      >
-                        {copiedSlug === `example:${row.id}` ? 'Copied ✓' : 'Copy link command'}
-                      </button>
-                    )}
-                  </>
-                )}
-              >
-                <strong>
-                  {row.name}
-                  <span className={ROW_STATUS.available.className}>{ROW_STATUS.available.label}</span>
-                </strong>
-                {row.description && <span>{row.description}</span>}
-                <span>
-                  {row.source.kind === 'builtin'
-                    ? 'Ships with Walnut, but not present in this build'
-                    : row.source.kind === 'example'
-                      ? `In this checkout at ${row.source.path} · install it with walnut-plugin link`
-                      : row.source.kind === 'npm'
-                        ? `npm · ${row.source.spec ?? row.id}`
-                        : `git · ${row.source.url ?? ''}`}
-                  {row.adds?.length ? ` · adds ${row.adds.join(', ')}` : ''}
-                </span>
-                {/* What installing it would ALSO pull in, before anything is added. */}
-                <PluginAlsoNeeds
-                  rowId={row.id}
-                  plan={row.dependencyPlan}
-                  blockedBy={row.blockedBy}
-                  nameFor={nameOf}
-                />
-              </SettingsRow>
-            ))}
-          </div>
-        </div>
+        <SettingsGroup
+          heading="Available"
+          headingTrailing={<span className="settings-addons-muted">{`${available.length} plugin${available.length === 1 ? '' : 's'}`}</span>}
+          className="plugin-store-group"
+          data-testid="plugin-store-available"
+        >
+          {availableRows}
+        </SettingsGroup>
       )}
 
-      {/* ── The free-form install path, for anything the catalog does not list ── */}
-      <SettingsSubCard
-        title="Install from a git repository or an npm package"
-        description="A repo can hold one plugin (manifest.json at the root) or several (one folder per plugin); an npm package holds one, at its root."
+      {/* The free-form install path, for anything the catalog does not list. */}
+      <SettingsGroup
+        heading="Install from git or npm"
+        footer={registry?.cloud
+          ? 'Read from your Mac over the bridge; installing and removing sources happens on the Mac.'
+          : registry?.sourcesUnavailable
+            ? "The installed-source list couldn't be read, so Update and Remove are unavailable here."
+            : 'Neither kind ever updates itself: you press Update.'}
       >
-        <div className="form-group">
-          <label htmlFor="plugin-source-url">Git URL or npm package</label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              id="plugin-source-url"
-              ref={urlInputRef}
-              type="text"
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd(); } }}
-              placeholder="git URL, npm package (name, name@1.2.3, @scope/name), or a teammate's share snippet"
-              style={{ flex: 1 }}
-            />
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={busy === 'add' || !url.trim() || !trusted}
-              onClick={() => void handleAdd()}
-            >
-              {busy === 'add' ? 'Installing…' : 'Add'}
-            </button>
-          </div>
-          <p className="text-xs text-muted" style={{ marginTop: 2 }}>
-            Git uses your machine&apos;s git (ssh keys / credential helpers), so any remote your shell can clone works.
-            npm disables lifecycle scripts, pins an exact version, and verifies the installed tarball receipt.
-            Neither kind ever updates itself: you press Update.
-          </p>
-          {/* Its own class because `.form-group label` UPPERCASES everything, and this
-              is the one sentence on the page that has to be read, not skimmed. */}
-          <label
-            htmlFor="plugin-trust-confirm"
-            className="text-xs plugin-trust-label"
-            style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 6 }}
-          >
-            <input
+        <SettingsRow
+          label="Git URL or npm package"
+          htmlFor="plugin-source-url"
+          help="A repo holds one plugin or one per folder; npm installs pin an exact version with scripts off."
+          wide
+          className="settings-row-stacked"
+          control={
+            <span className="settings-addons-inline">
+              <input
+                id="plugin-source-url"
+                ref={urlInputRef}
+                type="text"
+                className="settings-input settings-input--long settings-input--mono"
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd(); } }}
+                placeholder="https://github.com/example/walnut-plugin"
+                spellCheck={false}
+              />
+              <SettingsButton
+                variant="primary"
+                disabled={!url.trim() || !trusted}
+                title={!url.trim() ? 'Paste a Git URL or an npm package first.' : !trusted ? 'Turn on the trust switch first.' : undefined}
+                busy={busy === 'add'}
+                busyLabel="Installing..."
+                onClick={() => void handleAdd()}
+              >
+                Add
+              </SettingsButton>
+            </span>
+          }
+        />
+        <SettingsRow
+          label={<span className="plugin-trust-label">I trust this source</span>}
+          htmlFor="plugin-trust-confirm"
+          help="Its code runs inside Walnut with full access to your tasks, notes, credentials and this Mac."
+          control={
+            <ToggleSwitch
               id="plugin-trust-confirm"
               data-testid="plugin-trust-confirm"
-              type="checkbox"
               checked={trusted}
-              onChange={e => setTrusted(e.target.checked)}
-              style={{ marginTop: 2 }}
+              onChange={setTrusted}
             />
-            <span>
-              I trust this source. Its code runs inside Walnut with full access to my tasks, notes,
-              credentials and this machine.
-            </span>
-          </label>
-          {/* Phase two of the install: the plugin that just arrived needs another one.
-              This list names every source it would add, and it is the consent for them —
-              nothing is installed until the button below is pressed. */}
-          {pending && !pending.rowId && (
-            <div style={{ marginTop: 10 }}>
-              <PluginPendingDependencies
-                plan={pending.plan}
-                busy={busy === `pending:${pending.slug}`}
-                nameFor={nameOf}
-                onInstall={() => void installDependencies(pending.slug, `pending:${pending.slug}`)}
-                onDismiss={() => setPending(null)}
-              />
-            </div>
-          )}
-        </div>
-      </SettingsSubCard>
+          }
+        />
+      </SettingsGroup>
 
-      {/* ── Sources ── a source is not a plugin: one repo can carry several, and it is the
-          source that gets updated or removed, so it keeps its own list below the plugins. */}
+      {/* Phase two of an install from the form: the plugin that just arrived needs
+          another one. These rows name every source it would add and ARE the consent. */}
+      {pending && !pending.rowId && (
+        <SettingsGroup heading="Dependencies">
+          <PluginPendingDependencies
+            plan={pending.plan}
+            busy={busy === `pending:${pending.slug}`}
+            nameFor={nameOf}
+            onInstall={() => void installDependencies(pending.slug, `pending:${pending.slug}`)}
+            onDismiss={() => setPending(null)}
+          />
+        </SettingsGroup>
+      )}
+
+      {/* A source is not a plugin: one repo can carry several, and it is the source that
+          gets updated or removed, so it keeps its own group below the plugins. */}
       <PluginSourcesGroup
         sources={sources}
         ownedSlugs={ownedSlugs}
@@ -1101,17 +1112,47 @@ export function PluginStoreSection({ config, onSave }: Props) {
         setRowFeedback={setRowFeedback}
       />
 
-      {registry?.sourcesUnavailable && !registry.cloud && (
-        <p className="text-xs text-muted">
-          Could not read the installed-source list, so Update and Remove are unavailable on this view.
-        </p>
-      )}
-      {registry?.cloud && (
-        <p className="text-xs text-muted">
-          Read from your Mac over the bridge. Installing and removing plugin sources happens on the Mac.
-        </p>
-      )}
-
+      {/* The simplest way in for someone who wants a plugin nobody has written yet. */}
+      <BuildPluginCard />
     </SettingsSection>
+  );
+}
+
+/**
+ * One provider under a base plugin (mail): its account state. With no
+ * connection report the row names the provider only: a guess about how it
+ * signs in ("the system sign-in") was wrong for an app-password provider (F16).
+ */
+function ProviderRow({ provider, connection }: { provider: RegistryRow; connection?: ConnectionReport }) {
+  if (!connection) {
+    // No report of its own: still say whether it is set up and how it signs in (N06).
+    const fallback = providerFallbackState(provider);
+    return (
+      <SettingsRow
+        indent
+        data-testid={`plugin-provider-${provider.id}`}
+        data-provider-state={fallback.tag?.text ?? 'ready'}
+        label={provider.name}
+        help={fallback.help}
+        control={fallback.tag ? <SettingsTag tone={fallback.tag.tone}>{fallback.tag.text}</SettingsTag> : undefined}
+      />
+    );
+  }
+  const badge = CONNECTION_BADGE[connection.state];
+  return (
+    <SettingsRow
+      indent
+      data-testid={`plugin-provider-${provider.id}`}
+      label={
+        <span className="settings-addons-inline">
+          <span>{provider.name}</span>
+          {connection.account && (
+            <span className="settings-addons-ellipsis settings-addons-account" title={connection.account}>{connection.account}</span>
+          )}
+        </span>
+      }
+      help={(connection.state === 'connected' ? connectedHelp(connection) : badge?.help) || undefined}
+      control={badge ? <SettingsTag tone={badge.tone}>{badge.label}</SettingsTag> : undefined}
+    />
   );
 }

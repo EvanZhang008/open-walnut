@@ -104,6 +104,9 @@ test('pending health stays quiet and incomplete setup keeps its Settings link', 
   await banner.getByRole('button', { name: 'Settings' }).click()
   await expect(page).toHaveURL(/\/settings#providers$/)
   await expect(page.locator('.settings-layout')).toBeVisible()
+  // Pane mode: the deep link opens Advanced, where the API provider is folded.
+  await expect(page.getByTestId('settings-nav-advanced')).toHaveAttribute('aria-current', 'page')
+  await expect(page.locator('#providers')).toBeVisible({ timeout: 20_000 })
 })
 
 test('a failed health request does not invent a setup warning', async ({ page, baseURL }) => {

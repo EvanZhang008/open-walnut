@@ -27,7 +27,7 @@ test('webkit: a terminal-group toggle and a codex boolean persist to disk', asyn
   const section = await openEnginesSection(page)
   await waitForEngineRows(section, 'claude')
 
-  await section.locator('summary', { hasText: 'Terminal only' }).click()
+  await section.locator('.settings-disclosure-row', { hasText: 'Terminal only' }).click()
   const turnDuration = control(section, 'claude', 'showTurnDuration')
   await expect(row(section, 'showTurnDuration')).toHaveAttribute('data-source', 'default')
   await expect(turnDuration).toHaveAttribute('aria-checked', 'true')

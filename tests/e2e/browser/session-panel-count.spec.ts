@@ -60,7 +60,7 @@ async function openColumnsOnHome(page: Page, sids: readonly string[] = SIDS) {
 const openThreeColumnsOnHome = (page: Page) => openColumnsOnHome(page, SIDS)
 
 const panelPicker = (page: Page) =>
-  page.locator('.form-group', { hasText: 'Session Panels' }).locator('.theme-picker')
+  page.locator('#settings-session-panels')
 
 /**
  * Measure the strip and its columns in ONE evaluate.
@@ -104,7 +104,7 @@ function assertColumnsFitStrip(m: Awaited<ReturnType<typeof measureStrip>>, minW
  *  substring match that would also hit nothing today but silently grab the wrong
  *  button the moment a two-digit count is added. */
 const panelBtn = (page: Page, label: string) =>
-  panelPicker(page).locator('.theme-picker-btn').filter({ hasText: new RegExp(`^${label}$`) })
+  panelPicker(page).locator('.settings-segment').filter({ hasText: new RegExp(`^${label}$`) })
 
 /**
  * Pick a panel count through the real Settings UI (sidebar click, no /settings goto),
@@ -123,13 +123,13 @@ async function setPanelMode(page: Page, label: '1' | '2' | '3' | '4' | '5' | 'Au
     await page.goto('/')
     await page.waitForLoadState('networkidle')
   }
-  const settingsLink = page.locator('.sidebar a[href="/settings"]')
+  const settingsLink = page.locator('.sidebar a[href^="/settings"]')
   await expect(settingsLink).toBeVisible({ timeout: 30_000 })
   await settingsLink.click()
   await expect(panelPicker(page)).toBeVisible({ timeout: 10_000 })
   const btn = panelBtn(page, label)
   await btn.click()
-  await expect(btn).toHaveClass(/active/)
+  await expect(btn).toHaveAttribute('aria-checked', 'true')
 
   // Wait for the value to reach config. The write is a read-modify-write (fetch config →
   // PUT a merged `ui`) behind a file lock, and the fixture's session health monitor
@@ -166,11 +166,11 @@ test('the picker offers 1-5 plus Auto, and a choice persists to config', async (
   await page.setViewportSize({ width: 2400, height: 1000 })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.sidebar a[href="/settings"]').click()
+  await page.locator('.sidebar a[href^="/settings"]').click()
   await expect(panelPicker(page)).toBeVisible({ timeout: 20_000 })
 
   // Exactly the six options, in order — a missing or extra button is a real defect.
-  await expect(panelPicker(page).locator('.theme-picker-btn')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
+  await expect(panelPicker(page).locator('.settings-segment')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
 
   // setPanelMode asserts the value reached config (the setting is config, not just
   // component state).
@@ -179,10 +179,10 @@ test('the picker offers 1-5 plus Auto, and a choice persists to config', async (
 
   // Navigate away and back — the choice must survive, not reset to the '2' default.
   await page.locator('.sidebar a[href="/"]').first().click()
-  await page.locator('.sidebar a[href="/settings"]').click()
-  await expect(panelBtn(page, '3')).toHaveClass(/active/)
+  await page.locator('.sidebar a[href^="/settings"]').click()
+  await expect(panelBtn(page, '3')).toHaveAttribute('aria-checked', 'true')
   // Exactly one option reads as selected.
-  await expect(panelPicker(page).locator('.theme-picker-btn.active')).toHaveCount(1)
+  await expect(panelPicker(page).locator('.settings-segment[aria-checked="true"]')).toHaveCount(1)
 })
 
 test('three session panels render side by side without overflowing the strip', async ({ page }) => {
@@ -375,10 +375,10 @@ test('a count set outside the UI is honoured, and a junk one falls back', async 
   await expect(panelBtn(page, '4')).toHaveCount(0)  // we're on home, not settings
 
   // ...and the picker shows it as selected when you go look.
-  await page.locator('.sidebar a[href="/settings"]').click()
-  await expect(panelBtn(page, '4')).toHaveClass(/active/, { timeout: 20_000 })
-  await expect(panelPicker(page).locator('.theme-picker-btn.active')).toHaveCount(1)
-  await page.locator('.form-group', { hasText: 'Session Panels' })
+  await page.locator('.sidebar a[href^="/settings"]').click()
+  await expect(panelBtn(page, '4')).toHaveAttribute('aria-checked', 'true', { timeout: 20_000 })
+  await expect(panelPicker(page).locator('.settings-segment[aria-checked="true"]')).toHaveCount(1)
+  await page.getByTestId('settings-session-panels-row')
     .screenshot({ path: `${SCREENSHOT_DIR}/06-four-selected.png` })
 
   // A nonsense count must NOT be obeyed — no 99-sliver strip, and no zero-column one
@@ -396,9 +396,9 @@ test('a count set outside the UI is honoured, and a junk one falls back', async 
   // The picker shows the '2' DEFAULT for a rejected value — never '99' (there is no
   // such button) and never a blank strip with nothing selected. Exactly one lit button
   // is the invariant: the user always sees a real, actionable state.
-  await page.locator('.sidebar a[href="/settings"]').click()
+  await page.locator('.sidebar a[href^="/settings"]').click()
   await expect(panelPicker(page)).toBeVisible({ timeout: 20_000 })
-  await expect(panelPicker(page).locator('.theme-picker-btn.active')).toHaveText(['2'])
+  await expect(panelPicker(page).locator('.settings-segment[aria-checked="true"]')).toHaveText(['2'])
 })
 
 /**
@@ -430,9 +430,9 @@ for (const [viewport, expected] of [[1200, 1], [2560, 2]] as const) {
     expect(predicted, `row width ${Math.round(rowWidth)}px should budget ${expected}`).toBe(expected)
 
     // Auto must read as selected — not the count it happens to have resolved to.
-    await page.locator('.sidebar a[href="/settings"]').click()
-    await expect(panelBtn(page, 'Auto')).toHaveClass(/active/, { timeout: 20_000 })
-    await expect(panelPicker(page).locator('.theme-picker-btn.active')).toHaveText(['Auto'])
+    await page.locator('.sidebar a[href^="/settings"]').click()
+    await expect(panelBtn(page, 'Auto')).toHaveAttribute('aria-checked', 'true', { timeout: 20_000 })
+    await expect(panelPicker(page).locator('.settings-segment[aria-checked="true"]')).toHaveText(['Auto'])
   })
 }
 
@@ -574,9 +574,9 @@ test('the session kebab exposes the panel count and applies it immediately', asy
     .toBe('2')
 
   // Both surfaces agree: Settings shows what the session menu picked.
-  await page.locator('.sidebar a[href="/settings"]').click()
-  await expect(panelBtn(page, '2')).toHaveClass(/active/, { timeout: 20_000 })
-  await expect(panelPicker(page).locator('.theme-picker-btn.active')).toHaveText(['2'])
+  await page.locator('.sidebar a[href^="/settings"]').click()
+  await expect(panelBtn(page, '2')).toHaveAttribute('aria-checked', 'true', { timeout: 20_000 })
+  await expect(panelPicker(page).locator('.settings-segment[aria-checked="true"]')).toHaveText(['2'])
 })
 
 test('a change made in Settings shows up in the session kebab', async ({ page }) => {

@@ -1,146 +1,92 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { Config } from '@open-walnut/core';
-import { SectionCard } from '../inputs/SectionCard';
+import { SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow, SettingsSection } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
+import { useCommitField } from '../inputs/useCommitField';
 import { apiGet, apiPut } from '@/api/client';
-import { useAutoSave } from '@/hooks/useAutoSave';
+import { useSerialSave, type OnSave } from './GeneralSection';
 
 interface Props {
   config: Config;
-  onSave: (partial: Partial<Config>) => Promise<void>;
+  onSave: OnSave;
 }
 
-export function HeartbeatSection({ config, onSave }: Props) {
-  const [enabled, setEnabled] = useState(config.heartbeat?.enabled ?? false);
-  const [every, setEvery] = useState(config.heartbeat?.every ?? '30m');
-  const [activeHours, setActiveHours] = useState(config.heartbeat?.activeHours ?? '');
+type HeartbeatBlock = NonNullable<Config['heartbeat']>;
 
-  // Checklist state (separate API)
-  const [checklist, setChecklist] = useState('');
-  const [clLoading, setClLoading] = useState(true);
-  const [clSaving, setClSaving] = useState(false);
-  const [clSuccess, setClSuccess] = useState(false);
-  const [clError, setClError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setEnabled(config.heartbeat?.enabled ?? false);
-    setEvery(config.heartbeat?.every ?? '30m');
-    setActiveHours(config.heartbeat?.activeHours ?? '');
-  }, [config]);
-
+/** The checklist editor: its own file (HEARTBEAT.md), saved on blur. */
+function ChecklistRows() {
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
     apiGet<{ content: string }>('/api/heartbeat/checklist')
-      .then((r) => setChecklist(r.content))
-      .catch((e: Error) => setClError(e.message))
-      .finally(() => setClLoading(false));
+      .then((r) => setContent(r.content))
+      .catch((e: Error) => setLoadError(e.message))
+      .finally(() => setLoading(false));
   }, []);
+  // The file's own API; the field reports Saved / row errors itself.
+  const field = useCommitField<string>(
+    content,
+    (v) => apiPut('/api/heartbeat/checklist', { content: v }).then(() => setContent(v)),
+    { rowKey: 'heartbeat.checklist', kind: 'text', multiline: true },
+  );
+  if (loading) return <SettingsLoadingRow />;
+  if (loadError) return <SettingsNotice kind="error" role="alert">Couldn&apos;t load the checklist: {loadError}</SettingsNotice>;
+  return (
+    <div className="settings-row settings-row-stacked settings-editor-row" data-wide="true">
+      <label className="settings-row-label" htmlFor="heartbeat-editor">Items Walnut works through</label>
+      <textarea
+        id="heartbeat-editor"
+        className="settings-textarea settings-editor"
+        rows={10}
+        spellCheck={false}
+        placeholder={'# Heartbeat checklist\n- [ ] Check pipeline status\n- [ ] Review open PRs'}
+        {...field.inputProps}
+      />
+      {field.error && <p className="settings-row-error settings-row-error-inline" role="alert">{field.error}</p>}
+    </div>
+  );
+}
 
-  const handleSave = async () => {
-    await onSave({
-      heartbeat: {
-        enabled,
-        every: every || '30m',
-        activeHours: activeHours || undefined,
-      },
-    });
-  };
-
-  // Auto-save the heartbeat config (the checklist below has its own separate Save button).
-  useAutoSave({
-    current: JSON.stringify({ enabled, every: every || '30m', activeHours: activeHours || '' }),
-    baseline: JSON.stringify({
-      enabled: config.heartbeat?.enabled ?? false,
-      every: config.heartbeat?.every ?? '30m',
-      activeHours: config.heartbeat?.activeHours ?? '',
-    }),
-    save: handleSave,
-  });
-
-  const handleChecklistSave = async () => {
-    setClSaving(true);
-    setClError(null);
-    setClSuccess(false);
-    try {
-      await apiPut('/api/heartbeat/checklist', { content: checklist });
-      setClSuccess(true);
-      setTimeout(() => setClSuccess(false), 3000);
-    } catch (err) {
-      setClError((err as Error).message);
-    } finally {
-      setClSaving(false);
-    }
-  };
+/** Walnut wakes on this schedule and works through HEARTBEAT.md. */
+export function HeartbeatSection({ config, onSave }: Props) {
+  const hb = config.heartbeat;
+  const save = useSerialSave(config, onSave);
+  const saveHeartbeat = (patch: Partial<HeartbeatBlock>, rowKey: string) =>
+    save((c) => ({ heartbeat: { enabled: c.heartbeat?.enabled ?? false, every: c.heartbeat?.every ?? '30m', ...c.heartbeat, ...patch } as HeartbeatBlock }), { rowKey });
+  const enabled = useOptimisticSetting<boolean>(
+    hb?.enabled ?? false,
+    (v) => saveHeartbeat({ enabled: v }, 'heartbeat.enabled'),
+    { rowKey: 'heartbeat.enabled' },
+  );
+  const every = useCommitField<string>(
+    hb?.every ?? '30m',
+    (v) => saveHeartbeat({ every: v.trim() || '30m' }, 'heartbeat.every'),
+    { rowKey: 'heartbeat.every', kind: 'text' },
+  );
+  const hours = useCommitField<string>(
+    hb?.activeHours ?? '',
+    (v) => saveHeartbeat({ activeHours: v.trim() || undefined }, 'heartbeat.hours'),
+    { rowKey: 'heartbeat.hours', kind: 'text' },
+  );
+  const off = !enabled.value;
 
   return (
-    <SectionCard id="heartbeat" title="Heartbeat" description="Walnut wakes up on this schedule and works through the checklist below. Changes save automatically." onSave={handleSave} showSave={false}>
-      <div className="form-group">
-        <ToggleSwitch id="hb-enabled" checked={enabled} onChange={setEnabled} label="Enable Heartbeat" />
-      </div>
-
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="hb-every">Interval</label>
-          <input
-            id="hb-every"
-            type="text"
-            value={every}
-            onChange={(e) => setEvery(e.target.value)}
-            placeholder="30m"
-          />
-          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-            Duration string: &quot;30m&quot;, &quot;1h&quot;, etc.
-          </p>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="hb-hours">Active Hours</label>
-          <input
-            id="hb-hours"
-            type="text"
-            value={activeHours}
-            onChange={(e) => setActiveHours(e.target.value)}
-            placeholder="08:00-22:00"
-          />
-          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-            Empty = runs 24/7.
-          </p>
-        </div>
-      </div>
-
-      <div className="settings-divider" />
-
-      <div className="form-group">
-        <label htmlFor="heartbeat-editor">Checklist (HEARTBEAT.md)</label>
-        <p className="text-sm text-muted" style={{ margin: '-4px 0 4px' }}>
-          The AI reads this periodically and acts on unchecked items.
-        </p>
-        {clLoading ? (
-          <div className="text-sm text-muted">Loading checklist...</div>
-        ) : (
-          <>
-            <textarea
-              id="heartbeat-editor"
-              value={checklist}
-              onChange={(e) => setChecklist(e.target.value)}
-              rows={10}
-              className="settings-textarea"
-              placeholder="# Heartbeat Checklist&#10;- [ ] Check pipeline status&#10;- [ ] Review open PRs"
-            />
-            {clError && <div className="text-sm" style={{ color: 'var(--error)', marginTop: 4 }}>Error: {clError}</div>}
-            {clSuccess && <div className="text-sm" style={{ color: 'var(--success)', marginTop: 4 }}>Checklist saved.</div>}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={clSaving}
-                onClick={handleChecklistSave}
-              >
-                {clSaving ? 'Saving...' : 'Save Checklist'}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </SectionCard>
+    <SettingsSection id="heartbeat" title="Heartbeat">
+      <SettingsGroup>
+        <SettingsRow label="Heartbeat" help="Walnut checks in on its own." htmlFor="hb-enabled" error={enabled.error}
+          control={<ToggleSwitch id="hb-enabled" checked={enabled.value} busy={enabled.busy} onChange={enabled.set} />} />
+        <SettingsRow indent disabled={off} label="Interval" help="A duration such as 30m or 1h." htmlFor="hb-every" error={every.error}
+          data-testid="hb-every-row"
+          control={<input id="hb-every" type="text" className="settings-input settings-input--number" placeholder="30m" disabled={off} {...every.inputProps} />} />
+        <SettingsRow indent disabled={off} label="Active hours" help="Empty runs around the clock." htmlFor="hb-hours" error={hours.error}
+          data-testid="hb-hours-row"
+          control={<input id="hb-hours" type="text" className="settings-input settings-input--number" placeholder="08:00-22:00" disabled={off} {...hours.inputProps} />} />
+      </SettingsGroup>
+      <SettingsGroup heading="Checklist" footer={<>Stored in <code>HEARTBEAT.md</code>.</>} data-testid="heartbeat-checklist">
+        <ChecklistRows />
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

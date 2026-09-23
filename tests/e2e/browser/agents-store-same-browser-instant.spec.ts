@@ -39,7 +39,7 @@ async function openAgentSwitcher(page: Page) {
 }
 
 async function gotoAgentsPage(page: Page): Promise<void> {
-  await page.locator('.sidebar a[href="/settings"]').first().click()
+  await page.locator('.sidebar a[href^="/settings"]').first().click()
   const navLink = page.getByTestId('settings-nav-agents')
   await expect(navLink).toBeVisible({ timeout: 30_000 })
   // Settings is a heavy page; under machine load the first click can land before

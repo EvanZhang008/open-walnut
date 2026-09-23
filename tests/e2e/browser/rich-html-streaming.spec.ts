@@ -628,41 +628,43 @@ test.describe('Rich HTML streaming', () => {
    * which is also the value the pill falls back to (test 4), so a select that
    * looked right but saved nothing would silently pin everyone to rich.
    *
-   * Real config, real save, real reload — the point is that it PERSISTS.
+   * Real config, real save, real reload: the point is that it PERSISTS.
    */
   test('9. Settings carries the default output mode, and saving it sticks', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
-    const settingsLink = page.locator('.sidebar a[href="/settings"]').first();
+    const settingsLink = page.locator('.sidebar a[href^="/settings"]').first();
     await expect(settingsLink).toBeVisible({ timeout: 30_000 });
     await settingsLink.click();
-    const nav = page.locator('.settings-nav-item', { hasText: /^Sessions$/ }).first();
+    const nav = page.getByTestId('settings-nav-sessions');
     await expect(nav).toBeVisible({ timeout: 15_000 });
     await nav.click();
 
-    const select = page.locator('#session-output-mode');
-    await expect(select).toBeVisible({ timeout: 15_000 });
-    await expect(select).toHaveValue('rich');
+    // A segmented control: one radio per mode, the checked one is the saved value.
+    const group = page.locator('#session-output-mode');
+    const rich = page.getByTestId('session-output-rich');
+    const markdown = page.getByTestId('session-output-markdown');
+    await expect(group).toBeVisible({ timeout: 15_000 });
+    await expect(rich).toHaveAttribute('aria-checked', 'true');
 
-    await select.selectOption('markdown');
+    await markdown.click();
     await expect.poll(
       async () => (await page.request.get('/api/config').then((r) => r.json()))?.config?.session?.output_mode,
       { timeout: 15_000 },
     ).toBe('markdown');
 
     // Leave and come back through the real UI: the section re-mounts and re-reads
-    // the persisted config. Its live state and its auto-save baseline default
-    // identically, so a section that re-defaulted on mount would read 'rich' here
-    // (and would then write the config back on every visit).
+    // the persisted config. A section that re-defaulted on mount would read
+    // 'rich' here (and would then write the config back on every visit).
     await page.locator('.sidebar a[href="/"]').first().click();
     await expect(page.locator('#session-output-mode')).toHaveCount(0);
     await settingsLink.click();
     await nav.click();
-    await expect(page.locator('#session-output-mode')).toHaveValue('markdown', { timeout: 15_000 });
+    await expect(markdown).toHaveAttribute('aria-checked', 'true', { timeout: 15_000 });
 
     // Leave the fixture as shipped for any later test in this file.
-    await page.locator('#session-output-mode').selectOption('rich');
+    await rich.click();
     await expect.poll(
       async () => (await page.request.get('/api/config').then((r) => r.json()))?.config?.session?.output_mode,
       { timeout: 15_000 },

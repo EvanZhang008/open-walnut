@@ -63,12 +63,13 @@ async function stubParse(page: Page, body: Record<string, unknown>): Promise<voi
 /** Real-UI walk to the accuracy card: sidebar → Settings → the section's nav item
  *  (which is what scrolls it into view, and the card only fetches once it is). */
 async function openAccuracyCard(page: Page) {
-  const settingsLink = page.locator('.sidebar a[href="/settings"]')
+  const settingsLink = page.locator('.sidebar a[href^="/settings"]')
   await expect(settingsLink).toBeVisible({ timeout: 30_000 })
   await settingsLink.click()
-  const nav = page.locator('.settings-nav-item', { hasText: 'Suggestion Accuracy' }).first()
+  const nav = page.getByTestId('settings-nav-suggest-accuracy')
   await expect(nav).toBeVisible({ timeout: 20_000 })
   await nav.click()
+  await expect(nav).toHaveAttribute('aria-current', 'page')
   const table = page.locator('.suggest-accuracy-table')
   await expect(table, 'the accuracy card read the ledger').toBeVisible({ timeout: 20_000 })
   return table
@@ -166,7 +167,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   await expect(record).toBeVisible({ timeout: 20_000 })
   await expect(record.locator('.suggest-accuracy-entry.verdict-kept')).toContainText(aiCwd)
   await expect(record.locator('.suggest-accuracy-entry.verdict-changed'))
-    .toContainText(`${AI_PROJECT} → ${USER_PROJECT}`)
+    .toContainText(`${AI_PROJECT} to ${USER_PROJECT}`)
 
   // Scroll the card fully into frame for the artifact — the assertions above are
   // done, and a screenshot of the section header proves nothing to a human reviewer.

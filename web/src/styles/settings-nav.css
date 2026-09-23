@@ -1,0 +1,559 @@
+/*
+ * Settings page geometry and the settings nav.
+ *
+ * Every breakpoint is a CONTAINER query on `.settings-container` (never the
+ * viewport): with the app sidebar open, a 900px Mac app window leaves Settings
+ * about 660px. Selectors start at `.settings-container` so the page's
+ * geometry lives in this one file.
+ */
+
+.settings-container {
+  container-type: inline-size;
+  container-name: settings;
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-container .settings-layout {
+  position: relative;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  flex-direction: initial;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── Nav column ── */
+.settings-container .settings-nav {
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  top: auto;
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 8px;
+  /* Title and Find a setting stay pinned; only the list scrolls (F09). */
+  overflow: hidden;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+.settings-container .settings-nav-title {
+  margin: 0;
+  padding: 18px 8px 10px;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* The only scroller in the nav: the title and filter above it never move. */
+.settings-container .settings-nav-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -8px;
+  padding: 0 8px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* A scrolled list fades under the filter instead of cutting a label (N19);
+     at the top the fade covers only the first label's own padding. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 10px);
+}
+
+/* ── Find a setting ── */
+.settings-container .settings-filter-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0 0 2px;
+}
+
+.settings-container .settings-filter-glyph {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  color: var(--fg-muted);
+  pointer-events: none;
+}
+
+.settings-container input.settings-filter {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  padding: 0 26px 0 27px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--bg-tertiary);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 28px;
+  outline: none;
+  box-shadow: none;
+}
+
+.settings-container input.settings-filter::placeholder {
+  color: var(--fg-muted);
+  opacity: 1;
+}
+
+.settings-container input.settings-filter:focus,
+.settings-container input.settings-filter:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Native search chrome off: WebKit and Chrome would add a second clear button.
+   One rule per pseudo-element: an engine that does not know one of them drops
+   a whole selector list, and with it the cancel button rule. */
+.settings-container input.settings-filter::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+.settings-container input.settings-filter::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+.settings-container input.settings-filter::-webkit-search-results-button {
+  -webkit-appearance: none;
+  display: none;
+}
+
+.settings-container input.settings-filter::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  display: none;
+}
+
+:root[data-theme='dark'] .settings-container input.settings-filter {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .settings-container input.settings-filter {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.settings-container .settings-filter-clear {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.settings-container .settings-filter-clear:hover {
+  color: var(--fg-secondary);
+}
+
+.settings-container .settings-filter-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-container .settings-nav-find-button {
+  display: none;
+}
+
+/* ── Groups and items ── */
+.settings-container .settings-nav-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-container .settings-nav-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-container .settings-nav-group-label {
+  display: block;
+  padding: 14px 10px 4px;
+  font-size: 11.5px;
+  line-height: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg-muted);
+}
+
+.settings-container .settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 18px;
+  font-weight: 400;
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  /* No fade: the active highlight moves in one frame, as in macOS (N18). */
+  transition: none;
+  /* Scrolled into view with room for its group label above it (N19). */
+  scroll-margin-block: 28px;
+}
+
+.settings-container .settings-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.settings-container .settings-nav-item.is-highlighted {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Selected row: a deeper blue than --accent so white 13px text passes 4.5:1
+   (C50: #007AFF gave 4.0:1 light, 3.65:1 dark). */
+.settings-container {
+  --settings-nav-selected-bg: #0064d2;
+}
+
+:root[data-theme='dark'] .settings-container {
+  --settings-nav-selected-bg: #0a5fc8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .settings-container {
+    --settings-nav-selected-bg: #0a5fc8;
+  }
+}
+
+.settings-container .settings-nav-item.settings-nav-active {
+  background: var(--settings-nav-selected-bg);
+  color: #fff;
+  font-weight: 500;
+}
+
+.settings-container .settings-nav-item.settings-nav-active .settings-pane-tile {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.settings-container .settings-nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-container .settings-nav-item.settings-nav-active:focus-visible {
+  outline-color: var(--fg);
+}
+
+.settings-container .settings-nav-page-link::after {
+  content: none;
+  display: none;
+}
+
+.settings-container .settings-nav-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 7px 0;
+}
+
+.settings-container .settings-nav-label,
+.settings-container .settings-nav-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-container .settings-nav-mark {
+  font-weight: 600;
+}
+
+.settings-container .settings-nav-hint {
+  font-size: 11.5px;
+  line-height: 15px;
+  color: var(--fg-muted);
+}
+
+.settings-container .settings-nav-active .settings-nav-hint {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.settings-container .settings-nav-trailing {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-container .settings-nav-trailing:empty {
+  display: none;
+}
+
+.settings-container .settings-nav-arrow {
+  color: var(--fg-muted);
+}
+
+.settings-container .settings-nav-page-link:hover .settings-nav-arrow {
+  color: var(--fg-secondary);
+}
+
+.settings-container .settings-nav-error-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+.settings-container .settings-nav-active .settings-nav-error-dot {
+  box-shadow: 0 0 0 1.5px #fff;
+}
+
+.settings-tile-monogram {
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 600;
+  color: #fff;
+}
+
+.settings-pane-tile:not(.settings-pane-tile-20) .settings-tile-monogram {
+  font-size: 20px;
+}
+
+/* Plugin rows not loaded yet: same 32px, so Configure does not move when they land. */
+.settings-container .settings-nav-placeholder {
+  cursor: default;
+  pointer-events: none;
+}
+
+.settings-container .settings-nav-placeholder-tile {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+}
+
+.settings-container .settings-nav-placeholder-bar {
+  width: 60%;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+}
+
+.settings-container .settings-nav-empty {
+  padding: 14px 10px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--fg-muted);
+}
+
+.settings-container .settings-nav-empty p {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+
+.settings-container .settings-nav-clear-search {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-container .settings-nav-clear-search:hover {
+  text-decoration: underline;
+}
+
+.settings-container .settings-nav-clear-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ── Pane column: its own scroller; the page never scrolls ── */
+.settings-container .settings-pane.settings-content {
+  --settings-pane-pad-x: 40px;
+  --settings-pane-pad-top: 28px;
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--settings-pane-pad-top) 40px 64px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--settings-pane-bg);
+}
+
+.settings-container .settings-pane-inner {
+  max-width: 680px;
+  animation: settings-pane-in 120ms ease-out both;
+}
+
+/* Starts half visible: the new pane reads in its first painted frame, the fade
+   only softens the swap (F30: from 0 the pane looked empty for ~80ms). */
+@keyframes settings-pane-in {
+  from { opacity: 0.5; }
+  to { opacity: 1; }
+}
+
+.settings-container .settings-pane [id] {
+  scroll-margin-top: 52px;
+}
+
+/* A Find a setting hit on a row: one quiet flash where it landed. */
+.settings-anchor-flash {
+  animation: settings-anchor-flash 1200ms ease-out;
+}
+
+/* Strong enough to catch the eye on a white or #2C2C2E group (F20: 8% was not). */
+@keyframes settings-anchor-flash {
+  0%, 35% { background-color: color-mix(in srgb, var(--accent) 22%, transparent); }
+  100% { background-color: transparent; }
+}
+
+/* ── Pane-level states: config error, plugin off, section crash ── */
+.settings-container .settings-pane-state-centered {
+  margin-top: 12vh;
+}
+
+.settings-container .settings-config-error-message,
+.settings-container .settings-crash-message {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  background: none;
+  padding: 0;
+}
+
+.settings-container .settings-plugin-group > .settings-plugin-body {
+  padding: 12px 14px;
+}
+
+/* ── 640 to 899px of Settings width: narrower nav, tighter pane ── */
+@container settings (max-width: 899px) {
+  .settings-container .settings-layout {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+
+  .settings-container .settings-pane.settings-content {
+    --settings-pane-pad-x: 28px;
+    --settings-pane-pad-top: 24px;
+    padding: var(--settings-pane-pad-top) 28px 48px;
+  }
+
+  .settings-container .settings-pane-inner {
+    max-width: 100%;
+  }
+}
+
+/* ── Under 640px: a 56px icon rail; the magnifier opens the full nav over the pane ── */
+@container settings (max-width: 639px) {
+  .settings-container .settings-layout {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .settings-container .settings-nav {
+    z-index: 5;
+    padding: 8px 8px 16px;
+    align-items: center;
+  }
+
+  .settings-container .settings-nav:not(.is-overlay-open) :is(.settings-nav-title, .settings-filter-wrap,
+    .settings-nav-group-label, .settings-nav-text, .settings-nav-trailing, .settings-nav-empty, .settings-nav-placeholder-bar) {
+    display: none;
+  }
+
+  .settings-container .settings-nav:not(.is-overlay-open) .settings-nav-find-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 32px;
+    margin: 0 0 8px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    color: var(--fg-secondary);
+    cursor: pointer;
+  }
+
+  .settings-container .settings-nav:not(.is-overlay-open) .settings-nav-find-button:hover {
+    background: var(--bg-hover);
+  }
+
+  .settings-container .settings-nav:not(.is-overlay-open) .settings-nav-find-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .settings-container .settings-nav:not(.is-overlay-open) .settings-nav-item {
+    justify-content: center;
+    width: 40px;
+    padding: 0;
+  }
+
+  .settings-container .settings-nav:not(.is-overlay-open) .settings-nav-group + .settings-nav-group {
+    margin-top: 12px;
+  }
+
+  /* Same element, overlay class: the full 232px nav floats over the pane. */
+  .settings-container .settings-nav.is-overlay-open {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 232px;
+    z-index: 20;
+    padding: 0 8px 16px;
+    align-items: stretch;
+    box-shadow: var(--card-shadow-hover);
+  }
+}
+
+/* Settings fills the window edge to edge like System Settings (F23): the app
+   content area's 24px frame is dropped only while it hosts Settings. */
+.app-content-area:has(.settings-container) {
+  padding: 0;
+  overflow: hidden;
+}

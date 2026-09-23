@@ -1,12 +1,12 @@
 /**
- * Settings › Engines — the "Default engine for new sessions" picker's logic.
+ * Settings, Engines: the "Default engine for new sessions" picker's logic.
  *
  * Pure on purpose: the two decisions that can silently regress are WHICH engines
  * may be offered and WHAT the save writes, and neither is visible from the DOM.
  *
  * The save shape is the one with teeth. `updateConfig` replaces a whole top-level
  * key, so writing `{ defaults: { engine } }` would delete `defaults.priority`,
- * `defaults.platform` and `defaults.project` — the default task priority and the
+ * `defaults.platform` and `defaults.project`: the default task priority and the
  * default project for quick-add. Every sibling is spread back.
  */
 import type { Config, SessionEngine } from '@open-walnut/core';
@@ -33,7 +33,7 @@ export function currentDefaultEngine(config: Pick<Config, 'defaults'> | undefine
  * May the picker be used yet? Only once the catalog is the SERVER's.
  *
  * The compiled-in cold-start catalog says `installed: true` for both engines it
- * carries, on purpose — it exists so the composer's engine toggle paints its two
+ * carries, on purpose: it exists so the composer's engine toggle paints its two
  * buttons without waiting for a fetch (utils/engines.ts). That preset is wrong
  * for THIS control: a pick made against it can name an engine this machine does
  * not have, and the mistake is silent afterwards, because the server degrades
@@ -50,7 +50,7 @@ export function defaultEnginePickerReady(hydration: 'pending' | 'hydrated' | 'fa
 /**
  * What the picker may offer: every INSTALLED engine, in catalog (registry) order.
  *
- * An engine that is not installed is not offered — picking it would break every
+ * An engine that is not installed is not offered: picking it would break every
  * launch that inherits it. The one exception is the value currently configured:
  * it stays in the list, marked, because dropping it would show a selected engine
  * the config does not name and one stray change event would silently rewrite the
@@ -72,7 +72,7 @@ export function defaultEngineOptions(
 }
 
 /**
- * The config patch a pick writes. Spreads the sibling `defaults` keys — see the
+ * The config patch a pick writes. Spreads the sibling `defaults` keys: see the
  * file header for why that is not optional.
  */
 export function defaultEngineSave(

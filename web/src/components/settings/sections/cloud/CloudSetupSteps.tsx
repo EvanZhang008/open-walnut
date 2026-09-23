@@ -3,17 +3,21 @@
  * demand (an A record to create, a VM IP to type, a DNS override to confirm, a
  * provider token to supply).
  *
- * Row visuals follow SttSetupProgress's pattern (indicator + label + message)
- * rather than inventing a second progress idiom in Settings.
+ * Each step is a row of one group with a status tag; details a step asks for
+ * are indented rows under it, never a nested box.
  */
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import {
   CLOUD_SETUP_STEP_IDS,
   type CloudSetupJob,
   type CloudSetupStepId,
   type CloudSetupStepStatus,
 } from '@/api/cloud-setup';
+import { SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsMonoBlock } from '../../SettingsSection';
+import { SettingsButton } from '../../inputs/SettingsButton';
+import { CopyButton } from '../../inputs/CopyButton';
+import '@/styles/settings-sections-addons.css';
 
 const STEP_LABELS: Record<CloudSetupStepId, string> = {
   preflight: 'Check this machine',
@@ -27,34 +31,24 @@ const STEP_LABELS: Record<CloudSetupStepId, string> = {
   done: 'Finish',
 };
 
-const INDICATOR: Record<CloudSetupStepStatus, string> = {
-  done: '✓',
-  error: '✗',
-  running: '○',
-  skipped: '–',
-  pending: '•',
+const STATUS_TAG: Record<CloudSetupStepStatus, { text: string; tone: 'neutral' | 'warning' | 'success' } | null> = {
+  done: { text: 'Done', tone: 'success' },
+  error: { text: 'Failed', tone: 'warning' },
+  running: { text: 'Running', tone: 'neutral' },
+  skipped: { text: 'Not needed', tone: 'neutral' },
+  pending: null,
 };
 
-/** A copyable value with a button that reports success in place. */
+/** A copyable value as an indented row. */
 function CopyRow({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
   return (
-    <div className="cloud-copy-row">
-      <span className="cloud-copy-label">{label}</span>
-      <code className="cloud-copy-value">{value}</code>
-      <button
-        type="button"
-        className="cloud-copy-btn"
-        onClick={() => {
-          void navigator.clipboard?.writeText(value).then(
-            () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
-            () => { /* clipboard blocked — the value is selectable on screen */ },
-          );
-        }}
-      >
-        {copied ? 'Copied' : 'Copy'}
-      </button>
-    </div>
+    <SettingsRow
+      indent
+      className="cloud-copy-row"
+      label={label}
+      help={<code className="cloud-copy-value settings-addons-mono">{value}</code>}
+      control={<CopyButton text={value} />}
+    />
   );
 }
 
@@ -76,126 +70,141 @@ export function CloudSetupSteps({
 }: Props) {
   const [ip, setIp] = useState('');
   const [token, setToken] = useState('');
-  const [logOpen, setLogOpen] = useState(job.status === 'failed');
 
   const awaiting = job.status === 'awaiting-input' ? job.awaitingInput : undefined;
   const terminal = job.status === 'failed' || job.status === 'cancelled';
 
   return (
-    <div className="cloud-steps">
-      {CLOUD_SETUP_STEP_IDS.map((id) => {
-        const step = job.steps[id] ?? { status: 'pending' as const };
-        const isCurrent = job.currentStep === id;
-        return (
-          <div key={id} className={`cloud-step cloud-step-${step.status}`} data-step={id}>
-            <div className="cloud-step-header">
-              <span className="cloud-step-indicator">{INDICATOR[step.status]}</span>
-              <span className="cloud-step-label">{STEP_LABELS[id]}</span>
-              {step.status === 'skipped' && <span className="cloud-step-tag">not needed</span>}
-            </div>
-            {step.error && <p className="cloud-step-errmsg">{step.error}</p>}
+    <>
+      <SettingsGroup className="cloud-steps">
+        {CLOUD_SETUP_STEP_IDS.map((id) => {
+          const step = job.steps[id] ?? { status: 'pending' as const };
+          const isCurrent = job.currentStep === id;
+          const tag = STATUS_TAG[step.status];
+          return (
+            <Fragment key={id}>
+              <SettingsRow
+                className={`cloud-step cloud-step-${step.status}`}
+                data-step={id}
+                label={<span className="cloud-step-label">{STEP_LABELS[id]}</span>}
+                error={step.error || undefined}
+                control={tag ? <SettingsTag tone={tag.tone}>{tag.text}</SettingsTag> : undefined}
+              />
 
-            {/* The A record is the one thing only the operator can do, so it gets
-                the IP and the hostname side by side instead of buried in the log. */}
-            {id === 'dns' && step.status === 'running' && job.domain && job.ip && (
-              <div className="cloud-step-detail">
-                <p className="cloud-step-note">
-                  Create this record at your DNS provider — DNS-only, no CDN proxy (Caddy
-                  terminates TLS itself). Walnut keeps checking until it matches.
-                </p>
-                <CopyRow label="Type" value="A" />
-                <CopyRow label="Name" value={job.domain} />
-                <CopyRow label="Value" value={job.ip} />
-                <p className="cloud-step-waiting">Waiting for DNS…</p>
-              </div>
-            )}
+              {/* The A record is the one thing only the operator can do, so it gets
+                  the IP and the hostname side by side instead of buried in the log. */}
+              {id === 'dns' && step.status === 'running' && job.domain && job.ip && (
+                <>
+                  <SettingsRow
+                    indent
+                    className="cloud-step-note"
+                    label="Create this record at your DNS provider"
+                    help="DNS only, no CDN proxy (Caddy terminates TLS itself); Walnut keeps checking until it matches."
+                  />
+                  <CopyRow label="Type" value="A" />
+                  <CopyRow label="Name" value={job.domain} />
+                  <CopyRow label="Value" value={job.ip} />
+                  <SettingsRow indent className="cloud-step-waiting" label="Waiting for DNS..." />
+                </>
+              )}
 
-            {isCurrent && awaiting && (
-              <div className="cloud-step-detail cloud-step-awaiting">
-                <p className="cloud-step-prompt">{awaiting.prompt}</p>
+              {isCurrent && awaiting && (
+                <SettingsRow
+                  indent
+                  className="cloud-step-awaiting"
+                  label={<span className="cloud-step-prompt">{awaiting.prompt}</span>}
+                  control={
+                    awaiting.kind === 'vm-ip' ? (
+                      <span className="settings-addons-inline">
+                        <input
+                          type="text"
+                          className="settings-input settings-input--short settings-input--mono"
+                          value={ip}
+                          placeholder="203.0.113.10"
+                          aria-label="VM public IPv4 address"
+                          onChange={(e) => setIp(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); onProvideIp(ip); }
+                          }}
+                        />
+                        <SettingsButton variant="primary" disabled={busy || !ip.trim()} onClick={() => onProvideIp(ip)}>
+                          Continue
+                        </SettingsButton>
+                      </span>
+                    ) : awaiting.kind === 'dns-confirm' ? (
+                      <SettingsButton variant="primary" disabled={busy} onClick={onConfirmDns}>
+                        I&apos;ve added the record, continue
+                      </SettingsButton>
+                    ) : awaiting.kind === 'credentials' ? (
+                      <span className="settings-addons-inline">
+                        <input
+                          type="password"
+                          className="settings-input settings-input--short settings-input--mono"
+                          value={token}
+                          placeholder="Provider API token"
+                          aria-label="Provider API token"
+                          autoComplete="off"
+                          onChange={(e) => setToken(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); onProvideCredentials(token); }
+                          }}
+                        />
+                        <SettingsButton
+                          variant="primary"
+                          disabled={busy || !token.trim()}
+                          onClick={() => { onProvideCredentials(token); setToken(''); }}
+                        >
+                          Continue
+                        </SettingsButton>
+                      </span>
+                    ) : undefined
+                  }
+                />
+              )}
+            </Fragment>
+          );
+        })}
+        {job.error && <p className="settings-row-error cloud-job-error" role="alert">{job.error}</p>}
+        <SetupLog lines={logLines} defaultOpen={job.status === 'failed'} />
+      </SettingsGroup>
 
-                {awaiting.kind === 'vm-ip' && (
-                  <div className="devices-add-row">
-                    <input
-                      type="text"
-                      value={ip}
-                      placeholder="203.0.113.10"
-                      aria-label="VM public IPv4 address"
-                      onChange={(e) => setIp(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') { e.preventDefault(); onProvideIp(ip); }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      disabled={busy || !ip.trim()}
-                      onClick={() => onProvideIp(ip)}
-                    >
-                      Continue
-                    </button>
-                  </div>
-                )}
-
-                {awaiting.kind === 'dns-confirm' && (
-                  <button type="button" className="btn-primary" disabled={busy} onClick={onConfirmDns}>
-                    I&apos;ve added the record — continue
-                  </button>
-                )}
-
-                {awaiting.kind === 'credentials' && (
-                  <div className="devices-add-row">
-                    <input
-                      type="password"
-                      value={token}
-                      placeholder="Provider API token"
-                      aria-label="Provider API token"
-                      autoComplete="off"
-                      onChange={(e) => setToken(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') { e.preventDefault(); onProvideCredentials(token); }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      disabled={busy || !token.trim()}
-                      onClick={() => { onProvideCredentials(token); setToken(''); }}
-                    >
-                      Continue
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      {job.error && <p className="cloud-job-error">{job.error}</p>}
-
-      <details className="cloud-log" open={logOpen} onToggle={(e) => setLogOpen((e.currentTarget as HTMLDetailsElement).open)}>
-        <summary>Setup log ({logLines.length} {logLines.length === 1 ? 'line' : 'lines'})</summary>
-        <pre className="cloud-log-body">{logLines.slice(-60).join('\n') || 'No output yet.'}</pre>
-      </details>
-
-      <div className="cloud-actions">
+      <div className="cloud-actions settings-addons-actions">
         {job.status === 'failed' && (
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={onRetry}>
+          <SettingsButton variant="primary" disabled={busy} onClick={onRetry}>
             Retry this step
-          </button>
+          </SettingsButton>
         )}
         {!terminal && (
-          <button type="button" className="btn" disabled={busy} onClick={onCancel}>
+          <SettingsButton disabled={busy} onClick={onCancel}>
             Cancel setup
-          </button>
+          </SettingsButton>
         )}
         {terminal && (
-          <button type="button" className="btn" disabled={busy} onClick={onClear}>
+          <SettingsButton disabled={busy} onClick={onClear}>
             Start over
-          </button>
+          </SettingsButton>
         )}
       </div>
-    </div>
+    </>
+  );
+}
+
+/** `Setup log` disclosure: the tail as a read-only mono block (240px, scrolls). */
+export function SetupLog({ lines, defaultOpen = false }: { lines: string[]; defaultOpen?: boolean }) {
+  return (
+    <SettingsDisclosure
+      id="cloud-setup-log"
+      label="Setup log"
+      summary={`${lines.length} ${lines.length === 1 ? 'line' : 'lines'}`}
+      defaultOpen={defaultOpen}
+      data-testid="cloud-setup-log"
+    >
+      <SettingsMonoBlock
+        label="Last 60 lines"
+        text={lines.slice(-60).join('\n') || 'No output yet.'}
+        maxHeight={240}
+        data-testid="cloud-log-body"
+      />
+    </SettingsDisclosure>
   );
 }

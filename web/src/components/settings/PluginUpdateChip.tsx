@@ -6,7 +6,7 @@
  */
 import { type MouseEvent, useCallback } from 'react'
 import type { UpdateState } from './plugin-update-types'
-import { type BusyKind, chipView } from './plugin-update-view'
+import { type BusyKind, chipView, plainText } from './plugin-update-view'
 import { PluginUpdateIcon } from './plugin-update-icons'
 import '@/styles/plugin-updates.css'
 
@@ -43,9 +43,11 @@ export function PluginUpdateChip(props: PluginUpdateChipProps) {
     ...(isStatic ? { staticNote: staticTitle ?? '' } : {}),
   })
   const className = ['plugin-update-chip', ...view.modifiers.map((m) => `plugin-update-chip${m}`)].join(' ')
+  const label = plainText(view.label)
+  const title = plainText(view.title)
   const ariaLabel = view.kind === 'pending'
     ? 'Checking for updates'
-    : view.title ? `${view.label} (${view.title})` : view.label
+    : title ? `${label} (${title})` : label
 
   const onClick = useCallback((e: MouseEvent<HTMLButtonElement>) => {
     e.preventDefault()
@@ -56,7 +58,7 @@ export function PluginUpdateChip(props: PluginUpdateChipProps) {
   const body = (
     <>
       {view.icon ? <PluginUpdateIcon name={view.icon} /> : null}
-      {view.label ? <span className="plugin-update-chip-label">{view.label}</span> : null}
+      {label ? <span className="plugin-update-chip-label">{label}</span> : null}
       {view.stale ? (
         // Inside the pill, after the words: a corner badge notched the outline and read as a
         // rendering glitch at 9 px (N13).
@@ -72,7 +74,7 @@ export function PluginUpdateChip(props: PluginUpdateChipProps) {
         data-testid={`update-chip-${rowId}`}
         data-update-kind={view.kind}
         data-static="true"
-        title={view.title || undefined}
+        title={title || undefined}
         aria-label={ariaLabel}
       >
         {body}
@@ -86,7 +88,7 @@ export function PluginUpdateChip(props: PluginUpdateChipProps) {
       className={className}
       data-testid={`update-chip-${rowId}`}
       data-update-kind={view.kind}
-      title={view.title || undefined}
+      title={title || undefined}
       aria-label={ariaLabel}
       aria-busy={view.busy || undefined}
       onClick={onClick}

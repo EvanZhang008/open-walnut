@@ -1,168 +1,122 @@
-import { useState, useEffect } from 'react';
+import type { ChangeEvent } from 'react';
 import type { Config } from '@open-walnut/core';
-import { SectionCard } from '../inputs/SectionCard';
-import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SettingsDisclosure, SettingsGroup, SettingsRow, SettingsSection } from '../SettingsSection';
 import { SecretInput } from '../inputs/SecretInput';
-import { useAutoSave } from '@/hooks/useAutoSave';
+import { SegmentedControl } from '../inputs/SegmentedControl';
+import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
+import { useCommitField } from '../inputs/useCommitField';
+import { useSerialSave, type OnSave } from './GeneralSection';
 
 interface Props {
   config: Config;
-  onSave: (partial: Partial<Config>) => Promise<void>;
+  onSave: OnSave;
 }
 
-export function IntegrationsSection({ config, onSave }: Props) {
-  // MS-Todo
-  const msTodo = (config.plugins?.['ms-todo'] ?? {}) as Record<string, unknown>;
-  const [msTodoEnabled, setMsTodoEnabled] = useState(!!msTodo.enabled);
-  const [msTodoClientId, setMsTodoClientId] = useState((msTodo.client_id as string) ?? '');
+type Tools = NonNullable<Config['tools']>;
+type SearchProvider = 'tavily' | 'brave' | 'perplexity';
 
-  // Slack
-  const [slackToken, setSlackToken] = useState(config.tools?.slack?.bot_token ?? '');
-  const [slackChannel, setSlackChannel] = useState(config.tools?.slack?.default_channel ?? '');
-
-  // Web Search
-  const [searchProvider, setSearchProvider] = useState(config.tools?.web_search?.provider || 'tavily');
-  const [searchApiKey, setSearchApiKey] = useState(config.tools?.web_search?.api_key ?? '');
-  const [perplexityKey, setPerplexityKey] = useState(config.tools?.web_search?.perplexity_api_key ?? '');
-
-  useEffect(() => {
-    const ms = (config.plugins?.['ms-todo'] ?? {}) as Record<string, unknown>;
-    setMsTodoEnabled(!!ms.enabled);
-    setMsTodoClientId((ms.client_id as string) ?? '');
-    setSlackToken(config.tools?.slack?.bot_token ?? '');
-    setSlackChannel(config.tools?.slack?.default_channel ?? '');
-    setSearchProvider(config.tools?.web_search?.provider || 'tavily');
-    setSearchApiKey(config.tools?.web_search?.api_key ?? '');
-    setPerplexityKey(config.tools?.web_search?.perplexity_api_key ?? '');
-  }, [config]);
-
-  const handleSave = async () => {
-    await onSave({
-      plugins: {
-        ...config.plugins,
-        'ms-todo': {
-          ...(config.plugins?.['ms-todo'] ?? {}),
-          enabled: msTodoEnabled,
-          client_id: msTodoClientId || undefined,
-        },
-      },
-      tools: {
-        ...config.tools,
-        slack: {
-          ...config.tools?.slack,
-          bot_token: slackToken || undefined,
-          default_channel: slackChannel || undefined,
-        },
-        web_search: {
-          ...config.tools?.web_search,
-          provider: searchProvider || undefined,
-          api_key: searchApiKey || undefined,
-          perplexity_api_key: perplexityKey || undefined,
-        },
-      },
-    });
+/**
+ * A SecretInput that commits on blur through useCommitField (same Saved /
+ * row error / flush-on-unmount rules as a text row).
+ */
+function useSecretField(serverValue: string, commit: (v: string) => Promise<unknown>, rowKey: string) {
+  const field = useCommitField<string>(serverValue, commit, { rowKey, kind: 'text' });
+  return {
+    value: field.inputProps.value,
+    onChange: (v: string) => field.inputProps.onChange({ target: { value: v } } as ChangeEvent<HTMLInputElement>),
+    onBlur: () => field.inputProps.onBlur(),
+    error: field.error,
   };
+}
 
-  useAutoSave({
-    current: JSON.stringify({
-      msTodoEnabled, msTodoClientId, slackToken, slackChannel,
-      searchProvider, searchApiKey, perplexityKey,
-    }),
-    baseline: JSON.stringify({
-      msTodoEnabled: !!((config.plugins?.['ms-todo'] ?? {}) as Record<string, unknown>).enabled,
-      msTodoClientId: (((config.plugins?.['ms-todo'] ?? {}) as Record<string, unknown>).client_id as string) ?? '',
-      slackToken: config.tools?.slack?.bot_token ?? '',
-      slackChannel: config.tools?.slack?.default_channel ?? '',
-      searchProvider: config.tools?.web_search?.provider || 'tavily',
-      searchApiKey: config.tools?.web_search?.api_key ?? '',
-      perplexityKey: config.tools?.web_search?.perplexity_api_key ?? '',
-    }),
-    save: handleSave,
-  });
+/**
+ * Keys for the agent's own tools (Slack bot, web search). Plugins are enabled
+ * and configured only on their row in Plugins, so nothing here has an Enabled
+ * switch: these config keys have no enabled field.
+ */
+export function IntegrationsSection({ config, onSave }: Props) {
+  const save = useSerialSave(config, onSave);
+  const saveTools = (patch: (tools: Tools | undefined) => Partial<Tools>, rowKey: string) =>
+    save((c) => ({ tools: { ...c.tools, ...patch(c.tools) } as Tools }), { rowKey });
+  const slack = config.tools?.slack;
+  const search = config.tools?.web_search;
+
+  const slackToken = useSecretField(
+    slack?.bot_token ?? '',
+    (v) => saveTools((t) => ({ slack: { ...t?.slack, bot_token: v || undefined } }), 'integrations.slack-token'),
+    'integrations.slack-token',
+  );
+  const slackChannel = useCommitField<string>(
+    slack?.default_channel ?? '',
+    (v) => saveTools((t) => ({ slack: { ...t?.slack, default_channel: v.trim() || undefined } }), 'integrations.slack-channel'),
+    { rowKey: 'integrations.slack-channel', kind: 'text' },
+  );
+  const provider = useOptimisticSetting<SearchProvider>(
+    (search?.provider as SearchProvider | undefined) || 'tavily',
+    (v) => saveTools((t) => ({ web_search: { ...t?.web_search, provider: v } }), 'integrations.search-provider'),
+    { rowKey: 'integrations.search-provider' },
+  );
+  const searchKey = useSecretField(
+    search?.api_key ?? '',
+    (v) => saveTools((t) => ({ web_search: { ...t?.web_search, api_key: v || undefined } }), 'integrations.search-key'),
+    'integrations.search-key',
+  );
+  const perplexityKey = useSecretField(
+    search?.perplexity_api_key ?? '',
+    (v) => saveTools((t) => ({ web_search: { ...t?.web_search, perplexity_api_key: v || undefined } }), 'integrations.perplexity-key'),
+    'integrations.perplexity-key',
+  );
+  const hasSearchKey = provider.value === 'perplexity' ? !!search?.perplexity_api_key : !!search?.api_key;
 
   return (
-    <SectionCard id="integrations" title="Integrations" description="External services and tool API keys. Changes save automatically." onSave={handleSave} showSave={false}>
-      {/* MS-Todo */}
-      <details className="settings-collapsible" open={msTodoEnabled}>
-        <summary className="settings-collapsible-title">MS To-Do</summary>
-        <div className="settings-collapsible-body">
-          <div className="form-group">
-            <ToggleSwitch id="mstodo-enabled" checked={msTodoEnabled} onChange={setMsTodoEnabled} label="Enabled" />
-          </div>
-          {msTodoEnabled && (
-            <div className="form-group">
-              <label htmlFor="mstodo-client">Client ID</label>
-              <input
-                id="mstodo-client"
-                type="text"
-                value={msTodoClientId}
-                onChange={(e) => setMsTodoClientId(e.target.value)}
-                placeholder="Azure AD application client ID"
-              />
-            </div>
-          )}
-        </div>
-      </details>
-
-      {/* A plugin's manifest-driven config form now lives under its OWN row in
-          Settings → Plugins, next to its on/off switch, so install → configure →
-          turn on is one surface. Rendering it here as well would put two forms for
-          the same plugin on one page (duplicate input ids included). This section
-          keeps the hand-built TOOL settings below, which are not plugin manifests. */}
-
-      {/* Slack */}
-      <details className="settings-collapsible">
-        <summary className="settings-collapsible-title">Slack</summary>
-        <div className="settings-collapsible-body">
-          <div className="form-group">
-            <label htmlFor="slack-token">Bot Token</label>
-            <SecretInput
-              id="slack-token"
-              value={slackToken}
-              onChange={setSlackToken}
-              placeholder="xoxb-..."
+    <SettingsSection id="integrations" title="Integrations" description="Keys for the agent's own tools.">
+      <SettingsGroup>
+        <SettingsDisclosure
+          id="integrations-slack"
+          data-testid="integrations-slack"
+          label="Slack bot for the agent"
+          summary={slack?.bot_token ? 'Token saved' : 'No token'}
+        >
+          <SettingsRow indent label="Bot token" htmlFor="slack-token" error={slackToken.error} control={
+            <SecretInput id="slack-token" value={slackToken.value} onChange={slackToken.onChange} onBlur={slackToken.onBlur} placeholder="xoxb-..." />
+          } />
+          <SettingsRow indent label="Default channel" htmlFor="slack-channel" error={slackChannel.error} control={
+            <input id="slack-channel" type="text" className="settings-input settings-input--short" placeholder="#general" {...slackChannel.inputProps} />
+          } />
+        </SettingsDisclosure>
+        <SettingsDisclosure
+          id="integrations-web-search"
+          data-testid="integrations-web-search"
+          label="Web search"
+          summary={hasSearchKey ? 'Key saved' : 'No key'}
+        >
+          <SettingsRow indent label="Provider" error={provider.error} control={
+            <SegmentedControl<SearchProvider>
+              id="ws-provider"
+              aria-label="Web search provider"
+              value={provider.value}
+              onChange={provider.set}
+              options={[
+                { value: 'tavily', label: 'Tavily', testId: 'ws-provider-tavily' },
+                { value: 'brave', label: 'Brave', testId: 'ws-provider-brave' },
+                { value: 'perplexity', label: 'Perplexity', testId: 'ws-provider-perplexity' },
+              ]}
             />
-          </div>
-          <div className="form-group">
-            <label htmlFor="slack-channel">Default Channel</label>
-            <input
-              id="slack-channel"
-              type="text"
-              value={slackChannel}
-              onChange={(e) => setSlackChannel(e.target.value)}
-              placeholder="#general"
-            />
-          </div>
-        </div>
-      </details>
-
-      {/* Web Search */}
-      <details className="settings-collapsible">
-        <summary className="settings-collapsible-title">Web Search</summary>
-        <div className="settings-collapsible-body">
-          <div className="form-group">
-            <label htmlFor="ws-provider">Provider</label>
-            <select id="ws-provider" value={searchProvider} onChange={(e) => setSearchProvider(e.target.value)}>
-              <option value="tavily">Tavily</option>
-              <option value="brave">Brave</option>
-              <option value="perplexity">Perplexity</option>
-            </select>
-          </div>
-          {searchProvider !== 'perplexity' && (
-            <div className="form-group">
-              <label htmlFor="ws-apikey">API Key</label>
-              <SecretInput id="ws-apikey" value={searchApiKey} onChange={setSearchApiKey} placeholder={searchProvider === 'brave' ? 'Brave Search API key' : 'Tavily API key'} />
-            </div>
+          } />
+          {provider.value !== 'perplexity' ? (
+            <SettingsRow indent label="API key" htmlFor="ws-apikey" error={searchKey.error} control={
+              <SecretInput id="ws-apikey" value={searchKey.value} onChange={searchKey.onChange} onBlur={searchKey.onBlur}
+                placeholder={provider.value === 'brave' ? 'BSAxxxxxxxx' : 'tvly-xxxxxxxx'} />
+            } />
+          ) : (
+            <SettingsRow indent label="Perplexity API key" htmlFor="ws-perplexity" error={perplexityKey.error} control={
+              <SecretInput id="ws-perplexity" value={perplexityKey.value} onChange={perplexityKey.onChange} onBlur={perplexityKey.onBlur}
+                placeholder="pplx-xxxxxxxx" />
+            } />
           )}
-          {searchProvider === 'perplexity' && (
-            <div className="form-group">
-              <label htmlFor="ws-perplexity">Perplexity API Key</label>
-              <SecretInput id="ws-perplexity" value={perplexityKey} onChange={setPerplexityKey} placeholder="Perplexity API key" />
-            </div>
-          )}
-        </div>
-      </details>
+        </SettingsDisclosure>
+      </SettingsGroup>
       {/* Text-to-Speech lives in Voice next to dictation, not here. */}
-    </SectionCard>
+    </SettingsSection>
   );
 }

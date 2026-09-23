@@ -15,7 +15,7 @@
  * moves the next row's Update under the pointer. The owner replaces it on the next action.
  */
 import { useEffect, useState } from 'react'
-import type { Feedback } from './plugin-update-view'
+import { plainText, type Feedback } from './plugin-update-view'
 import { PluginUpdateIcon } from './plugin-update-icons'
 import '@/styles/plugin-updates.css'
 
@@ -36,7 +36,7 @@ export function PluginUpdateFeedback({ rowId, feedback }: PluginUpdateFeedbackPr
   return (
     <div className={cls} role="status" data-testid={`plugin-update-feedback-${rowId}`}>
       {!isError ? <PluginUpdateIcon name="check" size={14} className="plugin-update-feedback-icon" /> : null}
-      <span className="plugin-update-feedback-text" title={feedback.title}>{feedback.text}</span>
+      <span className="plugin-update-feedback-text" title={feedback.title ? plainText(feedback.title) : undefined}>{plainText(feedback.text)}</span>
       {feedback.detail ? (
         <button
           type="button"

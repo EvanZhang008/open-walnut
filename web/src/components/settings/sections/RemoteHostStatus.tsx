@@ -1,9 +1,9 @@
 /**
- * Live connect status for ONE row of Settings › Remote hosts, plus the button that
+ * Live connect status for ONE row of Settings: Remote Hosts, plus the button that
  * starts a connect on purpose.
  *
  * Its own component so the pushed status re-renders one row, not the whole section
- * (the section owns the auto-saving host editor — re-rendering it on every phase
+ * (the section owns the auto-saving host editor; re-rendering it on every phase
  * push would fight the inputs the user is typing in).
  */
 import { useEffect, useState } from 'react';
@@ -13,6 +13,11 @@ import {
   elapsedNow, formatElapsed, hostIndicatorStatus, hostStatusText, isHostConnecting, isHostFailed,
 } from '@/utils/host-connect';
 import { StatusIndicator } from '../inputs/StatusIndicator';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { SettingsNotice } from '../SettingsSection';
+
+/** Shared status text uses a typographic ellipsis; settings copy uses `...`. */
+const plain = (text: string) => text.replace(/\u2026/g, '...');
 
 export function RemoteHostStatus({ alias }: { alias: string }) {
   const status = useHostStatus(alias);
@@ -23,6 +28,8 @@ export function RemoteHostStatus({ alias }: { alias: string }) {
 
   const inProgress = isHostConnecting(status);
   const failed = isHostFailed(status);
+  // A connected host offers no connect action (F25); the button returns when it drops.
+  const connected = hostIndicatorStatus(status, hydration) === 'connected' && !busy;
 
   // Tick only while something is actually running: a settled row must not keep a
   // timer alive per host for the whole time the Settings page is open.
@@ -56,21 +63,27 @@ export function RemoteHostStatus({ alias }: { alias: string }) {
           otherwise still read "Not connected" under a pulsing dot. */}
       <StatusIndicator
         status={busy && !inProgress ? 'testing' : hostIndicatorStatus(status, hydration)}
-        text={busy && !inProgress ? 'Connecting…' : hostStatusText(status, hydration)}
+        text={busy && !inProgress ? 'Connecting...' : plain(hostStatusText(status, hydration))}
       />
       {elapsed && <span className="rh-status-elapsed">{elapsed}</span>}
       {error && <span className="rh-status-error">{error}</span>}
-      <button
-        type="button"
+      {!connected && <SettingsButton
+        variant="text"
         className="rh-connect-btn"
         disabled={inProgress || busy}
-        // Inside a <summary>: without both of these, connecting also toggles the
-        // host editor open/closed under the user's cursor.
+        reserve={['Connect now', 'Retry']}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); void connect(); }}
         title={failed ? 'Try connecting to this host again' : 'Connect to this host now'}
       >
         {failed ? 'Retry' : 'Connect now'}
-      </button>
+      </SettingsButton>}
     </span>
   );
+}
+
+/** `<host> isn't reachable right now.` while the last connect failed. */
+export function RemoteHostUnreachable({ alias, name }: { alias: string; name: string }) {
+  const status = useHostStatus(alias);
+  if (!isHostFailed(status)) return null;
+  return <SettingsNotice kind="warn">{`${name} isn't reachable right now.`}</SettingsNotice>;
 }

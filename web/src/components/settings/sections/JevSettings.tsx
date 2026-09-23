@@ -1,108 +1,103 @@
-import { useEffect, useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { Config } from '@open-walnut/core';
+import { SettingsRow } from '../SettingsSection';
 import { SecretInput } from '../inputs/SecretInput';
-import { useAutoSave } from '@/hooks/useAutoSave';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { useCommitField } from '../inputs/useCommitField';
+import { couldntSave } from '../inputs/useOptimisticSetting';
+import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
+import { AlertGlyph, CheckGlyph } from '../settings-glyphs';
 import { log } from '@/utils/log';
+import { useSerialSave, type OnSave } from './GeneralSection';
 
 interface Props {
   config: Config;
-  onSave: (partial: Partial<Config>) => Promise<void>;
+  onSave: OnSave;
   onReload: () => Promise<void>;
 }
 
-/** Defaults mirror src/core/decision/jev-client.ts — repeated, not imported
+/** Defaults mirror src/core/decision/jev-client.ts; repeated, not imported
  *  (see the TriageSection note: a drifted baseline makes opening Settings
  *  write config back). */
 const DEFAULT_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const DEFAULT_MODEL = 'jev-latest';
-const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
-const OPENROUTER_MODEL = 'typesafe/jev-1.13';
 
-type TestState =
+export type JevTestState =
   | { kind: 'idle' }
   | { kind: 'running' }
   | { kind: 'ok'; ms: number; model: string }
   | { kind: 'fail'; error: string };
 
+/** The Connection row's result line (pure, unit tested). */
+export function jevTestText(state: JevTestState): string | null {
+  if (state.kind === 'ok') return `Connected in ${Math.round(state.ms)} ms`;
+  if (state.kind === 'fail') return plainJevError(state.error);
+  return null;
+}
+
+/** Server wording people should never read (`api_key`, "not configured") in plain words (N3-27). Pure. */
+export function plainJevError(error: string): string {
+  if (/not configured|api_key|missing or unresolvable/i.test(error)) return 'Add an API key first.';
+  return `Couldn't connect: ${error}`;
+}
+
+async function jevKeyRequest(method: 'POST' | 'DELETE', key?: string): Promise<void> {
+  const res = await fetch('/api/jev/key', {
+    method,
+    ...(key !== undefined
+      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) }
+      : {}),
+  });
+  if (res.ok) return;
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  throw new Error(data.error ?? `HTTP ${res.status}`);
+}
+
 /**
- * Jev's own settings: key, endpoint, model, a live test. Rendered only when
- * Smart task creation is set to use Jev, so it never owns WHICH decisions Jev
- * answers (that is the parent's radio, jev.decisions) and never writes them.
+ * Jev's own rows (indented under `Uses` in Smart task creation): key,
+ * endpoint, model, a live test. Never owns WHICH decisions Jev answers (that
+ * is the parent's `Uses` control, jev.decisions) and never writes them.
  */
 export function JevSettings({ config, onSave, onReload }: Props) {
-  const [endpoint, setEndpoint] = useState(config.jev?.endpoint ?? '');
-  const [model, setModel] = useState(config.jev?.model ?? '');
   const [keyDraft, setKeyDraft] = useState('');
   const [keyBusy, setKeyBusy] = useState(false);
-  const [test, setTest] = useState<TestState>({ kind: 'idle' });
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [test, setTest] = useState<JevTestState>({ kind: 'idle' });
+  // A saved key offers Replace next to Remove (N29): Replace opens the field in place.
+  const [replacing, setReplacing] = useState(false);
+  const { track } = useSettingsSaved();
+  const save = useSerialSave(config, onSave);
 
-  // Three key states: Jev-specific override > shared OpenRouter provider
-  // credential (only meaningful when the effective endpoint IS OpenRouter) > none.
+  const endpoint = useCommitField<string>(
+    config.jev?.endpoint ?? '',
+    (v) => save((c) => ({ jev: { ...c.jev, endpoint: v.trim() || undefined } }), { rowKey: 'tasks.jev-endpoint' }),
+    { rowKey: 'tasks.jev-endpoint', kind: 'text' },
+  );
+  const model = useCommitField<string>(
+    config.jev?.model ?? '',
+    (v) => save((c) => ({ jev: { ...c.jev, model: v.trim() || undefined } }), { rowKey: 'tasks.jev-model' }),
+    { rowKey: 'tasks.jev-model', kind: 'text' },
+  );
+
+  // Three key states: Jev-specific key > shared OpenRouter provider key (only
+  // meaningful when the effective endpoint IS OpenRouter) > none.
   const ownKey = Boolean(config.jev?.api_key);
-  const effectiveEndpoint = (endpoint.trim() || config.jev?.endpoint || DEFAULT_ENDPOINT);
+  const effectiveEndpoint = endpoint.inputProps.value.trim() || config.jev?.endpoint || DEFAULT_ENDPOINT;
   const onOpenRouter = effectiveEndpoint.startsWith('https://openrouter.ai/');
   const sharedKey = !ownKey && onOpenRouter && Boolean(config.providers?.openrouter?.api_key);
-  const keyConfigured = ownKey || sharedKey;
 
-  // Keyed on the two saved VALUES, not on the config object: this form mounts
-  // the moment the runner radio flips to Jev, and that radio's own save
-  // refreshes config a beat later. Re-syncing on any refresh wiped whatever was
-  // typed in between (caught by settings-smart-task-creation.spec.ts).
-  const savedEndpoint = config.jev?.endpoint ?? '';
-  const savedModel = config.jev?.model ?? '';
-  useEffect(() => { setEndpoint(savedEndpoint); }, [savedEndpoint]);
-  useEffect(() => { setModel(savedModel); }, [savedModel]);
-
-  const handleSave = async () => {
-    await onSave({
-      // Spread ...config.jev so api_key (a ${file:} ref this form never renders)
-      // and decisions (the parent's radio) survive: updateConfig replaces the
-      // whole `jev` key.
-      jev: {
-        ...config.jev,
-        ...(endpoint.trim() ? { endpoint: endpoint.trim() } : { endpoint: undefined }),
-        ...(model.trim() ? { model: model.trim() } : { model: undefined }),
-      },
-    });
-  };
-
-  useAutoSave({
-    current: JSON.stringify({ endpoint: endpoint.trim(), model: model.trim() }),
-    baseline: JSON.stringify({
-      endpoint: (config.jev?.endpoint ?? '').trim(),
-      model: (config.jev?.model ?? '').trim(),
-    }),
-    save: handleSave,
-  });
-
-  const saveKey = async () => {
-    const key = keyDraft.trim();
-    if (!key) return;
+  const keyWrite = async (method: 'POST' | 'DELETE', key?: string) => {
     setKeyBusy(true);
+    setKeyError(null);
     try {
-      const res = await fetch('/api/jev/key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setKeyDraft('');
+      await track(jevKeyRequest(method, key), 'tasks.jev-key');
+      if (method === 'POST') { setKeyDraft(''); setReplacing(false); }
       await onReload();
     } catch (err) {
-      log.error('settings', 'jev key save failed', { error: err instanceof Error ? err.message : String(err) });
-      alert(`Saving the key failed: ${err instanceof Error ? err.message : err}`);
-    } finally {
-      setKeyBusy(false);
-    }
-  };
-
-  const removeKey = async () => {
-    if (!confirm('Remove the stored Jev API key? Smart task creation then uses the default engine until a key is saved again.')) return;
-    setKeyBusy(true);
-    try {
-      await fetch('/api/jev/key', { method: 'DELETE' });
-      await onReload();
+      const message = saveErrorMessage(err);
+      log.error('settings', 'jev key write failed', { method, error: message });
+      setKeyError(couldntSave(message));
     } finally {
       setKeyBusy(false);
     }
@@ -121,85 +116,129 @@ export function JevSettings({ config, onSave, onReload }: Props) {
     }
   };
 
-  return (
-    <div data-testid="jev-settings">
-      <div className="form-group">
-        <label htmlFor="jev-key">Jev API key</label>
-        {keyConfigured ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span className="text-sm" data-testid="jev-key-status">
-              {ownKey
-                ? <>Saved. It lives in <code>secrets/</code> and is never synced.</>
-                : <>Using the OpenRouter key saved under <a href="#providers">Advanced</a>.</>}
-            </span>
-            {ownKey && (
-              <button type="button" className="btn btn-sm" onClick={removeKey} disabled={keyBusy}>Remove</button>
-            )}
-          </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', gap: 8, maxWidth: 520 }}>
-              <SecretInput
-                id="jev-key"
-                value={keyDraft}
-                onChange={setKeyDraft}
-                placeholder="sk-or-… (OpenRouter) or a TypeSafe key"
-              />
-              <button type="button" className="btn btn-sm btn-primary" onClick={saveKey} disabled={keyBusy || !keyDraft.trim()}>
-                Save key
-              </button>
-            </div>
-            <p className="text-sm" style={{ marginTop: 4, color: 'var(--warning, #b45309)' }} data-testid="jev-no-key">
-              No key yet, so the default engine answers until you save one.
-            </p>
-          </>
-        )}
-      </div>
+  let keyHelp: ReactNode = null;
+  let keyControl: ReactNode;
+  const keyEntry = (
+    <span className="settings-control-cluster">
+      <SecretInput id="jev-key" value={keyDraft} onChange={setKeyDraft} placeholder="API key" />
+      {replacing && (
+        <SettingsButton variant="text" data-testid="jev-key-replace-cancel" onClick={() => { setReplacing(false); setKeyDraft(''); }}>
+          Cancel
+        </SettingsButton>
+      )}
+      <SettingsButton
+        variant="primary"
+        busy={keyBusy}
+        busyLabel="Saving..."
+        disabled={!keyDraft.trim()}
+        title={keyDraft.trim() ? undefined : 'Paste a key first.'}
+        onClick={() => void keyWrite('POST', keyDraft.trim())}
+        data-testid="jev-key-save"
+      >
+        Save key
+      </SettingsButton>
+    </span>
+  );
+  if (ownKey && replacing) {
+    keyControl = keyEntry;
+  } else if (ownKey) {
+    keyControl = (
+      <span className="settings-control-cluster">
+        <span className="settings-secret-saved-text" data-testid="jev-key-status">Saved in secrets, never synced.</span>
+        <SettingsButton variant="text" data-testid="jev-key-replace" disabled={keyBusy} onClick={() => setReplacing(true)}>
+          Replace
+        </SettingsButton>
+        <InlineConfirmButton data-testid="jev-key-remove" disabled={keyBusy} onConfirm={() => keyWrite('DELETE')} />
+      </span>
+    );
+  } else if (sharedKey) {
+    keyHelp = (
+      <span data-testid="jev-key-status">
+        Uses the OpenRouter key saved under <a href="#providers">Advanced</a>.
+      </span>
+    );
+  } else {
+    keyHelp = <span data-testid="jev-no-key">No key yet, so Walnut&apos;s usual model answers until you save one.</span>;
+    keyControl = keyEntry;
+  }
 
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="jev-endpoint">Endpoint</label>
+  const testText = jevTestText(test);
+  const hasKey = ownKey || sharedKey;
+  return (
+    <div className="settings-rows-contents" data-testid="jev-settings">
+      <SettingsRow
+        indent
+        label="API key"
+        htmlFor={ownKey || sharedKey ? undefined : 'jev-key'}
+        help={keyHelp}
+        state={!ownKey && !sharedKey ? 'warning' : undefined}
+        error={keyError}
+        control={keyControl}
+      />
+      <SettingsRow
+        indent
+        wide
+        label="Endpoint"
+        help="Empty uses the first-party endpoint."
+        htmlFor="jev-endpoint"
+        error={endpoint.error}
+        control={
           <input
             id="jev-endpoint"
             type="text"
-            value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
+            className="settings-input settings-input--long settings-input--mono"
             placeholder={DEFAULT_ENDPOINT}
+            spellCheck={false}
+            {...endpoint.inputProps}
           />
-          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-            Empty = TypeSafe first-party. OpenRouter: <code>{OPENROUTER_ENDPOINT}</code>
-          </p>
-        </div>
-        <div className="form-group">
-          <label htmlFor="jev-model">Model</label>
+        }
+      />
+      <SettingsRow
+        indent
+        label="Jev model"
+        help="Empty uses the latest model."
+        htmlFor="jev-model"
+        error={model.error}
+        control={
           <input
             id="jev-model"
             type="text"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
+            className="settings-input settings-input--short settings-input--mono"
             placeholder={DEFAULT_MODEL}
+            spellCheck={false}
+            {...model.inputProps}
           />
-          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-            Empty = <code>{DEFAULT_MODEL}</code>. OpenRouter: <code>{OPENROUTER_MODEL}</code>
-          </p>
-        </div>
-      </div>
-
-      <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button type="button" className="btn btn-sm" onClick={runTest} disabled={test.kind === 'running'} data-testid="jev-test">
-          {test.kind === 'running' ? 'Testing…' : 'Test connection'}
-        </button>
-        {test.kind === 'ok' && (
-          <span className="text-sm" style={{ color: 'var(--success, #16a34a)' }} data-testid="jev-test-ok">
-            ✓ {test.ms} ms · {test.model}
+        }
+      />
+      <SettingsRow
+        indent
+        label="Connection"
+        // One help line in every state, so a result never grows the row (N3-27).
+        help={!testText ? (hasKey ? 'Sends one short request to the endpoint.' : 'Add an API key first.') : (
+          <span
+            className="settings-test-result"
+            data-kind={test.kind}
+            data-testid={test.kind === 'ok' ? 'jev-test-ok' : 'jev-test-fail'}
+            title={test.kind === 'ok' ? test.model : undefined}
+            role={test.kind === 'fail' ? 'alert' : undefined}
+          >
+            {test.kind === 'ok' ? <CheckGlyph size={12} /> : <AlertGlyph size={12} />}
+            {testText}
           </span>
         )}
-        {test.kind === 'fail' && (
-          <span className="text-sm" style={{ color: 'var(--danger, #dc2626)' }} data-testid="jev-test-fail">
-            ✗ {test.error}
-          </span>
-        )}
-      </div>
+        control={
+          <SettingsButton
+            busy={test.kind === 'running'}
+            busyLabel="Testing..."
+            disabled={!hasKey}
+            title={hasKey ? undefined : 'Add an API key first.'}
+            onClick={() => void runTest()}
+            data-testid="jev-test"
+          >
+            Test connection
+          </SettingsButton>
+        }
+      />
     </div>
   );
 }

@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SettingsGroup, SettingsRow } from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { NumberInput } from '../inputs/NumberInput';
+import { SecretInput } from '../inputs/SecretInput';
+import { SegmentedControl } from '../inputs/SegmentedControl';
+import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
+import { saveErrorMessage } from '../settings-pane-context';
+import { formatAbsoluteTime } from './addons-format';
 import { apiGet, apiPost } from '@/api/client';
 import { fetchAwsProfiles } from '@/api/config';
-import { useAutoSave } from '@/hooks/useAutoSave';
 import { useEvent } from '@/hooks/useWebSocket';
+import '@/styles/settings-sections-addons.css';
 
 interface Props {
   config: Config;
@@ -34,7 +42,7 @@ interface TestResult {
 }
 
 const fmtBytes = (n?: number): string =>
-  n === undefined ? '—' : n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`;
+  n === undefined ? 'unknown size' : n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`;
 
 export function BackupSection({ config, onSave }: Props) {
   const saved = config.backup ?? {};
@@ -42,7 +50,8 @@ export function BackupSection({ config, onSave }: Props) {
   const [bucket, setBucket] = useState(saved.bucket ?? '');
   const [region, setRegion] = useState(saved.region ?? 'us-west-2');
   const [prefix, setPrefix] = useState(saved.prefix ?? 'walnut');
-  const [intervalHours, setIntervalHours] = useState(saved.interval_hours ?? 24);
+  // Empty while the user retypes it; a save falls back to 24.
+  const [intervalHours, setIntervalHours] = useState<number | undefined>(saved.interval_hours ?? 24);
   const [method, setMethod] = useState(saved.auth?.method ?? 'aws_chain');
   const [profile, setProfile] = useState(saved.auth?.profile ?? '');
   const [accessKey, setAccessKey] = useState(saved.auth?.aws_access_key_id ?? '');
@@ -55,16 +64,24 @@ export function BackupSection({ config, onSave }: Props) {
   const [runError, setRunError] = useState<string | null>(null);
   const [enablingVersioning, setEnablingVersioning] = useState(false);
 
+  // A config refresh re-seeds only the fields whose SAVED value moved: the
+  // refresh after one field's auto-save must not wipe text typed meanwhile in
+  // another (the bucket typed while the master switch's save was in flight).
+  const prevSaved = useRef(saved);
   useEffect(() => {
-    setEnabled(saved.enabled ?? false);
-    setBucket(saved.bucket ?? '');
-    setRegion(saved.region ?? 'us-west-2');
-    setPrefix(saved.prefix ?? 'walnut');
-    setIntervalHours(saved.interval_hours ?? 24);
-    setMethod(saved.auth?.method ?? 'aws_chain');
-    setProfile(saved.auth?.profile ?? '');
-    setAccessKey(saved.auth?.aws_access_key_id ?? '');
-    setSecretKey(saved.auth?.aws_secret_access_key ?? '');
+    const p = prevSaved.current;
+    prevSaved.current = saved;
+    if (p === saved) return;
+    const moved = <T,>(a: T, b: T, set: (v: T) => void) => { if (a !== b) set(b); };
+    moved(p.enabled ?? false, saved.enabled ?? false, setEnabled);
+    moved(p.bucket ?? '', saved.bucket ?? '', setBucket);
+    moved(p.region ?? 'us-west-2', saved.region ?? 'us-west-2', setRegion);
+    moved(p.prefix ?? 'walnut', saved.prefix ?? 'walnut', setPrefix);
+    moved(p.interval_hours ?? 24, saved.interval_hours ?? 24, setIntervalHours);
+    moved(p.auth?.method ?? 'aws_chain', saved.auth?.method ?? 'aws_chain', setMethod);
+    moved(p.auth?.profile ?? '', saved.auth?.profile ?? '', setProfile);
+    moved(p.auth?.aws_access_key_id ?? '', saved.auth?.aws_access_key_id ?? '', setAccessKey);
+    moved(p.auth?.aws_secret_access_key ?? '', saved.auth?.aws_secret_access_key ?? '', setSecretKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
@@ -94,7 +111,7 @@ export function BackupSection({ config, onSave }: Props) {
     await onSave({ backup: formConfig() } as Partial<Config>);
   };
 
-  useAutoSave({
+  useSettingsAutoSave({
     current: JSON.stringify(formConfig()),
     baseline: JSON.stringify({
       enabled: saved.enabled ?? false,
@@ -119,7 +136,7 @@ export function BackupSection({ config, onSave }: Props) {
     try {
       setTestResult(await apiPost<TestResult>('/api/backup/test', formConfig(), { timeoutMs: 45000 }));
     } catch (err) {
-      setTestResult({ ok: false, error: (err as Error).message });
+      setTestResult({ ok: false, error: saveErrorMessage(err) });
     } finally {
       setTesting(false);
     }
@@ -133,7 +150,7 @@ export function BackupSection({ config, onSave }: Props) {
       await apiPost('/api/backup/run', {});
       setStatus((prev) => (prev ? { ...prev, running: true } : prev));
     } catch (err) {
-      setRunError((err as Error).message);
+      setRunError(saveErrorMessage(err));
     }
   };
 
@@ -144,7 +161,7 @@ export function BackupSection({ config, onSave }: Props) {
       setStatus((prev) => (prev ? { ...prev, versioningEnabled: true } : prev));
       setTestResult((prev) => (prev ? { ...prev, versioningEnabled: true } : prev));
     } catch (err) {
-      setRunError((err as Error).message);
+      setRunError(saveErrorMessage(err));
     } finally {
       setEnablingVersioning(false);
     }
@@ -157,160 +174,181 @@ export function BackupSection({ config, onSave }: Props) {
     ? Math.floor((status.progress.uploadedBytes / status.progress.totalBytes) * 100)
     : null;
 
+
+  const lastBackupHelp = status?.running && progressPct !== null
+    ? `In progress: ${progressPct}% (${fmtBytes(status.progress?.uploadedBytes)} of ${fmtBytes(status.progress?.totalBytes)})`
+    : status?.lastBackupAt
+      ? [
+          formatAbsoluteTime(status.lastBackupAt),
+          `${status.lastFileCount ?? 0} files`,
+          fmtBytes(status.lastTotalBytes),
+          ...(status.versioningEnabled ? ['versioning on'] : []),
+        ].join(', ')
+      : 'No backup has run yet.';
+  const lastError = status?.error ? `Last error: ${status.error}` : runError;
+
   return (
-    <SectionCard
-      id="backup"
-      title="S3 Backup"
-      description="Back up your data to your own S3 bucket on a schedule. Changes save automatically."
-      onSave={handleSave}
-      showSave={false}
-    >
-      <div className="form-group">
-        <ToggleSwitch id="backup-enabled" checked={enabled} onChange={setEnabled} label="Enable scheduled backups" />
-      </div>
+    <SectionCard id="backup" title="S3 Backup" onSave={handleSave} showSave={false}>
+      <SettingsGroup footer={<>What gets backed up: everything in your data folder, credentials (<code>auth.json</code>) included, so use a bucket only you can access.</>}>
+        <SettingsRow
+          label="Scheduled backups"
+          htmlFor="backup-enabled"
+          help="Only changed files upload after the first run; caches and search indexes are skipped."
+          control={<ToggleSwitch id="backup-enabled" checked={enabled} onChange={setEnabled} />}
+        />
+      </SettingsGroup>
 
-      <p className="text-sm text-muted" style={{ marginTop: 0 }}>
-        <strong>What gets backed up:</strong> everything in your data folder — tasks, notes and
-        attachments, chat and session history, memory, config, and credentials (auth.json), so use
-        a bucket only you can access. Databases are snapshotted safely while in use.
-        <br />
-        <strong>Skipped:</strong> caches, temp files, and search indexes — Walnut rebuilds those
-        automatically. Only changed files upload after the first run.
-      </p>
+      <SettingsGroup heading="Destination">
+        <SettingsRow
+          label="Bucket"
+          htmlFor="backup-bucket"
+          control={
+            <input id="backup-bucket" type="text" className="settings-input settings-input--short"
+              value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="my-walnut-backup" />
+          }
+        />
+        <SettingsRow
+          label="Region"
+          htmlFor="backup-region"
+          control={
+            <input id="backup-region" type="text" className="settings-input settings-input--short"
+              value={region} onChange={(e) => setRegion(e.target.value)} placeholder="us-west-2" />
+          }
+        />
+        <SettingsRow
+          label="Prefix"
+          htmlFor="backup-prefix"
+          help="Folder inside the bucket; use a distinct prefix per machine."
+          control={
+            <input id="backup-prefix" type="text" className="settings-input settings-input--short"
+              value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="walnut" />
+          }
+        />
+        <SettingsRow
+          label="Every"
+          htmlFor="backup-interval"
+          control={
+            <NumberInput id="backup-interval" min={1} unit="hours" value={intervalHours}
+              onChange={setIntervalHours} />
+          }
+        />
+      </SettingsGroup>
 
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="backup-bucket">Bucket</label>
-          <input id="backup-bucket" type="text" value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="my-walnut-backup" />
-        </div>
-        <div className="form-group">
-          <label htmlFor="backup-region">Region</label>
-          <input id="backup-region" type="text" value={region} onChange={(e) => setRegion(e.target.value)} placeholder="us-west-2" />
-        </div>
-      </div>
-
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="backup-prefix">Prefix</label>
-          <input id="backup-prefix" type="text" value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="walnut" />
-          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-            Folder inside the bucket. Use a distinct prefix per machine.
-          </p>
-        </div>
-        <div className="form-group">
-          <label htmlFor="backup-interval">Every N hours</label>
-          <input
-            id="backup-interval"
-            type="number"
-            min={1}
-            value={intervalHours}
-            onChange={(e) => setIntervalHours(Number(e.target.value))}
+      <SettingsGroup heading="Credentials">
+        <SettingsRow
+          label="Method"
+          control={
+            <SegmentedControl
+              id="backup-auth-method"
+              aria-label="Credentials method"
+              value={method}
+              onChange={(v) => setMethod(v)}
+              options={[
+                { value: 'aws_chain', label: 'Default chain', title: 'The default AWS credential chain', testId: 'backup-auth-aws_chain' },
+                { value: 'profile', label: 'AWS profile', title: 'A profile from ~/.aws', testId: 'backup-auth-profile' },
+                { value: 'access_keys', label: 'Access keys', testId: 'backup-auth-access_keys' },
+              ]}
+            />
+          }
+        />
+        {method === 'profile' && (
+          <SettingsRow
+            label="Profile"
+            htmlFor="backup-profile"
+            indent
+            control={profiles.length > 0 ? (
+              <select id="backup-profile" className="settings-select" value={profile} onChange={(e) => setProfile(e.target.value)}>
+                <option value="">Choose a profile</option>
+                {profiles.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            ) : (
+              <input id="backup-profile" type="text" className="settings-input settings-input--short"
+                value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="default" />
+            )}
           />
-        </div>
-      </div>
-
-      <div className="form-group">
-        <label htmlFor="backup-auth-method">Credentials</label>
-        <select id="backup-auth-method" value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
-          <option value="aws_chain">Default AWS credential chain</option>
-          <option value="profile">AWS profile (~/.aws)</option>
-          <option value="access_keys">Access keys</option>
-        </select>
-      </div>
-
-      {method === 'profile' && (
-        <div className="form-group">
-          <label htmlFor="backup-profile">Profile</label>
-          {profiles.length > 0 ? (
-            <select id="backup-profile" value={profile} onChange={(e) => setProfile(e.target.value)}>
-              <option value="">Select a profile…</option>
-              {profiles.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          ) : (
-            <input id="backup-profile" type="text" value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="default" />
-          )}
-        </div>
-      )}
-
-      {method === 'access_keys' && (
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="backup-access-key">Access Key ID</label>
-            <input id="backup-access-key" type="text" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} autoComplete="off" />
-          </div>
-          <div className="form-group">
-            <label htmlFor="backup-secret-key">Secret Access Key</label>
-            <input id="backup-secret-key" type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} autoComplete="off" />
-          </div>
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-        <button type="button" className="btn btn-sm" disabled={testing || !bucket.trim()} onClick={handleTest}>
-          {testing ? 'Testing…' : 'Test Connection'}
-        </button>
-        <button type="button" className="btn btn-sm" disabled={!bucket.trim() || status?.running === true} onClick={handleRunNow}>
-          {status?.running ? 'Backing up…' : 'Back Up Now'}
-        </button>
-      </div>
-
-      {testResult && (
-        <div className="text-sm" style={{ marginTop: 6, color: testResult.ok ? 'var(--success)' : 'var(--error)' }}>
-          {testResult.ok ? `Connected as ${testResult.arn ?? 'unknown identity'}` : `Connection failed: ${testResult.error}`}
-        </div>
-      )}
-      {runError && (
-        <div className="text-sm" style={{ marginTop: 6, color: 'var(--error)' }}>{runError}</div>
-      )}
+        )}
+        {method === 'access_keys' && (
+          <>
+            <SettingsRow
+              label="Access key ID"
+              htmlFor="backup-access-key"
+              indent
+              control={
+                <input id="backup-access-key" type="text" className="settings-input settings-input--short settings-input--mono"
+                  value={accessKey} onChange={(e) => setAccessKey(e.target.value)} autoComplete="off" />
+              }
+            />
+            <SettingsRow
+              label="Secret access key"
+              htmlFor="backup-secret-key"
+              indent
+              control={<SecretInput id="backup-secret-key" value={secretKey} onChange={setSecretKey} />}
+            />
+          </>
+        )}
+        <SettingsRow
+          label="Connection"
+          help={testResult
+            ? testResult.ok ? `Connected as ${testResult.arn ?? 'unknown identity'}` : `Couldn't connect: ${testResult.error}`
+            : 'Checks the bucket with these credentials.'}
+          state={testResult && !testResult.ok ? 'error' : undefined}
+          data-testid="backup-connection-row"
+          control={
+            <SettingsButton onClick={handleTest} disabled={!bucket.trim()} title={bucket.trim() ? undefined : 'Enter a bucket first.'} busy={testing} busyLabel="Testing..."
+              data-testid="backup-test-connection">
+              Test connection
+            </SettingsButton>
+          }
+        />
+      </SettingsGroup>
 
       {versioningOff && (
-        <div
-          className="text-sm"
-          style={{
-            marginTop: 10, padding: '8px 10px', borderRadius: 8,
-            background: 'color-mix(in srgb, var(--warning, #b58900) 12%, transparent)',
-            border: '1px solid color-mix(in srgb, var(--warning, #b58900) 35%, transparent)',
-          }}
-        >
-          Bucket versioning is <strong>off</strong> — if someone deletes or overwrites your backup, it cannot be recovered.
-          Versioning keeps old copies of every file so deletion is always reversible.{' '}
-          <button type="button" className="btn btn-sm" disabled={enablingVersioning} onClick={handleEnableVersioning} style={{ marginLeft: 6 }}>
-            {enablingVersioning ? 'Enabling…' : 'Enable Versioning'}
-          </button>
-        </div>
+        // A warning row in a group, on the 14px inset and the control column (F35).
+        <SettingsGroup data-testid="backup-versioning-off">
+          <SettingsRow
+            state="warning"
+            label="Bucket versioning is off"
+            help="A deleted or overwritten backup can't be recovered."
+            control={
+              <SettingsButton onClick={handleEnableVersioning} busy={enablingVersioning} busyLabel="Enabling...">
+                Enable versioning
+              </SettingsButton>
+            }
+          />
+        </SettingsGroup>
       )}
 
-      <div className="settings-divider" />
-
-      <div className="text-sm text-muted">
-        {status?.running && progressPct !== null ? (
-          <>Backup in progress: {progressPct}% ({fmtBytes(status.progress?.uploadedBytes)} of {fmtBytes(status.progress?.totalBytes)})</>
-        ) : status?.lastBackupAt ? (
+      <SettingsGroup
+        footer={
           <>
-            Last backup {new Date(status.lastBackupAt).toLocaleString()} · {status.lastFileCount ?? '—'} files · {fmtBytes(status.lastTotalBytes)}
-            {status.versioningEnabled ? ' · versioning on' : ''}
+            Restore from a terminal with <code>open-walnut backup restore</code>, or paste the{' '}
+            <a
+              href="https://github.com/EvanZhang008/open-walnut/blob/main/skills/restore-backup/SKILL.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              restore-backup skill
+            </a>{' '}
+            into a Claude Code session.
           </>
-        ) : (
-          <>No backup has run yet.</>
-        )}
-        {status?.error && (
-          <span style={{ color: 'var(--error)' }}> · Last error: {status.error}</span>
-        )}
-      </div>
-      <p className="text-sm text-muted" style={{ marginTop: 6 }}>
-        Restore from a terminal: <code>open-walnut backup restore</code> (downloads into a fresh folder, never
-        overwrites live data). Or let an agent do it: paste the{' '}
-        <a
-          href="https://github.com/EvanZhang008/open-walnut/blob/main/skills/restore-backup/SKILL.md"
-          target="_blank"
-          rel="noreferrer"
-        >
-          restore-backup skill
-        </a>{' '}
-        into a Claude Code session and it walks through find → restore → verify → adopt.
-      </p>
+        }
+      >
+        <SettingsRow
+          label="Last backup"
+          // A greyed Back up now says why, in the row, not only on hover (N3-31).
+          help={!bucket.trim() && !status?.lastBackupAt ? 'Enter a bucket above to back up.' : lastBackupHelp}
+          error={lastError ?? undefined}
+          data-testid="backup-last-row"
+          control={
+            <SettingsButton onClick={handleRunNow} disabled={!bucket.trim()} title={bucket.trim() ? undefined : 'Enter a bucket first.'} busy={status?.running === true}
+              busyLabel="Backing up..." data-testid="backup-run-now">
+              Back up now
+            </SettingsButton>
+          }
+        />
+      </SettingsGroup>
     </SectionCard>
   );
 }

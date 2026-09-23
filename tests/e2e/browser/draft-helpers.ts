@@ -451,11 +451,11 @@ export async function seedColumns(page: Page, sids: readonly string[]): Promise<
 }
 
 const panelPicker = (page: Page) =>
-  page.locator('.form-group', { hasText: 'Session Panels' }).locator('.theme-picker')
+  page.locator('#settings-session-panels')
 
 /** One picker button, matched EXACTLY (labels are bare digits). */
 const panelBtn = (page: Page, label: string) =>
-  panelPicker(page).locator('.theme-picker-btn').filter({ hasText: new RegExp(`^${label}$`) })
+  panelPicker(page).locator('.settings-segment').filter({ hasText: new RegExp(`^${label}$`) })
 
 /**
  * Pick a panel count through the real Settings UI, then WAIT for it to reach
@@ -469,13 +469,21 @@ export async function setPanelMode(page: Page, label: '1' | '2' | '3' | '4' | '5
     await page.goto('/')
     await page.waitForLoadState('networkidle')
   }
-  const settingsLink = page.locator('.sidebar a[href="/settings"]')
+  const settingsLink = page.locator('.sidebar a[href^="/settings"]')
   await expect(settingsLink).toBeVisible({ timeout: 30_000 })
   await settingsLink.click()
   await expect(panelPicker(page)).toBeVisible({ timeout: 20_000 })
   const btn = panelBtn(page, label)
+  // The picker shows the EFFECTIVE count, and picking the option already shown
+  // writes nothing. Step through a wider count first so config names `label`
+  // explicitly (a wider count never evicts a seeded column).
+  if ((await btn.getAttribute('aria-checked')) === 'true') {
+    const via = panelBtn(page, label === '5' ? 'Auto' : '5')
+    await via.click()
+    await expect(via).toHaveAttribute('aria-checked', 'true')
+  }
   await btn.click()
-  await expect(btn).toHaveClass(/active/)
+  await expect(btn).toHaveAttribute('aria-checked', 'true')
 
   const expected = label === 'Auto' ? 'auto' : label
   const readMode = async () => {

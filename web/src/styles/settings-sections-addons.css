@@ -1,0 +1,444 @@
+/* Section-level styles for the add-on, machine and diagnostics panes
+   (Plugins, Calendar, macOS Access, Backup, Phones & Cloud, Remote Hosts,
+   Audio Capture, Usage, Suggestion Accuracy, Screen Tracking, Bug Report).
+   Colors only through tokens. */
+
+.settings-addons-mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.settings-addons-muted {
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.settings-addons-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.settings-addons-live {
+  color: var(--error);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+/* Calendar checklist rows: 10px colour dot after the checkbox. */
+.settings-addons-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+/* Checklist hairline starts after the checkbox, not at the row edge. */
+.settings-checklist .settings-checkbox-row:not(:first-child)::before {
+  left: 40px;
+}
+.settings-checklist .settings-checkbox-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-addons-link {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--accent);
+  cursor: pointer;
+}
+.settings-addons-link:hover:not(:disabled) { text-decoration: underline; }
+/* A dead verb, like every disabled text button: its own accent at 45%, never the muted
+   colour of the status sentence beside it (N2-11, N15). */
+.settings-addons-link:disabled { opacity: 0.45; cursor: default; }
+.settings-addons-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+a.settings-button { text-decoration: none; }
+
+/* Pairing QR: rows of the caller's group, the code centered, at most 200px. */
+.settings-row.settings-addons-qr-row {
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+.settings-addons-qr-row img {
+  display: block;
+  width: 100%;
+  max-width: 200px;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  image-rendering: pixelated;
+}
+.settings-addons-qr-row .settings-row-help { max-width: 60ch; }
+
+.settings-addons-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-row-label .settings-addons-inline { flex-wrap: nowrap; max-width: 100%; }
+
+/* A row that is one big choice (cloud provider): a button styled as a row. */
+.settings-addons-contents { display: contents; }
+.settings-group .settings-row.settings-addons-choice {
+  width: 100%;
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.settings-group .settings-row.settings-addons-choice:hover { background: var(--bg-hover); }
+.settings-group .settings-row.settings-addons-choice[aria-checked='true'] { background: var(--accent-subtle); }
+.settings-group .settings-row.settings-addons-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.settings-group .cloud-pill { background: none; padding: 0; border: 0; }
+
+/* Wizard buttons under the last group, right-aligned with the group edge. */
+.settings-addons-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: -10px 0 22px;
+}
+.settings-addons-actions:first-child { margin-top: 0; }
+
+/* Usage summary: three equal numbers, 20px/600 tabular, muted label below. */
+.settings-addons-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.settings-addons-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+.settings-addons-stat + .settings-addons-stat {
+  box-shadow: inset 1px 0 0 var(--settings-hairline, var(--border));
+}
+.settings-addons-stat-value {
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-addons-stat-label {
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+}
+.settings-addons-stats[aria-busy='true'] { opacity: 0.6; }
+.settings-group .usage-chart-section,
+.settings-group .usage-breakdown-panel,
+.settings-group .usage-recent-section {
+  overflow-x: auto;
+}
+/* The usage components keep their own look; inside a group they lose any box. */
+.settings-group .usage-breakdown-panel,
+.settings-group .usage-chart-section,
+.settings-group .usage-recent-section {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  margin: 0;
+}
+
+/* Screen Tracking */
+.settings-addons-catbar {
+  display: flex;
+  border-radius: 6px;
+  overflow: hidden;
+  height: 24px;
+  width: 100%;
+}
+.settings-addons-flip { transform: rotate(180deg); }
+
+/* Row wrappers that keep a testid (plugin account, config, app rows): a plain
+   block with no box, so its rows are still rows of the surrounding group. The
+   first row inside gets the hairline the group would have drawn. */
+.settings-addons-rows { display: block; }
+.settings-group > :not(:first-child).settings-addons-rows > .settings-row:first-child::before,
+.settings-addons-rows > :not(:first-child).settings-addons-rows > .settings-row:first-child::before,
+.settings-group > :not(:first-child).settings-addons-contents > .settings-row:first-child::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--settings-row-pad-x, 14px);
+  right: 0;
+  height: 1px;
+  background: var(--settings-hairline, var(--border));
+  pointer-events: none;
+}
+.settings-group > :not(:first-child).settings-addons-rows > .settings-row.settings-row-indent:first-child::before,
+.settings-addons-rows > :not(:first-child).settings-addons-rows > .settings-row.settings-row-indent:first-child::before,
+.settings-group > :not(:first-child).settings-addons-contents > .settings-row.settings-row-indent:first-child::before {
+  left: var(--settings-row-indent, 36px);
+}
+.settings-addons-account { color: var(--fg-muted); font-size: 12.5px; max-width: 28ch; }
+
+/* Plugins: "Also needs: ..." under a store row is a warning, not help text. */
+span.plugin-store-why {
+  color: var(--priority-important, var(--fg-muted));
+  white-space: normal;
+}
+
+/* Plugins: the device code of an outstanding sign-in, read aloud or typed on
+   another device, so it is larger and spaced. */
+.plugin-connection-code {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  user-select: all;
+}
+
+/* A dark settings group is lighter than the old card, so the update chip's blue
+   takes the brighter dark-theme accent there to keep 4.5:1 (native-plugin C34). */
+:root[data-theme='dark'] .settings-group .plugin-update-chip {
+  --plugin-update-chip-available: var(--accent-hover);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .settings-group .plugin-update-chip {
+    --plugin-update-chip-available: var(--accent-hover);
+  }
+}
+
+/* Usage: the shared date-range trigger writes its caret as a text glyph. In
+   Settings the glyph is hidden and the same caret is drawn in CSS (C80). */
+.settings-pane .usage-daterange-caret {
+  display: none;
+}
+.settings-pane .usage-daterange > .usage-period-tab::after {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+/* ── Plugin update chip inside Settings: the standard sentence-case filled tag
+   (F15). Tone follows the chip's state; clicking still re-checks the row. ── */
+.settings-pane .plugin-update-chip {
+  min-width: 0;
+  height: 18px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.settings-pane .plugin-update-chip:hover,
+.settings-pane button.plugin-update-chip--current:hover {
+  border: 0;
+  background: color-mix(in srgb, var(--fg-secondary) 16%, var(--bg-tertiary));
+}
+
+.settings-pane .plugin-update-chip--current {
+  background: transparent;
+}
+
+.settings-pane .plugin-update-chip--available {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-text, var(--accent));
+}
+
+.settings-pane .plugin-update-chip--dirty,
+.settings-pane .plugin-update-chip--diverged,
+.settings-pane .plugin-update-chip--auth {
+  background: rgba(255, 149, 0, 0.14);
+  color: var(--priority-important-text);
+}
+
+/* ── Usage & Costs tables (F11): one line per cell, same columns everywhere ── */
+.settings-usage-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 17px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+.settings-usage-table th {
+  padding: 0 6px 6px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--settings-hairline);
+}
+
+.settings-usage-table td {
+  padding: 5px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--settings-hairline);
+}
+
+.settings-usage-table tr:last-child td { border-bottom: 0; }
+.settings-usage-table :is(th, td):first-child { padding-left: 0; }
+.settings-usage-table :is(th, td):last-child { padding-right: 0; }
+.settings-usage-table .num { text-align: right; }
+.settings-usage-table .mono { font-family: var(--font-mono); font-size: 12px; }
+.settings-usage-table tbody tr[title^='Filter'],
+.settings-usage-table tbody tr.is-active { cursor: pointer; }
+.settings-usage-table tbody tr:hover td { background: var(--bg-hover); }
+.settings-usage-table tbody tr.is-active td { color: var(--accent-text, var(--accent)); font-weight: 500; }
+
+.settings-usage-col-name { width: 20%; }
+.settings-usage-col-num { width: 11%; }
+.settings-usage-col-cache { width: 14%; }
+.settings-usage-col-share { width: 19%; }
+
+/* Every header fits on its one line (N09, F11): the two-word cache headers
+   get the wider columns and a hair less padding. */
+.settings-usage-breakdown th {
+  padding-left: 4px;
+  padding-right: 4px;
+  font-size: 12px;
+}
+/* Recent calls: the text columns (source, model) take the spare width, the
+   numbers only what a token count or a cost needs (N3-29). */
+.settings-usage-col-time { width: 15%; }
+.settings-usage-col-source { width: 31%; }
+.settings-usage-col-model { width: 26%; }
+.settings-usage-col-cost { width: 10%; }
+.settings-usage-recent .settings-usage-col-num { width: 9%; }
+
+.settings-usage-share-track {
+  display: inline-block;
+  width: 28px;
+  height: 4px;
+  margin-right: 6px;
+  vertical-align: middle;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.settings-usage-share-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.settings-usage-via { color: var(--fg-muted); }
+
+.settings-usage-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+/* The daily chart draws straight on the group: no card of its own (F10). */
+.settings-group .usage-chart-wrapper,
+.settings-group .usage-chart-placeholder {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.settings-group .usage-chart-placeholder { padding: 16px 0; }
+
+/* Empty stand-in for a row's switch: keeps every control in the same slot (F17). */
+.settings-switch-slot {
+  display: inline-block;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 22px;
+}
+
+/* Usage chart axis text (N09): the chart is a 1000-unit viewBox scaled to the
+   pane, which drew its 11px labels at about 7px. Pick the user-unit size per
+   band of the chart's own width so labels render at 11px or a little more. */
+.settings-pane .usage-chart-wrapper { container: uchart / inline-size; }
+.settings-pane .usage-chart-svg { overflow: visible; }
+.settings-pane .usage-chart-axis { font-size: 28px; }
+@container uchart (min-width: 440px) { .settings-pane .usage-chart-axis { font-size: 25px; } }
+@container uchart (min-width: 520px) { .settings-pane .usage-chart-axis { font-size: 21.2px; } }
+@container uchart (min-width: 620px) { .settings-pane .usage-chart-axis { font-size: 17.8px; } }
+@container uchart (min-width: 740px) { .settings-pane .usage-chart-axis { font-size: 14.9px; } }
+@container uchart (min-width: 880px) { .settings-pane .usage-chart-axis { font-size: 12.5px; } }
+
+/* A host that is off fades its name and address only (N10). */
+.settings-row.rh-host-row[data-host-off='true'] > .settings-row-copy > .settings-row-label {
+  opacity: 0.45;
+}
+
+/* One vertical rule on every pane: controls centre on their row, as macOS
+   does (N13). plugin-updates.css pinned Plugins rows to the top. */
+.settings-pane .plugin-store-installed .settings-row {
+  align-items: center;
+}
+
+.settings-pane .plugin-store-installed .settings-row-actions {
+  align-self: auto;
+  margin-top: 0;
+}
+
+/* "10 of 14 shown": a reserved, right-aligned, tabular slot, so the Show all
+   and Hide all links sit at one x in every account heading (N26). */
+.settings-heading-count {
+  display: inline-block;
+  min-width: 7.6em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Cloud setup steps are ordinary rows of their group: the row inset, no box
+   (globals.css drew each as a bordered card, 12px label inset). The running
+   and failed steps say so in their label colour instead. */
+.settings-group .settings-row.cloud-step {
+  padding: 8px var(--settings-row-pad-x);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.settings-group .settings-row.cloud-step-running .cloud-step-label { color: var(--accent-text, var(--accent)); }
+.settings-group .settings-row.cloud-step-error .cloud-step-label { color: var(--settings-error-text, var(--error)); }
+
+/* macOS Access: one action slot per row, wide enough for "Open System
+   Settings...", so the state tags before it share one right edge (N3-28). */
+.permission-row .permission-row-action {
+  display: inline-flex;
+  justify-content: flex-end;
+  min-width: 176px;
+}

@@ -1,14 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Config } from '@open-walnut/core';
-import { SectionCard } from '../inputs/SectionCard';
+import {
+  SettingsEmpty, SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow, SettingsSection, SettingsTag,
+} from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { log } from '@/utils/log';
 import { visibleInterval } from '@/utils/page-visibility';
-import { useAutoSave } from '@/hooks/useAutoSave';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useSerialSave, type OnSave } from './GeneralSection';
 
 interface Props {
   config: Config;
-  onSave: (partial: Partial<Config>) => Promise<void>;
+  onSave: OnSave;
 }
 
 /**
@@ -26,7 +31,7 @@ interface Props {
  * vault-relative prefixes: trimmed, slashes stripped from both ends, deduped
  * case-insensitively. Mirrors the server's normalizeExcludeFolders.
  */
-function parseExcludedFolders(text: string): string[] {
+export function parseExcludedFolders(text: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of text.split(/[,\n]/)) {
@@ -72,35 +77,37 @@ const STORE_LABELS: Array<[string, string]> = [
   ['skills', 'Skills'],
 ];
 
-const PULSE_KEYFRAMES = `
-@keyframes search-index-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-`;
 
+const STATUS_TAG: Record<IndexStatus['status'], { text: string; tone: 'success' | 'neutral' | 'warning' }> = {
+  ready: { text: 'Ready', tone: 'success' },
+  indexing: { text: 'Indexing', tone: 'neutral' },
+  error: { text: 'Error', tone: 'warning' },
+};
+
+/** `Tasks 6,367, Sessions 40` for the stores that report (pure, unit tested). */
+export function indexedSummary(stores: Record<string, StoreStats | null>): string {
+  return STORE_LABELS
+    .filter(([key]) => stores[key])
+    .map(([key, label]) => `${label} ${stores[key]!.totalIndexed.toLocaleString('en-US')}`)
+    .join(', ');
+}
+
+/** Hybrid keyword and semantic index: its health, a rebuild, the excluded folders. */
 export function SearchSection({ config, onSave }: Props) {
   const confirm = useConfirm();
-  const search = config.search ?? {};
-  // Excluded-folders editor: raw text (comma/newline separated), parsed on save.
-  const [excludedText, setExcludedText] = useState(() => (search.excluded_folders ?? []).join('\n'));
-
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionPending, setActionPending] = useState(false);
-
+  const [draft, setDraft] = useState('');
   const pollRef = useRef<(() => void) | undefined>(undefined);
-  const userEditedRef = useRef(false);
-  const mountedRef = useRef(false);
 
-  // ── Sync from config prop (only on initial mount or if user hasn't edited) ──
-  useEffect(() => {
-    if (mountedRef.current && userEditedRef.current) return;
-    mountedRef.current = true;
-    const s = config.search ?? {};
-    setExcludedText((s.excluded_folders ?? []).join('\n'));
-  }, [config]);
+  const save = useSerialSave(config, onSave);
+  const excluded = useOptimisticSetting<string[]>(
+    config.search?.excluded_folders ?? [],
+    (next) => save((c) => ({ search: { ...c.search, excluded_folders: next.length > 0 ? next : undefined } }), { rowKey: 'search.excluded' }),
+    { rowKey: 'search.excluded' },
+  );
 
   const fetchStatus = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -123,20 +130,15 @@ export function SearchSection({ config, onSave }: Props) {
 
   useEffect(() => {
     const ac = new AbortController();
-    fetchStatus(ac.signal);
+    void fetchStatus(ac.signal);
     return () => ac.abort();
   }, [fetchStatus]);
 
-  // Poll while indexing. visibleInterval: a rebuild takes minutes — hidden tabs
-  // skip the poll.
+  // Poll while indexing; visibleInterval skips hidden tabs (a rebuild takes minutes).
   useEffect(() => {
     pollRef.current?.();
-    if (indexStatus?.status === 'indexing') {
-      pollRef.current = visibleInterval(fetchStatus, 5000);
-    }
-    return () => {
-      pollRef.current?.();
-    };
+    if (indexStatus?.status === 'indexing') pollRef.current = visibleInterval(fetchStatus, 5000);
+    return () => { pollRef.current?.(); };
   }, [indexStatus?.status, fetchStatus]);
 
   const handleReindex = async () => {
@@ -160,153 +162,98 @@ export function SearchSection({ config, onSave }: Props) {
     }
   };
 
-  const handleSave = async () => {
-    const excluded = parseExcludedFolders(excludedText);
-    await onSave({
-      search: {
-        ...config.search,
-        excluded_folders: excluded.length > 0 ? excluded : undefined,
-      },
-    });
-    userEditedRef.current = false;
+  const add = () => {
+    const merged = parseExcludedFolders([...excluded.value, draft].join('\n'));
+    setDraft('');
+    if (merged.length !== excluded.value.length) excluded.set(merged);
   };
-
-  useAutoSave({
-    current: JSON.stringify({ excluded_folders: parseExcludedFolders(excludedText) }),
-    baseline: JSON.stringify({ excluded_folders: config.search?.excluded_folders ?? [] }),
-    save: handleSave,
-  });
 
   const isBusy = indexStatus?.status === 'indexing';
-  const stores = indexStatus?.stores ?? {};
-  const hasAnyStore = STORE_LABELS.some(([key]) => stores[key]);
+  const tag = indexStatus ? STATUS_TAG[indexStatus.status] : null;
+  const summary = indexStatus ? indexedSummary(indexStatus.stores ?? {}) : '';
 
   return (
-    <SectionCard
-      id="search"
-      title="Search"
-      description="Hybrid keyword + semantic index over tasks, sessions, notes, memory and skills. Changes save automatically."
-      onSave={handleSave}
-      showSave={false}
-    >
-      <style>{PULSE_KEYFRAMES}</style>
-
-      {/* ── Index status ── */}
-      <div className="form-group">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontWeight: 500 }}>
-          Index Status
-          <StatusBadge status={indexStatus?.status ?? null} loading={loading} />
-        </div>
-
-        {loading && !indexStatus && <p className="text-sm text-muted">Loading status...</p>}
-
-        {fetchError && (
-          <p className="text-sm" style={{ color: 'var(--error)' }}>
-            {indexStatus ? 'Last status update failed: ' : 'Failed to fetch status: '}{fetchError}
-          </p>
-        )}
-
-        {indexStatus && (
-          <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-            <div>
-              <span className="text-muted">Embedding model:</span>{' '}
-              <code style={{ fontSize: 12 }}>{indexStatus.model.name}</code>
-            </div>
-            {indexStatus.error && (
-              <div style={{ color: 'var(--error)', marginTop: 4 }}>Error: {indexStatus.error}</div>
+    <SettingsSection id="search" title="Search">
+      <SettingsGroup heading="Index">
+        {loading && !indexStatus ? <SettingsLoadingRow /> : (
+          <>
+            <SettingsRow
+              label="Status"
+              help={indexStatus?.error ? `Error: ${indexStatus.error}` : summary || undefined}
+              state={indexStatus?.error ? 'warning' : undefined}
+              control={
+                <span className="settings-control-cluster">
+                  {tag && <SettingsTag tone={tag.tone}>{tag.text}</SettingsTag>}
+                  <SettingsButton
+                    busy={isBusy || actionPending}
+                    busyLabel="Rebuilding..."
+                    onClick={() => void handleReindex()}
+                    data-testid="search-index-reindex-btn"
+                  >
+                    Rebuild index
+                  </SettingsButton>
+                </span>
+              }
+            />
+            {indexStatus && (
+              <SettingsRow label="Embedding model" control={indexStatus.model.name && indexStatus.model.name !== 'disabled'
+                ? <code className="settings-mono-value">{indexStatus.model.name}</code>
+                : <span className="settings-addons-muted">Off, keyword search only</span>} />
             )}
-          </div>
+          </>
         )}
+        {fetchError && (
+          <SettingsNotice kind="error" role="alert" action={<SettingsButton variant="text" onClick={() => void fetchStatus()}>Retry</SettingsButton>}>
+            Couldn&apos;t load the index status: {fetchError}
+          </SettingsNotice>
+        )}
+      </SettingsGroup>
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            disabled={actionPending || isBusy}
-            onClick={handleReindex}
-            data-testid="search-index-reindex-btn"
-          >
-            {isBusy ? 'Rebuilding...' : 'Rebuild index'}
-          </button>
-        </div>
-      </div>
-
-      {/* ── Index statistics ── */}
-      {indexStatus && hasAnyStore && (
-        <div className="form-group">
-          <div style={{ marginBottom: 8, fontWeight: 500 }}>Indexed Documents</div>
-          <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-            {STORE_LABELS.map(([key, label]) => {
-              const stats = stores[key];
-              return stats ? <StoreStatsCard key={key} label={label} stats={stats} /> : null;
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ── Excluded Folders ── */}
-      <div className="form-group">
-        <label htmlFor="search-excluded-folders">Excluded Folders</label>
-        <textarea
-          id="search-excluded-folders"
-          value={excludedText}
-          onChange={(e) => {
-            setExcludedText(e.target.value);
-            userEditedRef.current = true;
-          }}
-          placeholder={'archive\nArchive/old-stuff'}
-          rows={3}
-          spellCheck={false}
-          style={{ resize: 'vertical', fontFamily: 'var(--font-mono, monospace)', fontSize: 13 }}
-          data-testid="search-excluded-folders-input"
+      <SettingsGroup
+        heading="Excluded folders"
+        footer="Hidden from results with their subfolders; content stays indexed, so removing one restores it at once."
+        data-testid="search-excluded-folders"
+      >
+        {excluded.value.length === 0 && <SettingsEmpty>Nothing excluded.</SettingsEmpty>}
+        {excluded.value.map((folder) => (
+          <SettingsRow
+            key={folder}
+            label={<code className="settings-mono-value">{folder}</code>}
+            data-testid="search-excluded-folder"
+            control={
+              <InlineConfirmButton
+                aria-label={`Remove ${folder}`}
+                onConfirm={() => excluded.set(excluded.value.filter((f) => f !== folder))}
+              />
+            }
+          />
+        ))}
+        <SettingsRow
+          wide
+          label="Add folder"
+          htmlFor="search-excluded-folders"
+          error={excluded.error}
+          control={
+            <span className="settings-control-cluster">
+              <input
+                id="search-excluded-folders"
+                type="text"
+                className="settings-input settings-input--long settings-input--mono"
+                placeholder="Folder name"
+                spellCheck={false}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
+                  if (e.key === 'Enter') { e.preventDefault(); add(); }
+                }}
+                data-testid="search-excluded-folders-input"
+              />
+              <SettingsButton disabled={!draft.trim()} title={draft.trim() ? undefined : 'Type a folder first.'} onClick={add} data-testid="search-excluded-folders-add">Add</SettingsButton>
+            </span>
+          }
         />
-        <p className="text-sm text-muted" style={{ marginTop: 4 }}>
-          Vault folders hidden from search results — one per line (or comma-separated), e.g. <code>archive</code>. Matching is case-insensitive and covers all subfolders. Content stays indexed, so removing an entry restores it instantly (no re-index).
-        </p>
-      </div>
-    </SectionCard>
-  );
-}
-
-// ── Sub-components ──
-
-function StatusBadge({ status, loading }: { status: IndexStatus['status'] | null; loading: boolean }) {
-  if (loading && !status) return <span className="text-sm text-muted">(checking...)</span>;
-
-  const map: Record<IndexStatus['status'], { color: string; label: string }> = {
-    ready: { color: 'var(--success)', label: 'Ready' },
-    indexing: { color: 'var(--warning, #e8a838)', label: 'Indexing...' },
-    error: { color: 'var(--error)', label: 'Error' },
-  };
-
-  const info = status ? map[status] : null;
-  if (!info) return null;
-
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 500, color: info.color }}>
-      <span style={{
-        width: 7,
-        height: 7,
-        borderRadius: '50%',
-        backgroundColor: info.color,
-        display: 'inline-block',
-        animation: status === 'indexing' ? 'search-index-pulse 1.5s infinite' : undefined,
-      }} />
-      {info.label}
-    </span>
-  );
-}
-
-function StoreStatsCard({ label, stats }: { label: string; stats: StoreStats }) {
-  return (
-    <div style={{ minWidth: 140 }}>
-      <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 12, lineHeight: 1.8, color: 'var(--text-muted)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-          <span>Documents</span>
-          <span style={{ fontVariantNumeric: 'tabular-nums' }}>{stats.totalIndexed}</span>
-        </div>
-      </div>
-    </div>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

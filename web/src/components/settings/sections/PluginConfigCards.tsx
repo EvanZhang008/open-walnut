@@ -1,16 +1,22 @@
 /**
- * Data-driven plugin config forms for Settings → Integrations.
+ * Data-driven plugin config fields for Settings: Plugins.
  *
- * Fetches /api/integrations/settings (every discovered plugin — loaded or
- * skipped for missing required config) and renders a form per plugin from its
- * manifest configSchema + uiHints. Plugins with missing required fields get an
- * attention banner listing exactly what to fill in and where to find it.
+ * Fetches /api/integrations/settings (every discovered plugin, loaded or
+ * skipped for missing required config) and renders one plugin's fields from its
+ * manifest configSchema + uiHints as INDENTED ROWS of the plugin's own group
+ * (`bare`), or as a group of its own otherwise. Plugins with missing required
+ * fields get a warning row naming exactly what to fill in.
  */
-import { useState, useEffect, useCallback, Fragment } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import type { Config } from '@open-walnut/core';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
+import { couldntSave } from '../inputs/useOptimisticSetting';
+import { saveErrorMessage } from '../settings-pane-context';
 import {
   fieldKindFor,
+  fieldOwnerFor,
   listPlaceholder,
   listTextFor,
   valueForSave,
@@ -44,9 +50,9 @@ interface Props {
    */
   onlyIds?: string[];
   /**
-   * Render the fields WITHOUT the collapsible `<details>` shell. The Plugins section
-   * already shows the plugin's name, its status badge and an expand control on the row
-   * above, so the shell would repeat all three.
+   * Render the fields as indented rows WITHOUT a group of their own. The Plugins section
+   * already shows the plugin's name, its status tag and Configure on the row above, and
+   * the fields continue that row's group (no nested box).
    */
   bare?: boolean;
 }
@@ -75,7 +81,7 @@ function wholeIfInteger(schema: FieldSchema | undefined, value: unknown): unknow
  *     the wire), so it is not this filter that protects those.
  *
  * `valueForSave` runs BEFORE the empty test, and that order is the whole point: it turns an emptied
- * textarea into `[]`, which is a VALUE and survives, where the old order dropped the key entirely — the
+ * textarea into `[]`, which is a VALUE and survives, where the old order dropped the key entirely; the
  * server then fell back to the manifest default and the list the user had just emptied came back after
  * a refresh, looking exactly like a save that had silently failed.
  */
@@ -91,17 +97,17 @@ export function pluginSavePayload(
   );
 }
 
-/** Render help text with clickable http(s) links. */
+/** Help text with clickable http(s) links (inline: it sits in the row's help line). */
 function HelpText({ text }: { text: string }) {
   const parts = text.split(/(https?:\/\/[^\s,)]+)/g);
   return (
-    <p className="text-xs text-muted" style={{ marginTop: 2 }}>
+    <>
       {parts.map((part, i) =>
         /^https?:\/\//.test(part)
           ? <a key={i} href={part} target="_blank" rel="noreferrer">{part}</a>
           : <Fragment key={i}>{part}</Fragment>
       )}
-    </p>
+    </>
   );
 }
 
@@ -109,7 +115,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
   const [plugins, setPlugins] = useState<PluginSettingsMeta[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [saving, setSaving] = useState<string | null>(null);
-  const [savedId, setSavedId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<{ id: string; message: string } | null>(null);
 
   // `onlyIds` is joined into the dep key so switching which row is expanded refetches
   // instead of showing the previous plugin's fields.
@@ -142,15 +148,26 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
     return () => window.removeEventListener(PLUGINS_CHANGED_EVENT, refresh);
   }, [refresh]);
 
+  // Fields the user edited since the last save, per plugin. Only those (plus
+  // seeded values config does not hold yet) are sent: the draft also holds every
+  // field as first loaded, and re-sending one that changed elsewhere meanwhile
+  // (a calendar hidden from Calendar Accounts) would put its old value back.
+  const touched = useRef<Record<string, Set<string>>>({});
   const setField = (pluginId: string, key: string, value: unknown) => {
+    (touched.current[pluginId] ??= new Set()).add(key);
     setDrafts(d => ({ ...d, [pluginId]: { ...d[pluginId], [key]: value } }));
   };
 
   const savePlugin = async (plugin: PluginSettingsMeta) => {
     const draft = drafts[plugin.id] ?? {};
     const schemas = plugin.configSchema?.properties ?? {};
-    const cleaned = pluginSavePayload(draft, schemas);
+    const edited = touched.current[plugin.id] ?? new Set<string>();
+    const stored = (config.plugins?.[plugin.id] ?? {}) as Record<string, unknown>;
+    const cleaned = Object.fromEntries(
+      Object.entries(pluginSavePayload(draft, schemas)).filter(([k]) => edited.has(k) || stored[k] === undefined),
+    );
     setSaving(plugin.id);
+    setSaveError(null);
     try {
       await onSave({
         plugins: {
@@ -158,11 +175,13 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
           [plugin.id]: { ...(config.plugins?.[plugin.id] ?? {}), ...cleaned, enabled: true },
         },
       } as Partial<Config>);
-      setSavedId(plugin.id);
-      setTimeout(() => setSavedId(null), 2500);
-      // Server soft-reloads the plugin on CONFIG_CHANGED (async) — poll a couple
+      for (const k of Object.keys(cleaned)) edited.delete(k);
+      // Server soft-reloads the plugin on CONFIG_CHANGED (async); poll a couple
       // of echoes so the "needs setup" badge flips to active without a reload.
       emitPluginsChanged([1200, 3500]);
+    } catch (err) {
+      // The page-wrapped onSave already shows `Not saved`; the row says why, until the next Save.
+      setSaveError({ id: plugin.id, message: saveErrorMessage(err) });
     } finally {
       setSaving(null);
     }
@@ -178,118 +197,152 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
         const draft = drafts[plugin.id] ?? {};
         const needsConfig = plugin.status === 'needs-config';
         const missingLabels = plugin.missing.map(f => plugin.uiHints?.[f]?.label ?? f);
+        const requiredTag = (key: string) => (required.has(key) ? <> <SettingsTag>Required</SettingsTag></> : null);
 
-        const body = (
-            <div className="settings-collapsible-body">
-              {!bare && plugin.description && (
-                <p className="text-xs text-muted" style={{ marginTop: 0 }}>{plugin.description}</p>
-              )}
-              {needsConfig && (
-                <p className="text-xs" style={{ color: 'var(--priority-immediate)', marginTop: 4 }}>
-                  Not active yet — fill in {missingLabels.join(', ')} below and save.
-                </p>
-              )}
-              {Object.entries(props).map(([key, schema]) => {
-                const hint = plugin.uiHints?.[key];
-                const label = hint?.label ?? key;
-                const isMissing = plugin.missing.includes(key);
-                const value = draft[key];
-                const fieldId = `plugin-${plugin.id}-${key}`;
+        const rows = (
+          <>
+            {needsConfig && (
+              <SettingsRow
+                indent
+                state="warning"
+                label="Not active yet"
+                help={`Fill in ${missingLabels.join(', ')} and save.`}
+              />
+            )}
+            {Object.entries(props).map(([key, schema]) => {
+              const hint = plugin.uiHints?.[key];
+              const label = hint?.label ?? key;
+              const isMissing = plugin.missing.includes(key);
+              const value = draft[key];
+              const fieldId = `plugin-${plugin.id}-${key}`;
+              const help = hint?.help ? <HelpText text={hint.help} /> : undefined;
 
-                const kind = fieldKindFor(schema);
+              const kind = fieldKindFor(schema);
+              // Owned by another pane: one link row in place of its keys (N3-04).
+              const owner = fieldOwnerFor(plugin.id, key);
+              if (owner) {
+                if (owner.keys.find((k) => k in props) !== key) return null;
+                return (
+                  <SettingsRow
+                    key={`owner-${owner.pane}`}
+                    indent
+                    className="plugin-config-owned"
+                    data-testid={`plugin-config-owned-${plugin.id}`}
+                    label={owner.label}
+                    help={owner.help}
+                    control={<a className="settings-button settings-button-text" href={`#${owner.pane}`}>{owner.link}</a>}
+                  />
+                );
+              }
 
-                if (kind === 'boolean') {
-                  return (
-                    <div className="form-group" key={key}>
+              if (kind === 'boolean') {
+                return (
+                  <SettingsRow
+                    key={key}
+                    indent
+                    label={label}
+                    htmlFor={fieldId}
+                    help={help}
+                    control={
                       <ToggleSwitch
                         id={fieldId}
                         checked={(value as boolean) ?? (schema.default as boolean) ?? false}
                         onChange={v => setField(plugin.id, key, v)}
-                        label={label}
                       />
-                      {hint?.help && <HelpText text={hint.help} />}
-                    </div>
-                  );
-                }
-                if (kind === 'list') {
-                  return (
-                    <div className="form-group" key={key}>
-                      <label htmlFor={fieldId}>
-                        {label}
-                        {required.has(key) && <span style={{ color: 'var(--priority-immediate)' }}> *</span>}
-                      </label>
+                    }
+                  />
+                );
+              }
+              if (kind === 'list') {
+                return (
+                  <SettingsRow
+                    key={key}
+                    indent
+                    wide
+                    // A multi-line editor: label on top, editor across the group (N3-22).
+                    className="settings-row-stacked"
+                    label={<>{label}{requiredTag(key)}</>}
+                    htmlFor={fieldId}
+                    help={help}
+                    state={isMissing ? 'warning' : undefined}
+                    control={
                       <textarea
                         id={fieldId}
                         rows={3}
+                        className="settings-input settings-input--long settings-input--mono"
+                        aria-invalid={isMissing || undefined}
                         // The draft holds the RAW text once the user types; re-joining a parsed array
                         // on every keystroke would eat the separator as it was typed.
                         value={listTextFor(value)}
                         onChange={e => setField(plugin.id, key, e.target.value)}
                         placeholder={listPlaceholder(schema)}
-                        style={isMissing ? { borderColor: 'var(--priority-immediate)' } : undefined}
                       />
-                      {hint?.help && <HelpText text={hint.help} />}
-                    </div>
-                  );
-                }
-                if (kind === 'text' || kind === 'number' || kind === 'integer') {
-                  const numeric = kind !== 'text';
-                  return (
-                    <div className="form-group" key={key}>
-                      <label htmlFor={fieldId}>
-                        {label}
-                        {required.has(key) && <span style={{ color: 'var(--priority-immediate)' }}> *</span>}
-                      </label>
+                    }
+                  />
+                );
+              }
+              if (kind === 'text' || kind === 'number' || kind === 'integer') {
+                const numeric = kind !== 'text';
+                return (
+                  <SettingsRow
+                    key={key}
+                    indent
+                    wide={!numeric}
+                    label={<>{label}{requiredTag(key)}</>}
+                    htmlFor={fieldId}
+                    help={help}
+                    state={isMissing ? 'warning' : undefined}
+                    control={
                       <input
                         id={fieldId}
                         type={numeric ? 'number' : 'text'}
+                        className={`settings-input ${numeric ? 'settings-input--number' : 'settings-input--long settings-input--mono'}`}
+                        aria-invalid={isMissing || undefined}
                         step={kind === 'integer' ? 1 : undefined}
                         value={(value as string | number) ?? ''}
                         onChange={e => setField(plugin.id, key,
                           numeric
                             ? (e.target.value === '' ? '' : Number(e.target.value))
                             : e.target.value)}
-                        placeholder={schema.default !== undefined ? `default: ${schema.default}` : undefined}
-                        style={isMissing ? { borderColor: 'var(--priority-immediate)' } : undefined}
+                        placeholder={schema.default !== undefined ? `Default ${String(schema.default)}` : undefined}
                       />
-                      {hint?.help && <HelpText text={hint.help} />}
-                    </div>
-                  );
-                }
-                // object fields, and arrays of anything but strings: config.yaml-only for now
-                return null;
-              })}
-              <div className="form-group">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={saving === plugin.id}
+                    }
+                  />
+                );
+              }
+              // object fields, and arrays of anything but strings: config.yaml-only for now
+              return null;
+            })}
+            <SettingsRow
+              indent
+              label="Save these settings"
+              help={needsConfig ? 'The plugin turns on after saving.' : undefined}
+              error={saveError?.id === plugin.id ? couldntSave(saveError.message) : undefined}
+              control={
+                <SettingsButton
+                  variant="primary"
+                  busy={saving === plugin.id}
+                  busyLabel="Saving..."
+                  data-testid={`plugin-config-save-${plugin.id}`}
                   onClick={() => void savePlugin(plugin)}
                 >
-                  {saving === plugin.id ? 'Saving…' : savedId === plugin.id ? 'Saved ✓' : 'Save'}
-                </button>
-                {needsConfig && (
-                  <p className="text-xs text-muted" style={{ marginTop: 4 }}>
-                    The plugin activates automatically after saving.
-                  </p>
-                )}
-              </div>
-            </div>
+                  Save
+                </SettingsButton>
+              }
+            />
+          </>
         );
 
-        if (bare) return <div key={plugin.id}>{body}</div>;
+        if (bare) return <Fragment key={plugin.id}>{rows}</Fragment>;
         return (
-          <details key={plugin.id} className="settings-collapsible" open={needsConfig}>
-            <summary className="settings-collapsible-title">
-              {plugin.name}
-              {needsConfig && (
-                <span className="badge badge-immediate" style={{ marginLeft: 8 }}>
-                  needs setup
-                </span>
-              )}
-            </summary>
-            {body}
-          </details>
+          <SettingsGroup
+            key={plugin.id}
+            heading={plugin.name}
+            headingTrailing={needsConfig ? <SettingsTag tone="warning">Needs setup</SettingsTag> : undefined}
+            footer={plugin.description}
+          >
+            {rows}
+          </SettingsGroup>
         );
       })}
     </>

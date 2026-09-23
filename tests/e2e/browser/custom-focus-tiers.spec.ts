@@ -26,9 +26,11 @@ async function openHome(page: Page): Promise<void> {
   await page.locator('.todo-section-tabs').first().waitFor({ state: 'visible', timeout: 30_000 })
 }
 
-/** Navigate to Settings via the real sidebar link, then scroll to Focus Tiers. */
+/** Navigate to Settings via the real sidebar link, open the Tasks pane (Focus Tiers
+ *  renders under it), then scroll to Focus Tiers. */
 async function openFocusTiersSettings(page: Page): Promise<void> {
-  await page.locator('a[href="/settings"]').first().click()
+  await page.locator('a[href^="/settings"]').first().click()
+  await page.getByTestId('settings-nav-tasks').click()
   await page.locator('#focus-tiers').waitFor({ state: 'attached', timeout: 15_000 })
   await page.locator('#focus-tiers').scrollIntoViewIfNeeded()
 }
@@ -90,7 +92,7 @@ test('settings CRUD: create, rename, and the tier appears across the UI', async 
     // Duplicate label rejected inline (server 400 surfaces, no second row).
     await section.locator('.focus-tiers-add-row input').fill(stamp)
     await section.getByRole('button', { name: 'Add tier' }).click()
-    await expect(section.getByText(/Error:/i).first()).toBeVisible({ timeout: 30_000 })
+    await expect(section.getByRole('alert').filter({ hasText: /already exists/i }).first()).toBeVisible({ timeout: 30_000 })
     await expect(section.locator('.focus-tiers-row', { hasText: stamp })).toHaveCount(1)
 
     // The new tier shows up as a section tab on the home panel.

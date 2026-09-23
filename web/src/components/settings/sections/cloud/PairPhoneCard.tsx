@@ -3,19 +3,21 @@
  *
  * Deliberately targets `cloud`: the whole point of having just built a companion
  * is a phone that works off Wi-Fi, and a LAN QR scanned over cellular can never
- * connect. It refuses to mint until /api/devices actually reports a cloud target
- * — otherwise the button would hand back a LAN credential that looks right and
+ * connect. It refuses to mint until /api/devices actually reports a cloud target;
+ * otherwise the button would hand back a LAN credential that looks right and
  * silently fails on the road.
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { apiGet } from '@/api/client';
+import { fetchDevicesList } from './devices-list';
 import { log } from '@/utils/log';
+import { SettingsGroup, SettingsRow } from '../../SettingsSection';
+import { SettingsButton } from '../../inputs/SettingsButton';
 import { PairingQrBlock } from './PairingQrBlock';
 import { usePairDevice, type PairingTarget } from './usePairDevice';
 
 interface Props {
-  /** Companion hostname, for the copy — pairing itself reads the server's target. */
+  /** Companion hostname, for the copy; pairing itself reads the server's target. */
   domain?: string;
 }
 
@@ -26,7 +28,7 @@ export function PairPhoneCard({ domain }: Props) {
 
   const loadTargets = useCallback(async () => {
     try {
-      const res = await apiGet<{ targets?: PairingTarget[] }>('/api/devices');
+      const res = await fetchDevicesList<{ targets?: PairingTarget[] }>();
       setTargets(res.targets ?? []);
     } catch (err) {
       log.warn('settings', 'cloud pair card: targets fetch failed', { error: String(err) });
@@ -40,46 +42,53 @@ export function PairPhoneCard({ domain }: Props) {
 
   const cloudTarget = targets?.find((t) => t.kind === 'cloud');
 
+  const note = cloudTarget
+    ? <>Pairing against <code>{cloudTarget.origin.replace(/^https?:\/\//, '')}</code>; this QR works from anywhere, including cellular.</>
+    : targets === null
+      ? 'Checking which addresses are reachable...'
+      : `No cloud address is registered yet; give sync a moment, then reload, because pairing needs the companion${domain ? ` at ${domain}` : ''} to be reachable.`;
+
   return (
-    <div className="cloud-pair-card">
-      <h4 className="cloud-pair-title">Connect your phone</h4>
-      <p className="cloud-pair-note">
-        {cloudTarget
-          ? <>Pairing against <code>{cloudTarget.origin.replace(/^https?:\/\//, '')}</code> — this QR works from anywhere, including cellular.</>
-          : targets === null
-            ? 'Checking which addresses are reachable…'
-            : <>No cloud address is registered yet. Give sync a moment to settle, then reload — pairing needs the companion{domain ? ` at ${domain}` : ''} to be reachable.</>}
-      </p>
-
+    <SettingsGroup heading="Connect your phone" className="cloud-pair-card">
       {!created && (
-        <div className="devices-add-row">
-          <input
-            type="text"
-            value={name}
-            placeholder="Device name (e.g. iPhone)"
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                if (cloudTarget) void mint({ name, target: 'cloud' });
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={busy || !name.trim() || !cloudTarget}
-            onClick={() => void mint({ name, target: 'cloud' })}
-          >
-            {busy ? 'Pairing…' : 'Show pairing QR'}
-          </button>
-        </div>
+        <SettingsRow
+          label="Device name"
+          htmlFor="cloud-pair-name"
+          help={<span className="cloud-pair-note">{note}</span>}
+          error={error ?? undefined}
+          control={
+            <span className="settings-addons-inline devices-add-row">
+              <input
+                id="cloud-pair-name"
+                type="text"
+                className="settings-input settings-input--short"
+                value={name}
+                placeholder="Device name, for example iPhone"
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (cloudTarget) void mint({ name, target: 'cloud' });
+                  }
+                }}
+              />
+              <SettingsButton
+                variant="primary"
+                disabled={!name.trim() || !cloudTarget}
+                busy={busy}
+                busyLabel="Pairing..."
+                onClick={() => void mint({ name, target: 'cloud' })}
+              >
+                Show pairing QR
+              </SettingsButton>
+            </span>
+          }
+        />
       )}
-
-      {error && <p className="devices-error">{error}</p>}
+      {created && error && <p className="settings-row-error devices-error" role="alert">{error}</p>}
       {created && qrDataURL && (
         <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={dismiss} />
       )}
-    </div>
+    </SettingsGroup>
   );
 }

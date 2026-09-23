@@ -1,7 +1,7 @@
 /**
- * Settings → Cloud Companion: the wizard over /api/cloud-setup.
+ * Settings: Cloud Companion, the wizard over /api/cloud-setup.
  *
- * The job lives on the SERVER, not in this component — a provision takes 10+
+ * The job lives on the SERVER, not in this component: a provision takes 10+
  * minutes and must survive a tab reload, so every screen here is derived from
  * GET /job plus the replayable 'cloud-setup' SSE stream. Local state holds only
  * what the operator has typed but not yet submitted.
@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
+import { fetchDevicesList } from './cloud/devices-list';
 import {
   cancelJob,
   clearJob,
@@ -33,10 +34,12 @@ import {
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import { SectionCard } from '../inputs/SectionCard';
+import { SettingsGroup, SettingsRow, SettingsTag, SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
 import { CloudConfigureForm, type ConfigureValues } from './cloud/CloudConfigureForm';
 import { CloudManualPaste } from './cloud/CloudManualPaste';
 import { CloudProviderPicker } from './cloud/CloudProviderPicker';
-import { CloudSetupSteps } from './cloud/CloudSetupSteps';
+import { CloudSetupSteps, SetupLog } from './cloud/CloudSetupSteps';
 import { PairPhoneCard } from './cloud/PairPhoneCard';
 
 /** Wizard position while no job exists yet. A live job overrides all of these. */
@@ -117,7 +120,7 @@ export function CloudSection() {
     void (async () => {
       const [, targets] = await Promise.all([
         refreshJob(),
-        apiGet<{ targets?: { kind: string; origin: string }[] }>('/api/devices').catch(() => ({ targets: [] })),
+        fetchDevicesList<{ targets?: { kind: string; origin: string }[] }>().catch(() => ({ targets: [] })),
       ]);
       if (cancelled) return;
       setCloudOrigin(targets.targets?.find((t) => t.kind === 'cloud')?.origin ?? null);
@@ -165,7 +168,7 @@ export function CloudSection() {
       onError: () => {
         // The stream is best-effort; the bus event below is the belt.
         streamLiveRef.current = false;
-        log.warn('cloud-setup', 'progress stream dropped — relying on bus events');
+        log.warn('cloud-setup', 'progress stream dropped, relying on bus events');
       },
     }, lastEventIdRef.current);
     return () => {
@@ -290,39 +293,53 @@ export function CloudSection() {
             ? 'live'
             : stage;
 
+  const errorNotice = error ? <SettingsNotice kind="error" role="alert">{error}</SettingsNotice> : null;
+  const liveHead = job?.status === 'failed'
+    ? 'Setup stopped at a step that needs attention.'
+    : job?.status === 'cancelled'
+      ? 'Setup was cancelled.'
+      : job?.status === 'awaiting-input'
+        ? 'Setup is waiting on you.'
+        : 'Setting up your companion; you can close this tab and it keeps going.';
+
   return (
     <SectionCard
       id="cloud"
       title="Cloud Companion"
-      description="Your own cloud instance of Walnut — reachable from your phone anywhere, and the sync hub for your data. Walnut sets it up end to end."
+      description="A server you run in the cloud keeps sessions reachable from your phone while this Mac sleeps."
     >
       <div className="cloud-section">
-        {view === 'loading' && <p className="cloud-hint">Checking for an existing setup…</p>}
+        {view === 'loading' && (
+          <SettingsGroup>
+            <SettingsLoadingRow>Checking for an existing setup...</SettingsLoadingRow>
+          </SettingsGroup>
+        )}
 
         {view === 'hero' && (
-          <div className="cloud-hero">
-            <h4 className="cloud-hero-title">Set up your own cloud companion</h4>
-            <p className="cloud-hero-body">
-              Walnut provisions a small server, gets it a certificate, claims it, and wires your data
-              repo to it. Own domain or a free auto-address — both take one pass through this wizard.
-            </p>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => { setStage('picker'); void loadProviders(); }}
-            >
-              Get started
-            </button>
-            <p className="cloud-hint">
-              You can also ask your Personal AI: &ldquo;set up my cloud companion&rdquo;.
-            </p>
-          </div>
+          <SettingsGroup
+            heading="Set up"
+            className="cloud-hero"
+            footer={<>You can also tell Ask Walnut: &ldquo;set up my cloud companion&rdquo;.</>}
+          >
+            <SettingsRow
+              label="Your own cloud companion"
+              help="Walnut provisions a small server, gets it a certificate, claims it and wires your data repo to it."
+              control={
+                <SettingsButton variant="primary" onClick={() => { setStage('picker'); void loadProviders(); }}>
+                  Get started
+                </SettingsButton>
+              }
+            />
+          </SettingsGroup>
         )}
 
         {view === 'picker' && (
           <div className="cloud-picker">
-            <p className="cloud-hint">Where should the companion live?</p>
-            {providers === null && !error && <p className="cloud-hint">Checking your credentials…</p>}
+            {providers === null && !error && (
+              <SettingsGroup heading="Where should the companion live?">
+                <SettingsLoadingRow>Checking your credentials...</SettingsLoadingRow>
+              </SettingsGroup>
+            )}
             {providers !== null && (
               <CloudProviderPicker
                 providers={providers}
@@ -337,9 +354,9 @@ export function CloudSection() {
                 }}
               />
             )}
-            {error && <p className="devices-error">{error}</p>}
-            <div className="cloud-actions">
-              <button type="button" className="btn" onClick={() => setStage('hero')}>Back</button>
+            {errorNotice}
+            <div className="cloud-actions settings-addons-actions">
+              <SettingsButton onClick={() => setStage('hero')}>Back</SettingsButton>
             </div>
           </div>
         )}
@@ -359,16 +376,13 @@ export function CloudSection() {
 
         {view === 'live' && job && (
           <>
-            <p className="cloud-live-head">
-              {job.status === 'failed'
-                ? 'Setup stopped at a step that needs attention.'
-                : job.status === 'cancelled'
-                  ? 'Setup was cancelled.'
-                  : job.status === 'awaiting-input'
-                    ? 'Setup is waiting on you.'
-                    : 'Setting up your companion — you can close this tab, it keeps going.'}
-              {job.domain && <> Target: <code>{job.domain}</code>.</>}
-            </p>
+            <SettingsGroup>
+              <SettingsRow
+                className="cloud-live-head"
+                label={liveHead}
+                help={job.domain ? <code className="settings-addons-mono">{job.domain}</code> : undefined}
+              />
+            </SettingsGroup>
             {/* The paste path only makes sense while the box doesn't exist yet. */}
             {!job.ip && job.steps.provision?.status !== 'done' && job.awaitingInput?.kind === 'vm-ip' && (
               <CloudManualPaste job={job} />
@@ -384,59 +398,60 @@ export function CloudSection() {
               onCancel={() => void act('cancel', cancelJob)}
               onClear={() => void act('clear', clearJob)}
             />
-            {error && <p className="devices-error">{error}</p>}
+            {errorNotice}
           </>
         )}
 
         {view === 'done' && job && (
           <div className="cloud-done">
-            <div className="settings-banner settings-banner-success">
-              Your cloud companion is live{job.domain ? ` at ${job.domain}` : ''}.
-            </div>
-            <p className="cloud-done-body">
-              Data sync is wired to it and the first push succeeded. Pair a phone below, then reach
-              Walnut from anywhere.
-            </p>
+            <SettingsGroup>
+              <SettingsRow
+                label="Your cloud companion is live"
+                help={job.domain
+                  ? <><code className="settings-addons-mono">{job.domain}</code>; data sync is wired and the first push succeeded.</>
+                  : 'Data sync is wired and the first push succeeded.'}
+                control={<SettingsTag tone="success">Connected</SettingsTag>}
+              />
+            </SettingsGroup>
             <PairPhoneCard domain={job.domain} />
-            <details className="cloud-log">
-              <summary>Setup log ({logLines.length} lines)</summary>
-              <pre className="cloud-log-body">{logLines.slice(-60).join('\n')}</pre>
-            </details>
-            <div className="cloud-actions">
-              <button type="button" className="btn" disabled={busy} onClick={() => void act('clear', clearJob)}>
-                Dismiss
-              </button>
+            <SettingsGroup>
+              <SetupLog lines={logLines} />
+            </SettingsGroup>
+            <div className="cloud-actions settings-addons-actions">
+              <SettingsButton disabled={busy} onClick={() => void act('clear', clearJob)}>Dismiss</SettingsButton>
             </div>
-            {error && <p className="devices-error">{error}</p>}
+            {errorNotice}
           </div>
         )}
 
         {view === 'configured' && (
-          <div className="cloud-configured">
-            <div className="settings-banner settings-banner-success">
-              Cloud sync is configured — <code>{cloudOrigin?.replace(/^https?:\/\//, '')}</code>
-            </div>
-            <p className="cloud-hint">
-              Pair phones from the Devices section above; they&apos;ll point at this companion and work
-              off Wi-Fi. Replacing an existing companion isn&apos;t supported from this screen yet —
-              remove the cloud git remote first if you need to start over.
-            </p>
+          <SettingsGroup
+            className="cloud-configured"
+            footer="Replacing a companion isn't supported here yet; remove the cloud git remote first to start over."
+          >
+            <SettingsRow
+              label="Cloud sync"
+              help={<code className="settings-addons-mono">{cloudOrigin?.replace(/^https?:\/\//, '')}</code>}
+              control={<SettingsTag tone="success">Connected</SettingsTag>}
+            />
+            <SettingsRow
+              label="Phones"
+              help={<>Pair phones under Paired phones; they point at this companion and work off <span className="settings-nowrap">Wi-Fi</span>.</>}
+            />
             {terminalJob && (
-              <>
-                <p className="cloud-hint">
-                  There&apos;s also an old setup attempt on record that {job?.status === 'failed' ? 'failed' : 'was cancelled'}.
-                  Your companion is working, so you can clear it.
-                </p>
-                <div className="cloud-actions">
-                  <button type="button" className="btn" disabled={busy} onClick={() => void act('clear', clearJob)}>
+              <SettingsRow
+                label="Old setup attempt"
+                help={`An earlier attempt ${job?.status === 'failed' ? 'failed' : 'was cancelled'}; your companion works, so you can clear it.`}
+                control={
+                  <SettingsButton disabled={busy} onClick={() => void act('clear', clearJob)}>
                     Clear old attempt
-                  </button>
-                </div>
-              </>
+                  </SettingsButton>
+                }
+              />
             )}
-            {error && <p className="devices-error">{error}</p>}
-          </div>
+          </SettingsGroup>
         )}
+        {view === 'configured' && errorNotice}
       </div>
     </SectionCard>
   );

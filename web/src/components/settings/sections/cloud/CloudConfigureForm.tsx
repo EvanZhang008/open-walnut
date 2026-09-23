@@ -9,8 +9,11 @@
  * exposed here.
  */
 
-import { useState } from 'react';
 import type { CloudSetupDomainMode, CloudSetupProvider, CloudSetupProviderId } from '@/api/cloud-setup';
+import { SettingsGroup, SettingsRow, SettingsDisclosure, SettingsNotice } from '../../SettingsSection';
+import { SettingsButton } from '../../inputs/SettingsButton';
+import { SegmentedControl } from '../../inputs/SegmentedControl';
+import '@/styles/settings-sections-addons.css';
 
 /**
  * What each driver actually creates, per provider — NOT one generic list.
@@ -48,9 +51,9 @@ const CREATED_RESOURCES: Record<CloudSetupProviderId, string[]> = {
 /** Where the resources land, phrased by how this driver gets its credential. */
 function accountSentence(provider: CloudSetupProvider): string {
   if (provider.detect.needs === 'api-token') {
-    return `This is created in YOUR ${provider.label} project — the one your API token belongs to. You own it and you pay for it; Walnut only drives the setup.`;
+    return `This is created in your ${provider.label} project, the one your API token belongs to; you own it and you pay for it, Walnut only drives the setup.`;
   }
-  return `This is created in YOUR OWN cloud account — the one the CLI on this machine is signed in to. You own it and you pay for it; Walnut only drives the setup.`;
+  return `This is created in your own cloud account, the one the CLI on this machine is signed in to; you own it and you pay for it, Walnut only drives the setup.`;
 }
 
 export interface ConfigureValues {
@@ -78,7 +81,6 @@ interface Props {
 export function CloudConfigureForm({
   provider, values, onChange, onBack, onStart, onProfileChange, busy, error,
 }: Props) {
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const set = <K extends keyof ConfigureValues>(key: K, value: ConfigureValues[K]) =>
     onChange({ ...values, [key]: value });
 
@@ -96,170 +98,153 @@ export function CloudConfigureForm({
 
   return (
     <div className="cloud-configure">
-      <p className="cloud-configure-provider">
-        Setting up on <strong>{provider.label}</strong> — {provider.costHint}
-      </p>
-
-      {showProfilePicker && (
-        <label className="cloud-field cloud-profile-field">
-          <span className="cloud-field-label">AWS profile</span>
-          <select
-            value={values.profile}
-            aria-label="AWS profile"
-            disabled={busy}
-            onChange={(e) => onProfileChange(e.target.value)}
-          >
-            <option value="">Default profile</option>
-            {profiles.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-          <span className="cloud-field-note">
-            {provider.detect.available
+      <SettingsGroup>
+        <SettingsRow
+          className="cloud-configure-provider"
+          label={`Setting up on ${provider.label}`}
+          help={provider.costHint}
+        />
+        {showProfilePicker && (
+          <SettingsRow
+            className="cloud-profile-field"
+            label="AWS profile"
+            htmlFor="cloud-aws-profile"
+            help={provider.detect.available
               ? provider.detect.detail
-              : 'Pick the account to deploy into — the box is created there and billed there.'}
-          </span>
-        </label>
-      )}
-
-      {credsNotReady && (
-        <p className="cloud-configure-warn">{provider.detect.detail}</p>
-      )}
-
-      {provider.canProvision && resources.length > 0 && (
-        <section className="cloud-whathappens">
-          <h4 className="cloud-whathappens-title">What will happen</h4>
-          <ul className="cloud-whathappens-list">
-            {resources.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-          <p className="cloud-whathappens-cost">
-            Estimated cost: <strong>{provider.costHint}</strong>. {accountSentence(provider)}
-          </p>
-        </section>
-      )}
-
-      <fieldset className="cloud-fieldset">
-        <legend>Address</legend>
-
-        <label className="cloud-radio">
-          <input
-            type="radio"
-            name="cloud-domain-mode"
-            checked={values.domainMode === 'own-domain'}
-            onChange={() => set('domainMode', 'own-domain')}
-          />
-          <span>
-            <span className="cloud-radio-label">Own domain (recommended)</span>
-            <span className="cloud-radio-note">
-              A hostname you control, e.g. <code>walnut.example.com</code>. You&apos;ll add one A
-              record during setup.
-            </span>
-          </span>
-        </label>
-
-        {values.domainMode === 'own-domain' && (
-          <input
-            type="text"
-            className="cloud-domain-input"
-            value={values.domain}
-            placeholder="walnut.example.com"
-            aria-label="Domain"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            onChange={(e) => set('domain', e.target.value.trim())}
+              : 'The account to deploy into; the box is created and billed there.'}
+            control={
+              <select
+                id="cloud-aws-profile"
+                className="settings-select"
+                value={values.profile}
+                aria-label="AWS profile"
+                disabled={busy}
+                onChange={(e) => onProfileChange(e.target.value)}
+              >
+                <option value="">Default profile</option>
+                {profiles.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            }
           />
         )}
+      </SettingsGroup>
 
-        <label className="cloud-radio">
-          <input
-            type="radio"
-            name="cloud-domain-mode"
-            checked={values.domainMode === 'sslip'}
-            onChange={() => set('domainMode', 'sslip')}
+      {credsNotReady && <SettingsNotice kind="warn">{provider.detect.detail}</SettingsNotice>}
+
+      {provider.canProvision && resources.length > 0 && (
+        <SettingsGroup heading="What will happen" className="cloud-whathappens">
+          {resources.map((item) => (
+            <SettingsRow key={item} label={item} />
+          ))}
+          <SettingsRow
+            className="cloud-whathappens-cost"
+            label={`Estimated cost: ${provider.costHint}`}
+            help={accountSentence(provider)}
           />
-          <span>
-            <span className="cloud-radio-label">Free auto-address (sslip.io)</span>
-            <span className="cloud-radio-note">
-              Start in 5 minutes with no registrar — the box serves itself at
-              <code>&lt;dashed-ip&gt;.sslip.io</code>. For long-term use we recommend your own
-              domain: the address changes if the IP ever does, and because sslip.io shares one
-              set of Let&apos;s Encrypt rate limits across every user worldwide, the first
-              certificate can occasionally take a while to issue.
-            </span>
-          </span>
-        </label>
-      </fieldset>
+        </SettingsGroup>
+      )}
 
-      {needsToken && (
-        <label className="cloud-field">
-          <span className="cloud-field-label">{provider.label} API token</span>
-          <input
-            type="password"
-            value={values.credentials}
-            placeholder="Pasted token — kept in memory, never written to disk"
-            aria-label="Provider API token"
-            autoComplete="off"
-            onChange={(e) => set('credentials', e.target.value)}
+      <SettingsGroup heading="Address" className="cloud-fieldset">
+        <SettingsRow
+          label="Address"
+          control={
+            <SegmentedControl
+              aria-label="Address"
+              name="cloud-domain-mode"
+              value={values.domainMode}
+              onChange={(v) => set('domainMode', v)}
+              options={[
+                { value: 'own-domain', label: 'Own domain' },
+                { value: 'sslip', label: 'Free auto-address' },
+              ]}
+            />
+          }
+          help={values.domainMode === 'own-domain'
+            ? 'Recommended: a hostname you control, with one A record added during setup.'
+            : 'Starts in 5 minutes with no registrar at <dashed-ip>.sslip.io; the address changes if the IP does.'}
+        />
+        {values.domainMode === 'own-domain' && (
+          <SettingsRow
+            label="Domain"
+            htmlFor="cloud-domain"
+            indent
+            wide
+            error={domainMissing ? 'Enter a domain, or switch to the free auto-address.' : undefined}
+            control={
+              <input
+                id="cloud-domain"
+                type="text"
+                className="cloud-domain-input settings-input settings-input--long settings-input--mono"
+                value={values.domain}
+                placeholder="walnut.example.com"
+                aria-label="Domain"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                onChange={(e) => set('domain', e.target.value.trim())}
+              />
+            }
           />
-        </label>
-      )}
-
-      {provider.canProvision && (
-        <details className="cloud-advanced" open={advancedOpen} onToggle={(e) => setAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}>
-          <summary>Placement (optional)</summary>
-          <div className="cloud-advanced-body">
-            <label className="cloud-field">
-              <span className="cloud-field-label">Region</span>
+        )}
+        {needsToken && (
+          <SettingsRow
+            label={`${provider.label} API token`}
+            htmlFor="cloud-api-token"
+            help="Kept in memory, never written to disk."
+            control={
               <input
-                type="text"
-                value={values.region}
-                placeholder="Leave blank to use your CLI default"
-                aria-label="Region"
-                onChange={(e) => set('region', e.target.value.trim())}
+                id="cloud-api-token"
+                type="password"
+                className="settings-input settings-input--short settings-input--mono"
+                value={values.credentials}
+                aria-label="Provider API token"
+                autoComplete="off"
+                onChange={(e) => set('credentials', e.target.value)}
               />
-            </label>
-            <label className="cloud-field">
-              <span className="cloud-field-label">Instance size</span>
-              <input
-                type="text"
-                value={values.instanceType}
-                placeholder="Leave blank for the recommended size"
-                aria-label="Instance size"
-                onChange={(e) => set('instanceType', e.target.value.trim())}
-              />
-            </label>
-          </div>
-        </details>
-      )}
+            }
+          />
+        )}
+        {provider.canProvision && (
+          <SettingsDisclosure id="cloud-placement" label="Placement" summary="Optional">
+            <SettingsRow
+              label="Region"
+              htmlFor="cloud-region"
+              control={
+                <input id="cloud-region" type="text" className="settings-input settings-input--short"
+                  value={values.region} placeholder="Your CLI default" aria-label="Region"
+                  onChange={(e) => set('region', e.target.value.trim())} />
+              }
+            />
+            <SettingsRow
+              label="Instance size"
+              htmlFor="cloud-instance-size"
+              control={
+                <input id="cloud-instance-size" type="text" className="settings-input settings-input--short"
+                  value={values.instanceType} placeholder="Recommended size" aria-label="Instance size"
+                  onChange={(e) => set('instanceType', e.target.value.trim())} />
+              }
+            />
+          </SettingsDisclosure>
+        )}
+        {!provider.canProvision && (
+          <SettingsRow
+            className="cloud-configure-note"
+            label="Paste a first-boot script"
+            help="Walnut writes the script for your VM, then watches for the box to come up and claims it."
+          />
+        )}
+      </SettingsGroup>
 
-      {!provider.canProvision && (
-        <p className="cloud-configure-note">
-          Walnut will generate the first-boot script for you to paste into your VM, then watch for
-          the box to come up and claim it automatically.
-        </p>
-      )}
+      {error && <SettingsNotice kind="error" role="alert">{error}</SettingsNotice>}
 
-      {error && <p className="devices-error">{error}</p>}
-
-      <div className="cloud-actions">
-        <button type="button" className="btn" onClick={onBack} disabled={busy}>
-          Back
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={busy || domainMissing}
-          onClick={onStart}
-        >
-          {busy ? 'Starting…' : provider.canProvision ? 'Start setup' : 'Generate the script'}
-        </button>
+      <div className="cloud-actions settings-addons-actions">
+        <SettingsButton onClick={onBack} disabled={busy}>Back</SettingsButton>
+        <SettingsButton variant="primary" disabled={domainMissing} busy={busy} busyLabel="Starting..." onClick={onStart}>
+          {provider.canProvision ? 'Start setup' : 'Generate the script'}
+        </SettingsButton>
       </div>
-      {domainMissing && (
-        <p className="cloud-validation">Enter a domain, or switch to the free auto-address.</p>
-      )}
     </div>
   );
 }

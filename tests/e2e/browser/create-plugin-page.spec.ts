@@ -41,8 +41,10 @@ async function openSettings(page: Page): Promise<void> {
   await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
 }
 
-test('the Plugins section links to the page, which walks the author through to the store', async ({ page, context }) => {
-  await context.grantPermissions(['clipboard-write', 'clipboard-read'])
+test('the Plugins section links to the page, which walks the author through to the store', async ({ page, context, browserName }) => {
+  // WebKit has no clipboard permissions to grant; there the copy is checked by its label only.
+  const canReadClipboard = browserName === 'chromium'
+  if (canReadClipboard) await context.grantPermissions(['clipboard-write', 'clipboard-read'])
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
@@ -64,8 +66,10 @@ test('the Plugins section links to the page, which walks the author through to t
     .toContainText('npx @open-walnut/plugin-cli new my-plugin --dev')
   await page.getByTestId('create-plugin-copy').click()
   await expect(page.getByTestId('create-plugin-copy')).toHaveText('Copied ✓')
-  expect(await page.evaluate(() => navigator.clipboard.readText()))
-    .toBe('npx @open-walnut/plugin-cli new my-plugin --dev')
+  if (canReadClipboard) {
+    expect(await page.evaluate(() => navigator.clipboard.readText()))
+      .toBe('npx @open-walnut/plugin-cli new my-plugin --dev')
+  }
 
   // Plugin-free install → the live panel waits rather than showing an empty list.
   await expect(page.getByTestId('create-plugin-waiting')).toBeVisible()

@@ -1,13 +1,19 @@
 /**
- * Settings → Calendar — external calendars (EventKit).
+ * Settings: Calendar Accounts, external calendars (EventKit).
  *
- * Shows the source status (with the TCC permission hint when denied), a
- * per-calendar visibility list grouped by account (this is where the user's
- * Google/iCloud calendars appear — added in macOS System Settings, not here),
- * and a refresh-now button.
+ * Master switch, a `Cached events` row with Refresh now, then one checklist
+ * group per account (accounts are added in macOS System Settings, not here).
+ * Every visibility write goes through ONE queue with at most one request in
+ * flight; quick successive checks resend the latest full hidden list.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
+import { SettingsGroup, SettingsRow, SettingsNotice, SettingsTag, SettingsLoadingRow } from '../SettingsSection';
+import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { useOptimisticSetting, couldntSave } from '../inputs/useOptimisticSetting';
+import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
 import { PermissionFixDialog } from '@/components/common/PermissionFixDialog';
 import { getPermissions, type PermissionsReport } from '@/api/permissions';
 import {
@@ -17,21 +23,39 @@ import {
   type CalendarInfo,
   type CalendarSourceStatus,
 } from '@/api/calendar';
+import {
+  LatestWriteQueue,
+  calendarDisplayName,
+  formatLastRefreshed,
+  hiddenAfterBulk,
+  hiddenAfterToggle,
+  shownCount,
+} from './addons-format';
+import '@/styles/settings-sections-addons.css';
+
+/** Row error for one calendar (`cal:<id>`) or one account (`acct:<name>`). */
+interface WriteError { key: string; message: string }
 
 export function CalendarSection() {
   const [status, setStatus] = useState<CalendarSourceStatus | null>(null);
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  // Local target of the hidden list while writes are queued (null = server truth).
+  const [target, setTarget] = useState<Set<string> | null>(null);
+  const [writeError, setWriteError] = useState<WriteError | null>(null);
+  const lastKey = useRef('');
+  const { notifySaved, notifySaveFailed } = useSettingsSaved();
   // Permission Doctor handoff: when the source is permission-denied we fetch
-  // the live permission report and open the guided fix dialog instead of
-  // leaving the user with a static "go find System Settings" sentence.
+  // the live permission report and open the guided fix dialog.
   const [fixReport, setFixReport] = useState<PermissionsReport | null>(null);
 
   const openFix = async () => {
     try {
       setFixReport(await getPermissions(true));
     } catch {
-      /* fall back to the static hint text already on screen */
+      /* the notice already names the fix */
     }
   };
 
@@ -40,8 +64,9 @@ export function CalendarSection() {
       const res = await listCalendarSources();
       setStatus(res.sources[0] ?? null);
       setCalendars(res.calendars);
-    } catch {
-      /* section renders the unavailable state */
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(saveErrorMessage(err));
     }
   }, []);
 
@@ -49,34 +74,66 @@ export function CalendarSection() {
     load();
   }, [load]);
 
-  const setEnabled = async (enabled: boolean) => {
-    setBusy(true);
-    try {
-      await updateCalendarSource({ enabled });
+  const enabled = useOptimisticSetting(
+    status?.enabled ?? false,
+    async (next: boolean) => {
+      await updateCalendarSource({ enabled: next });
       await load();
-    } finally {
-      setBusy(false);
-    }
+    },
+    { rowKey: 'calendar-enabled' },
+  );
+
+  const allIds = useMemo(() => calendars.map((c) => c.id), [calendars]);
+  const serverHidden = useMemo(() => new Set(calendars.filter((c) => c.hidden).map((c) => c.id)), [calendars]);
+  const hidden = target ?? serverHidden;
+
+  const queueRef = useRef<LatestWriteQueue<string[]> | null>(null);
+  if (!queueRef.current) {
+    queueRef.current = new LatestWriteQueue<string[]>(
+      (list) => updateCalendarSource({ hidden_calendar_ids: list, visible_calendar_ids: null }),
+      (result) => {
+        if (result.ok) {
+          const done = new Set(result.value);
+          setCalendars((prev) => prev.map((c) => ({ ...c, hidden: done.has(c.id) })));
+          setTarget(null);
+          setWriteError(null);
+          notifySavedRef.current();
+          return;
+        }
+        const message = saveErrorMessage(result.error);
+        setTarget(null);
+        setWriteError({ key: lastKey.current, message });
+        notifyFailedRef.current(message);
+        load();
+      },
+    );
+  }
+  const notifySavedRef = useRef(notifySaved);
+  notifySavedRef.current = notifySaved;
+  const notifyFailedRef = useRef(notifySaveFailed);
+  notifyFailedRef.current = notifySaveFailed;
+
+  const write = (key: string, list: string[]) => {
+    lastKey.current = key;
+    if (writeError?.key === key) setWriteError(null);
+    setTarget(new Set(list));
+    queueRef.current?.push(list);
   };
 
-  const toggleCalendar = async (id: string, hidden: boolean) => {
-    const nextHidden = calendars.filter((c) => (c.id === id ? hidden : c.hidden)).map((c) => c.id);
-    // optimistic
-    setCalendars((prev) => prev.map((c) => (c.id === id ? { ...c, hidden } : c)));
-    try {
-      await updateCalendarSource({ hidden_calendar_ids: nextHidden, visible_calendar_ids: null });
-    } catch {
-      load();
-    }
-  };
+  const toggleCalendar = (id: string, hide: boolean) => write(`cal:${id}`, hiddenAfterToggle(allIds, hidden, id, hide));
+  const bulk = (account: string, ids: string[], hide: boolean) =>
+    write(`acct:${account}`, hiddenAfterBulk(allIds, hidden, ids, hide));
 
   const refresh = async () => {
-    setBusy(true);
+    setRefreshing(true);
+    setRefreshError(null);
     try {
       await refreshCalendar();
       await load();
+    } catch (err) {
+      setRefreshError(saveErrorMessage(err));
     } finally {
-      setBusy(false);
+      setRefreshing(false);
     }
   };
 
@@ -86,78 +143,152 @@ export function CalendarSection() {
     if (list) list.push(c);
     else byAccount.set(c.account, [c]);
   }
+  const on = enabled.value;
+  const denied = !!status && !status.available && status.reason === 'permission-denied';
+
+  const rowError = (key: string) => (writeError?.key === key ? couldntSave(writeError.message) : undefined);
 
   return (
-    <SectionCard
-      id="calendar"
-      title="Calendar Accounts"
-      description="Show events from the Mac's calendars (iCloud, Google, Exchange — every account added in macOS System Settings → Internet Accounts). Walnut edits write back through macOS; no separate login needed."
-    >
+    <SectionCard id="calendar" title="Calendar Accounts">
       {!status ? (
-        <p className="settings-muted">Loading calendar status…</p>
+        <SettingsGroup>
+          {loadError ? (
+            <SettingsNotice
+              kind="error"
+              role="alert"
+              action={<SettingsButton variant="text" onClick={load}>Retry</SettingsButton>}
+            >
+              {`Couldn't load calendars: ${loadError}`}
+            </SettingsNotice>
+          ) : (
+            <SettingsLoadingRow />
+          )}
+        </SettingsGroup>
       ) : (
         <>
-          <label className="settings-toggle-row">
-            <input
-              type="checkbox"
-              checked={status.enabled}
-              disabled={busy}
-              onChange={(e) => setEnabled(e.target.checked)}
+          <SettingsGroup>
+            <SettingsRow
+              label="Show external calendar events"
+              htmlFor="calendar-enabled"
+              help="Events from every account added in macOS Internet Accounts."
+              error={enabled.error ?? undefined}
+              control={
+                <ToggleSwitch
+                  id="calendar-enabled"
+                  checked={on}
+                  busy={enabled.busy}
+                  onChange={enabled.set}
+                  data-testid="calendar-enabled-switch"
+                />
+              }
             />
-            <span>Show external calendar events</span>
-          </label>
+            {status.available && (
+              <SettingsRow
+                // Names what the line reports, so "Not refreshed yet" never
+                // sits under a "Last refreshed" label (N3-31).
+                label="Cached events"
+                help={refreshError ? `Refresh failed: ${refreshError}` : formatLastRefreshed(status.lastRefresh, status.eventCount)}
+                state={refreshError ? 'error' : undefined}
+                disabled={!on}
+                data-testid="calendar-last-refreshed"
+                control={
+                  <SettingsButton
+                    onClick={refresh}
+                    busy={refreshing}
+                    busyLabel="Refreshing..."
+                    disabled={!on}
+                    data-testid="calendar-refresh-now"
+                  >
+                    Refresh now
+                  </SettingsButton>
+                }
+              />
+            )}
+          </SettingsGroup>
 
-          {status.enabled && !status.available && (
-            <div className="settings-warning">
-              {status.reason === 'permission-denied' ? (
-                <>
-                  Calendar access is not granted.{' '}
-                  <button className="btn btn-sm" onClick={openFix}>
-                    Fix it…
-                  </button>
-                </>
-              ) : status.reason === 'cloud' ? (
-                <>macOS calendars aren't reachable from the cloud companion — open Walnut on the Mac to see them.</>
-              ) : (
-                <>{status.message ?? 'Calendar source unavailable.'}</>
-              )}
-            </div>
-          )}
-
-          {status.enabled && status.available && (
-            <>
-              <div className="settings-row-inline">
-                <button className="btn btn-sm" disabled={busy} onClick={refresh}>
-                  Refresh now
-                </button>
-                {status.lastRefresh && (
-                  <span className="settings-muted">
-                    Last refresh: {new Date(status.lastRefresh).toLocaleTimeString()} · {status.eventCount ?? 0} events cached
+          {!status.available && on && (
+            denied ? (
+              <SettingsNotice
+                kind="warn"
+                action={
+                  <span className="settings-addons-inline">
+                    <a className="settings-button settings-button-default" href="#permissions">
+                      <span className="settings-button-stack">
+                        <span className="settings-button-label">Open macOS Access</span>
+                      </span>
+                    </a>
+                    <SettingsButton onClick={openFix}>Fix it...</SettingsButton>
                   </span>
-                )}
-              </div>
-              {[...byAccount.entries()].map(([account, list]) => (
-                <div key={account} className="cal-settings-account">
-                  <div className="cal-settings-account-name">{account}</div>
-                  {list.map((c) => (
-                    <label key={c.id} className="settings-toggle-row cal-settings-cal-row">
-                      <input
-                        type="checkbox"
-                        checked={!c.hidden}
-                        onChange={(e) => toggleCalendar(c.id, !e.target.checked)}
-                      />
-                      <span className="cal-settings-dot" style={{ background: c.color }} />
-                      <span>{c.title}</span>
-                      {c.readonly && <span className="settings-muted"> (read-only)</span>}
-                    </label>
-                  ))}
-                </div>
-              ))}
-              <p className="settings-muted">
-                To connect another account (e.g. a second Google account), add it in macOS System Settings → Internet Accounts — its calendars appear here automatically.
-              </p>
-            </>
+                }
+              >
+                Walnut can't read calendars until macOS allows it.
+              </SettingsNotice>
+            ) : (
+              <SettingsNotice kind="warn">
+                {status.reason === 'cloud'
+                  ? "macOS calendars can't be reached from the cloud companion; open Walnut on the Mac to see them."
+                  : (status.message ?? 'Calendar source unavailable.')}
+              </SettingsNotice>
+            )
           )}
+
+          {status.available && calendars.length === 0 && (
+            <SettingsGroup>
+              <SettingsRow label="No calendars on this Mac yet." />
+            </SettingsGroup>
+          )}
+
+          {[...byAccount.entries()].map(([account, list]) => {
+            const ids = list.map((c) => c.id);
+            const acctKey = `acct:${account}`;
+            return (
+              <SettingsGroup
+                key={account}
+                className="settings-checklist"
+                disabled={!on}
+                data-testid="calendar-account-group"
+                heading={account}
+                headingTrailing={
+                  <span className="settings-addons-inline">
+                    {/* A bulk action that would change nothing is disabled (F31). */}
+                    <button type="button" className="settings-addons-link" onClick={() => bulk(account, ids, false)}
+                      disabled={ids.every((id) => !hidden.has(id))}>
+                      Show all
+                    </button>
+                    <button type="button" className="settings-addons-link" onClick={() => bulk(account, ids, true)}
+                      disabled={ids.every((id) => hidden.has(id))}>
+                      Hide all
+                    </button>
+                    <span className="settings-addons-muted settings-heading-count" data-testid="calendar-account-count">
+                      {shownCount(ids, hidden)}
+                    </span>
+                  </span>
+                }
+              >
+                {rowError(acctKey) && (
+                  <p className="settings-row-error" role="alert">{rowError(acctKey)}</p>
+                )}
+                {list.map((c) => {
+                  const display = calendarDisplayName(c.title);
+                  const err = rowError(`cal:${c.id}`);
+                  return (
+                    <Fragment key={c.id}>
+                      <SettingsCheckbox
+                        data-testid={`calendar-checkbox-${c.id}`}
+                        checked={!hidden.has(c.id)}
+                        onChange={(checked) => toggleCalendar(c.id, !checked)}
+                        title={display.untitled ? c.title || 'Untitled calendar' : c.title}
+                        leading={<span className="settings-addons-dot" style={{ background: c.color }} aria-hidden="true" />}
+                        label={display.name}
+                        trailing={c.readonly ? <SettingsTag>Read only</SettingsTag> : undefined}
+                      />
+                      {err && <p className="settings-row-error" role="alert">{err}</p>}
+                    </Fragment>
+                  );
+                })}
+              </SettingsGroup>
+            );
+          })}
         </>
       )}
       {fixReport && (() => {

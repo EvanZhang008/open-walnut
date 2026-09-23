@@ -17,9 +17,11 @@
  *     shared input a `disabled` prop.
  */
 import { useEffect, useState, type ReactNode } from 'react';
-import { SettingsRow } from '../SettingsSection';
+import { SettingsRow, SettingsTag } from '../SettingsSection';
+import { CodeText } from './code-text';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { NumberInput } from '../inputs/NumberInput';
+import { SegmentedControl } from '../inputs/SegmentedControl';
 import type {
   EngineSettingValue,
   EngineSettingView,
@@ -33,7 +35,7 @@ export function controlId(engine: string, key: string): string {
   return `engine-setting-${engine}-${key}`;
 }
 
-function fileLabel(files: EngineSettingsFileView[], id: string): string {
+export function fileLabel(files: EngineSettingsFileView[], id: string): string {
   return files.find((f) => f.id === id)?.label ?? id;
 }
 
@@ -82,7 +84,7 @@ export function settingWriteFileId(item: EngineSettingView): string {
   return item.writeTarget?.file ?? item.file;
 }
 
-interface ControlProps {
+export interface ControlProps {
   id: string;
   item: EngineSettingView;
   onSet: (key: string, value: EngineSettingValue) => void;
@@ -192,21 +194,21 @@ function SelectSettingControl({ id, item, onSet }: ControlProps) {
           onSet(item.key, next);
         }}
       >
-        {current === '' && <option value="">{item.defaultLabel ?? 'Default'}</option>}
+        {current === '' && <option value="">{item.defaultLabel ? optionLabel(item.defaultLabel) : 'Default'}</option>}
         {options.map((o) => (
-          <option key={o.value} value={o.value} title={o.help}>{o.label}</option>
+          <option key={o.value} value={o.value} title={o.help}>{optionLabel(o.label)}</option>
         ))}
         {/* A stored value outside the list is still the value in force, so the
             select lists it rather than silently showing something else. */}
         {!known && current !== '' && <option value={current}>{current}</option>}
-        {item.allowCustom && <option value={CUSTOM_OPTION}>Custom…</option>}
+        {item.allowCustom && <option value={CUSTOM_OPTION}>Custom...</option>}
       </select>
       {custom !== null && (
         <input
           type="text"
           className="engine-setting-custom"
           // Safe to steal focus: this input exists only because the user just
-          // picked "Custom…" in the select next to it.
+          // picked "Custom..." in the select next to it.
           autoFocus
           value={custom}
           placeholder={item.placeholder ?? 'custom value'}
@@ -262,7 +264,7 @@ function TriStateBooleanControl({ id, item, onSet, onReset }: ControlProps & { o
   );
 }
 
-function EngineSettingControl(props: ControlProps & { onReset: (key: string) => void }) {
+export function EngineSettingControl(props: ControlProps & { onReset: (key: string) => void }) {
   const { id, item, onSet } = props;
   switch (item.type) {
     case 'boolean':
@@ -291,9 +293,24 @@ export interface EngineSettingRowProps {
    * renders when absent; the Settings page passes none.
  */
   statusExtra?: ReactNode;
+  /**
+   * 'pane' = the Settings page look (one sentence of help, a source tag and a
+   * reserved Reset slot beside the control). Default keeps the popover's
+   * original layout, which the composer's popover and its specs rely on.
+   */
+  variant?: 'popover' | 'pane';
+  /** Pane only: a child row of a disclosure, inset like every child row (N12). */
+  indent?: boolean;
+  /** Pane only: the engine's display name, so a bare model label names its owner. */
+  engineLabel?: string;
 }
 
-export function EngineSettingRow({ engine, item, files, saving, onSet, onReset, statusExtra }: EngineSettingRowProps) {
+export function EngineSettingRow(props: EngineSettingRowProps) {
+  if (props.variant === 'pane') return <EnginePaneSettingRow {...props} />;
+  return <EngineSettingPopoverRow {...props} />;
+}
+
+function EngineSettingPopoverRow({ engine, item, files, saving, onSet, onReset, statusExtra }: EngineSettingRowProps) {
   const id = controlId(engine, item.key);
   // A file the server could not parse refuses every write; a live control on
   // such a row would only collect a 409. (A wrong-TYPE value keeps its control:
@@ -341,6 +358,210 @@ export function EngineSettingRow({ engine, item, files, saving, onSet, onReset, 
         </span>
       )}
       {item.invalid && <span className="engine-setting-invalid">{item.invalid}</span>}
+    </SettingsRow>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Settings pane look (variant="pane")
+// ---------------------------------------------------------------------------
+
+/**
+ * First sentence of a server help text: cut at the first `. ` that is outside
+ * backticks and not an abbreviation (`e.g. `, `i.e. `). The full text rides
+ * on the row's title.
+ */
+export function firstSentence(text: string): string {
+  let inCode = false;
+  for (let i = 0; i < text.length - 1; i++) {
+    const ch = text[i];
+    if (ch === '`') inCode = !inCode;
+    if (inCode || ch !== '.' || text[i + 1] !== ' ') continue;
+    const before = text.slice(Math.max(0, i - 3), i + 1).toLowerCase();
+    if (before === 'e.g.' || before === 'i.e.') continue;
+    return text.slice(0, i + 1);
+  }
+  return text;
+}
+
+export interface EngineSourceTag {
+  text: 'User' | 'Project' | 'Shared project' | 'Default' | 'Environment' | 'Older file';
+  title?: string;
+  tone: 'neutral' | 'warning';
+}
+
+/** Where the value in force comes from, as the short tag left of the control. */
+export function engineSourceTag(item: EngineSettingView, files: EngineSettingsFileView[]): EngineSourceTag {
+  if (item.envOverride) return { text: 'Environment', title: item.envOverride.name, tone: 'warning' };
+  if (item.overriddenBy) return { text: 'Shared project', title: item.overriddenBy.path, tone: 'warning' };
+  if (item.source === 'legacy') return { text: 'Older file', title: item.legacy?.path, tone: 'neutral' };
+  if (item.source === 'overlay') {
+    const file = files.find((f) => f.id === item.overlay?.file);
+    return { text: file?.readOnly ? 'Shared project' : 'Project', title: item.overlay?.path ?? file?.path, tone: 'neutral' };
+  }
+  if (item.source === 'file') {
+    const file = files.find((f) => f.id === item.file);
+    return { text: file?.scope === 'project' ? 'Project' : 'User', title: file?.path, tone: 'neutral' };
+  }
+  return { text: 'Default', title: item.defaultLabel ?? undefined, tone: 'neutral' };
+}
+
+/**
+ * A bare `Model` / `Default model` label says whose model it is (`Claude Code
+ * model`): the settings page never shows an unowned "model" row.
+ */
+export function paneSettingLabel(label: string, engineLabel: string | undefined): string {
+  return engineLabel && /^(default )?model$/i.test(label.trim()) ? `${engineLabel} model` : label;
+}
+
+/** A row whose change would not take effect: what wins over it, else null. */
+export function engineOverride(item: EngineSettingView): { code: string } | null {
+  if (item.envOverride) return { code: item.envOverride.name };
+  if (item.overriddenBy) return { code: item.overriddenBy.path };
+  return null;
+}
+
+/** "auto" -> "Auto": a word option reads in sentence case; ids (dashes, dots, digits) stay as sent (N12). */
+export function optionLabel(label: string): string {
+  return /^[a-z][a-z ]*$/.test(label) ? label.charAt(0).toUpperCase() + label.slice(1) : label;
+}
+
+/** A closed enum of up to 3 short words is a segmented control, not a menu (N12). */
+export function isSmallEnum(item: Pick<EngineSettingView, 'type' | 'options' | 'allowCustom'>): boolean {
+  const opts = item.options ?? [];
+  return item.type === 'select' && !item.allowCustom && opts.length >= 2 && opts.length <= 3
+    && opts.every((o) => o.label.length <= 12);
+}
+
+function PaneSegmentedSelect({ id, item, onSet }: ControlProps) {
+  const options = item.options ?? [];
+  const current = item.value === null ? '' : String(item.value);
+  // Unset: the segment the engine uses by default is the one shown, the tag says Default.
+  const effective = current || options.find((o) => o.value === String(item.default) || o.label === item.defaultLabel)?.value || '';
+  return (
+    <SegmentedControl<string>
+      id={id}
+      aria-label={item.label}
+      value={effective}
+      options={options.map((o) => ({ value: o.value, label: optionLabel(o.label), title: o.help }))}
+      onChange={(next) => { if (next !== current) onSet(item.key, next); }}
+    />
+  );
+}
+
+function PaneTriStateControl({ id, item, onSet, onReset }: ControlProps & { onReset: (key: string) => void }) {
+  const current = item.value === true ? 'true' : item.value === false ? 'false' : 'default';
+  const removable = settingRemovable(item);
+  return (
+    <SegmentedControl<'default' | 'true' | 'false'>
+      id={id}
+      aria-label={item.label}
+      value={current}
+      options={[
+        // "Auto": the tag beside it already says the value is the default (N3-06).
+        { value: 'default', label: 'Auto', title: item.defaultLabel ? `Default: ${item.defaultLabel}` : 'Default' },
+        { value: 'true', label: 'On' },
+        { value: 'false', label: 'Off' },
+      ]}
+      onChange={(next) => {
+        if (next === current) return;
+        if (next === 'default') { if (removable) onReset(item.key); return; }
+        onSet(item.key, next === 'true');
+      }}
+    />
+  );
+}
+
+/** Which control a pane row draws; the layout keys off it (N3-01). Pure. */
+export function paneControlKind(item: Pick<EngineSettingView, 'type' | 'default' | 'options' | 'allowCustom'>):
+  'switch' | 'segmented' | 'select' | 'number' | 'text' {
+  if (item.type === 'boolean') return item.default === null ? 'segmented' : 'switch';
+  if (item.type === 'number') return 'number';
+  if (item.type === 'select') return isSmallEnum(item) ? 'segmented' : 'select';
+  return 'text';
+}
+
+/** A free-text value that is code (a model id, a path) is mono; a language is prose (N3-07). Pure. */
+export function textIsCode(item: Pick<EngineSettingView, 'key' | 'label'>): boolean {
+  return !/language|locale|name|title/i.test(`${item.key} ${item.label}`);
+}
+
+function EnginePaneSettingRow({ engine, item, files, saving, onSet, onReset, statusExtra, engineLabel, indent }: EngineSettingRowProps) {
+  const id = controlId(engine, item.key);
+  const writeFile = settingWriteFileId(item);
+  const fileUnreadable = Boolean(files.find((f) => f.id === writeFile)?.error);
+  const override = engineOverride(item);
+  const writeTarget = settingWriteTargetLine(item, files);
+  const tag = engineSourceTag(item, files);
+  const removable = settingRemovable(item);
+  // Warnings outrank the plain help: an override first, then a foreign target.
+  // Commands, flags and paths in the engine's help are set in code (N28).
+  let help: ReactNode = <CodeText text={firstSentence(item.help)} />;
+  let state: 'warning' | undefined;
+  if (override) {
+    help = <>Overridden by <code>{override.code}</code>; changes here won&apos;t apply.</>;
+    state = 'warning';
+  } else if (item.invalid) {
+    help = item.invalid;
+    state = 'warning';
+  } else if (writeTarget) {
+    help = `${writeTarget}.`;
+  }
+  const triState = item.type === 'boolean' && item.default === null;
+  const control = triState
+    ? <PaneTriStateControl id={id} item={item} onSet={onSet} onReset={onReset} />
+    : isSmallEnum(item)
+      ? <PaneSegmentedSelect id={id} item={item} onSet={onSet} />
+      : <EngineSettingControl id={id} item={item} onSet={onSet} onReset={onReset} />;
+  // Every row shows its source, so the tags form one column (N3-06).
+  const kind = paneControlKind(item);
+  // An overridden row changes nothing: all of its controls are off, Reset too (N3-17).
+  const locked = saving || fileUnreadable || Boolean(override);
+  return (
+    <SettingsRow
+      className="engine-setting-row engine-setting-row-pane"
+      data-testid={`engine-setting-row-${item.key}`}
+      data-source={item.source}
+      data-write-target={writeFile}
+      data-control={kind}
+      data-mono={kind === 'text' ? String(textIsCode(item)) : undefined}
+      indent={indent}
+      // Free text is the only wide control: it alone wraps under a 600px group (N04).
+      wide={!['boolean', 'number', 'select'].includes(item.type)}
+      label={paneSettingLabel(item.label, engineLabel)}
+      htmlFor={item.type === 'boolean' && item.default !== null ? id : undefined}
+      help={<span className="engine-setting-help" title={item.help}>{help}</span>}
+      state={state}
+      disabled={override ? true : undefined}
+      control={
+        <span className="engine-pane-controls">
+          <span className="engine-pane-tag-slot">
+            <SettingsTag tone={tag.tone} title={tag.title}>
+              <span className="engine-setting-status" data-testid={`engine-setting-source-${item.key}`}>{tag.text}</span>
+            </SettingsTag>
+          </span>
+          <fieldset className="engine-setting-control" disabled={locked} aria-busy={saving || undefined}>
+            {control}
+          </fieldset>
+          <span className="engine-pane-reset-slot">
+            <button
+              type="button"
+              className="engine-setting-reset settings-button settings-button-text"
+              data-testid={removable ? `engine-setting-reset-${item.key}` : undefined}
+              data-visible={removable ? 'true' : 'false'}
+              tabIndex={removable && !locked ? 0 : -1}
+              aria-hidden={removable ? undefined : true}
+              disabled={!removable || locked}
+              title={`Remove ${item.key} from ${fileLabel(files, writeFile)} and use the default again`}
+              onClick={() => onReset(item.key)}
+            >
+              Reset
+            </button>
+          </span>
+        </span>
+      }
+    >
+      {statusExtra}
     </SettingsRow>
   );
 }

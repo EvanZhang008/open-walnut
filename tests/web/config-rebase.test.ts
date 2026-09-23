@@ -59,6 +59,21 @@ describe('rebaseOnto', () => {
     expect(rebaseOnto(partial, base, fresh)).toEqual(partial)
   })
 
+  it('merges two writes to one nested object field by field (token vs added model)', () => {
+    const base = cfg({ providers: { bedrock: { api: 'bedrock', bearer_token: 'old', models: ['a'] } } })
+    // The token save landed first; the add-model save was built from the same render.
+    const fresh = cfg({ providers: { bedrock: { api: 'bedrock', bearer_token: 'new', models: ['a'] } } })
+    const partial = { providers: { bedrock: { api: 'bedrock', bearer_token: 'old', models: ['a', 'b'] } } } as unknown as Partial<Config>
+    expect(rebaseOnto(partial, base, fresh)).toEqual({ providers: { bedrock: { api: 'bedrock', bearer_token: 'new', models: ['a', 'b'] } } })
+  })
+
+  it('a nested field the section dropped is deleted; one it re-sent unchanged keeps the fresh value', () => {
+    const base = cfg({ plugins: { calendar: { hidden_calendar_ids: ['x'], account: 'a', token: 't' } } })
+    const fresh = cfg({ plugins: { calendar: { hidden_calendar_ids: ['x', 'y'], account: 'a', token: 't' } } })
+    const partial = { plugins: { calendar: { hidden_calendar_ids: ['x'], account: 'b' } } } as unknown as Partial<Config>
+    expect(rebaseOnto(partial, base, fresh)).toEqual({ plugins: { calendar: { hidden_calendar_ids: ['x', 'y'], account: 'b' } } })
+  })
+
   it('leaves keys the partial does not name alone', () => {
     const base = cfg({ agent: { language: 'en' }, defaults: { engine: 'claude' } })
     const fresh = cfg({ agent: { language: 'en' }, defaults: { engine: 'codex' } })

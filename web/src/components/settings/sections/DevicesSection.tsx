@@ -1,11 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
+import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { SegmentedControl } from '../inputs/SegmentedControl';
+import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
+import { formatAbsoluteTime } from './addons-format';
 import { apiGet, apiDelete } from '@/api/client';
+import { fetchDevicesList } from './cloud/devices-list';
 import { log } from '@/utils/log';
 import { PairingQrBlock } from './cloud/PairingQrBlock';
+import { deviceNameForServer } from './device-name';
 import { usePairDevice, type PairingTarget, type PairTargetKind } from './cloud/usePairDevice';
 
-/** Self-reported hardware identity — absent until the phone checks in once. */
+import '@/styles/settings-sections-addons.css';
+
+/** Self-reported hardware identity, absent until the phone checks in once. */
 interface DeviceSelfInfo {
   model?: string;
   os?: string;
@@ -18,21 +28,32 @@ interface DeviceEntry {
   name: string;
   createdAt: string;
   lastUsedAt?: string;
-  /** What this credential actually is — not everything in the list is a phone. */
+  /** What this credential actually is: not everything in the list is a phone. */
   role?: 'phone' | 'simulator' | 'self';
   info?: DeviceSelfInfo;
 }
 
-/** "iPhone17,1 · iOS 26.1 · Walnut 1.0 (26)" — omits whatever wasn't reported. */
-function describeDevice(info?: DeviceSelfInfo): string | null {
+/**
+ * A raw hardware id (`iPhone18,2`) reads as its family (`iPhone`): the id means
+ * nothing to a person and a model table would go stale (F24).
+ */
+export function humanDeviceModel(model?: string): string | undefined {
+  if (!model) return undefined;
+  const m = /^(iPhone|iPad|iPod|Watch|Mac)\d+,\d+$/.exec(model.trim());
+  if (!m) return model;
+  return m[1] === 'Watch' ? 'Apple Watch' : m[1] === 'iPod' ? 'iPod touch' : m[1];
+}
+
+/** "iPhone, iOS 26.1, Walnut 1.0 (26)": omits whatever wasn't reported. */
+export function describeDevice(info?: DeviceSelfInfo): string | null {
   if (!info) return null;
-  const parts = [info.model, info.os, info.appVersion ? `Walnut ${info.appVersion}` : undefined]
+  const parts = [humanDeviceModel(info.model), info.os, info.appVersion ? `Walnut ${info.appVersion}` : undefined]
     .filter((p): p is string => Boolean(p));
-  return parts.length > 0 ? parts.join(' · ') : null;
+  return parts.length > 0 ? parts.join(', ') : null;
 }
 
 const ROLE_NOTE: Record<'simulator' | 'self', string> = {
-  self: 'This computer — used for cloud sync. Not a phone; revoking it breaks sync.',
+  self: 'This computer, used for cloud sync; removing it breaks sync.',
   simulator: 'iOS Simulator on this computer (development).',
 };
 
@@ -62,16 +83,20 @@ export function DevicesSection() {
   const [devices, setDevices] = useState<DeviceEntry[]>([]);
   const [cloudDevices, setCloudDevices] = useState<DeviceEntry[]>([]);
   const [targets, setTargets] = useState<PairingTarget[]>([]);
+  // Until the list answers, nothing is known: no "No phones" line and no "no address" notice
+  // that then vanish and pull a deep-linked section below them upward (C74).
+  const [listState, setListState] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [target, setTarget] = useState<TargetKind>('lan');
   const [newName, setNewName] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
   // Minting + QR rendering is shared with the Cloud Companion section.
-  const { created, qrDataURL, error, busy, mint, dismiss, setError } = usePairDevice();
+  const { created, qrDataURL, error, busy, mint, dismiss } = usePairDevice();
+  const [rowError, setRowError] = useState<{ name: string; message: string } | null>(null);
+  const { track } = useSettingsSaved();
 
   const refresh = useCallback(async () => {
     try {
-      const res = await apiGet<{ devices: DeviceEntry[]; cloudDevices?: DeviceEntry[]; targets?: PairingTarget[] }>(
-        '/api/devices',
-      );
+      const res = await fetchDevicesList<{ devices: DeviceEntry[]; cloudDevices?: DeviceEntry[]; targets?: PairingTarget[] }>();
       setDevices(res.devices);
       setCloudDevices(res.cloudDevices ?? []);
       const list = res.targets ?? [];
@@ -79,8 +104,10 @@ export function DevicesSection() {
       // Default to Cloud when it exists — a phone that leaves the house keeps
       // working, which is what people mean by "connect my phone".
       setTarget((prev) => (list.some((t) => t.kind === prev) ? prev : (list[list.length - 1]?.kind ?? 'lan')));
+      setListState('ready');
     } catch (err) {
       log.error('settings', 'devices list failed', { error: String(err) });
+      setListState((prev) => (prev === 'ready' ? prev : 'failed'));
     }
   }, []);
 
@@ -97,9 +124,8 @@ export function DevicesSection() {
    */
   const repair = async (name: string, kind: TargetKind) => {
     if (busy) return;
-    if (!window.confirm(
-      `Show a new QR code for "${name}"?\n\nIts current token stops working immediately — scan the new code on that phone.`,
-    )) return;
+    // Two-step button (InlineConfirmButton) instead of window.confirm: the Mac
+    // app's WKWebView has no confirm panel, so confirm() was a silent Cancel.
     // Keep the picker on the device's OWN target — re-pairing a cloud phone
     // must not silently flip the UI back to the Wi-Fi default.
     setTarget(kind);
@@ -107,8 +133,11 @@ export function DevicesSection() {
   };
 
   const addDevice = async () => {
-    const name = newName.trim();
-    if (!name || busy) return;
+    if (!newName.trim() || busy) return;
+    // "My iPhone" is the natural shape; the server wants an id (N3-03).
+    const name = deviceNameForServer(newName);
+    if (!name) { setNameError('Use at least one letter or digit in the name.'); return; }
+    setNameError(null);
     // Only send an explicit target when one was actually offered — otherwise
     // let the server pick (it falls back to a token-only QR).
     const chosen = targets.some((t) => t.kind === target) ? target : undefined;
@@ -124,14 +153,16 @@ export function DevicesSection() {
    * the device in, so "Revoke" must mean revoked.
    */
   const revoke = async (name: string, kinds: TargetKind[]) => {
-    if (!window.confirm(`Revoke "${name}"? The device will be signed out.`)) return;
+    setRowError(null);
     try {
-      for (const kind of kinds) {
-        await apiDelete(`/api/devices/${encodeURIComponent(name)}${kind === 'cloud' ? '?target=cloud' : ''}`);
-      }
+      await track((async () => {
+        for (const kind of kinds) {
+          await apiDelete(`/api/devices/${encodeURIComponent(name)}${kind === 'cloud' ? '?target=cloud' : ''}`);
+        }
+      })());
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setRowError({ name, message: saveErrorMessage(err) });
     }
   };
 
@@ -165,149 +196,149 @@ export function DevicesSection() {
   const phones = rows.filter((r) => (r.role ?? 'phone') === 'phone');
   const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone');
 
-  return (
-    <SectionCard
-      id="devices"
-      title="Phones & Cloud"
-      description="Your phones running the Walnut iOS app, and the cloud companion they reach this Mac through (next card). Pair a phone by scanning a QR code — tokens are shown once and stored hashed."
-    >
-      <div className="devices-section">
-        {(() => {
-          const renderRow = (d: typeof rows[number]) => {
-            const role = d.role ?? 'phone';
-            return (
-              <li key={d.name} className="devices-row">
-                <div className="devices-row-main">
-                  <span className="devices-name">
-                    {d.name}
-                    {d.kinds.map((k) => (
-                      <span key={k} className={`devices-tag devices-tag-${k}`}>
-                        {k === 'cloud' ? 'Cloud' : 'Local'}
-                      </span>
-                    ))}
-                  </span>
-                  {role === 'phone' && describeDevice(d.info) && (
-                    <span className="devices-hw">{describeDevice(d.info)}</span>
-                  )}
-                  <span className="devices-meta">
-                    {role === 'phone'
-                      ? `paired ${new Date(d.createdAt).toLocaleDateString()}${d.lastUsedAt ? ` · last used ${new Date(d.lastUsedAt).toLocaleDateString()}` : ''}`
-                      : ROLE_NOTE[role]}
-                  </span>
-                  {role === 'phone' && !d.info && (
-                    <span className="devices-meta devices-meta-dim">
-                      Model unknown — open the app on this phone to fill it in
-                    </span>
-                  )}
-                </div>
-                <div className="devices-row-actions">
-                  {role === 'phone' && (
-                    <button
-                      type="button"
-                      className="devices-showqr"
-                      disabled={busy}
-                      title="Mint a new token and show its QR code — for a phone that lost its pairing"
-                      onClick={() => void repair(d.name, preferredKind(d.kinds))}
-                    >
-                      Show QR
-                    </button>
-                  )}
-                  {/* This Mac's own sync credential has no QR and must not be
-                      casually revoked — that silently breaks cloud sync. */}
-                  {role !== 'self' && (
-                    <button
-                      type="button"
-                      className="btn-danger-outline"
-                      onClick={() => void revoke(d.name, d.kinds)}
-                    >
-                      Revoke
-                    </button>
-                  )}
-                </div>
-              </li>
-            );
-          };
-          return (
-            <>
-              {phones.length > 0 && <ul className="devices-list">{phones.map(renderRow)}</ul>}
-              {phones.length === 0 && rows.length > 0 && (
-                <p className="devices-hint">No phones paired yet — pair one below.</p>
-              )}
-              {others.length > 0 && (
-                <details className="devices-others">
-                  <summary>{others.length} non-phone {others.length === 1 ? 'entry' : 'entries'} (this computer, simulators)</summary>
-                  <ul className="devices-list">{others.map(renderRow)}</ul>
-                </details>
-              )}
-            </>
-          );
-        })()}
-
-        {targets.length > 1 && (
-          <div className="devices-target-row" role="radiogroup" aria-label="Pairing target">
-            {targets.map((t) => (
-              <button
-                key={t.kind}
-                type="button"
-                role="radio"
-                aria-checked={target === t.kind}
-                className={`devices-target${target === t.kind ? ' devices-target-active' : ''}`}
-                onClick={() => setTarget(t.kind)}
-              >
-                <span className="devices-target-label">{t.label}</span>
-                <span className="devices-target-origin">{t.origin.replace(/^https?:\/\//, '')}</span>
-              </button>
+  const renderRow = (d: typeof rows[number]) => {
+    const role = d.role ?? 'phone';
+    const hw = role === 'phone' ? describeDevice(d.info) : null;
+    const meta = role === 'phone'
+      ? [
+          hw ?? 'Model unknown until the app opens on this phone',
+          `paired ${formatAbsoluteTime(d.createdAt)}`,
+          ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
+        ].join(', ')
+      : ROLE_NOTE[role];
+    return (
+      <SettingsRow
+        key={d.name}
+        className="devices-row"
+        data-device-name={d.name}
+        label={
+          <span className="settings-addons-inline devices-name">
+            <span className="settings-addons-ellipsis" title={d.name}>{d.name}</span>
+            {d.kinds.map((k) => (
+              <SettingsTag key={k}>{k === 'cloud' ? 'Cloud' : 'Local'}</SettingsTag>
             ))}
-          </div>
-        )}
+          </span>
+        }
+        help={<span className="devices-meta">{meta}</span>}
+        error={rowError?.name === d.name ? `Couldn't remove: ${rowError.message}` : undefined}
+        control={
+          <>
+            {role === 'phone' && (
+              <InlineConfirmButton
+                label="Show QR"
+                confirmLabel="Confirm new QR"
+                variant="text"
+                disabled={busy}
+                aria-label={`Show a new QR code for ${d.name}; its current token stops working`}
+                data-testid="devices-show-qr"
+                onConfirm={() => repair(d.name, preferredKind(d.kinds))}
+              />
+            )}
+            {/* This Mac's own sync credential has no QR and must not be
+                casually removed: that silently breaks cloud sync. */}
+            {role !== 'self' && (
+              <InlineConfirmButton
+                aria-label={`Remove ${d.name}`}
+                data-testid="devices-remove"
+                onConfirm={() => revoke(d.name, d.kinds)}
+              />
+            )}
+          </>
+        }
+      />
+    );
+  };
 
-        {targets.length === 0 && (
-          <p className="devices-hint">
-            No auto-detectable address for this machine — the QR will carry only the token, so
-            you'll type the server address in the app. For one-tap pairing from anywhere,{' '}
-            <a
-              href="#cloud"
-              onClick={(e) => {
-                e.preventDefault();
-                document.getElementById('cloud')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
+  return (
+    <SectionCard id="devices" title="Phones & Cloud">
+      <div className="devices-section">
+        <SettingsGroup heading="Paired phones">
+          {phones.length === 0 && (
+            <SettingsEmpty>
+              {listState === 'loading' ? 'Loading paired phones...'
+                : listState === 'failed' ? "Couldn't load paired phones." : 'No phones paired yet.'}
+            </SettingsEmpty>
+          )}
+          {phones.map(renderRow)}
+          {others.length > 0 && (
+            <SettingsDisclosure
+              id="devices-others"
+              label="Other entries"
+              help="This computer and simulators."
+              summary={String(others.length)}
             >
-              set up a cloud companion
-            </a>.
-          </p>
-        )}
+              {others.map(renderRow)}
+            </SettingsDisclosure>
+          )}
+        </SettingsGroup>
 
-        <div className="devices-add-row">
-          <input
-            type="text"
-            value={newName}
-            placeholder="Device name (e.g. iPhone)"
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addDevice(); } }}
+        <SettingsGroup heading="Pair a phone">
+          {targets.length > 1 && (
+            <SettingsRow
+              label="Pairing target"
+              help={activeTarget
+                ? activeTarget.kind === 'cloud'
+                  ? 'Works from anywhere, including cellular; the token is created on your cloud companion.'
+                  : <>Works only while the phone is on the same <span className="settings-nowrap">Wi-Fi</span> as this Mac.</>
+                : undefined}
+              control={
+                <SegmentedControl
+                  aria-label="Pairing target"
+                  value={target}
+                  onChange={(v) => setTarget(v)}
+                  options={targets.map((t) => ({
+                    value: t.kind,
+                    label: t.label,
+                    title: t.origin.replace(/^https?:\/\//, ''),
+                    testId: `devices-target-${t.kind}`,
+                  }))}
+                />
+              }
+            />
+          )}
+          {listState === 'ready' && targets.length === 0 && (
+            <SettingsNotice kind="info">
+              No address for this machine can be detected, so the QR carries only the token and you type the
+              server address in the app; for one-tap pairing from anywhere, <a href="#cloud">set up a cloud companion</a>.
+            </SettingsNotice>
+          )}
+          <SettingsRow
+            label="Device name"
+            htmlFor="devices-new-name"
+            wide
+            help={targets.length === 1 && activeTarget?.kind === 'lan'
+              ? <>Pair a phone by scanning a QR code; this one works only on the same <span className="settings-nowrap">Wi-Fi</span> as this Mac.</>
+              : 'Pair a phone by scanning a QR code with the Walnut iOS app.'}
+            error={nameError ?? (!created && error ? error : undefined)}
+            control={
+              <span className="settings-addons-inline devices-add-row">
+                <input
+                  id="devices-new-name"
+                  type="text"
+                  className="settings-input settings-input--short"
+                  value={newName}
+                  placeholder="My iPhone"
+                  onChange={(e) => { setNewName(e.target.value); setNameError(null); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void addDevice(); } }}
+                />
+                <SettingsButton
+                  variant="primary"
+                  disabled={!newName.trim()}
+                  title={newName.trim() ? undefined : 'Name the device first.'}
+                  busy={busy}
+                  busyLabel="Pairing..."
+                  onClick={() => void addDevice()}
+                >
+                  Pair new device
+                </SettingsButton>
+              </span>
+            }
           />
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={busy || !newName.trim()}
-            onClick={() => void addDevice()}
-          >
-            {busy ? 'Pairing…' : 'Pair new device'}
-          </button>
-        </div>
-
-        {activeTarget && (
-          <p className="devices-hint">
-            {activeTarget.kind === 'cloud'
-              ? 'Cloud pairing works from anywhere, including cellular. The token is created on your cloud companion.'
-              : 'This QR only works while the phone is on the same Wi-Fi as this Mac.'}
-          </p>
-        )}
-
-        {error && <p className="devices-error">{error}</p>}
-
-        {created && qrDataURL && (
-          <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={dismiss} />
-        )}
+          {created && error && <p className="settings-row-error devices-error" role="alert">{error}</p>}
+          {created && qrDataURL && (
+            <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={dismiss} />
+          )}
+        </SettingsGroup>
       </div>
     </SectionCard>
   );

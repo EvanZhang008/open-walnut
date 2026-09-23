@@ -45,13 +45,24 @@ export function useSettingsConfig() {
     }).catch(() => { /* the next save or reload re-reads */ });
   });
 
+  // Saves run one at a time: each rebases onto a read taken after the previous
+  // write landed. Two in flight at once would both read the same config and the
+  // later PUT would write the earlier one's field back (a token typed, then Add
+  // model clicked before the blur save finished).
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+
   /** Save a partial config (top-level key merge) and re-fetch. */
-  const saveSection = useCallback(async (partial: Partial<Config>) => {
+  const saveSection = useCallback((partial: Partial<Config>) => {
     const base = baseRef.current;
-    const payload = base ? rebaseOnto(partial, base, await fetchConfig()) : partial;
-    await updateConfig(payload);
-    const refreshed = await read();
-    if (refreshed) setConfig(refreshed);
+    const run = async () => {
+      const payload = base ? rebaseOnto(partial, base, await fetchConfig()) : partial;
+      await updateConfig(payload);
+      const refreshed = await read();
+      if (refreshed) setConfig(refreshed);
+    };
+    const done = queue.current.then(run, run);
+    queue.current = done.catch(() => {});
+    return done;
   }, [read]);
 
   return { config, loading, error, saveSection, reload: load };

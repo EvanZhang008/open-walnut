@@ -1,0 +1,499 @@
+/*
+ * Section-only rules for the Configure panes (General, Tasks, Sessions,
+ * Engines, Hooks, Advanced, Providers, Integrations, Heartbeat, Triage,
+ * Search, Voice). Shared primitives live in settings-shell.css and
+ * settings-controls.css; nothing here restyles them globally.
+ */
+
+/* One-line help that ellipsizes (Hooks rows); full text rides on title. */
+.settings-help-oneline {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Inline mono value inside a row copy column (Fires on, paths). */
+.settings-mono-value {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* Row control cluster: tag + control + reserved slot on one line. */
+.settings-control-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/*
+ * A boxless wrapper around rows of the SAME group (keeps a testid like
+ * `jev-settings` without starting a new box). Its first row still gets the
+ * hairline, because it never opens the group.
+ */
+.settings-rows-contents {
+  display: contents;
+}
+
+.settings-group .settings-rows-contents > .settings-row:first-child::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--settings-row-pad-x);
+  right: 0;
+  height: 1px;
+  background: var(--settings-hairline);
+  pointer-events: none;
+}
+
+.settings-group .settings-rows-contents > .settings-row.settings-row-indent:first-child::before {
+  left: var(--settings-row-indent);
+}
+
+/* Result line of a Test connection row (Jev, providers). */
+.settings-test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-test-result[data-kind='ok'] {
+  color: var(--success);
+}
+
+.settings-test-result[data-kind='fail'] {
+  color: var(--settings-error-text, var(--error));
+}
+
+/* Focus tiers: icon + name on one line inside the row label. */
+.focus-tiers-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Session modes: label + one-line help inside a checkbox row. */
+.settings-checkbox-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/*
+ * Engines pane rows: [source tag slot][control][Reset slot]. Both slots keep
+ * their width whether or not they show anything, so hovering or resetting a
+ * row never moves the control.
+ */
+.engine-pane-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.engine-pane-tag-slot,
+.engine-pane-reset-slot {
+  display: inline-grid;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.engine-pane-tag-slot {
+  justify-items: end;
+}
+
+.engine-pane-tag-slot::before {
+  content: 'Shared project';
+  grid-area: 1 / 1;
+  visibility: hidden;
+  height: 0;
+  padding: 0 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.engine-pane-tag-slot > * {
+  grid-area: 1 / 1;
+}
+
+.engine-pane-reset-slot > .engine-setting-reset[data-visible='false'] {
+  visibility: hidden;
+}
+
+.engine-setting-row-pane .engine-setting-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.engine-setting-row-pane .engine-setting-help {
+  display: block;
+}
+
+/* Free text (model ids, a language) is mono; its width and stacking live in
+   the Engines pane rows block below. The label keeps 200px when inline. */
+.engine-setting-row-pane .engine-setting-text,
+.engine-setting-row-pane .engine-setting-custom {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.engine-setting-row-pane > .settings-row-copy {
+  min-width: 200px;
+}
+
+/* Warning line under a row's normal help (Default engine small jobs). */
+.settings-help-warning {
+  display: block;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--priority-important-text);
+}
+
+/* ── Hooks: one compact row per hook, details disclosed under it ── */
+.settings-section .hook-banner {
+  display: block;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* 44px rows (the spec minimum, F19): a pane of N hooks stays within 140 + 48 * N px (C31). */
+.settings-group .hook-row {
+  min-height: 44px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.settings-group .hook-row .settings-row-copy {
+  gap: 1px;
+}
+
+/* A switch or an "Always on" tag: one slot width, so every chevron beside it
+   sits at the same x (N3-11). */
+.settings-group .hook-row > .settings-row-actions {
+  min-width: 72px;
+}
+
+.settings-group .hook-row .settings-row-label,
+.settings-group .hook-row .hook-row-disclose {
+  line-height: 18px;
+}
+
+.settings-group .hook-row .settings-row-help {
+  line-height: 16px;
+}
+
+/* The disclosure spans the copy column so its chevron sits at one x on
+   every row, beside the switch, like every other disclosure row (N3-11). */
+.hook-row-disclose {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.hook-row-disclose:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hook-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hook-row-disclose .settings-disclosure-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--fg-muted);
+  transition: transform 120ms ease-out;
+}
+
+.hook-row-disclose[aria-expanded='true'] .settings-disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.hook-detail-value {
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hook-row-disclose .settings-disclosure-chevron {
+    transition: none;
+  }
+}
+
+/* Multi-line editor row (HEARTBEAT.md): label above, editor full width. */
+.settings-editor-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.settings-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.settings-editor:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.settings-editor[aria-invalid='true'] {
+  border-color: var(--error);
+}
+
+.settings-row-error.settings-row-error-inline {
+  margin: 0;
+  padding: 0;
+}
+
+/* In-row progress bar (Voice setup, model downloads): never a new box. */
+.settings-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-progress-track {
+  position: relative;
+  display: block;
+  width: 160px;
+  height: 6px;
+  margin: 0;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.settings-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.settings-progress-pct {
+  min-width: 3.5ch;
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The engine's own note: one muted line above its groups, not a box. */
+.settings-section .engine-settings-note {
+  margin: 0 0 16px;
+  max-width: none;
+}
+
+/* A boxless wrapper that opens its group draws no hairline above its first row. */
+.settings-group > .settings-rows-contents:first-child > .settings-row:first-child::before {
+  content: none;
+}
+
+/* ── Engines pane rows: standard inset, no fill (F06), text fields stack (F07) ── */
+.settings-group .settings-row.engine-setting-row.engine-setting-row-pane {
+  gap: 16px;
+  padding: 8px var(--settings-row-pad-x);
+  background: transparent;
+}
+
+.settings-group .engine-setting-row-pane .engine-pane-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-group .engine-setting-row-pane .engine-setting-control {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* N04: rows wrap by GROUP width like every pane. Free text (data-wide) sits
+   inline at 300px and drops under its label, full width, below 600px; switch,
+   select and segmented rows stay on one line until the generic 360px rule. */
+.settings-group .engine-setting-row-pane .engine-setting-text,
+.settings-group .engine-setting-row-pane .engine-setting-custom {
+  width: 300px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* The label takes only the space left over (basis 0, 200px floor above
+   600px), so the controls keep their size and shrink only past that floor. */
+.settings-group .settings-row.engine-setting-row-pane > .settings-row-copy {
+  flex: 1 1 0;
+}
+
+.settings-group .settings-row.engine-setting-row-pane > .settings-row-actions {
+  flex: 0 1 auto;
+}
+
+.settings-group .engine-setting-row-pane .engine-setting-control {
+  flex: 0 1 auto;
+}
+
+/* Typing a custom value adds a second field: that transient state stacks. */
+.settings-group .settings-row.engine-setting-row-pane:has(.engine-setting-custom) {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.settings-group .settings-row.engine-setting-row-pane:has(.engine-setting-custom) > .settings-row-actions {
+  flex: 1 1 100%;
+  justify-content: flex-start;
+  margin-left: 0;
+}
+
+@container sgroup (max-width: 599px) {
+  .settings-group .settings-row.engine-setting-row-pane > .settings-row-copy {
+    min-width: 96px;
+  }
+
+  .settings-group .engine-setting-row-pane .engine-pane-tag-slot::before {
+    content: 'Project';
+  }
+
+  .settings-group .engine-setting-row-pane select.engine-setting-select {
+    min-width: 0;
+    max-width: 180px;
+  }
+
+  .settings-group .settings-row.engine-setting-row-pane[data-wide] {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .settings-group .settings-row.engine-setting-row-pane[data-wide] > .settings-row-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  /* Wrapped: the field starts on the label's x and takes the width. */
+  .settings-group .engine-setting-row-pane[data-wide] .engine-pane-controls {
+    width: 100%;
+  }
+
+  .settings-group .engine-setting-row-pane[data-wide] .engine-setting-control {
+    order: -1;
+    flex: 1 1 auto;
+  }
+
+  .settings-group .engine-setting-row-pane[data-wide] .engine-setting-text {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .settings-group .engine-setting-row-pane[data-wide] .engine-pane-tag-slot::before {
+    content: none;
+  }
+}
+
+@container sgroup (max-width: 359px) {
+  .settings-group .settings-row.engine-setting-row-pane {
+    flex-wrap: wrap;
+  }
+
+  .settings-group .settings-row.engine-setting-row-pane > .settings-row-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+}
+
+/* Reset is a text button like every pane's: accent, underline on hover only,
+   and optically on the content edge (N11). engine-settings.css underlines it. */
+.settings-group .engine-setting-row-pane .engine-setting-reset.settings-button-text {
+  text-decoration: none;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.settings-group .engine-setting-row-pane .engine-setting-reset.settings-button-text:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.settings-group .engine-setting-row-pane .engine-pane-reset-slot {
+  margin-right: -6px;
+}
+
+/* Terminal-only rows: indented under their disclosure like every child row,
+   with a break between each run of 10 (N12). */
+.settings-group .settings-disclosure-content > .settings-row.engine-setting-row.engine-setting-row-pane {
+  padding-left: var(--settings-row-indent);
+}
+
+.engine-settings-chunk-break {
+  height: 8px;
+  border-top: 1px solid var(--settings-hairline);
+  background: var(--settings-band-bg, transparent);
+}
+
+.settings-disclosure-content > .engine-settings-chunk-break + .settings-row::before {
+  content: none;
+}
+
+/* Engines pane menus look like every other settings select: chevron, 28px,
+   room on the right. engine-settings.css paints them with the `background`
+   shorthand, which wipes the global chevron image (F28). */
+.settings-group .engine-setting-row-pane select.engine-setting-select {
+  box-sizing: border-box;
+  height: 28px;
+  max-width: min(100%, 260px);
+  padding: 0 28px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background-color: var(--settings-input-bg);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23868690' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}

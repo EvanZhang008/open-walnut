@@ -218,7 +218,7 @@ export function Sidebar({
         onSelect: () => updateAppDisposition(app.key, 'hidden'),
       },
       { divider: true },
-      { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/settings') },
+      { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/settings#plugin-store') },
     ];
   };
 

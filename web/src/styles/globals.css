@@ -466,7 +466,6 @@ select {
   gap: 0;
 }
 
-
 /* ── Notification bell + panel ── */
 
 .sidebar-notification-area {
@@ -1765,6 +1764,15 @@ select {
   letter-spacing: 0.5px;
 }
 
+/* Settings labels read as sentences (System Settings style), never shouted. */
+.settings-layout .form-group label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--fg);
+}
+
 .form-row {
   display: flex;
   gap: 12px;
@@ -1784,40 +1792,6 @@ select {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
-}
-
-/* Theme picker segmented control */
-.theme-picker {
-  display: flex;
-  gap: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.theme-picker-btn {
-  flex: 1;
-  padding: 6px 16px;
-  border: none;
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  font-size: 13px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.theme-picker-btn:not(:last-child) {
-  border-right: 1px solid var(--border-strong);
-}
-
-.theme-picker-btn:hover {
-  background: var(--bg-tertiary);
-}
-
-.theme-picker-btn.active {
-  background: var(--accent);
-  color: #fff;
 }
 
 /* ===== Loading Spinner ===== */
@@ -5127,7 +5101,6 @@ select {
   background: var(--bg-tertiary);
 }
 
-
 /* History dropdown row actions (📌 / ×) — revealed on row hover */
 .agent-dd-row .agent-dd-hover-btn {
   opacity: 0;
@@ -8355,19 +8328,10 @@ select {
 
 /* ── STT Detection Panel ── */
 
-.stt-detection-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
+/* The panel is a boxless run of settings rows (settings-rows-contents); the
+   Engine row is a standard SettingsRow, so no layout rules here (F04). */
 
 /* ── Service Dropdown ── */
-
-.stt-service-dropdown {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 .stt-dropdown-label {
   font-weight: 600;
   font-size: 0.85rem;
@@ -8392,10 +8356,6 @@ select {
 .stt-dropdown-icon { font-size: 1.1rem; }
 .stt-dropdown-chevron { font-size: 0.7rem; color: var(--text-muted); }
 
-.stt-service-dropdown {
-  position: relative;
-  z-index: 10;
-}
 .stt-dropdown-menu {
   position: absolute;
   top: 100%;
@@ -8991,7 +8951,6 @@ img[data-lightbox-src],
   flex: 1;
   min-width: 0;
 }
-
 
 .main-page-todo {
   flex-shrink: 0;
@@ -9838,7 +9797,6 @@ body.walnut-dragging {
   height: 100%;
   overflow: hidden;
 }
-
 
 /* ── Search bar ── */
 .todo-search-bar {
@@ -10758,7 +10716,6 @@ body.walnut-dragging {
   opacity: 0;
 }
 
-
 .todo-pinned-unpin {
   background: none;
   border: none;
@@ -11004,7 +10961,6 @@ body.walnut-dragging {
   background: var(--hover-bg, rgba(0,0,0,0.04));
 }
 
-
 .todo-focus-card.todo-pinned-card-needs-action {
   background: rgba(255, 59, 48, 0.08);
 }
@@ -11144,7 +11100,6 @@ body.walnut-dragging {
   flex-shrink: 0;
   white-space: nowrap;
 }
-
 
 /* Mini session chip in pinned cards — compact "S" button */
 .todo-panel-list {
@@ -12568,7 +12523,6 @@ body.walnut-dragging {
   padding: 8px 0;
   font-style: italic;
 }
-
 
 /* ===== Global Notes Section (TodoPanel bottom) ===== */
 
@@ -16807,6 +16761,11 @@ a.task-kebab-info:hover {
     padding-top: 52px;
   }
 
+  /* Settings runs edge to edge but still clears the floating sidebar toggle. */
+  .main-content > .app-content-area:has(.settings-container) {
+    padding: 52px 0 0;
+  }
+
   .main-page {
     flex-direction: column;
   }
@@ -18543,14 +18502,6 @@ a.task-kebab-info:hover {
 
 /* ── Reasoning-effort segmented control ── */
 
-
-
-
-
-
-
-
-
 /* Requested-but-not-applied effort (CLI override/downgrade) — amber outline */
 
 /* Live-truth strip: CLI's actual runtime settings pulled via get_settings on open */
@@ -18795,12 +18746,6 @@ a.task-kebab-info:hover {
   font-size: 11.5px;
 }
 
-
-
-
-
-
-
 .model-picker .model-picker-btn {
   font-size: 11px;
   padding: 3px 8px;
@@ -18829,9 +18774,7 @@ a.task-kebab-info:hover {
   background: var(--bg-secondary);
 }
 
-
 /* Catalog rows the CLI marks disabled (org-restricted): visible, greyed, no Switch. */
-
 
 /* ===== Hooks Page ===== */
 
@@ -19274,57 +19217,9 @@ a.task-kebab-info:hover {
   resize: vertical;
 }
 
-/* ===== Usage Page ===== */
-
-.usage-page {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 24px;
-  scroll-margin-top: 16px;
-}
-
-
-
-
-.usage-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 20px;
-}
-
-.usage-header h1 {
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.usage-refresh-btn {
-  padding: 6px 16px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  transition: background 0.15s;
-}
-
-.usage-refresh-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-
-.usage-refresh-btn:disabled {
-  opacity: 0.5;
-}
-
-.usage-period-tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 20px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-sm);
-  padding: 3px;
-  width: fit-content;
-}
+/* ===== Usage Page =====
+   The Usage & Costs settings pane owns its own layout (settings rows and
+   settings-usage tables); the old page chrome rules were removed (F10, F12). */
 
 .usage-period-tab {
   padding: 6px 16px;
@@ -19343,15 +19238,6 @@ a.task-kebab-info:hover {
   background: var(--card-bg);
   color: var(--fg);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-.usage-error {
-  padding: 12px 16px;
-  border-radius: var(--radius-sm);
-  background: rgba(255, 59, 48, 0.08);
-  color: var(--error);
-  margin-bottom: 20px;
-  font-size: 13px;
 }
 
 .usage-summary-cards {
@@ -19430,12 +19316,6 @@ a.task-kebab-info:hover {
   opacity: 1;
 }
 
-.usage-chart-label {
-  font-size: 10px;
-  fill: var(--fg-muted);
-  font-family: 'SF Mono', monospace;
-}
-
 .usage-chart-placeholder {
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -19444,13 +19324,6 @@ a.task-kebab-info:hover {
   text-align: center;
   color: var(--fg-muted);
   font-size: 13px;
-}
-
-.usage-breakdown-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 24px;
 }
 
 .usage-breakdown-panel {
@@ -19520,54 +19393,10 @@ a.task-kebab-info:hover {
   font-size: 13px;
 }
 
-.usage-cache-card {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 16px;
-  margin-bottom: 24px;
-}
-
-.usage-cache-stats {
-  display: flex;
-  gap: 32px;
-}
-
-.usage-cache-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.usage-cache-label {
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-
-.usage-cache-value {
-  font-size: 20px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.usage-recent-section {
-  margin-bottom: 24px;
-}
-
-.usage-recent-scroll {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  max-height: 400px;
-  overflow-y: auto;
-}
 
 @media (max-width: 768px) {
   .usage-summary-cards {
     grid-template-columns: repeat(2, 1fr);
-  }
-  .usage-breakdown-grid {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -19714,24 +19543,6 @@ a.task-kebab-info:hover {
 
 .task-filter-chips .usage-chip {
   padding: 2px 6px 2px 8px;
-}
-
-/* Section headers with a hint on the right */
-.usage-section-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.usage-section-head h2 {
-  margin-bottom: 0;
-}
-
-.usage-section-hint {
-  font-size: 12px;
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
 }
 
 /* Chart: gridlines, axis, interactive bars, tooltip */
@@ -21584,123 +21395,20 @@ td.usage-share-col {
   padding: 4px 8px;
 }
 
-
 /* Pin button old overrides removed — unified via .task-action-btn */
 
 /* ===== Settings Page ===== */
 
-.settings-layout {
-  display: flex;
-  height: 100%;
-  overflow: hidden;
-}
-
-.settings-nav {
-  width: 180px;
-  flex-shrink: 0;
-  position: sticky;
-  top: 0;
-  padding: 16px 0 16px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-  border-right: 1px solid var(--border);
-}
-
-.settings-nav-item {
-  display: block;
-  width: 100%;
-  padding: 6px 12px;
-  border: none;
-  background: none;
-  text-align: left;
-  font-size: 13px;
-  font-family: inherit;
-  color: var(--fg-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.settings-nav-item:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg);
-}
-
-.settings-nav-active {
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.settings-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 24px 48px;
-}
-
-.settings-content-inner {
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.settings-content-inner > .page-header {
-  max-width: 680px;
-}
-
+/* A settings section has no box of its own (groups are the surfaces, see
+   settings-shell.css); it only lands below the 44px compact header. */
 .settings-section {
-  max-width: 680px;
-  margin: 0 auto 16px;
-  padding: 20px 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 12px);
-  background: var(--bg-card, var(--bg));
-  scroll-margin-top: 16px;
-}
-
-.settings-section-wide {
-  max-width: 1200px;
-}
-
-.settings-nav-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 8px 0;
+  scroll-margin-top: 52px;
 }
 
 .settings-section-title {
   margin: 0 0 4px;
   font-size: 16px;
   font-weight: 600;
-}
-
-/* Settings sidebar: "Manage" / "Configure" group captions. */
-.settings-nav-group-label {
-  display: block;
-  padding: 4px 12px 2px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg-muted, var(--text-muted));
-}
-
-/* The management entries ROUTE AWAY, so they read as links, not as section jumps:
-   no active-section highlight, and a chevron marking the departure. */
-.settings-nav-page-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  text-decoration: none;
-}
-
-.settings-nav-page-link::after {
-  content: '\203A';
-  font-size: 14px;
-  line-height: 1;
-  color: var(--fg-muted, var(--text-muted));
 }
 
 .settings-banner {
@@ -21714,12 +21422,6 @@ td.usage-share-col {
 .settings-banner-success {
   background: rgba(52, 199, 89, 0.1);
   color: var(--success);
-}
-
-.settings-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 16px 0;
 }
 
 /* ── Suggestion accuracy (Tasks & Sessions) ──
@@ -21752,260 +21454,56 @@ td.usage-share-col {
   color: var(--fg);
   font-weight: 600;
 }
-/* One row per commit; entries wrap inside it. Bounded height because the ledger
-   holds up to 20 records and this panel is one card among many. */
-.suggest-accuracy-recent {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 10px;
-  max-height: 260px;
-  overflow-y: auto;
-}
-.suggest-accuracy-record {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 11px;
-}
-.suggest-accuracy-when {
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
+/* One settings row per guess: the date is the label, the chips wrap under it.
+   No height cap and no flex on the group, or rows shrink into each other (F01). */
+.suggest-accuracy-recent .settings-row.suggest-accuracy-record {
+  align-items: flex-start;
   flex-shrink: 0;
 }
+.suggest-accuracy-when {
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.suggest-accuracy-record .settings-row-help .settings-addons-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 4px;
+  white-space: normal;
+}
+/* One line per chip (N08): the field name and the verdict never break, the
+   value truncates with an ellipsis and carries the full text in `title`. */
 .suggest-accuracy-entry {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
+  max-width: 100%;
+  min-width: 0;
   padding: 1px 7px;
-  border: 1px solid var(--border);
   border-radius: 999px;
-}
-.suggest-accuracy-field { color: var(--fg-muted); }
-.suggest-accuracy-values { color: var(--fg); }
-.suggest-accuracy-verdict { color: var(--fg-muted); font-size: 10px; }
-/* Kept reads calm, an override reads as the finding — the whole point of the
-   panel is spotting the second kind at a glance. */
-.suggest-accuracy-entry.verdict-changed { border-color: color-mix(in srgb, var(--warning, #ff9f0a) 55%, var(--border)); }
-.suggest-accuracy-entry.verdict-changed .suggest-accuracy-verdict { color: var(--warning, #ff9f0a); }
-.suggest-accuracy-entry.verdict-dropped { border-color: color-mix(in srgb, var(--fg-muted) 45%, var(--border)); }
-
-/* Secret Input */
-.secret-input-wrapper {
-  position: relative;
-  display: flex;
-}
-
-.secret-input {
-  flex: 1;
-  padding-right: 36px !important;
-}
-
-.secret-toggle {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  border: none;
-  background: none;
-  cursor: pointer;
-  font-size: 16px;
-  color: var(--fg-muted);
-  padding: 4px;
-  line-height: 1;
-}
-
-.secret-toggle:hover {
-  color: var(--fg);
-}
-
-/* Toggle Switch */
-.toggle-switch-label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-}
-
-.toggle-switch {
-  position: relative;
-  width: 44px;
-  height: 24px;
-  border-radius: 12px;
   background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: background 0.2s;
-  flex-shrink: 0;
-  padding: 0;
-}
-
-.toggle-switch.toggle-on {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.toggle-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  transition: transform 0.2s;
-}
-
-.toggle-on .toggle-thumb {
-  transform: translateX(20px);
-}
-
-.toggle-text {
-  font-size: 13px;
-  color: var(--fg);
-}
-
-/* Number Input */
-.number-input-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.number-input {
-  flex: 1;
-  max-width: 140px;
-}
-
-.number-input-suffix {
-  font-size: 12px;
-  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 16px;
   white-space: nowrap;
 }
-
-/* KeyValue Editor */
-.kv-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.kv-editor-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.kv-editor-key {
-  min-width: 80px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg-secondary);
-  font-family: var(--font-mono, monospace);
-}
-
-.kv-editor-value {
-  flex: 1;
-}
-
-.kv-editor-remove {
-  border: none;
-  background: none;
-  cursor: pointer;
-  font-size: 16px;
-  color: var(--fg-muted);
-  padding: 2px 4px;
-  line-height: 1;
-}
-
-.kv-editor-remove:hover {
-  color: var(--error);
-}
-
-.kv-editor-add {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.kv-editor-add input {
-  flex: 1;
-  /* Two inputs keep their intrinsic width (about 190px each in WebKit) unless told they may
-     shrink; in a 388px group that pushed the Add button 70px past the settings pane. */
+.suggest-accuracy-field { flex: 0 0 auto; color: var(--fg-muted); white-space: nowrap; }
+.suggest-accuracy-values {
+  flex: 0 1 auto;
   min-width: 0;
-}
-
-/* Status Indicator */
-.status-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.status-dot-connected { background: var(--success); }
-.status-dot-error { background: var(--error); }
-.status-dot-unknown { background: var(--fg-muted); }
-.status-dot-testing {
-  background: var(--accent);
-  animation: status-pulse 1s infinite;
-}
-
-@keyframes status-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-.status-text {
-  color: var(--fg-secondary);
-}
-
-/* Collapsible sections */
-.settings-collapsible {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  margin-bottom: 8px;
   overflow: hidden;
-}
-
-.settings-collapsible-title {
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg);
-  cursor: pointer;
-  background: var(--bg-secondary);
-  list-style: none;
 }
+.suggest-accuracy-verdict { flex: 0 0 auto; color: var(--fg-muted); white-space: nowrap; }
+/* Kept reads calm, an override reads as the finding — the whole point of the
+   panel is spotting the second kind at a glance. */
+.suggest-accuracy-entry.verdict-changed { background: color-mix(in srgb, var(--warning, #ff9f0a) 16%, transparent); }
+.suggest-accuracy-entry.verdict-changed .suggest-accuracy-verdict { color: var(--warning, #ff9f0a); }
+.suggest-accuracy-entry.verdict-dropped { background: color-mix(in srgb, var(--fg-muted) 16%, transparent); }
 
-.settings-collapsible-title::-webkit-details-marker {
-  display: none;
-}
-
-.settings-collapsible-title::before {
-  content: '▸';
-  display: inline-block;
-  margin-right: 6px;
-  transition: transform 0.15s;
-  font-size: 11px;
-}
-
-.settings-collapsible[open] > .settings-collapsible-title::before {
-  transform: rotate(90deg);
-}
-
-.settings-collapsible-body {
-  padding: 12px;
-}
+/* Secret, switch, number, key/value, status and collapsible controls moved to
+   settings-controls.css + settings-controls-misc.css (imported by the components). */
 
 /* Textarea */
 .settings-textarea {
@@ -22020,21 +21518,6 @@ td.usage-share-col {
   color: var(--fg);
 }
 
-/* Raw config viewer */
-.settings-raw-config {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px;
-  font-size: 12px;
-  font-family: var(--font-mono, monospace);
-  max-height: 400px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--fg-secondary);
-}
-
 /* Small danger button */
 .btn-danger {
   color: var(--error);
@@ -22043,35 +21526,6 @@ td.usage-share-col {
 
 .btn-danger:hover {
   background: rgba(255, 59, 48, 0.08);
-}
-
-/* Mobile: nav becomes horizontal tabs */
-@media (max-width: 768px) {
-  .settings-layout {
-    flex-direction: column;
-  }
-
-  .settings-nav {
-    width: 100%;
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    padding: 8px;
-    gap: 4px;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .settings-nav-item {
-    white-space: nowrap;
-    padding: 6px 10px;
-    font-size: 12px;
-  }
-
-  .settings-content {
-    padding: 0 12px 48px;
-  }
 }
 
 /* ===== AI Providers Section ===== */
@@ -23251,23 +22705,6 @@ td.usage-share-col {
 }
 
 /* ===== Repositories Page ===== */
-
-.repos-page {
-  max-width: 1200px;
-}
-
-.repos-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.repos-header h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
 
 .repos-search-row {
   display: flex;
@@ -26104,7 +25541,6 @@ a.file-link:hover {
   50% { opacity: 0.3; }
 }
 
-
 /* ── Session Terminal (embedded xterm.js modal) ───────────────────────── */
 .session-terminal-overlay {
   position: fixed;
@@ -27074,32 +26510,9 @@ a.file-link:hover {
   text-align: center;
   margin: 6px 0;
 }
-.permission-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-}
-.permission-row + .permission-row { border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08)); }
-.permission-row-main { flex: 1 1 auto; min-width: 0; }
-.permission-row-label { font-weight: 500; }
+/* macOS Access rows are standard SettingsRows: inset, hairlines and weight
+   come from settings-rows.css (F05). */
 .permission-row-state { flex-shrink: 0; }
-.permission-state-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--fg-muted, #8b8f98);
-}
-.permission-state-dot.permission-state-granted { background: var(--success, #30a46c); }
-.permission-state-dot.permission-state-denied { background: var(--error, #e5484d); }
-.permission-state-dot.permission-state-not-determined { background: var(--warning, #f5a623); }
-/* Working through a stand-in: green, because the feature works, ringed because
-   there is still something to tidy up. */
-.permission-state-dot.permission-state-working {
-  background: var(--success, #30a46c);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning, #f5a623) 55%, transparent);
-}
 
 /* ============================================================================
    Session "Changed" view — full-screen File Diff + relocated session chat
@@ -29103,58 +28516,24 @@ a.file-link:hover {
 
 /* ── Devices section (Settings → Devices, QR pairing) ── */
 .devices-section { display: flex; flex-direction: column; gap: 14px; }
-.devices-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.devices-row {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
-}
-.devices-row-main { display: flex; flex-direction: column; gap: 2px; }
-.devices-name { font-weight: 600; }
-.devices-meta { font-size: 12px; color: var(--text-secondary); }
-.devices-add-row { display: flex; gap: 8px; }
-.devices-add-row input { flex: 1; }
+
+/* Device rows are plain SettingsRows in one group: no card per phone and the
+   standard 400 weight label (F10, F24). */
 .devices-error { color: var(--danger, #d33); font-size: 13px; margin: 0; }
-.devices-hint { font-size: 12px; color: var(--text-secondary); margin: 0; }
-.devices-row-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
-/* Self-reported hardware line, e.g. "iPhone17,1 · iOS 26.1 · Walnut 1.0 (26)". */
-.devices-hw { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
-.devices-meta-dim { opacity: 0.7; font-style: italic; }
+
 /* Non-phone credentials (this Mac, simulators) collapse out of the way. */
 .devices-others > summary {
   font-size: 12px; color: var(--text-secondary); cursor: pointer; padding: 2px 0;
 }
 .devices-others > summary:hover { color: var(--text); }
-.devices-others .devices-list { margin-top: 8px; }
-/* Re-pair a phone that lost its token (outline button, mirrors .btn-danger-outline). */
-.devices-showqr {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 14px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.devices-showqr:hover:not(:disabled) { color: var(--text); border-color: var(--text-secondary); }
-.devices-showqr:disabled { opacity: 0.5; cursor: default; }
-/* Local vs Cloud credential — the two are stored on different machines. */
-.devices-tag {
-  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
-  font-size: 10px; font-weight: 600; letter-spacing: 0.02em; vertical-align: 1px;
-}
-.devices-tag-lan { background: var(--bg-secondary); color: var(--text-secondary); }
-.devices-tag-cloud { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
-/* Pairing-target picker: which address the QR sends the phone to. */
-.devices-target-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
 .devices-target {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
   padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
   background: transparent; cursor: pointer; text-align: left;
 }
 .devices-target:hover { background: var(--bg-secondary); }
-.devices-target-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.devices-target-label { font-size: 13px; font-weight: 600; }
-.devices-target-origin { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
 .devices-qr-block {
   display: flex; flex-direction: column; align-items: center; gap: 10px;
   padding: 18px; border: 1px solid var(--border); border-radius: 12px;
@@ -29168,11 +28547,9 @@ a.file-link:hover {
 
 /* ── Cloud Companion section (Settings → Cloud Companion, setup wizard) ── */
 .cloud-section { display: flex; flex-direction: column; gap: 14px; }
-.cloud-hint { font-size: 12px; color: var(--text-secondary); margin: 0; }
+
 .cloud-hero { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
-.cloud-hero-title { margin: 0; font-size: 15px; font-weight: 650; }
-.cloud-hero-body { margin: 0; font-size: 13px; color: var(--text-secondary); max-width: 62ch; }
-.cloud-validation { margin: 0; font-size: 12px; color: var(--warning, #b8860b); }
+
 .cloud-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* Provider cards — same visual family as .devices-target, one per driver. */
@@ -29187,11 +28564,11 @@ a.file-link:hover {
 }
 .cloud-provider-card:hover { background: var(--bg-secondary); }
 .cloud-provider-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.cloud-provider-head { display: flex; align-items: center; gap: 8px; width: 100%; justify-content: space-between; }
+
 .cloud-provider-label { font-size: 14px; font-weight: 600; }
-.cloud-provider-cost { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
 .cloud-provider-detail { font-size: 12px; color: var(--text-secondary); }
-.cloud-provider-fallback { font-size: 11px; color: var(--text-secondary); opacity: 0.8; font-style: italic; }
+
 .cloud-pill {
   padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 600;
   letter-spacing: 0.02em; white-space: nowrap; flex-shrink: 0;
@@ -29206,12 +28583,7 @@ a.file-link:hover {
 .cloud-configure-provider { margin: 0; font-size: 13px; }
 .cloud-configure-note { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
 .cloud-profile-field select { max-width: 340px; }
-/* Advisory, not a blocker: the probe can be a false negative, so it warns. */
-.cloud-configure-warn {
-  margin: 0; font-size: 12px; max-width: 62ch;
-  color: var(--warning, #b8860b);
-}
-.cloud-field-note { font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
+
 /* "What will happen": the operator is about to create billable resources in
    their own account, so this states the resources, the cost and the ownership
    before the Start button is reachable. */
@@ -29220,30 +28592,16 @@ a.file-link:hover {
   padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--bg-secondary);
 }
-.cloud-whathappens-title { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
-.cloud-whathappens-list {
-  margin: 0; padding-left: 18px;
-  display: flex; flex-direction: column; gap: 3px;
-  font-size: 12px; max-width: 62ch;
-}
+
 .cloud-whathappens-cost { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
 .cloud-fieldset {
   display: flex; flex-direction: column; gap: 10px; margin: 0;
   padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
 }
 .cloud-fieldset legend { font-size: 12px; font-weight: 600; color: var(--text-secondary); padding: 0 4px; }
-.cloud-radio { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
-.cloud-radio input { margin-top: 3px; flex-shrink: 0; }
-.cloud-radio > span { display: flex; flex-direction: column; gap: 2px; }
-.cloud-radio-label { font-size: 13px; font-weight: 600; }
-.cloud-radio-note { font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
-.cloud-radio-note code { font-size: 11px; }
+
 .cloud-domain-input { margin-left: 26px; max-width: 340px; }
 .cloud-field { display: flex; flex-direction: column; gap: 4px; max-width: 340px; }
-.cloud-field-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
-.cloud-advanced > summary { font-size: 12px; color: var(--text-secondary); cursor: pointer; }
-.cloud-advanced > summary:hover { color: var(--text); }
-.cloud-advanced-body { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 
 /* Step checklist — mirrors the STT setup progress idiom. */
 .cloud-live-head { margin: 0; font-size: 13px; }
@@ -29251,17 +28609,11 @@ a.file-link:hover {
 .cloud-step { padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; }
 .cloud-step-running { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .cloud-step-error { border-color: var(--danger, #d33); }
-.cloud-step-header { display: flex; align-items: center; gap: 8px; }
-.cloud-step-indicator { width: 16px; text-align: center; flex-shrink: 0; color: var(--text-secondary); }
-.cloud-step-done .cloud-step-indicator { color: var(--success); }
-.cloud-step-error .cloud-step-indicator { color: var(--danger, #d33); }
-.cloud-step-running .cloud-step-indicator { color: var(--accent); }
+
 .cloud-step-label { font-size: 13px; }
 .cloud-step-done .cloud-step-label,
 .cloud-step-skipped .cloud-step-label { color: var(--text-secondary); }
-.cloud-step-tag { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
-.cloud-step-errmsg { margin: 4px 0 0 24px; font-size: 12px; color: var(--danger, #d33); }
-.cloud-step-detail { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px 24px; }
+
 .cloud-step-note, .cloud-step-prompt { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
 .cloud-step-prompt { color: var(--text); }
 .cloud-step-waiting { margin: 0; font-size: 12px; color: var(--accent); }
@@ -29270,17 +28622,12 @@ a.file-link:hover {
 
 /* Copyable A-record rows + the user-data blob. */
 .cloud-copy-row { display: flex; align-items: center; gap: 8px; }
-.cloud-copy-label { font-size: 11px; color: var(--text-secondary); min-width: 44px; }
+
 .cloud-copy-value {
   flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
   font-size: 12px; padding: 4px 8px; background: var(--bg-secondary); border-radius: 6px;
 }
-.cloud-copy-btn {
-  flex-shrink: 0; background: transparent; color: var(--text-secondary);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 4px 10px; font-size: 12px; cursor: pointer;
-}
-.cloud-copy-btn:hover { color: var(--text); border-color: var(--text-secondary); }
+
 .cloud-log > summary { font-size: 12px; color: var(--text-secondary); cursor: pointer; }
 .cloud-log > summary:hover { color: var(--text); }
 .cloud-log-body {
@@ -29294,12 +28641,10 @@ a.file-link:hover {
   display: flex; flex-direction: column; gap: 10px;
   padding: 14px; border: 1px solid var(--border); border-radius: 10px;
 }
-.cloud-manual-title { margin: 0; font-size: 14px; font-weight: 650; }
-.cloud-manual-steps { margin: 0; padding-left: 22px; font-size: 12px; color: var(--text-secondary); }
-.cloud-manual-steps li { margin-bottom: 4px; }
+
 .cloud-manual-console { margin: 0; font-size: 12px; }
 .cloud-userdata { display: flex; flex-direction: column; gap: 6px; }
-.cloud-userdata-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
 .cloud-userdata-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 .cloud-userdata-warn { margin: 0; font-size: 11px; color: var(--warning, #b8860b); }
 .cloud-userdata-box {
@@ -29310,28 +28655,24 @@ a.file-link:hover {
 
 /* Done / already-configured. */
 .cloud-done, .cloud-configured { display: flex; flex-direction: column; gap: 12px; }
-.cloud-done-body { margin: 0; font-size: 13px; color: var(--text-secondary); max-width: 62ch; }
+
 .cloud-pair-card {
   display: flex; flex-direction: column; gap: 10px;
   padding: 14px; border: 1px solid var(--border); border-radius: 10px;
 }
-.cloud-pair-title { margin: 0; font-size: 14px; font-weight: 650; }
+
 .cloud-pair-note { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
 
 /* ── Focus Tiers section (Settings → Focus Tiers, custom tier CRUD) ── */
 .focus-tiers-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.focus-tiers-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
-  min-height: 40px;
-}
+/* Tier rows are plain SettingsRows in one group: no card per tier (F10). */
 .focus-tiers-icon { display: inline-flex; align-items: center; flex-shrink: 0; }
-.focus-tiers-label { flex: 1; font-size: 14px; font-weight: 500; text-align: left; }
+.focus-tiers-label { flex: 1; font-size: 14px; font-weight: 400; text-align: left; }
 /* Custom labels rename inline — the label itself is the affordance. */
 button.focus-tiers-label-editable {
   background: transparent; border: none; color: var(--fg); cursor: text;
   padding: 2px 4px; margin: -2px -4px; border-radius: 4px;
-  font: inherit; font-size: 14px; font-weight: 500;
+  font: inherit; font-size: 14px; font-weight: 400;
 }
 button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .focus-tiers-edit-input {
@@ -29345,8 +28686,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
   background: var(--bg-secondary); color: var(--fg-muted);
 }
-.focus-tiers-add-row { display: flex; gap: 8px; }
-.focus-tiers-add-row input { flex: 1; }
 
 /* ===== iOS Materials Pass ===== */
 /* Frosted-glass chrome for FLOATING surfaces only (popovers, menus, the
@@ -32161,57 +31500,8 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   text-decoration: underline;
 }
 
-/* A plugin's app entries, listed on the plugin's own row in the Plugins section */
-
-.plugin-app-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 6px 0 2px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
-}
-
-.plugin-app-controls-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.plugin-app-controls-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  overflow: hidden;
-  min-width: 0;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.plugin-app-controls-label strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.plugin-app-chip {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--fg-muted);
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.plugin-app-controls-actions {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 6px;
-}
+/* A plugin's app entries are plain indented SettingsRows of the plugin's
+   group (settings-sections-addons.css); no box of their own (N05). */
 
 /* "Build a plugin" — the one simple way in (Plugins section + /plugins/new) */
 
@@ -32224,17 +31514,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
-}
-
-.build-plugin-head {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.build-plugin-head span {
-  color: var(--fg-muted);
-  font-size: 12px;
 }
 
 .build-plugin-form {
@@ -32262,12 +31541,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 @media (max-width: 700px) {
-  .plugin-app-controls-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
-  }
-
   .build-plugin-form {
     flex-direction: column;
   }

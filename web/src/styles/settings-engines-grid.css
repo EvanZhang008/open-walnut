@@ -1,0 +1,154 @@
+/*
+ * Engines pane rows as columns (N3-01, N3-06, N3-07).
+ *
+ * Each Engines group wraps its rows in `.engine-settings-grid`. From a 600px
+ * group up it is a grid and every row is a subgrid row, so the source tags,
+ * the controls and the Reset buttons of a group form three columns: a tag
+ * sits at the same x on every row whatever the width of the control beside
+ * it. Free-text rows (model ids, paths) put their field under the label.
+ * Under 600px the wrapper is a plain block again and a row whose control is
+ * not a switch drops the whole cluster under its copy, so a label never
+ * wraps word by word. Container queries on the group (`sgroup`), never the
+ * viewport. Selectors carry the group class so they outrank
+ * settings-sections-configure.css whatever order the sheets load in.
+ */
+
+@container sgroup (min-width: 600px) {
+  .settings-group .engine-settings-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content max-content max-content;
+    column-gap: 6px;
+  }
+
+  .settings-group .engine-settings-grid > * {
+    grid-column: 1 / -1;
+  }
+
+  .settings-group .engine-settings-grid > .settings-row.engine-setting-row.engine-setting-row-pane {
+    display: grid;
+    grid-template-columns: subgrid;
+    column-gap: 6px;
+    row-gap: 8px;
+    align-items: center;
+  }
+
+  .settings-group .engine-settings-grid > .settings-row.engine-setting-row-pane > .settings-row-copy {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    /* 6px column gap + 10px = the 16px every row keeps between copy and control. */
+    margin-right: 10px;
+  }
+
+  .settings-group .engine-settings-grid > .engine-setting-row-pane > .settings-row-actions,
+  .settings-group .engine-settings-grid > .engine-setting-row-pane .engine-pane-controls {
+    display: contents;
+  }
+
+  .settings-group .engine-settings-grid > .engine-setting-row-pane .engine-pane-tag-slot {
+    grid-column: 2;
+    grid-row: 1;
+    justify-items: start;
+  }
+
+  .settings-group .engine-settings-grid > .engine-setting-row-pane .engine-setting-control {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .settings-group .engine-settings-grid > .engine-setting-row-pane .engine-pane-reset-slot {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  /* Free text: label and tag on the first line, the field under the label
+     from the label's x to the control column's edge, Reset in its column. */
+  .settings-group .engine-settings-grid > .engine-setting-row-pane[data-control='text'] .engine-setting-control {
+    grid-column: 1 / 4;
+    grid-row: 2;
+    justify-self: stretch;
+    justify-content: flex-start;
+  }
+
+  .settings-group .engine-settings-grid > .engine-setting-row-pane[data-control='text'] .engine-pane-reset-slot {
+    grid-row: 2;
+  }
+
+  .settings-group .engine-settings-grid > .engine-setting-row-pane[data-control='text'] .engine-setting-text {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: 380px;
+  }
+}
+
+/* A tag column sized by the tags a group really shows ('Project' reserved),
+   not by the rare 'Shared project': every row gets that width back. */
+.settings-group .engine-settings-grid .engine-pane-tag-slot::before {
+  content: 'Project';
+}
+
+/* Chunk breaks and first-row hairlines inside the wrapper. */
+.settings-group .engine-settings-grid > .engine-settings-chunk-break + .settings-row::before {
+  content: none;
+}
+
+.settings-group .settings-disclosure-content > .engine-settings-grid > .settings-row:first-child::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--settings-row-indent);
+  right: 0;
+  height: 1px;
+  background: var(--settings-hairline);
+  pointer-events: none;
+}
+
+.settings-group .engine-settings-grid > .settings-row.engine-setting-row.engine-setting-row-pane.settings-row-indent {
+  padding-left: var(--settings-row-indent);
+}
+
+/* An overridden row already carries the 45%: its disabled fieldset does not
+   fade a second time (N07, N3-17). */
+.settings-group .engine-setting-row-pane[aria-disabled='true'] .engine-setting-control:disabled {
+  opacity: 1;
+}
+
+/* Language and other prose values are not code: normal text font (N3-07). */
+.settings-group .engine-setting-row-pane[data-mono='false'] .engine-setting-text {
+  font-family: inherit;
+  font-size: 13px;
+}
+
+@container sgroup (max-width: 599px) {
+  /* Copy first, full width; the cluster under it, on the right (N3-01). */
+  .settings-group .engine-settings-grid > .settings-row.engine-setting-row-pane:not([data-control='switch']) {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .settings-group .engine-settings-grid > .settings-row.engine-setting-row-pane:not([data-control='switch']) > .settings-row-copy {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .settings-group .engine-settings-grid > .settings-row.engine-setting-row-pane:not([data-control='switch']) > .settings-row-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+
+  /* A switch row keeps one line and at least 45% for its label. */
+  .settings-group .engine-settings-grid > .settings-row.engine-setting-row-pane[data-control='switch'] > .settings-row-copy {
+    flex: 1 1 45%;
+    min-width: 0;
+  }
+
+  .settings-group .engine-settings-grid > .engine-setting-row-pane:not([data-control='switch']) select.engine-setting-select {
+    max-width: 100%;
+  }
+
+  .settings-group .engine-settings-grid > .engine-setting-row-pane:not([data-control='switch']) .engine-pane-controls {
+    max-width: 100%;
+  }
+}

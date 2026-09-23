@@ -127,7 +127,8 @@ test('dead credential → one Sign in card → Settings row → device code → 
   page.on('websocket', (ws) => {
     ws.on('framereceived', (frame) => {
       const text = typeof frame.payload === 'string' ? frame.payload : frame.payload.toString()
-      if (text.includes('"notification:')) wsFrames.push(`${new Date().toISOString()} ${text.slice(0, 400)}`)
+      // Whole frame: `resolved` can sit past any fixed prefix once the body grows.
+      if (text.includes('"notification:')) wsFrames.push(`${new Date().toISOString()} ${text}`)
     })
   })
   const dumpFrames = () => fs.writeFile(`${SCREENSHOT_DIR}/ws-frames.log`, wsFrames.join('\n')).catch(() => {})
@@ -158,13 +159,14 @@ test('dead credential → one Sign in card → Settings row → device code → 
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 60_000 })
   const row = page.getByTestId(`plugin-row-${pluginId}`)
   await expect(row).toBeVisible({ timeout: 30_000 })
-  await expect(row).toContainText('on')
-  await expect(row.getByTestId(`plugin-row-connection-${pluginId}`)).toHaveText('sign in needed')
+  // The switch says the plugin is on (no On tag); the title line carries the link state.
+  await expect(page.locator(`#plugin-toggle-${pluginId}`)).toHaveAttribute('aria-checked', 'true')
+  await expect(row.getByTestId(`plugin-row-connection-${pluginId}`)).toHaveText('Sign in needed')
 
   const connection = page.getByTestId(`plugin-connection-${pluginId}`)
   await expect(connection).toBeVisible()
   await expect(connection).toHaveAttribute('data-connection-state', 'sign-in-required')
-  await expect(connection.getByTestId(`plugin-connection-badge-${pluginId}`)).toHaveText('sign in needed')
+  await expect(connection.getByTestId(`plugin-connection-badge-${pluginId}`)).toHaveText('Sign in needed')
   // The plugin's own sentence AND what Walnut's loop saw, side by side.
   await expect(connection.getByTestId(`plugin-connection-detail-${pluginId}`)).toContainText('invalid_grant')
   await expect(connection.getByTestId(`plugin-connection-sync-${pluginId}`)).toContainText(/Sync has failed \d+ times? in a row/)
@@ -177,22 +179,22 @@ test('dead credential → one Sign in card → Settings row → device code → 
   await expect(connection).toHaveAttribute('data-connection-state', 'signing-in')
   await expect(connection.getByTestId(`plugin-signin-code-${pluginId}`)).toHaveText('FIX-2468')
   await expect(prompt.getByRole('link')).toHaveAttribute('href', 'https://example.invalid/devicelogin')
-  await expect(prompt).toContainText('This panel updates by itself once you finish.')
-  await expect(row.getByTestId(`plugin-row-connection-${pluginId}`)).toHaveText('signing in…')
+  await expect(prompt).toContainText('this updates by itself once you finish.')
+  await expect(row.getByTestId(`plugin-row-connection-${pluginId}`)).toHaveText('Signing in...')
   await page.locator('#plugin-store').screenshot({ path: `${SCREENSHOT_DIR}/3-device-code.png` })
 
   // ── 4. The flow completes on its own: connected, no reload ──
   await expect(connection).toHaveAttribute('data-connection-state', 'connected', { timeout: 30_000 })
-  await expect(connection.getByTestId(`plugin-connection-badge-${pluginId}`)).toHaveText('signed in')
+  await expect(connection.getByTestId(`plugin-connection-badge-${pluginId}`)).toHaveText('Signed in')
   await expect(connection).toContainText('fixture@example.com')
-  await expect(connection).toContainText('renews automatically')
+  await expect(connection).toContainText('Renews automatically')
   await expect(prompt).toHaveCount(0)
   await expect(connection.getByTestId(`plugin-sign-in-${pluginId}`)).toHaveCount(0)
   // A healthy link is not a badge on the title line.
   await expect(row.getByTestId(`plugin-row-connection-${pluginId}`)).toHaveCount(0)
   // The next good tick clears the failure streak on the panel.
   await expect(connection.getByTestId(`plugin-connection-sync-${pluginId}`)).toHaveCount(0, { timeout: 30_000 })
-  await expect(connection).toContainText('last sync')
+  await expect(connection).toContainText('last synced')
   await page.locator('#plugin-store').screenshot({ path: `${SCREENSHOT_DIR}/4-signed-in.png` })
 
   // ── 5. The card retired by itself ──

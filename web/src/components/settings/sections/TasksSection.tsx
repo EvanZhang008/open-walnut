@@ -1,200 +1,202 @@
-import { useState, useEffect } from 'react';
 import type { Config, TaskPriority } from '@open-walnut/core';
-import { useAutoSave } from '@/hooks/useAutoSave';
-import { SectionCard } from '../inputs/SectionCard';
+import { SettingsGroup, SettingsRow, SettingsSection } from '../SettingsSection';
 import { NumberInput } from '../inputs/NumberInput';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SegmentedControl } from '../inputs/SegmentedControl';
+import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
+import { useCommitField } from '../inputs/useCommitField';
 import { useIntegrations } from '@/hooks/useIntegrations';
-import { useShowPriority, setShowPriority } from '@/hooks/useShowPriority';
+import { useShowPriority } from '@/hooks/useShowPriority';
+import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { SmartTaskCreation } from './SmartTaskCreation';
+import { useSerialSave, type OnSave } from './GeneralSection';
 
 interface Props {
   config: Config;
-  onSave: (partial: Partial<Config>) => Promise<void>;
+  onSave: OnSave;
   onReload: () => Promise<void>;
 }
 
-type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
+export type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
+
+const NOTIFY_OPTIONS: { value: TriageNotifyMode; label: string; testId: string }[] = [
+  { value: 'off', label: 'Off', testId: 'triage-notify-off' },
+  { value: 'buffered', label: 'On heartbeat', testId: 'triage-notify-buffered' },
+  { value: 'realtime', label: 'Right away', testId: 'triage-notify-realtime' },
+];
+
+/** Warning under Default project when the typed name is not a known project yet. */
+export function unknownProjectWarning(value: string, loaded: boolean, isKnown: (n: string) => boolean): string | null {
+  const name = value.trim();
+  if (!name || !loaded || isKnown(name)) return null;
+  return `No project named "${name}" yet; the next quick add creates it.`;
+}
+
+/** Server bound only: a negative debounce is treated as 0 by the triage hook. */
+const atLeastZero = (v: number | undefined) => (v === undefined ? v : Math.max(0, v));
 
 /**
- * Everything about tasks as tasks: where a new one lands (defaults, quick-add
- * destination) and how a finished session reports back onto its task (Task
- * Summary). The defaults used to sit in General and the summary knobs in
- * "Tasks & Sessions", so the task story was split across two cards.
+ * Everything about tasks as tasks: where a new one lands, smart creation, and
+ * how a finished session reports back onto its task.
  */
 export function TasksSection({ config, onSave, onReload }: Props) {
   const integrations = useIntegrations();
-  // `ui.show_priority` is read and written through its own module store, NOT through
-  // this section's local state + useAutoSave: hundreds of rows read the same flag, and
-  // a second `ui` write from here would race the store's own merged write.
-  const showPriority = useShowPriority();
-  const [defaultPriority, setDefaultPriority] = useState<TaskPriority>(config.defaults?.priority ?? 'none');
-  const [defaultPlatform, setDefaultPlatform] = useState(config.defaults?.platform ?? 'local');
-  const [defaultProject, setDefaultProject] = useState(config.defaults?.project ?? '');
-  // Triage throttling (config.agent.triage)
-  const [triageNotifyMode, setTriageNotifyMode] = useState<TriageNotifyMode>(config.agent?.triage?.notify_mode ?? 'off');
-  const [triageDebounce, setTriageDebounce] = useState<number | undefined>(config.agent?.triage?.debounce_minutes ?? 4);
+  const projects = useProjectRegistry();
+  // The app-wide store answers until config has the key (default hidden).
+  const storeShowPriority = useShowPriority();
+  const save = useSerialSave(config, onSave);
+  const showPriority = useOptimisticSetting<boolean>(
+    config.ui?.show_priority ?? storeShowPriority,
+    (v) => save((c) => ({ ui: { ...(c.ui ?? {}), show_priority: v } }), { rowKey: 'tasks.show-priority' }),
+    { rowKey: 'tasks.show-priority' },
+  );
+  const saveDefaults = (patch: Partial<NonNullable<Config['defaults']>>, rowKey: string) =>
+    save((c) => ({ defaults: { ...(c.defaults ?? {}), ...patch } as Config['defaults'] }), { rowKey });
+  const priority = useOptimisticSetting<TaskPriority>(
+    config.defaults?.priority ?? 'none',
+    (v) => saveDefaults({ priority: v }, 'tasks.default-priority'),
+    { rowKey: 'tasks.default-priority' },
+  );
+  const platform = useOptimisticSetting<string>(
+    config.defaults?.platform ?? 'local',
+    (v) => saveDefaults({ platform: v }, 'tasks.platform'),
+    { rowKey: 'tasks.platform' },
+  );
+  // Empty = Inbox. Never persist a literal "Inbox": that would create a real project.
+  const project = useCommitField<string>(
+    config.defaults?.project ?? '',
+    (v) => saveDefaults({ project: v.trim() || undefined }, 'tasks.default-project'),
+    { rowKey: 'tasks.default-project', kind: 'text' },
+  );
+  const saveTriage = (patch: Record<string, unknown>, rowKey: string) =>
+    // Spread config.agent: updateConfig replaces the whole `agent` key.
+    save((c) => ({ agent: { ...c.agent, triage: { ...c.agent?.triage, ...patch } } } as Partial<Config>), { rowKey });
+  const notify = useOptimisticSetting<TriageNotifyMode>(
+    config.agent?.triage?.notify_mode ?? 'off',
+    (v) => saveTriage({ notify_mode: v }, 'tasks.triage-notify'),
+    { rowKey: 'tasks.triage-notify' },
+  );
+  const debounce = useCommitField<number | undefined>(
+    config.agent?.triage?.debounce_minutes,
+    (v) => saveTriage({ debounce_minutes: v }, 'tasks.triage-debounce'),
+    { rowKey: 'tasks.triage-debounce', kind: 'number', clamp: atLeastZero },
+  );
 
-  useEffect(() => {
-    setDefaultPriority(config.defaults?.priority ?? 'none');
-    setDefaultPlatform(config.defaults?.platform ?? 'local');
-    setDefaultProject(config.defaults?.project ?? '');
-    setTriageNotifyMode(config.agent?.triage?.notify_mode ?? 'off');
-    setTriageDebounce(config.agent?.triage?.debounce_minutes ?? 4);
-  }, [config]);
-
-  const handleSave = async () => {
-    await onSave({
-      defaults: {
-        priority: defaultPriority,
-        platform: defaultPlatform,
-        // Empty = Inbox. Never persist a literal "Inbox" — that would create a real project.
-        ...(defaultProject.trim() ? { project: defaultProject.trim() } : {}),
-      },
-      // Spread ...config.agent so sibling agent fields (main_provider, provider,
-      // available_models, …) survive — updateConfig replaces the whole `agent` key.
-      agent: {
-        ...config.agent,
-        triage: { notify_mode: triageNotifyMode, debounce_minutes: triageDebounce ?? 4 },
-      },
-    });
-  };
-
-  // Auto-save: write when local edits drift from the persisted config. The `baseline` is
-  // recomputed from the config prop so a post-save refresh matches `current` and won't echo.
-  useAutoSave({
-    current: JSON.stringify({
-      defaultPriority, defaultPlatform, defaultProject,
-      triageNotifyMode, triageDebounce: triageDebounce ?? 4,
-    }),
-    baseline: JSON.stringify({
-      defaultPriority: config.defaults?.priority ?? 'none',
-      defaultPlatform: config.defaults?.platform ?? 'local',
-      defaultProject: config.defaults?.project ?? '',
-      triageNotifyMode: config.agent?.triage?.notify_mode ?? 'off',
-      triageDebounce: config.agent?.triage?.debounce_minutes ?? 4,
-    }),
-    save: handleSave,
-  });
+  const projectWarning = unknownProjectWarning(project.inputProps.value, projects.loaded, projects.isKnownProject);
 
   return (
-    <SectionCard id="tasks" title="Tasks" description="Where new tasks land, and how a finished session reports back onto its task. Changes save automatically." onSave={handleSave} showSave={false}>
-      <div className="form-group">
-        <ToggleSwitch
-          id="settings-show-priority"
-          checked={showPriority}
-          onChange={setShowPriority}
+    <SettingsSection id="tasks" title="Tasks">
+      <SettingsGroup>
+        <SettingsRow
           label="Show task priority"
+          help="Priority stays stored and sortable when hidden."
+          htmlFor="settings-show-priority"
+          error={showPriority.error}
+          control={
+            <ToggleSwitch
+              id="settings-show-priority"
+              checked={showPriority.value}
+              busy={showPriority.busy}
+              onChange={showPriority.set}
+            />
+          }
         />
-        <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-          Hidden by default because most people never use it; priority stays stored and sortable either way.
-        </p>
-      </div>
-
-      <div className="form-row">
-        {/* Only meaningful while priority is drawn — otherwise it sets a field nothing shows. */}
-        {showPriority && (
-          <div className="form-group">
-            <label htmlFor="settings-priority">Default Priority</label>
-            <select
-              id="settings-priority"
-              value={defaultPriority}
-              onChange={(e) => setDefaultPriority(e.target.value as TaskPriority)}
-            >
-              <option value="none">None (untriaged)</option>
-              <option value="backlog">Backlog</option>
-              <option value="important">Important</option>
-              <option value="immediate">Immediate</option>
-            </select>
-          </div>
-        )}
-
-        <div className="form-group">
-          <label htmlFor="settings-project">Default Project <span className="text-muted">(optional)</span></label>
-          <input
-            id="settings-project"
-            type="text"
-            value={defaultProject}
-            onChange={(e) => setDefaultProject(e.target.value)}
-            placeholder="Leave empty for Inbox"
+        {/* Only meaningful while priority is drawn; otherwise it sets a field nothing shows. */}
+        {showPriority.value && (
+          <SettingsRow
+            indent
+            label="Default priority"
+            htmlFor="settings-priority"
+            error={priority.error}
+            control={
+              <select
+                id="settings-priority"
+                className="settings-select"
+                value={priority.value}
+                onChange={(e) => priority.set(e.target.value as TaskPriority)}
+              >
+                <option value="none">None (untriaged)</option>
+                <option value="backlog">Backlog</option>
+                <option value="important">Important</option>
+                <option value="immediate">Immediate</option>
+              </select>
+            }
           />
-          <p className="text-sm text-muted" style={{ margin: '4px 0 0' }}>
-            Where new tasks land when no project is given. Empty means Inbox.
-          </p>
-        </div>
-      </div>
-
-      <div className="form-group">
-        <label htmlFor="settings-platform">Quick-add creates tasks in</label>
-        <select
-          id="settings-platform"
-          value={defaultPlatform}
-          onChange={(e) => setDefaultPlatform(e.target.value)}
-        >
-          <option value="local">Walnut (this device — instant)</option>
-          {integrations.map((i) => (
-            <option key={i.id} value={i.id}>{i.name}</option>
-          ))}
-        </select>
-        <p className="text-sm text-muted" style={{ margin: '4px 0 0' }}>
-          Where &ldquo;Add to Focus&rdquo; puts a new task. Walnut is instant and never synced;
-          pick a connected service to create new captures there instead.
-        </p>
-      </div>
+        )}
+        <SettingsRow
+          label="Default project"
+          help={projectWarning ?? 'Where new tasks land when none is given.'}
+          state={projectWarning ? 'warning' : undefined}
+          htmlFor="settings-project"
+          error={project.error}
+          data-testid="settings-default-project-row"
+          control={
+            <>
+              <input
+                id="settings-project"
+                type="text"
+                className="settings-input settings-input--short"
+                placeholder="Inbox"
+                list="settings-project-options"
+                autoComplete="off"
+                {...project.inputProps}
+              />
+              <datalist id="settings-project-options">
+                {projects.projectNames.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
+            </>
+          }
+        />
+        <SettingsRow
+          label="Quick add creates tasks in"
+          help="Walnut is instant and never synced; a connected service creates the task there."
+          htmlFor="settings-platform"
+          error={platform.error}
+          control={
+            <select
+              id="settings-platform"
+              className="settings-select"
+              value={platform.value}
+              onChange={(e) => platform.set(e.target.value)}
+            >
+              <option value="local">Walnut (this device, instant)</option>
+              {integrations.map((i) => (
+                <option key={i.id} value={i.id}>{i.name}</option>
+              ))}
+            </select>
+          }
+        />
+      </SettingsGroup>
 
       <SmartTaskCreation config={config} onSave={onSave} onReload={onReload} />
 
-      <div className="settings-divider" />
-
-      {/* Task Summary — a TASK concern (updates the task's note/phase and decides task
-          notifications), merely triggered by a session turn. The session itself
-          writes the note (side_question self-report, ~free); phase/notify is a
-          deterministic PHASE_SIGNAL lookup — no summarizer agent runs. */}
-      <div className="form-group">
-        <label style={{ fontWeight: 600 }}>Task Summary</label>
-        <p className="text-sm text-muted" style={{ margin: '2px 0 0' }}>
-          After a session goes quiet, the session itself reports what it did — Walnut updates
-          the task&rsquo;s summary and decides whether anything needs your attention.
-        </p>
-      </div>
-
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="triage-notify-mode">Notify Home Chat</label>
-          <select
-            id="triage-notify-mode"
-            value={triageNotifyMode}
-            onChange={(e) => setTriageNotifyMode(e.target.value as TriageNotifyMode)}
-            style={{ maxWidth: 220 }}
-          >
-            <option value="off">Off — quiet (poll only)</option>
-            <option value="buffered">Buffered — review on heartbeat</option>
-            <option value="realtime">Realtime — notify immediately</option>
-          </select>
-          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-            The task summary is <strong>always</strong> updated. This only controls whether the
-            home chat is woken to tell you about it. <strong>Off</strong> stays silent — the agent
-            sees it next time it checks the task. <strong>Realtime</strong> is the most expensive
-            (reads the whole conversation each time).
-          </p>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="triage-debounce">Triage Debounce</label>
-          <NumberInput
-            id="triage-debounce"
-            value={triageDebounce}
-            onChange={setTriageDebounce}
-            suffix="minutes"
-            placeholder="4"
-            min={0}
-          />
-          <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-            Wait this long after the last turn before triaging, so a burst of back-and-forth
-            collapses into one triage. 0 = triage on every turn.
-          </p>
-        </div>
-      </div>
-    </SectionCard>
+      {/* A TASK concern (the task's note/phase and its notifications), merely
+          triggered by a session turn; no summarizer agent runs. */}
+      <SettingsGroup heading="After a session finishes" data-testid="tasks-after-session">
+        <SettingsRow
+          label="Tell Ask Walnut"
+          help="The task summary always updates; this only decides whether chat hears about it."
+          error={notify.error}
+          control={
+            <SegmentedControl<TriageNotifyMode>
+              id="triage-notify-mode"
+              aria-label="Tell Ask Walnut"
+              value={notify.value}
+              options={NOTIFY_OPTIONS}
+              onChange={notify.set}
+            />
+          }
+        />
+        <SettingsRow
+          label="Wait before summarizing"
+          help="Turns inside this quiet window collapse into one summary; 0 summarizes every turn."
+          htmlFor="triage-debounce"
+          error={debounce.error}
+          control={<NumberInput id="triage-debounce" field={debounce.inputProps} unit="minutes" placeholder="4" min={0} />}
+        />
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

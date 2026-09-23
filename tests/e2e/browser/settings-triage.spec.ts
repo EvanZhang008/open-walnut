@@ -51,7 +51,7 @@ async function openTriageSection(page: Page) {
   if ((await page.locator('.sidebar.collapsed').count()) > 0) {
     await page.locator('.sidebar-collapse-btn').click()
   }
-  await page.locator('.sidebar-nav a[href="/settings"]').click()
+  await page.locator('.sidebar-nav a[href^="/settings"]').click()
   // The registry row's id is what mints this testid (SettingsNav).
   await page.getByTestId('settings-nav-triage').click()
   const section = page.locator('#triage')
@@ -62,7 +62,7 @@ async function openTriageSection(page: Page) {
 async function reopenTriageSection(page: Page) {
   await page.locator('.sidebar-nav a[href="/"]').click()
   await expect(page.locator('#triage')).toHaveCount(0)
-  await page.locator('.sidebar-nav a[href="/settings"]').click()
+  await page.locator('.sidebar-nav a[href^="/settings"]').click()
   await page.getByTestId('settings-nav-triage').click()
   const section = page.locator('#triage')
   await expect(section).toBeVisible()
@@ -88,7 +88,7 @@ test.describe('Settings → Inbox Triage', () => {
     await expect(section.locator('#inbox-triage-every-messages')).toHaveValue(String(before?.every_messages ?? 20))
     await expect(section.getByTestId('inbox-triage-source-mail')).toBeChecked()
     await expect(section.getByTestId('inbox-triage-source-slack')).toBeChecked()
-    await expect(section.locator('#inbox-triage-mode')).toHaveValue(before?.mode ?? 'ask')
+    await expect(section.getByTestId(`inbox-triage-mode-${before?.mode ?? 'ask'}`)).toHaveAttribute('aria-checked', 'true')
     await expect(section.locator('#inbox-triage-hours')).toHaveValue(before?.active_hours ?? '08:00-22:00')
     await expect(section.locator('#inbox-triage-auto-mark-read')).toHaveAttribute('aria-checked', String(before?.auto_mark_read ?? false))
 
@@ -101,12 +101,17 @@ test.describe('Settings → Inbox Triage', () => {
   test('a change round-trips through the server and survives leaving the page', async ({ page, request }) => {
     const section = await openTriageSection(page)
 
+    // Switches and segments save on the click; text fields on blur or Enter.
     await section.locator('#inbox-triage-enabled').click()
+    await expect(section.locator('#inbox-triage-every')).toBeEnabled()
     await section.locator('#inbox-triage-every').fill('45m')
+    await section.locator('#inbox-triage-every').press('Enter')
     await section.locator('#inbox-triage-every-messages').fill('8')
+    await section.locator('#inbox-triage-every-messages').press('Enter')
     await section.getByTestId('inbox-triage-source-mail').uncheck()
-    await section.locator('#inbox-triage-mode').selectOption('assist')
+    await section.getByTestId('inbox-triage-mode-assist').click()
     await section.locator('#inbox-triage-hours').fill('09:00-18:00')
+    await section.locator('#inbox-triage-hours').blur()
     await section.locator('#inbox-triage-auto-mark-read').click()
 
     await expect.poll(async () => await serverTriage(request), { timeout: 20_000 })
@@ -127,7 +132,7 @@ test.describe('Settings → Inbox Triage', () => {
     await expect(reopened.locator('#inbox-triage-every-messages')).toHaveValue('8')
     await expect(reopened.getByTestId('inbox-triage-source-mail')).not.toBeChecked()
     await expect(reopened.getByTestId('inbox-triage-source-slack')).toBeChecked()
-    await expect(reopened.locator('#inbox-triage-mode')).toHaveValue('assist')
+    await expect(reopened.getByTestId('inbox-triage-mode-assist')).toHaveAttribute('aria-checked', 'true')
     await expect(reopened.locator('#inbox-triage-enabled')).toHaveAttribute('aria-checked', 'true')
   })
 
@@ -141,7 +146,10 @@ test.describe('Settings → Inbox Triage', () => {
     expect(put.ok()).toBe(true)
 
     const section = await openTriageSection(page)
+    // The previous test left triage on, so the field is live.
+    await expect(section.locator('#inbox-triage-every')).toBeEnabled()
     await section.locator('#inbox-triage-every').fill('20m')
+    await section.locator('#inbox-triage-every').press('Enter')
 
     await expect.poll(async () => await serverTriage(request), { timeout: 20_000 })
       .toMatchObject({ every: '20m', future_knob: 'keep-me' })

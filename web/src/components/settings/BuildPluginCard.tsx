@@ -1,5 +1,5 @@
 /**
- * "Build a plugin" — the ONE simple way in: describe it, click, and an AI
+ * "Build a plugin": the ONE simple way in: describe it, click, and an AI
  * session starts building it. No terminal, no copied commands: the session
  * runs `plugin-cli new --dev` itself, and the watcher links the plugin into
  * this running Walnut so it appears live while the session works.
@@ -15,6 +15,9 @@ import { useNavigate } from 'react-router-dom'
 import { quickStartSession } from '@/api/sessions'
 import { fetchInstallDir, fetchIsCloudReplica } from '@/api/config'
 import { openSessionOnHome } from '@/utils/open-session'
+import { SettingsGroup, SettingsRow } from './SettingsSection'
+import { SettingsButton } from './inputs/SettingsButton'
+import '@/styles/settings-sections-addons.css'
 
 export const PLUGIN_CREATE_COMMAND = 'npx @open-walnut/plugin-cli new my-plugin --dev'
 
@@ -76,51 +79,55 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
     }
   }
 
-  return (
-    <div className="build-plugin-card" data-testid="build-plugin-card">
-      <div className="build-plugin-head">
-        <strong>Build a plugin</strong>
-        <span>
-          {cloud
-            ? 'Describe it on your Mac and an AI session builds it there. Building needs the Mac console; this replica can only browse.'
-            : 'Describe it, and an AI session builds it. It appears in your sidebar as it takes shape.'}
-        </span>
-      </div>
-      {!cloud && (
-        <div className="build-plugin-form">
-          <input
-            type="text"
-            value={request}
-            onChange={(e) => setRequest(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void start() } }}
-            placeholder="What should it do? e.g. a Pomodoro timer in the sidebar"
-            data-testid="build-plugin-request"
-          />
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            disabled={busy}
-            onClick={() => void start()}
-            data-testid="build-plugin-start"
-          >
-            {busy ? 'Starting…' : 'Build it'}
+  const manual = showManual ? (
+    <span className="build-plugin-manual">
+      To do it yourself, run <code>{PLUGIN_CREATE_COMMAND}</code> in a terminal
+      {showGuideLink && (
+        <>
+          , or read the{' '}
+          <button type="button" className="settings-addons-link" data-testid="build-plugin-guide" onClick={() => navigate('/plugins/new')}>
+            step-by-step guide
           </button>
-        </div>
-      )}
-      {error && <p className="text-sm" style={{ color: 'var(--priority-immediate)' }}>{error}</p>}
-      {showManual && (
-        <p className="build-plugin-manual text-xs text-muted">
-          Prefer to do it yourself? Run <code>{PLUGIN_CREATE_COMMAND}</code> in a terminal
-          {showGuideLink && (
-            <>
-              , or read the{' '}
-              <button type="button" className="link-button" data-testid="build-plugin-guide" onClick={() => navigate('/plugins/new')}>
-                step-by-step guide
-              </button>
-            </>
-          )}.
-        </p>
-      )}
-    </div>
+        </>
+      )}.
+    </span>
+  ) : undefined
+
+  return (
+    <SettingsGroup heading="Build a plugin" footer={manual} data-testid="build-plugin-card" className="build-plugin-card">
+      <SettingsRow
+        label="Describe it"
+        htmlFor="build-plugin-request"
+        wide
+        className="settings-row-stacked"
+        help={cloud
+          ? 'Building needs the Mac console; this replica can only browse.'
+          : 'An AI session builds it, and it appears in your sidebar as it takes shape.'}
+        error={error ?? undefined}
+        control={cloud ? undefined : (
+          <span className="settings-addons-inline build-plugin-form">
+            <input
+              id="build-plugin-request"
+              type="text"
+              className="settings-input settings-input--long"
+              value={request}
+              onChange={(e) => setRequest(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void start() } }}
+              placeholder="What should it do? For example a Pomodoro timer"
+              data-testid="build-plugin-request"
+            />
+            <SettingsButton
+              variant="primary"
+              busy={busy}
+              busyLabel="Starting..."
+              onClick={() => void start()}
+              data-testid="build-plugin-start"
+            >
+              Build it
+            </SettingsButton>
+          </span>
+        )}
+      />
+    </SettingsGroup>
   )
 }

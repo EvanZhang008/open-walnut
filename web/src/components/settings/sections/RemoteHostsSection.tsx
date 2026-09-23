@@ -1,11 +1,16 @@
-import { useState, useEffect } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
-import { KeyValueEditor } from '../inputs/KeyValueEditor';
-import { useAutoSave } from '@/hooks/useAutoSave';
+import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
+import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
-import { RemoteHostStatus } from './RemoteHostStatus';
+import { RemoteHostStatus, RemoteHostUnreachable } from './RemoteHostStatus';
+import { AddLimitRow } from './RemoteHostLimits';
+import '@/styles/settings-sections-addons.css';
 
 interface HostEntry {
   _key: number; // stable React key
@@ -25,13 +30,28 @@ function emptyHost(): HostEntry {
   return { _key: nextHostKey++, alias: '', hostname: '', user: '', port: undefined, label: '', shell_setup: '', enabled: true, discovered: false };
 }
 
+function hostsFromConfig(config: Config): HostEntry[] {
+  return Object.entries(config.hosts ?? {}).map(([alias, h]) => ({
+    _key: nextHostKey++,
+    alias,
+    hostname: h.hostname,
+    user: h.user ?? '',
+    port: h.port,
+    label: h.label ?? '',
+    shell_setup: h.shell_setup ?? '',
+    enabled: h.enabled ?? true,
+    discovered: h.discovered ?? false,
+  }));
+}
+
 interface Props {
   config: Config;
   onSave: (partial: Partial<Config>) => Promise<void>;
 }
 
 export function RemoteHostsSection({ config, onSave }: Props) {
-  const [hosts, setHosts] = useState<HostEntry[]>([]);
+  // Hydrated on the first render so the auto-save fingerprint matches its baseline at mount.
+  const [hosts, setHosts] = useState<HostEntry[]>(() => hostsFromConfig(config));
   const [expanded, setExpanded] = useState<number | null>(null);
   // Per-host concurrency caps (config.session_limits). Keyed by the same aliases
   // as the hosts above (plus "local"), so they belong on this card.
@@ -41,18 +61,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   useEffect(() => { void hydrateHostStatus(); }, []);
 
   useEffect(() => {
-    const entries = Object.entries(config.hosts ?? {}).map(([alias, h]) => ({
-      _key: nextHostKey++,
-      alias,
-      hostname: h.hostname,
-      user: h.user ?? '',
-      port: h.port,
-      label: h.label ?? '',
-      shell_setup: h.shell_setup ?? '',
-      enabled: h.enabled ?? true,
-      discovered: h.discovered ?? false,
-    }));
-    setHosts(entries);
+    setHosts(hostsFromConfig(config));
     setSessionLimits(config.session_limits ?? {});
   }, [config]);
 
@@ -106,7 +115,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
 
   // Re-normalize the persisted hosts through the SAME field order buildHostsConfig produces,
   // so the baseline can't differ from `current` purely by YAML key ordering (which would
-  // otherwise loop: save → refresh → reorder mismatch → save again).
+  // otherwise loop: save, refresh, reorder mismatch, save again).
   const normalizeHosts = (h: Config['hosts']): NonNullable<Config['hosts']> => {
     const out: NonNullable<Config['hosts']> = {};
     for (const [alias, v] of Object.entries(h ?? {})) {
@@ -123,156 +132,173 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     return out;
   };
 
-  // Fingerprint the VALIDATED hosts map (not raw entries) so typing a partial host — or a row
+  // Fingerprint the VALIDATED hosts map (not raw entries) so typing a partial host, or a row
   // with no alias yet — doesn't trigger a write until it's a complete, savable entry.
-  useAutoSave({
+  // A row with an alias or a hostname but not both is mid-edit. Saving then
+  // would drop it from `hosts`, so clearing an alias to retype it deleted the
+  // host. Hold the autosave until every started row is complete (Remove is the
+  // way to delete one); a fresh blank row holds nothing back.
+  const midEdit = hosts.some((h) => !h.alias !== !h.hostname);
+  useSettingsAutoSave({
     current: JSON.stringify({ hosts: buildHostsConfig(), limits: normalizeLimits(sessionLimits) }),
     baseline: JSON.stringify({ hosts: normalizeHosts(config.hosts), limits: normalizeLimits(config.session_limits ?? {}) }),
     save: handleSave,
+    enabled: !midEdit,
   });
 
+  const hostName = (host: HostEntry, idx: number) =>
+    // FQDN-only entries (alias == hostname) read better label-first.
+    host.alias && host.alias === host.hostname && host.label
+      ? host.label
+      : host.alias || host.hostname || `Host ${idx + 1}`;
+  // The address beside the name, never the label (N3-20): muted mono hostname.
+  const hostSub = (host: HostEntry) =>
+    host.hostname && host.hostname !== hostName(host, 0) ? host.hostname : '';
+
+  const text = (idx: number, field: 'alias' | 'hostname' | 'user' | 'label', label: string,
+    placeholder: string, size: 'short' | 'long', mono = false) => (
+    <SettingsRow
+      label={label}
+      htmlFor={`rh-${field}-${idx}`}
+      indent
+      wide={size === 'long'}
+      control={
+        <input
+          id={`rh-${field}-${idx}`}
+          type="text"
+          className={`settings-input settings-input--${size}${mono ? ' settings-input--mono' : ''}`}
+          value={hosts[idx][field]}
+          onChange={(e) => updateHost(idx, field, e.target.value)}
+          placeholder={placeholder}
+          spellCheck={false}
+        />
+      }
+    />
+  );
+
+  const addButton = (
+    <SettingsButton onClick={addHost} data-testid="remote-hosts-add">Add host</SettingsButton>
+  );
+
   return (
-    <SectionCard id="remote-hosts" title="Remote Hosts" description="SSH hosts for running remote Claude Code sessions. Changes save automatically." onSave={handleSave} showSave={false}>
-      {hosts.map((host, idx) => (
-        <details
-          key={host._key}
-          className="settings-collapsible"
-          open={expanded === idx}
-          onToggle={(e) => {
-            if ((e.target as HTMLDetailsElement).open) setExpanded(idx);
-            else if (expanded === idx) setExpanded(null);
-          }}
-        >
-          <summary className="settings-collapsible-title" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }} onClick={(e) => e.stopPropagation()}>
-              <input
-                type="checkbox"
-                checked={host.enabled}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  updateHost(idx, 'enabled', e.target.checked);
-                }}
-                style={{ margin: 0 }}
+    <SectionCard id="remote-hosts" title="Remote Hosts" onSave={handleSave} showSave={false} actions={addButton}>
+      {hosts.map((host, idx) => host.alias ? (
+        <RemoteHostUnreachable key={`u-${host._key}`} alias={host.alias} name={hostName(host, idx)} />
+      ) : null)}
+      <SettingsGroup heading="Hosts">
+        {hosts.length === 0 && (
+          <SettingsRow label="No remote hosts yet." control={addButton} />
+        )}
+        {hosts.map((host, idx) => {
+          const open = expanded === idx;
+          const sub = hostSub(host);
+          return (
+            <Fragment key={host._key}>
+              <SettingsRow
+                className="rh-host-row"
+                data-host-alias={host.alias || undefined}
+                label={
+                  <span className="settings-addons-inline">
+                    <span className="settings-addons-ellipsis" title={hostName(host, idx)}>{hostName(host, idx)}</span>
+                    {sub && <span className="settings-addons-mono settings-addons-muted settings-addons-ellipsis" title={sub}>{sub}</span>}
+                    {host.discovered && <SettingsTag>Auto-discovered</SettingsTag>}
+                  </span>
+                }
+                help={host.alias ? <RemoteHostStatus alias={host.alias} /> : 'Add an alias and hostname to save this host.'}
+                // Off: only the name and address fade; Edit, Remove and the
+                // switch that turns it back on stay at full strength (N10).
+                data-host-off={host.enabled ? undefined : 'true'}
+                control={
+                  <>
+                    {/* Remove first: its reserved width for "Confirm remove" opens on
+                        the copy side, so Remove and Edit sit together (N3-20). */}
+                    <InlineConfirmButton aria-label={`Remove ${hostName(host, idx)}`} onConfirm={() => removeHost(idx)} />
+                    <SettingsButton variant="text" aria-expanded={open} onClick={() => setExpanded(open ? null : idx)}>
+                      {open ? 'Done' : 'Edit'}
+                    </SettingsButton>
+                    <ToggleSwitch
+                      checked={host.enabled}
+                      onChange={(v) => updateHost(idx, 'enabled', v)}
+                      aria-label={`Use ${hostName(host, idx)}`}
+                    />
+                  </>
+                }
               />
-            </label>
-            <span style={{ opacity: host.enabled ? 1 : 0.5 }}>
-              {/* FQDN-only entries (alias == hostname) read better label-first;
-                  normal entries stay alias-first with the label in parens. */}
-              {host.alias && host.alias === host.hostname && host.label ? (
+              {open && (
                 <>
-                  {host.label}
-                  <span className="text-sm text-muted" style={{ marginLeft: 8 }}>({host.hostname})</span>
-                </>
-              ) : (
-                <>
-                  {host.alias || host.hostname || `Host ${idx + 1}`}
-                  {host.label && <span className="text-sm text-muted" style={{ marginLeft: 8 }}>({host.label})</span>}
+                  {text(idx, 'alias', 'Alias', 'devbox', 'short', true)}
+                  {text(idx, 'hostname', 'Hostname', 'host.example.com', 'long', true)}
+                  {text(idx, 'user', 'User', 'SSH user name', 'short')}
+                  <SettingsRow
+                    label="Port"
+                    htmlFor={`rh-port-${idx}`}
+                    indent
+                    control={
+                      <NumberInput id={`rh-port-${idx}`} value={host.port} onChange={(v) => updateHost(idx, 'port', v)}
+                        placeholder="22" min={1} max={65535} />
+                    }
+                  />
+                  {text(idx, 'label', 'Label', 'Display name', 'short')}
+                  <SettingsRow
+                    label="Shell setup"
+                    htmlFor={`rh-shell-${idx}`}
+                    help="Runs before claude in remote sessions."
+                    indent
+                    wide
+                    // Multi-line editor: label on top, editor across the group (N3-22).
+                    className="settings-row-stacked"
+                    control={
+                      <textarea
+                        id={`rh-shell-${idx}`}
+                        className="settings-input settings-input--long settings-input--mono"
+                        value={host.shell_setup}
+                        onChange={(e) => updateHost(idx, 'shell_setup', e.target.value)}
+                        rows={3}
+                        placeholder="source $HOME/.nvm/nvm.sh"
+                      />
+                    }
+                  />
                 </>
               )}
-              {host.discovered && <span className="text-xs text-muted" style={{ marginLeft: 8 }}>🔍 auto-discovered</span>}
-            </span>
-            {/* Live connect status + an explicit connect. Only for a saved row: an
-                alias-less draft has no host to ask about. */}
-            {host.alias && <RemoteHostStatus alias={host.alias} />}
-          </summary>
-          <div className="settings-collapsible-body">
-            <div className="form-row">
-              <div className="form-group">
-                <label>Alias (config key)</label>
-                <input
-                  type="text"
-                  value={host.alias}
-                  onChange={(e) => updateHost(idx, 'alias', e.target.value)}
-                  placeholder="e.g., devbox"
-                />
-              </div>
-              <div className="form-group">
-                <label>Hostname</label>
-                <input
-                  type="text"
-                  value={host.hostname}
-                  onChange={(e) => updateHost(idx, 'hostname', e.target.value)}
-                  placeholder="host.example.com"
-                />
-              </div>
-            </div>
+            </Fragment>
+          );
+        })}
+      </SettingsGroup>
 
-            <div className="form-row">
-              <div className="form-group">
-                <label>User</label>
-                <input
-                  type="text"
-                  value={host.user}
-                  onChange={(e) => updateHost(idx, 'user', e.target.value)}
-                  placeholder="ssh username"
-                />
-              </div>
-              <div className="form-group">
-                <label>Port</label>
+      <SettingsGroup heading="Session limits" footer="Most sessions one host runs at once.">
+        {/* Each limit is a row: host on the left, its number on the right (N3-21). */}
+        {Object.entries(sessionLimits).map(([alias, max]) => (
+          <SettingsRow
+            key={alias}
+            className="rh-limit-row"
+            data-limit-host={alias}
+            label={alias === 'local' ? 'This Mac' : <span className="settings-addons-mono">{alias}</span>}
+            htmlFor={`rh-limit-${alias}`}
+            control={
+              <>
                 <NumberInput
-                  value={host.port}
-                  onChange={(v) => updateHost(idx, 'port', v)}
-                  placeholder="22"
-                  min={1}
-                  max={65535}
+                  id={`rh-limit-${alias}`}
+                  value={typeof max === 'number' ? max : parseInt(String(max), 10) || undefined}
+                  onChange={(v) => setSessionLimits((prev) => ({ ...prev, [alias]: v ?? 0 }))}
+                  min={0}
+                  unit="sessions"
                 />
-              </div>
-              <div className="form-group">
-                <label>Label</label>
-                <input
-                  type="text"
-                  value={host.label}
-                  onChange={(e) => updateHost(idx, 'label', e.target.value)}
-                  placeholder="Display name"
-                />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>Shell Setup</label>
-              <textarea
-                value={host.shell_setup}
-                onChange={(e) => updateHost(idx, 'shell_setup', e.target.value)}
-                rows={3}
-                className="settings-textarea"
-                placeholder="source $HOME/.nvm/nvm.sh"
-              />
-              <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-                Shell snippet run before claude on remote sessions.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              className="btn btn-sm btn-danger"
-              onClick={() => removeHost(idx)}
-              style={{ marginTop: 4 }}
-            >
-              Remove Host
-            </button>
-          </div>
-        </details>
-      ))}
-
-      <button type="button" className="btn btn-sm" onClick={addHost} style={{ marginTop: 8 }}>
-        + Add Host
-      </button>
-
-      <div className="settings-divider" />
-
-      <div className="form-group">
-        <label>Session Limits (per host)</label>
-        <p className="text-sm text-muted" style={{ margin: '-4px 0 4px' }}>
-          Max concurrent sessions per host. Use &quot;local&quot; for local sessions.
-        </p>
-        <KeyValueEditor
-          entries={sessionLimits}
-          onChange={setSessionLimits}
-          keyPlaceholder="Host alias (e.g., local)"
-          valuePlaceholder="Max sessions"
-          valueType="number"
+                <SettingsButton
+                  variant="text"
+                  aria-label={`Remove the limit for ${alias}`}
+                  onClick={() => setSessionLimits((prev) => { const next = { ...prev }; delete next[alias]; return next; })}
+                >
+                  Remove
+                </SettingsButton>
+              </>
+            }
+          />
+        ))}
+        <AddLimitRow
+          taken={Object.keys(sessionLimits)}
+          onAdd={(alias, max) => setSessionLimits((prev) => ({ ...prev, [alias]: max }))}
         />
-      </div>
+      </SettingsGroup>
     </SectionCard>
   );
 }

@@ -27,26 +27,34 @@ test('webkit: the default-engine row renders, matches the config and offers the 
   const configured = body.config?.defaults?.engine ?? 'claude'
 
   const section = await openEnginesSection(page)
-  const select = section.getByTestId('default-engine-select')
-  await expect(select).toBeVisible()
-  await expect(select).toHaveValue(configured)
+  // A segmented control for five engines or fewer, a select beyond that.
+  const picker = section.getByTestId('default-engine-select')
+  await expect(picker).toBeVisible()
+  const isSelect = (await picker.evaluate((el) => el.tagName)) === 'SELECT'
+  if (isSelect) await expect(picker).toHaveValue(configured)
+  else {
+    await expect(picker).toHaveAttribute('data-value', configured)
+    await expect(section.getByTestId(`default-engine-option-${configured}`)).toHaveAttribute('aria-checked', 'true')
+  }
   await expect(section).toContainText('Default engine')
 
-  // The control has real height and is not clipped by the subcard around it —
+  // The control has real height and is not clipped by the group around it:
   // a zero/negative box is how a WebKit-only layout break shows up.
-  const box = await select.boundingBox()
+  const box = await picker.boundingBox()
   expect(box).not.toBeNull()
   expect(box!.height).toBeGreaterThan(16)
   expect(box!.width).toBeGreaterThan(80)
   const sectionBox = await section.boundingBox()
   expect(box!.y).toBeGreaterThanOrEqual(sectionBox!.y - 1)
 
-  // The list is populated and Claude is selectable (label read from the DOM, so a
-  // WebKit-only empty option list would fail here).
-  const options = await select.locator('option').evaluateAll(
-    (nodes) => nodes.map((n) => (n as HTMLOptionElement).value),
-  )
+  // The list is populated and Claude is offered (read from the DOM, so a
+  // WebKit-only empty list would fail here).
+  const options = isSelect
+    ? await picker.locator('option').evaluateAll((nodes) => nodes.map((n) => (n as HTMLOptionElement).value))
+    : await picker.locator('[role="radio"]').evaluateAll((nodes) =>
+      nodes.map((n) => (n.getAttribute('data-testid') ?? '').replace('default-engine-option-', '')))
   expect(options.length).toBeGreaterThan(0)
   expect(options).toContain('claude')
-  await expect(select).toBeEnabled()
+  if (isSelect) await expect(picker).toBeEnabled()
+  else await expect(section.getByTestId('default-engine-option-claude')).not.toHaveAttribute('aria-disabled', 'true')
 })

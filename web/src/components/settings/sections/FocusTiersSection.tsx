@@ -1,5 +1,5 @@
 /**
- * FocusTiersSection — Settings CRUD card for custom pinned-task tiers.
+ * FocusTiersSection: Settings CRUD card for custom pinned-task tiers.
  *
  * Self-contained (no config/onSave props): talks straight to the
  * /api/focus/tiers registry. The four built-ins render as read-only rows so
@@ -7,7 +7,17 @@
  */
 
 import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
-import { SettingsSection, SettingsNotice } from '../SettingsSection';
+import {
+  SettingsEmpty,
+  SettingsGroup,
+  SettingsLoadingRow,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+  SettingsTag,
+} from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { useSettingsSaved } from '../settings-pane-context';
 import { useEvent } from '@/hooks/useWebSocket';
 import {
   fetchCustomTiers,
@@ -23,7 +33,6 @@ import {
   ICON_TIER_WAIT,
   ICON_TIER_CUSTOM,
 } from '@/components/common/Icons';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 
@@ -49,9 +58,10 @@ export function FocusTiersSection() {
   const [editValue, setEditValue] = useState('');
   // Escape cancels the inline edit; the input's blur then fires and must not commit.
   const editCancelledRef = useRef(false);
-  // Pinned-task counts per tier — for the delete confirm's "N tasks move back".
+  // Pinned-task counts per tier: for the delete confirm's "N tasks move back".
   // Safe hook: absent (isolated render) the dialog just says "Its tasks".
   const customTierIds = useFocusBarContextSafe()?.customTierIds;
+  const { track } = useSettingsSaved();
 
   useEffect(() => {
     fetchCustomTiers()
@@ -60,7 +70,7 @@ export function FocusTiersSection() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Another client's tier CRUD emits config:changed{focus_tiers} — refetch so
+  // Another client's tier CRUD emits config:changed{focus_tiers}: refetch so
   // this list matches the kebab menus on the same screen (those go through
   // FocusBarContext, which already refetches on the same event).
   useEvent('config:changed', (data: unknown) => {
@@ -75,11 +85,11 @@ export function FocusTiersSection() {
     setError(null);
     setNotice(null);
     try {
-      const res = await createCustomTier(label);
+      const res = await track(createCustomTier(label));
       setTiers(res.tiers);
       setNewLabel('');
     } catch (err) {
-      // Server rejections (duplicate label, tier cap) arrive as {error} → message.
+      // Server rejections (duplicate label, tier cap) arrive as {error} to message.
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
@@ -95,7 +105,7 @@ export function FocusTiersSection() {
   };
 
   // Enter commits and unmounts the input, whose blur handler then calls
-  // commitRename AGAIN before the first PUT resolves — dedupe with a ref.
+  // commitRename AGAIN before the first PUT resolves: dedupe with a ref.
   const renameInFlightRef = useRef(false);
   const commitRename = async (id: string) => {
     if (editCancelledRef.current || renameInFlightRef.current) return;
@@ -105,7 +115,7 @@ export function FocusTiersSection() {
     if (!current || !label || label === current.label) return;
     renameInFlightRef.current = true;
     try {
-      const res = await renameCustomTier(id, label);
+      const res = await track(renameCustomTier(id, label));
       setTiers(res.tiers);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -139,7 +149,7 @@ export function FocusTiersSection() {
     setBusy(true);
     setError(null);
     try {
-      const res = await deleteCustomTier(tier.id);
+      const res = await track(deleteCustomTier(tier.id));
       setTiers(res.tiers);
       setNotice(res.moved > 0 ? `${res.moved} task${res.moved === 1 ? '' : 's'} moved to Satellite` : null);
     } catch (err) {
@@ -150,84 +160,95 @@ export function FocusTiersSection() {
   };
 
   return (
-    <SettingsSection
-      id="focus-tiers"
-      title="Focus Tiers"
-      description="Custom pinned-task tiers shown alongside Focus / Satellite / Backlog / Wait."
-    >
-      {loading ? <LoadingSpinner /> : (
-        <>
-          <ul className="focus-tiers-list">
+    <SettingsSection id="focus-tiers" title="Focus Tiers" description="The tiers pinned tasks are sorted into.">
+      <SettingsGroup>
+        {loading ? <SettingsLoadingRow /> : (
+          <>
             {BUILTIN_ROWS.map((b) => (
-              <li key={b.id} className="focus-tiers-row">
-                <span className={`focus-tiers-icon todo-tier-icon-${b.id}`}>{b.icon}</span>
-                <span className="focus-tiers-label">{b.label}</span>
-                <span className="focus-tiers-tag">Built-in</span>
-              </li>
+              <SettingsRow
+                key={b.id}
+                className="focus-tiers-row"
+                label={
+                  <span className="focus-tiers-name">
+                    <span className={`focus-tiers-icon todo-tier-icon-${b.id}`} aria-hidden="true">{b.icon}</span>
+                    <span className="focus-tiers-label">{b.label}</span>
+                  </span>
+                }
+                control={<SettingsTag>Built-in</SettingsTag>}
+              />
             ))}
             {tiers.map((t) => (
-              <li key={t.id} className="focus-tiers-row">
-                <span className="focus-tiers-icon todo-tier-icon-custom">{ICON_TIER_CUSTOM}</span>
-                {editingId === t.id ? (
-                  <input
-                    className="focus-tiers-edit-input"
-                    value={editValue}
-                    maxLength={LABEL_MAX}
-                    autoFocus
-                    onChange={(e) => setEditValue(e.target.value)}
-                    onKeyDown={(e) => handleEditKeyDown(e, t.id)}
-                    onBlur={() => void commitRename(t.id)}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    className="focus-tiers-label focus-tiers-label-editable"
-                    title="Click to rename"
-                    onClick={() => startEdit(t)}
-                  >
-                    {t.label}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn-danger-outline"
-                  onClick={() => void handleDelete(t)}
-                >
-                  Delete
-                </button>
-              </li>
+              <SettingsRow
+                key={t.id}
+                className="focus-tiers-row"
+                label={
+                  <span className="focus-tiers-name">
+                    <span className="focus-tiers-icon todo-tier-icon-custom" aria-hidden="true">{ICON_TIER_CUSTOM}</span>
+                    {editingId === t.id ? (
+                      <input
+                        className="focus-tiers-edit-input settings-input settings-input--short"
+                        aria-label={`Rename ${t.label}`}
+                        value={editValue}
+                        maxLength={LABEL_MAX}
+                        autoFocus
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => handleEditKeyDown(e, t.id)}
+                        onBlur={() => void commitRename(t.id)}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="focus-tiers-label focus-tiers-label-editable"
+                        title="Click to rename"
+                        onClick={() => startEdit(t)}
+                      >
+                        {t.label}
+                      </button>
+                    )}
+                  </span>
+                }
+                control={
+                  <SettingsButton variant="danger" onClick={() => void handleDelete(t)}>
+                    Delete
+                  </SettingsButton>
+                }
+              />
             ))}
-          </ul>
-
-          {tiers.length === 0 && (
-            <p className="text-sm text-muted" style={{ margin: '4px 0 8px' }}>
-              No custom tiers yet — add one (e.g. Icebox).
-            </p>
-          )}
-
-          <div className="focus-tiers-add-row">
-            <input
-              type="text"
-              value={newLabel}
-              maxLength={LABEL_MAX}
-              placeholder="New tier name (e.g. Icebox)"
-              onChange={(e) => setNewLabel(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd(); } }}
+            {tiers.length === 0 && <SettingsEmpty>No custom tiers yet.</SettingsEmpty>}
+            <SettingsRow
+              className="focus-tiers-add-row"
+              label="New tier"
+              htmlFor="focus-tiers-new"
+              control={
+                <>
+                  <input
+                    id="focus-tiers-new"
+                    type="text"
+                    className="settings-input settings-input--short"
+                    value={newLabel}
+                    maxLength={LABEL_MAX}
+                    placeholder="For example Icebox"
+                    onChange={(e) => setNewLabel(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd(); } }}
+                  />
+                  <SettingsButton
+                    variant="primary"
+                    busy={busy}
+                    busyLabel="Adding..."
+                    disabled={!newLabel.trim()}
+                    title={newLabel.trim() ? undefined : 'Name the tier first.'}
+                    onClick={() => void handleAdd()}
+                  >
+                    Add tier
+                  </SettingsButton>
+                </>
+              }
             />
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy || !newLabel.trim()}
-              onClick={() => void handleAdd()}
-            >
-              {busy ? 'Adding…' : 'Add tier'}
-            </button>
-          </div>
-
-          {error && <SettingsNotice kind="error">Error: {error}</SettingsNotice>}
-          {notice && <SettingsNotice kind="success">{notice}</SettingsNotice>}
-        </>
-      )}
+          </>
+        )}
+      </SettingsGroup>
+      {error && <SettingsNotice kind="error" role="alert">{error}</SettingsNotice>}
+      {notice && <SettingsNotice kind="success">{notice}</SettingsNotice>}
     </SettingsSection>
   );
 }

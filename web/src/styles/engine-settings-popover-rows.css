@@ -34,6 +34,11 @@
   align-items: center;
   gap: 12px;
   padding: 7px 10px;
+  /* The popover keeps one box per row; the Settings page's rows are boxless
+     (settings-rows.css), so the box is stated here. */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
 }
 
 .engine-settings-popover .engine-setting-row .settings-row-copy {

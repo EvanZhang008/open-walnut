@@ -12,6 +12,8 @@ const SCREENSHOT_DIR = '/tmp/walnut-plugin-demo'
 /** Where the update-status design shots land (light, dark, narrow); read by the reviewers. */
 const UPDATE_SHOT_DIR = '/tmp/plugin-update-ux/after'
 const execFileAsync = promisify(execFile)
+/** The header after a clean check: an absolute time today (never `just now`, never `ago`). */
+const CHECKED_AT = /^Checked \d{1,2}:\d{2} (AM|PM)$/
 let child: ChildProcessWithoutNullStreams | null = null
 let fixturePort = 0
 let fixtureHome = ''
@@ -78,7 +80,8 @@ async function expandSidebar(page: Page): Promise<void> {
 async function openSettings(page: Page): Promise<void> {
   await expandSidebar(page)
   await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page).toHaveURL(/\/settings$/)
+  // The link returns to the last pane Settings showed, so a pane hash may follow.
+  await expect(page).toHaveURL(/\/settings(#[\w-]+)?$/)
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
 }
 
@@ -123,13 +126,17 @@ async function commitAll(cwd: string, message: string): Promise<void> {
 
 /** Same helper as mail-app-design.spec.ts, landing back on the Plugins section. */
 async function pickTheme(page: Page, label: 'Light' | 'Dark'): Promise<void> {
-  await page.getByTestId('sidebar-core-app-settings').click()
-  const option = page.locator('.theme-picker-btn', { hasText: label }).first()
+  // The theme lives on the General pane: one nav click away, never a scroll.
+  await page.getByTestId('settings-nav-general').click()
+  const option = page.getByTestId(`settings-theme-${label.toLowerCase()}`)
   await expect(option).toBeVisible({ timeout: 30_000 })
   await option.click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', label.toLowerCase(), { timeout: 15_000 })
   await page.getByTestId('settings-nav-plugin-store').click()
   await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
+  // Only the open pane is mounted, so the rows come back with the pane: wait until
+  // the chips carry an answer again before measuring them.
+  await expect(page.getByTestId('update-chip-walnut-demo')).toHaveAttribute('data-update-kind', /^(current|available|dirty|diverged|unreachable)$/, { timeout: 30_000 })
 }
 
 /**
@@ -230,7 +237,7 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   await expect(pluginStore.getByTestId('plugin-trust-confirm')).not.toBeChecked()
   const sourceCard = page.getByTestId('plugin-source-native-plugin-repo')
   await expect(sourceCard.getByText('Walnut Plugin Demo').first()).toBeVisible()
-  await expect(sourceCard.getByText('active', { exact: true })).toBeVisible()
+  await expect(sourceCard.getByTestId('plugin-source-status-native-plugin-repo')).toHaveText('Active')
   const skillsResponse = await page.request.get(`http://127.0.0.1:${fixturePort}/api/skills`)
   if (!skillsResponse.ok()) throw new Error(`Skills catalogue failed: ${await skillsResponse.text()}`)
   const skills = await skillsResponse.json() as { skills: Array<{ dirName: string }> }
@@ -437,13 +444,14 @@ test.describe('update status', () => {
     }
     // A folder copied in by hand is exactly that: it says so instead of pretending to be a
     // git install with a chip whose click could never answer.
-    await expect(page.getByTestId('plugin-row-acme-copied')).toContainText('Local folder')
+    // The origin rides the row's title sentence, not a line of its own.
+    await expect(page.getByTestId('plugin-row-acme-copied')).toHaveAttribute('title', /^Local folder\./)
     // The origin label names the source only; what the plugin adds is appended from its
-    // manifest. These fixtures add nothing, so a label that baked in "· sync" would show
-    // here (and doubled on a real sync plugin: "Linked · sync · sync").
-    const linkedOrigin = page.getByTestId('plugin-row-acme-tracker').locator('.plugin-store-origin')
-    await expect(linkedOrigin).toHaveText(/^Linked(?!\s*·\s*sync)/)
-    await expect(linkedOrigin).not.toContainText('sync')
+    // manifest. These fixtures add nothing, so a label that baked in "sync" would show
+    // here (and doubled on a real sync plugin).
+    const linkedRow = page.getByTestId('plugin-row-acme-tracker')
+    await expect(linkedRow).toHaveAttribute('title', 'Linked.')
+    await expect(linkedRow.locator('.plugin-store-origin')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Check', exact: true })).toHaveCount(0)
     await expect(page.getByTestId('plugin-updates-check-now')).toBeVisible()
     await expect(page.getByTestId('plugin-updates-checked-at')).toHaveText(/^Checked /)
@@ -514,13 +522,13 @@ test.describe('update status', () => {
     const checkedAt = page.getByTestId('plugin-updates-checked-at')
     const checkNow = page.getByTestId('plugin-updates-check-now')
     await checkNow.click()
-    await expect(checkedAt).toHaveText('Checking for updates…')
+    await expect(checkedAt).toHaveText('Checking for updates...')
     await expect(checkedAt).not.toHaveText(/\d/)
     await expect(chip).toHaveAttribute('data-update-kind', 'available', { timeout: 30_000 })
     await expect(chip).toContainText('1 commit behind')
     // A git source names the commit Update would move to, like a linked checkout does (N19).
     expect(await chip.getAttribute('title')).toMatch(/Update moves this plugin to [0-9a-f]{7}\./)
-    await expect(checkedAt).toHaveText(/^Checked just now/)
+    await expect(checkedAt).toHaveText(CHECKED_AT)
     const row = page.getByTestId('plugin-row-walnut-demo')
     const update = page.getByTestId('plugin-update-walnut-demo')
     await expect(update).toHaveClass(/btn-primary/)
@@ -547,8 +555,8 @@ test.describe('update status', () => {
     // The plugin was loaded when its files changed, so until a restart the row's badge and the
     // Sources card both read RESTART TO ACTIVATE, and the switch stays on: the old code still
     // runs (N7).
-    await expect(row.locator('.badge').filter({ hasText: /^restart to activate$/i })).toBeVisible()
-    await expect(row.locator('.badge').filter({ hasText: /^on$/i })).toHaveCount(0)
+    await expect(row.locator('.settings-tag').filter({ hasText: /^restart to activate$/i })).toBeVisible()
+    await expect(row.locator('.settings-tag').filter({ hasText: /^on$/i })).toHaveCount(0)
     await expect(page.locator('#plugin-toggle-walnut-demo')).toBeChecked()
     await expect(page.getByTestId('plugin-source-status-native-plugin-repo')).toHaveText(/restart to activate/i)
     // Row copy never carries a path, a host or a git command.
@@ -602,7 +610,7 @@ test.describe('update status', () => {
     }
     await page.getByTestId('plugin-updates-check-now').click()
     await expect(chip).toHaveAttribute('data-update-kind', 'current', { timeout: 30_000 })
-    await expect(page.getByTestId('plugin-updates-checked-at')).toHaveText(/^Checked just now$/)
+    await expect(page.getByTestId('plugin-updates-checked-at')).toHaveText(CHECKED_AT)
   })
 
   test('(i)(j) linked siblings share one state: local changes block Update, one Update flips both', async ({ page }) => {
@@ -630,7 +638,8 @@ test.describe('update status', () => {
       await expect(notes).toHaveAttribute('data-update-kind', 'dirty')
       await expect(tracker).toContainText('Local changes')
       const wrap = page.getByTestId('plugin-update-wrap-acme-tracker')
-      await expect(wrap).toHaveAttribute('title', 'Commit or stash your changes in the checkout first.')
+      // Hover says what pressing would do; the focus tip keeps the full reason.
+      await expect(wrap).toHaveAttribute('title', 'Local changes would be overwritten.')
       await expect(page.getByTestId('plugin-update-acme-tracker')).toBeDisabled()
       // WebKit shows no title on a disabled button and no browser shows one on focus, so the
       // reason also appears as a tip under the button while the wrapper has focus.
@@ -724,15 +733,15 @@ test.describe('update status', () => {
       const trackerUpdate = page.getByTestId('plugin-update-acme-tracker')
       await trackerUpdate.click()
       await page.getByTestId('plugin-update-walnut-demo').click()
-      await expect(trackerUpdate).toHaveText('Updating…')
-      await expect(page.getByTestId('plugin-update-walnut-demo')).toHaveText('Updating…')
+      await expect(trackerUpdate).toHaveText('Updating...')
+      await expect(page.getByTestId('plugin-update-walnut-demo')).toHaveText('Updating...')
       // The sibling shares the row key, so its Update is locked too, but only the PRESSED row
       // says Updating… (N10).
       await expect(page.getByTestId('plugin-update-acme-notes')).toHaveText('Update')
       await expect(page.getByTestId('plugin-update-acme-notes')).toBeDisabled()
       const demoFeedback = page.getByTestId('plugin-update-feedback-walnut-demo')
       await expect(demoFeedback).toContainText('Updated to', { timeout: 60_000 })
-      await expect(trackerUpdate).toHaveText('Updating…')
+      await expect(trackerUpdate).toHaveText('Updating...')
       await expect(trackerUpdate).toBeDisabled()
       const trackerFeedback = page.getByTestId('plugin-update-feedback-acme-tracker')
       await expect(trackerFeedback).toContainText('Updated to', { timeout: 60_000 })
@@ -754,7 +763,7 @@ test.describe('update status', () => {
     const cardChip = page.getByTestId('update-chip-source-native-plugin-repo')
     await expect(rowChip).toHaveAttribute('data-update-kind', 'current', { timeout: 30_000 })
     const card = page.getByTestId('plugin-source-native-plugin-repo')
-    await expect(card.locator('strong').first()).toHaveText('Walnut Plugin Demo')
+    await expect(card.locator('.plugin-store-source-title .settings-addons-ellipsis').first()).toHaveText('Walnut Plugin Demo')
     // One plugin in the source: its version and status sit on the title row, and the name is
     // not repeated on a list of one (N16).
     await expect(card.locator('li')).toHaveCount(0)
@@ -764,7 +773,7 @@ test.describe('update status', () => {
     expect(await cardChip.getAttribute('data-update-kind')).toBe(await rowChip.getAttribute('data-update-kind'))
     const cardText = await card.innerText()
     expect(cardText).not.toMatch(/https?:\/\/|git@|file:\/\/|@ [0-9a-f]{7}|sha(256|512)-/)
-    expect(cardText).toMatch(/git · /)
+    expect(cardText).toMatch(/git, /)
     expect(cardText).not.toContain('not installed on this machine')
     // The Installed row owns the verb: with an update available there is exactly ONE
     // Update for this slug on the whole page, and it is on the row.
@@ -795,7 +804,7 @@ test.describe('update status', () => {
     await context.setOffline(true)
     try {
       const checkedAt = page.getByTestId('plugin-updates-checked-at')
-      await expect(checkedAt).toHaveText(/^Offline · last checked /)
+      await expect(checkedAt).toHaveText(/^Offline, last checked /)
       const checkNow = page.getByTestId('plugin-updates-check-now')
       await expect(checkNow).toBeDisabled()
       await expect(checkNow).toHaveAttribute('title', 'You are offline. Check again when you are back online.')
@@ -826,7 +835,7 @@ test.describe('update status', () => {
       await expect(page.getByTestId('plugin-updates-retry')).toBeVisible()
       // ONE verb after a failed GET: Retry replaces Check now, never both (N9).
       await expect(page.getByTestId('plugin-updates-check-now')).toHaveCount(0)
-      expect((await page.locator('.plugin-store-updates-head').innerText()).replace(/\s+/g, ' ').trim()).toBe('Could not check · Retry')
+      expect((await page.locator('.plugin-store-updates-head').innerText()).replace(/\s+/g, ' ').trim()).toBe('Could not check Retry')
       const chip = page.getByTestId('update-chip-acme-tracker')
       await expect(chip).toBeVisible()
       expect(['pending', 'unchecked']).toContain(await chip.getAttribute('data-update-kind'))
@@ -854,8 +863,8 @@ test.describe('update status', () => {
       .map((node) => node.dataset.testid || node.id || node.textContent?.trim() || ''))
     expect(expected[0]).toBe('update-chip-walnut-demo')
     expect(expected[1]).toBe('provenance-trigger-walnut-demo')
-    expect(expected.slice(2)).toEqual(expect.arrayContaining(['Remove', 'plugin-toggle-walnut-demo']))
-    expect(expected.indexOf('Remove')).toBeLessThan(expected.indexOf('plugin-toggle-walnut-demo'))
+    expect(expected.slice(2)).toEqual(expect.arrayContaining(['plugin-remove-walnut-demo', 'plugin-toggle-walnut-demo']))
+    expect(expected.indexOf('plugin-remove-walnut-demo')).toBeLessThan(expected.indexOf('plugin-toggle-walnut-demo'))
     await chip.focus()
     const seen: string[] = []
     for (let i = 0; i < expected.length; i += 1) {
@@ -870,7 +879,7 @@ test.describe('update status', () => {
     const checkNow = page.getByTestId('plugin-updates-check-now')
     await checkNow.focus()
     await page.keyboard.press('Enter')
-    await expect(page.getByTestId('plugin-updates-checked-at')).toHaveText(/^Checked just now/, { timeout: 30_000 })
+    await expect(page.getByTestId('plugin-updates-checked-at')).toHaveText(CHECKED_AT, { timeout: 30_000 })
   })
 
   test('(e)(C34)(C35) light, dark and 960px: screenshots, contrast, one-line actions', async ({ page }) => {
@@ -917,7 +926,7 @@ test.describe('update status', () => {
       // is actually on screen (WebKit finishes the scroll a frame late) before shooting.
       // The nav click's own smooth scroll can land AFTER an instant scroll here (WebKit), so
       // scroll, let a few frames pass, and repeat until the head stays put near the top.
-      const head = installed.locator('.plugin-store-group-head')
+      const head = installed.locator('.settings-group-heading')
       for (let attempt = 0; attempt < 10; attempt += 1) {
         await installed.evaluate((el) => el.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior }))
         await page.waitForTimeout(200)
@@ -1050,7 +1059,7 @@ test.describe('update status', () => {
       expect(title).toContain('Last checked')
       expect(title).not.toMatch(/(^|[\s'"])\/(Users|home|private|var|tmp|opt)\//)
       expect(title).not.toMatch(/fatal:|git exited/)
-      expect(title).toMatch(/(does not appear to be a git repository\.|…) Click to check again\.$/)
+      expect(title).toMatch(/(does not appear to be a git repository\.|\.\.\.) Click to check again\.$/)
       expect(title.length).toBeLessThanOrEqual(120 + 'Could not reach the remote just now. Last checked 59 minutes ago.  Click to check again.'.length)
       // The Update stays for the last known available, disabled with the offline reason.
       await expect(page.getByTestId('plugin-update-acme-tracker')).toBeDisabled()
@@ -1163,9 +1172,14 @@ test.describe('update status', () => {
     const before = gets.length
     const card = page.getByTestId('plugin-source-second-source-repo')
     await expect(card.getByRole('button', { name: 'Remove' })).toHaveCount(0)
-    expect(await page.getByRole('button', { name: 'Remove', exact: true }).count(), 'one Remove per source page-wide')
+    // Every Remove names what it removes (`Remove Sample Second`).
+    expect(await page.getByRole('button', { name: /^Remove / }).count(), 'one Remove per source page-wide')
       .toBe(await page.locator('.plugin-store-source').count())
-    await row.getByRole('button', { name: 'Remove' }).click()
+    // Two steps in place: the first click arms, the second removes.
+    const remove = row.getByTestId('plugin-remove-sample-second')
+    await remove.click()
+    await expect(remove).toHaveText('Confirm remove')
+    await remove.click()
     await expect(card).toHaveCount(0, { timeout: 30_000 })
     await expect.poll(() => gets.length, { timeout: 10_000 }).toBeGreaterThan(before)
     await expect(page.getByTestId('update-chip-walnut-demo')).toHaveAttribute('data-update-kind', 'current')
@@ -1226,7 +1240,7 @@ test.describe('update status', () => {
     // Outside click closes too.
     await trigger.click()
     await expect(flyout).toBeVisible()
-    await page.getByTestId('plugin-store-installed').locator('.plugin-store-group-head').click({ position: { x: 4, y: 4 } })
+    await page.getByTestId('plugin-store-installed').locator('.settings-group-heading').click({ position: { x: 4, y: 4 } })
     await expect(flyout).toHaveCount(0)
     // The source card sits at the bottom of the page: its flyout still lands in the viewport.
     const sourceTrigger = page.getByTestId('provenance-trigger-source-native-plugin-repo')

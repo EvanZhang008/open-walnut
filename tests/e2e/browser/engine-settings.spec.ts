@@ -45,8 +45,9 @@ test.describe('Settings → Engines', () => {
     await expect(row(section, 'alwaysThinkingEnabled')).toHaveAttribute('data-source', 'file')
     await expect(row(section, 'outputStyle')).toHaveAttribute('data-source', 'file')
     await expect(row(section, 'autoCompactEnabled')).toHaveAttribute('data-source', 'default')
-    // The permission-mode row tells the truth about Walnut sessions.
-    await expect(row(section, 'permissions.defaultMode')).toContainText('--permission-mode')
+    // The permission-mode row tells the truth about Walnut sessions: the pane shows the
+    // first sentence of the help and keeps the whole text in the help's title.
+    await expect(row(section, 'permissions.defaultMode').locator('.engine-setting-help')).toHaveAttribute('title', /--permission-mode/)
 
     // Boolean: Thinking mode off.
     const thinking = control(section, 'claude', 'alwaysThinkingEnabled')
@@ -96,7 +97,7 @@ test.describe('Settings → Engines', () => {
     // Terminal-only rows are behind a collapsed group: not visible until opened.
     const theme = row(section, 'theme')
     await expect(theme).toBeHidden()
-    await section.locator('summary', { hasText: 'Terminal only' }).click()
+    await section.locator('.settings-disclosure-row', { hasText: 'Terminal only' }).click()
     await expect(theme).toBeVisible()
     await expect(theme).toHaveAttribute('data-source', 'default')
 
@@ -105,14 +106,16 @@ test.describe('Settings → Engines', () => {
     await control(section, 'claude', 'theme').selectOption('light')
     await expect.poll(async () => (await readClaudeSettings(home)).theme).toBe('light')
 
-    // A boolean the engine decides by default is a three-way select, never a toggle
-    // pretending to know: Default → On writes true, back to Default removes the key.
+    // A boolean the engine decides by default is a three-way segmented control, never a
+    // toggle pretending to know: Auto → On writes true, back to Auto removes the key.
+    // The segment reads "Auto" because the row's source tag already says Default (N3-06).
     const workflows = control(section, 'claude', 'enableWorkflows')
-    await expect(workflows).toHaveValue('')
-    await workflows.selectOption('true')
+    const segment = (name: string) => workflows.getByRole('radio', { name, exact: true })
+    await expect(segment('Auto')).toHaveAttribute('aria-checked', 'true')
+    await segment('On').click()
     await expect.poll(async () => (await readClaudeSettings(home)).enableWorkflows).toBe(true)
     await expect(row(section, 'enableWorkflows')).toHaveAttribute('data-source', 'file')
-    await workflows.selectOption('')
+    await segment('Auto').click()
     await expect.poll(async () => 'enableWorkflows' in (await readClaudeSettings(home))).toBe(false)
     await expect(row(section, 'enableWorkflows')).toHaveAttribute('data-source', 'default')
     // The files footer names where things went; on this machine the environment

@@ -25,7 +25,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 
-const API = 'http://localhost:3457'
+const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 /** Read a bounded store's raw bytes straight off the server. */
 async function readStore(which: 'global' | 'user'): Promise<string> {

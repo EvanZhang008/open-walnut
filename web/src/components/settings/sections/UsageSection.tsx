@@ -1,13 +1,15 @@
 import { useMemo } from 'react';
-import { SettingsSection, SettingsNotice } from '../SettingsSection';
+import { SettingsSection, SettingsNotice, SettingsGroup, SettingsRow, SettingsLoadingRow, SettingsEmpty } from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useUsageOverview } from '@/hooks/useUsageOverview';
-import { UsageSummaryCards } from '@/components/usage/UsageSummaryCards';
+import { formatTokens } from '@/utils/format';
 import { UsageDailyChart } from '@/components/usage/UsageDailyChart';
-import { UsageBreakdownTable } from '@/components/usage/UsageBreakdownTable';
-import { UsageRecentTable } from '@/components/usage/UsageRecentTable';
+import { SettingsUsageBreakdown, SettingsUsageRecent, usageRangeHint } from './UsageTables';
 import { UsageFilterChips, chipValue, type Chip } from '@/components/usage/UsageFilterChips';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
 import type { Period } from '@/api/usage';
+import '@/styles/settings-sections-addons.css';
 
 const PRESETS: { value: Period; label: string }[] = [
   { value: 'today', label: 'Today' },
@@ -32,108 +34,122 @@ export function UsageSection() {
 
   const bounds = overview?.dateBounds ?? { min: null, max: null };
 
+  const summary = overview?.summary ?? null;
+  const empty = !loading && !error && summary !== null && summary.api_calls === 0 && chips.length === 0;
+  // The first read has no numbers yet: one loading row, not three `--` stats that
+  // may turn into the empty sentence a moment later. A refresh keeps the numbers.
+  const firstLoad = loading && summary === null && !error;
+  const presetValue = (time.preset === 'custom' ? '' : time.preset) as Period;
+  const rangeHint = usageRangeHint(effectiveRange.start, effectiveRange.end);
+
   return (
     <SettingsSection
       id="usage"
       title="Usage & Costs"
-      description="What every model call cost, by day, source, agent and model."
       actions={(
-        <button className="usage-refresh-btn" onClick={refresh} disabled={loading}>
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <SettingsButton className="usage-refresh-btn" onClick={refresh} busy={loading} busyLabel="Refreshing...">
+          Refresh
+        </SettingsButton>
       )}
     >
-      <div className="usage-period-tabs">
-        {PRESETS.map((p) => (
-          <button
-            key={p.value}
-            className={`usage-period-tab${time.preset === p.value ? ' active' : ''}`}
-            onClick={() => setTime({ preset: p.value })}
-          >
-            {p.label}
-          </button>
-        ))}
-        <UsageDateRange
-          active={time.preset === 'custom'}
-          start={time.start}
-          end={time.end}
-          bounds={bounds}
-          onApply={(start, end) => setTime({ preset: 'custom', start, end })}
+      <SettingsGroup>
+        <SettingsRow
+          label="Period"
+          control={
+            <span className="settings-addons-inline usage-period-tabs">
+              <SegmentedControl
+                aria-label="Period"
+                value={presetValue}
+                onChange={(v) => setTime({ preset: v })}
+                options={PRESETS.map((p) => ({ value: p.value, label: p.label, testId: `usage-period-${p.value}` }))}
+              />
+              <UsageDateRange
+                active={time.preset === 'custom'}
+                start={time.start}
+                end={time.end}
+                bounds={bounds}
+                onApply={(start, end) => setTime({ preset: 'custom', start, end })}
+              />
+            </span>
+          }
         />
-      </div>
+        {chips.length > 0 && (
+          <div className="settings-row">
+            <UsageFilterChips chips={chips} onClearAll={clearDrill} />
+          </div>
+        )}
+      </SettingsGroup>
 
-      <UsageFilterChips chips={chips} onClearAll={clearDrill} />
+      {error && <SettingsNotice kind="error" role="alert">{`Couldn't load usage: ${error}`}</SettingsNotice>}
 
-      {error && <SettingsNotice kind="error">Error: {error}</SettingsNotice>}
+      {firstLoad ? (
+        <SettingsGroup>
+          <SettingsLoadingRow>Loading usage...</SettingsLoadingRow>
+        </SettingsGroup>
+      ) : empty ? (
+        <SettingsGroup>
+          <SettingsEmpty>No model calls recorded yet.</SettingsEmpty>
+        </SettingsGroup>
+      ) : (
+        <>
+          <SettingsGroup className="settings-addons-summary" data-testid="usage-summary">
+            <div className="settings-addons-stats" aria-busy={loading || undefined}>
+              <Stat value={summary ? `$${summary.total_cost.toFixed(2)}` : '--'} label={chips.length > 0 || time.preset === 'custom' ? 'Filtered cost' : 'Walnut cost'} />
+              <Stat value={summary ? String(summary.api_calls) : '--'} label="API calls" />
+              <Stat value={summary ? formatTokens(summary.input_tokens + summary.output_tokens) : '--'} label="Tokens in and out" />
+            </div>
+          </SettingsGroup>
 
-      <UsageSummaryCards summary={overview?.summary ?? null} loading={loading} filtered={chips.length > 0 || time.preset === 'custom'} />
+          <SettingsGroup heading="Daily costs" headingTrailing="Click a bar to focus that day">
+            <div className="settings-row settings-row-stacked usage-chart-section" data-wide="true">
+              <UsageDailyChart
+                data={overview?.daily ?? []}
+                loading={loading}
+                selectedDate={chartSelectedDay}
+                onSelectDay={(date) => {
+                  // Toggle: clicking the already-selected day clears back to 7 days.
+                  if (chartSelectedDay === date) setTime({ preset: '7d' });
+                  else setTime({ preset: 'custom', start: date, end: date });
+                }}
+              />
+            </div>
+          </SettingsGroup>
 
-      <div className="usage-chart-section">
-        <div className="usage-section-head">
-          <h2>Daily Costs</h2>
-          <span className="usage-section-hint">click a bar to focus that day</span>
-        </div>
-        <UsageDailyChart
-          data={overview?.daily ?? []}
-          loading={loading}
-          selectedDate={chartSelectedDay}
-          onSelectDay={(date) => {
-            // Toggle: clicking the already-selected day clears back to 7 days.
-            if (chartSelectedDay === date) setTime({ preset: '7d' });
-            else setTime({ preset: 'custom', start: date, end: date });
-          }}
-        />
-      </div>
+          {([
+            ['By source', overview?.bySource, drill.source, (name: string) => setDrill((d) => ({ ...d, source: d.source === name ? undefined : name }))],
+            ['By agent', overview?.byAgent, drill.agentId, (name: string) => setDrill((d) => ({ ...d, agentId: d.agentId === name ? undefined : name }))],
+            ['By model', overview?.byModel, drill.model, (name: string) => setDrill((d) => ({ ...d, model: d.model === name ? undefined : name }))],
+          ] as const).map(([heading, data, active, onSelect]) => (
+            <SettingsGroup key={heading} heading={heading}>
+              <div className="settings-row settings-row-stacked usage-breakdown-panel" data-wide="true">
+                <SettingsUsageBreakdown data={data ?? []} loading={loading} activeName={active} onSelect={onSelect} />
+              </div>
+            </SettingsGroup>
+          ))}
 
-      <div className="usage-breakdown-grid">
-        <div className="usage-breakdown-panel">
-          <h2>By Source</h2>
-          <UsageBreakdownTable
-            data={overview?.bySource ?? []}
-            loading={loading}
-            activeName={drill.source}
-            onSelect={(name) => setDrill((d) => ({ ...d, source: d.source === name ? undefined : name }))}
-          />
-        </div>
-        <div className="usage-breakdown-panel">
-          <h2>By Agent</h2>
-          <UsageBreakdownTable
-            data={overview?.byAgent ?? []}
-            loading={loading}
-            activeName={drill.agentId}
-            onSelect={(name) => setDrill((d) => ({ ...d, agentId: d.agentId === name ? undefined : name }))}
-          />
-        </div>
-        <div className="usage-breakdown-panel">
-          <h2>By Model</h2>
-          <UsageBreakdownTable
-            data={overview?.byModel ?? []}
-            loading={loading}
-            activeName={drill.model}
-            onSelect={(name) => setDrill((d) => ({ ...d, model: d.model === name ? undefined : name }))}
-          />
-        </div>
-      </div>
+          {summary && (
+            <SettingsGroup heading="Cache efficiency" className="usage-cache-card">
+              <CacheStats summary={summary} />
+            </SettingsGroup>
+          )}
 
-      {overview?.summary && (
-        <div className="usage-cache-card">
-          <h2>Cache Efficiency</h2>
-          <CacheStats summary={overview.summary} />
-        </div>
+          <SettingsGroup heading="Recent activity" headingTrailing={rangeHint}>
+            <div className="settings-row settings-row-stacked usage-recent-section" data-wide="true">
+              <SettingsUsageRecent data={overview?.recent ?? []} loading={loading} />
+            </div>
+          </SettingsGroup>
+        </>
       )}
-
-      <div className="usage-recent-section">
-        <div className="usage-section-head">
-          <h2>Recent Activity</h2>
-          <span className="usage-section-hint">
-            {effectiveRange.start
-              ? `showing ${effectiveRange.start}${effectiveRange.end && effectiveRange.end !== effectiveRange.start ? ` → ${effectiveRange.end}` : ''}`
-              : 'all time'}
-          </span>
-        </div>
-        <UsageRecentTable data={overview?.recent ?? []} loading={loading} />
-      </div>
     </SettingsSection>
+  );
+}
+
+function Stat({ value, label }: { value: string; label: string }) {
+  return (
+    <div className="settings-addons-stat">
+      <span className="settings-addons-stat-value">{value}</span>
+      <span className="settings-addons-stat-label">{label}</span>
+    </div>
   );
 }
 
@@ -142,20 +158,22 @@ function CacheStats({ summary }: { summary: NonNullable<ReturnType<typeof useUsa
   const hitRate = totalIn > 0 ? (summary.cache_read_tokens / totalIn) * 100 : 0;
   const fmt = (n: number) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M' : n >= 1_000 ? (n / 1_000).toFixed(1) + 'k' : String(n));
   const stats = [
-    { label: 'Cache Hit Rate', value: `${hitRate.toFixed(1)}%` },
-    { label: 'Total Input', value: fmt(totalIn) },
-    { label: 'Cache Read', value: fmt(summary.cache_read_tokens) },
-    { label: 'Cache Write', value: fmt(summary.cache_creation_tokens) },
-    { label: 'Uncached Input', value: fmt(summary.input_tokens) },
+    { label: 'Cache hit rate', value: `${hitRate.toFixed(1)}%` },
+    { label: 'Total input', value: fmt(totalIn) },
+    { label: 'Cache read', value: fmt(summary.cache_read_tokens) },
+    { label: 'Cache write', value: fmt(summary.cache_creation_tokens) },
+    { label: 'Uncached input', value: fmt(summary.input_tokens) },
   ];
   return (
-    <div className="usage-cache-stats">
+    <>
       {stats.map((s) => (
-        <div className="usage-cache-stat" key={s.label}>
-          <span className="usage-cache-label">{s.label}</span>
-          <span className="usage-cache-value">{s.value}</span>
-        </div>
+        <SettingsRow
+          key={s.label}
+          className="usage-cache-stat"
+          label={s.label}
+          control={<span className="settings-addons-muted usage-cache-value">{s.value}</span>}
+        />
       ))}
-    </div>
+    </>
   );
 }

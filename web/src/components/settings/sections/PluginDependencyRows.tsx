@@ -1,5 +1,5 @@
 /**
- * The dependency half of Settings → Plugins: the copy that says what a row is waiting
+ * The dependency half of Settings: Plugins, the copy that says what a row is waiting
  * for, and the ONE action that can do something about it.
  *
  * Its own file because the store section owns the fetching and this owns the wording,
@@ -7,7 +7,7 @@
  *
  *   - A row never gets a button that cannot work. `example` sources are installed by hand
  *     with `walnut-plugin link`, and a dependency nothing can supply gets copy only.
- *   - "Install Alpha…" ASKS. It opens the consent list (every source URL it would add)
+ *   - "Install Alpha..." ASKS. It opens the consent list (every source URL it would add)
  *     instead of cloning on the first click, because the catalog that names those URLs is
  *     a user-writable file and one click must never be enough to run someone's code.
  *   - "Turn on Alpha" is the only one-click action here: no new code arrives, it is the
@@ -17,6 +17,9 @@
  *     belongs to, since two rows can wait on the same plugin.
  */
 import type { ReactNode } from 'react';
+import { SettingsRow } from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
+import '@/styles/settings-sections-addons.css';
 
 export interface DependencySource {
   kind: 'builtin' | 'git' | 'npm' | 'example';
@@ -45,7 +48,7 @@ export interface MissingDependencyView {
   note: string;
 }
 
-/** `walnut-plugin link examples/plugins/alpha` — the only way an example arrives. */
+/** `walnut-plugin link examples/plugins/alpha`: the only way an example arrives. */
 export function linkCommandFor(item: DependencyPlanItem): string {
   return `walnut-plugin link ${item.source?.path ?? item.id}`;
 }
@@ -65,7 +68,7 @@ export function dependencyBusyKey(rowId: string, dependencyId: string): string {
 }
 
 /**
- * `Alpha ^2 (found 1.2.0)` — the version only where it is the PROBLEM. Printing "(found
+ * `Alpha ^2 (found 1.2.0)`: the version only where it is the PROBLEM. Printing "(found
  * 1.0.0)" for a plugin that is merely switched off reads as a version complaint about a
  * version that is fine.
  */
@@ -98,41 +101,33 @@ function DependencyAction({
     const command = linkCommandFor(item);
     const key = `dep-link:${rowId}:${item.id}`;
     return (
-      <button
-        type="button"
-        className="btn btn-secondary btn-sm"
+      <SettingsButton
         data-testid={`plugin-dependency-copy-${rowId}-${item.id}`}
+        title={command}
+        reserve={['Copy command', 'Copied']}
         onClick={() => onCopy(command, key)}
       >
-        {copiedKey === key ? 'Copied ✓' : `Copy: ${command}`}
-      </button>
+        {copiedKey === key ? 'Copied' : 'Copy command'}
+      </SettingsButton>
     );
   }
   if (item.resolvable === 'catalog') {
     return (
-      <button
-        type="button"
-        className="btn btn-secondary btn-sm"
-        data-testid={`plugin-dependency-install-${rowId}-${item.id}`}
-        onClick={() => onInstall(item)}
-      >
-        Install {nameFor(item.id)}…
-      </button>
+      <SettingsButton data-testid={`plugin-dependency-install-${rowId}-${item.id}`} onClick={() => onInstall(item)}>
+        {`Install ${nameFor(item.id)}...`}
+      </SettingsButton>
     );
   }
   if (item.resolvable === 'installed') {
     return (
-      <button
-        type="button"
-        className="btn btn-secondary btn-sm"
-        disabled={busyKey === dependencyBusyKey(rowId, item.id)}
+      <SettingsButton
+        busy={busyKey === dependencyBusyKey(rowId, item.id)}
+        busyLabel="Turning on..."
         data-testid={`plugin-dependency-turn-on-${rowId}-${item.id}`}
         onClick={() => onTurnOn(item)}
       >
-        {busyKey === dependencyBusyKey(rowId, item.id)
-          ? 'Turning on…'
-          : `Turn on ${nameFor(item.id)}`}
-      </button>
+        {`Turn on ${nameFor(item.id)}`}
+      </SettingsButton>
     );
   }
   return null;
@@ -160,11 +155,7 @@ export function PluginDependencyNeeds({
   ];
   if (items.length === 0) return null;
   return (
-    <div
-      className="plugin-store-why"
-      data-testid={`plugin-dependency-needs-${actions.rowId}`}
-      style={{ display: 'grid', gap: 4 }}
-    >
+    <div className="settings-addons-rows plugin-store-why" data-testid={`plugin-dependency-needs-${actions.rowId}`}>
       {items.map((item) => {
         const note = notes.get(item.id);
         // A version this range cannot accept is the one case where the version belongs in
@@ -173,11 +164,14 @@ export function PluginDependencyNeeds({
           ? note.found
           : item.found;
         return (
-          <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span>Needs {headline(actions.nameFor(item.id), item.range, found)}</span>
-            {note && <span className="text-xs text-muted">· {note.note}</span>}
-            <DependencyAction item={item} {...actions} />
-          </div>
+          <SettingsRow
+            key={item.id}
+            indent
+            state="warning"
+            label={`Needs ${headline(actions.nameFor(item.id), item.range, found)}`}
+            help={note?.note}
+            control={<DependencyAction item={item} {...actions} />}
+          />
         );
       })}
     </div>
@@ -206,10 +200,10 @@ export function PluginAlsoNeeds({
         ? `${nameFor(item.id)} ${item.range} (have ${item.found})`
         : nameFor(item.id))).join(', ')}
       {plan.filter((item) => blocked.has(item.id)).map((item) => (
-        <span key={item.id} className="text-xs text-muted" style={{ marginLeft: 6 }}>
+        <span key={item.id}>
           {item.resolvable === 'none'
-            ? `${nameFor(item.id)} cannot be installed from here`
-            : `${nameFor(item.id)} lives in this checkout: run ${linkCommandFor(item)}`}
+            ? `; ${nameFor(item.id)} can't be installed from here`
+            : `; ${nameFor(item.id)} lives in this checkout: run ${linkCommandFor(item)}`}
         </span>
       ))}
     </span>
@@ -240,45 +234,46 @@ export function PluginPendingDependencies({
   const actionable = plan.filter((item) => item.resolvable !== 'none'
     && !(item.resolvable === 'catalog' && item.source?.kind === 'example'));
   return (
-    <div
-      className="settings-collapsible"
-      data-testid="plugin-pending-dependencies"
-      style={{ padding: '10px 12px', display: 'grid', gap: 6 }}
-    >
-      <strong>Also install: {plan.map((item) => nameFor(item.id)).join(', ')}</strong>
+    <div className="settings-addons-rows" data-testid="plugin-pending-dependencies">
+      <SettingsRow
+        indent
+        label={`Also install: ${plan.map((item) => nameFor(item.id)).join(', ')}`}
+        help="Their code runs inside Walnut with the same access as any plugin you install."
+        control={
+          <>
+            {actionable.length > 0 && (
+              <SettingsButton
+                variant="primary"
+                busy={busy}
+                busyLabel="Installing..."
+                data-testid="plugin-pending-dependencies-install"
+                onClick={onInstall}
+              >
+                {`Install ${actionable.map((item) => nameFor(item.id)).join(', ')}`}
+              </SettingsButton>
+            )}
+            <SettingsButton data-testid="plugin-pending-dependencies-dismiss" onClick={onDismiss}>
+              Not now
+            </SettingsButton>
+          </>
+        }
+      />
       {plan.map((item) => (
-        <span key={item.id} className="text-xs text-muted">
-          {nameFor(item.id)} {item.range} · {sourceLabel(item.source)}
-          {item.resolvable === 'none' ? ' · not available here' : ''}
-          {item.resolvable === 'catalog' && item.source?.kind === 'example'
-            ? ` · install it with ${linkCommandFor(item)}`
-            : ''}
-        </span>
+        <SettingsRow
+          key={item.id}
+          indent
+          label={`${nameFor(item.id)} ${item.range}`}
+          help={
+            <span className="settings-addons-mono">
+              {sourceLabel(item.source)}
+              {item.resolvable === 'none' ? ', not available here' : ''}
+              {item.resolvable === 'catalog' && item.source?.kind === 'example'
+                ? `, install it with ${linkCommandFor(item)}`
+                : ''}
+            </span>
+          }
+        />
       ))}
-      <span className="text-xs text-muted">
-        Their code runs inside Walnut with the same access as any plugin you install.
-      </span>
-      <div style={{ display: 'flex', gap: 8 }}>
-        {actionable.length > 0 && (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={busy}
-            data-testid="plugin-pending-dependencies-install"
-            onClick={onInstall}
-          >
-            {busy ? 'Installing…' : `Install ${actionable.map((item) => nameFor(item.id)).join(', ')}`}
-          </button>
-        )}
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          data-testid="plugin-pending-dependencies-dismiss"
-          onClick={onDismiss}
-        >
-          Not now
-        </button>
-      </div>
     </div>
   );
 }
@@ -303,37 +298,31 @@ export function PluginCascadeConfirm({
   onConfirm(): void;
   onCancel(): void;
 }) {
-  const one = dependents.length === 1;
+  // The switch above stays ON (aria-busy) while this row asks; nothing is written
+  // until Turn off all. Cancel leaves everything exactly as it was.
   return (
-    <div className="plugin-store-config" data-testid="plugin-cascade-ask" style={{ display: 'grid', gap: 6 }}>
-      <strong>{one ? '1 plugin runs' : `${dependents.length} plugins run`} on {name}</strong>
-      <span className="text-xs text-muted">
-        {dependents.join(', ')} {one ? 'stops' : 'stop'} working until {name} is back on.
-        {one ? ' It is' : ' They are'} not switched off: turning {name} on again brings
-        {one ? ' it' : ' them'} back.
-      </span>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        {/* Same metrics as the Cancel next to it. `.btn-danger-outline` is declared after
-            `.btn-sm` in globals.css, so adding the class would lose; inline wins. */}
-        <button
-          type="button"
-          className="btn-danger-outline"
-          style={{ padding: '4px 10px', fontSize: 12 }}
-          disabled={busy}
-          data-testid="plugin-cascade-confirm"
-          onClick={onConfirm}
-        >
-          {busy ? 'Turning off…' : `Turn off ${name} anyway`}
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          data-testid="plugin-cascade-cancel"
-          onClick={onCancel}
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
+    <SettingsRow
+      indent
+      state="warning"
+      data-testid="plugin-cascade-ask"
+      label={`Also turns off ${dependents.join(', ')}.`}
+      help={`They come back when ${name} is on again.`}
+      control={
+        <>
+          <SettingsButton
+            variant="danger"
+            busy={busy}
+            busyLabel="Turning off..."
+            data-testid="plugin-cascade-confirm"
+            onClick={onConfirm}
+          >
+            Turn off all
+          </SettingsButton>
+          <SettingsButton data-testid="plugin-cascade-cancel" onClick={onCancel}>
+            Cancel
+          </SettingsButton>
+        </>
+      }
+    />
   );
 }

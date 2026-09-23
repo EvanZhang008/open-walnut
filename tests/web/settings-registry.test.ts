@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/core-settings-registry.js'
+import { isSettingsGlyph, tileKey } from '../../web/src/components/settings/settings-icons.js'
 
 const EXPECTED_IDS = [
   // No `apps` row either: a plugin's app entries are managed on the plugin's own
-  // row in the Plugins section (PluginAppControls) — one panel is the start point
+  // row in the Plugins section (PluginAppControls): one panel is the start point
   // for everything plugin-shaped.
   // No `repositories` row for now either: the feature is hidden until ready
   // (ReposSection and its API stay; only the Settings entry is gone).
   'hooks',
   // ARRAY ORDER IS PAGE ORDER: plugin-store sits directly after the Manage
   // sections because the nav's Plugins group renders between Manage and
-  // Configure — nav order and scroll order must agree or a click lands wrong.
+  // Configure: nav order and pane order must agree or a click lands wrong.
   'plugin-store',
   // No separate chat-engine or provider entry: the one default engine lives in
   // Engines, and the API alternative is folded under Advanced (last below).
@@ -72,8 +73,8 @@ describe('core settings registry', () => {
   })
 
   it('folds a nav-hidden section under the visible entry directly above it', () => {
-    // A navHidden row keeps its #id deep link but has no nav button; the nav
-    // highlights the previous visible entry when the scroll spy lands on it.
+    // A navHidden row keeps its #id deep link but has no nav button; it mounts
+    // in the pane of the visible entry directly above it (NAV_OWNER).
     const hidden = CORE_SETTINGS_CONTRIBUTIONS.filter((entry) => entry.navHidden).map((entry) => entry.id)
     expect(hidden).toEqual(['focus-tiers', 'cloud', 'providers'])
     for (const id of hidden) {
@@ -92,5 +93,28 @@ describe('core settings registry', () => {
     expect(labels).not.toContain('Permissions')
     expect(labels).not.toContain('Timeline')
     expect(labels).not.toContain('Tasks & Sessions')
+  })
+
+  it('gives every entry a tile, one sentence and filter keywords', () => {
+    for (const entry of CORE_SETTINGS_CONTRIBUTIONS) {
+      expect(isSettingsGlyph(entry.icon), `${entry.id} icon`).toBe(true)
+      expect(entry.tint, `${entry.id} tint`).toMatch(/^#[0-9A-Fa-f]{6}$/)
+      expect(entry.description.trim().length, `${entry.id} description`).toBeGreaterThan(0)
+      // One sentence: nothing after an inner full stop, no em or en dash.
+      expect(entry.description.replace(/\.$/, ''), `${entry.id} description`).not.toMatch(/\. /)
+      expect(entry.description, `${entry.id} description`).not.toMatch(/[\u2013\u2014]/)
+      expect(entry.keywords.length, `${entry.id} keywords`).toBeGreaterThan(0)
+      for (const k of entry.keywords) {
+        const word = typeof k === 'string' ? k : k.word
+        expect(word, `${entry.id} keyword`).toBe(word.toLowerCase())
+        expect(word.trim().length).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('keeps visible tiles distinct by tint and glyph', () => {
+    const visible = CORE_SETTINGS_CONTRIBUTIONS.filter((entry) => !entry.navHidden)
+    const keys = visible.map((entry) => tileKey(entry.tint, entry.icon))
+    expect(new Set(keys).size).toBe(keys.length)
   })
 })

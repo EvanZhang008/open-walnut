@@ -6,6 +6,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { startSetup, type SetupEvent } from '@/api/stt';
+import { SettingsRow, SettingsTag } from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
 
 interface SetupStep {
   action: string;
@@ -111,51 +113,50 @@ export function SttSetupProgress({ steps, onComplete, onCancel }: Props) {
   };
 
   return (
-    <div className="stt-setup-progress">
+    <div className="stt-setup-progress settings-rows-contents">
       {stepStates.map((step, i) => (
-        <div key={i} className={`stt-setup-step stt-step-${step.status}`}>
-          <div className="stt-step-header">
-            <span className="stt-step-indicator">
-              {step.status === 'done' ? '\u2713' : step.status === 'error' ? '\u2717' : step.status === 'running' ? '\u25CB' : '\u2022'}
-            </span>
-            <span className="stt-step-label">{step.label}</span>
-            {step.status === 'running' && step.percent > 0 && (
-              <span className="stt-step-percent">{step.percent}%</span>
-            )}
-          </div>
-
-          {step.status === 'running' && (
-            <div className="stt-progress-bar-track">
-              <div
-                className="stt-progress-bar-fill"
-                style={{ width: `${step.percent}%` }}
-              />
-            </div>
-          )}
-
-          {step.message && step.status !== 'pending' && (
-            <p className="stt-step-message">{step.message}</p>
-          )}
-        </div>
+        <SettingsRow
+          key={i}
+          indent
+          className={`stt-setup-step stt-step-${step.status}`}
+          label={step.label}
+          help={step.message && step.status !== 'pending' ? step.message : undefined}
+          state={step.status === 'error' ? 'warning' : undefined}
+          control={
+            step.status === 'running' ? (
+              <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={step.percent}>
+                <span className="settings-progress-track stt-progress-bar-track">
+                  <span className="settings-progress-fill stt-progress-bar-fill" style={{ width: `${step.percent}%` }} />
+                </span>
+                <span className="settings-progress-pct">{step.percent}%</span>
+              </span>
+            ) : (
+              <SettingsTag tone={step.status === 'done' ? 'success' : step.status === 'error' ? 'warning' : 'neutral'}>
+                {STEP_TAG[step.status]}
+              </SettingsTag>
+            )
+          }
+        />
       ))}
-
-      <div className="stt-setup-actions">
-        {finished && (
-          <button className="btn btn-sm btn-primary" onClick={onComplete}>
-            Done — Apply Config
-          </button>
-        )}
-        {failed && (
-          <button className="btn btn-sm" onClick={onComplete}>
-            Retry
-          </button>
-        )}
-        {!finished && (
-          <button className="btn btn-sm" onClick={handleCancel}>
-            Cancel
-          </button>
-        )}
-      </div>
+      <SettingsRow
+        indent
+        className="stt-setup-actions"
+        label={finished ? 'Setup finished' : failed ? 'Setup stopped' : 'Setting up'}
+        control={
+          <span className="settings-control-cluster">
+            {finished && <SettingsButton variant="primary" onClick={onComplete}>Done, apply config</SettingsButton>}
+            {failed && <SettingsButton onClick={onComplete}>Retry</SettingsButton>}
+            {!finished && <SettingsButton onClick={handleCancel}>Cancel</SettingsButton>}
+          </span>
+        }
+      />
     </div>
   );
 }
+
+const STEP_TAG: Record<string, string> = {
+  done: 'Done',
+  error: 'Failed',
+  running: 'Running',
+  pending: 'Waiting',
+};

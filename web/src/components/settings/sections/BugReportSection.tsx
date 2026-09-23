@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react';
-import { SettingsSection, SettingsNotice } from '../SettingsSection';
+import { SettingsSection, SettingsNotice, SettingsGroup, SettingsRow } from '../SettingsSection';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { SegmentedControl } from '../inputs/SegmentedControl';
 import { apiGetText } from '@/api/client';
 import { wsClient } from '@/api/ws';
 import { getRecentEntries } from '@/utils/browser-logger';
@@ -8,19 +10,19 @@ import { copyTextRobust } from '@/utils/clipboard';
 import { redactText } from '@/utils/redact';
 
 /**
- * Settings → Bug Report — generate a shareable diagnostic bundle anytime
+ * Settings: Bug Report, generate a shareable diagnostic bundle anytime
  * (not just at crash): the server's scrubbed bundle (GET /api/bug-report)
  * merged with this browser's live state, so ONE artifact has everything.
  * Server unreachable? The client half still produces.
  */
 
 const WINDOW_CHOICES = [
-  { label: 'Last 15 min', mins: 15 },
-  { label: 'Last 30 min', mins: 30 },
-  { label: 'Last 2 hours', mins: 120 },
+  { label: '15 minutes', mins: 15 },
+  { label: '30 minutes', mins: 30 },
+  { label: '2 hours', mins: 120 },
 ];
 
-/** The client-side half — same data the crash report collects, minus the crash. */
+/** The client-side half: same data the crash report collects, minus the crash. */
 function buildClientSection(): string {
   const lines: string[] = ['=== client ==='];
   try {
@@ -108,57 +110,52 @@ export function BugReportSection() {
   };
 
   return (
-    <SettingsSection
-      id="bug-report"
-      title="Bug Report"
-      description={<>
-        Generates a scrubbed diagnostic bundle: recent server logs, system health, config with
-        secrets masked, and this browser&apos;s state. Paste it into an issue or chat when reporting a problem.
-      </>}
-    >
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <select
-          className="input"
-          style={{ width: 'auto' }}
-          value={windowMins}
-          onChange={(e) => setWindowMins(Number(e.target.value))}
-          disabled={generating}
-        >
-          {WINDOW_CHOICES.map((c) => (
-            <option key={c.mins} value={c.mins}>{c.label}</option>
-          ))}
-        </select>
-        <button type="button" className="btn btn-primary" onClick={handleGenerate} disabled={generating}>
-          {generating ? 'Generating…' : 'Generate bundle'}
-        </button>
+    <SettingsSection id="bug-report" title="Bug Report">
+      <SettingsGroup footer="Secrets are masked; paste the bundle into an issue or chat when reporting a problem.">
+        <SettingsRow
+          label="Logs from the last"
+          control={
+            <SegmentedControl
+              aria-label="Logs from the last"
+              value={String(windowMins)}
+              disabled={generating}
+              onChange={(v) => setWindowMins(Number(v))}
+              options={WINDOW_CHOICES.map((c) => ({ value: String(c.mins), label: c.label }))}
+            />
+          }
+        />
+        <SettingsRow
+          label="Diagnostic bundle"
+          help="Recent server logs, system health, config and this browser's state, scrubbed."
+          control={
+            <SettingsButton variant="primary" onClick={handleGenerate} busy={generating} busyLabel="Generating..."
+              data-testid="bug-report-generate">
+              Generate bundle
+            </SettingsButton>
+          }
+        />
         {report && (
-          <>
-            <button type="button" className="btn" onClick={handleCopy}>
-              {copied ? 'Copied ✓' : 'Copy as text'}
-            </button>
-            <button type="button" className="btn" onClick={handleDownload}>
-              Download .txt
-            </button>
-          </>
+          <div className="settings-row settings-row-stacked settings-mono-row" data-wide="true">
+            <div className="settings-mono-head">
+              <span className="settings-row-label">Report</span>
+              <span className="settings-addons-inline">
+                <SettingsButton variant="text" reserve={['Copy as text', 'Copied']} onClick={handleCopy}>
+                  {copied ? 'Copied' : 'Copy as text'}
+                </SettingsButton>
+                <SettingsButton variant="text" onClick={handleDownload}>Download .txt</SettingsButton>
+              </span>
+            </div>
+            <pre className="settings-mono-block" style={{ maxHeight: 320 }} tabIndex={0} data-testid="bug-report-text">
+              {report}
+            </pre>
+          </div>
         )}
-      </div>
+      </SettingsGroup>
 
       {copyFailed && (
         <SettingsNotice kind="warn">
-          Clipboard unavailable in this browser context — select the text below and copy manually.
+          The clipboard isn't available here; select the report text and copy it by hand.
         </SettingsNotice>
-      )}
-
-      {report && (
-        <textarea
-          readOnly
-          value={report}
-          onFocus={(e) => e.currentTarget.select()}
-          style={{
-            width: '100%', height: '30vh', marginTop: 12, fontFamily: 'ui-monospace, monospace',
-            fontSize: 11, padding: 8, whiteSpace: 'pre', boxSizing: 'border-box',
-          }}
-        />
       )}
     </SettingsSection>
   );

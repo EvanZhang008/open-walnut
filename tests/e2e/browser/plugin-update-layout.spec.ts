@@ -7,7 +7,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
-  commitAll, ensureSourceInstalled, git, openPlugins, pickTheme, startPluginFixture, type PluginFixture,
+  commitAll, ensureSourceInstalled, expandSidebar, git, startPluginFixture, type PluginFixture,
 } from './plugin-update-fixture'
 
 const SHOT_DIR = '/tmp/plugin-update-ux/after'
@@ -23,6 +23,20 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await fixture?.stop() })
 
 const UPDATABLE = ['acme-tracker', 'acme-notes', 'walnut-demo'] as const
+
+/**
+ * Settings, Plugins, through real clicks. The sidebar's Settings link returns to the last
+ * pane Settings showed (`/settings#plugin-store` after the first test), so the URL may carry
+ * a pane hash; the nav click then opens Plugins either way.
+ */
+async function openPlugins(page: Page): Promise<void> {
+  await expandSidebar(page)
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page).toHaveURL(/\/settings(#[\w-]+)?$/)
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('settings-nav-plugin-store').click()
+  await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
+}
 
 async function openWithChips(page: Page): Promise<void> {
   await page.goto(`http://127.0.0.1:${fixture.port}/`)
@@ -45,6 +59,21 @@ const rect = (target: Locator) => target.evaluate((el) => {
   const r = el.getBoundingClientRect()
   return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height }
 })
+
+/**
+ * Theme through General, back to Plugins. The sidebar's Settings link now returns to the
+ * last pane (Plugins here), so General is opened with its own nav click first.
+ */
+async function pickTheme(page: Page, label: 'Light' | 'Dark'): Promise<void> {
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await page.getByTestId('settings-nav-general').click()
+  const option = page.locator('.theme-picker-btn', { hasText: label }).first()
+  await expect(option).toBeVisible({ timeout: 30_000 })
+  await option.click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', label.toLowerCase(), { timeout: 15_000 })
+  await page.getByTestId('settings-nav-plugin-store').click()
+  await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
+}
 
 async function collapseSidebar(page: Page): Promise<void> {
   if (await page.locator('.sidebar.collapsed').count()) return
@@ -111,15 +140,29 @@ test('(N2-1)(N2-2)(N2-6)(N2-10) an Update flips in one frame, costs one reload, 
   // open (N2-1), and the actions cluster is sized to its controls, not a 280px floor.
   await page.setViewportSize({ width: 1280, height: 800 })
   const row = page.getByTestId('plugin-row-walnut-demo')
-  await expect(row.locator('.badge', { hasText: /restart to activate/i })).toBeVisible()
-  const title = row.locator('.settings-row-copy > strong')
+  // The server now hot reloads an updated plugin (feedback "Updated to ..., reloaded"), so a
+  // "Restart to activate" tag shows only when it could not; the layout holds either way.
+  await expect(row).toBeVisible()
+  const title = row.locator('.settings-row-copy .plugin-store-name')
   const titleBox = await rect(title)
   const chipBox = await rect(demoChip)
   expect(chipBox.top, 'chip sits on the title line').toBeLessThan(titleBox.top + 12)
   expect(titleBox.height, 'title block is one line').toBeLessThan(30)
   const actions = row.locator('.settings-row-actions')
   const actionsBox = await rect(actions)
-  expect(actionsBox.width).toBeLessThan(240)
+  // Sized to its controls (the Update slot, Remove with its Confirm reserve, the switch) plus
+  // the gaps between them, never a fixed floor. Font metrics differ per engine, so the sum is
+  // measured rather than hardcoded.
+  const fit = await actions.evaluate((el) => {
+    const kids = Array.from(el.children).filter((c) => c.getBoundingClientRect().width > 0)
+    const gap = parseFloat(getComputedStyle(el).columnGap) || 0
+    return {
+      sum: kids.reduce((n, c) => n + c.getBoundingClientRect().width, 0) + gap * Math.max(0, kids.length - 1),
+      parts: kids.map((c) => `${c.tagName.toLowerCase()}.${(c as HTMLElement).className}:${Math.round(c.getBoundingClientRect().width)}`),
+    }
+  })
+  expect(actionsBox.width, `actions ${fit.parts.join(' ')}`).toBeLessThanOrEqual(fit.sum + 1)
+  expect(actionsBox.width).toBeLessThan(280)
   // Neighbouring rows keep the same height (the chip wrapping used to add 40px).
   const heights = await page.locator('[data-testid="plugin-store-installed"] .settings-row').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))
   expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(40)
@@ -146,9 +189,11 @@ test('(N2-1)(N2-2)(N2-6)(N2-10) an Update flips in one frame, costs one reload, 
   for (let i = 0; i < await rows.count(); i += 1) {
     const r = rows.nth(i)
     const geometry = await r.evaluate((el) => {
-      const copy = el.querySelector('.settings-row-copy')!.getBoundingClientRect()
+      // A feedback line under a row ("Updated to ...") is a row with no copy or actions.
+      const copyEl = el.querySelector('.settings-row-copy')
       const acts = el.querySelector('.settings-row-actions')
-      if (!acts) return null
+      if (!acts || !copyEl) return null
+      const copy = copyEl.getBoundingClientRect()
       const a = acts.getBoundingClientRect()
       const kids = Array.from(acts.children).map((k) => k.getBoundingClientRect())
       const rowBox = el.getBoundingClientRect()
@@ -216,7 +261,7 @@ test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover,
   await commitAll(work, 'Local commit for the ahead tooltip')
   const tracker = page.getByTestId('update-chip-acme-tracker')
   await tracker.click()
-  await expect(tracker).toHaveText(/Up to date · 1 ahead/i, { timeout: 30_000 })
+  await expect(tracker).toHaveText(/Up to date, 1 ahead/i, { timeout: 30_000 })
   await expect(tracker).toHaveAttribute('title', /Nothing newer on the remote; you have 1 commit it does not\./)
   await expect(tracker).not.toHaveAttribute('title', /Same as the remote/)
 
@@ -238,7 +283,7 @@ test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover,
   await expect(tracker).toHaveAttribute('data-update-kind', 'dirty', { timeout: 30_000 })
   const disabled = page.getByTestId('plugin-update-acme-tracker')
   await expect(disabled).toBeDisabled()
-  const enabled = page.locator('[data-testid="plugin-store-installed"] button.btn.btn-secondary:not([disabled])').first()
+  const enabled = page.locator('[data-testid="plugin-store-installed"] button.settings-button-default:not([disabled])').first()
   for (const theme of ['Light', 'Dark'] as const) {
     await pickTheme(page, theme)
     const [dead, live] = [await styleOf(disabled), await styleOf(enabled)]
@@ -262,7 +307,7 @@ test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover,
   const checkNow = page.getByTestId('plugin-updates-check-now')
   const status = page.getByTestId('plugin-updates-checked-at')
   await checkNow.click()
-  await expect(status).toHaveText('Checking for updates…')
+  await expect(status).toHaveText('Checking for updates...')
   await expect(checkNow).toBeDisabled()
   const [statusStyle, verbStyle] = [await styleOf(status), await styleOf(checkNow)]
   expect(verbStyle.color, 'busy Check now is not the status colour').not.toBe(statusStyle.color)
@@ -373,7 +418,7 @@ test('(N2-3) a clone that disappears reads Not installed here, keeps its name, a
     await expect(sourceChip).toHaveAttribute('data-update-kind', 'missing', { timeout: 30_000 })
     await expect(sourceChip).toHaveText(/Not installed here/i)
     // The display name, never the slug, on the card title.
-    await expect(card.locator('.plugin-store-source-title strong')).toHaveText('Walnut Plugin Demo')
+    await expect(card.locator('.plugin-store-source-title .settings-addons-ellipsis')).toHaveText('Walnut Plugin Demo')
     const restore = card.getByRole('button', { name: 'Restore' })
     await expect(restore).toBeVisible()
     await expect(restore).toHaveClass(/btn-primary/)

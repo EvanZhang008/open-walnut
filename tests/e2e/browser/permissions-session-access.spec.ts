@@ -109,7 +109,8 @@ test('a user can set up session file access from Settings, without a terminal', 
   }
   await page.getByTestId('sidebar-core-app-settings').click()
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
-  await page.locator('.settings-nav-item', { hasText: 'macOS Access' }).click()
+  await page.getByTestId('settings-nav-permissions').click()
+  await expect(page.getByTestId('settings-nav-permissions')).toHaveAttribute('aria-current', 'page')
 
   const section = page.locator('#permissions')
   await expect(section).toBeVisible()
@@ -132,13 +133,13 @@ test('a user can set up session file access from Settings, without a terminal', 
   // "Unknown" beside a switch the user just flipped reads as a broken check.
   await expect(row.locator('.permission-row-state')).toHaveText("Can't be checked")
   // And it is a setup step, not a fault: "Fix" would say something is broken.
-  const setUp = row.getByRole('button', { name: 'Set up…' })
+  const setUp = row.getByRole('button', { name: 'Set up...' })
   await expect(setUp).toBeVisible()
   // The reader row, same macOS permission but a different identity, keeps the
   // ordinary wording.
   const readerRow = section.locator('.permission-row', { hasText: 'Full Disk Access' })
-  await expect(readerRow.locator('.permission-row-state')).toHaveText('Not granted')
-  await expect(readerRow.getByRole('button', { name: 'Fix…' })).toBeVisible()
+  await expect(readerRow.locator('.permission-row-state')).toHaveText('Not allowed')
+  await expect(readerRow.getByRole('button', { name: 'Open System Settings...' })).toBeVisible()
   await shot(section, 'permissions-section')
 
   await setUp.click()
@@ -196,7 +197,7 @@ test('a user can set up session file access from Settings, without a terminal', 
   // step carries its own opener.
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
-  await readerRow.getByRole('button', { name: 'Fix…' }).click()
+  await readerRow.getByRole('button', { name: 'Open System Settings...' }).click()
   await expect(dialog.locator('.app-modal-title')).toHaveText('Full Disk Access needs permission')
   await expect(dialog).toContainText('turns green once granted')
   await expect(dialog.locator('.permission-steps .permission-step-link')).toHaveCount(1)
