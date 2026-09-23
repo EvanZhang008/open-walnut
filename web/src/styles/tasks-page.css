@@ -390,24 +390,23 @@
 }
 .tp-row.done .tp-row-title { color: var(--fg-muted); text-decoration: line-through; }
 
-.tp-status-circle {
-  width: 15px;
-  height: 15px;
-  flex: none;
-  border-radius: 50%;
-  border: 1.5px solid var(--border-strong);
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  line-height: 1;
-  color: #fff;
+.tp-status-circle { flex: none; }
+
+/* The home list's red marks, in the row's 20px left padding so the circle never
+   shifts: solid dot = unread (task.unread), hollow ring = NEED_ACTION. The ring
+   is display:none globally (home-navigation.css shows it only inside the home
+   list), so the table opts in explicitly with the same look. */
+.tp-row .task-unread-dot {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
 }
-.tp-status-circle:hover { border-color: var(--accent); }
-.tp-row.done .tp-status-circle { background: var(--accent); border-color: var(--accent); }
+.tp-row .task-attention-dot {
+  display: inline-block;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--error);
+}
 
 .tp-cell-pri {
   display: flex;

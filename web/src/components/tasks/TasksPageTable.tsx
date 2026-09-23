@@ -23,7 +23,8 @@ import {
 } from './tasks-table-columns';
 import { TasksColumnsMenu } from './TasksColumnsMenu';
 import { TagChip } from './TagChip';
-import { PHASE_LABELS } from '@/utils/session-status';
+import { PHASE_LABELS, taskNeedsAction } from '@/utils/session-status';
+import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
@@ -288,6 +289,28 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
   );
 }
 
+/**
+ * The row's To Do ↔ Complete toggle — the SAME circle the home list draws
+ * (useTaskCircle: grey = no session, blue = session attached, pulsing = running,
+ * green check = done), so a task reads the same on both surfaces. A component,
+ * not a branch of `row()`, because the colour subscribes to live session status.
+ */
+function RowCircle({ task, onToggleComplete }: { task: Task; onToggleComplete: (id: string) => void }) {
+  const circleClass = useTaskCircle(task);
+  const isDone = task.status === 'done';
+  return (
+    <button
+      type="button"
+      className={`tp-status-circle task-phase-icon-btn ${circleClass}`}
+      title={isDone ? 'Done — click to reopen' : 'Click to complete'}
+      aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+      onClick={(e) => { e.stopPropagation(); onToggleComplete(task.id); }}
+    >
+      {ICONS.binaryPhaseIcon(isDone)}
+    </button>
+  );
+}
+
 /** Column header cell — click cycles asc → desc → off; no key = plain label. */
 function Th({ label, k, sort, onSortChange }: {
   label: string;
@@ -452,14 +475,15 @@ export function TasksPageTable({
     return (
       <div key={t.id} className={`tp-row${t.status === 'done' ? ' done' : ''}`} data-task-id={t.id}>
         <span className="tp-cell-title">
-          <button
-            type="button"
-            className="tp-status-circle"
-            title={t.status === 'done' ? 'Mark as todo' : 'Mark as done'}
-            onClick={() => onToggleComplete(t.id)}
-          >
-            {t.status === 'done' ? '✓' : ''}
-          </button>
+          {/* Same two red marks as the home list, in the row's left gutter: a solid
+              dot = unread agent output (clears when the task is opened), a hollow
+              ring = the task is at NEED_ACTION and waits on the human. */}
+          {t.status !== 'done' && (t.unread ? (
+            <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
+          ) : taskNeedsAction(t) && (
+            <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
+          ))}
+          <RowCircle task={t} onToggleComplete={onToggleComplete} />
           <button
             type="button"
             className={`tp-row-title${t.walnut_agent ? ' walnut-task-title' : ''}`}

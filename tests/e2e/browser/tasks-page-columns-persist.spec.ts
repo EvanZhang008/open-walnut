@@ -77,9 +77,10 @@ test('column chooser adds Created / Session / Phase, drops Updated, stays aligne
   await openHome(page, baseURL!)
   await gotoTasks(page)
 
-  // Shipped layout: Title · Due · Updated, sorted by Updated (newest first).
+  // Shipped layout: Title · Updated, sorted by Updated (newest first).
   const before = await headerLabels(page)
-  expect(before).toEqual(expect.arrayContaining(['Title', 'Due', 'Updated']))
+  expect(before).toEqual(expect.arrayContaining(['Title', 'Updated']))
+  expect(before).not.toContain('Due')
   expect(before).not.toContain('Session')
   expect(before).not.toContain('Created')
   await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toContainText('Updated')
@@ -101,8 +102,8 @@ test('column chooser adds Created / Session / Phase, drops Updated, stays aligne
   const after = await headerLabels(page)
   expect(after).toEqual(expect.arrayContaining(['Title', 'Phase', 'Session', 'Created']))
   expect(after).not.toContain('Updated')
-  // Display order is fixed: Phase precedes Due, Session precedes the timestamps.
-  expect(after.indexOf('Phase')).toBeLessThan(after.indexOf('Due'))
+  // Display order is fixed: Phase precedes Session, Session precedes the timestamps.
+  expect(after.indexOf('Phase')).toBeLessThan(after.indexOf('Session'))
   expect(after.indexOf('Session')).toBeLessThan(after.indexOf('Created'))
 
   const r = row(page, OPEN_RECENT)
@@ -135,6 +136,7 @@ test('column chooser adds Created / Session / Phase, drops Updated, stays aligne
   await page.keyboard.press('Escape')
   const reset = await headerLabels(page)
   expect(reset).toContain('Updated')
+  expect(reset).not.toContain('Due')
   expect(reset).not.toContain('Session')
   expect(reset).not.toContain('Created')
   expect(reset).not.toContain('Tags')
@@ -150,15 +152,15 @@ test('project, filter, search and columns survive leaving the page and a reload'
   await openHome(page, baseURL!)
   await gotoTasks(page)
 
-  // Make four distinct choices.
+  // Make four distinct choices. Sort first: "off" must be remembered, not snap
+  // back to Updated — and its header goes away in the next step.
+  await headers(page).filter({ hasText: 'Updated' }).click()   // desc → off
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toHaveCount(0)
   await openColumns(page)
   await setColumn(page, 'created', true)
   await setColumn(page, 'project', true)
-  await setColumn(page, 'due', false)
+  await setColumn(page, 'updated', false)
   await page.keyboard.press('Escape')
-  // Turn the sort OFF too: "off" must be remembered, not snap back to Updated.
-  await headers(page).filter({ hasText: 'Updated' }).click()   // desc → off
-  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toHaveCount(0)
   await page.locator('[data-testid="tasks-rail"] .tp-rail-item', { hasText: 'Lantern' }).click()
   await expect(page.locator('.tasks-page .tp-title')).toHaveText('Lantern')
   await chip(page, 'Done').click()
@@ -175,7 +177,7 @@ test('project, filter, search and columns survive leaving the page and a reload'
     await expect(chip(page, 'Todo'), label).toHaveClass(/\bon\b/)
     const labels = await headerLabels(page)
     expect(labels, label).toContain('Created')
-    expect(labels, label).not.toContain('Due')
+    expect(labels, label).not.toContain('Updated')
     // A per-project board has no Project column, chosen or not.
     expect(labels, label).not.toContain('Project')
     await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`), label).toHaveCount(0)
@@ -204,4 +206,46 @@ test('project, filter, search and columns survive leaving the page and a reload'
   await expect(page.locator('.tasks-page .tp-search')).toHaveValue('')
   // Project column is back now that we are on All Tasks — still chosen, was just scoped out.
   expect(await headerLabels(page)).toContain('Project')
+})
+
+test('rows carry the home list\'s circle colour and red marks', async ({ page, baseURL }) => {
+  await isolateUiPrefs(page)
+  await openHome(page, baseURL!)
+
+  // A task at NEED_ACTION, made through the API (setup, not the action under test).
+  const tag = `${test.info().project.name}-${Date.now()}`
+  const created = await page.request.post('/api/tasks', {
+    data: { title: `Needs a human ${tag}`, project: 'Lantern', source: 'local' },
+  })
+  expect(created.ok()).toBe(true)
+  const needsActionId = (await created.json() as { task: { id: string } }).task.id
+  expect((await page.request.patch(`/api/tasks/${needsActionId}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
+
+  try {
+    await gotoTasks(page)
+
+    // Grey circle: a plain task with no session.
+    await expect(row(page, OPEN_RECENT).locator('.tp-status-circle')).toHaveClass(/task-circle-todo/)
+    await expect(row(page, OPEN_RECENT).locator('.task-unread-dot')).toHaveCount(0)
+
+    // Blue circle: a task with a session attached (pw-task-001 owns pw-mode-test-session).
+    await expect(row(page, 'pw-task-001').locator('.tp-status-circle')).toHaveClass(/task-circle-(session|running)/)
+
+    // Red mark: NEED_ACTION shows the ring (or the solid dot if the phase change
+    // also flagged it unread) in the row's left gutter, and it is actually drawn.
+    const mark = row(page, needsActionId).locator('.task-unread-dot')
+    await expect(mark).toHaveCount(1)
+    await expect(mark).toBeVisible()
+    const box = (await mark.boundingBox())!
+    const rowBox = (await row(page, needsActionId).boundingBox())!
+    expect(box.x, 'mark sits in the left gutter, before the circle').toBeLessThan(rowBox.x + 20)
+
+    // Green check: a done row (turn the Done chip on to see one).
+    await chip(page, 'Done').click()
+    await expect(row(page, 'pw-tq-pinned-done-recent').locator('.tp-status-circle')).toHaveClass(/task-circle-done/)
+    await expect(row(page, 'pw-tq-pinned-done-recent').locator('.task-unread-dot')).toHaveCount(0)
+    await page.screenshot({ path: `${SHOTS}/06-circles-and-marks.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } })
+  } finally {
+    await page.request.delete(`/api/tasks/${needsActionId}`).catch(() => undefined)
+  }
 })
