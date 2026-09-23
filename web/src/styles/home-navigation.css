@@ -20,6 +20,21 @@
   padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer;
 }
 .todo-panel-hide:hover { color: var(--fg); background: var(--bg-hover); }
+/* One quiet toolbar, no accent colour (the user's call, 2026-09-23): New task wears the
+   search field's outline, and the filter icon is a plain glyph like the hide button. An
+   active filter keeps its dot, in grey. */
+.app-shell-navigation .todo-panel-toolbar .new-launcher-btn {
+  border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg);
+  font-weight: 500; box-shadow: none;
+}
+.app-shell-navigation .todo-panel-toolbar .new-launcher-btn:hover { background: var(--bg-hover); box-shadow: none; transform: none; }
+@container (max-width: 275px) {
+  .app-shell-navigation .todo-panel-toolbar .new-launcher-btn { border-radius: 7px; }
+}
+.app-shell-navigation .todo-panel-toolbar .vd-trigger-icon,
+.app-shell-navigation .todo-panel-toolbar .vd-trigger-icon.vd-has-filter { width: 24px; border-radius: 6px; color: var(--fg-muted); }
+.app-shell-navigation .todo-panel-toolbar .vd-trigger-icon:hover { color: var(--fg); background: var(--bg-hover); }
+.app-shell-navigation .todo-panel-toolbar .vd-dot { background: var(--fg-secondary); }
 .tier-solo-heading { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 8px 0 16px; flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--fg-secondary); }
 .tier-solo-heading > :last-child { margin-left: auto; }
 .app-shell-navigation .todo-panel-toolbar .todo-search-bar {
@@ -56,8 +71,11 @@
 .task-group-chip:hover .navigation-more, .task-group-chip:focus-within .navigation-more { opacity: 1; pointer-events: auto; }
 .navigation-drop-target { box-shadow: 0 -2px 0 var(--accent); }
 
+/* Three levels, one look each wherever they appear: section (Pinned, Projects) 13px/600 in
+   the text colour, tier 12px/600 secondary, project 12px/500 secondary. */
 .navigation-heading.todo-pinned-header { margin: 8px 0 2px; }
-.navigation-heading.todo-pinned-header .navigation-heading-open { color: var(--fg-muted); font-size: 11px; font-weight: 600; }
+.navigation-heading.todo-pinned-header .navigation-heading-open { color: var(--fg); font-size: 13px; font-weight: 600; }
+.navigation-heading.todo-tasks-header { border-bottom: 0; }
 
 /* Tier sub-groups inside Pinned: flat, no rails, same left edge as every heading. */
 .home-navigation-scroll .todo-pinned-subgroup,
@@ -77,26 +95,25 @@
 /* One row rhythm (29px pitch). */
 .home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-focus-card { min-height: 27px; padding: 2px 6px 2px 4px; margin-left: 0; }
 .home-navigation-scroll .todo-focus-card.task-grouped, .home-navigation-scroll .todo-pinned-card.task-grouped { margin-left: 16px; }
-.home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { padding: 3px 6px 3px 4px; }
+.home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { margin-left: -8px; padding: 3px 6px 3px 12px; }
 .home-navigation-scroll .todo-item-title-row { gap: 6px; }
-.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: 20px; }
-.home-navigation-scroll .todo-panel-item .todo-row-pill { left: 0; }
+.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: 28px; }
+.home-navigation-scroll .todo-panel-item .todo-row-pill { left: 8px; }
 /* The estimate is the CONTENT box: 22 + the 6px padding = the rendered 28px row. At 28 an
    unrendered row stood 34px tall in WebKit and every row shrank as it came into view,
    shifting the list under the pointer. */
 .home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { contain-intrinsic-size: auto 22px; }
 /* The unread dot (filled: output you have not opened) and the needs-action dot (hollow: opened,
-   still waiting on you) trail the row, so they never push the left edge. */
+   still waiting on you) sit in the gutter LEFT of the circle, 4 to 11px from the panel edge, so
+   they never move the circle and never meet the session chevron on the right. */
 .home-navigation-scroll .todo-pinned-card > .task-unread-dot, .home-navigation-scroll .todo-focus-card > .task-unread-dot,
-.home-navigation-scroll .todo-pinned-card.task-grouped > .task-unread-dot, .home-navigation-scroll .todo-focus-card.task-grouped > .task-unread-dot { left: auto; right: 8px; }
-.home-navigation-scroll .todo-pinned-card:has(> .task-unread-dot), .home-navigation-scroll .todo-focus-card:has(> .task-unread-dot) { padding-right: 20px; }
-/* A card whose session is open draws a chevron on that same right edge: the dot steps left of it. */
-.home-navigation-scroll .todo-pinned-card-session-open > .task-unread-dot { right: 24px; }
-.home-navigation-scroll .todo-pinned-card-session-open:has(> .task-unread-dot) { padding-right: 36px; }
-.home-navigation-scroll .todo-pinned-card-session-open:hover > .task-unread-dot { right: 8px; }
-.home-navigation-scroll .todo-pinned-card-session-open:hover:has(> .task-unread-dot) { padding-right: 20px; }
-.home-navigation-scroll .todo-item-title-row .task-unread-dot { left: auto; right: 2px; }
-.home-navigation-scroll .todo-item-title-row:has(> .task-unread-dot) { padding-right: 14px; }
+.home-navigation-scroll .todo-pinned-card.task-grouped > .task-unread-dot, .home-navigation-scroll .todo-focus-card.task-grouped > .task-unread-dot { left: -8px; right: auto; }
+/* There is no drag grip here, so the dot never yields to one on hover. */
+.home-navigation-scroll .todo-pinned-card:hover:has(> .todo-pinned-drag-handle) > .task-unread-dot,
+.home-navigation-scroll .todo-focus-card:hover:has(> .todo-pinned-drag-handle) > .task-unread-dot { opacity: 1; }
+.home-navigation-scroll .todo-panel-item,
+.home-navigation-scroll .todo-panel-item:has(> .collapse-chevron),
+.home-navigation-scroll .todo-group-project .todo-panel-item:has(> .collapse-chevron) { --dot-pull: -12px; }
 .home-navigation-scroll .todo-pinned-drag-handle, .home-navigation-scroll .todo-item-drag-handle { display: none; }
 .home-navigation-scroll .todo-pinned-card-needs-action,
 .home-navigation-scroll .todo-focus-card.todo-pinned-card-needs-action { background: transparent; }
@@ -108,7 +125,7 @@
 .home-navigation-scroll .task-attention-dot { display: inline-block; background: transparent; box-shadow: inset 0 0 0 1.5px var(--error); }
 
 /* Project and folder headers: no project folder icon, no tag or count, chevron after the name. */
-.home-navigation-scroll .project-kind-tag, .home-navigation-scroll .todo-group-count, .home-navigation-scroll .tier-project-label-count,
+.home-navigation-scroll .project-kind-tag,
 .home-navigation-scroll .todo-group-project-icon, .home-navigation-scroll .tier-project-label-icon,
 .home-navigation-scroll .todo-group-project-header .project-src-badge { display: none; }
 .home-navigation-scroll .todo-group-project-header, .home-navigation-scroll .tier-project-label {
@@ -119,17 +136,22 @@
 .home-navigation-scroll .todo-group-header-controls { gap: 0; }
 /* No left padding on the name: a project name starts on the same line as the headings and
    the Pinned project labels, and a row title starts where a pinned card's title does. */
-.home-navigation-scroll .todo-group-project-header .todo-group-name-btn { order: 1; padding: 2px 4px 2px 0; font-size: 12px; font-weight: 600; color: var(--fg-secondary); }
+.home-navigation-scroll .todo-group-project-header .todo-group-name-btn { order: 1; padding: 2px 4px 2px 0; }
 .home-navigation-scroll .tier-project-label-name { order: 1; padding-left: 0; }
 .home-navigation-scroll .todo-group-project-header .collapse-chevron,
 .home-navigation-scroll .tier-project-label .collapse-chevron,
-.home-navigation-scroll .task-group-chip .collapse-chevron { order: 2; --chevron-size: 16px; margin: 0; font-size: 0; opacity: .7; }
-.home-navigation-scroll .todo-group-header-controls > :not(.todo-group-name-btn):not(.collapse-chevron),
-.home-navigation-scroll .tier-project-label > :not(.tier-project-label-name):not(.collapse-chevron) { order: 3; }
+.home-navigation-scroll .task-group-chip .collapse-chevron { order: 3; --chevron-size: 16px; margin: 0; font-size: 0; opacity: .7; }
+.home-navigation-scroll .todo-group-header-controls > :not(.todo-group-name-btn):not(.collapse-chevron):not(.todo-group-count),
+.home-navigation-scroll .tier-project-label > :not(.tier-project-label-name):not(.collapse-chevron):not(.tier-project-label-count) { order: 4; }
+/* A project's task count sits right after its name, in both lists. */
+.home-navigation-scroll .todo-group-header-controls > .todo-group-count,
+.home-navigation-scroll .tier-project-label > .tier-project-label-count {
+  order: 2; margin: 0 2px 0 0; font-size: 11px; font-weight: 400; color: var(--fg-muted); font-variant-numeric: tabular-nums;
+}
 .home-navigation-scroll .tier-project-label-actions { margin-left: auto; }
 .home-navigation-scroll .task-group-chip-icon { order: 0; }
 .home-navigation-scroll .task-group-chip-label { order: 1; }
-.home-navigation-scroll .task-group-chip > :not(.task-group-chip-icon):not(.task-group-chip-label):not(.collapse-chevron) { order: 3; }
+.home-navigation-scroll .task-group-chip > :not(.task-group-chip-icon):not(.task-group-chip-label):not(.collapse-chevron) { order: 4; }
 .home-navigation-scroll .todo-group-action-btn-plus { opacity: 0; }
 .home-navigation-scroll .todo-group-project-header:hover .todo-group-action-btn-plus,
 .home-navigation-scroll .todo-group-project-header:focus-within .todo-group-action-btn-plus,
@@ -163,11 +185,11 @@
 .home-navigation-scroll .task-group-chip .collapse-chevron::before {
   content: ''; width: 4.5px; height: 4.5px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: translateX(-1px) rotate(-45deg);
 }
-/* Groups are quieter than the task rows they hold (12px under 13px rows). A section's own groups
-   (a tier, a project under Projects) are 600; a tier's project and a folder step down to muted. */
-.home-navigation-scroll .todo-pinned-sublabel .navigation-heading-open,
-.home-navigation-scroll .todo-group-project-header .todo-group-name-btn { font-size: 12px; font-weight: 600; color: var(--fg-secondary); }
-.home-navigation-scroll .tier-project-label { font-size: 12px; font-weight: 500; color: var(--fg-muted); }
+/* Groups are quieter than their section heading and than the 13px rows they hold. A project
+   reads the same under a tier and under Projects; a folder steps down to muted. */
+.home-navigation-scroll .todo-pinned-sublabel .navigation-heading-open { font-size: 12px; font-weight: 600; color: var(--fg-secondary); }
+.home-navigation-scroll .todo-group-project-header .todo-group-name-btn,
+.home-navigation-scroll .tier-project-label { font-size: 12px; font-weight: 500; color: var(--fg-secondary); }
 .home-navigation-scroll .task-group-chip { font-size: 12px; font-weight: 400; color: var(--fg-muted); padding-left: 4px; }
 .home-navigation-scroll .task-group-chip-count { display: none; }
 .home-navigation-scroll .task-group-chip-more { margin-left: auto; }
@@ -179,3 +201,12 @@
   content: ''; width: 4.5px; height: 4.5px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: translateX(-1px) rotate(-45deg);
 }
 .home-navigation-scroll .task-children-badge { background: none; color: var(--fg-muted); padding: 0; font-weight: 400; }
+/* A long project draws in batches; the next batch hangs off this row (list-batch.ts). Its
+   text starts on the title column. */
+.todo-list-show-more {
+  display: flex; align-items: center; width: 100%; min-height: 28px; padding: 0 6px 0 28px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.todo-list-show-more:hover { color: var(--fg); background: var(--bg-hover); }
+.todo-list-show-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.home-navigation-scroll .todo-list-show-more { margin-left: -8px; width: calc(100% + 8px); padding-left: 36px; }

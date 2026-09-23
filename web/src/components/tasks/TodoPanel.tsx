@@ -139,6 +139,7 @@ import {
 } from './tier-group-sentinels';
 import { inferTierDropProject, resolveMoveMigration, sourceDisplayName } from './task-move-project';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
+import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useSessionStatusEpoch, useTaskCircle } from '@/hooks/useSessionStatus';
 import {
@@ -400,32 +401,24 @@ function persistSet(key: string, set: Set<string>) {
   try { localStorage.setItem(key, JSON.stringify([...set])); } catch { /* ignore */ }
 }
 
-/** The Projects list remembers the projects the user OPENED, so every other one,
- *  a project that appears later included, starts folded. `shut` is the older stored
- *  shape (the folded ones); it is read as-is until the next change rewrites it. */
-type ListFolds = { open: Set<string> } | { shut: Set<string> };
-const LS_LIST_OPEN_PROJS_KEY = 'walnut-todo-list-open-projs';
-const LS_LIST_SHUT_PROJS_KEY = 'walnut-todo-list-collapsed-projs';
+/** The Projects list remembers the projects the user OPENED; every other one, a project
+ *  that appears later included, starts folded. The key is new on purpose: the one before
+ *  it was converted from an older "folded ones" record whose default was open, so it
+ *  marked nearly every project opened (2026-09-23, "these should always be collapsed
+ *  unless I click into it"). The retired keys are dropped on read. */
+const LS_LIST_OPEN_PROJS_KEY = 'walnut-todo-list-opened';
+const RETIRED_LIST_FOLD_KEYS = ['walnut-todo-list-open-projs', 'walnut-todo-list-collapsed-projs'];
 
-function readListFolds(): ListFolds {
+function readListOpen(): Set<string> {
   try {
-    if (localStorage.getItem(LS_LIST_SHUT_PROJS_KEY) !== null) return { shut: readSetFromStorage(LS_LIST_SHUT_PROJS_KEY) };
-    if (localStorage.getItem(LS_LIST_OPEN_PROJS_KEY) !== null) return { open: readSetFromStorage(LS_LIST_OPEN_PROJS_KEY) };
+    for (const key of RETIRED_LIST_FOLD_KEYS) if (localStorage.getItem(key) !== null) localStorage.removeItem(key);
   } catch { /* Storage off: the first-visit folds. */ }
-  return { open: new Set() };
+  return readSetFromStorage(LS_LIST_OPEN_PROJS_KEY);
 }
 
-function isListProjectOpen(folds: ListFolds, project: string): boolean {
-  return 'open' in folds ? folds.open.has(project) : !folds.shut.has(project);
-}
-
-/** Apply `change` to the open set (converting the older shape against `live`) and store it. */
-function writeListFolds(folds: ListFolds, live: Iterable<string>, change: (open: Set<string>) => void): ListFolds {
-  const open = 'open' in folds ? new Set(folds.open) : new Set([...live].filter((p) => !folds.shut.has(p)));
-  change(open);
+function saveListOpen(open: Set<string>): Set<string> {
   persistSet(LS_LIST_OPEN_PROJS_KEY, open);
-  try { localStorage.removeItem(LS_LIST_SHUT_PROJS_KEY); } catch { /* ignore */ }
-  return { open };
+  return open;
 }
 
 function readTab(): string {
@@ -1449,6 +1442,24 @@ function ProjectHeaderRow({
       {/* Sibling, not child — see the note in ProjectContextMenu.tsx. */}
       {projectMenu.node}
     </>
+  );
+}
+
+/** Draws the next batch of a long list (list-batch.ts). */
+function ShowMoreRow({ batchKey, hidden, onShowMore }: {
+  batchKey: string;
+  hidden: number;
+  onShowMore: (key: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="todo-list-show-more"
+      title={`${hidden} more ${hidden === 1 ? 'task' : 'tasks'}`}
+      onClick={() => onShowMore(batchKey)}
+    >
+      Show more
+    </button>
   );
 }
 
@@ -2755,10 +2766,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [headerAddSignal, setHeaderAddSignal] = useState<{ project: string; nonce: number } | null>(null);
   /** Unfold a project, for callers about to reveal something INSIDE it — a ghost
    *  row (or any other row) under a folded project is a dead click. Shared by the
-   *  main list's add row and the pinned tiers' per-run add row. */
-  const expandProject = useCallback((project: string) => {
-    setListFolds(prev => isListProjectOpen(prev, project) ? prev
-      : writeListFolds(prev, tasksRef.current.map(task => task.project || ''), open => open.add(project)));
+   *  main list's add row and the pinned tiers' per-run add row. `tierOnly` leaves the
+   *  Projects list alone: a list project opens only when the user acts on it there. */
+  const expandProject = useCallback((project: string, opts?: { tierOnly?: boolean }) => {
+    if (!opts?.tierOnly) setListOpen(prev => prev.has(project) ? prev : saveListOpen(new Set(prev).add(project)));
     setCollapsedProjects((prev) => {
       if (!prev.has(project)) return prev;
       const next = new Set(prev);
@@ -2883,7 +2894,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (isDeleted(searchSection)) setSearchSection('focus');
   }, [activeSection, searchSection, customTiersLive, customTiersLoaded]);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
-  const [listFolds, setListFolds] = useState<ListFolds>(readListFolds);
+  const [listOpen, setListOpen] = useState<Set<string>>(readListOpen);
+  // Projects a locate opened for this visit only. Nothing but a click on the project
+  // saves it open, so a reload folds these back.
+  const [revealedProjects, setRevealedProjects] = useState<Set<string>>(() => new Set());
+  // How many rows each open project draws before its "Show more" row (list-batch.ts).
+  // Per visit: folding a project resets it.
+  const [listBatch, setListBatch] = useState<Map<string, ListBatchState>>(() => new Map());
   // Tracks which parent tasks the user has EXPANDED (default = all collapsed)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => readSetFromStorage(LS_EXPANDED_PARENTS_KEY));
   // Auto-expand parents with active (non-completed) children on initial load.
@@ -3193,8 +3210,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           return next;
         });
       }
-      setListFolds(prev => isListProjectOpen(prev, proj) ? prev
-        : writeListFolds(prev, tasks.map(task => task.project || ''), open => open.add(proj)));
+      setRevealedProjects(prev => prev.has(proj) ? prev : new Set(prev).add(proj));
 
       // Expand collapsed parent if focused task is a child (temporary — not persisted,
       // so parents collapse back on page reload unless user manually expanded them)
@@ -3250,7 +3266,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // not switch tabs" rule stays intact. The collapse key is shared with the main
       // list, so this also unfolds that project's header row. Revealing rows is the
       // acceptable side of a shared key; silently locating nothing is not.
-      expandProject(proj);
+      expandProject(proj, { tierOnly: true });
       let tierKey = focusTaskIds?.has(focusedTaskId) ? 'focus'
         : backlogTaskIds?.has(focusedTaskId) ? 'backlog'
         : waitTaskIds?.has(focusedTaskId) ? 'wait'
@@ -4840,15 +4856,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
     // The list's own set too: an opened name left behind by a rename would open a
     // later project that reuses it.
-    setListFolds((prev) => {
-      const stored = 'open' in prev ? prev.open : prev.shut;
-      const stale = [...stored].filter((k) => !liveGroupKeys.has(k));
+    setListOpen((prev) => {
+      const stale = [...prev].filter((k) => !liveGroupKeys.has(k));
       if (stale.length === 0) return prev;
-      const next = new Set(stored);
+      const next = new Set(prev);
       for (const k of stale) next.delete(k);
-      if ('open' in prev) { persistSet(LS_LIST_OPEN_PROJS_KEY, next); return { open: next }; }
-      persistSet(LS_LIST_SHUT_PROJS_KEY, next);
-      return { shut: next };
+      return saveListOpen(next);
     });
   }, [loading, tasks.length, liveGroupKeys]);
 
@@ -5815,7 +5828,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [grouped]);
 
   // The pinned tiers' project label rows fold through this set. The main list keeps
-  // its own (`listFolds`, folded by default), so folding a
+  // its own (`listOpen`, folded by default), so folding a
   // project in a tier leaves its list group alone and vice versa. Both survive a
   // reload. useCallback because the tier render pass depends on it.
   const toggleProject = useCallback((key: string) => {
@@ -5852,8 +5865,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [queryFoldedProjects, setQueryFoldedProjects] = useState<Set<string>>(() => new Set());
   useEffect(() => { if (!queryActive) setQueryFoldedProjects(new Set()); }, [queryActive]);
   const isListProjectCollapsed = useCallback(
-    (project: string) => queryActive ? queryFoldedProjects.has(project) : !isListProjectOpen(listFolds, project),
-    [queryActive, queryFoldedProjects, listFolds],
+    (project: string) => queryActive ? queryFoldedProjects.has(project)
+      : !listOpen.has(project) && !revealedProjects.has(project),
+    [queryActive, queryFoldedProjects, listOpen, revealedProjects],
   );
   const toggleListProject = useCallback((project: string) => {
     if (queryActive) {
@@ -5864,25 +5878,62 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       });
       return;
     }
-    setListFolds(prev => writeListFolds(prev, liveGroupKeys, open => {
-      if (open.has(project)) open.delete(project); else open.add(project);
-    }));
-  }, [queryActive, liveGroupKeys]);
+    const shown = !isListProjectCollapsed(project);
+    if (shown) setListBatch(prev => { if (!prev.has(project)) return prev; const next = new Map(prev); next.delete(project); return next; });
+    setRevealedProjects(prev => { if (!prev.has(project)) return prev; const next = new Set(prev); next.delete(project); return next; });
+    setListOpen(prev => {
+      const next = new Set(prev);
+      if (shown) next.delete(project); else next.add(project);
+      return saveListOpen(next);
+    });
+  }, [queryActive, isListProjectCollapsed]);
 
   const allCollapsed = liveGroupKeys.size > 0 &&
     [...liveGroupKeys].every(project => isListProjectCollapsed(project));
 
   const handleCollapseExpandAll = useCallback(() => {
     if (queryActive) { setQueryFoldedProjects(new Set<string>(allCollapsed ? [] : liveGroupKeys)); return; }
-    setListFolds(prev => writeListFolds(prev, liveGroupKeys, open => {
-      open.clear();
-      if (allCollapsed) for (const project of liveGroupKeys) open.add(project);
-    }));
+    setRevealedProjects(new Set());
+    setListBatch(new Map());
+    setListOpen(saveListOpen(new Set<string>(allCollapsed ? liveGroupKeys : [])));
     if (!allCollapsed) {
       setExpandedParents(new Set());
       persistSet(LS_EXPANDED_PARENTS_KEY, new Set());
     }
   }, [queryActive, allCollapsed, liveGroupKeys]);
+
+  // Row batching (list-batch.ts). A folded folder's members stay drawn but unseen, so
+  // they don't use up the batch; the "In one list" view batches under FLAT_BATCH_KEY.
+  const countsTowardBatch = useCallback(
+    (task: Task) => !isRowFolderCollapsed(task.id) || !!groupRenderMap.get(task.id)?.isLead,
+    [isRowFolderCollapsed, groupRenderMap],
+  );
+  const cutRows = (key: string, rows: Task[]) => {
+    const state = listBatch.get(key) ?? FRESH_BATCH;
+    return cutListBatch(rows, state.limit, id => id === focusedTaskId || state.kept.has(id), countsTowardBatch);
+  };
+  const showMoreRows = useCallback((key: string) => {
+    setListBatch(prev => {
+      const state = prev.get(key) ?? FRESH_BATCH;
+      return new Map(prev).set(key, { ...state, limit: state.limit + LIST_BATCH });
+    });
+  }, []);
+  // The cut always draws the focused row; this keeps a row focused past the batch drawn
+  // after focus moves on, so the list doesn't reshape under the next click.
+  useEffect(() => {
+    if (!focusedTaskId) return;
+    const key = groupBy === 'none' ? FLAT_BATCH_KEY : taskGroupMap.get(focusedTaskId);
+    if (key === undefined) return;
+    const rows = (groupBy === 'none' ? sorted : grouped.find(g => g.project === key)?.tasks ?? [])
+      .filter(t => !isChildHidden(t.id));
+    const state = listBatch.get(key) ?? FRESH_BATCH;
+    if (state.kept.has(focusedTaskId) || !isPastBatch(rows, state.limit, focusedTaskId, countsTowardBatch)) return;
+    setListBatch(prev => {
+      const current = prev.get(key) ?? FRESH_BATCH;
+      return new Map(prev).set(key, { ...current, kept: new Set(current.kept).add(focusedTaskId) });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a focus change keeps a row
+  }, [focusedTaskId]);
 
   // ── Mini-bar "Running (n)" — tasks whose linked session is actively running.
   // Cycles through them on repeated clicks (focus-scroll each in turn).
@@ -6887,7 +6938,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const addTaskToRun = useCallback((tier: string, project: string) => {
     // The ghost row is rendered INSIDE the project's run, so a folded project
     // would hide the very row this click asked for. Unfold first.
-    expandProject(project);
+    expandProject(project, { tierOnly: true });
     setRunAddSignal({ tier, project, nonce: Date.now() });
   }, [expandProject]);
   const tierAddOpenSignal = useCallback((tier: string) =>
@@ -7843,9 +7894,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         {/* Flat mode: ungrouped list sorted by selected sort option */}
         {!loading && !isSearchMode && groupBy === 'none' && sorted.length > 0 && (
           <div className="todo-flat-results">
-            {sorted.map((task) => {
-              if (isChildHidden(task.id)) return null;
-              return (
+            {(() => {
+            const batch = cutRows(FLAT_BATCH_KEY, sorted.filter((t) => !isChildHidden(t.id)));
+            const row = (task: Task) => (
                 <SortableTaskItem
                   key={task.id}
                   task={task}
@@ -7895,8 +7946,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   folderProject={task.group_id ? folderOwnerProject(folderMeta?.[task.group_id], task) : undefined}
                   onMoveFolderToProject={handleMoveFolderToProject}
                 />
-              );
-            })}
+            );
+            return (<>
+            {batch.head.map(row)}
+            {batch.hidden > 0 && <ShowMoreRow batchKey={FLAT_BATCH_KEY} hidden={batch.hidden} onShowMore={showMoreRows} />}
+            {batch.tail.map(row)}
+            </>);
+            })()}
           </div>
         )}
         {/* Normal mode: grouped hierarchy */}
@@ -7937,11 +7993,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onMoveUp={(p) => moveProjectBy(allGroupKeys, p, -1)}
                         onMoveDown={(p) => moveProjectBy(allGroupKeys, p, 1)}
                       />
-                      {!isListProjectCollapsed(project) && (
-                        <SortableContext items={projTasks.filter((t) => !isChildHidden(t.id)).map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                          {projTasks.map((task) => {
-                            if (isChildHidden(task.id)) return null;
-                            return (
+                      {!isListProjectCollapsed(project) && (() => {
+                        const batch = cutRows(project, projTasks.filter((t) => !isChildHidden(t.id)));
+                        const row = (task: Task) => (
                               <SortableTaskItem
                                 key={task.id}
                                 task={task}
@@ -7990,8 +8044,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 folderProject={task.group_id ? folderOwnerProject(folderMeta?.[task.group_id], task) : undefined}
                                 onMoveFolderToProject={handleMoveFolderToProject}
                               />
-                            );
-                          })}
+                        );
+                        return (
+                        <SortableContext items={batch.head.concat(batch.tail).map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                          {batch.head.map(row)}
+                          {batch.hidden > 0 && <ShowMoreRow batchKey={project} hidden={batch.hidden} onShowMore={showMoreRows} />}
+                          {batch.tail.map(row)}
                           {(emptyFoldersByProject.get((project || '').toLowerCase()) ?? []).map((f) => (
                             <EmptyFolderRow
                               key={f.groupId}
@@ -8015,7 +8073,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             }}
                           />
                         </SortableContext>
-                      )}
+                        );
+                      })()}
                     </div>
                   )}
                 </SortableGroupItem>

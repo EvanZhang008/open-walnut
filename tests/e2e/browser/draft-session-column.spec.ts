@@ -405,8 +405,9 @@ test('task row ▶ Start reuses the task (taskId in the payload) and creates no 
   expect(createRes.ok(), await createRes.text()).toBe(true)
   const taskId = ((await createRes.json()) as { task: { id: string } }).task.id
 
-  // Find the row in the real list (the WS task:created event lands it live).
-  const row = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
+  // Find the task in the real panel (the WS task:created event lands it live). A new
+  // task is pinned, and the All view shows a pinned task as its tier card only.
+  const row = page.locator(`#home-task-navigation [data-task-id="${taskId}"]`).first()
   await expect(row).toBeVisible({ timeout: 25_000 })
 
   // Hover reveals ▶ (opacity 0 until then — a dense list stays quiet).
@@ -465,7 +466,8 @@ test('title-only task ▶ Start opens a bound draft (no launch), and its Start r
   expect(createRes.ok(), await createRes.text()).toBe(true)
   const taskId = ((await createRes.json()) as { task: { id: string } }).task.id
 
-  const row = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
+  // A new task is pinned, and the All view shows a pinned task as its tier card only.
+  const row = page.locator(`#home-task-navigation [data-task-id="${taskId}"]`).first()
   await expect(row).toBeVisible({ timeout: 25_000 })
   await row.hover()
 

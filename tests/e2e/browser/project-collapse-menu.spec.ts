@@ -69,7 +69,7 @@
  * project group changes what they see.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { isolateUiPrefs, openListProject, presetPanelView } from './todo-panel-helpers'
 import { presetTierViewModes } from './draft-surface-helpers'
 import { chooseViewOption } from './home-navigation-helpers'
 
@@ -893,6 +893,9 @@ test('Rename driven from the project context menu really renames', async ({ page
   await modal.getByRole('button', { name: 'Rename' }).click()
 
   await expect(projectBucket(page, renamed)).toBeVisible({ timeout: 15_000 })
+  // The new name is one the list never opened, so it starts folded (the next test
+  // pins that rule); open it to see the member moved with it.
+  await openListProject(page, renamed)
   await expect(listRow(page, renamed, task.id)).toBeVisible()
   await expect(projectBucket(page, project)).toHaveCount(0)
   await page.screenshot({ path: '/tmp/project-collapse/project-renamed-from-menu.png' })
@@ -948,10 +951,10 @@ test('a renamed project starts folded like any new one, and its old opened name 
   await page.waitForLoadState('networkidle')
 
   // The MAIN LIST remembers the projects the user OPENED (every other one, a new
-  // project included, starts folded). presetPanelView opens everything with the
-  // older "folded ones" shape; the first toggle rewrites it as the open set.
+  // project included, starts folded). presetPanelView seeds that set with every
+  // project the server had at the first load.
   const openKeys = () => page.evaluate(() => {
-    try { return JSON.parse(localStorage.getItem('walnut-todo-list-open-projs') ?? '[]') as string[] } catch { return [] }
+    try { return JSON.parse(localStorage.getItem('walnut-todo-list-opened') ?? '[]') as string[] } catch { return [] }
   })
 
   await expect(listHeader(page, before)).toBeVisible({ timeout: 15_000 })

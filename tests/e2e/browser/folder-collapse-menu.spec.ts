@@ -42,7 +42,7 @@
  * what every list spec sees.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { isolateUiPrefs, openListProject, presetPanelView, showMoreUntil } from './todo-panel-helpers'
 import { chooseViewOption } from './home-navigation-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -384,6 +384,10 @@ test('flat list mode: the folder header still folds (one collapse set, every lis
   const header = flat.locator(`.task-group-chip[data-group-id="${groupId}"]`).first()
   const rowA = flat.locator(`.todo-panel-item[data-task-id="${a.id}"]`).first()
   const rowB = flat.locator(`.todo-panel-item[data-task-id="${b.id}"]`).first()
+  // Folders sink below the loose tasks, and a long list draws in batches, so on the
+  // shared fixture the folder sits behind "Show more".
+  await expect(flat).toBeVisible({ timeout: 15_000 })
+  await showMoreUntil(flat, header)
   await expect(header).toBeVisible({ timeout: 15_000 })
   await expect(rowA).toBeVisible()
   await expect(rowB).toBeVisible()
@@ -468,8 +472,10 @@ test('"Move to project…" really moves the folder: header + members land under 
     beforePick: async () => { await page.screenshot({ path: '/tmp/folder-collapse-menu/folder-move-project-picker.png' }) },
   })
 
-  // The folder header now renders inside the DESTINATION project's group…
+  // The folder header now renders inside the DESTINATION project's group, which the
+  // list never opened, so it is folded until the user opens it…
   const dest = projectBucket(page, target)
+  await openListProject(page, target)
   await expect(dest.locator(`.task-group-chip[data-group-id="${groupId}"]`)).toBeVisible({ timeout: 15_000 })
   // …its members came along (they carry the new project, so they render there)…
   await expect(dest.locator(`.todo-panel-item[data-task-id="${a.id}"]`)).toBeVisible()
@@ -504,6 +510,8 @@ test('an EMPTY folder moved to a project with no tasks still renders, in its new
   await expect(row).toBeVisible({ timeout: 15_000 })
   await pickFolderProject(page, row, (f) => pickerOption(page, f, target), { filter: target })
 
+  // The destination was never opened in the list, so it is folded until the user opens it.
+  await openListProject(page, target)
   await expect(projectBucket(page, target).locator(`.task-group-chip-empty[data-group-id="${groupId}"]`))
     .toBeVisible({ timeout: 15_000 })
   await expect(page.locator('.notification-toast--error', { hasText: 'Action failed' })).toHaveCount(0)

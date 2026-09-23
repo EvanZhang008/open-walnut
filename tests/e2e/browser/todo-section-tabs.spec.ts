@@ -18,15 +18,12 @@
 
 import { test, expect } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { isolateUiPrefs, openListProject, showMoreUntil } from './todo-panel-helpers'
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
   await page.addInitScript(() => {
     if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '[]')
-    if (localStorage.getItem('walnut-todo-list-collapsed-projs') === null && localStorage.getItem('walnut-todo-list-open-projs') === null) {
-      localStorage.setItem('walnut-todo-list-collapsed-projs', '[]')
-    }
   })
 })
 
@@ -188,7 +185,11 @@ test.describe('todo panel section tabs', () => {
 
     // Click the pinned task's row in the main list — the view must NOT teleport
     // to the task's pin tier (the old behavior); the user is working in Tasks.
+    // Its project starts folded (the list opens only what the user opened) and may be
+    // long enough to draw in batches.
+    await openListProject(page, 'Work')
     const row = page.locator(`.todo-panel-list [data-task-id="${id}"]`).first()
+    await showMoreUntil(page.locator('.todo-panel-list'), row)
     await expect(row).toBeVisible()
     await row.click()
     await expect(tab(page, 'Tasks')).toHaveAttribute('aria-selected', 'true')

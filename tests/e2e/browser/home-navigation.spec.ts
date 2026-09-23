@@ -49,6 +49,18 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   const bottomOf = (selector: string) => page.locator(selector).first().evaluate(el => Math.round(el.getBoundingClientRect().bottom));
   expect(await bottomOf('.sidebar-header')).toBe(await bottomOf('#home-task-navigation .todo-panel-toolbar'));
   await expect(homeToolbar(page).locator('.new-launcher-label')).toBeVisible();
+  // One quiet toolbar, no accent colour: New task wears the search field's outline, and the
+  // filter icon is the same grey glyph as the hide button.
+  const look = (selector: string) => homeToolbar(page).locator(selector).first().evaluate(el => {
+    const s = getComputedStyle(el);
+    return { background: s.backgroundColor, border: `${s.borderTopWidth} ${s.borderTopColor}`, color: s.color };
+  });
+  const [searchLook, createLook, filterLook, hideLook] = await Promise.all(
+    ['.todo-search-bar', '.new-launcher-btn', '.vd-trigger-icon', '.todo-panel-hide'].map(look));
+  expect(createLook.background).toBe(searchLook.background);
+  expect(createLook.border).toBe(searchLook.border);
+  expect(createLook.color).toBe('rgb(29, 29, 31)');
+  expect(filterLook.color).toBe(hideLook.color);
 
   // Default list is everything; the tiers are headings of one page (the empty ones are
   // covered by their own test below).
@@ -85,17 +97,28 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
     return range.getClientRects()[0].left;
   });
   expect(Math.round(textLeft - panelX)).toBe(40);
-  // Status dots trail the title: filled while the output is unread, hollow once it is
-  // read but the task still needs you. The circle keeps its session colour either way.
-  const titleX = await leftOf(row.locator('.todo-item-title'));
+  // Status dots sit in the gutter LEFT of the circle: filled while the output is unread,
+  // hollow once it is read but the task still needs you. The circle keeps its session
+  // colour either way, and the dot never moves it.
+  const dotBox = (dot: ReturnType<Page['locator']>) => dot.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return { left: box.left, right: box.right, painted: hit === el };
+  });
   const unreadDot = row.locator('.task-unread-dot:not(.task-attention-dot)');
   if (await unreadDot.count()) {
-    expect(await leftOf(unreadDot)).toBeGreaterThan(titleX);
+    const dot = await dotBox(unreadDot);
+    expect(dot.left).toBeGreaterThanOrEqual(panelX);
+    expect(dot.right).toBeLessThanOrEqual(circleX - 3);
     expect((await page.request.patch(`/api/tasks/${taskId}`, { data: { unread: false } })).ok()).toBe(true);
   }
   await expect(row.locator('.task-attention-dot')).toBeVisible();
   await expect(unreadDot).toHaveCount(0);
-  expect(await leftOf(row.locator('.task-attention-dot'))).toBeGreaterThan(titleX);
+  const ring = await dotBox(row.locator('.task-attention-dot'));
+  expect(ring.left).toBeGreaterThanOrEqual(panelX);
+  expect(ring.right).toBeLessThanOrEqual(circleX - 3);
+  expect(ring.painted).toBe(true);
+  expect(Math.round(await leftOf(row.locator('.task-phase-icon-btn')) - panelX)).toBe(16);
   await expect(row.locator('.task-phase-icon-btn')).toHaveClass(/task-circle-todo/);
   expect(await row.locator('.task-phase-icon-btn').evaluate(el => getComputedStyle(el).color)).not.toBe('rgb(255, 59, 48)');
   await project.locator('.collapse-chevron').click();
@@ -194,6 +217,12 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   // A known, tiny board: only Focus holds pins, so the other three tiers are empty. The
   // session-open card reuses the fixture's task/session pair.
   await page.addInitScript(() => sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-store-sync-session', locked: false }])));
+  // Fold records from earlier builds: one marked every project opened. Both are retired,
+  // so the list still starts folded.
+  await page.addInitScript(() => {
+    localStorage.setItem('walnut-todo-list-open-projs', JSON.stringify(['Orchard', 'Meadowlark']));
+    localStorage.setItem('walnut-todo-list-collapsed-projs', '[]');
+  });
   const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
   const task = (id: string, title: string, project: string, extra: Record<string, unknown> = {}) => ({
     id, title, project, status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
@@ -203,6 +232,8 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   const board = () => [
     task('pw-task-store-sync', 'Card with an open session', 'Orchard', { unread: true, session_ids: ['pw-store-sync-session'], ...(pinning ? { pinned: true, focus_tier: 'focus' } : {}) }),
     task('nav-empty-pin', 'Pinned focus card', 'Orchard', pinning ? { pinned: true, focus_tier: 'focus' } : {}),
+    // A second project in Focus, so the tier draws its project labels.
+    task('nav-pin-other', 'Pinned card elsewhere', 'Meadowlark', pinning ? { pinned: true, focus_tier: 'focus' } : {}),
     task('nav-list-alpha', 'List alpha', 'Orchard', { created_at: ago(3), updated_at: ago(1) }),
     task('nav-list-bravo', 'List bravo', 'Meadowlark', { priority: 'immediate', created_at: ago(2), updated_at: ago(3) }),
     task('nav-list-charlie', 'List charlie', 'Meadowlark', { created_at: ago(1), updated_at: ago(2) }),
@@ -213,7 +244,7 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   });
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
-    const pins = pinning ? ['pw-task-store-sync', 'nav-empty-pin'] : [];
+    const pins = pinning ? ['pw-task-store-sync', 'nav-empty-pin', 'nav-pin-other'] : [];
     await route.fulfill({ json: { pinned_tasks: pins, focus_tasks: pins, satellite_tasks: [], backlog_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
   });
   // One custom tier while pinning, none after: other specs leave custom tiers on the shared fixture.
@@ -230,19 +261,45 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   for (const tier of ['satellite', 'backlog', 'wait']) await expect(heading(page, tier)).toHaveCount(0);
   await expect(heading(page, 'nav-custom-someday')).toBeVisible();
 
-  // An open session draws a chevron on the card's right edge; the unread dot sits left of it.
+  // The unread dot sits in the gutter left of the circle, so it never meets the chevron
+  // an open session draws on the card's right edge, and it stays put on hover.
   const sessionCard = navigation(page).locator('.todo-pinned-card-session-open[data-task-id="pw-task-store-sync"]');
   await expect(sessionCard).toBeVisible({ timeout: 20_000 });
-  await page.mouse.move(0, 0);
-  const dotRight = await sessionCard.locator('> .task-unread-dot').evaluate(el => el.getBoundingClientRect().right);
-  const cardRight = await sessionCard.evaluate(el => el.getBoundingClientRect().right);
-  const chevronLeft = await sessionCard.evaluate(el => {
-    const after = getComputedStyle(el, '::after');
-    // A 6px square rotated 45deg spans about 8.5px; `right` is where its box ends.
-    return el.getBoundingClientRect().right - parseFloat(after.right) - 6 * Math.SQRT2;
+  const panelLeft = await navigation(page).evaluate(el => el.getBoundingClientRect().left);
+  const gutterDot = () => sessionCard.evaluate(card => {
+    const dot = card.querySelector(':scope > .task-unread-dot')!;
+    const box = dot.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return { left: box.left, right: box.right, circle: card.querySelector('.task-phase-icon-btn')!.getBoundingClientRect().left, painted: hit === dot, opacity: getComputedStyle(dot).opacity };
   });
-  expect(dotRight).toBeLessThanOrEqual(chevronLeft);
-  expect(cardRight - dotRight).toBeGreaterThanOrEqual(18);
+  await page.mouse.move(0, 0);
+  const atRest = await gutterDot();
+  expect(atRest.left).toBeGreaterThanOrEqual(panelLeft);
+  expect(atRest.right).toBeLessThanOrEqual(atRest.circle - 3);
+  expect(atRest.painted).toBe(true);
+  await sessionCard.hover();
+  await expect.poll(async () => (await gutterDot()).opacity).toBe('1');
+
+  // One look per level, wherever it appears: sections (Pinned, Projects) lead, a project
+  // label under a tier matches one under Projects, and each project shows its task count.
+  const font = (locator: ReturnType<Page['locator']>) => locator.first().evaluate(el => {
+    const style = getComputedStyle(el);
+    return `${style.fontSize}/${style.fontWeight}/${style.color}`;
+  });
+  expect(await font(heading(page, 'pinned').locator('.navigation-heading-open'))).toBe('13px/600/rgb(29, 29, 31)');
+  expect(await font(heading(page, 'tasks').locator('.navigation-heading-open'))).toBe('13px/600/rgb(29, 29, 31)');
+  expect(await heading(page, 'tasks').evaluate(el => getComputedStyle(el).borderBottomWidth)).toBe('0px');
+  const tierProject = navigation(page).locator('.tier-project-label').filter({ hasText: 'Orchard' });
+  const listProject = navigation(page).locator('.todo-group-project-header').filter({ hasText: 'Meadowlark' });
+  expect(await font(tierProject)).toBe(await font(listProject.locator('.todo-group-name-btn')));
+  await expect(tierProject.locator('.tier-project-label-count')).toHaveText('2');
+  await expect(listProject.locator('.todo-group-count')).toHaveText('2');
+  // The count sits between the name and the chevron.
+  for (const [label, count] of [[tierProject, '.tier-project-label-count'], [listProject, '.todo-group-count']] as const) {
+    const countX = await label.locator(count).evaluate(el => el.getBoundingClientRect().left);
+    expect(countX).toBeGreaterThan(await label.locator('.tier-project-label-name, .todo-group-name-btn').first().evaluate(el => el.getBoundingClientRect().left));
+    expect(countX).toBeLessThan(await label.locator('.collapse-chevron').first().evaluate(el => el.getBoundingClientRect().left));
+  }
 
   // Pinned's menu folds every tier at once, and unfolds them again.
   const menuItem = (name: string) => page.locator('.wn-context-menu').getByRole('menuitem', { name, exact: true });
@@ -261,6 +318,7 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   const listRow = (id: string) => navigation(page).locator(`.todo-panel-list [data-task-id="${id}"]`);
   await expect(navigation(page).locator('.todo-group-project-header')).toHaveCount(2);
   await expect(listRow('nav-list-alpha')).toBeHidden();
+  expect(await page.evaluate(() => [localStorage.getItem('walnut-todo-list-open-projs'), localStorage.getItem('walnut-todo-list-collapsed-projs')])).toEqual([null, null]);
   const openProjectsMenu = async () => {
     await projects.hover();
     await projects.getByRole('button', { name: 'Projects menu' }).click();

@@ -18,7 +18,35 @@
  * now needs `showAllSections()` (or an explicit tab) first.
  */
 
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
+
+/**
+ * Open a Projects-list project the way a user does, with a click on its name, unless
+ * it is open already. The list opens only what the user opened: a project that first
+ * appears after the page loaded (a new one, a rename, a move target) starts folded.
+ */
+export async function openListProject(page: Page, project: string): Promise<void> {
+  const exact = new RegExp('^' + project.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&') + '$')
+  const header = page.locator('.todo-group-project-header').filter({
+    has: page.locator('.todo-group-project-name').filter({ hasText: exact }),
+  }).first()
+  await expect(header).toBeVisible({ timeout: 15_000 })
+  const chevron = header.locator('.collapse-chevron')
+  if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) {
+    await header.locator('.todo-group-name-btn').click()
+    await expect(chevron).toHaveClass(/expanded/)
+  }
+}
+
+/** A long list draws in batches: click `scope`'s "Show more" until `target` is drawn. */
+export async function showMoreUntil(scope: Locator, target: Locator, maxClicks = 60): Promise<void> {
+  for (let i = 0; i < maxClicks && (await target.count()) === 0; i++) {
+    const more = scope.getByRole('button', { name: 'Show more', exact: true }).first()
+    if ((await more.count()) === 0) break
+    await more.click()
+  }
+  await expect(target.first()).toBeAttached()
+}
 
 /** A section tab by visible name. */
 export function sectionTab(page: Page, name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent' | 'Tasks' | 'Notes') {
@@ -101,10 +129,15 @@ export async function presetPanelView(
     try {
       localStorage.setItem('walnut-todo-active-section', s as string)
       localStorage.setItem('walnut-todo-active-tab', p as string)
-      // No list fold state yet: open every project (the older "folded ones" shape, empty).
-      // Once a spec toggles a project the list writes its own open set, which a reload keeps.
-      if (localStorage.getItem('walnut-todo-list-collapsed-projs') === null && localStorage.getItem('walnut-todo-list-open-projs') === null) {
-        localStorage.setItem('walnut-todo-list-collapsed-projs', '[]')
+      // No list fold state yet: open every project the server knows at this first load
+      // (a user's list starts folded; these specs were written against an open one). A
+      // project created after this load starts folded, as it does for a user.
+      if (localStorage.getItem('walnut-todo-list-opened') === null && location.protocol.startsWith('http')) {
+        const xhr = new XMLHttpRequest()
+        xhr.open('GET', '/api/tasks?fields=list', false)
+        xhr.send()
+        const tasks = (JSON.parse(xhr.responseText) as { tasks?: Array<{ project?: string }> }).tasks ?? []
+        localStorage.setItem('walnut-todo-list-opened', JSON.stringify([...new Set(tasks.map((t) => t.project || ''))]))
       }
     } catch { /* ignore */ }
   }, [section, project])

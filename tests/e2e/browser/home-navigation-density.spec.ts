@@ -48,8 +48,23 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
   const firstProject = page.locator('.todo-group-project-header').filter({ hasText: 'Project 1' }).first();
   await firstProject.scrollIntoViewIfNeeded();
   await firstProject.locator('.todo-group-name-btn').click();
-  await expect(firstProject.locator('xpath=..').locator('.todo-panel-item').first()).toBeVisible();
+  const firstGroup = firstProject.locator('xpath=..');
+  await expect(firstGroup.locator('.todo-panel-item').first()).toBeVisible();
+  // An open project draws a batch of 30 and a "Show more" row, never its whole wall; each
+  // click draws the next batch, and folding starts it over.
+  const total = Number(await firstProject.locator('.todo-group-count').innerText());
+  expect(total).toBeGreaterThan(40);
+  await expect(firstGroup.locator('.todo-panel-item')).toHaveCount(30);
+  const showMore = firstGroup.getByRole('button', { name: 'Show more', exact: true });
+  await expect(showMore).toHaveAttribute('title', `${total - 30} more tasks`);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-dense-projects.png` });
+  await showMore.click();
+  await expect(firstGroup.locator('.todo-panel-item')).toHaveCount(total);
+  await expect(showMore).toHaveCount(0);
+  await firstProject.locator('.todo-group-name-btn').click();
+  await expect(firstGroup.locator('.todo-panel-item')).toHaveCount(0);
+  await firstProject.locator('.todo-group-name-btn').click();
+  await expect(firstGroup.locator('.todo-panel-item')).toHaveCount(30);
   await page.reload();
   await expect(page.locator('.todo-group-project').filter({ has: page.locator('.todo-group-project-name', { hasText: /^Project 1$/ }) }).locator('.todo-panel-item').first()).toBeVisible({ timeout: 30_000 });
   await page.waitForLoadState('networkidle');
@@ -67,12 +82,75 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
   await page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true }).click();
   const located = page.locator('.todo-panel-list [data-task-id="pw-task-store-sync"]');
   await expect(located).toBeVisible();
+  // The located task sits past its project's first batch; the locate draws it anyway.
+  expect(await located.evaluate(el => [...el.closest('.todo-group-project')!.querySelectorAll('.todo-panel-item')].indexOf(el))).toBeGreaterThanOrEqual(30);
   await expect.poll(async () => {
     const item = await located.boundingBox(), viewport = await scroller.boundingBox();
     return !!item && !!viewport && item.y >= viewport.y && item.y + item.height <= viewport.y + viewport.height;
   }).toBe(true);
   await expect.poll(() => page.evaluate(() => Number(sessionStorage.getItem('walnut-home-todo-scroll')))).toBeGreaterThan(0);
+  // A locate opens the task's project for this visit only; only a click on a project saves it open.
+  const opened = await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-list-opened') ?? '[]'));
+  expect(opened).toContain('Project 1');
+  expect(opened).not.toContain('Project 56');
   await test.info().attach('load-times', { body: JSON.stringify({ loads, worst: Math.max(...loads) }), contentType: 'application/json' });
   test.info().annotations.push({ type: 'load-times-ms', description: JSON.stringify({ loads, worst: Math.max(...loads) }) });
+  expect(errors).toEqual([]);
+});
+
+test('a task located deep in a long project is drawn after the first batch, without every row before it', async ({ page, baseURL }) => {
+  await isolateUiPrefs(page);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(() => sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-store-sync-session', locked: false }])));
+  const now = new Date().toISOString();
+  const tasks = Array.from({ length: 400 }, (_, i) => ({
+    id: i === 250 ? 'pw-task-store-sync' : `deep-${i}`, title: `Deep item ${i}`, status: 'todo', phase: 'TODO',
+    priority: 'none', project: 'Deep project', source: 'local', created_at: now, updated_at: now,
+    description: '', summary: '', note: '', subtasks: [],
+  }));
+  await page.route('**/api/tasks?*', async route => {
+    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
+    await route.fulfill({ json: { tasks } });
+  });
+  await page.route('**/api/focus/tasks', route => route.fulfill({ json: {
+    pinned_tasks: [], focus_tasks: [], satellite_tasks: [], backlog_tasks: [], wait_tasks: [],
+  } }));
+  await openHome(page, baseURL!);
+  const header = page.locator('.todo-group-project-header').filter({ has: page.locator('.todo-group-project-name', { hasText: /^Deep project$/ }) });
+  const group = header.locator('xpath=..');
+  await expect(header).toHaveCount(1, { timeout: 45_000 });
+  await expect(group.locator('.todo-panel-item')).toHaveCount(0);
+  const drawn = () => group.evaluate(g => [...g.querySelectorAll('.todo-panel-item, .todo-list-show-more')]
+    .map(el => el.classList.contains('todo-list-show-more') ? 'more' : el.getAttribute('data-task-id')));
+  const firstIds = (n: number) => tasks.slice(0, n).map(t => t.id);
+
+  // Locate: the first batch, the "Show more" row, then the located row on its own.
+  await page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true }).click();
+  const located = group.locator('[data-task-id="pw-task-store-sync"]');
+  await expect(located).toBeVisible();
+  expect(await drawn()).toEqual([...firstIds(30), 'more', 'pw-task-store-sync']);
+  await expect(group.getByRole('button', { name: 'Show more', exact: true })).toHaveAttribute('title', '369 more tasks');
+  const scroller = page.locator('#home-task-navigation .home-navigation-scroll');
+  await expect.poll(async () => {
+    const item = await located.boundingBox(), viewport = await scroller.boundingBox();
+    return !!item && !!viewport && item.y >= viewport.y && item.y + item.height <= viewport.y + viewport.height;
+  }).toBe(true);
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-deep-locate.png` });
+
+  // Focus moving back up keeps the located row where it is.
+  await group.locator('[data-task-id="deep-3"] .todo-item-title').click();
+  await expect(group.locator('[data-task-id="deep-3"]')).toHaveClass(/task-focused/);
+  expect(await drawn()).toEqual([...firstIds(30), 'more', 'pw-task-store-sync']);
+
+  // "Show more" draws the next batch between them.
+  await group.getByRole('button', { name: 'Show more', exact: true }).click();
+  expect(await drawn()).toEqual([...firstIds(60), 'more', 'pw-task-store-sync']);
+
+  // Folding starts the visit's batch over.
+  await header.locator('.todo-group-name-btn').click();
+  await expect(group.locator('.todo-panel-item')).toHaveCount(0);
+  await header.locator('.todo-group-name-btn').click();
+  await expect.poll(drawn).toEqual([...firstIds(30), 'more']);
   expect(errors).toEqual([]);
 });

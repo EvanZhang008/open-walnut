@@ -29,7 +29,7 @@ test('completed pins remain available and filtering never expands unrelated proj
   await selectProject(page, 'All');
   await expect(project('Navigation Beta').locator('.todo-panel-item')).toHaveCount(0);
   // The list remembers what the user opened; everything else stays folded.
-  const opened = await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-list-open-projs') ?? '[]'));
+  const opened = await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-list-opened') ?? '[]'));
   expect(opened).toContain('Navigation Alpha');
   expect(opened).not.toContain('Navigation Beta');
   await arrange(page, 'Flat');
