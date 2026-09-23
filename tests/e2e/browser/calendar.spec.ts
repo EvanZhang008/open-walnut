@@ -1094,14 +1094,14 @@ test.describe('Calendar view', () => {
     const allTab = page.locator('.todo-section-tab-all')
     if (await allTab.count()) await allTab.click()
 
-    // The row renders either as a plain list item (whole-card draggable) or as
-    // a pinned-style card (drag ONLY via its ☰ handle) depending on which
-    // section variant the tab uses — grab whichever is present and pick the
-    // correct grip point.
+    // The row renders either as a plain list item or as a pinned-style card
+    // depending on which section variant the tab uses. Both drag from the
+    // whole card; a pinned card is grabbed by its title, clear of the status
+    // circle and the hover controls.
     const card = page.locator(`[data-task-id="${task.id}"]`).first()
     await card.scrollIntoViewIfNeeded()
     const isPinnedCard = await card.evaluate((el) => el.classList.contains('todo-pinned-card') || el.classList.contains('todo-focus-card'))
-    const grip = isPinnedCard ? card.locator('.todo-pinned-drag-handle') : card
+    const grip = isPinnedCard ? card.locator('.todo-pinned-title') : card
     const cardBox = await grip.boundingBox()
     if (!cardBox) throw new Error('todo card not visible')
 

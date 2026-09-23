@@ -459,6 +459,9 @@ test.describe('Notes Editor Stress Tests', () => {
   })
 
   test('long typing session — 1000 chars with periodic pauses', async ({ page }) => {
+    // The typing and its pauses alone take ~17s, so a WebKit run on a busy machine measured 24-27s
+    // and crossed the default 30s budget in a full run.
+    test.setTimeout(60_000)
     const errors = trackConsoleErrors(page)
     const editor = await openNotesEditor(page)
     await editor.click()

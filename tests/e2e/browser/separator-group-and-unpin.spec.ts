@@ -159,9 +159,9 @@ test.beforeEach(async () => {
 async function dragCardTo(page: Page, taskId: string, x: number, y: number): Promise<void> {
   const card = page.locator(`${TIER_SCOPE} [data-task-id="${taskId}"]`).first()
   await card.hover()
-  const grip = card.locator('.todo-pinned-drag-handle')
+  const grip = card.locator('.todo-pinned-title')
   const box = await grip.boundingBox()
-  if (!box) throw new Error(`no drag handle for ${taskId}`)
+  if (!box) throw new Error(`no card title for ${taskId}`)
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   await page.mouse.down()
   // Past dnd-kit's activation constraint first, then to the target.
@@ -182,9 +182,9 @@ async function dragCardTo(page: Page, taskId: string, x: number, y: number): Pro
 async function dragCardOnto(page: Page, dragId: string, target: Locator, at: 'middle' | 'top'): Promise<void> {
   const card = page.locator(`${TIER_SCOPE} [data-task-id="${dragId}"]`).first()
   await card.hover()
-  const grip = card.locator('.todo-pinned-drag-handle')
+  const grip = card.locator('.todo-pinned-title')
   const gb = await grip.boundingBox()
-  if (!gb) throw new Error(`no drag handle for ${dragId}`)
+  if (!gb) throw new Error(`no card title for ${dragId}`)
   const tb = await target.boundingBox() // static layout — measured pre-drag
   if (!tb) throw new Error('drop target not visible')
   await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2)
@@ -417,9 +417,9 @@ async function settledBox(page: Page, selector: string): Promise<{ x: number; y:
 async function dragHoldAt(page: Page, taskId: string, x: number, y: number): Promise<void> {
   const card = page.locator(`${TIER_SCOPE} [data-task-id="${taskId}"]`).first()
   await card.hover()
-  const grip = card.locator('.todo-pinned-drag-handle')
+  const grip = card.locator('.todo-pinned-title')
   const gb = await grip.boundingBox()
-  if (!gb) throw new Error(`no grip for ${taskId}`)
+  if (!gb) throw new Error(`no card title for ${taskId}`)
   await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2)
   await page.mouse.down()
   await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2 + 10)
@@ -642,7 +642,7 @@ test('the blue join frame follows the pointer\'s middle-band test — no frame, 
   expect(tBox).not.toBeNull()
 
   await looseCard.hover()
-  const grip = looseCard.locator('.todo-pinned-drag-handle')
+  const grip = looseCard.locator('.todo-pinned-title')
   const gBox = await grip.boundingBox()
   expect(gBox).not.toBeNull()
   await page.mouse.move(gBox!.x + gBox!.width / 2, gBox!.y + gBox!.height / 2)
@@ -684,7 +684,7 @@ test('a pinned card can be dragged back out of the pinned area', async ({ page }
   // The zone only exists while a pinned card is in flight, so grab the card first
   // and read the zone mid-drag.
   await card.hover()
-  const grip = card.locator('.todo-pinned-drag-handle')
+  const grip = card.locator('.todo-pinned-title')
   const gripBox = await grip.boundingBox()
   expect(gripBox).not.toBeNull()
   await page.mouse.move(gripBox!.x + gripBox!.width / 2, gripBox!.y + gripBox!.height / 2)

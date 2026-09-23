@@ -56,17 +56,16 @@ async function cleanup(page: Page, ids: string[], projects: string[]): Promise<v
   }
 }
 
-/** Real pointer drag: grab the card's drag handle, walk to the target card. */
+/** Real pointer drag: grab the card itself (it has no drag handle), walk to the target card. */
 async function dragCardOnto(page: Page, srcId: string, dstId: string): Promise<void> {
   const src = page.locator(`[data-task-id="${srcId}"]`).first()
   const dst = page.locator(`[data-task-id="${dstId}"]`).first()
   await src.scrollIntoViewIfNeeded()
-  await src.hover()
-  const handle = src.locator('.todo-pinned-drag-handle')
-  const sb = await handle.boundingBox()
+  const sb = await src.boundingBox()
   const db = await dst.boundingBox()
   if (!sb || !db) throw new Error('missing bounding box for drag')
-  const sx = sb.x + sb.width / 2, sy = sb.y + sb.height / 2
+  // Inside the title, clear of the status circle at the left edge and the controls at the right.
+  const sx = sb.x + sb.width * 0.4, sy = sb.y + sb.height / 2
   await page.mouse.move(sx, sy)
   await page.mouse.down()
   // PointerSensor activation (distance: 5), then walk to the target's center.
@@ -74,10 +73,14 @@ async function dragCardOnto(page: Page, srcId: string, dstId: string): Promise<v
   await page.mouse.move(db.x + db.width / 2, db.y + db.height / 2, { steps: 15 })
   // Re-target the CURRENT position before release — the live preview shifts
   // layout, and releasing at stale coordinates lands on whatever slid under
-  // the pointer (same trap custom-focus-tiers.spec.ts documents).
-  const dbNow = await dst.boundingBox()
-  if (dbNow) await page.mouse.move(dbNow.x + dbNow.width / 2, dbNow.y + dbNow.height / 2, { steps: 6 })
-  await page.waitForTimeout(300)
+  // the pointer (same trap custom-focus-tiers.spec.ts documents). One re-target
+  // after a fixed wait was not enough on a loaded WebKit: follow the card for a
+  // few frames, as home-navigation-drag.spec.ts does, until the preview settles.
+  for (let step = 0; step < 5; step++) {
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const dbNow = await dst.boundingBox()
+    if (dbNow) await page.mouse.move(dbNow.x + dbNow.width / 2, dbNow.y + dbNow.height / 2, { steps: 4 })
+  }
   await page.mouse.up()
   // Then let dnd-kit's document listeners go. On mouseup the library keeps a
   // CAPTURE-phase `click` listener on the document and only removes it on a
