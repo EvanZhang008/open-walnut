@@ -1417,7 +1417,10 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     }
     if (msg.role === 'assistant' && dropWarmupReply) {
       dropWarmupReply = false;
-      if (tools.length === 0) continue;
+      // Unconditional: the warm-up told the model "no tools", so a reply that
+      // ran some anyway is still warm-up plumbing, not user-relevant activity —
+      // letting it through rendered a floating "Ready." + "Ran 2 commands" row.
+      continue;
     }
 
     // Machine wrappers on a user line (display only). The send path appends a

@@ -21,7 +21,6 @@
 import {
   listSideThreads,
   createSideThread as apiCreateSideThread,
-  warmSideThreadStandby,
   promoteSideThread as apiPromoteSideThread,
   deleteSideThread as apiDeleteSideThread,
   archiveSideThread as apiArchiveSideThread,
@@ -83,10 +82,6 @@ let pendingSeq = 0;
 let openInstanceId: string | null = null;
 
 const PREWARM_THROTTLE_MS = 1_500;
-/** Keystrokes before a new-thread draft counts as intent to ask (the warm-up
- *  costs a full prefix write on a big parent, so a stray character must not fire it). */
-const WARM_MIN_CHARS = 8;
-
 function notify(): void {
   for (const l of listeners) l();
 }
@@ -375,31 +370,6 @@ export function prewarmSideThread(parentSessionId: string | undefined): void {
   });
 }
 
-/** parentSids whose current standby already got its warm-up request; cleared by
- *  create (the standby is consumed) so the next standby can be warmed again. */
-const warmRequested = new Set<string>();
-
-/**
- * Typing-triggered cache warm-up (see api/sideThreads.ts warmSideThreadStandby).
- * Once per standby cycle; the server is idempotent too, this only saves a request
- * per keystroke.
- */
-export function warmSideThreadOnTyping(parentSessionId: string | undefined, draft: string): void {
-  if (!parentSessionId || draft.trim().length < WARM_MIN_CHARS) return;
-  if (warmRequested.has(parentSessionId)) return;
-  warmRequested.add(parentSessionId);
-  warmSideThreadStandby(parentSessionId).then((r) => {
-    log.info('sideThreads', 'standby warm-up requested', { sessionId: parentSessionId, ...r });
-    // Nothing to warm yet (standby still forking): let a later keystroke retry.
-    if (!r.warmed && r.reason === 'no_standby') warmRequested.delete(parentSessionId);
-  }).catch((err) => {
-    warmRequested.delete(parentSessionId);
-    log.warn('sideThreads', 'standby warm-up failed (ignored)', {
-      sessionId: parentSessionId, error: err instanceof Error ? err.message : String(err),
-    });
-  });
-}
-
 export function setActiveSideThread(parentSessionId: string | undefined, threadId: string | null): void {
   if (!parentSessionId) return;
   if (read(parentSessionId).activeThreadId === threadId) return;
@@ -483,7 +453,6 @@ export async function createSideThreadOptimistic(
     // cold — re-arm one now. Throttle bypassed: this trigger means the standby
     // is definitively gone, unlike a re-clicked "+ New".
     lastPrewarmAt.delete(parentSessionId);
-    warmRequested.delete(parentSessionId);
     prewarmSideThread(parentSessionId);
     return adopted;
   } catch (err) {
@@ -728,7 +697,6 @@ export function __resetSideThreadsStore(): void {
   inflightList.clear();
   archiveInFlight.clear();
   lastPrewarmAt.clear();
-  warmRequested.clear();
   openInstanceId = null;
   pendingSeq = 0;
   notify();

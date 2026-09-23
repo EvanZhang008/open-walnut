@@ -26,13 +26,9 @@ import {
   parseSideLaneKey, sideThreadLaneKey,
 } from './side-thread-fork.js';
 import { SessionControlError } from './session-controls.js';
-import { CACHE_WARMUP_MESSAGE, markWarmupTurnPending } from './side-thread-warmup.js';
 import type { SideQuestion } from '../side-questions.js';
 
 const STANDBY_TTL_MS = 120_000;
-/** A warmed standby holds a paid prompt-cache write (1h server TTL); dropping it
- *  after the plain 2-minute idle window would throw that money away. */
-const WARMED_STANDBY_TTL_MS = 15 * 60_000;
 const MAX_LIVE_THREADS = 3;
 const IDLE_SWEEP_INTERVAL_MS = 5 * 60_000;
 const THREAD_IDLE_MS = 30 * 60_000;
@@ -62,8 +58,6 @@ class SideThreadManager {
    *  In-memory only: a server restart loses it, but the boot sweep archives
    *  every standby anyway, so a record can never outlive its map entry. */
   private standbyParentOffsets = new Map<string, number | undefined>();
-  /** parentSid → standby sid that already ran its cache warm-up turn. */
-  private warmedStandbys = new Map<string, string>();
   /** One in-flight standby/create op per parent — two concurrent asks must not
    *  both consume the same standby (they would collide on its lane rename). */
   private inFlight = new Map<string, Promise<unknown>>();
@@ -101,7 +95,6 @@ class SideThreadManager {
     for (const timer of this.standbyTimers.values()) clearTimeout(timer);
     this.standbyTimers.clear();
     this.standbyParentOffsets.clear();
-    this.warmedStandbys.clear();
     // NOTE: clears without draining — an op chained before stop() and one issued
     // after can overlap. Acceptable: stop() only runs at shutdown/test teardown,
     // and surviving standbys self-heal via the next start()'s boot sweep.
@@ -122,15 +115,13 @@ class SideThreadManager {
       const existing = await this.findStandby(parentSid);
       if (existing) {
         if (await this.isStandbyUsable(parentSid, existing)) {
-          const warmed = this.warmedStandbys.get(parentSid) === existing.claudeSessionId;
-          this.armStandbyTtl(parentSid, existing.claudeSessionId, warmed ? WARMED_STANDBY_TTL_MS : STANDBY_TTL_MS);
+          this.armStandbyTtl(parentSid, existing.claudeSessionId);
           return existing.claudeSessionId;
         }
         // Stale (the parent kept working after the fork was taken) or dead —
         // either way its transcript is not what the user would be asking about.
         // Fire-and-forget: nothing downstream needs the retire to finish.
         void this.retireSession(existing.claudeSessionId, 'side_thread_standby_stale');
-        this.warmedStandbys.delete(parentSid);
       }
       const parentOffset = parent.consumedOffset;
       const { sessionId } = await forkSideThreadSession(parentSid, STANDBY_THREAD_ID);
@@ -178,7 +169,6 @@ class SideThreadManager {
         const record = await getSessionByClaudeId(sessionId).catch(() => null);
         if (!record || parseSideLaneKey(record.lane)?.threadId !== STANDBY_THREAD_ID) return;
         this.standbyParentOffsets.delete(parentSid);
-        this.warmedStandbys.delete(parentSid);
         await this.retireSession(sessionId, 'side_thread_standby_ttl');
       }).catch(() => {});
     }, ttlMs);
@@ -187,34 +177,17 @@ class SideThreadManager {
   }
 
   /**
-   * Run the standby's cache warm-up turn (see side-thread-warmup.ts). Called
-   * when the user starts TYPING a new question: the fork's first API call pays
-   * the full prefix write no matter what, so paying it while they type turns
-   * the actual question into a cached follow-up. Idempotent per standby; a
-   * missing or stale standby is a no-op (the ask path will fork fresh anyway).
+   * RETIRED (2026-09-22): the typing-triggered cache warm-up turn is gone.
+   * It existed for a world where a fork's first API call paid a full prefix
+   * rewrite (the launch-argv model/effort bug — see spawn-prefix.ts); with that
+   * fixed a fork is born warm (measured: first call read 95K, wrote 13K), so
+   * the warm-up bought sub-second prefill at the price of reading the whole
+   * prefix TWICE, one extra model reply per thread (which sometimes ran tools
+   * despite being told not to), and two junk lines in every thread transcript.
+   * The route stays for older clients; it just no-ops now.
    */
-  async warmStandby(parentSid: string): Promise<{ warmed: boolean; reason?: string }> {
-    return this.serialize(parentSid, async () => {
-      const standby = await this.findStandby(parentSid);
-      if (!standby) return { warmed: false, reason: 'no_standby' };
-      if (!(await this.isStandbyUsable(parentSid, standby))) return { warmed: false, reason: 'stale' };
-      if (this.warmedStandbys.get(parentSid) === standby.claudeSessionId) {
-        return { warmed: true, reason: 'already_warm' };
-      }
-      const { sendMessageToSession } = await import('../session-message-queue.js');
-      markWarmupTurnPending(standby.claudeSessionId);
-      // Sent RAW on purpose: the warm-up is CLI plumbing whose reply is hidden on
-      // every surface, so wrapping it would spend the output-mode edge on a turn
-      // the user never sees — and advancing `output_mode_injected` here would make
-      // the real first question skip the instruction entirely.
-      await sendMessageToSession(standby.claudeSessionId, CACHE_WARMUP_MESSAGE, { source: 'side-thread-warmup' });
-      this.warmedStandbys.set(parentSid, standby.claudeSessionId);
-      this.armStandbyTtl(parentSid, standby.claudeSessionId, WARMED_STANDBY_TTL_MS);
-      log.session.info('side thread: standby cache warm-up sent', {
-        parentSid, standbySid: standby.claudeSessionId,
-      });
-      return { warmed: true };
-    });
+  async warmStandby(_parentSid: string): Promise<{ warmed: boolean; reason?: string }> {
+    return { warmed: false, reason: 'warmup_retired' };
   }
 
   // ── Threads ────────────────────────────────────────────────────────────────
@@ -395,7 +368,6 @@ class SideThreadManager {
       // teardown (a daemon RPC) must not sit in the user's ask path.
       void this.retireSession(standby.claudeSessionId, 'side_thread_standby_stale');
       this.standbyParentOffsets.delete(parentSid);
-      this.warmedStandbys.delete(parentSid);
       return null;
     }
     if ((overrides?.model && overrides.model !== standby.cliModel)
@@ -413,7 +385,6 @@ class SideThreadManager {
       this.standbyTimers.delete(parentSid);
     }
     this.standbyParentOffsets.delete(parentSid);
-    this.warmedStandbys.delete(parentSid);
     const lane = sideThreadLaneKey(parentSid, threadId);
     const { updateSessionRecord } = await import('../session-tracker.js');
     await updateSessionRecord(standby.claudeSessionId, {

@@ -164,14 +164,20 @@ describe('readSessionHistory', () => {
     ]);
   });
 
-  it('hides the side-thread cache warm-up exchange (tagged user line + its one-word reply)', async () => {
-    // The drawer warms a standby fork's prompt cache while the user is still
-    // typing; that exchange is plumbing and must never render as a "You: <tag>"
-    // bubble followed by a stray "Ready." from the assistant.
-    const { CACHE_WARMUP_MESSAGE } = await import('../../src/core/sessions/side-thread-warmup.js');
+  it('hides a LEGACY cache warm-up exchange, even when the reply disobeyed and ran tools', async () => {
+    // The warm-up sender was retired 2026-09-22, but threads created before
+    // that carry the tagged line + its reply in their JSONL forever. The reply
+    // is hidden UNCONDITIONALLY: it told the model "no tools", so a reply that
+    // ran some anyway is still plumbing — letting it through rendered a
+    // floating "Ready." + "Ran 2 commands" row (user report, same day).
+    const { CACHE_WARMUP_TAG } = await import('../../src/core/sessions/side-thread-warmup.js');
+    const warmupLine = `${CACHE_WARMUP_TAG}legacy warm-up text</walnut-cache-warmup>`;
     await writeJsonl('s-warmup', '/test', [
-      { type: 'user', timestamp: '2025-01-01T00:00:00Z', uuid: 'uuid-warm', message: { role: 'user', content: CACHE_WARMUP_MESSAGE } },
-      msg('a-warm', 'assistant', 'Ready.'),
+      { type: 'user', timestamp: '2025-01-01T00:00:00Z', uuid: 'uuid-warm', message: { role: 'user', content: warmupLine } },
+      { type: 'assistant', timestamp: '2025-01-01T00:00:01Z', uuid: 'a-warm', message: { role: 'assistant', content: [
+        { type: 'text', text: 'Ready.' },
+        { type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'git status' } },
+      ] } },
       msg('u1', 'user', 'why does hasPipe flip?'),
       msg('a1', 'assistant', 'Because attach() never set it.'),
     ]);

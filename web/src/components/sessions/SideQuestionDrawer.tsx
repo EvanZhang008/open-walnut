@@ -85,7 +85,6 @@ import {
   subscribeSideThreads,
   updateLegacySideQuestions,
   applySideThreadTitle,
-  warmSideThreadOnTyping,
 } from '@/stores/side-threads';
 
 interface SideQuestionDrawerProps {
@@ -899,7 +898,6 @@ export function SideQuestionDrawer({
               mentionCwd={cwd}
               mentionHost={host}
               draftKey={sessionId ? `side-thread-draft:${sessionId}` : undefined}
-              onValueChange={activeThread ? undefined : (text) => warmSideThreadOnTyping(sessionId, text)}
               isStreaming={!!activeThreadSid && threadStreaming}
               onStop={activeThread?.threadSessionId
                 ? () => { void stopTurn(activeThread.threadSessionId); }

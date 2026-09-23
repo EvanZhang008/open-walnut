@@ -2105,9 +2105,10 @@ sessionsRouter.post('/:sessionId/side-threads/standby', async (req: Request, res
   }
 })
 
-// POST /api/sessions/:sessionId/side-threads/standby/warm — the user started
-// typing a question: run the standby's cache warm-up turn now so the question
-// itself lands as a cached follow-up (see core/sessions/side-thread-warmup.ts).
+// POST /api/sessions/:sessionId/side-threads/standby/warm — RETIRED no-op,
+// kept only so older clients get a clean answer. The warm-up turn it used to
+// fire was for the era when a fork's first call paid a full prefix rewrite;
+// forks are born warm now (see side-thread-manager.warmStandby).
 sessionsRouter.post('/:sessionId/side-threads/standby/warm', async (req: Request, res: Response) => {
   if (refuseSideThreadsOnReplica(res)) return
   const sessionId = String(req.params.sessionId)

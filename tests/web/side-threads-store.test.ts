@@ -23,7 +23,6 @@ const api = vi.hoisted(() => ({
   archiveSideThread: vi.fn<(sid: string, tid: string) => Promise<{ archived: true; archivedAt: string }>>(),
   restoreSideThread: vi.fn<(sid: string, tid: string) => Promise<{ archived: false }>>(),
   prewarmSideThreadStandby: vi.fn<(sid: string) => Promise<{ ok: true }>>(),
-  warmSideThreadStandby: vi.fn<(sid: string) => Promise<{ warmed: boolean; reason?: string }>>(),
   isForkUnsupportedError: vi.fn<(err: unknown) => boolean>(),
 }));
 
@@ -56,7 +55,6 @@ const {
   sideThreadLabel,
   sideThreadsBadgeCount,
   subscribeSideThreads,
-  warmSideThreadOnTyping,
 } = await import('@/stores/side-threads');
 
 const PARENT = 'parent-session-1';
@@ -84,7 +82,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.listSideThreads.mockResolvedValue({ threads: [], legacy: [] });
   api.prewarmSideThreadStandby.mockResolvedValue({ ok: true });
-  api.warmSideThreadStandby.mockResolvedValue({ warmed: true });
   api.isForkUnsupportedError.mockReturnValue(false);
   api.archiveSideThread.mockResolvedValue({ archived: true, archivedAt: '2026-09-04T00:00:00.000Z' });
   api.restoreSideThread.mockResolvedValue({ archived: false });
@@ -385,49 +382,6 @@ describe('side-threads store — standby prewarm', () => {
   it('is a no-op without a parent session', () => {
     prewarmSideThread(undefined);
     expect(api.prewarmSideThreadStandby).not.toHaveBeenCalled();
-  });
-});
-
-describe('side-threads store — typing-triggered cache warm-up', () => {
-  it('fires once the draft shows intent, and only once per parent', async () => {
-    warmSideThreadOnTyping(PARENT, 'why');
-    expect(api.warmSideThreadStandby).not.toHaveBeenCalled();
-    warmSideThreadOnTyping(PARENT, 'why does it');
-    warmSideThreadOnTyping(PARENT, 'why does it stall?');
-    expect(api.warmSideThreadStandby).toHaveBeenCalledTimes(1);
-    expect(api.warmSideThreadStandby).toHaveBeenCalledWith(PARENT);
-  });
-
-  it('ignores an empty parent and whitespace-padded short drafts', () => {
-    warmSideThreadOnTyping(undefined, 'a long enough draft');
-    warmSideThreadOnTyping(PARENT, '      ab      ');
-    expect(api.warmSideThreadStandby).not.toHaveBeenCalled();
-  });
-
-  it('retries later when the server had no standby yet, and after a failure', async () => {
-    api.warmSideThreadStandby.mockResolvedValueOnce({ warmed: false, reason: 'no_standby' });
-    warmSideThreadOnTyping(PARENT, 'first attempt here');
-    await Promise.resolve(); await Promise.resolve();
-    warmSideThreadOnTyping(PARENT, 'first attempt here!');
-    expect(api.warmSideThreadStandby).toHaveBeenCalledTimes(2);
-
-    api.warmSideThreadStandby.mockRejectedValueOnce(new Error('offline'));
-    warmSideThreadOnTyping('other-parent', 'another question');
-    await Promise.resolve(); await Promise.resolve();
-    warmSideThreadOnTyping('other-parent', 'another question?');
-    expect(api.warmSideThreadStandby).toHaveBeenCalledTimes(4);
-  });
-
-  it('re-arms after the thread is created (the next standby is cold again)', async () => {
-    warmSideThreadOnTyping(PARENT, 'question number one');
-    expect(api.warmSideThreadStandby).toHaveBeenCalledTimes(1);
-    warmSideThreadOnTyping(PARENT, 'question number one?');
-    expect(api.warmSideThreadStandby).toHaveBeenCalledTimes(1);
-
-    api.createSideThread.mockResolvedValue({ thread: thread() });
-    await createSideThreadOptimistic(PARENT, 'question number one?');
-    warmSideThreadOnTyping(PARENT, 'question number two');
-    expect(api.warmSideThreadStandby).toHaveBeenCalledTimes(2);
   });
 });
 

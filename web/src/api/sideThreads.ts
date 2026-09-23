@@ -63,18 +63,6 @@ export function prewarmSideThreadStandby(sessionId: string): Promise<{ ok: true 
 }
 
 /**
- * The user started typing a new question: run the standby's cache warm-up turn
- * now, so the question itself lands as a cached follow-up (the fork's first API
- * call re-writes the whole prefix no matter when it happens). Cheap no-op on the
- * server when there is no usable standby or it is already warm.
- */
-export function warmSideThreadStandby(
-  sessionId: string,
-): Promise<{ warmed: boolean; reason?: string }> {
-  return apiPost(`/api/sessions/${sessionId}/side-threads/standby/warm`, {}, { timeoutMs: 15_000 });
-}
-
-/**
  * Open a new thread with its first question. Resolves once the thread record
  * exists (the ANSWER arrives later over the stream, so this is fast) — 409
  * `fork_unsupported` when the parent engine can't fork.

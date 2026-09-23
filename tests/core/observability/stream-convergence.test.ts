@@ -9,9 +9,6 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   armStreamConvergenceCheck, diffStreamedVsPersisted,
 } from '../../../src/core/observability/stream-convergence.js'
-import {
-  consumeWarmupTurn, markWarmupTurnPending,
-} from '../../../src/core/sessions/side-thread-warmup.js'
 
 describe('diffStreamedVsPersisted', () => {
   it('converged: every streamed id persisted', () => {
@@ -51,33 +48,12 @@ describe('diffStreamedVsPersisted', () => {
   })
 })
 
-describe('armStreamConvergenceCheck × side-thread warm-up', () => {
-  it('skips exactly one check for a session whose next result is the hidden warm-up reply', () => {
+describe('armStreamConvergenceCheck', () => {
+  it('arms one delayed check per finished turn (the warm-up exemption is gone with the warm-up)', () => {
     vi.useFakeTimers()
     try {
-      const sid = 'standby-fork-1'
-      markWarmupTurnPending(sid)
-      armStreamConvergenceCheck(sid, ['msg_ready'])
-      // The mark was consumed by the arm: no delayed check is pending, and the
-      // session's NEXT turn is checked again like any other.
-      expect(vi.getTimerCount()).toBe(0)
-      expect(consumeWarmupTurn(sid)).toBe(false)
-
-      armStreamConvergenceCheck(sid, ['msg_real_answer'])
-      expect(vi.getTimerCount()).toBe(1)
-    } finally {
-      vi.clearAllTimers()
-      vi.useRealTimers()
-    }
-  })
-
-  it('a mark on one session never shields another', () => {
-    vi.useFakeTimers()
-    try {
-      markWarmupTurnPending('standby-a')
       armStreamConvergenceCheck('thread-b', ['msg_x'])
       expect(vi.getTimerCount()).toBe(1)
-      expect(consumeWarmupTurn('standby-a')).toBe(true)
     } finally {
       vi.clearAllTimers()
       vi.useRealTimers()
