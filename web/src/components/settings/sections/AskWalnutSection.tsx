@@ -19,26 +19,40 @@ function lacksPersona(catalog: ReturnType<typeof useEngineCatalog>, id: string):
 }
 
 /**
- * The honest inventory of what the Walnut agent does WITHOUT being asked —
- * every `fastModelFor`/`sendMessage` caller under src/core, named in the user's
- * terms. Keeping it in the UI is the point: "what does Walnut do behind my
- * back, and what answers it" was previously unanswerable from Settings.
+ * The honest inventory of what the Walnut agent does WITHOUT being asked, and
+ * WHO actually answers each one. The runner column is not decoration: the first
+ * version of this list called every row a "model" job, and the user caught it —
+ * session titles and diff summaries are answered by the coding session's own
+ * model over its control pipe (no Walnut credential involved at all), and AI
+ * task search spawns a slim Claude Code child on this machine.
  *
- * `runner: 'jev'` marks a job Jev can take over (a one-field classification);
- * the rest are text jobs that need a language model.
+ *  - `jev`     one-field classification — Jev when configured, Walnut's model otherwise.
+ *  - `model`   text job on the provider picked below.
+ *  - `session` the coding session answers about itself (side question).
+ *  - `cli`     a slim `claude` child process under this machine's Claude Code login.
  */
-const AGENT_JOBS: Array<{ name: string; detail: string; runner: 'jev' | 'model' }> = [
+type JobRunner = 'jev' | 'model' | 'session' | 'cli';
+
+const AGENT_JOBS: Array<{ name: string; detail: string; runner: JobRunner }> = [
   { name: 'Quick-add task parsing', detail: 'Turns a typed note into a title, tier, priority and project.', runner: 'jev' },
   { name: 'Session auto-filing', detail: 'Files a quick-start session’s task into the best-matching project.', runner: 'jev' },
-  { name: 'Session titles', detail: 'Names a session from its first turns.', runner: 'model' },
+  { name: 'Session titles', detail: 'Names a session from its first turns — asked of that session, so Walnut’s model only steps in when the session has no CLI at all.', runner: 'session' },
+  { name: 'Diff summaries', detail: 'Explains what a session changed, per file — asked of the session that made the changes.', runner: 'session' },
+  { name: 'AI task search', detail: 'Answers a search query that needs reading tasks, not just matching words.', runner: 'cli' },
   { name: 'Conversation and fork titles', detail: 'Names a chat conversation, and a fork from the turn it branched at.', runner: 'model' },
   { name: 'Project summaries', detail: 'Keeps a one-line description of each project as its tasks accumulate.', runner: 'model' },
   { name: 'Task ledger notes', detail: 'Writes the short description a task carries after a session works on it.', runner: 'model' },
   { name: 'Memory upkeep', detail: 'Maintains working memory and the standing overview injected into chats.', runner: 'model' },
-  { name: 'Diff summaries', detail: 'Explains what a session changed, per file.', runner: 'model' },
-  { name: 'AI task search', detail: 'Answers a search query that needs reading tasks, not just matching words.', runner: 'model' },
-  { name: 'Routine drafts and watchers', detail: 'Drafts a routine from a description; runs a watcher’s check script decision.', runner: 'model' },
+  { name: 'Routine drafts', detail: 'Turns a described routine into a schedule, a prompt and its data sources.', runner: 'model' },
 ];
+
+/** What to print in the runner column, and whether it is the accented one. */
+function runnerLabel(runner: JobRunner, jevOn: boolean): { text: string; accent: boolean } {
+  if (runner === 'jev') return jevOn ? { text: 'Jev', accent: true } : { text: 'model', accent: false };
+  if (runner === 'session') return { text: 'session', accent: false };
+  if (runner === 'cli') return { text: 'Claude Code', accent: false };
+  return { text: 'model', accent: false };
+}
 
 /**
  * Ask Walnut — the Walnut agent, in one section: the chat you talk to, plus
@@ -125,19 +139,19 @@ export function AskWalnutSection({ config, onSave }: Props) {
         </p>
         <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 7 }}>
           {AGENT_JOBS.map((job) => {
-            const onJev = job.runner === 'jev' && jevOn;
+            const runner = runnerLabel(job.runner, jevOn);
             return (
               <li key={job.name} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
                 <span
                   className="text-sm"
                   style={{
-                    flex: '0 0 68px',
+                    flex: '0 0 82px',
                     textAlign: 'right',
-                    color: onJev ? 'var(--accent, #1d4ed8)' : 'var(--text-muted, #6b7280)',
-                    fontWeight: onJev ? 600 : 400,
+                    color: runner.accent ? 'var(--accent, #1d4ed8)' : 'var(--text-muted, #6b7280)',
+                    fontWeight: runner.accent ? 600 : 400,
                   }}
                 >
-                  {onJev ? 'Jev' : 'model'}
+                  {runner.text}
                 </span>
                 <span>
                   <span style={{ fontWeight: 600 }}>{job.name}</span>
@@ -150,7 +164,7 @@ export function AskWalnutSection({ config, onSave }: Props) {
       </div>
 
       <div className="form-group">
-        <label>Which model answers them</label>
+        <label>Who answers them</label>
         <p className="text-sm text-muted" style={{ marginTop: 2 }}>
           The <em>model</em> rows run on{' '}
           {backgroundProvider
@@ -160,6 +174,10 @@ export function AskWalnutSection({ config, onSave }: Props) {
           {jevOn
             ? <>The <em>Jev</em> rows run on TypeSafe’s decision model instead: a few hundred milliseconds, fractions of a cent (<a href="#jev">Jev Decisions</a>).</>
             : <>The classification rows can run on TypeSafe’s decision model instead, which is far faster and cheaper for a one-field answer (<a href="#jev">Jev Decisions</a>).</>}
+        </p>
+        <p className="text-sm text-muted" style={{ marginTop: 4 }}>
+          The <em>session</em> and <em>Claude Code</em> rows need no provider of their own: they are
+          answered by a coding session on this machine, using the login it already runs under.
         </p>
       </div>
     </SectionCard>
