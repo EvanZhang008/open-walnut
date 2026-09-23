@@ -31,10 +31,10 @@ vi.mock('../../src/core/session-history.js', () => ({
 }));
 
 import { WALNUT_HOME } from '../../src/constants.js';
-import { sessionRunner } from '../../src/providers/claude-code-session.js';
+import { sessionRunner, ClaudeCodeSession } from '../../src/providers/claude-code-session.js';
 import { addTask, getTask, updateTask, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
 import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js';
-import { sessionAutoTitleHook, sessionAutoTitleTurnCompleteHook, autoTitleFromObservedMessage, __resetAutoTitleState } from '../../src/core/session-hooks/builtins.js';
+import { sessionAutoTitleHook, sessionAutoTitleTurnCompleteHook, autoTitleFromObservedMessage, autoTitleFromLaunch, __resetAutoTitleState } from '../../src/core/session-hooks/builtins.js';
 import { defaultSessionTaskTitle } from '../../src/core/sessions/quick-start.js';
 import type { OnMessageSendPayload } from '../../src/core/session-hooks/types.js';
 import type { Task } from '../../src/core/types.js';
@@ -516,6 +516,70 @@ describe('sessionAutoTitleHook', () => {
 
       expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
       expect((await getTask(task.id)).title).toBe('Investigate login loop');
+    });
+  });
+
+  /**
+   * A wrapper found by session id is NOT proof of a live CLI. `send()` claims
+   * the preassigned id before it builds the transport, so a spawn that failed
+   * (local daemon not answering) leaves the id resolvable while every
+   * control_request against it throws 'session not started'. On 2026-09-21 that
+   * cost two launch-time titles: they "failed" in 5s and Walnut's own fallback
+   * model named sessions the user could see were alive.
+   */
+  describe('control-channel readiness (presence is not liveness)', () => {
+    it('never dispatches into a wrapper whose CLI never started', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      const fake = registerFakeSession(
+        sid,
+        async () => 'titler must not be asked',
+        async () => 'side question must not be asked',
+      );
+      // The production fingerprint: the wrapper is in the map, carries the sid,
+      // and has no transport behind it.
+      (fake as unknown as { controlChannelState: string }).controlChannelState = 'dead';
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, 'add an idempotency key to the retry path'));
+
+      expect(fake.askSideQuestion).not.toHaveBeenCalled();
+      expect(fake.generateSessionTitle).not.toHaveBeenCalled();
+      // Backend channel is gated off in tests, so the placeholder survives —
+      // in production this is the ONE case the fallback model legitimately owns.
+      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
+
+    it('launch kick waits out a still-booting spawn so the SESSION titles itself', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      const fake = registerFakeSession(sid, async () => null, async () => 'Idempotency key for retries');
+      const readiness = fake as unknown as { controlChannelState: string; awaitSpawn: () => Promise<void> };
+      readiness.controlChannelState = 'starting'; // cold init — ~27s in the field
+      readiness.awaitSpawn = async () => {};
+      const flip = setTimeout(() => { readiness.controlChannelState = 'live'; }, 1_200);
+
+      try {
+        await autoTitleFromLaunch(sid, task.id, 'add an idempotency key to the retry path', CWD, PLACEHOLDER);
+      } finally {
+        clearTimeout(flip);
+      }
+
+      // The old loop broke on presence alone and asked while the transport was
+      // still null, which threw and handed the title to the backend model.
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
+      expect((await getTask(task.id)).title).toBe('Idempotency key for retries');
+    }, 20_000);
+
+    it('a real wrapper whose transport build threw reports dead, not starting', () => {
+      // These two fields are exactly what send() leaves behind when
+      // createSessionManager throws ('Local daemon not running…'): the spawn
+      // timestamp is stamped one line before the transport is built, and the id
+      // was claimed earlier still. No send() here — a real one would spawn a
+      // CLI against the machine's own daemon.
+      const session = new ClaudeCodeSession('task-readiness', '');
+      expect(session.controlChannelState).toBe('starting'); // nothing attempted yet
+      (session as unknown as { _spawnTs: number })._spawnTs = Date.now();
+      expect(session.controlChannelState).toBe('dead');
     });
   });
 });

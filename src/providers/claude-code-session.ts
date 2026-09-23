@@ -1731,6 +1731,37 @@ export class ClaudeCodeSession {
     return this._transport?.hasPipe ?? false
   }
 
+  /**
+   * Can this wrapper carry a control_request right now?
+   *
+   * PRESENCE IN THE RUNNER'S MAP IS NOT LIVENESS, and every control-protocol
+   * caller that treated it as liveness has been wrong. `send()` claims the
+   * preassigned session id (line ~2008, so the UI can mount the panel at once)
+   * BEFORE it builds the transport, and `createSessionManager` THROWS outright
+   * when the local daemon isn't answering — which leaves this wrapper in the
+   * map, findable by its session id, with a null transport and every
+   * control_request against it throwing 'session not started'. Verified on
+   * 2026-09-21: two launch-time titlings hit exactly that ("Local daemon
+   * started but not responding to hello") and were answered by Walnut's own
+   * fallback model instead of the session's.
+   *
+   *  - `live`     transport + a process the daemon confirmed → ask away.
+   *  - `starting` the spawn hasn't settled yet → WAIT, don't degrade. A cold
+   *               spawn's init can take ~27s.
+   *  - `dead`     the spawn was attempted and settled without a usable
+   *               process → this wrapper will never answer, so a caller with a
+   *               fallback should take it NOW rather than burn its deadline.
+   */
+  get controlChannelState(): 'live' | 'starting' | 'dead' {
+    if (this._transport && this.pid !== null) return 'live'
+    // _spawnTs is stamped one line before the transport is built, so 0 means
+    // send() hasn't reached the spawn (or an attach supplied no pid — the
+    // caller's own deadline decides that one, not us).
+    if (this._spawnTs === 0) return 'starting'
+    if (this._spawnSettled) return 'starting'
+    return 'dead'
+  }
+
   /** The transport's post-prepareOutbound text of the last outbound message —
    *  what the CLI actually echoes. Echo-claim registration must use this
    *  (falling back to the queue text only when the transport doesn't track it). */

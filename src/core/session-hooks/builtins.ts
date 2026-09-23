@@ -1066,10 +1066,42 @@ export function __resetAutoTitleState(retryDelayMs = 4_000): void {
   autoTitleRetryDelayMs = retryDelayMs;
 }
 
-/** A live session's title-generation surface — what askAndApplyTitle needs. */
+/** A live session's title-generation surface — what askAndApplyTitle needs.
+ *  The two readiness members are the REAL ClaudeCodeSession's (see
+ *  controlChannelReadiness); test fakes omit them and count as live. */
 interface TitleCapableSession {
   askSideQuestion?: (question: string, timeoutMs?: number) => Promise<string>;
   generateSessionTitle?: (description: string, timeoutMs?: number) => Promise<string | null>;
+  controlChannelState?: 'live' | 'starting' | 'dead';
+  awaitSpawn?: () => Promise<void>;
+}
+
+/**
+ * Is this session's OWN channel usable, or is the CLI not there?
+ *
+ * Titling asks the session's own model — that is the whole design, and the
+ * Walnut-side fallback exists only for a session that has no CLI at all. The
+ * two got confused because a wrapper found by session id was treated as proof
+ * of a live CLI: `send()` claims the session id before it builds the
+ * transport, so a spawn that failed (local daemon not answering) stays
+ * findable while every control_request against it throws 'session not
+ * started'. Titling then "failed" in 5s and the fallback answered a session
+ * the user could see was alive (2026-09-21, twice).
+ *
+ * `starting` is the case worth waiting for: a cold spawn's init takes seconds,
+ * and the session that answers 20s late answers WITH ITS OWN MODEL.
+ */
+async function controlChannelReadiness(
+  live: TitleCapableSession | undefined,
+): Promise<'live' | 'starting' | 'dead' | 'absent'> {
+  if (!live) return 'absent';
+  // No readiness surface = not a native wrapper (ACP shim, test fake): it
+  // answers or it doesn't, and its own call reports that.
+  if (live.controlChannelState === undefined) return 'live';
+  // Settle an in-flight spawn first — the answer is only meaningful once the
+  // daemon has said whether a process exists.
+  try { await live.awaitSpawn?.(); } catch { /* a failed spawn reports itself in the state below */ }
+  return live.controlChannelState;
 }
 
 // buildTitleQuestion / cleanTitleAnswer live in ../session-title-backend.ts —
@@ -1222,7 +1254,15 @@ async function askAndApplyTitle(
     const acp = opts.noColdAttach
       ? sessionRunner.findAcpSession(sessionId)
       : await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
-    let live = acp ? undefined : sessionRunner.findSessionByClaudeId(sessionId);
+    // Native side, same split as the ACP branch above: a foreground trigger
+    // ATTACHES on demand (the map holds only what the startup reconciler
+    // flagged, so a session that is genuinely alive after a server restart was
+    // silently conceded to the backend model), a background sweep only peeks.
+    let live = acp
+      ? undefined
+      : opts.noColdAttach
+        ? sessionRunner.findSessionByClaudeId(sessionId)
+        : await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined);
     if (opts.noColdAttach && !acp && live) {
       // A native wrapper holding a codex sid is a misroute (2026-08-10
       // incident) — without the durable-record consult that findOrAttach
@@ -1231,6 +1271,20 @@ async function askAndApplyTitle(
         const { getSessionByClaudeId } = await import('../session-tracker.js');
         if (isAcpEngine((await getSessionByClaudeId(sessionId))?.engine)) live = undefined;
       } catch { live = undefined; }
+    }
+    // A wrapper carrying the sid is not a live CLI (controlChannelReadiness):
+    // dispatching into one whose spawn never produced a process spends an
+    // attempt, logs a failure, and hands the title to the fallback model on a
+    // session the user believes is live. Wait out a `starting` spawn instead —
+    // the point of this channel is that the SESSION's model answers.
+    if (live) {
+      const readiness = await controlChannelReadiness(live);
+      if (readiness !== 'live') {
+        log.session.info('session-auto-title: no usable CLI control channel — backend channel owns this one', {
+          sessionId, taskId, readiness,
+        });
+        live = undefined;
+      }
     }
     // No session-delivered channel AND the backend channel is gated off →
     // nothing to ask. When the backend IS available we proceed even with no
@@ -1415,22 +1469,30 @@ export async function autoTitleFromLaunch(
   // 60s: a cold spawn's init can take ~27s (2026-08-08 incident: a 30s
   // deadline expired right as init landed and the whole launch kick vanished
   // WITHOUT A TRACE — askAndApplyTitle's no-live-session guard was silent).
-  const deadline = Date.now() + 60_000;
-  let found = false;
+  const startedAt = Date.now();
+  const deadline = startedAt + 60_000;
+  // Wait for the session to be LIVE, not merely present. Presence was the bug:
+  // this loop used to break the instant a wrapper carried the sid, which
+  // happens before the transport exists (and forever, when the spawn threw) —
+  // so the side_question failed with 'session not started' in ~5s and Walnut's
+  // own model titled a session whose CLI was still booting or already dead
+  // (2026-09-21: 2 of 3 fallback titles). `dead` breaks out at once: the
+  // fallback is the right answer there and waiting 60s for it is just latency.
+  let readiness: 'live' | 'starting' | 'dead' | 'absent' = 'absent';
   while (Date.now() < deadline) {
-    // Presence is enough: a native ClaudeCodeSession always carries both title
-    // channels (askSideQuestion / generateSessionTitle) as class methods.
-    if (sessionRunner.findSessionByClaudeId(sessionId)) { found = true; break; }
+    readiness = await controlChannelReadiness(
+      sessionRunner.findSessionByClaudeId(sessionId) as TitleCapableSession | undefined);
+    if (readiness === 'live' || readiness === 'dead') break;
     await new Promise((r) => setTimeout(r, 1_000));
   }
-  if (!found) {
+  if (readiness !== 'live') {
     // Do NOT bail: askAndApplyTitle's backend (Walnut-side model) channel works
     // without a live session — a spawn that is still cold (or failed outright,
     // 2026-08-23 wedged-daemon repro) gets its title anyway. When the backend is
     // gated off too, askAndApplyTitle no-ops and the onMessageSend hook / the
     // title reconciler sweep cover the task later.
-    log.session.warn('session-auto-title: launch kick found no live session in 60s — trying backend channel', {
-      sessionId, taskId,
+    log.session.warn('session-auto-title: launch kick has no live session channel — trying backend channel', {
+      sessionId, taskId, readiness, waitedMs: Date.now() - startedAt,
     });
   }
   await askAndApplyTitle(sessionId, taskId, trimmed, placeholder);
