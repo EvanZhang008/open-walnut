@@ -32,7 +32,7 @@ import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { isProcessAliveAsync } from '../utils/process.js'
 import { isLocalJsonlFresh } from '../utils/session-liveness.js'
-import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
+import { SESSION_STREAMS_DIR, CLAUDE_HOME, CLOUD_MODE } from '../constants.js'
 import { log } from '../logging/index.js'
 import {
   enqueueMessage,
@@ -9089,6 +9089,21 @@ export class SessionRunner {
         spillFile: data.largePromptFile.localPath,
         originalLength: data.largePromptFile.originalLength,
       })
+    }
+
+    // On a loaded machine the server's boot-time daemon start can time out
+    // (10s), and the first local start after it threw 'Local daemon not
+    // running', losing the session. Join or restart the daemon spawn first, as
+    // processNext does for a queued message.
+    if (!CLOUD_MODE && !this._testDaemonUrl && (!data.host || data.host === '__local__')) {
+      try {
+        const { ensureLocalDaemon } = await import('./session-manager.js')
+        await ensureLocalDaemon()
+      } catch (err) {
+        log.session.warn('handleStart: local daemon ensure failed', {
+          taskId, error: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
 
     // Resolve cwd if not provided — defense-in-depth for RPC/bus paths that

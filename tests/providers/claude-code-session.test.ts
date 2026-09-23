@@ -1387,6 +1387,37 @@ describe('SessionRunner context enrichment', () => {
     runner.destroyAndKill();
   });
 
+  it('a local start joins the daemon spawn when the boot-time daemon start timed out', async () => {
+    // Server boot's 10s daemon start can time out on a loaded machine; the first
+    // local start after that used to throw 'Local daemon not running' and lose
+    // the session. Now handleStart ensures the daemon first.
+    const { localDaemon } = await import('../../src/providers/local-daemon.js');
+    const daemon = localDaemon as unknown as { _wsUrl: string | null };
+    const prior = daemon._wsUrl;
+    daemon._wsUrl = null;
+    const ensure = vi.spyOn(localDaemon, 'ensureRunning').mockImplementation(async () => {
+      daemon._wsUrl = daemonUrl();
+      return sharedDaemon.port;
+    });
+    const collected = collectEvents();
+    const runner = new SessionRunner(MOCK_CLI); // no _testDaemonUrl: the real lookup path
+    runner.init();
+    try {
+      bus.emit('session:start', {
+        taskId: 'daemon-late-task',
+        project: 'Test',
+        message: 'started while the daemon was still coming up',
+      }, ['session-runner'], { source: 'test' });
+      const result = await waitForResult(collected);
+      expect((result.data as { result: string }).result).toContain('started while the daemon was still coming up');
+      expect(ensure).toHaveBeenCalled();
+    } finally {
+      ensure.mockRestore();
+      daemon._wsUrl = prior;
+      runner.destroyAndKill();
+    }
+  });
+
   it('session starts even if the task does not exist (hint still injected)', async () => {
     const collected = collectEvents();
     const runner = useDaemon(new SessionRunner(MOCK_CLI));
