@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Config } from '@open-walnut/core';
-import { SectionCard } from '../inputs/SectionCard';
 import { SecretInput } from '../inputs/SecretInput';
-import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useAutoSave } from '@/hooks/useAutoSave';
 import { log } from '@/utils/log';
 
@@ -26,11 +24,14 @@ type TestState =
   | { kind: 'ok'; ms: number; model: string }
   | { kind: 'fail'; error: string };
 
-export function JevSection({ config, onSave, onReload }: Props) {
+/**
+ * Jev's own settings: key, endpoint, model, a live test. Rendered only when
+ * Smart task creation is set to use Jev, so it never owns WHICH decisions Jev
+ * answers (that is the parent's radio, jev.decisions) and never writes them.
+ */
+export function JevSettings({ config, onSave, onReload }: Props) {
   const [endpoint, setEndpoint] = useState(config.jev?.endpoint ?? '');
   const [model, setModel] = useState(config.jev?.model ?? '');
-  const [quickParse, setQuickParse] = useState(config.jev?.decisions?.quick_parse !== false);
-  const [organize, setOrganize] = useState(config.jev?.decisions?.session_organize !== false);
   const [keyDraft, setKeyDraft] = useState('');
   const [keyBusy, setKeyBusy] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: 'idle' });
@@ -43,33 +44,33 @@ export function JevSection({ config, onSave, onReload }: Props) {
   const sharedKey = !ownKey && onOpenRouter && Boolean(config.providers?.openrouter?.api_key);
   const keyConfigured = ownKey || sharedKey;
 
-  useEffect(() => {
-    setEndpoint(config.jev?.endpoint ?? '');
-    setModel(config.jev?.model ?? '');
-    setQuickParse(config.jev?.decisions?.quick_parse !== false);
-    setOrganize(config.jev?.decisions?.session_organize !== false);
-  }, [config]);
+  // Keyed on the two saved VALUES, not on the config object: this form mounts
+  // the moment the runner radio flips to Jev, and that radio's own save
+  // refreshes config a beat later. Re-syncing on any refresh wiped whatever was
+  // typed in between (caught by settings-smart-task-creation.spec.ts).
+  const savedEndpoint = config.jev?.endpoint ?? '';
+  const savedModel = config.jev?.model ?? '';
+  useEffect(() => { setEndpoint(savedEndpoint); }, [savedEndpoint]);
+  useEffect(() => { setModel(savedModel); }, [savedModel]);
 
   const handleSave = async () => {
     await onSave({
-      // Spread ...config.jev so api_key (a ${file:} ref this section never
-      // renders) survives — updateConfig replaces the whole `jev` key.
+      // Spread ...config.jev so api_key (a ${file:} ref this form never renders)
+      // and decisions (the parent's radio) survive: updateConfig replaces the
+      // whole `jev` key.
       jev: {
         ...config.jev,
         ...(endpoint.trim() ? { endpoint: endpoint.trim() } : { endpoint: undefined }),
         ...(model.trim() ? { model: model.trim() } : { model: undefined }),
-        decisions: { quick_parse: quickParse, session_organize: organize },
       },
     });
   };
 
   useAutoSave({
-    current: JSON.stringify({ endpoint: endpoint.trim(), model: model.trim(), quickParse, organize }),
+    current: JSON.stringify({ endpoint: endpoint.trim(), model: model.trim() }),
     baseline: JSON.stringify({
       endpoint: (config.jev?.endpoint ?? '').trim(),
       model: (config.jev?.model ?? '').trim(),
-      quickParse: config.jev?.decisions?.quick_parse !== false,
-      organize: config.jev?.decisions?.session_organize !== false,
     }),
     save: handleSave,
   });
@@ -97,7 +98,7 @@ export function JevSection({ config, onSave, onReload }: Props) {
   };
 
   const removeKey = async () => {
-    if (!confirm('Remove the stored Jev API key? Both decisions fall back to their pre-Jev paths.')) return;
+    if (!confirm('Remove the stored Jev API key? Smart task creation then uses the default engine until a key is saved again.')) return;
     setKeyBusy(true);
     try {
       await fetch('/api/jev/key', { method: 'DELETE' });
@@ -121,45 +122,38 @@ export function JevSection({ config, onSave, onReload }: Props) {
   };
 
   return (
-    <SectionCard
-      id="jev"
-      title="Jev Decisions"
-      description="Optional: TypeSafe's Jev answers Walnut's small classification decisions (a few hundred milliseconds, fractions of a cent) instead of a full model call. Unset, every decision keeps its normal path. Changes save automatically."
-      onSave={handleSave}
-      showSave={false}
-    >
+    <div data-testid="jev-settings">
       <div className="form-group">
-        <label htmlFor="jev-key">API key</label>
+        <label htmlFor="jev-key">Jev API key</label>
         {keyConfigured ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className="text-sm" data-testid="jev-key-status">
               {ownKey
-                ? <>Jev-specific key — stored in <code>secrets/</code>, referenced from config, never synced.</>
-                : <>Using the shared OpenRouter provider key. <a href="#providers">Manage under Ask Walnut</a></>}
+                ? <>Saved. It lives in <code>secrets/</code> and is never synced.</>
+                : <>Using the OpenRouter key saved under <a href="#providers">Advanced</a>.</>}
             </span>
             {ownKey && (
               <button type="button" className="btn btn-sm" onClick={removeKey} disabled={keyBusy}>Remove</button>
             )}
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: 8, maxWidth: 520 }}>
-            <SecretInput
-              id="jev-key"
-              value={keyDraft}
-              onChange={setKeyDraft}
-              placeholder="sk-or-… (OpenRouter) or a TypeSafe key"
-            />
-            <button type="button" className="btn btn-sm btn-primary" onClick={saveKey} disabled={keyBusy || !keyDraft.trim()}>
-              Save key
-            </button>
-          </div>
+          <>
+            <div style={{ display: 'flex', gap: 8, maxWidth: 520 }}>
+              <SecretInput
+                id="jev-key"
+                value={keyDraft}
+                onChange={setKeyDraft}
+                placeholder="sk-or-… (OpenRouter) or a TypeSafe key"
+              />
+              <button type="button" className="btn btn-sm btn-primary" onClick={saveKey} disabled={keyBusy || !keyDraft.trim()}>
+                Save key
+              </button>
+            </div>
+            <p className="text-sm" style={{ marginTop: 4, color: 'var(--warning, #b45309)' }} data-testid="jev-no-key">
+              No key yet, so the default engine answers until you save one.
+            </p>
+          </>
         )}
-        <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-          {onOpenRouter
-            ? <>An OpenRouter key is saved as the SHARED provider credential (<code>providers.openrouter</code>), so chat models can use it too.</>
-            : <>A first-party key is Jev-specific.</>}{' '}
-          Keys are written to <code>~/.open-walnut/secrets/</code> (excluded from sync); config keeps only a file reference.
-        </p>
       </div>
 
       <div className="form-row">
@@ -191,29 +185,6 @@ export function JevSection({ config, onSave, onReload }: Props) {
         </div>
       </div>
 
-      <div className="form-group">
-        <ToggleSwitch
-          id="jev-quick-parse"
-          checked={quickParse}
-          onChange={setQuickParse}
-          label="Quick-add classification"
-        />
-        <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-          Optional: pinTier, priority and project suggestions while you type a task note.
-        </p>
-      </div>
-      <div className="form-group">
-        <ToggleSwitch
-          id="jev-session-organize"
-          checked={organize}
-          onChange={setOrganize}
-          label="Session auto-filing"
-        />
-        <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-          Optional: a quick-start session's task is filed into the best-matching project.
-        </p>
-      </div>
-
       <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button type="button" className="btn btn-sm" onClick={runTest} disabled={test.kind === 'running'} data-testid="jev-test">
           {test.kind === 'running' ? 'Testing…' : 'Test connection'}
@@ -229,6 +200,6 @@ export function JevSection({ config, onSave, onReload }: Props) {
           </span>
         )}
       </div>
-    </SectionCard>
+    </div>
   );
 }

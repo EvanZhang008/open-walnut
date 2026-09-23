@@ -13,7 +13,6 @@ import { GeneralSection } from './sections/GeneralSection'
 import { HeartbeatSection } from './sections/HeartbeatSection'
 import { HooksSection } from './sections/HooksSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
-import { JevSection } from './sections/JevSection'
 import { PermissionsSection } from './sections/PermissionsSection'
 import { PluginStoreSection } from './sections/PluginStoreSection'
 import { ProvidersSection } from './sections/ProvidersSection'
@@ -62,18 +61,11 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // groups must read in the same top-to-bottom order or a nav click lands somewhere
   // the eye did not expect. Keep this entry directly after the Manage sections.
   { owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'plugins', render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} /> },
-  // There is ONE engine choice and it lives in Engines ("Default engine"):
-  // coding sessions, Ask Walnut, agent chats and routines all start on it. A
-  // separate chat-engine section existed for a day and was removed because
-  // users read "which engine does Walnut use" as one question.
-  // Providers = the API provider for Walnut's small one-call jobs (quick-add,
-  // names, summaries, memory upkeep). No session starts on it.
-  { owner: 'walnut', id: 'providers', label: 'AI Provider', title: 'AI Provider & API Keys', group: 'configure', render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure', render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} /> },
   // Tasks = where new tasks land + how a finished session reports back onto its
   // task. Focus Tiers is part of the same story (the pinned-task tiers), so it
   // renders right under it and shares the nav entry; `#focus-tiers` still works.
-  { owner: 'walnut', id: 'tasks', label: 'Tasks', title: 'Tasks', group: 'configure', render: ({ config, saveSection }) => <TasksSection config={config} onSave={saveSection} /> },
+  { owner: 'walnut', id: 'tasks', label: 'Tasks', title: 'Tasks', group: 'configure', render: ({ config, saveSection, reload }) => <TasksSection config={config} onSave={saveSection} onReload={reload} /> },
   { owner: 'walnut', id: 'focus-tiers', label: 'Focus Tiers', title: 'Focus Tiers', group: 'configure', navHidden: true, render: () => <FocusTiersSection /> },
   { owner: 'walnut', id: 'sessions', label: 'Sessions', title: 'Sessions', group: 'configure', render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} /> },
   // Sessions is how WALNUT runs an engine; Engines is the engine's OWN settings
@@ -86,9 +78,6 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'stt', label: 'Voice', title: 'Voice', group: 'configure', render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} /> },
   { owner: 'walnut', id: 'audio-capture', label: 'Audio Capture', title: 'Audio Capture', group: 'configure', render: ({ config, saveSection }) => <AudioCaptureSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'integrations', label: 'Integrations', title: 'Integrations', group: 'configure', render: ({ config, saveSection }) => <IntegrationsSection config={config} onSave={saveSection} /> },
-  // Right after Integrations: Jev is an outbound integration too (a decision
-  // API), and both answer "what external services does Walnut call?".
-  { owner: 'walnut', id: 'jev', label: 'Jev Decisions', title: 'Jev Decisions', group: 'configure', render: ({ config, saveSection, reload }) => <JevSection config={config} onSave={saveSection} onReload={reload} /> },
   // "Calendar Accounts" / "macOS Access": the two used to be "Calendar" and
   // "Permissions", which collided with the Calendar page and with the session
   // permission-prompt settings.
@@ -106,6 +95,12 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   { owner: 'walnut', id: 'cloud', label: 'Cloud Companion', title: 'Cloud Companion', group: 'configure', navHidden: true, render: () => <CloudSection /> },
   { owner: 'walnut', id: 'remote-hosts', label: 'Remote Hosts', title: 'Remote Hosts', group: 'configure', render: ({ config, saveSection }) => <RemoteHostsSection config={config} onSave={saveSection} /> },
   { owner: 'walnut', id: 'advanced', label: 'Advanced', title: 'Advanced', group: 'configure', render: ({ config, saveSection }) => <AdvancedSection config={config} onSave={saveSection} /> },
+  // The API alternative to Claude Code for Walnut's small background jobs
+  // (names, summaries, memory upkeep, quick-add on the default runner). Folded
+  // under Advanced and collapsed: there is ONE engine choice (Engines), and
+  // this only matters on a machine without Claude Code or for someone who wants
+  // those jobs faster. The `#providers` anchor (setup banner) expands it.
+  { owner: 'walnut', id: 'providers', label: 'API Provider', title: 'Use an API instead of Claude Code', group: 'configure', navHidden: true, render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} /> },
   // Diagnostics: read-mostly panels about what Walnut did, not knobs.
   { owner: 'walnut', id: 'usage', label: 'Usage & Costs', title: 'Usage & Costs', group: 'diagnostics', render: () => <UsageSection /> },
   { owner: 'walnut', id: 'suggest-accuracy', label: 'Suggestion Accuracy', title: 'Suggestion Accuracy', group: 'diagnostics', render: () => <SuggestAccuracySection /> },

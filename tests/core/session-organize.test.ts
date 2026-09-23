@@ -106,6 +106,25 @@ describe('suggestSessionPlacement', () => {
 });
 
 describe('organizeQuickStartTask', () => {
+  it('does nothing at all when the user turned filing off (agent.session_organize: false)', async () => {
+    const { updateConfig } = await import('../../src/core/config-manager.js');
+    await fs.mkdir(WALNUT_HOME, { recursive: true }); // beforeEach removed it; config writes need the dir
+    await updateConfig({ agent: { session_organize: false } as never });
+    try {
+      const task = await makeQuickStartTask();
+      sendMessageMock.mockResolvedValue(textResult('{"project":"walnut"}'));
+
+      await organizeQuickStartTask(task.id, '/Users/me/walnut', 'fix stuff');
+
+      // Off means off: no model call, no digest walk, the task stays in Inbox.
+      expect(sendMessageMock).not.toHaveBeenCalled();
+      expect(digestMock).not.toHaveBeenCalled();
+      expect((await getTask(task.id)).project).toBe('');
+    } finally {
+      await updateConfig({ agent: {} as never });
+    }
+  });
+
   it('files an Inbox task into the suggested project', async () => {
     const task = await makeQuickStartTask();
     expect(task.project).toBe('');

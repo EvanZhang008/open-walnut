@@ -212,6 +212,12 @@ export async function suggestSessionPlacement(
 export async function organizeQuickStartTask(
   taskId: string, cwd: string, message?: string,
 ): Promise<void> {
+  // The whole-feature switch (Settings › Tasks › Smart task creation). Checked
+  // before the digest build: that walks every task, and a pass the user turned
+  // off must cost nothing. Unset = on.
+  const { getConfig } = await import('./config-manager.js');
+  if ((await getConfig()).agent?.session_organize === false) return;
+
   const suggestion = await suggestSessionPlacement({ cwd, message }, { taskId });
   if (!suggestion.project) return;
 

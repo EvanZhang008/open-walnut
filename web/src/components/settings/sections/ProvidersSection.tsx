@@ -7,6 +7,7 @@ import { NumberInput } from '../inputs/NumberInput';
 import { fetchProviders, fetchAwsProfiles, testProvider, testConnection, fetchCredentialTrace, type ProviderStatus, type TestConnectionResult, type ModelEntry, type CredentialTrace, type CredentialVerify } from '@/api/config';
 import { InstallButton } from '@/components/common/InstallButton';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
+import { useLocation } from 'react-router-dom';
 
 // Providers we actively test and support.
 // `api` matches ProviderConfig.api (the ApiProtocol union). Typing the field as the union
@@ -870,6 +871,7 @@ function ProviderCard({
 }
 
 export function ProvidersSection({ config, onSave }: Props) {
+  const location = useLocation();
   const [providers, setProviders] = useState<Record<string, ProviderStatus>>({});
   const [loading, setLoading] = useState(true);
   // The server applies the default rule (claude_cli when Claude Code is installed,
@@ -958,6 +960,13 @@ export function ProvidersSection({ config, onSave }: Props) {
   // the group under it. `mode` is derived from the provider, never stored.
   const mode: 'claude' | 'custom' | undefined =
     activeProvider === undefined ? undefined : activeProvider === 'claude_cli' ? 'claude' : 'custom';
+  // Collapsed unless it matters: an API already in use, or a deep link here
+  // (the setup banner's "configure a provider" step). Once open it stays open;
+  // a card that folds itself while someone is reading it is worse than a long page.
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (mode === 'custom' || location.hash === '#providers') setExpanded(true);
+  }, [mode, location.hash]);
   const claudeDef = ALL_PROVIDERS.find(p => p.name === 'claude_cli')!;
   const customDefs = ALL_PROVIDERS.filter(p => p.name !== 'claude_cli');
   // Re-selecting "custom agent" returns to the provider it last ran on.
@@ -991,11 +1000,24 @@ export function ProvidersSection({ config, onSave }: Props) {
   return (
     <SectionCard
       id="providers"
-      title="AI Provider &amp; API Keys"
-      description="Walnut's small background jobs run on this provider: quick-add, filing new tasks into a project, chat and fork names, project descriptions, task notes, memory upkeep and routine drafts. Sessions and chats run on the default engine (Engines) instead. A key saved here is shared: Jev Decisions uses the OpenRouter key from here."
+      title="Use an API instead of Claude Code"
+      description="Optional. Walnut's small background jobs (names, project descriptions, task notes, memory upkeep) normally run through Claude Code. Pick an API here only on a machine without Claude Code, or to make those jobs faster. A key saved here is shared: Jev uses the OpenRouter one."
       showSave={false}
     >
-      {loading ? (
+      <p className="text-sm" data-testid="providers-summary" style={{ margin: '0 0 8px' }}>
+        {mode === 'custom'
+          ? <>On: small jobs use <strong>{customDefs.find(p => p.name === activeProvider)?.label ?? activeProvider}</strong>.</>
+          : mode === 'claude' ? <>Off: small jobs use Claude Code.</> : null}
+        {!expanded && (
+          <>
+            {' '}
+            <button type="button" className="btn btn-sm" onClick={() => setExpanded(true)} data-testid="providers-expand">
+              Show options
+            </button>
+          </>
+        )}
+      </p>
+      {!expanded ? null : loading ? (
         <p className="text-sm text-muted">Loading providers...</p>
       ) : (
         <div className="provider-catalog" data-testid="provider-modes">

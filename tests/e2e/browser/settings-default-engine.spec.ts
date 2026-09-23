@@ -58,9 +58,9 @@ test.describe('Settings → Engines → default engine', () => {
     await expect(section).toContainText('Default engine')
     // One engine for everything Walnut starts: coding sessions AND its chats.
     await expect(section.getByTestId('default-engine-used-for'))
-      .toContainText('Starts new coding sessions, Ask Walnut and agent chats')
+      .toContainText('Everything Walnut runs uses this: coding sessions, Ask Walnut and agent chats')
     await section.getByTestId('default-engine-used-for').locator('xpath=ancestor::div[contains(@class,"form-group")][1]')
-      .screenshot({ path: '/tmp/default-engine-settings/engines-default.png' })
+      .screenshot({ path: '/tmp/smart-task-creation/engines-default.png' })
 
     // Every option is a distinct engine the catalog reported, Claude included,
     // and nothing is offered that the row itself marks as missing.

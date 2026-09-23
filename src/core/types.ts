@@ -848,6 +848,10 @@ export interface AgentConfig {
    * without also setting `fast_model` to a DIRECT-API model re-creates that.
    */
   quick_parse?: boolean;
+  /** File a quick-start session's new task into the best-matching project
+   *  (session-organize.ts). Unset = on; `false` leaves every such task in the
+   *  Inbox. Settings › Tasks › Smart task creation. */
+  session_organize?: boolean;
   /** Preferred language for AI-generated UI text (diff summaries etc.), ISO
    *  639-1 (e.g. 'zh'). Unset = follow the browser locale, else English. */
   language?: string;

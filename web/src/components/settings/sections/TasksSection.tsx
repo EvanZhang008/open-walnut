@@ -6,10 +6,12 @@ import { NumberInput } from '../inputs/NumberInput';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useIntegrations } from '@/hooks/useIntegrations';
 import { useShowPriority, setShowPriority } from '@/hooks/useShowPriority';
+import { SmartTaskCreation } from './SmartTaskCreation';
 
 interface Props {
   config: Config;
   onSave: (partial: Partial<Config>) => Promise<void>;
+  onReload: () => Promise<void>;
 }
 
 type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
@@ -20,7 +22,7 @@ type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
  * Summary). The defaults used to sit in General and the summary knobs in
  * "Tasks & Sessions", so the task story was split across two cards.
  */
-export function TasksSection({ config, onSave }: Props) {
+export function TasksSection({ config, onSave, onReload }: Props) {
   const integrations = useIntegrations();
   // `ui.show_priority` is read and written through its own module store, NOT through
   // this section's local state + useAutoSave: hundreds of rows read the same flag, and
@@ -139,6 +141,8 @@ export function TasksSection({ config, onSave }: Props) {
           pick a connected service to create new captures there instead.
         </p>
       </div>
+
+      <SmartTaskCreation config={config} onSave={onSave} onReload={onReload} />
 
       <div className="settings-divider" />
 

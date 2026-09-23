@@ -30,6 +30,7 @@ import { StatusIndicator } from '../inputs/StatusIndicator';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useEngineCatalog, useEngineCatalogHydration, type EngineCatalogEntry } from '@/hooks/useEngineCatalog';
 import { useEngineSettings } from '@/hooks/useEngineSettings';
+import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { envUncheckedSentence } from '@/utils/engine-settings-copy';
 import { hostIndicatorStatus, hostStatusText } from '@/utils/host-connect';
@@ -97,6 +98,7 @@ function HostButton({ host, active, onPick }: { host: HostChoice; active: boolea
 
 export function EnginesSection({ config, onSave }: { config: Config; onSave: (partial: Partial<Config>) => Promise<void> }) {
   const catalog = useEngineCatalog();
+  const { health } = useSystemHealth();
   const catalogHydration = useEngineCatalogHydration();
   const engines = useMemo(() => catalog.filter((e) => e.capabilities.settings), [catalog]);
 
@@ -284,9 +286,32 @@ export function EnginesSection({ config, onSave }: { config: Config; onSave: (pa
             ))}
           </select>
           <p className="text-sm text-muted" style={{ marginTop: 2 }} data-testid="default-engine-used-for">
-            Starts new coding sessions, Ask Walnut and agent chats, AI actions, Inbox Triage runs and
-            routines, unless one picks its own engine.
+            Everything Walnut runs uses this: coding sessions, Ask Walnut and agent chats, AI actions,
+            Inbox Triage, routines and Walnut&rsquo;s small background jobs. A session can still pick its own.
           </p>
+          {/* Only when it is not the plain case: small one-shot jobs have no
+              Codex path, and an API picked under Advanced takes them over. */}
+          {(() => {
+            // Explicit choice, else the server's default (an API on a machine
+            // without Claude Code).
+            const provider = config.agent?.main_provider ?? health.mainProvider;
+            const api = provider && provider !== 'claude_cli';
+            if (api) {
+              return (
+                <p className="text-sm text-muted" style={{ marginTop: 2 }} data-testid="default-engine-small-jobs">
+                  Small background jobs use an API instead (<a href="#providers">Advanced</a>).
+                </p>
+              );
+            }
+            if (defaultEngine !== 'claude') {
+              return (
+                <p className="text-sm text-muted" style={{ marginTop: 2 }} data-testid="default-engine-small-jobs">
+                  Small background jobs stay on Claude Code.
+                </p>
+              );
+            }
+            return null;
+          })()}
           {defaultError && (
             <SettingsNotice kind="error" role="alert">{defaultError}</SettingsNotice>
           )}

@@ -12,8 +12,9 @@ const EXPECTED_IDS = [
   // sections because the nav's Plugins group renders between Manage and
   // Configure — nav order and scroll order must agree or a click lands wrong.
   'plugin-store',
-  // No separate chat-engine section: the one default engine lives in Engines.
-  'providers', 'general',
+  // No separate chat-engine or provider entry: the one default engine lives in
+  // Engines, and the API alternative is folded under Advanced (last below).
+  'general',
   // Tasks owns task defaults + Task Summary; Focus Tiers renders under it and
   // shares its nav entry (navHidden).
   // Sessions = how Walnut runs an engine; Engines = the engine's OWN settings
@@ -21,13 +22,14 @@ const EXPECTED_IDS = [
   // Engines sits directly after Sessions, which is the next question a reader asks.
   'tasks', 'focus-tiers', 'sessions', 'engines',
   // `stt` is labelled Voice and also carries Text-to-Speech now.
-  // Jev sits after Integrations: it is an external decision service wired the
-  // same way (credential + per-feature toggles).
+  // No `jev` row: Jev is one runner choice inside Tasks › Smart task creation.
   // Inbox Triage sits directly after Heartbeat: both are "Walnut wakes itself up
   // and works", and it is the question a reader asks next.
-  'stt', 'audio-capture', 'integrations', 'jev', 'calendar', 'permissions', 'heartbeat', 'triage', 'search', 'backup',
+  'stt', 'audio-capture', 'integrations', 'calendar', 'permissions', 'heartbeat', 'triage', 'search', 'backup',
   // Phones & Cloud: `devices` is the nav entry, `cloud` renders under it (navHidden).
   'devices', 'cloud', 'remote-hosts', 'advanced',
+  // Use an API instead of Claude Code: renders under Advanced (navHidden).
+  'providers',
   // Diagnostics group. No `time` row: time tracking's only UI is the walnut-time
   // Plugin App, and the duplicate Settings section was deleted in 95473094.
   // `timeline` below is a different feature (the screen-activity Life Tracker,
@@ -73,7 +75,7 @@ describe('core settings registry', () => {
     // A navHidden row keeps its #id deep link but has no nav button; the nav
     // highlights the previous visible entry when the scroll spy lands on it.
     const hidden = CORE_SETTINGS_CONTRIBUTIONS.filter((entry) => entry.navHidden).map((entry) => entry.id)
-    expect(hidden).toEqual(['focus-tiers', 'cloud'])
+    expect(hidden).toEqual(['focus-tiers', 'cloud', 'providers'])
     for (const id of hidden) {
       const idx = CORE_SETTINGS_CONTRIBUTIONS.findIndex((entry) => entry.id === id)
       expect(CORE_SETTINGS_CONTRIBUTIONS[idx - 1].navHidden).toBeUndefined()
