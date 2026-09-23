@@ -59,6 +59,11 @@ async function kebabPanels(page: Page) {
   await expect(menu).toBeVisible()
   return menu.locator('.task-kebab-tier').filter({ has: page.getByText('Panels', { exact: true }) })
 }
+/** The View section shows whole, its last row (Session panels) included, with nothing to scroll. */
+const viewFits = (page: Page) => page.locator('.vd-detail').evaluate((el) => {
+  const row = el.querySelector('[data-view-option="session-panels"]')!.getBoundingClientRect()
+  return el.scrollHeight <= el.clientHeight + 1 && row.bottom <= el.getBoundingClientRect().bottom + 1
+})
 /** The strip's budget under Auto, from the same breakpoints the home page uses. */
 const autoBudget = (page: Page) => page.locator('.main-page-content-row').evaluate((el) => {
   const width = el.getBoundingClientRect().width
@@ -89,6 +94,7 @@ test('the filter menu shows the panel count and a pick moves the strip at once',
   await expect(panelsRow(page)).toContainText('Side by side')
   await expect(panelsRow(page).locator('button')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
   await expect(checked(page)).toHaveText(['3'])
+  expect(await viewFits(page)).toBe(true)
   await page.locator('.vd-panel').screenshot({ path: `${SHOTS}/${test.info().project.name}-filter-menu-panels.png` })
 
   // A pick moves the strip without waiting for the config round-trip, and the menu stays open on it.
@@ -124,12 +130,21 @@ test('a change made in the session kebab shows in the filter menu, and Auto name
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('4')
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['4'])
+  expect(await viewFits(page)).toBe(true)
 
   // Auto: the row says how many panels Auto means at this window width.
   await choice(page, 'auto').click()
   await expect(checked(page)).toHaveText([`Auto (${await autoBudget(page)})`])
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('auto')
   await page.locator('.vd-panel').screenshot({ path: `${SHOTS}/${test.info().project.name}-filter-menu-auto.png` })
+  await closeViewMenu(page)
+
+  // A short window caps the menu to the space below its button; the body scrolls instead.
+  await page.setViewportSize({ width: 1280, height: 560 })
+  await openViewMenu(page)
+  expect(await page.locator('.vd-panel').evaluate((el) => el.getBoundingClientRect().bottom <= innerHeight)).toBe(true)
+  await panelsRow(page).scrollIntoViewIfNeeded()
+  await expect(choice(page, 'auto')).toBeInViewport()
   await closeViewMenu(page)
 
   // A wider window changes what Auto means, and the row follows.
