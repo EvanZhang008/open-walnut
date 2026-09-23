@@ -30,6 +30,7 @@ describe('classifyHostConnectError', () => {
     ['Daemon failed to start within 20s', 'daemon'],
     ['capability handshake failed', 'daemon'],
     ['ephemeral server: no daemon running on devbox and ephemeral sandboxes do not deploy/start remote daemons (attach-only)', 'ephemeral'],
+    ["ephemeral server: remote host 'devbox' is off for test servers (set WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach anyway)", 'ephemeral'],
     ['something nobody has seen before', 'unknown'],
   ])('%s → %s', (message, kind) => {
     expect(classifyHostConnectError(message, T).kind).toBe(kind);

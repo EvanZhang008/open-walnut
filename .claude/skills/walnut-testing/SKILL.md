@@ -221,9 +221,9 @@ Two modes:
 
 1. **Automated code tests** (`tests/e2e/browser/`): Run with `npx playwright test`. Playwright config starts the web server automatically. Parallel workers (half CPUs locally, 4 in CI), each test creates unique data. Tests are standard `@playwright/test` specs.
 
-2. **Manual MCP verification** (final human-in-the-loop step): After automated tests pass, use Playwright MCP tools for visual spot-checks:
+2. **Manual MCP verification** (final human-in-the-loop step): After automated tests pass, use Playwright MCP tools for visual spot-checks. Point them at an ephemeral server (`npm run dev:ephemeral` prints its port), never at :3456 when the check creates or changes data:
    ```
-   mcp__playwright__browser_navigate → http://localhost:3456
+   mcp__playwright__browser_navigate → http://localhost:<ephemeral port>
    mcp__playwright__browser_snapshot → verify DOM structure
    mcp__playwright__browser_take_screenshot → visual verification
    ```

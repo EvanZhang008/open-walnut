@@ -62,6 +62,7 @@ import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpMod
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingText } from '../core/sessions/launch-naming.js'
+import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind } from '../core/types.js'
 import {
   SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
@@ -2025,6 +2026,16 @@ export class ClaudeCodeSession {
     }
     if (profile?.allowedTools && profile.allowedTools.length > 0) {
       args.push('--allowedTools', profile.allowedTools.join(','))
+    }
+    // The in-session `walnut` CLI (and the walnut MCP child) must reach the
+    // server that launched this session. They default to :3456, so a session of
+    // any other server (ephemeral, fixture, vitest) wrote into the user's real
+    // Walnut. Settings `env` is the CLI's own way to set a session's env; it
+    // merges with ~/.claude/settings.json env and reaches Bash tool children
+    // (verified on CLI 2.1.280). Local sessions only (see self-api-root.ts).
+    const walnutEnv = walnutApiEnvForSession(host)
+    if (Object.keys(walnutEnv).length > 0) {
+      args.push('--settings', JSON.stringify({ env: walnutEnv }))
     }
 
     // Both local and SSH sessions use stream-json stdin via SessionIO

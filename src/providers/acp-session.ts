@@ -48,6 +48,7 @@ import { localDaemon } from './local-daemon.js'
 import { getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
 import { AcpJournalProjector } from './acp-journal-projector.js'
 import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
+import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import type {
   AcpCapabilitySnapshot,
   AcpConfigOption,
@@ -460,6 +461,23 @@ export function resolveCodexInitialMode(
   return undefined
 }
 
+/**
+ * Add the launching server's API env to the walnut MCP mount: the provider spawns
+ * MCP servers with the env list it is given, so inheriting the adapter's env is
+ * not something to count on. Other mounts are left exactly as configured.
+ */
+export function withWalnutApiEnv(servers: AcpMcpServer[], walnutEnv: Record<string, string>): AcpMcpServer[] {
+  const entries = Object.entries(walnutEnv)
+  if (entries.length === 0) return servers
+  return servers.map((server) => server.name !== 'walnut' ? server : {
+    ...server,
+    env: [
+      ...server.env.filter((entry) => !(entry.name in walnutEnv)),
+      ...entries.map(([name, value]) => ({ name, value })),
+    ],
+  })
+}
+
 export function buildAcpAdapterEnv(
   systemCodex: string | undefined,
   options: {
@@ -469,6 +487,8 @@ export function buildAcpAdapterEnv(
     sessionId?: string
     /** Startup approval preset (adapter env INITIAL_AGENT_MODE). */
     initialAgentMode?: string
+    /** Env pointing in-session Walnut clients at the launching server (self-api-root.ts). */
+    walnutApiEnv?: Record<string, string>
   } = {},
 ): Record<string, string> | undefined {
   const existingInstructions = typeof options.baseConfig?.developer_instructions === 'string'
@@ -486,6 +506,7 @@ export function buildAcpAdapterEnv(
     ...(Object.keys(config).length > 0 ? { CODEX_CONFIG: JSON.stringify(config) } : {}),
     ...(options.sessionId ? { WALNUT_SESSION_ID: options.sessionId } : {}),
     ...(options.initialAgentMode ? { INITIAL_AGENT_MODE: options.initialAgentMode } : {}),
+    ...(options.walnutApiEnv ?? {}),
   }
   return Object.keys(env).length > 0 ? env : undefined
 }
@@ -973,6 +994,10 @@ export class AcpSession {
    * set per-session would need record-level persistence like SessionProfile.
    */
   private async resolveMcpServers(): Promise<AcpMcpServer[]> {
+    return withWalnutApiEnv(await this.resolveMcpServerSet(), walnutApiEnvForSession(this.host))
+  }
+
+  private async resolveMcpServerSet(): Promise<AcpMcpServer[]> {
     if (this.cfg.walnutMcpServer) {
       if (this.engineId === 'pi') throw new Error('Pi does not support MCP mounts; use the walnut CLI instead.')
       return [{
@@ -1049,7 +1074,7 @@ export class AcpSession {
   private async buildAdapterEnv(providerExecutable: string | undefined): Promise<Record<string, string> | undefined> {
     const overlay = await this.resolveConfiguredEngineEnv()
     if (this.engineId !== 'codex') {
-      const managed = buildAcpAdapterEnv(undefined, { sessionId: this.runtimeId })
+      const managed = buildAcpAdapterEnv(undefined, { sessionId: this.runtimeId, walnutApiEnv: walnutApiEnvForSession(this.host) })
       const provider = this.engineId === 'pi' && providerExecutable
         ? { PI_ACP_PI_COMMAND: providerExecutable }
         : undefined
@@ -1093,6 +1118,7 @@ export class AcpSession {
       baseConfig: parsedBaseConfig,
       sessionId: this.runtimeId,
       initialAgentMode,
+      walnutApiEnv: walnutApiEnvForSession(this.host),
     })
     if (!overlay) return managed
     return { ...overlay, ...(managed ?? {}) }

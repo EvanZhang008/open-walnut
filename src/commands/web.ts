@@ -21,7 +21,10 @@ import {
   unregisterEphemeralDir,
   reapStaleEphemeralDirs,
   countLiveEphemeralServers,
+  ephemeralRuntimeDir,
+  removeEphemeralRuntimeDirs,
 } from './ephemeral-registry.js'
+import { ephemeralChildEnv, pauseSnapshotCronJobs, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
 /** Auto-shutdown after 10 minutes of no HTTP requests. */
 const EPHEMERAL_IDLE_TTL_MS = 10 * 60 * 1000
@@ -169,6 +172,30 @@ async function runEphemeralLauncher(): Promise<void> {
   // 3. Create unique tmpdir: /tmp/open-walnut-{PPID}-{random}
   const prefix = `open-walnut-${process.ppid}-`
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  // Its own local daemon (see ephemeralRuntimeDir): never the production one.
+  const runtimeDir = ephemeralRuntimeDir(tmpDir)
+  if (!runtimeDir) {
+    process.stderr.write(`ephemeral: unexpected snapshot dir name ${tmpDir}\n`)
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    process.exit(1)
+    return
+  }
+  // Created fresh (never recursive): an entry that already exists, a planted
+  // symlink included, is not ours, and the daemon would put its socket there.
+  const createdRuntimeDirs: string[] = []
+  try {
+    for (const dir of [runtimeDir, `${runtimeDir}-streams`]) {
+      fs.mkdirSync(dir, { mode: 0o700 })
+      createdRuntimeDirs.push(dir)
+    }
+  } catch (err) {
+    process.stderr.write(`ephemeral: cannot create runtime dir ${runtimeDir}: ${(err as Error).message}\n`)
+    for (const dir of [tmpDir, ...createdRuntimeDirs]) {
+      try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    }
+    process.exit(1)
+    return
+  }
 
   // 4. Ensure WALNUT_HOME exists (first run on a fresh machine)
   fs.mkdirSync(WALNUT_HOME, { recursive: true })
@@ -203,8 +230,11 @@ async function runEphemeralLauncher(): Promise<void> {
       // Skip the runtime tmp dir — since streams moved to ~/.open-walnut/tmp/
       // it holds live FIFO .pipe files, and cpSync on a FIFO dies with
       // ERR_INTERNAL_ASSERTION "Unreachable code" (cp-sync getStats).
-      if (src.includes(path.join(path.sep, 'tmp', path.sep)) ||
-          src.endsWith(path.join(path.sep, 'tmp'))) return false
+      // Anchored to WALNUT_HOME/tmp: a substring test for "/tmp/" matched EVERY
+      // path of a data dir that itself lives under /tmp (a sandbox home, a test
+      // source dir), so that snapshot came out empty. Other FIFOs and sockets
+      // are caught by the file-type check below.
+      if (path.relative(WALNUT_HOME, src).split(path.sep)[0] === 'tmp') return false
       // Skip images dir (can be large)
       if (src.includes(path.join(path.sep, 'images', path.sep)) ||
           src.endsWith(path.join(path.sep, 'images'))) return false
@@ -249,13 +279,17 @@ async function runEphemeralLauncher(): Promise<void> {
     },
   })
 
+  // The copied automations and phone registrations belong to the real Walnut.
+  const pausedCronJobs = pauseSnapshotCronJobs(tmpDir)
+  const removedPushTokens = stripSnapshotPushTokens(tmpDir)
+
   // 5. Spawn detached child
   const binPath = process.argv[1]
   // Ephemeral identity travels via the --_ephemeral-child argv flag ONLY (see
   // IS_EPHEMERAL in constants.ts). No env marker: env inherits down the whole
   // process tree and has twice poisoned shared daemons + prod servers.
   const child = spawn(process.execPath, [binPath, 'web', '--_ephemeral-child'], {
-    env: { ...process.env, OPEN_WALNUT_HOME: tmpDir },
+    env: ephemeralChildEnv(process.env, tmpDir, runtimeDir),
     stdio: 'ignore',  // No pipes — no SIGPIPE risk
     detached: true,
   })
@@ -263,6 +297,7 @@ async function runEphemeralLauncher(): Promise<void> {
   child.on('error', (err) => {
     process.stderr.write(`ephemeral: spawn failed — ${err.message}\n`)
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    removeEphemeralRuntimeDirs(runtimeDir)
     unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
   })
@@ -273,6 +308,7 @@ async function runEphemeralLauncher(): Promise<void> {
   if (childPid == null) {
     process.stderr.write('ephemeral: child.pid is undefined — spawn may have failed\n')
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    removeEphemeralRuntimeDirs(runtimeDir)
     unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
     return
@@ -295,14 +331,16 @@ async function runEphemeralLauncher(): Promise<void> {
       pollForControlFile(controlFile),
       earlyDeathPromise,
     ])
-    // 7. Print JSON to stdout (exec tool captures this)
-    console.log(JSON.stringify(data))
+    // 7. Print JSON to stdout (exec tool captures this). daemonDir holds this
+    // server's own daemon and logs (open-walnut-<date>.log).
+    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, pausedCronJobs, removedPushTokens }))
     process.exit(0)
   } catch (err) {
     process.stderr.write(`ephemeral: ${err instanceof Error ? err.message : String(err)}\n`)
     // Kill child and clean up
     try { process.kill(childPid, 'SIGTERM') } catch { /* may already be dead */ }
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    removeEphemeralRuntimeDirs(runtimeDir)
     unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
   }
@@ -408,16 +446,29 @@ async function runEphemeralChild(): Promise<void> {
     process.stderr.write(`ephemeral child: shutting down (${reason})\n`)
     clearInterval(idleChecker)
 
+    // This server's own daemon dir (set by the launcher; see ephemeralRuntimeDir).
+    const runtimeDir = process.env.WALNUT_DAEMON_DIR
+    const removeAll = () => {
+      try { fs.rmSync(tmpDir!, { recursive: true, force: true }) } catch { /* best-effort */ }
+      if (runtimeDir) removeEphemeralRuntimeDirs(runtimeDir)
+    }
+
     // Force exit if stopServer() hangs for more than 10 seconds
     const forceExit = setTimeout(() => {
       process.stderr.write('ephemeral child: forced exit after 10s timeout\n')
-      try { fs.rmSync(tmpDir!, { recursive: true, force: true }) } catch { /* best-effort */ }
+      removeAll()
       process.exit(1)
     }, 10_000)
     forceExit.unref()
 
     try { await stopServer() } catch { /* best-effort */ }
-    try { fs.rmSync(tmpDir!, { recursive: true, force: true }) } catch { /* best-effort */ }
+    // Stop our own daemon before deleting its dir, or it keeps writing there.
+    // Bounded: stopIfIsolated polls the pid; the parent-pid watchdog covers the rest.
+    try {
+      const { localDaemon } = await import('../providers/local-daemon.js')
+      await Promise.race([localDaemon.stopIfIsolated(), new Promise((r) => setTimeout(r, 5_000))])
+    } catch { /* best-effort */ }
+    removeAll()
 
     process.exit(0)
   }

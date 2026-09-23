@@ -142,7 +142,7 @@ export function classifyHostConnectError(message: string, sshTarget: string, hos
   }
 
   if (/ephemeral server|attach-only/.test(m)) {
-    return { kind: 'ephemeral', hint: 'This is a throwaway test server; it never installs a daemon on a shared host. Use the main Walnut server for remote hosts.' }
+    return { kind: 'ephemeral', hint: 'This is a throwaway test server: it stays off shared remote hosts and never installs a daemon there. Use the main Walnut server for remote hosts, or start the test server with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach.' }
   }
   if (/permission denied|publickey|authentication failed|too many authentication failures|host key verification failed|no supported authentication/.test(m)) {
     return {

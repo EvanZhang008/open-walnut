@@ -165,7 +165,7 @@ npx playwright test         # Browser tests
 
 **Mock only**: Claude CLI. Everything else real.
 
-**Production safety**: `OPEN_WALNUT_HOME=/tmp/walnut-test-*/`. Never `~/.open-walnut/`. Port 3456 = production, never touch.
+**Production safety**: `OPEN_WALNUT_HOME=/tmp/walnut-test-*/`. Never `~/.open-walnut/`. Port 3456 = production, never touch. Live checks with a real CLI run on `npm run dev:ephemeral`.
 
 **Open source**: No internal tool names, employer references, or personal usernames.
 

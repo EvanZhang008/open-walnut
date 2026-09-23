@@ -12,7 +12,7 @@
  * non-ephemeral server is never read-only.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 // Force the process to look like an ephemeral child for this file.
@@ -56,6 +56,14 @@ describe('ephemeral attach-only: isReadOnlyRemote discriminator', () => {
 describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   // Cast helper: reach private methods/getters for spying + invocation.
   const priv = (conn: DaemonConnection) => conn as unknown as Record<string, (...args: unknown[]) => unknown>
+  // Attaching to a remote host at all is opt-in for ephemeral servers now (see
+  // 'ephemeral remote hosts' below); these tests pin what an OPTED-IN one may do.
+  const savedOptIn = process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
+  beforeEach(() => { process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = '1' })
+  afterEach(() => {
+    if (savedOptIn === undefined) delete process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
+    else process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = savedOptIn
+  })
 
   it('Test 1 — connect(), no daemon running → throws attach-only, never deploys/starts', async () => {
     const conn = new DaemonConnection('clouddev', testSshTarget)
@@ -133,5 +141,55 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
     expect(redeploy).toHaveBeenCalledTimes(0)
 
     conn.disconnect()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+//  2026-09-23: a remote daemon hands relayed work (phone requests, the
+//  `walnut` calls of its sessions) to whichever server it sees first, so a
+//  test server attached there could answer the real Walnut's traffic and its
+//  own test sessions' calls could land on the real Walnut. Default: stay off.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ephemeral remote hosts: off unless WALNUT_EPHEMERAL_REMOTE_HOSTS=1', () => {
+  const priv = (conn: DaemonConnection) => conn as unknown as Record<string, (...args: unknown[]) => unknown>
+  const saved = process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
+  afterEach(() => {
+    if (saved === undefined) delete process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
+    else process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = saved
+  })
+
+  it('refuses before any SSH, with a message the connect hint recognises', async () => {
+    delete process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
+    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const ssh = vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    const probe = vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(9999)
+
+    await expect(conn.connect()).rejects.toThrow(/ephemeral server: remote host 'clouddev' is off for test servers/)
+    expect(ssh).toHaveBeenCalledTimes(0)
+    expect(probe).toHaveBeenCalledTimes(0)
+    const { classifyHostConnectError } = await import('../../src/core/sessions/host-connect-hint.js')
+    expect(classifyHostConnectError(`ephemeral server: remote host 'clouddev' is off for test servers`, 'clouddev').kind).toBe('ephemeral')
+  })
+
+  it('the opt-in reaches the attach path (contrast: the gate is what stopped it)', async () => {
+    process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = '1'
+    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const ssh = vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(null)
+
+    await expect(conn.connect()).rejects.toThrow(/attach-only/)
+    expect(ssh).toHaveBeenCalledTimes(1)
+  })
+
+  it('never pushes the cloud bridge config, not even to its own local daemon', async () => {
+    const conn = new DaemonConnection('__local__', null)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true } as never)
+    priv(conn).pushBridgeConfig()
+    // Deterministic: an ungated push claims its in-flight slot synchronously,
+    // before any of the async work a timed wait would have to outlast.
+    expect(priv(conn).bridgePushInFlight).toBeFalsy()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(send.mock.calls.filter((c) => c[0] === 'bridge.configure')).toHaveLength(0)
   })
 })

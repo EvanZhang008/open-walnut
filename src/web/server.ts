@@ -90,6 +90,7 @@ import { relayPrimaryPluginHttpRequest } from './routes/plugin-runtime-bridge.js
 import { appsRouter, pluginAppStaticRouter } from './routes/apps.js'
 import { createPluginBodyParser, createPluginRouteDispatcher } from './plugin-route-dispatcher.js'
 import { setPluginApiBase } from '../core/plugins/server-api.js'
+import { setSelfApiRoot } from '../lib/self-api-root.js'
 import { systemRouter } from './routes/system.js'
 import { hostsRouter } from './routes/hosts.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
@@ -486,6 +487,24 @@ function runPluginMutation<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 let cronServiceInstance: CronService | null = null
+/** OPEN_WALNUT_API_URL as it was before this server claimed it at listen. */
+let priorOpenWalnutApiUrl: { value: string | undefined; self: string } | null = null
+
+/**
+ * Give the self API root back, LAST in stopServer: work still draining during
+ * shutdown (a relayed session `walnut` call, an agent tool) must not fall back
+ * to the :3456 default. An ephemeral child exits right after stopServer, so it
+ * keeps its root to the end. The env is restored only if still ours.
+ */
+function releaseSelfApiRoot(): void {
+  if (!priorOpenWalnutApiUrl || IS_EPHEMERAL) return
+  setSelfApiRoot(null)
+  if (process.env.OPEN_WALNUT_API_URL === priorOpenWalnutApiUrl.self) {
+    if (priorOpenWalnutApiUrl.value === undefined) delete process.env.OPEN_WALNUT_API_URL
+    else process.env.OPEN_WALNUT_API_URL = priorOpenWalnutApiUrl.value
+  }
+  priorOpenWalnutApiUrl = null
+}
 /** Counts wake events for routines that run on a count, not only on the clock. */
 let routineWakeHandle: import('../core/routines/wake-events.js').RoutineWakeHandle | null = null
 let healthMonitor: SessionHealthMonitor | null = null
@@ -1875,6 +1894,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       updateInstanceLockPort(bound.port)
       setPluginApiBase(`http://127.0.0.1:${bound.port}`)
       process.env.WALNUT_SERVER_URL = `http://localhost:${bound.port}`
+      // This server's own ops and every local session it launches must talk to
+      // THIS server, never the default :3456 (src/lib/self-api-root.ts). The env
+      // copy reaches descendants spawned from here on (a lazily started daemon,
+      // hook scripts); stopServer restores whatever was there before.
+      const selfRoot = `http://127.0.0.1:${bound.port}`
+      priorOpenWalnutApiUrl = { value: process.env.OPEN_WALNUT_API_URL, self: selfRoot }
+      setSelfApiRoot(selfRoot)
+      process.env.OPEN_WALNUT_API_URL = selfRoot
     }
   }
 
@@ -4540,6 +4567,12 @@ async function startHeartbeatIfConfigured(): Promise<void> {
     log.heartbeat.info('cloud mode: heartbeat skipped (primary box owns heartbeat turns)')
     return
   }
+  // An ephemeral server runs over a copy of the real config: its heartbeat would
+  // fire the user's real agent turns a second time.
+  if (IS_EPHEMERAL) {
+    log.heartbeat.info('ephemeral server: heartbeat skipped (the real Walnut owns heartbeat turns)')
+    return
+  }
   const { getConfig } = await import('../core/config-manager.js')
   const config = await getConfig()
 
@@ -5324,13 +5357,17 @@ export async function stopServer(): Promise<void> {
     .then(({ releaseInstanceLock }) => releaseInstanceLock())
     .catch(() => {})
 
-  if (httpServer) {
-    return new Promise((resolve, reject) => {
-      httpServer!.close((err) => {
-        httpServer = null
-        if (err) reject(err)
-        else resolve()
+  try {
+    if (httpServer) {
+      await new Promise<void>((resolve, reject) => {
+        httpServer!.close((err) => {
+          httpServer = null
+          if (err) reject(err)
+          else resolve()
+        })
       })
-    })
+    }
+  } finally {
+    releaseSelfApiRoot()
   }
 }

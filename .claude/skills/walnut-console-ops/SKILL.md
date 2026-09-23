@@ -9,6 +9,8 @@ requires:
 
 This skill explains the Walnut web UI so you can operate it confidently via Playwright MCP tools, acting as a human user.
 
+**Which server.** Looking at the real console on :3456 is fine. Anything that creates or changes data to test a flow (a new task, a session, a sent message, a cron job) runs on a throwaway server instead: `npm run dev:ephemeral`, then open the printed port. Test data made on :3456 stays on the user's board. The ephemeral server's sessions and tools talk only to it (see "Live verification" in the repo AGENTS.md).
+
 ## Core Mental Models for SPA Console Testing
 
 These principles are universal — they apply to any single-page app, not just Walnut.

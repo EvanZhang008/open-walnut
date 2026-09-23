@@ -59,8 +59,81 @@ export function isEphemeralSnapshotDir(dir: string): boolean {
 
 export type RegistryRow = { dir: string, launcherPid: number, createdAt: number }
 
-/** Where the candidate scan looks; tests point it at a private directory. */
-export type ReapOptions = { tmpBase?: string }
+/**
+ * Where the candidate scan looks; tests point it at a private directory.
+ * `runtimeRoot` is where runtime dirs live (defaults to tmpBase when a test
+ * passes one, else EPHEMERAL_RUNTIME_ROOT), so a test never scans the real /tmp.
+ */
+export type ReapOptions = { tmpBase?: string, runtimeRoot?: string }
+
+// ── Runtime (daemon) dirs ──────────────────────────────────────────────────
+//
+// Each ephemeral server gets its OWN local daemon, in a runtime dir named after
+// its snapshot. Sharing the production daemon (/tmp/open-walnut) let a test
+// server restart the real daemon on a version skew, receive the real Walnut's
+// trigger fires, and answer relays meant for it. The runtime dir sits directly
+// under /tmp, not under os.tmpdir(): macOS caps a unix socket path at 104 bytes,
+// and the daemon puts `term/walnut-<uuid>.dsock` under it (90 bytes worst case
+// here, 136 under /var/folders/…/T/).
+
+/** Root for runtime dirs. /tmp exists on every supported OS. */
+export const EPHEMERAL_RUNTIME_ROOT = '/tmp'
+
+/** The runtime dir shape, `open-walnut-eph-<ppid>-<six>` (the snapshot's own suffix). */
+export const EPHEMERAL_RUNTIME_DIR_RE = /^open-walnut-eph-\d+-[A-Za-z0-9]{6}$/
+
+/** The daemon's runtime dir for a snapshot dir, or null when the name is not ours. */
+export function ephemeralRuntimeDir(snapshotDir: string, root: string = EPHEMERAL_RUNTIME_ROOT): string | null {
+  const base = path.basename(snapshotDir)
+  if (!EPHEMERAL_DIR_RE.test(base)) return null
+  return path.join(root, `open-walnut-eph-${base.slice('open-walnut-'.length)}`)
+}
+
+/** The runtime dir plus the `-streams` sibling the daemon derives from it. */
+export function ephemeralRuntimeDirs(snapshotDir: string, root: string = EPHEMERAL_RUNTIME_ROOT): string[] {
+  const dir = ephemeralRuntimeDir(snapshotDir, root)
+  return dir ? [dir, `${dir}-streams`] : []
+}
+
+/** Remove a runtime dir and its streams sibling. Only ever touches the exact shape. */
+export function removeEphemeralRuntimeDirs(runtimeDir: string): void {
+  if (!EPHEMERAL_RUNTIME_DIR_RE.test(path.basename(runtimeDir))) return
+  for (const dir of [runtimeDir, `${runtimeDir}-streams`]) {
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ }
+  }
+}
+
+function readPid(file: string): number | null {
+  try {
+    const pid = Number.parseInt(fs.readFileSync(file, 'utf-8').trim(), 10)
+    return Number.isInteger(pid) && pid > 1 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Remove runtime dirs nobody uses any more: no live daemon inside, no live
+ * server behind the snapshot it belongs to, and past the grace period (a
+ * launcher creates the dir a few seconds before its daemon writes daemon.pid).
+ */
+function reapOrphanRuntimeDirs(runtimeRoot: string, liveSnapshotSuffixes: Set<string>): void {
+  let entries: string[] = []
+  try { entries = fs.readdirSync(runtimeRoot) } catch { return }
+  for (const entry of entries) {
+    if (!EPHEMERAL_RUNTIME_DIR_RE.test(entry)) continue
+    if (liveSnapshotSuffixes.has(entry.slice('open-walnut-eph-'.length))) continue
+    const dir = path.join(runtimeRoot, entry)
+    const daemonPid = readPid(path.join(dir, 'daemon.pid'))
+    if (daemonPid !== null && isProcessAlive(daemonPid)) continue
+    try {
+      if (Date.now() - fs.statSync(dir).mtimeMs < NO_CONTROL_FILE_GRACE_MS) continue
+    } catch {
+      continue
+    }
+    removeEphemeralRuntimeDirs(dir)
+  }
+}
 
 /** Registry lives at a fixed path so cleanup never depends on the current TMPDIR. */
 export function registryPath(walnutHome: string): string {
@@ -149,6 +222,8 @@ export function reapStaleEphemeralDirs(walnutHome: string, opts: ReapOptions = {
   const registryFile = registryPath(walnutHome)
   const rows = readRegistry(registryFile)
   const gone = new Set<string>()
+  const runtimeRoot = opts.runtimeRoot ?? opts.tmpBase ?? EPHEMERAL_RUNTIME_ROOT
+  const liveSuffixes = new Set<string>()
 
   for (const dir of candidateDirs(walnutHome, opts.tmpBase ?? os.tmpdir())) {
     if (!isEphemeralSnapshotDir(dir)) { gone.add(dir); continue }
@@ -165,6 +240,8 @@ export function reapStaleEphemeralDirs(walnutHome: string, opts: ReapOptions = {
       if (data.pid && !isProcessAlive(data.pid)) {
         fs.rmSync(dir, { recursive: true, force: true })
         removed = true
+      } else if (data.pid) {
+        liveSuffixes.add(path.basename(dir).slice('open-walnut-'.length))
       }
     } catch {
       // No control file or unparseable — the child never came up. Age it out.
@@ -177,8 +254,13 @@ export function reapStaleEphemeralDirs(walnutHome: string, opts: ReapOptions = {
         // Can't stat — another reaper got it first, fine
       }
     }
-    if (removed) gone.add(dir)
+    if (removed) {
+      gone.add(dir)
+      const runtimeDir = ephemeralRuntimeDir(dir, runtimeRoot)
+      if (runtimeDir) removeEphemeralRuntimeDirs(runtimeDir)
+    }
   }
+  reapOrphanRuntimeDirs(runtimeRoot, liveSuffixes)
 
   const kept = rows.filter((r) =>
     !gone.has(r.dir) && Date.now() - r.createdAt < REGISTRY_ROW_TTL_MS)

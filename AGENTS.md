@@ -60,6 +60,28 @@ npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
 WALNUT_DEVPROD_DRY_RUN=1 WALNUT_DEVPROD_PORT=35999 TMPDIR=/tmp/dry bash scripts/dev-prod.sh
 ```
 
+### Live verification runs on an ephemeral server, never on :3456
+
+Anything that creates tasks, sessions, notes or cron jobs to prove a change works (a real-CLI
+turn, a Playwright click path, a `curl` or `walnut tools call` against the API) runs on
+`npm run dev:ephemeral`. Reading :3456 is fine; writing to it for a test is not: every probe
+task an agent made there stayed on the user's board (a 2026-09-23 audit found dozens).
+
+The launcher prints `{pid, port, tmpDir, daemonDir, pausedCronJobs, removedPushTokens}`. The
+server is isolated by construction, so nothing it does reaches the real Walnut:
+
+- its own data copy and its own local daemon in `daemonDir` (its logs are there too);
+- its own op executor and every local session it launches talk to it, never the :3456 default
+  (`OPEN_WALNUT_API_URL`, see `src/lib/self-api-root.ts`);
+- the copied cron jobs are paused (jobs created there still run), the copied phone push tokens
+  are removed, no plugin syncs tasks (installed ones included), and there is no cloud bridge
+  push and no heartbeat;
+- shared remote hosts stay off unless it is started with `WALNUT_EPHEMERAL_REMOTE_HOSTS=1`,
+  because a remote daemon hands relayed work to whichever server it sees first.
+
+Plugins still load with the copied settings, so a test that sends mail or a chat message
+through one sends it for real.
+
 **dev-prod.sh must stay portable.** Issue #11: the server log was pinned to `/private/tmp`,
 a macOS-only path, so a Linux deploy killed the live server and then failed to start its
 replacement. Two rules it now encodes: prove every external prerequisite (a writable log)

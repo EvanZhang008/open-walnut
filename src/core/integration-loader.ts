@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import yaml from 'js-yaml';
-import { WALNUT_HOME, CONFIG_FILE } from '../constants.js';
+import { WALNUT_HOME, CONFIG_FILE, IS_EPHEMERAL } from '../constants.js';
 import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
 import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
@@ -1687,7 +1687,10 @@ async function loadPlugin(
   // fixture plugin, written into the temp home's plugins/ dir, is not the leak and
   // stays fully functional). Dropping `sync` makes the plugin not a task source
   // (hasSync false → never polled, never claimed), while its routes/UI still load.
-  const isolationReason = isBuiltin && !isLocal && builder.collected.sync
+  // An ephemeral server gates EVERY plugin: its plugins/ dir is a copy of the
+  // user's real one (installed sync plugins and their settings included), so
+  // "not shipped" no longer means "a test's own fixture".
+  const isolationReason = builder.collected.sync && !isLocal && (isBuiltin || IS_EPHEMERAL)
     ? remoteSyncIsolationReason()
     : null;
   if (isolationReason) {

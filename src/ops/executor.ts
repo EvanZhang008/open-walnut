@@ -13,6 +13,7 @@
 
 import { z } from 'zod'
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
+import { getSelfApiRoot } from '../lib/self-api-root.js'
 
 const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
 const REQUEST_TIMEOUT_MS = 10_000
@@ -20,9 +21,11 @@ const REQUEST_TIMEOUT_MS = 10_000
 /**
  * Resolve the `/api/v1` base. `OPEN_WALNUT_API_URL` may be the server root or
  * already carry the prefix — both accepted (same contract the MCP tools had).
+ * Inside a listening server its own root wins over the env: a server's ops must
+ * never land on another Walnut (see src/lib/self-api-root.ts).
  */
 export function resolveApiBase(override?: string): string {
-  const raw = (override ?? process.env.OPEN_WALNUT_API_URL ?? DEFAULT_API_ROOT).trim()
+  const raw = (override ?? getSelfApiRoot() ?? process.env.OPEN_WALNUT_API_URL ?? DEFAULT_API_ROOT).trim()
   const root = raw.replace(/\/+$/, '')
   return root.endsWith('/api/v1') ? root : `${root}/api/v1`
 }

@@ -34,6 +34,11 @@ import {
   REGISTRY_MAX_ROWS,
   REGISTRY_ROW_TTL_MS,
   NO_CONTROL_FILE_GRACE_MS,
+  EPHEMERAL_RUNTIME_ROOT,
+  EPHEMERAL_RUNTIME_DIR_RE,
+  ephemeralRuntimeDir,
+  ephemeralRuntimeDirs,
+  removeEphemeralRuntimeDirs,
 } from '../../src/commands/ephemeral-registry.js'
 
 let home: string
@@ -291,5 +296,82 @@ describe('countLiveEphemeralServers', () => {
     const inTmp = makeSnapshot(scanBase, 'open-walnut-999-dedupe', { pid: process.pid })
     registerEphemeralDir(reg, inTmp)
     expect(countLiveEphemeralServers(home, { tmpBase: scanBase })).toBe(1)
+  })
+})
+
+// Each ephemeral server runs its OWN local daemon in a runtime dir named after
+// its snapshot (2026-09-23: sharing /tmp/open-walnut let a test server answer
+// the real Walnut's relays and restart its daemon on a version skew).
+describe('ephemeral runtime dirs', () => {
+  it('derives the runtime dir from the snapshot name, and nothing from any other name', () => {
+    expect(ephemeralRuntimeDir('/var/folders/x/T/open-walnut-4242-AbC123'))
+      .toBe(path.join(EPHEMERAL_RUNTIME_ROOT, 'open-walnut-eph-4242-AbC123'))
+    expect(ephemeralRuntimeDirs('/var/folders/x/T/open-walnut-4242-AbC123', '/r'))
+      .toEqual(['/r/open-walnut-eph-4242-AbC123', '/r/open-walnut-eph-4242-AbC123-streams'])
+    expect(ephemeralRuntimeDir('/tmp/open-walnut')).toBeNull()
+    expect(ephemeralRuntimeDir('/tmp/open-walnut-stage.1790193970.34116')).toBeNull()
+    expect(ephemeralRuntimeDir('/tmp/open-walnut-demo')).toBeNull()
+  })
+
+  it('keeps every unix socket the daemon creates under the 104-byte macOS limit', () => {
+    // Worst case: a 7-digit ppid. The daemon puts agent-gateway.sock and
+    // term/walnut-<uuid>.dsock (DTACH_SOCKET_DIR) under its dir.
+    const dir = ephemeralRuntimeDir('/var/folders/ph/qftcnrrx0wb8n18r4j_pd9m00000gq/T/open-walnut-4194304-AbC123')!
+    const uuid = '0d194657-0ab8-4c3f-a07e-36aff35e406b'
+    expect(path.join(dir, 'agent-gateway.sock').length).toBeLessThan(104)
+    expect(path.join(dir, 'term', `walnut-${uuid}.dsock`).length).toBeLessThan(104)
+  })
+
+  it('removal only ever touches the exact runtime shape', () => {
+    const mine = path.join(scanBase, 'open-walnut-eph-5-AbC123')
+    const prodLike = path.join(scanBase, 'open-walnut')
+    const demo = path.join(scanBase, 'open-walnut-demo')
+    for (const d of [mine, `${mine}-streams`, prodLike, demo]) fs.mkdirSync(d, { recursive: true })
+
+    removeEphemeralRuntimeDirs(prodLike)
+    removeEphemeralRuntimeDirs(demo)
+    removeEphemeralRuntimeDirs(mine)
+
+    expect(fs.existsSync(mine)).toBe(false)
+    expect(fs.existsSync(`${mine}-streams`)).toBe(false)
+    expect(fs.existsSync(prodLike)).toBe(true)
+    expect(fs.existsSync(demo)).toBe(true)
+    expect(EPHEMERAL_RUNTIME_DIR_RE.test('open-walnut-eph-5-AbC123-streams')).toBe(false)
+  })
+
+  it('a dead server takes its runtime dirs with it; a live one keeps them', () => {
+    makeSnapshot(scanBase, 'open-walnut-11-deadAa', { pid: DEAD_PID })
+    makeSnapshot(scanBase, 'open-walnut-12-liveBb', { pid: process.pid })
+    const dead = path.join(scanBase, 'open-walnut-eph-11-deadAa')
+    const live = path.join(scanBase, 'open-walnut-eph-12-liveBb')
+    for (const d of [dead, `${dead}-streams`, live, `${live}-streams`]) fs.mkdirSync(d, { recursive: true })
+    // The dead server's dirs are FRESH, so the orphan sweep (grace period) would
+    // spare them: only "removed with its snapshot" can take them. The live one is
+    // old, so only the live-server rule can save it.
+    backdate(live, NO_CONTROL_FILE_GRACE_MS + 60_000)
+
+    reapStaleEphemeralDirs(home, { tmpBase: scanBase })
+
+    expect(fs.existsSync(dead)).toBe(false)
+    expect(fs.existsSync(`${dead}-streams`)).toBe(false)
+    expect(fs.existsSync(live)).toBe(true)
+    expect(fs.existsSync(`${live}-streams`)).toBe(true)
+  })
+
+  it('an orphan runtime dir goes once its daemon is dead and the grace period passed', () => {
+    const orphan = path.join(scanBase, 'open-walnut-eph-21-orphAn')
+    const running = path.join(scanBase, 'open-walnut-eph-22-runNin')
+    const fresh = path.join(scanBase, 'open-walnut-eph-23-fresHh')
+    for (const d of [orphan, running, fresh]) fs.mkdirSync(d, { recursive: true })
+    fs.writeFileSync(path.join(orphan, 'daemon.pid'), String(DEAD_PID))
+    fs.writeFileSync(path.join(running, 'daemon.pid'), String(process.pid))
+    backdate(orphan, NO_CONTROL_FILE_GRACE_MS + 60_000)
+    backdate(running, NO_CONTROL_FILE_GRACE_MS + 60_000)
+
+    reapStaleEphemeralDirs(home, { tmpBase: scanBase })
+
+    expect(fs.existsSync(orphan)).toBe(false)
+    expect(fs.existsSync(running)).toBe(true)
+    expect(fs.existsSync(fresh)).toBe(true)
   })
 })

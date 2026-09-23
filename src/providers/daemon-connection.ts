@@ -329,6 +329,19 @@ export class DaemonConnection {
     return IS_EPHEMERAL && this.hostKey !== '__local__'
   }
 
+  /**
+   * An ephemeral server stays off shared remote hosts unless started with
+   * WALNUT_EPHEMERAL_REMOTE_HOSTS=1. A remote daemon is one per host and hands
+   * relayed work (phone requests, the `walnut` calls of its sessions) to
+   * whichever server it sees first: attached there, a test server could answer
+   * the real Walnut's traffic, and its own test sessions' calls could land on
+   * the real Walnut. Read only when IS_EPHEMERAL, so the flag leaking down a
+   * process tree changes nothing for any other server.
+   */
+  private get ephemeralRemoteRefused(): boolean {
+    return this.isReadOnlyRemote && process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS !== '1'
+  }
+
   // ── Binary deployment helpers ──
 
   /**
@@ -504,11 +517,13 @@ export class DaemonConnection {
 
   /**
    * Tell the daemon where to dial for the phone→cloud→daemon path (see
-   * bridge.configure in daemon-standalone.ts). Ephemeral sandboxes skip:
-   * they attach to production daemons and must not rewire them.
+   * bridge.configure in daemon-standalone.ts). Ephemeral sandboxes skip, on
+   * EVERY host: a shared remote daemon must not be rewired, and their own local
+   * daemon would otherwise dial the cloud with the user's real bridge secret and
+   * take phone traffic meant for the real Walnut.
    */
   private pushBridgeConfig(): void {
-    if (this.isReadOnlyRemote) return
+    if (IS_EPHEMERAL) return
     // In-flight guard: a slow configure RPC + the 5-min re-push tick must not
     // stack overlapping pushes against the same daemon.
     if (this.bridgePushInFlight) return
@@ -836,6 +851,13 @@ export class DaemonConnection {
           host: this.hostKey, wsUrl, instanceId: this._daemonInstanceId,
         })
         return
+      }
+
+      if (this.ephemeralRemoteRefused) {
+        throw new Error(
+          `ephemeral server: remote host '${this.hostKey}' is off for test servers ` +
+          `(set WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach anyway)`,
+        )
       }
 
       // Step 0: Establish SSH ControlMaster (one connection for all subsequent commands)
