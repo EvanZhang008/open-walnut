@@ -18,6 +18,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fsp from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
@@ -438,6 +439,41 @@ describe('the conversation seed on a fresh mint', () => {
     expect(laneSeen[`lane:${record!.claudeSessionId}`]).toBe(
       ((store.entries as Array<{ timestamp: string }>).at(-1))!.timestamp,
     )
+  })
+
+  it('emits SESSION_START exactly once, AFTER the mark is on disk, and returns with nothing awaited in between', async () => {
+    // Why the order matters: a turn runner binds its SSE relay to the lane id
+    // only once the mint RETURNS, so any await between the spawn and the return
+    // is a window in which the CLI's first frames are dropped (seen as a missing
+    // tool-result frame under machine load). The mark itself is read by nobody
+    // but the next turn's catch-up, so writing it first changes no consumer.
+    await seedConversation('conv-order', [
+      { user: 'earlier q', assistant: 'earlier a', engine: 'walnut-agent-fallback' },
+    ])
+    let markAtSpawn: Record<string, string> | undefined
+    let tickAfterSpawn = false
+    bus.subscribe('spawn-order-probe', (event: BusEvent) => {
+      if (event.name !== EventNames.SESSION_START) return
+      // Synchronous on purpose: bus delivery is synchronous, so this is the
+      // store exactly as it stands when the spawn goes out.
+      const raw = JSON.parse(readFileSync(conversationFile('general', 'conv-order'), 'utf-8')) as { laneSeen?: Record<string, string> }
+      markAtSpawn = raw.laneSeen
+      setTimeout(() => { tickAfterSpawn = true }, 0)
+    }, { global: true, interest: [EventNames.SESSION_START] })
+
+    const lane = await getOrCreateLaneSession('general', 'conv-order', { firstMessage: 'next q' })
+    // No macrotask ran between the spawn and the return.
+    expect(tickAfterSpawn).toBe(false)
+    expect(lane.created).toBe(true)
+    expect(started).toHaveLength(1)
+    const lastAt = ((await storeOf('conv-order')).entries as Array<{ timestamp: string }>).at(-1)!.timestamp
+    expect(markAtSpawn).toEqual({ [`lane:${lane.sessionId}`]: lastAt })
+
+    // A second send reuses the lane: still exactly one spawn, and the mark stays.
+    const again = await getOrCreateLaneSession('general', 'conv-order', { firstMessage: 'another q' })
+    expect(again).toMatchObject({ sessionId: lane.sessionId, created: false })
+    expect(started).toHaveLength(1)
+    expect((await storeOf('conv-order')).laneSeen).toEqual({ [`lane:${lane.sessionId}`]: lastAt })
   })
 
   it('mints with no seed at all for an empty conversation, but still latches the mark', async () => {

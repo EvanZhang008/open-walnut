@@ -17,7 +17,9 @@
  *  - the replica writes NO chat history for a relayed turn (the primary is the
  *    single writer — two writers would double every message under git-sync);
  *  - bridge down ends the turn with the SSE `error` the phone already unlocks on,
- *    and still writes nothing here (there is no second engine to degrade to);
+ *    and still writes nothing here: this box is not a cloud-exec host, so it has
+ *    no engine of its own (the companion's own fallback, when it IS one, is
+ *    pinned in api-v1-chat-cloud-fallback.test.ts);
  *  - an IMAGE turn relays too: the bytes ride the `image.save` daemon lane and
  *    the control RPC carries only host PATHS (base64 in a control frame is the
  *    1009 oversized-frame kill), the replica stages nothing on its own disk, and
@@ -41,6 +43,9 @@ import { attachBridge, closeAllBridges } from '../../../src/web/ws/bridge-regist
 import { createDevice, _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { createConversation } from '../../../src/core/conversations.js'
 import { resetChatTurnRelayState } from '../../../src/web/routes/chat-turn-relay.js'
+import { listCloudTurns } from '../../../src/core/cloud-chat-outbox.js'
+import { getSessionByLane } from '../../../src/core/session-tracker.js'
+import { cloudChatLaneKey } from '../../../src/core/sessions/cloud-chat-lane.js'
 
 let server: HttpServer
 let port: number
@@ -322,6 +327,10 @@ describe('a relayed chat turn runs on the primary\'s engine', () => {
       // (the primary owns chat-history for a relayed turn; both writing would
       // double every message once git-sync converged)
       expect(await readReplicaHistory(conv.id)).toEqual([])
+      // ...and a relayed turn never touches the companion's own fallback path:
+      // no banked outbox entry, no companion lane.
+      expect(await listCloudTurns({ conversationId: conv.id })).toEqual([])
+      expect(await getSessionByLane(cloudChatLaneKey('general', conv.id))).toBeNull()
     } finally {
       sse.close()
       primary.close()
@@ -497,21 +506,24 @@ describe('an image turn also runs on the primary\'s engine', () => {
 describe('degradation: no bridge → the replica says it cannot answer', () => {
   it('ends the turn with the unreachable SSE error and writes nothing', async () => {
     // No bridge connected at all: callPrimaryControl fails with BridgeOfflineError.
-    // A replica has no engine of its own, so the honest answer is to say so — and
-    // to say it on the ONE channel the phone unlocks its composer on. A turn that
-    // ends with neither message-end nor error leaves the composer spinning.
+    // This replica is not a cloud-exec host, so it has no engine of its own and
+    // the honest answer is to say so, on the ONE channel the phone unlocks its
+    // composer on. A turn that ends with neither message-end nor error leaves the
+    // composer spinning. `toContain`: when the relay layer can prove nothing was
+    // sent, the message also says WHY this box cannot answer (cloud exec off).
     const conv = await createConversation('general')
     const sse = await connectSse(apiUrl(`/api/v1/conversations/${conv.id}/stream`))
     try {
       expect((await postMessage(conv.id, 'hello with no bridge')).status).toBe(202)
 
       const err = await sse.waitFor((e) => e.event === 'error', 30_000)
-      expect(String(err.data.message)).toBe(PRIMARY_UNREACHABLE)
+      expect(String(err.data.message)).toContain(PRIMARY_UNREACHABLE)
       expect(sse.events.some((e) => e.event === 'message-end')).toBe(false)
 
       // Nothing on this box's disk: the primary is the single writer for every
       // turn, answered or not, so a reconnect cannot resurrect a ghost half-turn.
       expect(await readReplicaHistory(conv.id)).toEqual([])
+      expect(await listCloudTurns({ conversationId: conv.id })).toEqual([])
     } finally {
       sse.close()
     }

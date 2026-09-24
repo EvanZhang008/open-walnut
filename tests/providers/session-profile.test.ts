@@ -182,18 +182,40 @@ describe('profile → CLI arg assembly', () => {
     expect(flagValue(args, '--allowedTools')).toBe('Read,Bash(git log:*),mcp__walnut')
   })
 
+  it('tools (the available built-in set) is comma-joined as --tools', async () => {
+    const args = await argsForSend('t-builtin-set', { tools: ['Read', 'Grep', 'WebFetch'] })
+    expect(flagValue(args, '--tools')).toBe('Read,Grep,WebFetch')
+  })
+
+  it('the cloud companion chat profile spawns with no shell and only the web tools pre-approved', async () => {
+    const { toCloudChatProfile, CLOUD_CHAT_TOOLS } = await import('../../src/core/sessions/cloud-chat-lane.js')
+    const profile = toCloudChatProfile(personalAiProfile('Ada'), '## Conversation so far (injected by Walnut)')
+    const args = await argsForSend('t-cloud-chat', profile)
+    const available = flagValue(args, '--tools')!.split(',')
+    expect(available).toEqual(CLOUD_CHAT_TOOLS)
+    // Nothing that runs a command, spawns an agent, or writes a file can exist.
+    for (const tool of ['Bash', 'PowerShell', 'BashOutput', 'KillShell', 'Agent', 'Task', 'Write', 'Edit', 'NotebookEdit']) {
+      expect(available).not.toContain(tool)
+    }
+    expect(flagValue(args, '--allowedTools')).toBe('WebSearch,WebFetch')
+    expect(args).not.toContain('--mcp-config') // the Walnut MCP was its only mount
+    expect(args.indexOf('--tools')).toBeLessThan(args.indexOf('--input-format'))
+  })
+
   it('no profile → none of the three flags appear (unchanged behavior)', async () => {
     const args = await argsForSend('t-none', undefined)
     expect(args).not.toContain('--system-prompt')
     expect(args).not.toContain('--mcp-config')
     expect(args).not.toContain('--allowedTools')
+    expect(args).not.toContain('--tools')
     expect(args).not.toContain('--append-system-prompt')
   })
 
   it('empty profile collections emit no flags', async () => {
-    const args = await argsForSend('t-empty', { mcpServers: {}, allowedTools: [] })
+    const args = await argsForSend('t-empty', { mcpServers: {}, allowedTools: [], tools: [] })
     expect(args).not.toContain('--mcp-config')
     expect(args).not.toContain('--allowedTools')
+    expect(args).not.toContain('--tools')
   })
 
   it('a personal-ai-like profile produces all three flags in one argv', async () => {
@@ -279,6 +301,8 @@ describe('profile record round-trip', () => {
       systemPromptMode: 'replace',
       mcpServers: { walnut: { command: 'open-walnut', args: ['mcp'] } },
       allowedTools: ['Read', 'Grep'],
+      // A cold resume must come back with the same restricted tool set.
+      tools: ['Read', 'Grep'],
     }
     await createSessionRecord('sid-resume', 'task-3', 'proj', tmpBase, { pid: 4321, profile, lane: 'personal-ai' })
     // Private method — reached through the instance under test, deliberately:

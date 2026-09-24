@@ -20,7 +20,7 @@ import crypto from 'node:crypto';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { eventData } from '../event-types.js';
 import { log } from '../../logging/index.js';
-import { getOrCreateLaneSession } from './personal-ai-lane.js';
+import { getOrCreateLaneSession, type LaneSession } from './personal-ai-lane.js';
 
 /** Default ceiling for one background lane turn (10 minutes). */
 export const LANE_TURN_TIMEOUT_MS = 600_000;
@@ -31,6 +31,25 @@ export const LANE_TURN_TIMEOUT_MS = 600_000;
  * unbounded array.
  */
 const EARLY_BUFFER_MAX = 50;
+
+/**
+ * A lane other than the conversation's own Personal AI lane.
+ *
+ * The cloud companion answers a phone turn on ITS OWN lane when the primary
+ * provably cannot receive it (routes/cloud-chat-fallback.ts). That lane lives in
+ * the companion's own session registry under a different key, and its catch-up
+ * high-water mark must never be written into the git-synced conversation file,
+ * so both halves are the caller's. Everything else (subscribe-before-send, the
+ * early-event buffer, result correlation, the timeout) is this module's, which is
+ * the point: one turn runner, two lanes.
+ */
+export interface LaneTurnTarget {
+  /** Resolve (or mint) the lane. `firstMessage` rides the spawn when it mints. */
+  resolve: (firstMessage: string) => Promise<LaneSession>;
+  /** Context to prepend to a send into an EXISTING lane, plus the commit that
+   *  records it as delivered (called only after the send succeeded). */
+  catchUp: (sessionId: string, message: string) => Promise<{ message: string; commit?: () => Promise<void> }>;
+}
 
 export interface LaneTurnResult {
   /** The lane session the turn ran on (valid even when the turn timed out). */
@@ -131,7 +150,13 @@ export async function runLaneTurn(
   agentId: string,
   conversationId: string,
   message: string,
-  opts: { source: string; timeoutMs?: number; onSessionId?: (sessionId: string) => void },
+  opts: {
+    source: string;
+    timeoutMs?: number;
+    onSessionId?: (sessionId: string) => void;
+    /** Run on this lane instead of the conversation's Personal AI lane. */
+    target?: LaneTurnTarget;
+  },
 ): Promise<LaneTurnResult> {
   const timeoutMs = opts.timeoutMs ?? LANE_TURN_TIMEOUT_MS;
   const subName = `lane-turn-${opts.source}-${crypto.randomUUID()}`;
@@ -203,7 +228,9 @@ export async function runLaneTurn(
       consider(event);
     }, { global: true, interest: [EventNames.SESSION_RESULT, EventNames.SESSION_ERROR] });
 
-    const lane = await getOrCreateLaneSession(agentId, conversationId, { firstMessage: message });
+    const lane = opts.target
+      ? await opts.target.resolve(message)
+      : await getOrCreateLaneSession(agentId, conversationId, { firstMessage: message });
     sessionId = lane.sessionId;
     // Hand the lane id over BEFORE the wait (and before the send below, so a relay
     // subscribed here cannot miss this turn's first deltas). A throwing hook is the
@@ -233,7 +260,9 @@ export async function runLaneTurn(
     // mint also needs no catch-up: its spawn profile carries the conversation
     // seed, which covers everything on disk at that moment.
     if (!lane.created) {
-      const caught = await withCatchUpContext(agentId, conversationId, sessionId, message);
+      const caught = opts.target
+        ? await opts.target.catchUp(sessionId, message)
+        : await withCatchUpContext(agentId, conversationId, sessionId, message);
       try {
         const { sendMessageToSession } = await import('../session-message-queue.js');
         await sendMessageToSession(sessionId, caught.message, { source: opts.source });

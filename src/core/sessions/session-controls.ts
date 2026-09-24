@@ -797,6 +797,11 @@ export type SessionControlAction =
   // (claude-code) instead of the replica's in-process fallback loop.
   // Accept-only + reverse-lane streaming: routes/chat-turn-relay.ts.
   | 'server.chat.turn'
+  // Adopt ONE chat turn the cloud companion answered itself while the primary
+  // was provably unreachable. The companion banks it in a non-git outbox (it
+  // never writes the conversation file) and hands it over here once the bridge
+  // is back; idempotent by turnId. See core/cloud-chat-outbox.ts.
+  | 'server.chat.adopt'
   // Read ONE page of a conversation's messages from the primary. Same reason as
   // the two actions below: a Personal AI turn sent from the web console runs in a
   // lane-bound CLI session, so the transcript lives in that session's JSONL on the
@@ -1280,6 +1285,18 @@ export async function handleSessionControlRelay(
       case 'server.chat.turn': {
         const { handlePrimaryChatTurnRelay } = await import('../../web/routes/chat-turn-relay.js');
         result = await handlePrimaryChatTurnRelay(p) as unknown as Record<string, unknown>;
+        break;
+      }
+      // A turn the cloud companion answered while this box was unreachable:
+      // written into this box's history exactly once (by turnId).
+      case 'server.chat.adopt': {
+        const { handlePrimaryChatAdopt, CloudTurnAdoptError } = await import('../cloud-chat-outbox.js');
+        try {
+          result = await handlePrimaryChatAdopt(p);
+        } catch (err) {
+          if (err instanceof CloudTurnAdoptError) throw new SessionControlError(err.message, err.statusCode);
+          throw err;
+        }
         break;
       }
       // One page of a conversation's messages, read on the box that owns the

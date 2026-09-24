@@ -555,6 +555,8 @@ let taskQueueFlushHandle: { stop: () => void } | null = null
 let controlQueueFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/send-queue/ (see core/send-queue.ts). */
 let sendQueueFlushHandle: { stop: () => void } | null = null
+/** Cloud box only: hands self-answered chat turns to the primary (core/cloud-chat-outbox.ts). */
+let cloudChatOutboxFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
 let autoRecoverHandle: { stop: () => void } | null = null
@@ -2456,6 +2458,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // banked message reaches the CLI on reconnect with no human retry.
       const { startSendQueueFlush } = await import('../core/send-queue.js')
       sendQueueFlushHandle = startSendQueueFlush()
+      // Chat turns this box answered itself while the primary was unreachable
+      // ride their own non-git outbox to the primary, on the same drain triggers.
+      const { startCloudChatOutboxFlush } = await import('../core/cloud-chat-outbox.js')
+      cloudChatOutboxFlushHandle = startCloudChatOutboxFlush()
       // Seed the local replica from the synced projection shortly after boot.
       setTimeout(() => { void importProjectionOnCloud() }, 5_000)
     }
@@ -5310,6 +5316,10 @@ export async function stopServer(): Promise<void> {
   if (sendQueueFlushHandle) {
     sendQueueFlushHandle.stop()
     sendQueueFlushHandle = null
+  }
+  if (cloudChatOutboxFlushHandle) {
+    cloudChatOutboxFlushHandle.stop()
+    cloudChatOutboxFlushHandle = null
   }
   stopMobileEventsFeed()
   if (pinRetirementHandle) {

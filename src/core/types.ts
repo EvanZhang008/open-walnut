@@ -1866,6 +1866,7 @@ export interface SessionMcpServer {
  *   systemPrompt + mode 'append'  → `--append-system-prompt` (default)
  *   mcpServers                    → `--mcp-config` (inline JSON)
  *   allowedTools                  → `--allowedTools` (comma-joined)
+ *   tools                         → `--tools` (comma-joined)
  */
 export interface SessionProfile {
   systemPrompt?: string;
@@ -1873,6 +1874,10 @@ export interface SessionProfile {
   systemPromptMode?: 'replace' | 'append';
   mcpServers?: Record<string, SessionMcpServer>;
   allowedTools?: string[];
+  /** The built-in tools the session can SEE at all (`--tools`). Undefined = the
+   *  CLI's full set. Unlike `allowedTools` (pre-approval), a tool left out of this
+   *  list does not exist for the model, so no mode or auto-allow can reach it. */
+  tools?: string[];
 }
 
 export interface SessionRecord {

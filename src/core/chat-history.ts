@@ -1104,6 +1104,140 @@ export function laneEngineLabel(sessionId: string): string {
   return `lane:${sessionId}`;
 }
 
+// ── Turns the cloud companion answered, adopted by the primary ─────────────
+//
+// When the primary provably cannot receive a phone turn, the cloud companion
+// answers it on its own lane and banks the turn in a NON-git outbox
+// (core/cloud-chat-outbox.ts). It never writes this store: a conversation file
+// has ONE writer, the primary, because git-sync merges it per file last-writer-
+// wins and two boxes appending inside one sync window drops one side's entries.
+// Once the primary is reachable again it adopts each banked turn here, exactly
+// once by turnId.
+
+/** Engine-label namespace of the cloud companion's own lanes. */
+export const CLOUD_ENGINE_PREFIX = 'cloud:';
+
+/** The engine label for one cloud-companion lane session. */
+export function cloudEngineLabel(sessionId: string): string {
+  return `${CLOUD_ENGINE_PREFIX}${sessionId}`;
+}
+
+/**
+ * ChatEntry plus adoption provenance. Local extension for the same reason as
+ * EngineStampedEntry: unknown JSON fields round-trip untouched through the store.
+ * `adoptedFrom` is the answering engine label; `adoptedAt` is when THIS store
+ * learned of the turn, which can be long after the turn's own timestamps.
+ */
+type AdoptedChatEntry = EngineStampedEntry & { adoptedFrom?: string; adoptedAt?: string };
+
+/** True for an entry the primary adopted from the cloud companion's outbox. */
+export function isAdoptedCloudEntry(entry: ChatEntry): boolean {
+  const from = (entry as AdoptedChatEntry).adoptedFrom;
+  return typeof from === 'string' && from.startsWith(CLOUD_ENGINE_PREFIX);
+}
+
+/**
+ * When this store learned of an entry: its own timestamp, or its adoption time
+ * when that is later. The catch-up rule compares against a lane's high-water
+ * mark, and a turn adopted after the mark moved past the turn's own clock would
+ * otherwise never be given to that lane.
+ */
+function entryKnownAt(entry: ChatEntry): string {
+  const adoptedAt = (entry as AdoptedChatEntry).adoptedAt;
+  return typeof adoptedAt === 'string' && adoptedAt > entry.timestamp ? adoptedAt : entry.timestamp;
+}
+
+/** Of `turnIds`, the ones already adopted into this conversation. */
+export async function listAdoptedTurnIds(
+  agentId: string,
+  conversationId: string,
+  turnIds: string[],
+): Promise<string[]> {
+  if (turnIds.length === 0) return [];
+  const wanted = new Set(turnIds);
+  const store = await readStore(agentId, conversationId);
+  const found = new Set<string>();
+  for (const entry of store.entries ?? []) {
+    if (entry.turnId && wanted.has(entry.turnId)) found.add(entry.turnId);
+  }
+  return [...found];
+}
+
+export interface CloudTurnAdoption {
+  agentId: string;
+  conversationId: string;
+  turnId: string;
+  userText: string;
+  userAt: string;
+  /** The answer, or absent for a turn that failed on the companion. */
+  answerText?: string;
+  answeredAt?: string;
+  /** Failure text for an unanswered turn (stored as an error notification). */
+  error?: string;
+  /** cloudEngineLabel(<companion lane session>). */
+  engine: string;
+}
+
+/**
+ * Write one banked cloud turn into this conversation, idempotent by turnId.
+ *
+ * `already-present` when ANY entry already carries the turnId, which is what
+ * makes a retried adoption (a lost reply) a no-op. Checked inside the write lock,
+ * immediately before the write, because the check and the write must not be
+ * separable by a concurrent adoption of the same turn.
+ *
+ * INSERTED by time, never merely appended: the turn happened while the primary
+ * was unreachable, and the primary may have answered its own turns since (a web
+ * console chat on the same conversation). It goes in front of the first turn
+ * that STARTED after it, on a turn boundary, so it never splits another turn.
+ *
+ * A failed turn keeps the user's words plus the same `[Error: …]` notification
+ * entry the primary writes for its own failed turns: the error is filtered out of
+ * every timeline, and it marks the turn as answered, so the lane orphan healer
+ * never tries to pair it with an unrelated lane answer.
+ */
+export async function adoptCloudTurn(opts: CloudTurnAdoption): Promise<'adopted' | 'already-present'> {
+  const { agentId, conversationId, turnId } = opts;
+  return withWriteLock(async () => {
+    const store = await readStore(agentId, conversationId);
+    const entries = store.entries ?? [];
+    if (entries.some((e) => e.turnId === turnId)) return 'already-present';
+
+    const adoptedAt = new Date().toISOString();
+    const provenance = { adoptedFrom: opts.engine, adoptedAt };
+    const user: AdoptedChatEntry = {
+      tag: 'ai', role: 'user', content: opts.userText, displayText: opts.userText,
+      timestamp: opts.userAt, turnId, ...provenance,
+    };
+    const answerAt = opts.answeredAt && opts.answeredAt >= opts.userAt ? opts.answeredAt : opts.userAt;
+    const answer: AdoptedChatEntry = opts.answerText
+      ? {
+          tag: 'ai', role: 'assistant', content: [{ type: 'text', text: opts.answerText }],
+          timestamp: answerAt, turnId, engine: opts.engine, ...provenance,
+        }
+      : {
+          tag: 'ai', role: 'assistant', source: 'agent-error',
+          content: [{ type: 'text', text: `[Error: ${opts.error || 'The cloud companion did not answer this turn.'}]` }],
+          timestamp: answerAt, turnId, ...provenance,
+        };
+
+    let at = entries.length;
+    for (let i = 0; i < entries.length; i++) {
+      if (isTurnStartingUserEntry(entries[i]) && entries[i].timestamp > opts.userAt) { at = i; break; }
+    }
+    entries.splice(at, 0, user, answer);
+    store.entries = entries;
+    await writeStore(store, agentId, conversationId);
+    await touchConversationBestEffort(store, agentId, conversationId);
+    indexChatEntries([user, answer], agentId, conversationId);
+    log.agent.info('adopted a turn the cloud companion answered', {
+      agentId, conversationId, turnId, engine: opts.engine, answered: !!opts.answerText,
+      insertedAt: at, appended: at === entries.length - 2,
+    });
+    return 'adopted';
+  }, agentId, conversationId);
+}
+
 /**
  * Per-lane high-water marks: laneLabel → the timestamp of the newest entry that
  * lane has been GIVEN. Store-level rather than per-entry so the common turn
@@ -1325,11 +1459,15 @@ function collectSeedTurns(entries: ChatEntry[]): SeedTurn[] {
     let timestamp = '';
     let answeredAt = '';
     for (const entry of turnEntries) {
-      if (entry.timestamp > timestamp) timestamp = entry.timestamp;
+      // Adoption-aware (see entryKnownAt): a turn the cloud companion answered
+      // becomes known to this store only when it is adopted, so a lane whose mark
+      // moved past the turn's own clock in the meantime must still select it.
+      const at = entryKnownAt(entry);
+      if (at > timestamp) timestamp = at;
       if (entry.role === 'assistant') {
         const engine = entryEngine(entry);
         if (engine && !answeredBy.includes(engine)) answeredBy.push(engine);
-        if (entry.timestamp > answeredAt) answeredAt = entry.timestamp;
+        if (at > answeredAt) answeredAt = at;
       }
     }
     turns.push({ entries: turnEntries, timestamp, answeredBy, answeredAt });
@@ -1403,8 +1541,10 @@ function renderSeed(
     // The newest turn CONSIDERED sets the watermark, whether or not it renders.
     // A turn whose every block is dropped by the filter (tool traffic only) has
     // still been resolved by this block: leaving the mark behind it would
-    // re-select that turn on every send for the life of the lane.
-    if (!watermark) watermark = turn.timestamp;
+    // re-select that turn on every send for the life of the lane. A running MAX
+    // rather than the last turn by position: an adopted cloud turn can sit
+    // earlier in the list than a turn it is newer than (see entryKnownAt).
+    if (turn.timestamp > watermark) watermark = turn.timestamp;
     const body = seedTurnText(turn);
     if (!body) continue; // tool-only turn: nothing survives the block filter
     // The `\n\n` between two turns is content too, and it is what made the
@@ -1546,6 +1686,22 @@ export interface LaneCatchUpInput {
    * as seededAtMint (no mark).
    */
   laneSeededAt?: () => string | Promise<string>;
+  /**
+   * Read the lane's high-water mark from somewhere OTHER than this store. The
+   * cloud companion's own lane keeps its mark in a machine-local sidecar,
+   * because the conversation file is git-synced with exactly one writer (the
+   * primary) and the companion must never write it. Absent = the store's
+   * `laneSeen` map, as for every primary-side lane.
+   */
+  readMark?: () => Promise<string | undefined>;
+  /**
+   * Count an UNSTAMPED answer as another engine's. Off for primary-side lanes:
+   * the web chat's compat copy of a lane turn carries no stamp, and there the
+   * lane itself gave it. On for the cloud companion's lane, which stamps every
+   * answer it gives (`cloud:<sid>`), so an unstamped one was provably given
+   * elsewhere and trigger A would otherwise never carry it.
+   */
+  unstampedIsForeign?: boolean;
   maxTokens?: number;
 }
 
@@ -1592,7 +1748,7 @@ export interface LaneCatchUpInput {
 export async function buildLaneCatchUp(input: LaneCatchUpInput): Promise<ConversationSeed | null> {
   const { agentId, conversationId, laneLabel, seededAtMint } = input;
   const store = await readStore(agentId, conversationId) as LaneSeenStore;
-  const watermark = store.laneSeen?.[laneLabel];
+  const watermark = input.readMark ? await input.readMark() : store.laneSeen?.[laneLabel];
   const turns = collectSeedTurns(store.entries ?? []);
   if (turns.length === 0) return null;
 
@@ -1611,7 +1767,10 @@ export async function buildLaneCatchUp(input: LaneCatchUpInput): Promise<Convers
   let mark = watermark;
   if (mark === undefined) mark = (await input.laneSeededAt?.()) ?? '';
   const unseen = turns.filter((t) =>
-    t.answeredAt > mark && t.answeredBy.some((engine) => engine !== laneLabel));
+    t.answeredAt > mark && (
+      t.answeredBy.some((engine) => engine !== laneLabel)
+      || (input.unstampedIsForeign === true && t.answeredAt !== '' && t.answeredBy.length === 0)
+    ));
   if (unseen.length === 0) return null;
   return deliverable(renderSeed(
     unseen, null, CATCH_UP_HEADER, CATCH_UP_PREAMBLE, maxTokens, Number.MAX_SAFE_INTEGER,

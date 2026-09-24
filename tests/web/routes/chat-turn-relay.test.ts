@@ -282,6 +282,37 @@ describe('degradation matrix: every failure reports unavailable, none hangs', ()
     expect(busy.kind).toBe('turn_active')
   })
 
+  // Whether the companion may answer the turn itself hinges on this flag, so
+  // each failure class must report it exactly: a false `true` can double-answer
+  // a turn the primary is already running.
+  it.each([
+    ['no bridge, provably nothing sent', { ok: false, failure: { kind: 'bridge_offline', message: 'No live bridge', notSent: true } }, true],
+    ['an old primary that does not know the action', { ok: false, failure: { kind: 'needs_upgrade', message: 'predates' } }, true],
+    ['bridge_offline WITHOUT notSent (timeout after send)', { ok: false, failure: { kind: 'bridge_offline', message: 'bridge request timed out' } }, false],
+    ['a domain refusal', { ok: true, result: { accepted: false, reason: 'bad_request', message: 'nope' } }, false],
+    ['a relay error reply', { ok: false, failure: { kind: 'error', status: 400, code: 'bad_request', message: 'primary server timed out' } }, false],
+  ])('provablyUnsent: %s', async (_label, reply, expected) => {
+    callPrimaryControlMock.mockResolvedValue(reply)
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'hi', TURN)
+    expect(outcome.kind).toBe('unavailable')
+    if (outcome.kind !== 'unavailable') throw new Error('unreachable')
+    expect(outcome.provablyUnsent).toBe(expected)
+  })
+
+  it('provablyUnsent: the relay module failing to load proves nothing went out', async () => {
+    callPrimaryControlMock.mockRejectedValue(new Error('dispatch exploded'))
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'hi', TURN)
+    if (outcome.kind !== 'unavailable') throw new Error('expected unavailable')
+    expect(outcome.provablyUnsent).toBe(true)
+  })
+
+  it('provablyUnsent: an image staging failure is never claimed as provable', async () => {
+    bridgeRequestMock.mockRejectedValue(new Error('No live bridge for host: __local__'))
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'look', TURN, [pngPayload()])
+    if (outcome.kind !== 'unavailable') throw new Error('expected unavailable')
+    expect(outcome.provablyUnsent).toBe(false)
+  })
+
   it('every failure releases the in-flight slot so the next turn can relay', async () => {
     callPrimaryControlMock.mockResolvedValue({
       ok: false, failure: { kind: 'bridge_offline', message: 'down' },

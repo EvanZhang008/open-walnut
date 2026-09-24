@@ -63,9 +63,12 @@
  *
  * Bridge down, primary's server down, old primary, relay error, or ANY image
  * that could not be staged (too large for `image.save`, a daemon predating it, a
- * save error) all report `unavailable`. The replica has no second engine to
- * answer with — a turn runs in a `claude` session and this box has none — so the
- * caller ends the turn with an SSE `error` instead (see runApiV1TurnRouted).
+ * save error) all report `unavailable`, with `provablyUnsent` saying whether the
+ * turn provably never reached the primary. Only a provable non-delivery may be
+ * answered by the companion itself (routes/cloud-chat-fallback.ts, when the
+ * companion is an execution host); everything else ends the turn with an SSE
+ * `error` (see runApiV1TurnRouted), because a turn the primary might be running
+ * must not get a second answer from this box.
  *
  * Image failures are all-or-nothing on purpose: a turn that answered a picture
  * question from a partially-staged attachment set would be confidently wrong,
@@ -158,8 +161,13 @@ export type RelayStartOutcome =
   | { kind: 'accepted'; engine: string; settled: Promise<void> }
   /** The primary already has a turn running on this conversation. */
   | { kind: 'turn_active'; message: string }
-  /** Relay unusable — the caller must run the turn locally instead. */
-  | { kind: 'unavailable'; reason: string }
+  /**
+   * Relay unusable. `provablyUnsent` is true only when the turn cannot have
+   * reached the primary: nothing went on the wire (the relay layer's `notSent`),
+   * or the primary answered that it does not know the action (needs_upgrade). A
+   * timeout after the send, a domain refusal, or a staging failure is false.
+   */
+  | { kind: 'unavailable'; reason: string; provablyUnsent: boolean }
 
 /**
  * Stage one turn's images on the PRIMARY through the daemon's narrow
@@ -265,7 +273,7 @@ export async function relayChatTurnToPrimary(
   turnId: string,
   images: ImagePayload[] = [],
 ): Promise<RelayStartOutcome> {
-  if (!CLOUD_MODE) return { kind: 'unavailable', reason: 'not a cloud replica' }
+  if (!CLOUD_MODE) return { kind: 'unavailable', reason: 'not a cloud replica', provablyUnsent: false }
   if (inFlight.has(conversationId)) {
     return { kind: 'turn_active', message: 'A relayed turn is already active on this conversation' }
   }
@@ -277,7 +285,10 @@ export async function relayChatTurnToPrimary(
   if (images.length > 0) {
     const staged = await stageImagesOnPrimary(images, conversationId, turnId)
     if (staged === null) {
-      return { kind: 'unavailable', reason: 'image staging on the primary failed' }
+      // The turn itself never went out, but some pictures may have: image turns
+      // are not answered locally anyway (cloud-chat-fallback.ts), so claim
+      // nothing stronger than the facts.
+      return { kind: 'unavailable', reason: 'image staging on the primary failed', provablyUnsent: false }
     }
     imagePaths = staged
   }
@@ -296,7 +307,7 @@ export async function relayChatTurnToPrimary(
   const entry: InFlightRelay = { turnId, engine: 'unknown', timer, settle: settleFn }
   inFlight.set(conversationId, entry)
 
-  let outcome: { ok: true; result: Record<string, unknown> } | { ok: false; failure: { kind: string; message: string } }
+  let outcome: { ok: true; result: Record<string, unknown> } | { ok: false; failure: { kind: string; message: string; notSent?: boolean } }
   try {
     const { callPrimaryControl } = await import('./v1-control-relay.js')
     outcome = await callPrimaryControl(
@@ -312,16 +323,20 @@ export async function relayChatTurnToPrimary(
     )
   } catch (err) {
     // The relay module itself failed to load / dispatch. Degrade, never throw.
+    // callPrimaryControl never throws by contract, so a throw here comes from
+    // BEFORE the send (the module load): nothing reached the wire.
     clearInFlight(conversationId, turnId)
-    return { kind: 'unavailable', reason: err instanceof Error ? err.message : String(err) }
+    return { kind: 'unavailable', reason: err instanceof Error ? err.message : String(err), provablyUnsent: true }
   }
 
   if (!outcome.ok) {
     clearInFlight(conversationId, turnId)
+    const provablyUnsent = relayFailureProvablyUnsent(outcome.failure)
     log.web.info('chat-turn relay unavailable', {
       conversationId, turnId, agentId, failureKind: outcome.failure.kind, reason: outcome.failure.message,
+      provablyUnsent,
     })
-    return { kind: 'unavailable', reason: `${outcome.failure.kind}: ${outcome.failure.message}` }
+    return { kind: 'unavailable', reason: `${outcome.failure.kind}: ${outcome.failure.message}`, provablyUnsent }
   }
 
   const result = outcome.result
@@ -332,7 +347,9 @@ export async function relayChatTurnToPrimary(
     if (result.reason === 'turn_active') {
       return { kind: 'turn_active', message: String(result.message ?? 'A turn is already active on this conversation') }
     }
-    return { kind: 'unavailable', reason: String(result.reason ?? result.message ?? 'primary refused the turn') }
+    // A domain refusal: the primary saw the turn and declined it, so this box
+    // must not answer it either.
+    return { kind: 'unavailable', reason: String(result.reason ?? result.message ?? 'primary refused the turn'), provablyUnsent: false }
   }
 
   const engine = typeof result.engine === 'string' && result.engine ? result.engine : 'unknown'
@@ -342,6 +359,25 @@ export async function relayChatTurnToPrimary(
 
   log.web.info('chat-turn relayed to the primary', { conversationId, turnId, agentId, engine })
   return { kind: 'accepted', engine, settled }
+}
+
+/**
+ * Did this relay failure provably leave the turn undelivered?
+ *
+ *  - `needs_upgrade`: the primary's daemon or server answered that it does not
+ *    know the command/action, so nothing ran.
+ *  - `bridge_offline` with `notSent: true`: the relay layer proved nothing reached
+ *    the wire (no bridge even after its short reconnect grace, or the primary's
+ *    daemon reported no primary server connected).
+ *
+ * Everything else, notably a `bridge_offline` WITHOUT `notSent` (a timeout or a
+ * socket that died after the send), is ambiguous. `notSent` is the additive
+ * RelayFailure field (v1-control-relay.ts), read structurally so that anything
+ * other than an explicit `true` counts as "might have been delivered".
+ */
+export function relayFailureProvablyUnsent(failure: { kind: string; notSent?: unknown }): boolean {
+  if (failure.kind === 'needs_upgrade') return true
+  return failure.kind === 'bridge_offline' && failure.notSent === true
 }
 
 /** Watchdog: the primary went silent mid-turn — unlock the phone's composer. */

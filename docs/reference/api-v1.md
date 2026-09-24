@@ -429,14 +429,40 @@ host-side save a session attachment uses), and only the resulting host paths rid
 the relay call, so the picture reaches the primary's model without a multi-MB
 control frame. Nothing about the request shape changes for the client.
 
-When the relay is unusable (bridge down, primary's server down, a primary that
-predates the relay) or an attachment cannot be handed over (too large, or the
-primary's host refuses it), the turn ends with the SSE `error` frame carrying
+**When the primary cannot be reached, the companion may answer itself.** If the
+relay PROVABLY never reached the primary (no live bridge to it, or a primary that
+predates the relay) and the companion has cloud exec enabled with the `claude` CLI
+installed, the companion answers the turn with its own `claude` session. The
+stream is the same frames as a relayed turn, and `message-start`, `message-end`
+and `error` carry the additive `"answeredBy": "cloud"` so a client can label the
+reply (for example "answered from the cloud"). Clients that ignore the field keep
+working. That session is deliberately narrow: it has no Walnut tools, no shell
+and no file editing, only reads inside its own working folder and web search. It
+starts from the conversation history the companion already has, which is every
+turn sent from the phone or the web chat. Turns typed into a session panel on
+the Mac live only in that session on the Mac, so the companion does not see them.
+
+The companion banks each such turn outside the synced data and hands it to the
+primary once the bridge is back. The primary files it into the conversation
+exactly once (by `turnId`, at its original time position), and its own session
+for the conversation picks the turn up on its next reply. Until then the
+companion's `GET /conversations/:id/messages` merges the banked turn into its
+own copy of the conversation by time, once per `turnId`, so the reply stays
+visible on the phone while it waits for the hand-over. When that copy is empty
+but the conversation has messages (its history lives in a Mac session), the read
+answers `503 primary_unreachable` rather than a page holding only the banked
+turn, because a client that replaces its rows with that page would lose the rest.
+
+In every other failure the turn ends with the SSE `error` frame carrying
 "Walnut's primary is unreachable; the replica cannot answer on its own. Try again
-when the primary is back." There is no second engine to answer with, so a clear
-failure is the honest outcome: retry once the primary is reachable, and note that
-nothing is written on the replica for a turn it could not relay. A turn is never
-relayed with only some of its pictures.
+when the primary is back.", sometimes followed by a short reason in parentheses,
+so match on the prefix rather than the whole string. That covers a relay outcome
+that may have reached the primary (a timeout after sending, for instance: a turn
+that might already be running there is never answered a second time), a picture
+turn, a companion without cloud exec or without the CLI, and an attachment that
+cannot be handed over (too large, or the primary's host refuses it). Retry once
+the primary is reachable; nothing is written for a turn that was neither relayed
+nor answered. A turn is never relayed with only some of its pictures.
 The additive `engine` field on the terminal frame reports which engine answered
 (`"claude-code"`); it is informational only.
 
@@ -446,14 +472,14 @@ The additive `engine` field on the terminal frame reports which engine answered
 
 | Event | Data | Meaning |
 |---|---|---|
-| `message-start` | `{ "turnId" }` | A turn began |
+| `message-start` | `{ "turnId", "answeredBy"? }` | A turn began. `answeredBy` (additive) is `"cloud"` only when the cloud companion answers the turn itself because the primary is unreachable; absent otherwise |
 | `queued` | `{ "turnId", "position" }` | Turn accepted but waiting behind another turn on the shared agent queue (additive, may precede `message-start` by minutes) |
 | `text-delta` | `{ "delta" }` | Streaming assistant text chunk |
 | `tool` | `{ "name", "toolUseId"?, "detail"?, "inputPreview"? }` | The agent invoked a tool. `detail` (additive) is the same one-line input summary the message rows carry (≤160+`…`, masked), so the activity line can read `Bash · ls docs/`; `inputPreview` (additive) is the same ≤2000-char masked `key: value` render the message rows carry, so an expanded live row shows what the tool was actually called with (`detail` prefers a Bash `description`, which is why the command itself needs this field); `toolUseId` (additive) pairs this frame with its `tool-result` |
 | `tool-result` | `{ "toolUseId", "resultPreview"? }` | That tool finished (additive) — clears the activity line. `resultPreview` (additive) is the same ≤700+`…` masked excerpt the message row carries, so a finished live row can show its output before the transcript lands. Still no full output on this channel: the whole text is only reachable through the row's `detailRef` read. Only sent for a `toolUseId` whose `tool` frame this turn actually delivered, so an id you never saw open is never closed |
 | `thinking` | `{ "delta"? }` | The agent is reasoning. `delta` (additive, optional) is the reasoning text — coalesced into ~120 ms batches, so treat it as an append, not one whole block. Clients that ignore it and just show a spinner keep working |
-| `message-end` | `{ "turnId", "fullText", "engine"? }` | Turn finished; `fullText` = complete reply |
-| `error` | `{ "message", "engine"? }` | Turn failed |
+| `message-end` | `{ "turnId", "fullText", "engine"?, "answeredBy"? }` | Turn finished; `fullText` = complete reply. `answeredBy` as on `message-start` |
+| `error` | `{ "message", "engine"?, "answeredBy"? }` | Turn failed. `answeredBy` as on `message-start` |
 
 - `tool`, `tool-result` and `thinking` arrive on **every** engine (a Personal AI
   CLI lane and a coding session alike), so an activity line can

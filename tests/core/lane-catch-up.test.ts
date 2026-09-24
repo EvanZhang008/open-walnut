@@ -257,6 +257,21 @@ describe('the ordinary turn', () => {
     expect(await deliverTurn('hello')).toBe('hello')
   })
 
+  it('a lane that stamps every answer it gives (the cloud companion) reads an unstamped one as foreign', async () => {
+    // Same store as the test above. Default off (primary lanes, pinned above);
+    // with the flag, the unstamped answer after the mark is carried.
+    await writeConversation([{ user: 'web chat q', assistant: 'web chat a' }], { [LANE]: '' })
+    const { buildLaneCatchUp } = await import('../../src/core/chat-history.js')
+    const base = { agentId: AGENT, conversationId: CONV, laneLabel: LANE, seededAtMint: () => true }
+    expect(await buildLaneCatchUp(base)).toBeNull()
+    const caught = await buildLaneCatchUp({ ...base, unstampedIsForeign: true })
+    expect(caught?.text).toContain('web chat q')
+    expect(caught?.text).toContain('web chat a')
+    // Its own stamped answers stay its own, flag or not.
+    await writeConversation([{ user: 'own q', assistant: 'own a', engine: LANE }], { [LANE]: '' })
+    expect(await buildLaneCatchUp({ ...base, unstampedIsForeign: true })).toBeNull()
+  })
+
   it('never touches a freshly created lane (the spawn profile carried the seed)', async () => {
     await writeRecord({ seeded: true })
     await writeConversation([{ user: 'q', assistant: 'a', engine: FOREIGN }])

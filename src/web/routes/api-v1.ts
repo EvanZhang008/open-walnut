@@ -53,6 +53,9 @@ import {
 } from './notes-v2.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
 import { mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
+import {
+  PRIMARY_UNREACHABLE_MESSAGE, cloudTurnRows, mergeRowsByTime, mergeCloudRowsIntoRelayedPage,
+} from './cloud-chat-fallback.js'
 import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { withFileLock } from '../../utils/file-lock.js'
@@ -784,6 +787,8 @@ function stampApiV1Ids(rows: Array<Omit<ApiV1Message, 'id'>>, fallbackAt: string
 async function laneMessagesForConversation(
   agentId: string,
   conversationId: string,
+  /** Filled with the chat-history entries this very assembly was built from. */
+  snapshot?: { entries?: ChatEntry[] },
 ): Promise<ApiV1Message[] | null> {
   // A REPLICA has no registry of the primary's lane sessions (session records are
   // machine-local) and no way to reach the JSONL, so it must never try to answer
@@ -801,7 +806,7 @@ async function laneMessagesForConversation(
     const records = await listSessionsByLane(personalAiLaneKey(agentId, conversationId))
     if (records.length === 0) return null
     const outcome = await Promise.race([
-      assembleLaneConversation(agentId, conversationId, records),
+      assembleLaneConversation(agentId, conversationId, records, snapshot),
       bail.promise,
     ])
     if (outcome === 'timeout') {
@@ -940,6 +945,7 @@ async function assembleLaneConversation(
   agentId: string,
   conversationId: string,
   allRecords: LaneSegmentRecord[],
+  snapshot?: { entries?: ChatEntry[] },
 ): Promise<ApiV1Message[]> {
   const { buildSessionTranscript } = await import('../../core/session-projection.js')
 
@@ -1001,10 +1007,32 @@ async function assembleLaneConversation(
   const { messages: entries } = await chatHistory.getDisplayEntries(
     1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
   )
+  if (snapshot) snapshot.entries = entries
   // …minus the rows the first segment repeats verbatim (the eager user message).
   const rows = dropLeadingOverlap(chatHistoryPrefix(entries, cutoff, floor), laneRows)
-  rows.push(...laneRows)
+  // Turns the cloud companion answered while this box was unreachable are rows
+  // of THIS conversation that no lane transcript will ever contain (the Mac lane
+  // only receives them as a stripped catch-up banner on its next turn). Past the
+  // cutoff the prefix drops them, so they are slotted into the lane rows by time.
+  // Adoption inserts rows mid-list at most once per turn, the same id-shift class
+  // as residual R1 above.
+  rows.push(...mergeRowsByTime(laneRows, adoptedCloudRows(entries, cutoff, floor)))
   return stampApiV1Ids(rows, new Date().toISOString())
+}
+
+/** Adopted cloud-companion rows at or after the lane cutoff (see the assembly). */
+function adoptedCloudRows(
+  entries: ChatEntry[],
+  cutoff: number,
+  floor: number,
+): Array<Omit<ApiV1Message, 'id'>> {
+  if (!Number.isFinite(cutoff)) return [] // no lane content: the prefix holds them all
+  const adopted = entries.filter((e) => {
+    if (!chatHistory.isAdoptedCloudEntry(e)) return false
+    const at = Date.parse(e.timestamp)
+    return Number.isFinite(at) && at >= cutoff && at > floor
+  })
+  return normalizeEntries(adopted).map(({ id: _id, ...rest }) => rest)
 }
 
 // ── The REPLICA's half: relay the whole read to the primary ──
@@ -1042,12 +1070,19 @@ async function relayMessagesToPrimary(
   conversationId: string,
   limit: number,
   before: string | undefined,
-): Promise<ApiV1Message[] | null> {
+  /** turnIds this box banked for the conversation (cloud-chat-outbox.ts). The
+   *  primary answers which of them it has adopted already. */
+  pendingTurnIds: string[] = [],
+): Promise<{ messages: ApiV1Message[]; adoptedTurnIds: string[] } | null> {
   const { callPrimaryControl } = await import('./v1-control-relay.js')
   const outcome = await callPrimaryControl(
     'server.chat.messages',
     '__server__',
-    { agentId, conversationId, limit, ...(before !== undefined ? { before } : {}) },
+    {
+      agentId, conversationId, limit,
+      ...(before !== undefined ? { before } : {}),
+      ...(pendingTurnIds.length > 0 ? { pendingTurnIds } : {}),
+    },
     MESSAGES_RELAY_TIMEOUT_MS,
   )
   if (!outcome.ok) {
@@ -1082,7 +1117,12 @@ async function relayMessagesToPrimary(
     })
     return null
   }
-  return result.messages as ApiV1Message[]
+  // Absent on a primary that predates the field: then it cannot have adopted
+  // anything either (it does not know `server.chat.adopt`), so empty is exact.
+  const adoptedTurnIds = Array.isArray(result.adoptedTurnIds)
+    ? result.adoptedTurnIds.filter((id): id is string => typeof id === 'string')
+    : []
+  return { messages: result.messages as ApiV1Message[], adoptedTurnIds }
 }
 
 /**
@@ -1106,15 +1146,35 @@ export async function handlePrimaryChatMessagesRelay(
   if (!AGENT_ID_RE.test(agentId) || !/^conv-[A-Za-z0-9-]+$/.test(conversationId)) {
     return { messages: [], source: 'chat-history', known: false }
   }
-  const laneMessages = await laneMessagesForConversation(agentId, conversationId)
+  // Which of the replica's banked cloud turns this box already holds, so the
+  // replica shows each exactly once (additive; only read when it asked).
+  // Answered from the SAME entries the page is built from, never a separate
+  // read: an adoption committing between two reads would put a turn in the page
+  // but not in this list, and the replica would then show it twice.
+  const pending = Array.isArray(params.pendingTurnIds)
+    ? [...new Set(params.pendingTurnIds.filter((id): id is string => typeof id === 'string'))].slice(0, 200)
+    : []
+  const adoptedIn = (entries: ChatEntry[] | undefined): { adoptedTurnIds?: string[] } => {
+    if (pending.length === 0) return {}
+    const present = new Set((entries ?? []).map((e) => e.turnId).filter((id): id is string => !!id))
+    return { adoptedTurnIds: pending.filter((id) => present.has(id)) }
+  }
+  const snapshot: { entries?: ChatEntry[] } = {}
+  const laneMessages = await laneMessagesForConversation(agentId, conversationId, snapshot)
   if (laneMessages) {
     return {
       messages: pageApiV1Messages(laneMessages, limit, before, conversationId),
-      source: 'lane', known: true,
+      source: 'lane', known: true, ...adoptedIn(snapshot.entries),
     }
   }
   const known = (await listConversations(agentId)).some((c) => c.id === conversationId)
-  if (!known) return { messages: [], source: 'chat-history', known: false }
+  if (!known) {
+    // No page to contradict: a plain read is exact here.
+    const adopted = pending.length > 0
+      ? { adoptedTurnIds: await chatHistory.listAdoptedTurnIds(agentId, conversationId, pending) }
+      : {}
+    return { messages: [], source: 'chat-history', known: false, ...adopted }
+  }
   const { messages: entries } = await chatHistory.getDisplayEntries(
     1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
   )
@@ -1122,6 +1182,7 @@ export async function handlePrimaryChatMessagesRelay(
     messages: pageApiV1Messages(normalizeEntries(entries), limit, before, conversationId),
     source: 'chat-history',
     known: true,
+    ...adoptedIn(entries),
   }
 }
 
@@ -1141,12 +1202,26 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
     const before = typeof req.query.before === 'string' ? req.query.before : undefined
     let relayFailed = false
+    // Turns this companion answered itself and has not handed to the primary yet
+    // (cloud-chat-outbox.ts). They exist nowhere else until adopted, so every
+    // read on this box merges them, once each.
+    const banked = CLOUD_MODE
+      ? await (await import('../../core/cloud-chat-outbox.js')).listCloudTurns({ agentId, conversationId })
+      : []
     if (CLOUD_MODE) {
       // The reply is ALREADY a page — do not re-page it here; the cursor space
       // belongs to the primary, which is the box that read the source.
-      const relayed = await relayMessagesToPrimary(agentId, conversationId, limit, before)
+      const relayed = await relayMessagesToPrimary(
+        agentId, conversationId, limit, before, banked.map((e) => e.turnId),
+      )
       if (relayed) {
-        res.json(relayed)
+        const adopted = new Set(relayed.adoptedTurnIds)
+        const unadopted = banked.filter((e) => !adopted.has(e.turnId))
+        // Only a TAIL page: banked turns are the newest thing the phone did, and
+        // merging them into an older page too would show them twice.
+        res.json(before || unadopted.length === 0
+          ? relayed.messages
+          : mergeCloudRowsIntoRelayedPage(relayed.messages, cloudTurnRows(unadopted)))
         return
       }
       relayFailed = true
@@ -1163,14 +1238,32 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
     const { messages: entries } = await chatHistory.getDisplayEntries(
       1, Number.MAX_SAFE_INTEGER, agentId, conversationId,
     )
-    const local = pageApiV1Messages(normalizeEntries(entries), limit, before, conversationId)
+    let rows = normalizeEntries(entries)
+    // Judged on the SYNCED rows alone, before banked turns join them. The synced
+    // file holds every phone and web-chat turn, but a conversation driven from a
+    // session panel on the Mac keeps its turns only in the Mac's CLI transcript
+    // (that sender bumps the index count and writes no entry): its file is empty
+    // while the index says it has messages. A 200 carrying only this box's banked
+    // turns would then make the phone REPLACE its whole history with them, on the
+    // very refetch it runs at every `message-end`.
+    const syncedEmpty = rows.length === 0
+    if (banked.length > 0) {
+      // The synced copy may already carry an adopted turn (git-sync delivered it
+      // back before this box deleted its entry): turnId decides, once each.
+      const synced = new Set(entries.map((e) => e.turnId).filter((id): id is string => !!id))
+      const extra = cloudTurnRows(banked.filter((e) => !synced.has(e.turnId)))
+      if (extra.length > 0) {
+        rows = stampApiV1Ids(mergeRowsByTime(rows.map(({ id: _id, ...rest }) => rest), extra), new Date().toISOString())
+      }
+    }
+    const local = pageApiV1Messages(rows, limit, before, conversationId)
     // A replica whose relay failed and whose own copy is EMPTY for a conversation
     // the index says has messages must not answer 200-[]: the iOS client REPLACES
     // its rows with a 200 body (ChatStore.loadMessages), so a false empty wipes a
     // conversation the phone was correctly showing a second ago. On a thrown error
     // it keeps what it has and reports reachability instead, which is the truthful
     // outcome here — the history exists, this box just cannot reach it yet.
-    if (relayFailed && local.length === 0 && !before) {
+    if (relayFailed && syncedEmpty && !before) {
       const meta = (await listConversations(agentId)).find((c) => c.id === conversationId)
       if ((meta?.messageCount ?? 0) > 0) {
         sendError(res, 503, 'primary_unreachable',
@@ -1392,19 +1485,17 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
   }
 })
 
-/** What a replica tells the phone when it cannot reach the box that answers. */
-const PRIMARY_UNREACHABLE_MESSAGE =
-  "Walnut's primary is unreachable; the replica cannot answer on its own. Try again when the primary is back."
-
 /**
  * Turn router for one accepted REST turn.
  *
  * On the PRIMARY this is just runApiV1Turn. On a CLOUD REPLICA the turn is handed
- * to the primary, because a turn runs in a `claude` CLI session and the replica
- * has neither a session runner nor the CLI. There is no second engine to degrade
- * to, so a relay the replica cannot use is a turn it cannot answer: the phone
- * gets the SSE `error` frame it already unlocks its composer on, and nothing is
- * written here (the replica is never a writer for a relayed turn).
+ * to the primary, which owns the conversation's lane and its history. When the
+ * relay PROVES the turn never reached the primary and this companion is an
+ * execution host, the companion answers it on its own lane instead
+ * (routes/cloud-chat-fallback.ts) and banks it in a non-git outbox for the
+ * primary to adopt later. Any other relay failure ends the turn with the SSE
+ * `error` frame the phone already unlocks its composer on, and nothing is
+ * written here (the replica never writes the conversation file).
  *
  * IMAGE turns relay too, but their bytes take a different lane: the ORIGINAL
  * base64 payloads (not this box's saved paths, which mean nothing over there)
@@ -1449,10 +1540,27 @@ async function runApiV1TurnRouted(
     return
   }
 
-  log.web.warn('api-v1 turn refused — the replica cannot reach the primary', {
-    conversationId, turnId, agentId, reason: outcome.reason,
+  // Unavailable. The companion may answer only a turn that provably never
+  // reached the primary; see cloud-chat-fallback.ts for the full rule.
+  const { decideCloudFallback, runCloudFallbackTurn } = await import('./cloud-chat-fallback.js')
+  const decision = await decideCloudFallback({
+    provablyUnsent: outcome.provablyUnsent,
+    hasImages: (imageData?.images?.length ?? 0) > 0,
   })
-  emitSse(conversationId, 'error', { message: PRIMARY_UNREACHABLE_MESSAGE })
+  if (decision.kind === 'run') {
+    log.web.warn('api-v1 turn: the primary provably did not receive it, answering on the cloud companion', {
+      conversationId, turnId, agentId, reason: outcome.reason,
+    })
+    await runCloudFallbackTurn({
+      agentId, conversationId, text, turnId, cwd: decision.cwd,
+      emit: (event, data) => emitSse(conversationId, event, data),
+    })
+    return
+  }
+  log.web.warn('api-v1 turn refused — the replica cannot reach the primary', {
+    conversationId, turnId, agentId, reason: outcome.reason, fallback: decision.reason,
+  })
+  emitSse(conversationId, 'error', { message: decision.message })
 }
 
 /**
@@ -1595,159 +1703,27 @@ async function runApiV1LaneTurn(
   turnId: string,
 ): Promise<void> {
   const { runLaneTurn } = await import('../../core/sessions/lane-turn.js')
+  const { subscribeLaneTurnFrames } = await import('./lane-turn-sse.js')
 
-  // Live relay. Interest-scoped global subscription (the pattern every session-event
-  // consumer uses): session events are addressed to 'main-ai'/'session-runner', and
-  // without `interest` this handler would wake on every event in the process.
-  // The lane id is only known once the lane resolves, hence the onSessionId hook —
-  // subscribing FIRST means no delta of this turn can slip through the gap.
-  const subName = `api-v1-lane-relay-${turnId}`
+  // Live relay (routes/lane-turn-sse.ts, shared with the cloud companion's own
+  // fallback turn so both emit the same frames under the same rules). Subscribed
+  // BEFORE the lane resolves; the onSessionId hook binds it, so no delta of this
+  // turn can slip through the gap.
   let laneSessionId: string | null = null
-
-  // ── Thinking coalescer ──
-  // Thinking deltas arrive at TOKEN rate with urgency:'urgent', and this channel
-  // fans out to every open client (plus the bridge mirror, and the 512-event
-  // replay ring, which a raw token stream would blow through — evicting this
-  // turn's own message-start from what a reconnect replays). The client buffers
-  // deltas at the same cadence anyway (ChatStore.appendDelta), so batching here
-  // is invisible to it and cheap for everyone: one trailing 120ms window per
-  // burst, flushed on turn end so the tail is never lost.
-  const THINKING_FLUSH_MS = 120
-  let thinkingBuf = ''
-  let thinkingTimer: NodeJS.Timeout | null = null
-  const flushThinking = (): void => {
-    if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null }
-    if (!thinkingBuf) return
-    const delta = thinkingBuf
-    thinkingBuf = ''
-    emitSse(conversationId, 'thinking', { delta })
-  }
-
-  // Set just before this turn's terminal frame. Nothing may be relayed after it:
-  // iOS finalizes the turn on `message-end`, so a later frame would leave its
-  // activity line lit on a finished turn — and it would also sit in the replay
-  // ring AFTER the terminal frame, which is the shape that once re-materialized a
-  // previous answer as a permanent duplicate on reconnect. One rule for all four
-  // kinds on purpose: two rules in one handler is how the next person reintroduces
-  // this. (A trailing delta after the CLI's result line is normal, not rare.)
-  let turnSettled = false
-
-  // toolUseIds whose `tool` frame this turn actually put on the wire. A
-  // `tool-result` means "clear the activity line for THIS id", so one whose `tool`
-  // frame was dropped (a subagent's, a replayed one, one that arrived before the
-  // lane id resolved) is an instruction about a line the client never drew: iOS
-  // looks the id up, misses, and is left holding a frame it cannot place. Relaying
-  // only known ids makes the pair symmetric — every drop rule above now
-  // automatically applies to the result too, instead of each one having to
-  // remember to.
-  const relayedToolUseIds = new Set<string>()
-
-  // Live relay. Interest-scoped global subscription (the pattern every session-event
-  // consumer uses): session events are addressed to 'main-ai'/'session-runner', and
-  // without `interest` this handler would wake on every event in the process.
-  // The lane id is only known once the lane resolves, hence the onSessionId hook —
-  // subscribing FIRST means no delta of this turn can slip through the gap.
-  bus.subscribe(subName, (event) => {
-    const d = event.data as {
-      sessionId?: string; delta?: string; parentToolUseId?: string; replayed?: boolean
-      toolName?: string; toolUseId?: string; input?: unknown; result?: string
-    }
-    if (turnSettled) return
-    // Own lane only, and never a `replayed` event (JSONL history being re-read,
-    // not this turn happening). Identical gate for all four event kinds.
-    if (laneSessionId === null || d.sessionId !== laneSessionId || d.replayed) return
-    // `parentToolUseId` = a SUBAGENT's nested activity. Dropped for every kind,
-    // for the same reason the text path drops it: this channel drives ONE activity
-    // line for the main turn, and a subagent's tools would overwrite "Task —
-    // investigate the crash" with whatever the delegate happens to be reading —
-    // hiding the one fact the human needs (the main agent is inside a delegation).
-    // The subagent's own transcript is its own surface. Note thinking deltas never
-    // carry the field at all (stream_event lines have no parent_tool_use_id), so
-    // that kind is unaffected by this rule today.
-    if (d.parentToolUseId) return
-    switch (event.name) {
-      case EventNames.SESSION_TEXT_DELTA: {
-        if (!d.delta) return
-        // Subagent text never reaches the turn's result text
-        // (claude-code-session.ts keeps it out of fullText) — see the gate above.
-        emitSse(conversationId, 'text-delta', { delta: d.delta })
-        return
-      }
-      case EventNames.SESSION_THINKING_DELTA: {
-        if (!d.delta) return
-        thinkingBuf += d.delta
-        if (!thinkingTimer) {
-          thinkingTimer = setTimeout(flushThinking, THINKING_FLUSH_MS)
-          thinkingTimer.unref?.()
-        }
-        return
-      }
-      case EventNames.SESSION_TOOL_USE: {
-        if (!d.toolName) return
-        // A tool starting ENDS the reasoning burst it followed: flush first so the
-        // frames stay in causal order on a channel the client reads as a sequence.
-        flushThinking()
-        const input = d.input as Record<string, unknown> | undefined
-        const detail = toolDetail(d.toolName, input)
-        // `detail` is the collapsed one-liner (Bash prefers `description`, so the
-        // command itself never reached the phone). `inputPreview` is the same
-        // bounded, masked `key: value` render the history row carries, so an
-        // expanded live row shows what the tool was actually called with.
-        const inputPreview = toolInputPreview(input)
-        if (d.toolUseId) relayedToolUseIds.add(d.toolUseId)
-        emitSse(conversationId, 'tool', {
-          name: d.toolName,
-          ...(d.toolUseId ? { toolUseId: d.toolUseId } : {}),
-          ...(detail ? { detail } : {}),
-          ...(inputPreview ? { inputPreview } : {}),
-        })
-        return
-      }
-      case EventNames.SESSION_TOOL_RESULT: {
-        if (!d.toolUseId) return
-        // Only an id this turn announced (see relayedToolUseIds). `delete` rather
-        // than `has`: it also makes a repeated result frame a no-op, and keeps the
-        // set from outliving the tools it describes.
-        if (!relayedToolUseIds.delete(d.toolUseId)) return
-        // The id clears the activity line; `resultPreview` is what a FINISHED live
-        // row can show before the transcript lands. Without it the phone's drawer
-        // said "No output" for a tool that had output, because a live frame carried
-        // no text at all and the row that does only exists once the JSONL is read.
-        //
-        // Bounded three times over, which is why shipping it here is cheap: the
-        // emitter already caps the bus event at 2000 characters
-        // (claude-code-session.ts), `toolResultPreview` clips to 700 plus an
-        // ellipsis, and it masks the excerpt with the same rule the history row
-        // uses. The FULL text still never rides this channel: it is only reachable
-        // through the row's `detailRef` read.
-        const resultPreview = toolResultPreview(d.result)
-        emitSse(conversationId, 'tool-result', {
-          toolUseId: d.toolUseId,
-          ...(resultPreview ? { resultPreview } : {}),
-        })
-        return
-      }
-      default:
-        return
-    }
-  }, {
-    global: true,
-    interest: [
-      EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_THINKING_DELTA,
-      EventNames.SESSION_TOOL_USE, EventNames.SESSION_TOOL_RESULT,
-    ],
-  })
+  const relay = subscribeLaneTurnFrames(
+    `api-v1-lane-relay-${turnId}`,
+    (event, data) => emitSse(conversationId, event, data),
+  )
 
   try {
     const { sessionId, resultText } = await runLaneTurn(agentId, conversationId, message, {
       source: 'api-v1',
-      onSessionId: (sid) => { laneSessionId = sid },
+      onSessionId: (sid) => { laneSessionId = sid; relay.setSessionId(sid) },
     })
 
     // The turn is over: hand the client the reasoning tail BEFORE any terminal
-    // frame, then stop relaying (see `turnSettled`).
-    flushThinking()
-    turnSettled = true
+    // frame, then stop relaying.
+    relay.settle()
 
     if (resultText === null) {
       // runLaneTurn degrades instead of rejecting: null is a timeout, a
@@ -1789,18 +1765,12 @@ async function runApiV1LaneTurn(
   } catch (err) {
     // getOrCreateLaneSession can still throw (no config, record write failure) —
     // without this the client would only learn of it from its own watchdog.
-    flushThinking()
-    turnSettled = true
+    relay.settle()
     const errMsg = err instanceof Error ? err.message : String(err)
     log.web.error('api-v1 lane turn error', { conversationId, turnId, agentId, error: errMsg })
     await persistAndEmitTurnError(agentId, conversationId, errMsg)
   } finally {
-    // Discard, never emit: by here the terminal frame is already out (see
-    // `turnSettled`). Clearing the timer matters on its own — a pending one would
-    // otherwise keep a reference to this closure past the turn.
-    if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null }
-    thinkingBuf = ''
-    bus.unsubscribe(subName)
+    relay.dispose()
   }
 }
 

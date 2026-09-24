@@ -2028,6 +2028,11 @@ export class ClaudeCodeSession {
     if (profile?.allowedTools && profile.allowedTools.length > 0) {
       args.push('--allowedTools', profile.allowedTools.join(','))
     }
+    // The AVAILABLE built-in set. A pre-approval list cannot take anything away:
+    // the CLI still auto-allows read-only Bash in the cwd under any mode.
+    if (profile?.tools && profile.tools.length > 0) {
+      args.push('--tools', profile.tools.join(','))
+    }
     // The in-session `walnut` CLI (and the walnut MCP child) must reach the
     // server that launched this session. They default to :3456, so a session of
     // any other server (ephemeral, fixture, vitest) wrote into the user's real

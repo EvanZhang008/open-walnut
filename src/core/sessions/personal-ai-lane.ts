@@ -836,19 +836,6 @@ async function resolveLane(
     initialStatusReason: 'awaiting_spawn',
   });
 
-  // Mode is left unset → send() defaults to 'bypass', matching the in-process
-  // Personal AI (which never prompted the user to approve its own tool calls).
-  bus.emit(EventNames.SESSION_START, {
-    taskId: '',
-    message,
-    cwd: WALNUT_HOME,
-    title,
-    profile,
-    lane,
-    effort,
-    preassignedSessionId: sessionId,
-  }, ['session-runner'], { source: 'personal-ai-lane' });
-
   // Latch how far this lane has been caught up — ONLY when the recap was actually
   // delivered by one of the two carriers, or when there was nothing to deliver
   // (see latchLaneSeen). Not latching is cheap and self-healing: the very next
@@ -864,6 +851,22 @@ async function resolveLane(
       hadMessageToRide: !!firstMessage,
     });
   }
+
+  // The spawn goes out AFTER the latch, with nothing awaited between it and the
+  // return: a turn runner binds its SSE relay to this id only once we return, so
+  // an await after the emit is a window in which the CLI's first frames are lost.
+  // Mode is left unset → send() defaults to 'bypass', matching the in-process
+  // Personal AI (which never prompted the user to approve its own tool calls).
+  bus.emit(EventNames.SESSION_START, {
+    taskId: '',
+    message,
+    cwd: WALNUT_HOME,
+    title,
+    profile,
+    lane,
+    effort,
+    preassignedSessionId: sessionId,
+  }, ['session-runner'], { source: 'personal-ai-lane' });
 
   log.session.info('Personal AI lane: session created', {
     lane, sessionId, agentId, conversationId,
