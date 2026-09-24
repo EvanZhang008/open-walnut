@@ -82,6 +82,17 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
 Plugins still load with the copied settings, so a test that sends mail or a chat message
 through one sends it for real.
 
+**Testing a task sync plugin.** No plugin syncs tasks on a test server, so tasks made there stay
+local, which is what almost every test wants. To test a sync plugin against its real service
+(Microsoft To Do, or one the user installed), start the server with
+`WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1 npm run dev:ephemeral`. It then writes to the user's real
+account, and the real Walnut pulls those items back onto the user's board. Change only tasks you
+created there: the copied tasks are linked to real items, so editing, completing or deleting one
+changes the real item. Before you finish, clean up: delete each item you created from the test
+server while sync is still on (that removes it from the real service too), then check the real
+board and delete any copy it already pulled in. Removing your own leftovers is the one write to
+:3456 a test may make. Report what you removed.
+
 **dev-prod.sh must stay portable.** Issue #11: the server log was pinned to `/private/tmp`,
 a macOS-only path, so a Linux deploy killed the live server and then failed to start its
 replacement. Two rules it now encodes: prove every external prerequisite (a writable log)
