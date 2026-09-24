@@ -1,44 +1,7 @@
-/**
- * Transcript chain machinery — two functions with two distinct roles:
- *
- * 1. `computeCliLoadedChain` — a read-side port of the CLI's own `--resume
- *    <sid>` loader (`getLastSessionLog`): the chain from the latest-timestamp
- *    non-sidechain leaf, walked to its root, with DAG recovery for parallel
- *    tool results. Because the walk stops at the first null/dangling parent,
- *    this is the NEWEST tree of the forest only — exactly what the CLI can
- *    resume. Used to VALIDATE a rewind point at commit time (the CLI exits 1
- *    when `--resume-session-at` names a uuid off this chain, e.g. one behind
- *    the last compact boundary) and by tests. It is deliberately NOT used to
- *    filter displayed history: the file alone provably cannot distinguish a
- *    rewind branch from an innocent fork (an api_error line re-parenting the
- *    next user message, a mid-turn slash-command branch off pre-turn state) —
- *    measured on the real transcript store, an always-on chain filter deleted
- *    8.4% of rendered rows from sessions that were never rewound.
- *
- * 2. `computeRewindDeadSet` — display filtering driven ONLY by recorded rewind
- *    events (SessionRecord.inPlaceRewinds), replayed against the file FRESH at
- *    every read. The CLI disambiguates a rewind branch from an innocent fork
- *    via runtime state (`--resume-session-at` argv + the on-disk snapshot at
- *    resume); the cut record {uuid, lastUuidAtCommit} IS that runtime state,
- *    persisted. Both anchors are uuids resolved to line indices per read, so a
- *    file rewrite (tombstone) cannot desync them, and lines appended after the
- *    commit sit past the anchor and can never join the dead region.
- *
- * Port contract for #1 is the CLI source, cited per rule below:
- *   loadTranscriptFile dispatch      sessionStorage.ts:3625-3698
- *   isTranscriptMessage              sessionStorage.ts:139
- *   findLatestMessage                sessionStorage.ts:2046
- *   buildConversationChain           sessionStorage.ts:2069-2092
- *   recoverOrphanedParallelToolResults sessionStorage.ts:2118-2206
- *
- * Pure computation: no file/network I/O, and NO logging import — this module is
- * bundled into the session daemon (both twins, via transcript-rewind-core.ts)
- * where `../logging` cannot resolve. A degrade the server used to warn about
- * inline is REPORTED instead (`RewindDeadSetResult.skippedCuts`) and logged by
- * whichever caller owns a logger.
- */
+// The CLI load chain is used for resume validation; display filtering relies only on recorded rewinds and must never infer a deletion from an off-chain identity.
 
 import type { InPlaceRewindCut } from './types.js';
+import { selectCliLeafCandidates } from './transcript-chain-leaf.js';
 
 /** Tree-node line types — port of isTranscriptMessage (sessionStorage.ts:139).
  *  Note `system` IS a tree node (compact boundaries chain through it). */
@@ -52,12 +15,16 @@ export interface TranscriptChainLine {
   parentUuid?: string | null;
   isSidechain?: boolean;
   timestamp?: string;
+  leafUuid?: string | null;
+  explicit?: boolean;
+  loaderReset?: boolean;
+  attachment?: { type?: string };
   /** queue-operation fields (uuid-less lines, suppressed by identity key). */
   operation?: string;
   content?: string;
-  /** compact_boundary metadata — preservedSegment drives the relink port. */
   compactMetadata?: {
     preservedSegment?: { headUuid?: string; anchorUuid?: string; tailUuid?: string };
+    preservedMessages?: { anchorUuid: string; uuids: string[] };
   };
   message?: {
     id?: string;
@@ -85,16 +52,17 @@ interface ChainNode {
   /** Effective parent (after the legacy progress bridge rewrite). */
   parentUuid: string | null;
   type: string;
-  isSidechain: boolean;
+  isSidechain?: boolean;
   timestamp: string;
+  hasTimestamp: boolean;
   /** Anthropic message.id for assistant nodes (parallel-tool sibling groups). */
   msgApiId?: string;
   /** user node whose content carries a tool_result block (DAG recovery). */
   isToolResultUser: boolean;
   /** system/compact_boundary line (isCompactBoundaryMessage, messages.ts:4608). */
   isCompactBoundary?: boolean;
-  /** The boundary's compactMetadata.preservedSegment, when it carries one. */
   compactSeg?: { headUuid: string; anchorUuid: string; tailUuid: string };
+  preservedMessages?: { anchorUuid: string; uuids: string[] };
 }
 
 /**
@@ -112,6 +80,7 @@ function buildChainNodes(parsedLines: readonly TranscriptChainLine[]): Map<strin
   const nodes = new Map<string, ChainNode>();
   for (const raw of parsedLines) {
     if (!raw || typeof raw !== 'object' || typeof raw.type !== 'string') continue;
+    if (raw.loaderReset) { nodes.clear(); progressBridge.clear(); }
     if (raw.type === 'progress' && typeof raw.uuid === 'string') {
       const parent = typeof raw.parentUuid === 'string' ? raw.parentUuid : null;
       progressBridge.set(
@@ -138,13 +107,14 @@ function buildChainNodes(parsedLines: readonly TranscriptChainLine[]): Map<strin
       uuid: raw.uuid,
       parentUuid,
       type: raw.type,
-      isSidechain: raw.isSidechain === true,
+      isSidechain: raw.isSidechain,
       timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : '',
+      hasTimestamp: typeof raw.timestamp === 'string',
       msgApiId: raw.type === 'assistant' && typeof raw.message?.id === 'string'
         ? raw.message.id : undefined,
       isToolResultUser: raw.type === 'user' && Array.isArray(content)
         && content.some((b) => b?.type === 'tool_result'),
-      ...(isCompactBoundary ? { isCompactBoundary } : {}),
+      ...(isCompactBoundary ? { isCompactBoundary, preservedMessages: raw.compactMetadata?.preservedMessages } : {}),
       ...(seg && typeof seg.headUuid === 'string' && typeof seg.anchorUuid === 'string'
         && typeof seg.tailUuid === 'string'
         ? { compactSeg: { headUuid: seg.headUuid, anchorUuid: seg.anchorUuid, tailUuid: seg.tailUuid } }
@@ -154,72 +124,90 @@ function buildChainNodes(parsedLines: readonly TranscriptChainLine[]): Map<strin
   return nodes;
 }
 
-/**
- * Port of the CLI's applyPreservedSegmentRelinks (sessionStorage.ts:1839-1956),
- * relink half only. A partial ("suffix-preserving") compaction dedup-skips the
- * kept messages, so on disk they keep their PRE-compact parentUuids while the
- * first post-compact message parents onto the ANCHOR (the last summary line, or
- * the boundary itself for prefix-preserving). The CLI patches the endpoints in
- * memory BEFORE leaf selection: head.parentUuid → anchorUuid, and anchor's
- * other children → tailUuid — which is what makes the preserved messages part
- * of the chain `--resume` loads. Without this port, a rewind to a message
- * inside the preserved segment was refused with 409 even though
- * `--resume-session-at` on it works (4/17 real preserved-segment files).
- *
- * Faithful to the CLI:
- *  - only the LAST seg-boundary is relinked, and only when it IS the
- *    absolute-last boundary (a later no-seg /compact makes the seg stale —
- *    segIsLive, sessionStorage.ts:1870);
- *  - the tail→head walk is validated FIRST; if it doesn't reach head, NO
- *    relink (the CLI bails the same way, tengu_relink_walk_broken).
- *
- * The prune half (delete pre-boundary entries) is deliberately NOT ported: it
- * only removes uuids that are already off the chain this gate walks, and the
- * chain — not the node map — is what the gate consumes.
- *
- * Mutates the node map in place.
- */
-function applyPreservedSegmentRelink(nodes: Map<string, ChainNode>): void {
-  let lastSeg: { headUuid: string; anchorUuid: string; tailUuid: string } | undefined;
-  let lastSegBoundaryIdx = -1;
-  let absoluteLastBoundaryIdx = -1;
-  let i = 0;
+function resolvePreservedMessages(boundary: ChainNode, nodes: Map<string, ChainNode>) {
+  if (boundary.preservedMessages) return boundary.preservedMessages;
+  const segment = boundary.compactSeg;
+  if (!segment) return undefined;
+  const seen = new Set<string>();
+  const uuids: string[] = [];
+  let current = nodes.get(segment.tailUuid);
+  while (current && !seen.has(current.uuid)) {
+    seen.add(current.uuid);
+    uuids.push(current.uuid);
+    if (current.uuid === segment.headUuid) return { anchorUuid: segment.anchorUuid, uuids: uuids.reverse() };
+    current = current.parentUuid ? nodes.get(current.parentUuid) : undefined;
+  }
+  return undefined;
+}
+
+// CLI 2.1.258 hns/yns: list order wins; after relinking, prune the old nodes, then repair parent links that pointed at pruned nodes.
+function applyPreservedSegmentRelink(nodes: Map<string, ChainNode>): string | undefined {
+  let lastPreserved: ChainNode | undefined;
+  let lastPreservedIndex = -1;
+  let lastBoundaryIndex = -1;
+  const indices = new Map<string, number>();
+  let index = 0;
   for (const node of nodes.values()) {
+    indices.set(node.uuid, index);
     if (node.isCompactBoundary) {
-      absoluteLastBoundaryIdx = i;
-      if (node.compactSeg) {
-        lastSeg = node.compactSeg;
-        lastSegBoundaryIdx = i;
+      lastBoundaryIndex = index;
+      if (node.preservedMessages || node.compactSeg) {
+        lastPreserved = node;
+        lastPreservedIndex = index;
       }
     }
-    i++;
+    index++;
   }
-  if (!lastSeg) return;
-  // Seg stale (a no-seg boundary came after): the CLI skips the relink.
-  if (lastSegBoundaryIdx !== absoluteLastBoundaryIdx) return;
-
-  // Validate tail→head BEFORE mutating (sessionStorage.ts:1875-1902).
-  const walkSeen = new Set<string>();
-  let cur = nodes.get(lastSeg.tailUuid);
-  let reachedHead = false;
-  while (cur && !walkSeen.has(cur.uuid)) {
-    walkSeen.add(cur.uuid);
-    if (cur.uuid === lastSeg.headUuid) {
-      reachedHead = true;
-      break;
+  if (!lastPreserved) return undefined;
+  const live = lastPreservedIndex === lastBoundaryIndex;
+  const resolved = live ? resolvePreservedMessages(lastPreserved, nodes) : undefined;
+  if (live && !resolved) return undefined;
+  const preserved = resolved && resolved.uuids.length > 0 ? resolved : undefined;
+  if (preserved?.uuids.some((uuid) => !nodes.has(uuid))) return undefined;
+  const uuids = preserved?.uuids ?? [];
+  const kept = new Set(uuids);
+  const tail = uuids.at(-1);
+  if (preserved) {
+    let parentUuid = preserved.anchorUuid;
+    for (const uuid of uuids) {
+      nodes.get(uuid)!.parentUuid = parentUuid;
+      parentUuid = uuid;
     }
-    cur = cur.parentUuid ? nodes.get(cur.parentUuid) : undefined;
+    for (const node of nodes.values()) {
+      if (node.parentUuid === preserved.anchorUuid && node.uuid !== uuids[0]) node.parentUuid = tail!;
+    }
   }
-  if (!reachedHead) return; // broken walk — resume loads full pre-compact history
+  const removed = new Set<string>();
+  for (const uuid of nodes.keys()) {
+    if (indices.get(uuid)! < lastBoundaryIndex && !kept.has(uuid)) removed.add(uuid);
+  }
+  for (const uuid of removed) nodes.delete(uuid);
+  if (preserved && removed.size > 0) {
+    for (const node of nodes.values()) {
+      if ((node.type === 'user' || node.type === 'assistant') && node.parentUuid !== null && removed.has(node.parentUuid)) {
+        node.parentUuid = tail!;
+      }
+    }
+  }
+  return tail;
+}
 
-  const head = nodes.get(lastSeg.headUuid);
-  if (head) head.parentUuid = lastSeg.anchorUuid;
-  // Tail-splice: anchor's other children → tail (sessionStorage.ts:1915-1919).
+function timestampFallbackParent(nodes: Map<string, ChainNode>, current: ChainNode, seen: Set<string>): ChainNode | undefined {
+  const now = new Date(current.timestamp).getTime();
+  if (Number.isNaN(now)) return undefined;
+  let closest: ChainNode | undefined;
+  let distance = Infinity;
   for (const node of nodes.values()) {
-    if (node.parentUuid === lastSeg.anchorUuid && node.uuid !== lastSeg.headUuid) {
-      node.parentUuid = lastSeg.tailUuid;
+    if (seen.has(node.uuid) || node.isSidechain !== current.isSidechain) continue;
+    const at = new Date(node.timestamp).getTime();
+    if (Number.isNaN(at)) continue;
+    const delta = now - at;
+    if (delta >= 0 && delta <= 5000 && delta < distance) {
+      distance = delta;
+      closest = node;
     }
   }
+  return closest;
 }
 
 export interface CliLoadedChainResult {
@@ -231,32 +219,26 @@ export interface CliLoadedChainResult {
   /** The selected leaf's uuid, or null when the transcript has no non-sidechain
    *  tree line (the CLI's getLastSessionLog treats that as "no session"). */
   leafUuid: string | null;
+  clearedToEmpty?: true;
 }
 
-/**
- * The conversation chain the CLI's `--resume <sid>` load would produce
- * (getLastSessionLog, sessionStorage.ts:3899): newest-tree only, since the walk
- * from the newest leaf terminates at the first null/dangling parent — a compact
- * boundary or a fork root (sessionStorage.ts:2088 and :3414).
- */
+// CLI 2.1.258: mir → hns → Ht → m4 → aEe/Sns/kns.
 export function computeCliLoadedChain(parsedLines: readonly TranscriptChainLine[]): CliLoadedChainResult {
   const nodes = buildChainNodes(parsedLines);
 
   // ── Preserved-segment relink ── runs BEFORE leaf selection, exactly like the
   // CLI (applyPreservedSegmentRelinks at sessionStorage.ts:3704).
-  applyPreservedSegmentRelink(nodes);
-
-  // ── Leaf ── findLatestMessage(all nodes, m => !m.isSidechain): strict `>` on
-  // Date.parse(timestamp) — NaN skipped, tie → first-inserted wins (Map
-  // iteration order = file order; sessionStorage.ts:2046, :3899).
+  const preservedTail = applyPreservedSegmentRelink(nodes);
+  const candidates = selectCliLeafCandidates(parsedLines, nodes, preservedTail);
+  const fallback = candidates.uuids.size === 0 && !candidates.clearedToEmpty;
   let leaf: ChainNode | undefined;
   let maxTime = -Infinity;
   for (const m of nodes.values()) {
-    if (m.isSidechain) continue;
+    if (fallback ? m.isSidechain : !candidates.uuids.has(m.uuid)) continue;
     const t = Date.parse(m.timestamp);
     if (t > maxTime) { maxTime = t; leaf = m; }
   }
-  if (!leaf) return { chain: [], chainUuids: new Set(), leafUuid: null };
+  if (!leaf) return { chain: [], chainUuids: new Set(), leafUuid: null, ...(candidates.clearedToEmpty ? { clearedToEmpty: true as const } : {}) };
 
   // ── Chain walk ── leaf→root with a `seen` cycle guard; on cycle keep the
   // partial chain (buildConversationChain, sessionStorage.ts:2069-2092).
@@ -267,9 +249,11 @@ export function computeCliLoadedChain(parsedLines: readonly TranscriptChainLine[
     if (seen.has(cur.uuid)) break; // cycle → partial chain (:2077-2084)
     seen.add(cur.uuid);
     chainNodes.push(cur);
-    cur = cur.parentUuid ? nodes.get(cur.parentUuid) : undefined;
+    if (!cur.parentUuid) break;
+    const parent = nodes.get(cur.parentUuid);
+    cur = !parent || seen.has(parent.uuid) ? timestampFallbackParent(nodes, cur, seen) : parent;
   }
-  chainNodes.reverse(); // root → leaf (:2092)
+  chainNodes.reverse();
 
   // ── DAG recovery ── port of recoverOrphanedParallelToolResults
   // (sessionStorage.ts:2118-2206), over the whole map like the CLI. Streaming
@@ -334,7 +318,26 @@ export function computeCliLoadedChain(parsedLines: readonly TranscriptChainLine[
     ordered = chainNodes;
   }
 
-  const chain = ordered.map((m) => m.uuid);
+  const children = new Map<string, ChainNode[]>();
+  for (const node of nodes.values()) {
+    if (node.parentUuid && node.type !== 'user' && node.type !== 'assistant') {
+      const group = children.get(node.parentUuid) ?? [];
+      group.push(node);
+      children.set(node.parentUuid, group);
+    }
+  }
+  const attachments: ChainNode[] = [];
+  const pending = [leaf.uuid];
+  for (let i = 0; i < pending.length; i++) {
+    for (const node of children.get(pending[i]) ?? []) {
+      if (seen.has(node.uuid)) continue;
+      seen.add(node.uuid);
+      attachments.push(node);
+      pending.push(node.uuid);
+    }
+  }
+  attachments.sort((a, b) => a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0);
+  const chain = [...ordered, ...attachments].map((m) => m.uuid);
   return { chain, chainUuids: new Set(chain), leafUuid: leaf.uuid };
 }
 

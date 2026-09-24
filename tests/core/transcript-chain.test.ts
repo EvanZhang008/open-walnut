@@ -10,7 +10,12 @@
  *                                     right now. No cuts = no filtering, ever.
  *
  * The chain rules each cite the CLI source that is their contract:
- *   findLatestMessage                  sessionStorage.ts:2046  (leaf selection)
+ *   last-prompt + file order           leaf CANDIDATES: the recorded last-prompt
+ *                                     line and the LAST tree line written. A
+ *                                     plain "newest timestamp" leaf is NOT the
+ *                                     contract and disagrees with the real CLI.
+ *   findLatestMessage                  sessionStorage.ts:2046  (tie-break only,
+ *                                     over the candidate set)
  *   buildConversationChain             sessionStorage.ts:2069  (walk + cycle)
  *   recoverOrphanedParallelToolResults sessionStorage.ts:2118  (the real DAG)
  *   dangling parent = normal end       sessionStorage.ts:2088, :3414
@@ -35,6 +40,8 @@ import {
 } from '../helpers/transcript-fixtures.js';
 
 const T = (sec: number) => new Date(Date.UTC(2026, 7, 30, 0, 0, sec)).toISOString();
+/** Same clock as T, to the millisecond — the parent-bridge window is 5000ms. */
+const TMS = (ms: number) => new Date(Date.UTC(2026, 7, 30, 0, 0, 0) + ms).toISOString();
 
 /** The chain the CLI would load, as uuids root → leaf. */
 const chainOf = (t: ReturnType<typeof transcript>) => computeCliLoadedChain(t.lines).chain;
@@ -42,10 +49,7 @@ const chainOf = (t: ReturnType<typeof transcript>) => computeCliLoadedChain(t.li
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('computeCliLoadedChain — leaf selection', () => {
-  it('follows the TIMESTAMP, not file order — in both directions', () => {
-    // Same topology twice, only the stamps swapped. Under a "last line in file"
-    // rule the two fixtures would give opposite answers; under the official
-    // latest-timestamp rule the newer stamp always wins.
+  it('selects the last branch rather than a newer timestamp on another branch', () => {
     const olderLast = transcript()
       .user('u1', 'first', { at: T(1) }).assistant('a1', 'reply one', { at: T(2) })
       .user('u2', 'second', { at: T(3) })
@@ -53,8 +57,8 @@ describe('computeCliLoadedChain — leaf selection', () => {
       .from('u2').user('u2b', 'second take', { at: T(9) }).assistant('a2b', 'new two', { at: T(10) })
       // written LAST, but older
       .from('u2').assistant('a2', 'other two', { at: T(4) }).user('u3', 'other third', { at: T(5) });
-    expect(computeCliLoadedChain(olderLast.lines).leafUuid).toBe('a2b');
-    expect(chainOf(olderLast)).toEqual(['u1', 'a1', 'u2', 'u2b', 'a2b']);
+    expect(computeCliLoadedChain(olderLast.lines).leafUuid).toBe('u3');
+    expect(chainOf(olderLast)).toEqual(['u1', 'a1', 'u2', 'a2', 'u3']);
 
     const newerLast = transcript()
       .user('u1', 'first', { at: T(1) }).assistant('a1', 'reply one', { at: T(2) })
@@ -64,20 +68,22 @@ describe('computeCliLoadedChain — leaf selection', () => {
     expect(chainOf(newerLast)).toEqual(['u1', 'a1', 'u2', 'u2b', 'a2b']);
   });
 
-  it('breaks a timestamp tie in favour of the EARLIER line (strict >)', () => {
-    // findLatestMessage compares with `>`, and the map iterates in insertion =
-    // file order, so the FIRST of two equally-stamped leaves wins. Pinned
-    // because the intuitive "last writer wins" would flip this fixture.
+  it('selects the last branch when branch timestamps tie', () => {
     const t = transcript()
       .user('u1', 'first', { at: T(1) }).assistant('a1', 'reply one', { at: T(2) })
       .user('u2', 'second', { at: T(3) })
       .from('u2').assistant('aFirst', 'written first', { at: T(7) })
       .from('u2').assistant('aSecond', 'written second', { at: T(7) });
-    expect(chainOf(t)).toEqual(['u1', 'a1', 'u2', 'aFirst']);
+    expect(chainOf(t)).toEqual(['u1', 'a1', 'u2', 'aSecond']);
   });
 
   it('skips unparseable timestamps as leaf candidates, and reports NO leaf when none parse', () => {
-    // Date.parse(NaN) > x is false, so a junk stamp can never be the leaf.
+    // Two independent guards, and a junk stamp trips both: the candidate rules
+    // never name it (it is neither the last line written nor a descendant of that
+    // line), and Date.parse(NaN) > x is false so it cannot win the tie-break
+    // either. Note the candidate rules compare timestamps as STRINGS, where
+    // 'not a date' sorts ABOVE every ISO stamp — so the parse guard is load
+    // bearing, not decoration.
     const some = transcript()
       .user('u1', 'first', { at: T(1) })
       .from('u1').user('junk', 'unparseable stamp', { at: 'not a date' })
@@ -92,20 +98,168 @@ describe('computeCliLoadedChain — leaf selection', () => {
     expect(computeCliLoadedChain(none.lines)).toEqual({ chain: [], chainUuids: new Set(), leafUuid: null });
   });
 
-  it('never returns a sidechain line as the conversation leaf', () => {
-    // findLatestMessage is called with `m => !m.isSidechain`
-    // (sessionStorage.ts:3899-3900). If a sidechain could win, the CLI would
-    // resume the subagent's transcript as the conversation.
+  it('does not let appended sidechain activity replace the primary leaf', () => {
     const t = transcript()
       .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second')
       .from('u2').user('side', 'subagent line', { isSidechain: true, at: T(99) });
     expect(chainOf(t)).toEqual(['u1', 'a1', 'u2']);
 
-    // A transcript with ONLY sidechain lines has no conversation at all.
     const sideOnly = transcript()
       .from(null).user('s1', 'subagent prompt', { isSidechain: true })
       .assistant('s2', 'subagent reply', { isSidechain: true });
-    expect(computeCliLoadedChain(sideOnly.lines).leafUuid).toBeNull();
+    expect(computeCliLoadedChain(sideOnly.lines).leafUuid).toBe('s2');
+  });
+
+  it('honours an EXPLICIT last-prompt leaf over a newer branch still on disk', () => {
+    // The in-place rewind shape: the abandoned branch keeps the NEWEST stamps in
+    // the file, and the CLI records `last-prompt {leafUuid, explicit:true}` at EOF.
+    // Resume loads the recorded leaf, so a newest-timestamp leaf rule validates
+    // rewind points against a chain the CLI would never load.
+    const t = transcript()
+      .user('u1', 'first', { at: T(1) }).assistant('a1', 'reply one', { at: T(2) })
+      .user('u2', 'second', { at: T(3) })
+      .assistant('a2', 'ABANDONED two', { at: T(9) })
+      .user('u3', 'ABANDONED third', { at: T(10) })
+      .meta({ type: 'last-prompt', leafUuid: 'u2', explicit: true });
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.leafUuid).toBe('u2');
+    expect(res.chain).toEqual(['u1', 'a1', 'u2']);
+    for (const uuid of ['a2', 'u3']) expect(res.chainUuids.has(uuid)).toBe(false);
+  });
+
+  it('advances a NON-explicit last-prompt to the last line written for it', () => {
+    // The ordinary shape: the prompt's own leaf is recorded when the human sends,
+    // then the turn is appended. Resume loads the whole turn, so the candidate has
+    // to walk FORWARD to the file's last line whenever that line descends from it.
+    const t = transcript()
+      .user('u1', 'first', { at: T(1) }).assistant('a1', 'reply one', { at: T(2) })
+      .user('u2', 'second', { at: T(3) })
+      .meta({ type: 'last-prompt', leafUuid: 'u2' })
+      .assistant('a2', 'working on it', { at: T(4) })
+      .assistant('a3', 'reply two', { at: T(5) });
+    expect(chainOf(t)).toEqual(['u1', 'a1', 'u2', 'a2', 'a3']);
+  });
+
+  it('keeps a NON-explicit last-prompt when the file ends on a DIFFERENT branch', () => {
+    // No descendant relationship, so there is nothing to advance to: the recorded
+    // prompt wins over both file order and the newer stamp.
+    const t = transcript()
+      .user('u1', 'first', { at: T(1) }).assistant('a1', 'reply one', { at: T(2) })
+      .user('u2', 'second', { at: T(3) }).assistant('a2', 'reply two', { at: T(4) })
+      .meta({ type: 'last-prompt', leafUuid: 'a2' })
+      .from('u2').assistant('other', 'other branch', { at: T(9) });
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.leafUuid).toBe('a2');
+    expect(res.chain).toEqual(['u1', 'a1', 'u2', 'a2']);
+    expect(res.chainUuids.has('other')).toBe(false);
+  });
+
+  it('loads NOTHING after a recorded clear, and says so', () => {
+    // `last-prompt {leafUuid:null, explicit:true}` is the CLI's own record that the
+    // session was cleared. An empty chain here is the ANSWER, not a parse failure,
+    // so it is reported separately from "no leaf found".
+    const t = transcript()
+      .user('u1', 'first').assistant('a1', 'reply one').user('u2', 'second')
+      .meta({ type: 'last-prompt', leafUuid: null, explicit: true });
+    expect(computeCliLoadedChain(t.lines)).toEqual({
+      chain: [], chainUuids: new Set(), leafUuid: null, clearedToEmpty: true,
+    });
+  });
+
+  it('a clear survives later sidechain / fork_briefing lines, but ONE tree line ends it', () => {
+    const cleared = () => transcript()
+      .user('u1', 'first', { at: T(1) }).assistant('a1', 'reply one', { at: T(2) })
+      .user('u2', 'second', { at: T(3) })
+      .meta({ type: 'last-prompt', leafUuid: null, explicit: true });
+
+    // Neither a subagent line nor a fork briefing is conversation the human owns,
+    // so neither of them un-clears the session (both are skipped by the same guard
+    // that keeps them from becoming the leaf).
+    const noise = cleared()
+      .from('u2').user('side', 'subagent line', { isSidechain: true, at: T(9) })
+      .attachment('fb', { attachment: { type: 'fork_briefing' }, at: T(10) });
+    const quiet = computeCliLoadedChain(noise.lines);
+    expect(quiet.leafUuid).toBeNull();
+    expect(quiet.clearedToEmpty).toBe(true);
+
+    // One ordinary tree line and the session is live again.
+    const resumed = computeCliLoadedChain(cleared().from('u2').assistant('a2', 'back to work', { at: T(9) }).lines);
+    expect(resumed.clearedToEmpty).toBeUndefined();
+    expect(resumed.chain).toEqual(['u1', 'a1', 'u2', 'a2']);
+  });
+
+  it('forgets a recorded last-prompt at a compact boundary', () => {
+    // The boundary resets the prompt bookkeeping, and it must: a pre-compact uuid
+    // is one the CLI can no longer resume to, so an explicit prompt pointing back
+    // there cannot be allowed to drag the summarized-away prefix onto the chain.
+    const t = transcript()
+      .user('u1', 'before the compaction', { at: T(1) })
+      .assistant('a1', 'pre-compact reply', { at: T(2) })
+      .meta({ type: 'last-prompt', leafUuid: 'u1', explicit: true })
+      .compactBoundary('cb', { at: T(3), logicalParentUuid: 'a1' })
+      .user('sum', 'summary of the conversation so far', { isCompactSummary: true, at: T(4) })
+      .assistant('a2', 'post-compact reply', { at: T(5) });
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.chain).toEqual(['cb', 'sum', 'a2']);
+    expect(res.chainUuids.has('u1')).toBe(false);
+  });
+
+  it('when the newest line is NOT the last line written, only a descendant of the last line moves the leaf', () => {
+    // Backward-stamped EOF lines are routine (an api_error carries the stamp of
+    // when the call failed, not of when it was written), so the newest stamp often
+    // sits mid-file on a branch the loader will not load. The advance is a
+    // reachability question, never a timestamp race.
+    const t = transcript()
+      .user('u1', 'why is the deploy stuck', { at: T(1) })
+      .assistant('a1', 'looking now', { at: T(2) })
+      .user('u2', 'confirm it then', { at: T(3) })
+      .assistant('a2', 'confirmed: the config was stale', { at: T(20) })   // newest stamp
+      .system('err', 'api_error', { parent: 'a1', at: T(4), error: { message: 'overloaded_error' } });
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.leafUuid).toBe('a1');
+    expect(res.chain).toEqual(['u1', 'a1', 'err']);
+    for (const uuid of ['u2', 'a2']) expect(res.chainUuids.has(uuid)).toBe(false);
+  });
+
+  it('…and a descendant written BEFORE its parent DOES move it', () => {
+    // Out-of-order writes are real (the parent-appears-later case below), and here
+    // the file's last line is the ROOT: without the forward advance the chain would
+    // be ['u1'] alone and the reply would be dropped.
+    const t = transcript()
+      .raw({ type: 'assistant', uuid: 'a1', parentUuid: 'u1', timestamp: T(9),
+        message: { id: 'msg_a1', role: 'assistant', content: [{ type: 'text', text: 'reply' }] } })
+      .raw({ type: 'user', uuid: 'u1', parentUuid: null, timestamp: T(1),
+        message: { role: 'user', content: 'first' } });
+    expect(chainOf(t)).toEqual(['u1', 'a1']);
+  });
+
+  it('refuses a reachable descendant that has NO timestamp at all', () => {
+    // `d` descends from the file's last line, so reachability alone would elect it
+    // — but it carries no timestamp, which the CLI requires before a candidate may
+    // advance. Electing it is not a harmless mistake: an unstamped candidate then
+    // loses the Date.parse tie-break too, so the whole session reports NO leaf and
+    // every rewind point in it fails validation.
+    const t = transcript()
+      .raw({ type: 'user', uuid: 'd', parentUuid: 'b', message: { role: 'user', content: [] } })
+      .raw({ type: 'user', uuid: 'x', parentUuid: null, timestamp: T(9), message: { role: 'user', content: [] } })
+      .raw({ type: 'user', uuid: 'b', parentUuid: null, timestamp: T(1), message: { role: 'user', content: [] } });
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.leafUuid).toBe('b');
+    expect(res.chain).toEqual(['b']);
+  });
+
+  it('lands the leaf on a user/assistant line and appends its non-conversational tail in TIME order', () => {
+    // The file ends on a `system` line hung off an attachment: the leaf climbs to
+    // the first conversational ancestor, and the lines below it come back through
+    // the descendant sweep — sorted by timestamp, so `hook` precedes the
+    // attachment it is a child of.
+    const t = transcript()
+      .user('u1', 'first', { at: T(1) }).assistant('a1', 'reply one', { at: T(2) })
+      .attachment('at2', { at: T(9) })
+      .system('hook', 'stop_hook_summary', { at: T(5) });
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.leafUuid).toBe('a1');
+    expect(res.chain).toEqual(['u1', 'a1', 'hook', 'at2']);
   });
 });
 
@@ -151,6 +305,39 @@ describe('computeCliLoadedChain — walk termination', () => {
     expect(chainOf(t)).toEqual(['c1', 'c2']);
   });
 
+  it('bridges a MISSING parent to the nearest earlier line within 5s — 5000ms in, 5001ms out', () => {
+    // When the named parent is not in the file the CLI does not stop: it adopts the
+    // closest line stamped at or before this one, inside a 5s window. The bound is
+    // exact, so a case sitting on it pins the comparison as <=, not <.
+    const orphaned = (ms: number) => transcript()
+      .user('anc', 'the line the walk should land on', { at: TMS(0) })
+      .raw({ type: 'user', uuid: 'orphan', parentUuid: '0199dead-0000-4000-8000-000000000000',
+        timestamp: TMS(ms), message: { role: 'user', content: 'parent is gone' } });
+    expect(chainOf(orphaned(5000))).toEqual(['anc', 'orphan']);
+    expect(chainOf(orphaned(5001))).toEqual(['orphan']);
+  });
+
+  it('will not bridge across the sidechain flag — `false` and absent are DIFFERENT values', () => {
+    // The CLI compares isSidechain with !==, so an explicit `false` never matches a
+    // line that carries no flag at all. Relaxing this to a boolean coercion would
+    // graft main-thread lines onto subagent walks and vice versa.
+    const t = transcript()
+      .user('anc', 'explicitly flagged main-thread', { at: TMS(0), isSidechain: false })
+      .raw({ type: 'user', uuid: 'orphan', parentUuid: '0199dead-0000-4000-8000-000000000000',
+        timestamp: TMS(1000), message: { role: 'user', content: 'no flag at all' } });
+    expect(chainOf(t)).toEqual(['orphan']);
+  });
+
+  it('uses the same 5s bridge when a CYCLE blocks the walk', () => {
+    // The cycle guard stops the walk from hanging; the bridge then carries it on to
+    // an off-cycle line, so a cyclic tail costs the chain its cycle, not its history.
+    const t = transcript()
+      .user('anc', 'off-cycle line', { at: TMS(0) })
+      .raw({ type: 'user', uuid: 'c1', parentUuid: 'c2', timestamp: TMS(1000), message: { role: 'user', content: 'a' } })
+      .raw({ type: 'user', uuid: 'c2', parentUuid: 'c1', timestamp: TMS(2000), message: { role: 'user', content: 'b' } });
+    expect(chainOf(t)).toEqual(['anc', 'c1', 'c2']);
+  });
+
   it('bridges legacy `progress` lines so the chain does not truncate there', () => {
     // Pre-#24099 transcripts put progress lines INSIDE the parent chain. They are
     // consumed into a uuid→parent bridge and the child is re-pointed at the
@@ -163,15 +350,15 @@ describe('computeCliLoadedChain — walk termination', () => {
       .from('p2').assistant('a1', 'reply one', { at: T(4) })
       .from('a1').user('u2', 'second', { at: T(6) })
       .from('a1').assistant('other', 'other branch', { at: T(5) });
-    // The bridge held: a1's parent resolved through p2→p1→u1.
-    expect(chainOf(t)).toEqual(['u1', 'a1', 'u2']);
+    expect(chainOf(t)).toEqual(['u1', 'a1', 'other']);
   });
 
   it('collapses a duplicate uuid to one node — later value wins, ORIGINAL position kept', () => {
-    // Map.set semantics of the CLI loader (sessionStorage.ts:3646), and both
-    // halves matter. `dup` is rewritten at line 4 with T(7): the LATER value
-    // gives it a leaf-worthy stamp, and the ORIGINAL insertion position (line 2,
-    // ahead of `other`) wins the strict-`>` tie against `other`, also T(7).
+    // Map.set semantics of the CLI loader (sessionStorage.ts:3646): the rewrite at
+    // line 4 replaces the node's fields (parent, timestamp) while the map keeps
+    // its FIRST insertion position, which is what still orders the candidate scan.
+    // `dup` is then selected because it is the LAST tree line in the file — not
+    // because it out-stamps `other`, which carries the same T(7).
     const t = transcript()
       .user('u1', 'first', { at: T(1) })
       .user('dup', 'first write', { parent: 'u1', at: T(1) })
@@ -597,7 +784,92 @@ describe('computeCliLoadedChain — preserved-segment relink (partial compaction
       .raw({ type: 'user', uuid: 'straggler', parentUuid: 'sum', timestamp: T(30), message: { role: 'user', content: 'late line off the old summary' } });
     const res = computeCliLoadedChain(t.lines);
     expect(res.leafUuid).toBe('straggler');
-    expect(res.chain).toEqual(['cb', 'sum', 'straggler']);
+    expect(res.chain).toEqual(['straggler']);
     expect(res.chainUuids.has('headU')).toBe(false);
+  });
+
+  it('a STALE seg protects nothing — its OWN preserved lines are pruned with the prefix', () => {
+    // Same staleness, stated on the lines the seg named: once a later no-seg
+    // boundary exists, nothing before that boundary is kept, so a line hung off the
+    // once-preserved reply can no longer walk back into it.
+    const t = preservedFixture({ headUuid: 'headU', anchorUuid: 'sum', tailUuid: 'tailA' })
+      .compactBoundary('cb2', { at: T(9), logicalParentUuid: 'newA' })
+      .user('sum2', 'second summary', { isCompactSummary: true, at: T(10) })
+      .raw({ type: 'user', uuid: 'straggler', parentUuid: 'tailA', timestamp: T(30),
+        message: { role: 'user', content: 'late line off a once-preserved reply' } });
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.chain).toEqual(['straggler']);
+    expect(res.chainUuids.has('tailA')).toBe(false);
+  });
+
+  /** The same compaction shape, but the boundary carries the explicit
+   *  `preservedMessages` LIST. `gapA` sits between two kept lines on disk and the
+   *  list does NOT name it — the case that tells list order from disk order. */
+  const preservedListFixture = (compactMetadata: Record<string, unknown>) => transcript()
+    .user('u1', 'summarized away', { at: T(1) })
+    .assistant('a1', 'old reply', { at: T(2) })
+    .user('headU', 'keep this ask', { at: T(3) })
+    .assistant('gapA', 'summarized away mid-segment', { at: T(4) })
+    .user('midU', 'keep this follow-up', { at: T(5) })
+    .assistant('tailA', 'keep this reply', { at: T(6) })
+    .compactBoundary('cb', { at: T(7), logicalParentUuid: 'tailA', compactMetadata })
+    .user('sum', 'summary of the earlier conversation', { isCompactSummary: true, at: T(8) })
+    .from('sum').user('newU', 'post-compact ask', { at: T(9) })
+    .assistant('newA', 'post-compact reply', { at: T(10) });
+
+  /** A late line hung off a summarized-away reply — the probe that shows whether
+   *  the pre-boundary prefix is still in the loaded map at all. */
+  const withStraggler = (t: ReturnType<typeof transcript>) => t.raw({
+    type: 'user', uuid: 'straggler', parentUuid: 'a1', timestamp: T(30),
+    message: { role: 'user', content: 'late line off a summarized-away reply' },
+  });
+
+  it('relinks the preservedMessages LIST in list order, dropping an unlisted line between them', () => {
+    // anchor → headU → midU → tailA, and the anchor's other child (the first
+    // post-compact ask) is re-pointed at the list's tail so the segment is spliced
+    // in whole. `gapA` was never listed, so it goes with the summarized-away prefix.
+    const t = preservedListFixture({
+      trigger: 'auto', preTokens: 150_000,
+      preservedMessages: { anchorUuid: 'sum', uuids: ['headU', 'midU', 'tailA'] },
+    });
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.chain).toEqual(['cb', 'sum', 'headU', 'midU', 'tailA', 'newU', 'newA']);
+    expect(res.chainUuids.has('gapA')).toBe(false);
+  });
+
+  it('prefers the LIST over a preservedSegment whose walk is broken', () => {
+    // Listed uuids are authoritative, so the seg is never walked. Compare with the
+    // seg-only case above, where the same broken tail means no relink at all.
+    const t = preservedListFixture({
+      trigger: 'auto', preTokens: 150_000,
+      preservedMessages: { anchorUuid: 'sum', uuids: ['headU', 'midU', 'tailA'] },
+      preservedSegment: { headUuid: 'headU', anchorUuid: 'sum', tailUuid: '0199dead-0000-4000-8000-000000000000' },
+    });
+    expect(computeCliLoadedChain(t.lines).chain)
+      .toEqual(['cb', 'sum', 'headU', 'midU', 'tailA', 'newU', 'newA']);
+  });
+
+  it('an EMPTY preservedMessages list keeps nothing: the whole pre-boundary prefix is pruned', () => {
+    // A list that names no line is not "no list": the boundary is still the live one,
+    // so the prefix is dropped exactly as an ordinary full compaction drops it. The
+    // straggler's parent is gone with it and the walk ends on the straggler.
+    const t = withStraggler(preservedListFixture({
+      trigger: 'auto', preTokens: 150_000,
+      preservedMessages: { anchorUuid: 'sum', uuids: [] },
+    }));
+    const res = computeCliLoadedChain(t.lines);
+    expect(res.leafUuid).toBe('straggler');
+    expect(res.chain).toEqual(['straggler']);
+  });
+
+  it('does NOT relink and does NOT prune when a listed uuid is missing from the file', () => {
+    // Same file, same straggler: a list we cannot honour makes the whole splice
+    // untrustworthy, so the loader leaves the map alone rather than dropping lines
+    // on a record it could not verify — and the prefix is still reachable.
+    const t = withStraggler(preservedListFixture({
+      trigger: 'auto', preTokens: 150_000,
+      preservedMessages: { anchorUuid: 'sum', uuids: ['headU', '0199dead-0000-4000-8000-000000000000'] },
+    }));
+    expect(computeCliLoadedChain(t.lines).chain).toEqual(['u1', 'a1', 'straggler']);
   });
 });

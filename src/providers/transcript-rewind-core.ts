@@ -40,6 +40,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import readline from 'node:readline';
+import { createCliTranscriptPrefilter } from '../core/transcript-chain-prefilter.js';
 import {
   TRANSCRIPT_TREE_TYPES,
   computeCliLoadedChain,
@@ -394,14 +395,20 @@ function slimTranscriptLine(raw: Record<string, unknown>): RewindTranscriptLine 
   if (typeof raw.uuid === 'string') line.uuid = raw.uuid;
   if (typeof raw.parentUuid === 'string') line.parentUuid = raw.parentUuid;
   else if (raw.parentUuid === null) line.parentUuid = null;
-  if (raw.isSidechain === true) line.isSidechain = true;
+  if (typeof raw.isSidechain === 'boolean') line.isSidechain = raw.isSidechain;
+  if (raw.type === 'last-prompt') {
+    if (typeof raw.leafUuid === 'string' || raw.leafUuid === null) line.leafUuid = raw.leafUuid;
+    if (raw.explicit === true) line.explicit = true;
+  }
+  const attachment = raw.attachment as { type?: unknown } | undefined;
+  if (raw.type === 'attachment' && typeof attachment?.type === 'string') line.attachment = { type: attachment.type };
   if (typeof raw.timestamp === 'string') line.timestamp = raw.timestamp;
   if (typeof raw.operation === 'string') line.operation = raw.operation;
   // Top-level `content` is only read for queue-operation lines (their identity key).
   if (line.type === 'queue-operation' && typeof raw.content === 'string') {
     line.content = raw.content;
   }
-  const meta = raw.compactMetadata as { preservedSegment?: Record<string, unknown> } | undefined;
+  const meta = raw.compactMetadata as { preservedSegment?: Record<string, unknown>; preservedMessages?: Record<string, unknown> } | undefined;
   const seg = meta && typeof meta === 'object' ? meta.preservedSegment : undefined;
   if (seg && typeof seg === 'object') {
     line.compactMetadata = {
@@ -411,6 +418,13 @@ function slimTranscriptLine(raw: Record<string, unknown>): RewindTranscriptLine 
         ...(typeof seg.tailUuid === 'string' ? { tailUuid: seg.tailUuid } : {}),
       },
     };
+  }
+  const preserved = meta?.preservedMessages;
+  if (preserved) {
+    if (typeof preserved.anchorUuid !== 'string' || !Array.isArray(preserved.uuids)
+      || preserved.uuids.some((uuid) => typeof uuid !== 'string')) throw new Error('Invalid preserved transcript list');
+    line.compactMetadata ??= {};
+    line.compactMetadata.preservedMessages = { anchorUuid: preserved.anchorUuid, uuids: [...preserved.uuids] };
   }
   const message = raw.message as { id?: unknown; content?: unknown } | undefined;
   if (message && typeof message === 'object') {
@@ -441,8 +455,11 @@ function slimTranscriptLine(raw: Record<string, unknown>): RewindTranscriptLine 
 async function readSlimTranscript(
   jsonlPath: string,
   keepTextForUuid?: string,
-): Promise<{ lines: RewindTranscriptLine[]; lineCount: number }> {
+): Promise<{ lines: RewindTranscriptLine[]; loadedLines: RewindTranscriptLine[]; lineCount: number }> {
   const lines: RewindTranscriptLine[] = [];
+  const stat = await fsp.stat(jsonlPath);
+  const disabled = ['1', 'true', 'yes', 'on'].includes(process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP?.trim().toLowerCase() ?? '');
+  const prefilter = createCliTranscriptPrefilter(stat.size, disabled);
   let lineCount = 0;
   const stream = fs.createReadStream(jsonlPath, { encoding: 'utf-8' });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -468,13 +485,14 @@ async function readSlimTranscript(
           if (tb) slim.twinText = tb.text as string;
         }
       }
+      prefilter.push(Buffer.from(text), raw, lines.length);
       lines.push(slim);
     }
   } finally {
     rl.close();
     stream.destroy();
   }
-  return { lines, lineCount };
+  return { lines, loadedLines: prefilter.apply(lines), lineCount };
 }
 
 /**
@@ -495,9 +513,9 @@ export async function probeTranscriptRewindHostLocal(
   }
   if (!st.isFile()) return null;
 
-  const { lines, lineCount } = await readSlimTranscript(jsonlPath, input.uuid);
+  const { lines, loadedLines, lineCount } = await readSlimTranscript(jsonlPath, input.uuid);
   const anchor = commitAnchorOf(lines);
-  const loaded = computeCliLoadedChain(lines);
+  const loaded = computeCliLoadedChain(loadedLines);
 
   const out: RewindProbeOutput = {
     jsonlPath,

@@ -310,8 +310,11 @@ function tooLargeForTheTunnel(err: unknown): SessionControlError | null {
  *  Partial/corrupt lines are skipped — they are not transcript lines. */
 async function parseTranscriptLines(
   content: string,
+  forResume = false,
 ): Promise<import('../../providers/transcript-rewind-core.js').RewindTranscriptLine[]> {
   const { resumeFactsOf } = await import('../../providers/transcript-rewind-core.js');
+  const { createCliTranscriptPrefilter } = await import('../transcript-chain-prefilter.js');
+  const prefilter = forResume ? createCliTranscriptPrefilter(Buffer.byteLength(content)) : null;
   const parsedLines: import('../../providers/transcript-rewind-core.js').RewindTranscriptLine[] = [];
   for (const line of content.split('\n')) {
     if (!line) continue;
@@ -321,10 +324,11 @@ async function parseTranscriptLines(
       const parsed = raw as import('../../providers/transcript-rewind-core.js').RewindTranscriptLine;
       const resume = resumeFactsOf(raw);
       if (resume) parsed.resume = resume;
+      prefilter?.push(Buffer.from(line), raw, parsedLines.length);
       parsedLines.push(parsed);
     } catch { /* partial/corrupt line — not a transcript line */ }
   }
-  return parsedLines;
+  return prefilter ? prefilter.apply(parsedLines) : parsedLines;
 }
 
 /**
@@ -412,7 +416,7 @@ async function resolveRewindTarget(sessionId: string, messageUuid: string): Prom
     }
     const { computeCliLoadedChain } = await import('../transcript-chain.js');
     const { resumeAnchorBefore } = await import('../../providers/transcript-rewind-core.js');
-    const lines = await parseTranscriptLines(raw.content);
+    const lines = await parseTranscriptLines(raw.content, true);
     const loaded = computeCliLoadedChain(lines);
     if (!loaded.chainUuids.has(messageUuid)) {
       throw new SessionControlError(OFF_CHAIN, 409);
