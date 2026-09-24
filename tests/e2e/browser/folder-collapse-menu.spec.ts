@@ -7,12 +7,12 @@
  *
  *   1. Main list: clicking the folder header row anywhere (not just the chevron)
  *      folds it. Members hide, the chevron un-rotates, and the fold survives a
- *      reload (localStorage `open-walnut-collapsed-folders`).
+ *      reload (localStorage `open-walnut-folder-folds`).
  *   2. Pinned tier (By-project view): clicking the folder chip folds it there
- *      too, and BOTH surfaces share one collapse set, so folding in the tier
- *      folds the same folder in the main list.
- *   3. Flat list mode (grouping off): the same folder folds there as well. The
- *      collapse set is global, so every list mode has to be wired to it.
+ *      too, and only there: each place folds a folder on its own
+ *      (place-folds.ts), so the main list keeps its copy open.
+ *   3. Flat list mode (grouping off): the same folder folds there as well. Every
+ *      list mode reads the list's one fold record, so each has to be wired to it.
  *   4. Right-click on a folder row opens Walnut's own menu with the folder
  *      actions, and Rename / Delete still work when driven from it.
  *   5. "Move to project…" really moves the folder: the header row re-renders
@@ -54,8 +54,8 @@ const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 test.setTimeout(180_000)
 
 /**
- * Sequential inside this file: the fold sets (`walnut-todo-collapsed-folders`,
- * `walnut-todo-collapsed-projs`) are single localStorage keys that ui-prefs-sync
+ * Sequential inside this file: the fold records (`open-walnut-folder-folds`,
+ * `walnut-todo-tier-run-folds`) are single localStorage keys that ui-prefs-sync
  * mirrors to the fixture SERVER and merges back at boot, last-writer-wins per key.
  * Two tests folding in parallel overwrite each other's whole set, and the test that
  * reloads to prove the fold PERSISTED comes back with the other one's value.
@@ -326,7 +326,7 @@ test('main list: clicking the folder header row body folds it, and the fold surv
 
 })
 
-test('pinned tier: clicking the folder chip folds it, and the main list folds with it', async ({ page }) => {
+test('pinned tier: clicking the folder chip folds it there, and the main list keeps its own fold', async ({ page }) => {
   const project = `FoldTierProj${Date.now().toString(36)}`
   const a = await createTaskViaApi('Fold tier member A', { project })
   const b = await createTaskViaApi('Fold tier member B', { project })
@@ -357,12 +357,20 @@ test('pinned tier: clicking the folder chip folds it, and the main list folds wi
   await expect(chip.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
   await page.screenshot({ path: '/tmp/folder-collapse-menu/tier-chip-collapsed.png' })
 
-  // ONE collapse set, two surfaces: the main list folded too. The All view lists a
-  // pinned task only in its tier, so read the list side from the Projects view.
+  // Each place folds on its own: the main list still shows the folder open. A shared
+  // fold closed the copy of a folder above the click too, and the clicked row jumped.
+  // The All view lists a pinned task only in its tier, so read the list side from the
+  // Projects view.
   await chooseViewOption(page, 'tasks')
   await expect(listHeader(page, groupId)).toBeVisible()
+  await expect(page.locator(`.todo-group-project .todo-panel-item[data-task-id="${a.id}"]`).first()).toBeVisible()
+  await expect(listHeader(page, groupId).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  // And folding it there leaves the tier's fold as it was.
+  await listHeader(page, groupId).locator('.task-group-chip-label').click()
   await expect(page.locator(`.todo-group-project .todo-panel-item[data-task-id="${a.id}"]`).first()).toBeHidden()
-  await expect(listHeader(page, groupId).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await chooseViewOption(page, 'all')
+  await expect(chip.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(cardA).toBeHidden()
 
 })
 

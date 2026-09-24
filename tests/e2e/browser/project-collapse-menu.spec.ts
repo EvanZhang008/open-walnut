@@ -86,7 +86,7 @@ test.setTimeout(180_000)
 /**
  * Sequential inside this file, because the thing under test is ONE global value.
  *
- * The fold lives in `walnut-todo-collapsed-projs`, and that key starts with
+ * The fold lives in `walnut-todo-tier-run-folds`, and that key starts with
  * `walnut-todo-`, so ui-prefs-sync mirrors it to the fixture SERVER and merges the
  * server copy back at boot, last-writer-wins per key. Two of these tests folding
  * different projects in parallel therefore overwrite each other's whole set, and
@@ -739,13 +739,14 @@ test('a tier with ONE project draws no label, and a fold from the main list cann
   await pinToTierViaApi(t1.id, tierId)
   await pinToTierViaApi(t2.id, tierId)
 
-  // The TIER's own fold set already names this project, the way a fold made while
-  // the tier still drew two runs outlives the other run leaving. Seeded directly,
-  // so the gate below is exercised whichever surface's click wrote the set (the
-  // main-list fold further down is the other way in).
-  await page.addInitScript((p) => {
-    try { localStorage.setItem('walnut-todo-collapsed-projs', JSON.stringify([p])) } catch { /* storage off */ }
-  }, project)
+  // The TIER's own fold record already folds this project's run, the way a fold made
+  // while the tier still drew two runs outlives the other run leaving. Seeded
+  // directly (key = tier + U+001F + project, place-folds.ts), so the gate below is
+  // exercised whichever click wrote it (the main-list fold further down is the other
+  // way in).
+  await page.addInitScript((key) => {
+    try { localStorage.setItem('walnut-todo-tier-run-folds', JSON.stringify([key])) } catch { /* storage off */ }
+  }, `${tierId}\u001f${project}`)
   await presetPanelView(page, { section: 'all', project: '' })
   await presetProjectGrouping(page)
   await presetTierViewModes(page, { [tierId]: 'project' })

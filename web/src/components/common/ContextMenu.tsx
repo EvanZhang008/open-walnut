@@ -494,6 +494,8 @@ export function ContextMenu({
                 disabled={row.disabled}
                 title={row.title}
                 data-ai={row.ai ? 'true' : undefined}
+                // Lets a panel recognise what an item does from the click alone (useFoldAnchor).
+                data-menu-key={row.key}
                 onMouseEnter={() => setFocusIndex(index)}
                 onClick={(e) => {
                   e.stopPropagation();

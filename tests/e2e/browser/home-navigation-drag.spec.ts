@@ -43,7 +43,7 @@ test('native reorder, drag cancellation, folded tiers, failure recovery and expl
   await page.addInitScript(() => {
     // Backlog was folded earlier. Empty, it is not drawn until a drag needs it as a target.
     if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '["backlog"]');
-    if (localStorage.getItem('walnut-todo-collapsed-projs') === null) localStorage.setItem('walnut-todo-collapsed-projs', '[]');
+    if (localStorage.getItem('walnut-todo-tier-run-folds') === null) localStorage.setItem('walnut-todo-tier-run-folds', '[]');
   });
   const ids: string[] = [];
   for (const [i, tier] of ['focus', 'focus', 'satellite'].entries()) {

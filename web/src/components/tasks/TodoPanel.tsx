@@ -123,9 +123,11 @@ import {
 } from '@open-walnut/task-query';
 import { INBOX_TAB, LS_TAB_KEY } from './task-tabs';
 import { staleDonePinIds } from './pin-search-fold';
+import { foldedId, isFoldedAt, pruneFolds, readFolds, saveFolds, toggleFold, unfold } from './place-folds';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { CopyableId } from '../common/CopyableId';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
+import { useFoldAnchor } from '@/hooks/useFoldAnchor';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { ProjectDetailPane } from './ProjectDetailPane';
@@ -379,8 +381,15 @@ function effectivePriority(p: string): string {
 // ── LocalStorage persistence helpers ──
 
 const LS_COLLAPSED_SECTIONS_KEY = 'walnut-todo-collapsed-sections';
-const LS_COLLAPSED_PROJS_KEY = 'walnut-todo-collapsed-projs';
 const LS_EXPANDED_PARENTS_KEY = 'walnut-todo-expanded-parents';
+/** Project runs in the pinned tiers, folded per (tier, project): place-folds.ts. */
+const LS_RUN_FOLDS_KEY = 'walnut-todo-tier-run-folds';
+const LS_LEGACY_RUN_FOLDS_KEY = 'walnut-todo-collapsed-projs';
+/** Folders, folded per (tier or LIST_PLACE, folder id). */
+const LS_FOLDER_FOLDS_KEY = 'open-walnut-folder-folds';
+const LS_LEGACY_FOLDER_FOLDS_KEY = 'open-walnut-collapsed-folders';
+/** The Projects list's place in the folder fold record. */
+const LIST_PLACE = 'list';
 // LS_FILTERS_COLLAPSED_KEY removed — filters now inside ViewDropdown
 const LS_SORT_KEY = 'walnut-todo-sortBy';
 /** Per-project task order, `{ [project]: SortBy }`; a project absent here follows LS_SORT_KEY. */
@@ -2816,15 +2825,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [headerAddSignal, setHeaderAddSignal] = useState<{ project: string; nonce: number } | null>(null);
   /** Unfold a project, for callers about to reveal something INSIDE it — a ghost
    *  row (or any other row) under a folded project is a dead click. Shared by the
-   *  main list's add row and the pinned tiers' per-run add row. `tierOnly` leaves the
-   *  Projects list alone: a list project opens only when the user acts on it there. */
-  const expandProject = useCallback((project: string, opts?: { tierOnly?: boolean }) => {
-    if (!opts?.tierOnly) setListOpen(prev => prev.has(project) ? prev : saveListOpen(new Set(prev).add(project)));
-    setCollapsedProjects((prev) => {
-      if (!prev.has(project)) return prev;
-      const next = new Set(prev);
-      next.delete(project);
-      persistSet(LS_COLLAPSED_PROJS_KEY, next);
+   *  main list's add row and the pinned tiers' per-run add row. With a `tier`, only
+   *  that tier's run opens and the Projects list is left alone (a list project opens
+   *  only when the user acts on it there); without one, only the list's project opens,
+   *  never a run in a tier above it. */
+  const expandProject = useCallback((project: string, opts?: { tier?: string }) => {
+    const tier = opts?.tier;
+    if (tier === undefined) {
+      setListOpen(prev => prev.has(project) ? prev : saveListOpen(new Set(prev).add(project)));
+      return;
+    }
+    setRunFolds((prev) => {
+      const next = unfold(prev, project, tier, allTierKeysRef.current);
+      if (next !== prev) saveFolds(LS_RUN_FOLDS_KEY, next);
       return next;
     });
   }, []);
@@ -2948,7 +2961,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (isDeleted(activeSection)) { setActiveSection('focus'); persistSection('focus'); }
     if (isDeleted(searchSection)) setSearchSection('focus');
   }, [activeSection, searchSection, customTiersLive, customTiersLoaded]);
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
+  // The pinned tiers' project runs, folded per (tier, project).
+  const [runFolds, setRunFolds] = useState<ReadonlySet<string>>(() => readFolds(LS_RUN_FOLDS_KEY, LS_LEGACY_RUN_FOLDS_KEY));
+  // Every tier key; allTierKeys is computed further down, and splitting an every-tier
+  // fold (place-folds.ts) needs it inside callbacks declared before it.
+  const allTierKeysRef = useRef<readonly string[]>([]);
   const [listOpen, setListOpen] = useState<Set<string>>(readListOpen);
   // Projects a locate opened for this visit only. Nothing but a click on the project
   // saves it open, so a reload folds these back.
@@ -3012,6 +3029,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Vertical splitter for list/detail ratio
   const { ratio: detailRatio, containerRef: splitterContainerRef, handleProps: splitterHandleProps, isResizing: splitterResizing } = useVerticalSplitter();
+  // A fold keeps its clicked row in place; only the rows below it move.
+  useFoldAnchor(splitterContainerRef);
   // GONE (deliberately): the PINNED-vs-list splitter and the four per-tier resize
   // handles. The stacked view is ONE scroller now, so a ratio between the two
   // regions and a maxHeight per tier both carved private scrollboxes out of it —
@@ -3253,15 +3272,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         onProjectChange?.(projTab);
       }
 
-      // Expand the collapsed project group (collapse keys are plain project names)
-      if (collapsedProjects.has(proj)) {
-        setCollapsedProjects((prev) => {
-          const next = new Set(prev);
-          next.delete(proj);
-          persistSet(LS_COLLAPSED_PROJS_KEY, next);
-          return next;
-        });
-      }
       setRevealedProjects(prev => prev.has(proj) ? prev : new Set(prev).add(proj));
 
       // Expand collapsed parent if focused task is a child (temporary — not persisted,
@@ -3315,10 +3325,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Runs on the pinnedOnly path too (the block at the top of this effect that
       // unfolds projects is gated on !pinnedOnly, which is exactly the tier quick-add
       // case); expanding only touches the fold, never the tab, so the "pinnedOnly must
-      // not switch tabs" rule stays intact. The collapse key is shared with the main
-      // list, so this also unfolds that project's header row. Revealing rows is the
-      // acceptable side of a shared key; silently locating nothing is not.
-      expandProject(proj, { tierOnly: true });
+      // not switch tabs" rule stays intact. Only the task's own tier opens (below).
       let tierKey = focusTaskIds?.has(focusedTaskId) ? 'focus'
         : backlogTaskIds?.has(focusedTaskId) ? 'backlog'
         : waitTaskIds?.has(focusedTaskId) ? 'wait'
@@ -3328,6 +3335,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           if (ids.has(focusedTaskId)) { tierKey = tid; break; }
         }
       }
+      expandProject(proj, { tier: tierKey });
       if (collapsedSections.has('pinned') || collapsedSections.has(tierKey)) {
         setCollapsedSections((prev) => {
           const next = new Set(prev);
@@ -3369,7 +3377,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // query simply finds nothing). Keeps the PIN row in sync with the list below.
     scrollToPinnedTask(focusedTaskId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedTaskId, focusNonce, tasks, activeProject, collapsedProjects, favorites]);
+  }, [focusedTaskId, focusNonce, tasks, activeProject, favorites]);
 
   // Auto-expand parent when a child task is created (via WS event)
   // Persist to localStorage so expansion survives page refresh (fork subtask bug fix)
@@ -3775,6 +3783,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => ['focus', 'satellite', 'backlog', 'wait', ...(customTiers ?? []).map((t) => t.id)],
     [customTiers],
   );
+  allTierKeysRef.current = allTierKeys;
   const DROP_ZONE_TIERS = useMemo<Record<string, FocusTier>>(() => {
     const map: Record<string, FocusTier> = {};
     for (const k of allTierKeys) {
@@ -4888,7 +4897,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onProjectChange?.('');
   }, [loading, tasks.length, activeProject, projectTabs, onProjectChange]);
 
-  /** Every legal `collapsedProjects` key right now: real project names + '' when Inbox exists. */
+  /** Every live project group key: real project names + '' when Inbox exists. */
   const liveGroupKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const t of tasks) keys.add(t.project || '');
@@ -4904,12 +4913,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // its tasks moved away and it stopped rendering a header to un-collapse.
   useEffect(() => {
     if (loading || tasks.length === 0) return;
-    setCollapsedProjects((prev) => {
-      const stale = [...prev].filter((k) => !liveGroupKeys.has(k));
-      if (stale.length === 0) return prev;
-      const next = new Set(prev);
-      for (const k of stale) next.delete(k);
-      persistSet(LS_COLLAPSED_PROJS_KEY, next);
+    setRunFolds((prev) => {
+      const next = pruneFolds(prev, (key) => liveGroupKeys.has(foldedId(key)));
+      if (next !== prev) saveFolds(LS_RUN_FOLDS_KEY, next);
       return next;
     });
     // The list's own set too: an opened name left behind by a rename would open a
@@ -5832,15 +5838,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return map;
   }, [sorted, taskGroups]);
 
-  // Folder collapse (main list). Persisted so a fold survives reloads; keyed by
-  // group id. The folder header row stays and carries the chevron; member rows
-  // get .task-folder-collapsed (display:none) so dnd ids stay mounted.
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => {
-    try {
-      const raw = localStorage.getItem('open-walnut-collapsed-folders');
-      return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
-    } catch { return new Set(); }
-  });
+  // Folder folds. Each tier and the Projects list fold a folder on their own
+  // (place-folds.ts), so a folder shown in two places never folds the copy above
+  // the click. Persisted so a fold survives reloads. The folder header row stays
+  // and carries the chevron; member rows get .task-folder-collapsed (display:none)
+  // so dnd ids stay mounted.
+  const [folderFolds, setFolderFolds] = useState<ReadonlySet<string>>(() => readFolds(LS_FOLDER_FOLDS_KEY, LS_LEGACY_FOLDER_FOLDS_KEY));
   // Prune on write: the set is otherwise append-only, so every folder the user
   // ever folded and later DELETED stays in localStorage for good. Skipped until a
   // registry has actually loaded, or the first toggle after a cold boot (empty
@@ -5849,19 +5852,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => new Set([...Object.keys(taskGroups ?? {}), ...Object.keys(folderMeta ?? {})]),
     [taskGroups, folderMeta],
   );
-  const toggleFolderCollapse = useCallback((groupId: string) => {
-    setCollapsedFolders((prev) => {
-      const canPrune = foldersKnown.size > 0;
-      const next = new Set<string>();
-      for (const gid of prev) {
-        if (gid === groupId) continue; // the toggle below decides this one
-        if (!canPrune || foldersKnown.has(gid)) next.add(gid);
-      }
-      if (!prev.has(groupId)) next.add(groupId);
-      try { localStorage.setItem('open-walnut-collapsed-folders', JSON.stringify([...next])); } catch { /* quota, non-fatal */ }
+  const toggleFolder = useCallback((place: string, groupId: string) => {
+    setFolderFolds((prev) => {
+      const kept = foldersKnown.size > 0
+        ? pruneFolds(prev, (key) => foldedId(key) === groupId || foldersKnown.has(foldedId(key)))
+        : prev;
+      const next = toggleFold(kept, place, groupId, [...allTierKeysRef.current, LIST_PLACE]);
+      saveFolds(LS_FOLDER_FOLDS_KEY, next);
       return next;
     });
   }, [foldersKnown]);
+  const toggleListFolder = useCallback((groupId: string) => toggleFolder(LIST_PLACE, groupId), [toggleFolder]);
 
   // taskId → its folder id, for the ancestor walk below. Built from `sorted` (the
   // rows actually drawn), the same source the folder header/collapse logic uses.
@@ -5879,15 +5880,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    * isChildHidden below, with the same depth cap guarding a cycle.
    */
   const isRowFolderCollapsed = useCallback((taskId: string) => {
-    if (collapsedFolders.size === 0) return false;
+    if (folderFolds.size === 0) return false;
     let currentId: string | undefined = taskId;
     for (let hops = 0; currentId && hops <= 10; hops++) {
       const gid = groupIdByTaskId.get(currentId);
-      if (gid && collapsedFolders.has(gid)) return true;
+      if (gid && isFoldedAt(folderFolds, LIST_PLACE, gid)) return true;
       currentId = childParentMap.get(currentId);
     }
     return false;
-  }, [collapsedFolders, groupIdByTaskId, childParentMap]);
+  }, [folderFolds, groupIdByTaskId, childParentMap]);
 
   // Determine if a child task should be hidden (any ancestor is collapsed, walks full chain)
   const isChildHidden = useCallback((taskId: string) => {
@@ -5920,16 +5921,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return m;
   }, [grouped]);
 
-  // The pinned tiers' project label rows fold through this set. The main list keeps
-  // its own (`listOpen`, folded by default), so folding a
-  // project in a tier leaves its list group alone and vice versa. Both survive a
-  // reload. useCallback because the tier render pass depends on it.
-  const toggleProject = useCallback((key: string) => {
-    setCollapsedProjects((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      persistSet(LS_COLLAPSED_PROJS_KEY, next);
+  // A tier's project label row folds that tier's run only, so the rows above the
+  // click never move. The main list keeps its own record (`listOpen`, folded by
+  // default). Both survive a reload. useCallback because the tier render pass
+  // depends on it.
+  const toggleRun = useCallback((tier: string, project: string) => {
+    setRunFolds((prev) => {
+      const next = toggleFold(prev, tier, project, allTierKeysRef.current);
+      saveFolds(LS_RUN_FOLDS_KEY, next);
       return next;
     });
   }, []);
@@ -6600,10 +6599,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const draggedTask = activeDragId ? sorted.find((t) => t.id === activeDragId) : null;
 
   // User-controlled collapse only — no auto-collapse during drag.
-  // Key = the plain project name ('' = Inbox).
-  const isProjectCollapsed = useCallback((project: string) => {
-    return collapsedProjects.has(project);
-  }, [collapsedProjects]);
+  // `project` = the plain project name ('' = Inbox).
+  const isRunCollapsed = useCallback((tier: string, project: string) => {
+    return isFoldedAt(runFolds, tier, project);
+  }, [runFolds]);
 
   // Click task row (or pinned card) = select + scroll + open session (if any). Never open detail panel.
   // Pinned cards and list rows share identical behavior — single handler, one alias.
@@ -7041,7 +7040,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const addTaskToRun = useCallback((tier: string, project: string) => {
     // The ghost row is rendered INSIDE the project's run, so a folded project
     // would hide the very row this click asked for. Unfold first.
-    expandProject(project, { tierOnly: true });
+    expandProject(project, { tier });
     setRunAddSignal({ tier, project, nonce: Date.now() });
   }, [expandProject]);
   const tierAddOpenSignal = useCallback((tier: string) =>
@@ -7117,10 +7116,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
      * would shift dnd-kit's indices under a live drag. Gated on `showFolders`
      * because the label row is the ONLY way back — hiding a run in a tier that
      * draws no label (single project, or 'custom' view mode) would be a one-way
-     * door, and the collapse set is shared with the main list, where a project
-     * can be folded from a header this tier never renders.
+     * door: the fold outlives the label (it is saved, and a second project can
+     * leave the tier).
      */
-    const runHidden = (p: string) => showFolders && isProjectCollapsed(p);
+    const runHidden = (p: string) => showFolders && isRunCollapsed(tier, p);
     // Project run sequence (first-seen order) — decides which SIDE of the target
     // the drop indicator draws on. handleLabelDrop's splice means the dragged
     // project takes the target's slot: dragging UP lands before the target
@@ -7200,7 +7199,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             project={folderOwnerProject(folderMeta?.[gid], facts.member)}
             showProjectPrefix={!showFolders}
             count={facts.count}
-            collapsed={collapsedFolders.has(gid)}
+            collapsed={isFoldedAt(folderFolds, tier, gid)}
             // The RUN's project decides, not the folder's registry project: this
             // chip is drawn inside the bucket its members cluster into, and that
             // bucket is what the label row folds. `prevProject` IS that bucket (the
@@ -7209,7 +7208,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             // above it yet, so there is no run to be folded inside.
             projectCollapsed={prevProject !== null ? runHidden(prevProject) : false}
             inert={foldersInert}
-            onToggleCollapse={toggleFolderCollapse}
+            onToggleCollapse={(id) => toggleFolder(tier, id)}
             onMoveToProject={handleMoveFolderToProject}
             onRename={handleRenameGroup}
             onDissolve={handleDissolveGroup} onHide={handleHideGroup} />
@@ -7245,7 +7244,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             key={runIndex === 0 ? `projlabel:${tier}:${proj}` : `projlabel:${tier}:${proj}:${runIndex}`}
             project={proj}
             count={projectRowCount.get(proj) ?? 0}
-            collapsed={isProjectCollapsed(proj)}
+            collapsed={isRunCollapsed(tier, proj)}
             inert={foldersInert}
             dropIndicator={labelDropProj === proj && labelDragProj !== proj ? dropSide(proj) : null}
             // The project-reorder drag stays HERE, next to `ordering.projects`.
@@ -7277,7 +7276,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 if (active !== null) handleLabelDrop(active, proj, projSeq);
               },
             }}
-            onToggleCollapse={toggleProject}
+            onToggleCollapse={(p) => toggleRun(tier, p)}
             onAddTask={(p) => addTaskToRun(tier, p)}
             onAddSeparator={(p) => addSeparator(tier, p)}
             onAddFolder={onCreateFolder ? handleCreateFolder : undefined}
@@ -7305,10 +7304,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             project={folderOwnerProject(folderMeta?.[gi.groupId], task)}
             showProjectPrefix={!showFolders}
             count={gi.count}
-            collapsed={collapsedFolders.has(gi.groupId)}
+            collapsed={isFoldedAt(folderFolds, tier, gi.groupId)}
             projectCollapsed={runHidden(proj)}
             inert={foldersInert}
-            onToggleCollapse={toggleFolderCollapse}
+            onToggleCollapse={(id) => toggleFolder(tier, id)}
             onMoveToProject={handleMoveFolderToProject}
             onRename={handleRenameGroup}
             onDissolve={handleDissolveGroup} onHide={handleHideGroup} />
@@ -7325,7 +7324,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onStartSession={onStartSession}
           onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
           onDelete={onDelete} onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
-          groupInfo={gi} folderCollapsed={!!(gi && collapsedFolders.has(gi.groupId))}
+          groupInfo={gi} folderCollapsed={!!(gi && isFoldedAt(folderFolds, tier, gi.groupId))}
           projectCollapsed={runHidden(proj)}
           selectMode={selectMode}
           isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle}
@@ -7344,7 +7343,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       out.push(runAddRow(tier, lastScope));
     }
     return out;
-  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, collapsedFolders, toggleFolderCollapse, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isProjectCollapsed, toggleProject, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy]);
+  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -8054,7 +8053,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   // Flat mode folds exactly like the grouped list: ONE collapse
                   // set, shared by every list mode.
                   folderCollapsed={isRowFolderCollapsed(task.id)}
-                  onToggleFolder={toggleFolderCollapse}
+                  onToggleFolder={toggleListFolder}
                   folderProject={task.group_id ? folderOwnerProject(folderMeta?.[task.group_id], task) : undefined}
                   onMoveFolderToProject={handleMoveFolderToProject}
                 />
@@ -8154,7 +8153,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onUnhideGroup={handleUnhideGroup}
                                 onDissolveGroup={handleDissolveGroup}
                                 folderCollapsed={isRowFolderCollapsed(task.id)}
-                                onToggleFolder={toggleFolderCollapse}
+                                onToggleFolder={toggleListFolder}
                                 folderProject={task.group_id ? folderOwnerProject(folderMeta?.[task.group_id], task) : undefined}
                                 onMoveFolderToProject={handleMoveFolderToProject}
                               />

@@ -1036,3 +1036,195 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
     await page.request.put('/api/notes/global', { data: { content: original } });
   }
 });
+
+test('a fold keeps the clicked row where it was, and a tier folds only its own project run', async ({ page, baseURL }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  // First boot only: an older build's fold record (one set shared by every tier) with
+  // Meadowlark folded, and every tier open so the panel has room to scroll. A reload
+  // keeps whatever the test saved.
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('fold-anchor-seeded')) return;
+    sessionStorage.setItem('fold-anchor-seeded', '1');
+    localStorage.setItem('walnut-todo-collapsed-projs', JSON.stringify(['Meadowlark']));
+    localStorage.setItem('walnut-todo-collapsed-sections', '[]');
+  });
+  const now = new Date().toISOString();
+  const task = (id: string, project: string, extra: Record<string, unknown> = {}) => ({
+    id, title: `Fold ${id}`, project, status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
+    created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
+  });
+  const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`);
+  // The same two projects in Focus, Satellite and Wait, a folder in Satellite, a folder with
+  // one member pinned in Focus and two in the list, and the list below.
+  const tiers: Record<string, Array<[string, string]>> = {
+    focus: [...range('fo', 8).map((id): [string, string] => [id, 'Orchard']), ['fs1', 'Orchard'], ...range('fm', 3).map((id): [string, string] => [id, 'Meadowlark'])],
+    satellite: [...range('so', 2).map((id): [string, string] => [id, 'Orchard']), ...range('sg', 3).map((id): [string, string] => [id, 'Orchard']), ...range('sm', 3).map((id): [string, string] => [id, 'Meadowlark'])],
+    wait: [...range('wo', 6).map((id): [string, string] => [id, 'Orchard']), ...range('wm', 2).map((id): [string, string] => [id, 'Meadowlark'])],
+  };
+  const folderMembers = range('sg', 3);
+  const spanMembers = ['fs1', 'lO1', 'lO2'];
+  const groupOf = (id: string) => folderMembers.includes(id) ? 'fold-folder' : spanMembers.includes(id) ? 'fold-span' : undefined;
+  await page.route('**/api/tasks?*', async route => {
+    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
+    const pinned = Object.entries(tiers).flatMap(([tier, rows]) => rows.map(([id, project]) =>
+      task(id, project, { pinned: true, focus_tier: tier, ...(groupOf(id) ? { group_id: groupOf(id) } : {}) })));
+    const list = ['Orchard', 'Meadowlark', 'Juniper'].flatMap(project => range(`l${project[0]}`, project === 'Juniper' ? 12 : 8)
+      .map(id => task(id, project, groupOf(id) ? { group_id: groupOf(id) } : {})));
+    await route.fulfill({ json: { tasks: [...pinned, ...list] } });
+  });
+  await page.route('**/api/tasks/groups', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({ json: { groups: [
+      { group_id: 'fold-folder', label: 'Fold folder', member_ids: folderMembers, project: 'Orchard' },
+      { group_id: 'fold-span', label: 'Span folder', member_ids: spanMembers, project: 'Orchard' },
+    ] } });
+  });
+  await page.route('**/api/focus/tasks', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const ids = (tier: string) => tiers[tier].map(([id]) => id);
+    await route.fulfill({ json: {
+      pinned_tasks: [...ids('focus'), ...ids('satellite'), ...ids('wait')], focus_tasks: ids('focus'),
+      satellite_tasks: ids('satellite'), backlog_tasks: [], wait_tasks: ids('wait'), custom_tier_tasks: {},
+    } });
+  });
+  await page.route('**/api/focus/tiers', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({ json: { tiers: [] } });
+  });
+  await boot(page, baseURL!);
+  await expect(navigation(page).locator('[data-task-id="fo1"]')).toBeVisible({ timeout: 30_000 });
+
+  const tier = (id: string) => navigation(page).locator('.todo-pinned-subgroup').filter({ has: page.locator(`[data-navigation-id="${id}"]`) });
+  const label = (tierId: string, project: string) => tier(tierId).locator(`.tier-project-label[data-project="${project}"]`).first();
+  const card = (id: string) => navigation(page).locator(`.todo-pinned-section [data-task-id="${id}"]`);
+  const scroller = navigation(page).locator('.home-navigation-scroll');
+  const topOf = (row: ReturnType<typeof label>) => row.evaluate(el => el.getBoundingClientRect().top);
+  const frames = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  /** Clicks `target`, waits for `folded` to settle, and returns how far `row` moved on screen. */
+  const drift = async (row: ReturnType<typeof label>, click: () => Promise<void>, settled: () => Promise<void>) => {
+    // Measured in view, so the click's own scroll-into-view never counts as drift.
+    const view = await scroller.evaluate(el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; });
+    const before = await topOf(row);
+    expect(before).toBeGreaterThan(view.top);
+    expect(before).toBeLessThan(view.bottom - 40);
+    await click();
+    await settled();
+    await frames();
+    const soon = await topOf(row) - before;
+    // Nothing may drift once the hold has ended either.
+    await page.waitForTimeout(500);
+    return { soon, later: await topOf(row) - before };
+  };
+  const still = { soon: 0, later: 0 };
+  const near = (moved: { soon: number; later: number }) => ({ soon: Math.round(moved.soon), later: Math.round(moved.later) });
+
+  // The shared record converted: Meadowlark is still folded in every tier.
+  await expect(card('fm1')).toBeHidden();
+  await expect(card('sm1')).toBeHidden();
+  await expect(card('wm1')).toBeHidden();
+  await openListProject(page, 'Juniper');
+  await openListProject(page, 'Orchard');
+  expect(await scroller.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(300);
+
+  // 1. The report: at the top of the panel, fold Orchard in Satellite by its name. Orchard in
+  //    Focus, above it, stays open, so the label does not jump up.
+  await scroller.evaluate(el => { el.scrollTop = 0; });
+  await frames();
+  const satOrchard = label('satellite', 'Orchard');
+  expect(near(await drift(satOrchard, () => satOrchard.locator('.tier-project-label-name').click(), () => expect(card('so1')).toBeHidden()))).toEqual(still);
+  await expect(card('fo1')).toBeVisible();
+  await expect(card('wo1')).toBeVisible();
+  expect(near(await drift(satOrchard, () => satOrchard.click(), () => expect(card('so1')).toBeVisible()))).toEqual(still);
+
+  // 2. Opening a run the old shared record folded opens it in that tier only.
+  const satMeadowlark = label('satellite', 'Meadowlark');
+  expect(near(await drift(satMeadowlark, () => satMeadowlark.click(), () => expect(card('sm1')).toBeVisible()))).toEqual(still);
+  await expect(card('fm1')).toBeHidden();
+  await expect(card('wm1')).toBeHidden();
+  // A scroll the page makes right after a fold is never pulled back.
+  expect(await satOrchard.evaluate(async el => {
+    const scroller = el.closest('.home-navigation-scroll')!;
+    (el as HTMLElement).click();
+    scroller.scrollTop = 40;
+    for (let i = 0; i < 5; i++) await new Promise(resolve => requestAnimationFrame(resolve));
+    return scroller.scrollTop;
+  })).toBe(40);
+  await expect(card('so1')).toBeHidden();
+  await satOrchard.click();
+  await expect(card('so1')).toBeVisible();
+
+  // 3. Scrolled into the middle, every kind of fold row keeps its place: a tier heading, a
+  //    fold picked from its menu, a folder, and a project label's right-click menu.
+  const scrollTo = async (row: ReturnType<typeof label>, y: number) => {
+    await scroller.evaluate((el, dy) => { el.scrollTop += dy; }, await topOf(row) - y);
+    await frames();
+  };
+  const satHeading = heading(page, 'satellite');
+  const satOpen = satHeading.locator('.navigation-heading-open');
+  await scrollTo(satHeading, 300);
+  expect(await scroller.evaluate(el => el.scrollTop)).toBeGreaterThan(100);
+  expect(near(await drift(satHeading, () => satOpen.click(), () => expect(card('so1')).toHaveCount(0)))).toEqual(still);
+  expect(near(await drift(satHeading, () => satOpen.click(), () => expect(card('so1')).toBeVisible()))).toEqual(still);
+  expect(near(await drift(satHeading, async () => {
+    await satHeading.getByRole('button', { name: 'Satellite menu' }).click();
+    await page.locator('.wn-context-menu').getByRole('menuitem', { name: 'Collapse Satellite' }).click();
+  }, () => expect(card('so1')).toHaveCount(0)))).toEqual(still);
+  expect(near(await drift(satHeading, () => satOpen.click(), () => expect(card('so1')).toBeVisible()))).toEqual(still);
+
+  const folder = tier('satellite').locator('.task-group-chip[data-group-id="fold-folder"]');
+  await scrollTo(folder, 360);
+  expect(near(await drift(folder, () => folder.locator('.task-group-chip-label').click(), () => expect(card('sg1')).toBeHidden()))).toEqual(still);
+  expect(near(await drift(folder, () => folder.getByRole('button', { name: 'Expand folder' }).click(), () => expect(card('sg1')).toBeVisible()))).toEqual(still);
+
+  await scrollTo(satOrchard, 320);
+  expect(near(await drift(satOrchard, async () => {
+    await satOrchard.click({ button: 'right' });
+    await page.locator('.wn-context-menu').getByRole('menuitem', { name: 'Collapse project' }).click();
+  }, () => expect(card('so1')).toBeHidden()))).toEqual(still);
+  await expect(card('fo1')).toBeAttached();
+  expect(await card('fo1').evaluate(el => getComputedStyle(el).display)).not.toBe('none');
+  await expect(card('wo1')).toBeVisible();
+
+  // A folder shown in two places folds only where it was clicked: its Focus copy, above
+  // the list, stays open. (It sits at the end of the list, so this is also a fold that
+  // shortens the content under the scroll position; see 4.)
+  const listRow = (id: string) => navigation(page).locator(`.todo-panel-list [data-task-id="${id}"]`);
+  const listFolder = navigation(page).locator('.todo-panel-list .task-group-chip[data-group-id="fold-span"]');
+  await scrollTo(listFolder, 360);
+  await expect(listRow('lO2')).toBeVisible();
+  expect(near(await drift(listFolder, () => listFolder.locator('.task-group-chip-label').click(), () => expect(listRow('lO2')).toBeHidden()))).toEqual(still);
+  await expect(card('fs1')).toBeVisible();
+
+  // 4. At the very end of the list, folding a project shortens the content below the
+  //    scroll position; the row still stays, and the room that takes drains away as
+  //    the user scrolls back up.
+  const juniper = navigation(page).locator('.todo-group-project-header').filter({ has: page.locator('.todo-group-project-name', { hasText: /^Juniper$/ }) });
+  await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await frames();
+  await expect(listRow('lJ12')).toBeVisible();
+  expect(near(await drift(juniper, () => juniper.locator('.todo-group-name-btn').click(), () => expect(listRow('lJ1')).toHaveCount(0)))).toEqual(still);
+  const atEnd = await topOf(juniper);
+  const box = await scroller.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.wheel(0, -150);
+  await expect.poll(() => topOf(juniper)).toBeGreaterThan(atEnd + 100);
+  await page.mouse.wheel(0, -400);
+  await expect.poll(() => scroller.evaluate(el => el.style.paddingBottom)).toBe('');
+  // The rows ride the wheel, nothing else: no jump when the room goes.
+  const settled = await topOf(juniper);
+  await frames();
+  expect(Math.round(await topOf(juniper) - settled)).toBe(0);
+
+  // 5. The folds are saved per place, and the old shared record is left for older builds.
+  await page.reload();
+  await expect(navigation(page).locator('[data-task-id="fo1"]')).toBeVisible({ timeout: 30_000 });
+  await expect(card('sm1')).toBeVisible();
+  await expect(card('fm1')).toBeHidden();
+  await expect(card('so1')).toBeHidden();
+  await expect(card('fo1')).toBeVisible();
+  await expect(card('fs1')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('walnut-todo-collapsed-projs'))).toBe(JSON.stringify(['Meadowlark']));
+  await page.screenshot({ path: `${SHOTS}/v2/fold/${test.info().project.name}-after-reload.png`, clip: { x: 0, y: 0, width: 700, height: 840 } });
+  expect(errors).toEqual([]);
+});
