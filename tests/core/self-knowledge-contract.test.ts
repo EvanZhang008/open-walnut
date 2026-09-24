@@ -10,9 +10,15 @@ describe('Walnut self-knowledge contract', () => {
     const prompt = renderSelfKnowledgeContract();
 
     expect(prompt.length).toBeLessThanOrEqual(SELF_KNOWLEDGE_PROMPT_MAX_CHARS);
-    expect(prompt).toContain('`task_create` records work only');
-    expect(prompt).toContain('`session_start` starts a session');
-    expect(prompt).toContain('`session_send` messages a live session');
+    expect(prompt).toContain('`task_create` creates AND starts it');
+    expect(prompt).toContain('`record_only: true` saves a placeholder');
+    expect(prompt).toContain('`task_start` starts an existing task');
+    expect(prompt).toContain('`task_send` adds context');
+    expect(prompt).toContain('`task_history` reads its conversation');
+    // The task is the only work identity the first tool call needs, so the
+    // retired session ops must not come back into the bootstrap prompt.
+    expect(prompt).not.toContain('session_start');
+    expect(prompt).not.toContain('session_send');
     expect(prompt).toContain('explicit task ID');
     expect(prompt).toContain('Satellite is represented by no stored focus tier');
     expect(prompt).not.toContain('/api/');
@@ -31,6 +37,20 @@ describe('Walnut self-knowledge contract', () => {
     expect(prompt).not.toContain('`WAIT`');
     expect(prompt).toContain('`COMPLETE` when it is finished');
     expect(prompt).toContain('You may set any phase; none is reserved');
+
+    // `status` left every tool surface 2026-09-01, so the bootstrap prompt has
+    // to say phase is the only state field. Without this line the Main Agent
+    // keeps writing where.status / task_update{status}, which no longer resolve.
+    expect(prompt).toContain('ONE state field');
+    expect(prompt).toContain('no `status`');
+    // Phase is the lifecycle the agent WRITES; execution is what a read reports
+    // about the run. An agent that thinks it can set execution invents a call.
+    expect(prompt).toContain('`execution` on a read observes the run; you never set it');
+    // NEED_ACTION is the rename of AGENT_COMPLETE (same state, honest name). The
+    // old name must not survive anywhere in the prompt, or the agent learns a
+    // phase value the API will reject.
+    expect(prompt).toContain('NEED_ACTION');
+    expect(prompt).not.toContain('AGENT_COMPLETE');
 
     // The deleted mechanism must not creep back in as prose.
     expect(prompt).not.toMatch(/only a human/i);
