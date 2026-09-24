@@ -74,6 +74,7 @@ interface Fixture {
   accounts: string[];
   /** How many times a body was fetched, per message id. Proves `retry` reached the provider. */
   bodyFetches: Record<string, number>;
+  beforeBodyFetch?: (messageId: string) => Promise<void>;
 }
 
 let server: HttpServer;
@@ -375,6 +376,7 @@ export function activate(walnut) {
     },
     getBody: async (accountId, messageId) => {
       const state = S();
+      await state.beforeBodyFetch?.(messageId);
       state.bodyFetches[messageId] = (state.bodyFetches[messageId] ?? 0) + 1;
       const message = MESSAGES.find((one) => 'INBOX:900:' + one.uid === messageId);
       if (!message) {
@@ -447,19 +449,55 @@ describe('a zero-account install has no agent surface at all', () => {
 
 describe('adding the first account arms the surface', () => {
   it('registers eight tools, eight ops and one context line naming the account', async () => {
-    marks().accounts = [ONE];
-    const created = await api<{ account: { accountId: string } }>('POST', '/accounts', {
-      providerId: 'agentmail', values: { which: 'one' },
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let entered = false;
+    let finished = false;
+    let initialPrefetch: Promise<number> | undefined;
+    const prefetch = MailService.prototype.prefetchBodies;
+    const intercepted = vi.spyOn(MailService.prototype, 'prefetchBodies').mockImplementation(function (...args) {
+      const work = prefetch.apply(this, args);
+      if (args[0] === ONE) {
+        initialPrefetch = work;
+        void work.then(() => { finished = true; }, () => { finished = true; });
+      }
+      return work;
     });
-    expect(created.status).toBe(201);
+    marks().beforeBodyFetch = async (messageId) => {
+      if (messageId === 'INBOX:900:4' && !entered) {
+        entered = true;
+        await blocked;
+      }
+    };
+    try {
+      marks().accounts = [ONE];
+      const created = await api<{ account: { accountId: string } }>('POST', '/accounts', {
+        providerId: 'agentmail', values: { which: 'one' },
+      });
+      expect(created.status).toBe(201);
 
-    await expect.poll(mailToolNames, { timeout: 20_000 }).toEqual(TOOL_NAMES);
-    expect(await mailOpNames()).toEqual(TOOL_NAMES);
-    expect(contextLine()).toBe('Mail: 1 account: Work mail');
+      await expect.poll(mailToolNames, { timeout: 20_000 }).toEqual(TOOL_NAMES);
+      expect(await mailOpNames()).toEqual(TOOL_NAMES);
+      expect(contextLine()).toBe('Mail: 1 account: Work mail');
 
-    // The account setup kicks a poll; the reads below need the messages in the cache.
-    await expect.poll(async () => (await rows('SELECT rowid FROM messages')).length, { timeout: 30_000 })
-      .toBe(MESSAGE_COUNT);
+      await expect.poll(async () => (await rows('SELECT rowid FROM messages')).length, { timeout: 30_000 })
+        .toBe(MESSAGE_COUNT);
+      await expect.poll(() => entered, { timeout: 30_000 }).toBe(true);
+      expect(finished).toBe(false);
+      await tool('mail_read', { message: 'INBOX:900:4' });
+      const before = marks().bodyFetches['INBOX:900:4'] ?? 0;
+      release();
+      await initialPrefetch;
+      expect(marks().bodyFetches['INBOX:900:4'] ?? 0).toBe(before + 1);
+      // Later cache assertions must wait for the first prefetch to finish; storing the envelope does not mean the body request has finished.
+      const settled = marks().bodyFetches['INBOX:900:4'];
+      await tool('mail_read', { message: 'INBOX:900:4' });
+      expect(marks().bodyFetches['INBOX:900:4']).toBe(settled);
+    } finally {
+      release();
+      try { await initialPrefetch; }
+      finally { delete marks().beforeBodyFetch; intercepted.mockRestore(); }
+    }
   }, 60_000);
 
   it('registers the skill only now, so a zero-account prompt index was byte-identical', async () => {

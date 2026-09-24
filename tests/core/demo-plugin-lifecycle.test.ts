@@ -182,7 +182,7 @@ describe('Demo Plugin lifecycle', () => {
       const response = await request(app).get('/api/plugins/walnut-demo/stats')
       expect(response.body.counters).toMatchObject({
         events: expect.any(Number),
-        hookCalls: 1,
+        hookCalls: 2,
         configChanges: 1,
       })
       expect(response.body.counters.events).toBeGreaterThan(0)

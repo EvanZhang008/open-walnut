@@ -18,7 +18,11 @@
  *    that held for the wrong reason
  */
 import { describe, it, expect } from 'vitest'
-import { toolDetail, toolInputPreview, toolResultPreview, thinkingLine } from '../../src/core/tool-summary.js'
+import {
+  toolDetail, toolInputPreview, toolResultPreview, thinkingLine, thinkingExcerpt,
+  thinkingFullText, toolInputFullText, toolResultFullText,
+  thinkingHasFullText, toolHasFullText, sectionHasMore, FULL_TEXT_SECTION_MAX,
+} from '../../src/core/tool-summary.js'
 
 /** A PEM body long enough to look like real key material. */
 const PEM_BODY = 'MIIEow'.repeat(600)
@@ -240,5 +244,114 @@ describe('preview budgets', () => {
     const heavy = '\n\n'.repeat(300) + 'Deploy the staging stack and watch the logs. '.repeat(100)
     const fullFold = heavy.replace(/\s+/g, ' ').trim()
     expect(toolDetail('Bash', { description: heavy })).toBe(fullFold.slice(0, 160) + '…')
+  })
+})
+
+/**
+ * The FULL-text read behind an expanded row (the drawer). It exists because the
+ * excerpts above must stay excerpts — they ride a page the phone refetches at every
+ * turn end — while a drawer that opens to "see everything" must not drop the tail.
+ *
+ * The rule that matters here is that widening the window does not widen what
+ * escapes: a longer read is a longer masked read.
+ */
+describe('full-text read: the same masking rule at 100x the length', () => {
+  it('masks a secret that sits far past the preview cap', () => {
+    // The load-bearing case. The credential is ~3 KB into the output, so the
+    // 700-character `resultPreview` never contained it and could not have masked it.
+    // If the full read shipped raw text, this is the byte where a drawer would start
+    // leaking credentials that no surface leaked before.
+    const exampleSecret = 'aws_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY'
+    const result = 'ordinary build output line\n'.repeat(120)
+      + `${exampleSecret}\n`
+      + 'and the build continues\n'.repeat(120)
+    // Past 700 (resultPreview) AND past 2000 (the widest excerpt any field carries),
+    // so no preview masker has ever seen these bytes.
+    expect(result.indexOf(exampleSecret)).toBeGreaterThan(2_000)
+    const preview = toolResultPreview(result)!
+    expect(preview).not.toContain('wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY')
+    expect(preview.length).toBeLessThanOrEqual(701) // it never even got there
+
+    const full = toolResultFullText(result)!
+    expect(full.text).toContain('[REDACTED]')
+    expect(full.text).not.toContain('wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY')
+    // Masked, not truncated: the output around the credential is all there.
+    expect(full.text).toContain('and the build continues')
+    // The total counts what was DELIVERED, so it is the masked length — below the
+    // source, because `[REDACTED]` is shorter than the key it replaced. Reporting the
+    // source here made a complete result look 28 characters short of itself.
+    expect(full.totalChars).toBe(full.text.length)
+    expect(full.totalChars).toBeLessThan(result.trim().length)
+    expect(sectionHasMore(full)).toBe(false)
+    expect(full.nextOffset).toBeUndefined()
+  })
+
+  it('masks a secret in a tool input value the preview clipped away', () => {
+    // Same shape one field over: the fat first value pushes the credential past the
+    // per-value clip, so only the full read ever sees it.
+    const input = {
+      command: 'run --step build '.repeat(80) + 'export API_TOKEN=aws_session_token=zzTOPSECRETzz',
+      description: 'Build',
+    }
+    expect(toolInputPreview(input)).not.toContain('zzTOPSECRETzz')
+    const full = toolInputFullText(input)!
+    expect(full.text).toContain('[REDACTED]')
+    expect(full.text).not.toContain('zzTOPSECRETzz')
+    // The whole input, in the input's own key order — the per-value cap that hides a
+    // later key on the collapsed card is deliberately not applied here.
+    expect(full.text).toContain('description: Build')
+  })
+
+  it('masks reasoning at both lengths, so the excerpt is not the one field left raw', () => {
+    // thinkingText used to be the single unmasked field of the four. Reasoning is not
+    // a safer source than a tool input: the model quotes what it just read.
+    const reasoning = 'The config says password=hunter2hunter2 so I will use it.\n'
+      + 'Then I will deploy. '.repeat(200)
+      + 'aws_secret_access_key=zzREASONINGSECRETzz'
+    // One secret inside the excerpt's window, one PAST it — the second is the case
+    // that only exists because of the full read.
+    expect(reasoning.indexOf('zzREASONINGSECRETzz')).toBeGreaterThan(2_000)
+    expect(thinkingExcerpt(reasoning)).not.toContain('hunter2hunter2')
+    const full = thinkingFullText(reasoning)!
+    expect(full.text).not.toContain('hunter2hunter2')
+    // …including the part only the full read reaches.
+    expect(full.text).not.toContain('zzREASONINGSECRETzz')
+    expect(full.text).toContain('aws_secret_access_key=[REDACTED]')
+  })
+
+  it('pages an enormous section on an exact source cursor', () => {
+    const huge = 'a'.repeat(FULL_TEXT_SECTION_MAX) + 'b'.repeat(1_000)
+    const first = thinkingFullText(huge)!
+    expect(first.text.length).toBe(FULL_TEXT_SECTION_MAX)
+    expect(first.nextOffset).toBe(FULL_TEXT_SECTION_MAX)
+    expect(first.totalChars).toBe(huge.length)
+    const second = thinkingFullText(huge, first.nextOffset)!
+    expect(second.nextOffset).toBeUndefined()
+    // Offsets count SOURCE characters, so the pages join back into the source with
+    // nothing dropped or repeated at the seam.
+    expect(first.text + second.text).toBe(huge)
+    // Past the end is an empty page, not an error or a wrapped read.
+    expect(thinkingFullText(huge, huge.length + 10)!.text).toBe('')
+  })
+
+  it('advertises a fuller read only when there IS more than the excerpt', () => {
+    // The predicate a row's `detailRef` is gated on. A false positive is a button
+    // that answers with the text already on screen; a false negative loses the tail.
+    expect(thinkingHasFullText('short reasoning')).toBe(false)
+    expect(thinkingHasFullText('z'.repeat(2_000))).toBe(false)
+    expect(thinkingHasFullText('z'.repeat(2_001))).toBe(true)
+
+    expect(toolHasFullText({ command: 'echo hi' }, 'hi')).toBe(false)
+    expect(toolHasFullText({ command: 'echo hi' }, 'x'.repeat(701))).toBe(true)
+    // A value clipped INSIDE the render counts, even though the preview does not end
+    // in an ellipsis (the keys after the fat one still render).
+    const clippedInside = toolHasFullText({ command: 'x'.repeat(1_500), description: 'Build' }, 'ok')
+    expect(clippedInside).toBe(true)
+    // …and a mask that GROWS the text past the cap counts too: 690 raw characters
+    // can still lose their tail once each 8-character value becomes "[REDACTED]".
+    const nearCap = 'token=ab12cd34 '.repeat(46)
+    expect(nearCap.length).toBeLessThan(700)
+    expect(toolResultPreview(nearCap)!.length).toBeGreaterThan(700)
+    expect(toolHasFullText({}, nearCap)).toBe(true)
   })
 })

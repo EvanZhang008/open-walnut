@@ -192,7 +192,7 @@ describe('the attribute values', () => {
 
 describe('control characters', () => {
   it('strips C0 except newline and tab, DEL, and C1', () => {
-    const stripped = stripControls('a bc\rdefg\nh\ti');
+    const stripped = stripControls('a\x00bc\rdefg\nh\ti');
     expect(stripped).toBe('abcdefg\nh\ti');
   });
 

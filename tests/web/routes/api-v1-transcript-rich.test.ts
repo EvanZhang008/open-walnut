@@ -74,8 +74,17 @@ interface Row {
   resultPreview?: string
   inputPreview?: string
   thinkingText?: string
+  detailRef?: string
 }
-interface Body { version: number; sessionId: string; exportedAt: string; truncated: boolean; messages: Row[] }
+interface Body {
+  version: number
+  sessionId: string
+  exportedAt: string
+  truncated: boolean
+  messages: Row[]
+  /** Present only on a `rich=1` request — whether these rows really carry the fields. */
+  rich?: boolean
+}
 
 /** Raw body text AND the parsed shape — the byte-identity case needs the text. */
 async function getTranscript(sid: string, qs = ''): Promise<{ status: number; text: string; body: Body }> {
@@ -179,6 +188,10 @@ describe('transcript ?rich=1', () => {
     // rather than as an opaque string diff.
     expect(text).not.toContain('inputPreview')
     expect(text).not.toContain('thinkingText')
+    // The drawer's handle rides the same opt-in as the fields it points at: the
+    // slim tail is what the sweep pushes over the bridge under a frame cap, and
+    // a per-row token would widen every row of it for nothing.
+    expect(text).not.toContain('detailRef')
     // …and the rows that WOULD carry them are present, unwidened.
     const thinking = body.messages.find((m) => m.kind === 'thinking')!
     const tool = body.messages.find((m) => m.kind === 'tool')!
@@ -220,7 +233,8 @@ describe('transcript ?rich=1', () => {
 
     // Everything OUTSIDE the two fields is the slim answer, unchanged: same rows,
     // same order, same text. The opt-in adds fields; it must not reshape the tail.
-    const strip = (rows: Row[]): Row[] => rows.map(({ inputPreview: _i, thinkingText: _t, ...rest }) => rest)
+    const strip = (rows: Row[]): Row[] =>
+      rows.map(({ inputPreview: _i, thinkingText: _t, detailRef: _d, ...rest }) => rest)
     expect(strip(rich.body.messages)).toEqual(strip(slim.body.messages))
     expect(rich.body.truncated).toBe(slim.body.truncated)
   })
@@ -254,20 +268,63 @@ describe('transcript ?rich=1', () => {
     expect(on.body.messages.find((m) => m.kind === 'tool')!.inputPreview).toBeDefined()
   })
 
-  it('rich=1 never forces a build: a cached read still answers from the sweep file', async () => {
-    // The phone opens a session in two phases — cached paint, then a fresh
-    // reconcile — and phase one being a plain disk read is the point of it. So
-    // `rich=1` decorates a tail the box BUILDS and never turns a cached read
-    // into a live one; the sweep file cannot carry the fields either way.
+  it('a rich request is never answered with slim rows, on the second read as much as the first', async () => {
+    // THE regression this case exists for, and it replaces the opposite pin.
+    //
+    // `rich=1` used to decorate only a tail the route BUILT, so a request that hit
+    // the sweep-exported file answered without the fields — the sweep writes the
+    // slim shape and cannot carry them. That was defended as protecting the phone's
+    // two-phase open, but its real effect was that the SAME URL answered differently
+    // depending on whether a cache file happened to exist: measured on a live box,
+    // `?rich=1` gave 0 of 102 rows with `thinkingText` and `?fresh=1&rich=1` gave 39
+    // of 106. A reviewer read the first number as "this box does not produce these
+    // fields" and filed two defects about it. Nothing can be built against a shape
+    // that depends on cache warmth, so a rich request now implies the live read on
+    // the primary, and the answer says `rich: true` where the fields really are.
+    //
+    // The phone pays nothing for it: WalnutAPI.sessionTranscriptPath drops `rich`
+    // unless `fresh` is already set, so its cached first phase is still a disk read.
     const sid = 'sess-rich-cached'
     await seedRichSession(sid)
     await writeExportedTail(sid)
 
-    const { status, text, body } = await getTranscript(sid, '?rich=1')
+    // Read 1 — the sweep file exists and is what a non-rich read still serves.
+    const slim = await getTranscript(sid)
+    expect(slim.body.messages[0].text).toBe('FROM THE SWEEP FILE')
+
+    // Read 2 and read 3, same URL: the fields are there BOTH times. A cache-warmth
+    // dependency would show up as one of these two being slim.
+    for (const attempt of [1, 2]) {
+      const { status, body } = await getTranscript(sid, '?rich=1')
+      expect(status, `attempt ${attempt}`).toBe(200)
+      expect(body.rich, `attempt ${attempt}: the answer must declare its rows rich`).toBe(true)
+      expect(body.messages[0].text, `attempt ${attempt}: read live, not from the sweep file`)
+        .toBe('ship the release')
+      const thinking = body.messages.find((m) => m.kind === 'thinking')!
+      const tool = body.messages.find((m) => m.kind === 'tool')!
+      expect(thinking.thinkingText, `attempt ${attempt}`).toBeDefined()
+      expect(tool.inputPreview, `attempt ${attempt}`).toContain('command: curl')
+    }
+
+    // …and the sweep file is untouched by any of it: a plain read still gets it, so
+    // the fix did not quietly turn every transcript read into a live build.
+    const after = await getTranscript(sid)
+    expect(after.body.messages[0].text).toBe('FROM THE SWEEP FILE')
+    expect(after.text).not.toContain('"rich"')
+  })
+
+  it('declares rich=false when it could not produce the fields, instead of answering silently slim', async () => {
+    // The one path left that cannot carry them on the primary: a session with no
+    // record and no readable history, whose sweep file is all there is. The rows are
+    // slim — that part is unavoidable — but the response says so, which is the
+    // difference between a client degrading on purpose and a client guessing.
+    const sid = 'sess-rich-unreadable'
+    await writeExportedTail(sid)
+
+    const { status, body } = await getTranscript(sid, '?rich=1')
     expect(status).toBe(200)
+    expect(body.rich).toBe(false)
     expect(body.messages[0].text).toBe('FROM THE SWEEP FILE')
-    expect(text).not.toContain('inputPreview')
-    expect(text).not.toContain('thinkingText')
   })
 
   it('rich=1 is NOT full: the tail is still sliced and text rows are still clipped', async () => {
@@ -313,7 +370,8 @@ describe('transcript ?rich=1', () => {
     // 4. Row-for-row, `rich=1` is the slim answer plus the two fields: the tail
     //    it slices is the SAME tail, in the same order, with the same text.
     const slim = await getTranscript(sid, '?fresh=1')
-    const strip = (rows: Row[]): Row[] => rows.map(({ inputPreview: _i, thinkingText: _t, ...rest }) => rest)
+    const strip = (rows: Row[]): Row[] =>
+      rows.map(({ inputPreview: _i, thinkingText: _t, detailRef: _d, ...rest }) => rest)
     expect(strip(rich.body.messages)).toEqual(strip(slim.body.messages))
   })
 

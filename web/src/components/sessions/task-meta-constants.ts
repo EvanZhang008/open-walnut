@@ -22,7 +22,7 @@ export const DEFAULT_META: QuickStartTaskMeta = {
   // across launches.
   pinTier: 'focus',
   model: undefined,      // Auto — Claude/config default picks the model unless user overrides
-  engine: undefined,     // Claude (native) unless the user picks Codex in the model picker
+  engine: undefined,     // the default engine (native Claude) unless the user picks another
 };
 
 export const TIER_OPTIONS: { value: FocusTier; label: string }[] = [

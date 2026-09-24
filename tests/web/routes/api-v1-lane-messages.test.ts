@@ -84,6 +84,8 @@ interface V1Message {
   inputPreview?: string
   thinkingText?: string
   agent?: string
+  /** Opaque handle on the row's full text — only on rows the excerpts had to cut. */
+  detailRef?: string
 }
 
 async function createConv(): Promise<string> {
@@ -715,6 +717,39 @@ describe('expanded-card fields survive the lane mapping', () => {
     // The expanded excerpt is the one that KEEPS the newlines, and also agrees.
     expect(laneRow.thinkingText).toContain('\n')
     expect(historyRow.thinkingText).toBe(laneRow.thinkingText)
+  }, 30_000)
+
+  it('carries detailRef, so the chat drawer can read the text the excerpt cut', async () => {
+    // The chat surface half of the on-demand full-text read. The excerpts on these
+    // rows are capped (thinkingText at 2,000), and this route builds with
+    // `full: true` — which implies `rich` — so a clipped row arrives with the handle
+    // the drawer fetches by. The mapping used to drop additive projection fields on
+    // the floor (that is how `agent` went missing), hence an end-to-end assertion
+    // rather than a unit check of the projection.
+    const reasoning = 'Weighing the lockfile options at length. '.repeat(80) + 'CHAT-TAIL-MARKER.'
+    expect(reasoning.length).toBeGreaterThan(2_000)
+
+    const convId = await createConv()
+    const sessionId = 'lane-messages-sid-detail'
+    await seedLaneSession(convId, sessionId)
+    await writeJsonl(sessionId, [userLine('why?'), thinkingLine(reasoning, 'because.'), toolLine('tu-short'), toolResultLine('tu-short')])
+
+    const all = await getMessages(convId, '?limit=50')
+    const thinking = all.find((m) => m.kind === 'thinking')!
+    expect(thinking.thinkingText!.endsWith('…')).toBe(true)
+    expect(thinking.detailRef).toBeDefined()
+
+    const res = await fetch(apiUrl(`/api/v1/activity/detail?ref=${encodeURIComponent(thinking.detailRef!)}`))
+    expect(res.status).toBe(200)
+    const detail = await res.json() as { kind: string; text: string; textChars: number; truncated: boolean }
+    expect(detail.kind).toBe('thinking')
+    expect(detail.truncated).toBe(false)
+    // The tail the drawer could not reach before.
+    expect(detail.text).toContain('CHAT-TAIL-MARKER')
+    expect(detail.textChars).toBe(reasoning.length)
+
+    // A row whose preview holds everything advertises nothing to fetch.
+    expect(all.find((m) => m.text === 'Bash')!.detailRef).toBeUndefined()
   }, 30_000)
 })
 

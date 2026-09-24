@@ -32,6 +32,7 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 }))
 vi.mock('../../src/core/task-manager.js', () => ({
   listTasks: async () => mockTasks,
+  listFolderLabels: async () => new Map(),
 }))
 
 const DAY_MS = 24 * 60 * 60 * 1000

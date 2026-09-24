@@ -95,22 +95,24 @@ describe('tasks enriched + sprints (through the REAL mount order)', () => {
 
 describe('sessions recent + summaries', () => {
   it('GET /sessions/recent serves the projection shape, newest first', async () => {
-    // Real session records — the primary path re-exports the projection
-    // inline, so seeding the file directly would just get overwritten.
-    const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
-    await createSessionRecord('11111111-1111-4111-8111-111111111111', '', '', '/tmp')
-    await createSessionRecord('22222222-2222-4222-8222-222222222222', '', '', '/tmp')
-    // Make the second one clearly the most recent.
-    await updateSessionRecord('22222222-2222-4222-8222-222222222222', { lastActiveAt: new Date(Date.now() + 60_000).toISOString() })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-01T12:00:00.000Z'))
+    try {
+      const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+      await createSessionRecord('11111111-1111-4111-8111-111111111111', '', '', '/tmp')
+      await createSessionRecord('22222222-2222-4222-8222-222222222222', '', '', '/tmp')
+      vi.setSystemTime(new Date('2026-09-01T12:01:00.000Z'))
+      const updated = await updateSessionRecord('22222222-2222-4222-8222-222222222222', { title: 'Recent session' })
+      expect(updated.lastActiveAt).toBe('2026-09-01T12:01:00.000Z')
 
-    const res = await request(createApp()).get('/api/v1/sessions/recent?limit=1')
-    expect(res.status).toBe(200)
-    expect(res.body.sessions).toHaveLength(1)
-    expect(res.body.sessions[0].id).toBe('22222222-2222-4222-8222-222222222222')
-    // The projection shape (snake_case fields), not the raw record shape.
-    expect(res.body.sessions[0]).toHaveProperty('process_status')
-    expect(res.body.sessions[0]).toHaveProperty('last_active_at')
-    expect(res.body.syncedAt).toBeTruthy()
+      const res = await request(createApp()).get('/api/v1/sessions/recent?limit=1')
+      expect(res.status).toBe(200)
+      expect(res.body.sessions).toHaveLength(1)
+      expect(res.body.sessions[0].id).toBe('22222222-2222-4222-8222-222222222222')
+      expect(res.body.sessions[0]).toHaveProperty('process_status')
+      expect(res.body.sessions[0].last_active_at).toBe(updated.lastActiveAt)
+      expect(res.body.syncedAt).toBeTruthy()
+    } finally { vi.useRealTimers() }
   })
 
   it('GET /sessions/summaries parses summary markdown files', async () => {

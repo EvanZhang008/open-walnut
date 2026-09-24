@@ -44,6 +44,10 @@ export const SLOW_TEST_FILES = [
   'tests/providers/acp-worker.test.ts', // 9s
   'tests/providers/pi-acp-bundle.test.ts', // 6.5s
   'tests/providers/session-io.test.ts', // 2.5s (was 9s — dead RemoteIO suites + afterEach sleep)
+  // 3-5s: compiles desktop/SessionHost.swift once (the same file Walnut.app is
+  // built from) and runs it — the only way to ask macOS who it holds responsible
+  // for the processes below it.
+  'tests/providers/session-host-native.test.ts',
   'tests/providers/acp-daemon.test.ts', // 7s
   'tests/providers/session-background-workflow.test.ts', // 0.3s (was 5s — afterEach sleep was 90% of it)
   'tests/providers/daemon-transport-unit.test.ts', // 3s

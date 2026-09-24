@@ -390,14 +390,30 @@ describe('crash-resume', () => {
   it('resuming after provision does not create a second VM', async () => {
     const driver = useDriver(makeAutoDriver())
     box.bootedAfter = 10_000 // park in await-server so we can restart mid-job
-    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
-    await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
-    expect(driver.createVMCalls).toHaveLength(1)
-
-    // The state on disk says 'running' at await-server.
-    const persisted = JSON.parse(await fs.readFile(jobFile(), 'utf-8')) as CloudSetupJobState
-    expect(persisted.status).toBe('running')
-    expect(persisted.steps.provision.status).toBe('done')
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const rename = fs.rename.bind(fs)
+    const intercepted = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === jobFile()) {
+        const state = JSON.parse(await fs.readFile(from, 'utf-8')) as CloudSetupJobState
+        if (state.steps.provision.status === 'done') await blocked
+      }
+      return rename(from, to)
+    })
+    try {
+      await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+      await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
+      expect(driver.createVMCalls).toHaveLength(1)
+      const pending = JSON.parse(await fs.readFile(jobFile(), 'utf-8')) as CloudSetupJobState
+      expect(pending.steps.provision.status).toBe('running')
+      release()
+      const persisted = await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision persisted')
+      expect(persisted.status).toBe('running')
+    } finally {
+      release()
+      try { await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision persisted') }
+      finally { intercepted.mockRestore() }
+    }
 
     box.bootedAfter = 0 // the box comes up while we were down
     await restart()
@@ -468,7 +484,7 @@ describe('crash-resume', () => {
 
     // Stop the runner BEFORE editing the file, or it keeps advancing and
     // overwrites the edit (the state file has exactly one writer by design).
-    const state = await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision done on disk')
+    const state = await waitForOnDisk((s) => s.steps['await-server'].status === 'running', 'runner waiting for server on disk')
     _resetCloudSetupJobForTesting()
     // Rewind to a not-yet-provisioned job, then restart: the credential lived
     // only in memory, so it cannot silently be reused.
@@ -500,7 +516,7 @@ describe('crash-resume', () => {
     await startCloudSetupJob({ provider: 'azure', domainMode: 'own-domain', domain: ORIGIN })
     await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
 
-    const state = await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision done on disk')
+    const state = await waitForOnDisk((s) => s.steps['await-server'].status === 'running', 'runner waiting for server on disk')
     _resetCloudSetupJobForTesting()
     state.currentStep = 'provision'
     state.steps.provision = { status: 'pending' }
@@ -558,7 +574,7 @@ describe('crash-resume', () => {
     cloudRemote = { domain: 'other.example.com', token: 'tok', secure: true }
     box.bootedAfter = 10_000
     await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN, force: true })
-    const onDisk = await waitForOnDisk((s) => s.steps.preflight.status === 'done', 'preflight done on disk')
+    const onDisk = await waitForOnDisk((s) => s.steps['await-server'].status === 'running', 'runner waiting for server on disk')
     expect(onDisk.force).toBe(true)
 
     // Reload from disk only — the in-memory handle that used to hold `force` is

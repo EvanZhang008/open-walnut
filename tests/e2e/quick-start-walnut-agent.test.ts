@@ -8,9 +8,11 @@
  *     client tier still wins)
  *   - the session record carries the Personal AI profile (persona + walnut MCP
  *     mount) so a cold --resume re-applies it
- *   - ACP engines are rejected (the profile rides the CLI's system-prompt
- *     flags, which ACP lacks), and so is a remote host (the Personal AI runs
- *     where the server runs)
+ *   - an ACP engine is ACCEPTED and answers without a session id (the adapter
+ *     mints its own); its persona rides the first message instead of the spawn
+ *     flags, which is pinned where the runner is mocked out
+ *     (tests/web/routes/quick-start-default-engine.test.ts)
+ *   - a remote host is still rejected (the Personal AI runs where the server runs)
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -110,10 +112,17 @@ describe('quick-start walnutAgent', () => {
     expect(res.task?.focus_tier).toBe('backlog')
   })
 
-  it('rejects ACP engines (profile rides the CLI system-prompt flags)', async () => {
+  it('accepts an ACP engine and answers without a session id (the adapter mints its own)', async () => {
+    // Was a 400 ("walnutAgent requires the claude engine") until the persona got
+    // a second carrier: ACP has no system-prompt channel, so quickStartSession
+    // puts the same bundle on the first message. The spawn itself is the ACP
+    // stack's business (and needs a real adapter), so what is pinned here is the
+    // HTTP contract: accepted, a normal ask task, and no id to hand back.
     const res = await quickStart({ walnutAgent: true, message: 'hi', engine: 'codex' })
-    expect(res.status).toBe(400)
-    expect(res.error).toMatch(/claude engine/i)
+    expect(res.status, res.error).toBe(200)
+    expect(res.sessionId).toBeUndefined()
+    expect(res.task?.walnut_agent).toBe(true)
+    expect(res.task?.project).toBe('Ask Walnut')
   })
 
   it('rejects a remote host (the Personal AI runs where the server runs)', async () => {

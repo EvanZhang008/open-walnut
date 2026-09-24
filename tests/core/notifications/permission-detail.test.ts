@@ -105,7 +105,7 @@ describe('compactPermissionInput', () => {
         }],
       })!;
       const q = (ask.questions as Array<Record<string, unknown>>)[0];
-      expect(q.question).toBe('Use token=[REDACTED]');
+      expect(q.question).toBe('Use token=[REDACTED]?');
       const opt = (q.options as Array<Record<string, unknown>>)[0];
       expect(opt.label).toBe('password=[REDACTED]');
       expect(opt.description).toBe('secret=[REDACTED]');

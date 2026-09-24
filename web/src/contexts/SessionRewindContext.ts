@@ -7,8 +7,9 @@ import { createContext, useContext } from 'react';
  * dialog state lives inside a memoized transcript row.
  */
 export interface SessionRewindApi {
-  /** False when this session can't rewind at all (Codex/ACP engine, or no
-   *  session id yet) — the button hides rather than failing on click. */
+  /** False when this session can't rewind at all (an engine whose registry
+   *  capability says rewind is unsupported, or no session id yet) — the button
+   *  hides rather than failing on click. */
   available: boolean;
   /** Open the confirm dialog for a rewind back to this message. */
   request: (msgId: string, label?: string) => void;
