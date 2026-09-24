@@ -446,7 +446,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   // ── Message truncation — render only the tail to keep DOM count low ──
   const INITIAL_RENDER_LIMIT = 30;
-  const LOAD_MORE_BATCH = 200;
+  const LOAD_MORE_BATCH = 500;
   const [truncationOffset, setTruncationOffset] = useState(0);
   // "Show earlier" scroll anchor: distance-to-bottom captured at click time,
   // restored after the expanded batch renders. The container has

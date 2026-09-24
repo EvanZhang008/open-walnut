@@ -82,16 +82,17 @@ describe('computeRenderWindow', () => {
     expect(startId(full, w)).toBe('m513');
   });
 
-  it('expanding the limit ("Show earlier") widens the window and re-anchors', () => {
-    const msgs = conv(400, 143);
+  it('expands in 500-row batches without moving its anchor on backfill', () => {
+    const msgs = conv(1050, 143);
     let w = computeRenderWindow(msgs, LIMIT, fresh);
-    w = computeRenderWindow(msgs, LIMIT + 200, w);
-    expect(w.start).toBe(170);
-    expect(startId(msgs, w)).toBe('m313');
-    // …and the widened window is itself sticky against a later swap.
-    const swapped = conv(543, 0);
-    w = computeRenderWindow(swapped, LIMIT + 200, w);
-    expect(startId(swapped, w)).toBe('m313');
+    for (const [limit, start] of [[530, 520], [1030, 20], [1530, 0]]) {
+      w = computeRenderWindow(msgs, limit, w);
+      expect(w.start).toBe(start);
+      expect(startId(msgs, w)).toBe(`m${start + 143}`);
+    }
+    const swapped = conv(2000, 0);
+    w = computeRenderWindow(swapped, 1530, w);
+    expect(startId(swapped, w)).toBe('m143');
   });
 
   it('/compact rewrite: the anchored rows are GONE, so fall back to the tail', () => {
