@@ -36,6 +36,7 @@ import { Markdown } from 'tiptap-markdown';
 
 import { tableExtensions } from '@/components/notes/extensions/table-kit';
 import { FenceCodeBlock } from '@/components/notes/extensions/fence-code-block';
+import { LiteralText } from '@/components/notes/extensions/literal-text';
 import { MarkdownCopy } from '@/components/notes/extensions/markdown-copy';
 import { TagNode } from '@/components/notes/extensions/tag-node';
 import { Callout } from '@/components/notes/extensions/callout-node';
@@ -69,7 +70,10 @@ const TightTaskList = TaskList.extend({
  */
 export function buildNotesExtensions(): Extensions {
   return [
-    StarterKit.configure({ link: false, codeBlock: false }),
+    StarterKit.configure({ link: false, codeBlock: false, text: false }),
+    // Same node ('text'), only the markdown serialize differs: `<`/`>` typed as
+    // prose are written verbatim, not as entities.
+    LiteralText,
     // Same node ('codeBlock'), only the ``` input rule differs — mirrored so the
     // resolved extension list stays identical to production.
     FenceCodeBlock,

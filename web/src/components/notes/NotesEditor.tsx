@@ -31,6 +31,7 @@ import { tableExtensions } from './extensions/table-kit';
 import { ListAutoJoin } from './extensions/list-auto-join';
 import { EmptyAwareTaskItem } from './extensions/empty-task-item';
 import { FenceCodeBlock } from './extensions/fence-code-block';
+import { LiteralText } from './extensions/literal-text';
 import { MarkdownCopy } from './extensions/markdown-copy';
 import { findListItemType, indentListItem, outdentListItem } from './extensions/list-indent';
 import { insertImageFile } from './image-insert';
@@ -237,7 +238,10 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         link: false,
         // Replaced by FenceCodeBlock: ``` converts on the third backtick.
         codeBlock: false,
+        // Replaced by LiteralText: `<`/`>` in prose save and copy verbatim.
+        text: false,
       }),
+      LiteralText,
       FenceCodeBlock,
       TightTaskList,
       // Merge adjacent same-type lists eagerly — markdown can't express the

@@ -74,8 +74,9 @@ describe('memory file: frontmatter survives a save through the editor', () => {
     const broken = saveWithoutSplit(HEALTHY);
     // The closing fence became a setext-H2 underline: one heading, YAML inline.
     expect(broken).toMatch(/^---\n\n## name: Global Memory description:/);
-    // …and the block-scalar marker came back HTML-escaped.
-    expect(broken).toContain('&gt;');
+    // The block-scalar marker rides along inside that heading (LiteralText
+    // writes a bare `>` verbatim; before it, the marker came back as `&gt;`).
+    expect(broken).toContain('description: >');
     // Which is exactly the fake-entry shape: a `## ` line the bounded-store
     // parser counts as an entry against the char budget — 2 real entries + 1 fake.
     expect(broken.split('\n').filter((l) => l.startsWith('## ')).length).toBe(3);
@@ -241,8 +242,10 @@ describe('memory file: angle-bracket / entity fidelity', () => {
   });
 
   it('a bare `>` / `<` in prose is not turned into an entity', () => {
-    // The serializer's escapeHTML is what produced the literal `&gt;` rot.
-    expect(h.roundTrip('Budget: a > b in prose.')).toContain('&gt;');
+    // The library's escapeHTML produced the literal `&gt;` rot; LiteralText
+    // (extensions/literal-text.ts) writes a bare `>` verbatim, so the serializer
+    // alone is already clean and decodeEditorEscapes has nothing left to peel.
+    expect(h.roundTrip('Budget: a > b in prose.')).toBe('Budget: a > b in prose.');
     expect(through('Budget: a > b in prose.')).toBe('Budget: a > b in prose.');
     expect(through('Compare a < b here.')).toBe('Compare a < b here.');
     expect(through('A -> B and X => Y')).toBe('A -> B and X => Y');
