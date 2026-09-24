@@ -1183,13 +1183,24 @@ BOTH boxes:
   verbatim with their original code/status.
 
 - `GET /api/v1/sessions/:id/model-options` →
-  `{ "models": [ { "id", "label", "supportsEffort"?, "supportedEffortLevels"? } ],
+  `{ "models": [ { "id", "label", "resolvedModel"?, "supportsEffort"?, "supportedEffortLevels"? } ],
   "current", "currentEffort" }`
   - `models`: the session's selectable catalog (live CLI catalog when the
     session is alive → the host's last-known catalog → the static registry on
     a first install). Each row's `id` is what the picker must send back to
     `POST .../model`. `supportedEffortLevels` (when present) drives the effort
     buttons per model.
+  - `resolvedModel` (additive, 2026-09): the canonical model id the row
+    resolves to, when the catalog knows it. Alias rows only name a real model
+    here (`default` and `opus` → `global.anthropic.claude-opus-5-5[1m]`,
+    `haiku` → `global.anthropic.claude-haiku-4-5-20251001-v1:0`). Clients label
+    rows with the web picker's rule (`catalogRowLabel`: the versioned name
+    derived from `resolvedModel ?? id`, `Default (…)` for the `default` row,
+    else `label`), so the phone reads "Opus 5.5 1M" where the Mac does. Absent
+    on the static registry, on an old CLI, and on a primary that predates the
+    field; a client then derives from `id` alone. A replica relays the
+    primary's rows verbatim, so the field reaches the phone with a primary-only
+    deploy.
   - `current`: the active row's `id` (falls back to the raw runtime model
     string when it isn't in the catalog); `null` when unknown.
   - `currentEffort`: the record's requested effort (`low|medium|high|xhigh|max`)

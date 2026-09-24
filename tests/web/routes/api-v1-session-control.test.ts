@@ -115,6 +115,53 @@ describe('GET /api/v1/sessions/:id/model-options', () => {
     expect(res.body.currentEffort).toBe('low')
   })
 
+  // The phone labels rows with the web picker's rule (`catalogRowLabel`), which
+  // needs each row's resolved model: alias rows ('default', 'opus', 'haiku') name
+  // a real model ONLY there. Without it the phone showed "Opus 5.5 (1M context)"
+  // and "Haiku" where the Mac shows "Opus 5.5 1M" and "Haiku 4.5". This is the
+  // real catalog a Mac's CLI answered (host-model-catalogs.json, 2026-09-24).
+  it('rows carry the catalog resolvedModel when it has one (additive), and omit it otherwise', async () => {
+    const { saveHostModelCatalog, _resetHostModelCatalogCache } = await import('../../../src/core/host-model-catalog.js')
+    _resetHostModelCatalogCache()
+    try {
+      await createSessionRecord('ctl-options-resolved', 'task-or', 'proj', '/tmp', {
+        initialProcessStatus: 'stopped',
+      })
+      const levels = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+      await saveHostModelCatalog(null, [
+        { value: 'default', resolvedModel: 'global.anthropic.claude-opus-5-5[1m]', displayName: 'Default', supportsEffort: true, supportedEffortLevels: [...levels] },
+        { value: 'global.anthropic.claude-fable-5-1[1m]', resolvedModel: 'global.anthropic.claude-fable-5-1[1m]', displayName: 'Fable 5.1', supportsEffort: true, supportedEffortLevels: [...levels] },
+        { value: 'opus', resolvedModel: 'global.anthropic.claude-opus-5-5[1m]', displayName: 'Opus 5.5 (1M context)', supportsEffort: true, supportedEffortLevels: [...levels] },
+        { value: 'haiku', resolvedModel: 'global.anthropic.claude-haiku-4-5-20251001-v1:0', displayName: 'Haiku' },
+        // An older CLI row with no resolved model: the field must be ABSENT, not null.
+        { value: 'gpt-6-luna', displayName: 'GPT-6 Luna' },
+      ])
+
+      const res = await request(createApp()).get('/api/v1/sessions/ctl-options-resolved/model-options')
+      expect(res.status).toBe(200)
+      const rows = res.body.models as Array<Record<string, unknown>>
+      expect(rows.map((r) => r.id)).toEqual(['default', 'global.anthropic.claude-fable-5-1[1m]', 'opus', 'haiku', 'gpt-6-luna'])
+      expect(rows.find((r) => r.id === 'default')).toMatchObject({ label: 'Default', resolvedModel: 'global.anthropic.claude-opus-5-5[1m]' })
+      expect(rows.find((r) => r.id === 'opus')?.resolvedModel).toBe('global.anthropic.claude-opus-5-5[1m]')
+      expect(rows.find((r) => r.id === 'haiku')?.resolvedModel).toBe('global.anthropic.claude-haiku-4-5-20251001-v1:0')
+      expect(rows.find((r) => r.id === 'haiku')).not.toHaveProperty('supportsEffort')
+      expect(rows.find((r) => r.id === 'gpt-6-luna')).not.toHaveProperty('resolvedModel')
+    } finally {
+      _resetHostModelCatalogCache()
+    }
+  })
+
+  it('the static registry fallback carries no resolvedModel (nothing resolved it)', async () => {
+    await createSessionRecord('ctl-options-static', 'task-os', 'proj', '/tmp', {
+      initialProcessStatus: 'stopped',
+    })
+    const res = await request(createApp()).get('/api/v1/sessions/ctl-options-static/model-options')
+    expect(res.status).toBe(200)
+    for (const row of res.body.models as Array<Record<string, unknown>>) {
+      expect(row).not.toHaveProperty('resolvedModel')
+    }
+  })
+
   it('404 not_found for an unknown session', async () => {
     const res = await request(createApp()).get('/api/v1/sessions/no-such-session/model-options')
     expect(res.status).toBe(404)

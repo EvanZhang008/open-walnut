@@ -275,6 +275,11 @@ export function modelReadBackMatches(requested: string, effective: string): bool
 export interface ModelOption {
   id: string;
   label: string;
+  /** Additive: the canonical model id this row resolves to, when the catalog
+   *  knows it (alias rows like 'default'/'opus'/'haiku' name a real model only
+   *  here). The phone derives its row labels from it with the web picker's own
+   *  rule (`catalogRowLabel`). Absent = unknown (static fallback, old CLI). */
+  resolvedModel?: string;
   supportsEffort?: boolean;
   supportedEffortLevels?: SessionEffort[];
 }
@@ -340,6 +345,7 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
     .map((e) => ({
       id: e.value,
       label: e.displayName,
+      ...(e.resolvedModel ? { resolvedModel: e.resolvedModel } : {}),
       ...(e.supportsEffort !== undefined ? { supportsEffort: e.supportsEffort } : {}),
       ...(e.supportedEffortLevels !== undefined ? { supportedEffortLevels: e.supportedEffortLevels } : {}),
     }));
