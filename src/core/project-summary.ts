@@ -81,7 +81,7 @@ export function hasCrossedThreshold(lastCount: number, count: number): boolean {
 
 const SYSTEM_PROMPT = `You maintain a one-line description of a project (a task list). Reply with ONLY a JSON object — no markdown fence, no commentary.
 Field:
-- summary: 1-3 short sentences describing what this project is about and its current focus, written so someone deciding "does a new task belong here?" can judge instantly. Plain statements, no fluff, no task-by-task recap. Preserve whatever is still true from the previous summary; drop what the task list no longer supports. Match the dominant language of the task titles.`;
+- summary: 2-3 short sentences. The FIRST sentence must stand alone as "what this project is" — downstream prompts truncate to it, so it alone must let someone decide "does a new task belong here?". The following sentence(s) describe the current focus. Plain statements, no fluff, no task-by-task recap. Preserve whatever is still true from the previous summary; drop what the task list no longer supports. Match the dominant language of the task titles.`;
 
 export interface ProjectSummaryResult {
   summary: string;

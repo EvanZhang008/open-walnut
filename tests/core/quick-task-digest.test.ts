@@ -155,8 +155,8 @@ describe('buildProjectDigest', () => {
     expect(result.projects).toHaveLength(24);
   });
 
-  it('truncates at 4000 characters on a whole-line boundary with a marker', async () => {
-    const names = Array.from({ length: 20 }, (_, index) => `Long Project ${index + 1} ${'x'.repeat(60)}`);
+  it('truncates at 9500 characters on a whole-line boundary with a marker', async () => {
+    const names = Array.from({ length: 30 }, (_, index) => `Long Project ${index + 1} ${'x'.repeat(60)}`);
     const tasks: FixtureTask[] = [];
     for (const name of names) {
       for (let title = 1; title <= 3; title += 1) {
@@ -165,13 +165,17 @@ describe('buildProjectDigest', () => {
     }
     mocks.getStoreProjects.mockResolvedValue(registry(names));
     mocks.listTasksSlim.mockResolvedValue(tasks);
+    // Every project carries a full-budget summary so the about: lines push
+    // the digest past the cap (the digest window itself holds only 20 rows).
+    mocks.getProjectMetadata.mockResolvedValue({ summary: 'z'.repeat(350) });
 
     const result = await buildProjectDigest();
     const lines = result.digest.split('\n');
 
-    expect(result.digest.length).toBeLessThanOrEqual(4000);
+    expect(result.digest.length).toBeLessThanOrEqual(9500);
     expect(lines.at(-1)).toBe('…');
-    expect(lines.slice(0, -1).every((line) => line.startsWith('- Long Project'))).toBe(true);
+    expect(lines.slice(0, -1).every((line) =>
+      line.startsWith('- Long Project') || line.startsWith('  about: '))).toBe(true);
   });
 
   it('survives a project-summary read failure (enrichment only)', async () => {
@@ -209,22 +213,22 @@ describe('buildProjectDigest', () => {
     expect(result.summaries['Project 1']).toBe('Hobby games and fun side quests.');
   });
 
-  it('flattens whitespace and caps criteria summaries at 160 chars (digest about: keeps 200)', async () => {
+  it('flattens whitespace and caps criteria summaries at 160 chars (digest about: keeps 350)', async () => {
     mocks.getStoreProjects.mockResolvedValue(registry(['Website']));
     mocks.listTasksSlim.mockResolvedValue([task('Update homepage', 'Website')]);
-    mocks.getProjectMetadata.mockResolvedValue({ summary: `multi\nline ${'y'.repeat(300)}` });
+    mocks.getProjectMetadata.mockResolvedValue({ summary: `multi\nline ${'y'.repeat(400)}` });
 
     const result = await buildProjectDigest();
 
     expect(result.summaries.Website).not.toContain('\n');
     expect(result.summaries.Website.startsWith('multi line ')).toBe(true);
     expect(Array.from(result.summaries.Website)).toHaveLength(160);
-    // The digest's own about: budget (200) is unchanged by the criteria
+    // The digest's own about: budget (350) is independent of the criteria
     // budget (160). Measured on the raw text after the marker, not on split
     // lines: a summary's own newlines split the about: line, as they always
     // have — this test pins budgets, not that pre-existing quirk.
     const afterMarker = result.digest.slice(result.digest.indexOf('  about: ') + '  about: '.length);
-    expect(Array.from(afterMarker)).toHaveLength(200);
+    expect(Array.from(afterMarker)).toHaveLength(350);
   });
 
   it('summary read failures leave summaries empty, never throw', async () => {

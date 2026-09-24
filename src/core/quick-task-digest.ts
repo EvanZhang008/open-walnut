@@ -3,8 +3,15 @@ import { getStoreProjects, listTasksSlim, getProjectMetadata } from './task-mana
 const MAX_PROJECTS = 20;
 const MAX_TITLES_PER_LINE = 3;
 const MAX_TITLE_CHARS = 40;
-const MAX_DIGEST_CHARS = 4000;
-const MAX_SUMMARY_CHARS = 200;
+// Budgets, retuned 2026-09-23: at 4000/200 the real store (52 projects) sat
+// AGAINST the cap — tail projects fell out of the digest entirely and the
+// summary's "current focus" sentence was cut mid-clause. Sized from the
+// window itself: 20 project rows (~90 chars) each carrying a full 2-3
+// sentence summary (~350 chars) is ~9000. The extra ~5000 chars cost ~1.2K
+// input tokens on cheap classification models (haiku / Jev), which is noise
+// next to the misfiles they prevent.
+const MAX_DIGEST_CHARS = 9500;
+const MAX_SUMMARY_CHARS = 350;
 /** Per-project summary budget when riding inside a choice-question criteria. */
 const MAX_CRITERIA_SUMMARY_CHARS = 160;
 
