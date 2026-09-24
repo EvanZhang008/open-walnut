@@ -24851,12 +24851,14 @@ a.file-link:hover {
 /* Chrome rows keep their natural height in that column; only the editor grows. */
 .file-content-view:has(> .fv-source-editor) > .fv-html-toolbar,
 .file-content-view:has(> .fv-source-editor) > .fv-save-error,
+.file-content-view:has(> .fv-source-editor) > .fv-offline-banner,
 .file-content-view:has(> .fv-source-editor) > .fv-draft-banner,
 .file-content-view:has(> .fv-source-editor) > .file-viewer-truncated,
 .file-content-view:has(> .fv-source-editor) > .fv-reloading-badge,
 .file-content-view:has(> .fv-source-editor) > .fv-search-bar,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-html-toolbar,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-save-error,
+.file-content-view:has(> .fv-wysiwyg-editor) > .fv-offline-banner,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-draft-banner,
 .file-content-view:has(> .fv-wysiwyg-editor) > .file-viewer-truncated,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-reloading-badge,
@@ -25426,6 +25428,7 @@ a.file-link:hover {
 .file-content-view.fv-fullscreen > .fv-reloading-badge,
 .file-content-view.fv-fullscreen > .fv-search-bar,
 .file-content-view.fv-fullscreen > .fv-save-error,
+.file-content-view.fv-fullscreen > .fv-offline-banner,
 .file-content-view.fv-fullscreen > .fv-draft-banner,
 .file-content-view.fv-fullscreen > .file-viewer-truncated {
   position: static;

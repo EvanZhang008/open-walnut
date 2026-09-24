@@ -18,7 +18,10 @@
  * file's bytes under another file's path.
  */
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { saveFileContent, fetchFileContent, fetchFileContentConditional, FileSaveConflictError } from '@/api/files';
+import {
+  saveFileContent, fetchFileContent, fetchFileContentConditional,
+  FileSaveConflictError, FileSaveHttpError, isNetworkFetchError,
+} from '@/api/files';
 import { READ_ONLY_TOOLS } from '@/utils/embedded-image-freshness';
 import { deleteFileDraft } from '@/utils/file-drafts';
 import { threeWayMerge, type MergeResult } from '@/utils/three-way-merge';
@@ -55,12 +58,52 @@ export function agentToolMayChangeFile(path: string, tool?: string, input?: Reco
  *  RECEIPT WORDING only ("from the agent" vs "from disk"). */
 export const AGENT_ACTIVE_WINDOW_MS = 30_000;
 
+// ── A write that never arrived ───────────────────────────────────────────────
+// A write the server never saw is not a verdict on the file, and must not be
+// treated like one. The case that taught this (2026-09-24): a deploy restarted
+// the server for two seconds while a design doc was being typed into. The
+// auto-write's fetch rejected, live mode paused itself for that file, the banner
+// showed the browser's own words ("Failed to fetch"), and every keystroke for the
+// next minutes stayed unsaved with only the pill's dot to say so. So a failed
+// connection, and a gateway's 502/503/504, are RETRIED: the text stays armed and
+// goes out again on a backoff, and at once when the WebSocket comes back. Only
+// after a full minute of that does live mode pause for the file, and then it
+// says why. A refusal (any other status) still pauses at once: retrying a 400
+// would send the same rejected request forever.
+export type WriteFailureKind = 'conflict' | 'unreachable' | 'refused';
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
+
+export function classifyWriteFailure(err: unknown): WriteFailureKind {
+  if (err instanceof FileSaveConflictError) return 'conflict';
+  if (isNetworkFetchError(err)) return 'unreachable';
+  if (err instanceof FileSaveHttpError && GATEWAY_STATUSES.has(err.status)) return 'unreachable';
+  return 'refused';
+}
+
+/** Wait before the n-th retry (n = failures so far, 1-based). Doubles to a 16s
+ *  ceiling: quick enough to catch a deploy's gap, slow enough that a minute of
+ *  outage is a handful of requests, not hundreds. */
+export const OFFLINE_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000] as const;
+export function offlineRetryDelay(failures: number): number {
+  const i = Math.max(0, Math.min(failures - 1, OFFLINE_RETRY_DELAYS_MS.length - 1));
+  return OFFLINE_RETRY_DELAYS_MS[i];
+}
+/** How long the server may stay unreachable before live mode stops trying. */
+export const LIVE_OFFLINE_GIVE_UP_MS = 60_000;
+export function offlineGivesUp(outageSince: number, now: number): boolean {
+  return now - outageSince >= LIVE_OFFLINE_GIVE_UP_MS;
+}
+export const LIVE_UNREACHABLE_PAUSED_MESSAGE =
+  "Live edit is paused for this file: Walnut couldn't be reached for a minute. "
+  + 'Your text is still in the editor. Press Save once Walnut is back, or click Live to resume.';
+
 // ── Per-file suspension ──────────────────────────────────────────────────────
 // A conflict live mode could not merge pauses live writes for THAT FILE ONLY —
 // never the global preference, which the user set deliberately and which still
 // applies to every other file. In-memory on purpose: the pause is about the
 // current collision, not a lasting property of the file.
-const suspendedFiles = new Map<string, 'conflict'>();
+export type LiveSuspendReason = 'conflict' | 'unreachable';
+const suspendedFiles = new Map<string, LiveSuspendReason>();
 
 export function liveSuspensionKey(host: string | undefined, path: string): string {
   return `${host ?? 'local'} ${path}`;
@@ -68,8 +111,11 @@ export function liveSuspensionKey(host: string | undefined, path: string): strin
 export function isLiveSuspended(host: string | undefined, path: string): boolean {
   return suspendedFiles.has(liveSuspensionKey(host, path));
 }
-export function suspendLiveEdit(host: string | undefined, path: string): void {
-  suspendedFiles.set(liveSuspensionKey(host, path), 'conflict');
+export function liveSuspensionReason(host: string | undefined, path: string): LiveSuspendReason | null {
+  return suspendedFiles.get(liveSuspensionKey(host, path)) ?? null;
+}
+export function suspendLiveEdit(host: string | undefined, path: string, reason: LiveSuspendReason = 'conflict'): void {
+  suspendedFiles.set(liveSuspensionKey(host, path), reason);
 }
 export function resumeLiveEdit(host: string | undefined, path: string): void {
   suspendedFiles.delete(liveSuspensionKey(host, path));
@@ -361,10 +407,16 @@ export interface UseLiveEditOptions {
 export interface LiveEdit {
   /** Armed for this file: preference on, not suspended, file editable. */
   on: boolean;
-  /** This file was paused by a conflict (the toggle title explains it). */
+  /** This file was paused (the toggle title explains it). */
   suspended: boolean;
+  /** Why, when `suspended`: an unmergeable conflict, or a minute of not reaching
+   *  the server. */
+  suspendedReason: LiveSuspendReason | null;
   /** An auto-write (or its merge cycle) is in flight. */
   writing: boolean;
+  /** The last auto-write did not reach the server and is being retried. Live
+   *  mode is still ON; this is a status, not an error. */
+  unreachable: boolean;
   /** Transient toolbar note, or null. */
   receipt: string | null;
   toggle: () => void;
@@ -422,8 +474,13 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   const [prefOn, setPrefOn] = useState(loadLiveEditPref);
   const prefOnRef = useRef(prefOn);
   prefOnRef.current = prefOn;
-  const [suspended, setSuspended] = useState(() => isLiveSuspended(host, path));
+  const [suspendedFor, setSuspendedFor] = useState<LiveSuspendReason | null>(() => liveSuspensionReason(host, path));
+  const suspended = suspendedFor != null;
   const [writing, setWriting] = useState(false);
+  // The outage the file on screen is riding out: when it began and how many
+  // writes have failed since (the latter picks the backoff). Null = reachable.
+  const outageRef = useRef<{ since: number; failures: number } | null>(null);
+  const [unreachable, setUnreachable] = useState(false);
   // Nonce so the same wording twice in a row still restarts the 4s timer.
   const [receipt, setReceipt] = useState<{ text: string; n: number } | null>(null);
   const receiptNRef = useRef(0);
@@ -462,8 +519,12 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   // tool ids go too: a result that arrives after the switch would otherwise pull
   // the NEW file because of a write aimed at the old one.
   useEffect(() => {
-    setSuspended(isLiveSuspended(host, path));
+    setSuspendedFor(liveSuspensionReason(host, path));
     agentWriteIdsRef.current.clear();
+    // An outage is tracked for the file on screen; the incoming file starts clean
+    // and learns about the server from its own first write.
+    outageRef.current = null;
+    setUnreachable(false);
     return () => {
       if (pullTimerRef.current) clearTimeout(pullTimerRef.current);
       pullTimerRef.current = null;
@@ -500,12 +561,24 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     [],
   );
 
-  const suspendHere = useCallback((rec: PendingWrite) => {
-    suspendLiveEdit(rec.host, rec.path);
+  /** The outage bookkeeping lives and dies with the record it is retrying. Every
+   *  path that drops the pending record calls this too, or the "can't reach
+   *  Walnut" strip outlives its write (an explicit Save, Live turned off, an undo
+   *  back to the saved text) and a stale `since` makes the NEXT blip, minutes
+   *  later, give up on its very first failure. */
+  const clearOutage = useCallback(() => {
+    if (!outageRef.current) return;
+    outageRef.current = null;
+    setUnreachable(false);
+  }, []);
+
+  const suspendHere = useCallback((rec: PendingWrite, reason: LiveSuspendReason = 'conflict') => {
+    suspendLiveEdit(rec.host, rec.path, reason);
     clearTimer();
     pendingRef.current = null;
-    if (isCurrent(rec)) setSuspended(true);
-  }, [clearTimer, isCurrent]);
+    clearOutage();
+    if (isCurrent(rec)) setSuspendedFor(reason);
+  }, [clearTimer, clearOutage, isCurrent]);
 
   // Declared as refs because write → conflict → merge → write is mutually
   // recursive, and a useCallback cannot reference its own later sibling.
@@ -522,7 +595,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // Only for the file on screen: `on` now describes the INCOMING file, and a
     // record for the outgoing one was armed while live was on for it. Dropping it
     // because the next file happens to be an image would lose the last burst.
-    if (isCurrent(rec) && !onRef.current) { pendingRef.current = null; return; }
+    if (isCurrent(rec) && !onRef.current) { pendingRef.current = null; clearOutage(); return; }
     if (inFlightRef.current) {
       // Re-check shortly rather than queueing a second write against the same
       // base, which would 409 by construction.
@@ -554,12 +627,14 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // bouncing straight back to disk.
     if (isCurrent(rec) && optsRef.current.baseContentRef.current === rec.text) {
       pendingRef.current = null;
+      // Nothing left to retry either (an undo back to the saved text).
+      clearOutage();
       return;
     }
     pendingRef.current = null;
     // 0 = no merge cycle has run for this write yet.
     await writeOnceRef.current?.(rec, 'live', 0, allowMerge);
-  }, [clearTimer, isCurrent]);
+  }, [clearTimer, clearOutage, isCurrent]);
 
   const schedule = useCallback((ms: number) => {
     clearTimer();
@@ -712,6 +787,8 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
           log.info('file-editor', 'live write dropped: the buffer moved on', {
             path: rec.path, host: rec.host, armedGen: rec.bufferGen, currentGen, reason: plan.reason,
           });
+          // A retry with nothing to write is over, whatever started it.
+          clearOutage();
           return;
         }
         if (plan.text !== rec.text) {
@@ -775,6 +852,18 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       o.lockHashRef.current = res.contentHash;
       o.baseContentRef.current = text;
       o.onWrote(text, res);
+      if (outageRef.current) {
+        // The text that waited out the outage is on disk. Say so: the toolbar
+        // has been showing "can't reach Walnut" and a silent return to normal
+        // leaves the user unsure whether that burst ever landed.
+        log.info('file-editor', 'live write reached the server again', {
+          path: rec.path, host: rec.host, downMs: Date.now() - outageRef.current.since,
+          failures: outageRef.current.failures,
+        });
+        outageRef.current = null;
+        setUnreachable(false);
+        showReceipt('Saved after reconnecting');
+      }
     } catch (err) {
       if (err instanceof FileSaveConflictError) {
         if (!allowMerge || !isCurrent(rec)) return; // no live editor to merge into
@@ -804,9 +893,57 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
+      if (classifyWriteFailure(err) === 'unreachable') {
+        // Nothing reached the server, so nothing about the file is decided (see
+        // the block comment at classifyWriteFailure).
+        if (!isCurrent(rec)) {
+          // A file we have left has no timer and no editor to retry from. The
+          // draft store still holds these bytes and offers them on the next open.
+          log.warn('file-editor', 'live write for a left file did not reach the server; its draft is kept', {
+            path: rec.path, host: rec.host, error: msg,
+          });
+          return;
+        }
+        if (!onRef.current) {
+          // Live was turned off (or an explicit Save took over) while this write
+          // was in flight. Nobody will retry it, so nothing may say so: the text
+          // is in the editor and the draft store, where the user's own Save
+          // finds it.
+          clearOutage();
+          log.info('file-editor', 'live write did not reach the server; live is off now, not retrying', {
+            path: rec.path, host: rec.host, error: msg,
+          });
+          return;
+        }
+        const now = Date.now();
+        const outage = outageRef.current ?? { since: now, failures: 0 };
+        outage.failures += 1;
+        outageRef.current = outage;
+        if (offlineGivesUp(outage.since, now)) {
+          outageRef.current = null;
+          setUnreachable(false);
+          suspendHere(rec, 'unreachable');
+          optsRef.current.onError(LIVE_UNREACHABLE_PAUSED_MESSAGE);
+          log.error('file-editor', 'live edit paused: the server stayed unreachable', {
+            path: rec.path, host: rec.host, error: msg, failures: outage.failures, downMs: now - outage.since,
+          });
+          return;
+        }
+        setUnreachable(true);
+        // Keep the text armed unless the user typed since: theirs is the newer
+        // record and already carries everything this one had. The retry re-reads
+        // the buffer before sending either way.
+        if (!pendingRef.current) pendingRef.current = rec;
+        const delay = offlineRetryDelay(outage.failures);
+        log.warn('file-editor', 'live write did not reach the server; retrying', {
+          path: rec.path, host: rec.host, error: msg, failures: outage.failures, retryInMs: delay,
+        });
+        scheduleRef.current?.(delay);
+        return;
+      }
       log.error('file-editor', 'live write failed', { path: rec.path, host: rec.host, error: msg });
-      // Never retry a network/5xx failure: at one write per typing pause it
-      // would hammer the server and bury the message the user needs to read.
+      // A refusal is not retried: at one write per typing pause it would send the
+      // same rejected request over and over and bury the message the user needs.
       suspendHere(rec);
       if (isCurrent(rec)) optsRef.current.onError(msg);
     } finally {
@@ -818,7 +955,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       if (live) setWriting(false);
       if (pullPendingRef.current) schedulePull(pullPendingRef.current);
     }
-  }, [isCurrent, resolveConflict, suspendHere, schedulePull]);
+  }, [isCurrent, resolveConflict, suspendHere, schedulePull, showReceipt, clearOutage]);
   writeOnceRef.current = writeOnce;
 
   const noteUserEdit = useCallback(() => {
@@ -843,7 +980,10 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   const cancelPending = useCallback(() => {
     clearTimer();
     pendingRef.current = null;
-  }, [clearTimer]);
+    // An explicit Save or Live turned off takes over from the retry; the strip
+    // must not keep promising an automatic write nobody is going to make.
+    clearOutage();
+  }, [clearTimer, clearOutage]);
 
   const toggle = useCallback(() => {
     const p = pathRef.current;
@@ -852,7 +992,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // global preference" — the preference was never what turned it off.
     if (isLiveSuspended(h, p)) {
       resumeLiveEdit(h, p);
-      setSuspended(false);
+      setSuspendedFor(null);
       if (!prefOnRef.current) { setPrefOn(true); saveLiveEditPref(true); }
       return;
     }
@@ -967,7 +1107,12 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     };
   }, [canEdit, schedulePull]);
 
-  useEvent('_ws:reconnected', () => schedulePull('disk'));
+  useEvent('_ws:reconnected', () => {
+    schedulePull('disk');
+    // The server is back. Text waiting out an outage goes now, not at the end of
+    // its backoff; the pull above defers itself while that write is in flight.
+    if (outageRef.current && pendingRef.current) scheduleRef.current?.(BUSY_RECHECK_MS);
+  });
   useEvent('session:result', (data) => {
     if (sessionId && (data as { sessionId?: string }).sessionId === sessionId) schedulePull('disk');
   });
@@ -1001,7 +1146,9 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   return {
     on,
     suspended,
+    suspendedReason: suspendedFor,
     writing,
+    unreachable,
     receipt: receipt?.text ?? null,
     toggle,
     noteUserEdit,

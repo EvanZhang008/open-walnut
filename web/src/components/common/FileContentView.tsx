@@ -25,7 +25,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   fetchFileContentConditional, rawFileContentUrl, downloadFileUrl, saveFileContent,
-  FileSaveConflictError, type FileContentResponse,
+  FileSaveConflictError, isNetworkFetchError, SAVE_UNREACHABLE_MESSAGE, type FileContentResponse,
 } from '@/api/files';
 import {
   getCachedFileContent, setCachedFileContent, storable,
@@ -1039,6 +1039,10 @@ export function FileContentView({
     isDirtyRef: dirtyRef,
     onWrote: (text, res) => {
       applySaved(text, res, { live: true });
+      // A write that landed ends whatever the banner was about (a pause the
+      // user resumed, a conflict the merge resolved): leaving it up would report
+      // a problem the disk no longer has.
+      setSaveError(null);
       log.info('file-editor', 'live write saved', { path: filePath, host, size: res.size });
       onSaved?.(filePath);
     },
@@ -1104,6 +1108,14 @@ export function FileContentView({
         conflictHashRef.current = err.currentHash;
         setSaveError('This file changed on disk since you opened it. Press Save again to overwrite it with your version, or Discard and reopen the file to get the new one.');
         log.warn('file-editor', 'save conflict', { path: filePath, host });
+      } else if (isNetworkFetchError(err)) {
+        // The request never arrived (server restarting, tunnel down). The
+        // browser's own words for this ("Failed to fetch", "Load failed") name
+        // no cause and no way out, so say what happened and what to do.
+        setSaveError(SAVE_UNREACHABLE_MESSAGE);
+        log.warn('file-editor', 'save did not reach the server', {
+          path: filePath, host, error: err instanceof Error ? err.message : String(err),
+        });
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         setSaveError(msg);
@@ -1770,7 +1782,9 @@ export function FileContentView({
       onClick={live.toggle}
       aria-pressed={live.on}
       title={live.suspended
-        ? 'Live edit paused for this file after a conflict — click to resume'
+        ? (live.suspendedReason === 'unreachable'
+          ? "Live edit paused for this file: Walnut couldn't be reached for a minute. Click to resume."
+          : 'Live edit paused for this file after a conflict — click to resume')
         : live.on
           ? 'Live edit is ON — your changes are written to disk shortly after you stop typing. Click to turn it off.'
           : 'Live edit is off — changes are written only when you press Save. Click to write as you type.'}
@@ -2211,6 +2225,21 @@ export function FileContentView({
       {/* Deliberately NOT .file-viewer-error: that class is the whole-pane empty
           state (height:100%, centered), which as a sibling of the editor grew to
           swallow the pane. A save error is a one-line BANNER above the editor. */}
+      {/* Live mode's last write never reached the server and is being retried.
+          A STATUS, not an error: live mode is still on, nothing is lost (the text
+          is in the editor and in the draft store), nothing needs deciding. It is
+          a strip and not a toolbar note because the toolbar is a non-wrapping
+          row that a ~600px pane fills completely, where a shrinkable note is
+          zero pixels wide (measured under Playwright at 1200x800 with the chat
+          open). The 2026-09-24 incident was this state shown as a red "Failed to
+          fetch" with live mode silently paused underneath: the strip exists so
+          "not saving right now" is never invisible. Hidden behind a real error
+          banner, which already says what to do. */}
+      {live.unreachable && !saveError && (
+        <div className="fv-offline-banner" role="status">
+          Can't reach Walnut right now. Your edits are kept in the editor and will be saved on their own once it is back.
+        </div>
+      )}
       {saveError && (
         <div className="fv-save-error" role="alert" onClick={() => setSaveError(null)} title="Click to dismiss">
           {saveError}

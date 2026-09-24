@@ -114,14 +114,69 @@ export class FileSaveConflictError extends Error {
   }
 }
 
+/** A save the server answered with a non-2xx status other than 409. Carries the
+ *  status so a caller can tell a gateway that lost the server (502/503/504) from
+ *  a refusal (4xx), which is the difference between "try again shortly" and
+ *  "tell the user". */
+export class FileSaveHttpError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+    this.name = 'FileSaveHttpError';
+  }
+}
+
+/**
+ * A save whose request never reached the server (server down, connection
+ * refused, DNS, offline). Thrown ONLY from around the `fetch` call itself: every
+ * browser signals this failure with a `TypeError`, but so does a programming
+ * error anywhere in a caller's try block, and treating "my bookkeeping threw
+ * after the PUT landed" as "the server is unreachable" would re-send a write
+ * that already succeeded (live mode) or tell the user to press Save again for
+ * a file that is saved. Wrapping at the one place the fetch happens is what
+ * keeps the two apart. The browser's wording ("Failed to fetch" in Chromium,
+ * "Load failed" in WebKit, "NetworkError when attempting to fetch resource." in
+ * Firefox) rides along as the message for the log, never for the user.
+ */
+export class FileSaveUnreachableError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'FileSaveUnreachableError';
+  }
+}
+
+/** The request never reached the server (see FileSaveUnreachableError). An
+ *  aborted request is not one of these: that is a DOMException the caller asked
+ *  for, and it passes through the wrapper untouched. */
+export function isNetworkFetchError(err: unknown): boolean {
+  return err instanceof FileSaveUnreachableError;
+}
+
+/** `fetch` that turns a failed connection into FileSaveUnreachableError and
+ *  leaves everything else (an abort, a programming error) as it was. */
+async function fetchOrUnreachable(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    if (err instanceof TypeError) throw new FileSaveUnreachableError(err);
+    throw err;
+  }
+}
+
+/** What the explicit Save button shows when its request never reached Walnut.
+ *  Named here because it replaces the browser's own wording, which the 2026-09-24
+ *  incident put in front of a user verbatim ("Failed to fetch"). */
+export const SAVE_UNREACHABLE_MESSAGE =
+  "Can't reach Walnut right now. Your text is still in the editor: check that Walnut is running, then press Save again.";
+
 /**
  * Save an edited file. `expectedHash` is the contentHash from the read that
  * seeded the editor — the server rejects the write with 409 if the bytes on disk
  * no longer hash to it (an agent, another tab, or a git checkout got there
  * first), so an edit can never silently clobber someone else's change.
  *
- * Throws FileSaveConflictError on 409, plain Error otherwise (both surfaced in
- * the editor's toolbar rather than swallowed).
+ * Throws FileSaveConflictError on 409, FileSaveHttpError on any other non-2xx,
+ * FileSaveUnreachableError when the request never reached the server. All three
+ * are surfaced in the editor's toolbar rather than swallowed.
  */
 export async function saveFileContent(
   filePath: string,
@@ -156,7 +211,7 @@ export async function saveFileContent(
     baseFrom?: 'content';
   } = {},
 ): Promise<{ size: number; contentHash: string }> {
-  const res = await fetch('/api/file-content', {
+  const res = await fetchOrUnreachable('/api/file-content', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -176,7 +231,12 @@ export async function saveFileContent(
     const reason = typeof body?.reason === 'string' ? body.reason as FileSaveConflictReason : undefined;
     throw new FileSaveConflictError(body.currentHash, reason);
   }
-  if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : `Save failed: ${res.status}`);
+  if (!res.ok) {
+    throw new FileSaveHttpError(
+      typeof body?.error === 'string' ? body.error : `Save failed: ${res.status}`,
+      res.status,
+    );
+  }
   const result = { size: body.size as number, contentHash: body.contentHash as string };
   // Announce it HERE, the one choke point every writer of a file goes through
   // (explicit Save, Live Edit's auto-write, its merge re-write). Carrying the

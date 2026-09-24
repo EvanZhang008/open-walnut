@@ -51,3 +51,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* "Can't reach Walnut right now": live mode's write is being retried. Same
+   shape and place as .fv-save-error (a one-line strip above the editor) in the
+   WARNING tone, not danger: live mode is still on and the text is safe, the
+   server just isn't answering yet. A strip rather than a toolbar note because
+   the toolbar row fills a ~600px pane completely and a shrinkable note there
+   measures zero pixels. Both colors set together, as the other strips do. The
+   chrome-row flex rules in globals.css list this class next to .fv-save-error. */
+.fv-offline-banner {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--warning, #f59e0b);
+  background: color-mix(in srgb, var(--warning, #f59e0b) 10%, transparent);
+  color: var(--fg);
+}
