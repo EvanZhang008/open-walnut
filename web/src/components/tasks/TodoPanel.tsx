@@ -338,6 +338,12 @@ const CHEVRON_ICON = ICONS.CHEVRON_GLYPH;
 // keyed on the result don't churn. Never mutate.
 const EMPTY_ID_SET: Set<string> = new Set<string>();
 
+/** Where a tier sits, for the drag-start scroll anchor: its box, not its heading, which can be
+ *  stuck to the top and stay put while the rows above it grow. */
+function anchorTop(el: Element): number {
+  return (el.closest('.todo-pinned-subgroup') ?? el).getBoundingClientRect().top;
+}
+
 const pinnedCollision: CollisionDetection = args => {
   const point = args.pointerCoordinates;
   if (point) {
@@ -1735,6 +1741,23 @@ const typeAwareCollision: CollisionDetection = (args) => {
   });
 
   if (filtered.length === 0) return [];
+  // A project header can be stuck to the top of the list, and dnd-kit moves the boxes it took
+  // at the drag's start with the scroll, so a stuck header's box drifts down over the rows it
+  // covers. Like the tier headings (pinnedCollision), a header takes a drop only where it is
+  // now, under the pointer.
+  const point = args.pointerCoordinates;
+  if (activeType === 'task' && point) {
+    const isHeader = (container: (typeof filtered)[number]) => (container.data?.current as { type?: string })?.type === 'header-drop';
+    for (const container of filtered) {
+      if (!isHeader(container)) continue;
+      const rect = container.node.current?.getBoundingClientRect();
+      if (rect && rect.width > 0 && rect.height > 0 && point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom) {
+        return [{ id: container.id, data: { droppableContainer: container, value: 0 } }];
+      }
+    }
+    const rows = filtered.filter(container => !isHeader(container));
+    return rows.length ? closestCenter({ ...args, droppableContainers: rows }) : [];
+  }
   return closestCenter({ ...args, droppableContainers: filtered });
 };
 
@@ -2307,7 +2330,7 @@ function TierNavigationGroup({ def, isAll, folded, collapsed, onToggle, visibleI
   return (
     <div className="todo-pinned-subgroup">
       {isAll && (
-        <div ref={setNodeRef} className={isOver ? 'navigation-drop-target' : undefined}>
+        <div ref={setNodeRef} className={`todo-pinned-subgroup-heading${isOver ? ' navigation-drop-target' : ''}`}>
         <NavigationHeading
           id={def.id}
           label={def.label}
@@ -3153,10 +3176,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const scroller = listContainer.closest('.home-navigation-scroll.is-stacked') ?? listContainer;
       const elRect = el.getBoundingClientRect();
       const containerRect = scroller.getBoundingClientRect();
-      const outOfView = elRect.top < containerRect.top || elRect.bottom > containerRect.bottom;
+      // The stuck headings cover the scroller's top; the row's scroll margin says how much.
+      const covered = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
+      const outOfView = elRect.top < containerRect.top + covered || elRect.bottom > containerRect.bottom;
       if (outOfView) {
         const elTopInContainer = elRect.top - containerRect.top + scroller.scrollTop;
-        scroller.scrollTop = elTopInContainer - containerRect.height / 3;
+        scroller.scrollTop = elTopInContainer - Math.max(containerRect.height / 3, covered);
         scrollLog('focus-scroll-done', { taskId, scrollTo: Math.round(scroller.scrollTop) });
       } else {
         scrollLog('focus-scroll-skip', { reason: 'already-visible', taskId: taskId.substring(0, 12) });
@@ -3182,6 +3207,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   }, [flashCard]);
 
+  /** scrollIntoView({block:'nearest'}) that also counts a card under the stuck headings as out of
+   *  view. The card's scroll margin is how much they cover; Chromium ignores it for a card that is
+   *  already on screen, and would leave it hidden under them. */
+  const revealBelowHeadings = useCallback((el: Element) => {
+    const covered = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
+    let scroller = el.parentElement;
+    while (scroller && !(/(auto|scroll)/.test(getComputedStyle(scroller).overflowY) && scroller.scrollHeight > scroller.clientHeight)) scroller = scroller.parentElement;
+    const top = scroller ? el.getBoundingClientRect().top - scroller.getBoundingClientRect().top : covered;
+    if (scroller && top < covered) scroller.scrollBy({ top: top - covered, behavior: 'smooth' });
+    else el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, []);
+
   // Scroll a pinned task into view inside the top Pinned region (Focus/Next/Satellite/Wait).
   // Separate from scrollToTask (which targets the lower .todo-panel-list) so the PIN region
   // jumps + highlights too — not just the list below. Double-RAF waits for tier re-render.
@@ -3198,7 +3235,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // flash are both no-ops. getClientRects() is empty for display:none, so treat
       // that as not-found and let the 150ms retry pick the card up once the unfold
       // (see the focus effect) has committed.
-      if (el && el.getClientRects().length > 0) { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); flashCard(el); return true; }
+      if (el && el.getClientRects().length > 0) { revealBelowHeadings(el); flashCard(el); return true; }
       return false;
     };
     pinnedScrollRafRef.current = requestAnimationFrame(() => {
@@ -3209,7 +3246,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (!tryScroll()) pinnedScrollTimerRef.current = setTimeout(tryScroll, 150);
       });
     });
-  }, [flashCard]);
+  }, [flashCard, revealBelowHeadings]);
 
   // Cleanup RAF + timer on unmount
   useEffect(() => {
@@ -3545,7 +3582,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const scrollAnchorRef = useRef<{ selector: string; top: number } | null>(null);
   const holdScrollAnchor = useCallback((selector: string) => {
     const el = document.querySelector(selector);
-    scrollAnchorRef.current = el ? { selector, top: el.getBoundingClientRect().top } : null;
+    scrollAnchorRef.current = el ? { selector, top: anchorTop(el) } : null;
   }, []);
   useLayoutEffect(() => {
     const anchor = scrollAnchorRef.current;
@@ -3554,7 +3591,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const el = document.querySelector(anchor.selector);
     const scroller = el?.closest('.home-navigation-scroll');
     if (!el || !scroller) return;
-    const delta = el.getBoundingClientRect().top - anchor.top;
+    const delta = anchorTop(el) - anchor.top;
     if (Math.abs(delta) >= 1) scroller.scrollTop += delta;
   }, [activeDragPinnedId]);
   // The tier REGISTRY freezes too: a cross-client tier create/delete mid-drag
@@ -7862,6 +7899,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       </NavigationSection>
       <NavigationSection key="tasks" navId="tasks">
+      {/* One box for the heading and its list, so a stuck Projects heading lets go where
+          the list ends. Outside the stacked view it is display:contents, and the list
+          stays the flex child that scrolls. */}
+      <div className="todo-tasks-section">
 
       {/* TASKS header bar — the stacked view's collapsible affordance, matching
           PINNED / RECENT / Notes. The Tasks TAB doesn't get one: the tab strip
@@ -8225,6 +8266,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         )}
       </div>
       )}
+      </div>
 
       </NavigationSection>
       </NavigationSections>

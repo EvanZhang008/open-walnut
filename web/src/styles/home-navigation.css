@@ -51,7 +51,11 @@
 .home-navigation-scroll.is-unpin-dragging { margin-bottom: 46px; }
 .todo-unpin-zone { pointer-events: auto; background: var(--bg); }
 .home-navigation-scroll.is-stacked > .todo-pinned-wrapper,
-.home-navigation-scroll.is-stacked > .todo-panel-list { flex: none !important; overflow: visible; min-height: 0; max-height: none; padding: 0; }
+.home-navigation-scroll.is-stacked > .todo-tasks-section,
+.home-navigation-scroll.is-stacked > .todo-tasks-section > .todo-panel-list { flex: none !important; overflow: visible; min-height: 0; max-height: none; padding: 0; }
+/* The Projects heading and its list share a box only where the heading exists (it is what
+   the heading sticks inside); elsewhere the list is the scroller's own flex child. */
+.home-navigation-scroll:not(.is-stacked) > .todo-tasks-section { display: contents; }
 .home-navigation-scroll.is-stacked .todo-pinned-section { padding: 0; }
 .home-navigation-scroll.is-stacked .todo-pinned-list-scroll { overflow: visible; max-height: none !important; }
 .home-navigation-scroll .todo-pinned-section { border-bottom: 0; }
@@ -59,8 +63,7 @@
    list kept the old panel's 12px side padding on their section and list, which put every
    row, label and dot 12px right of where All draws them (the user's report, 2026-09-23). */
 .home-navigation-scroll .todo-pinned-section,
-.home-navigation-scroll > .todo-panel-list,
-.home-navigation-scroll > .todo-panel-list-collapsed { padding-left: 0; padding-right: 0; }
+.home-navigation-scroll .todo-tasks-section > .todo-panel-list { padding-left: 0; padding-right: 0; }
 /* A Recent card's "pinned in" tier glyph trails the title, so its circle stays on the
    circle column like every other row's. */
 .home-navigation-scroll .todo-recent-tier-dot { order: 2; }
@@ -87,11 +90,11 @@
 /* Three levels, one look each wherever they appear: section (Pinned, Projects) 13px/600 in
    the text colour, tier 12px/600 secondary, project 12px/500 secondary. */
 .navigation-heading.todo-pinned-header { margin: 8px 0 2px; }
-/* The second section stands clearly apart from the first: 28px of air, where tiers and projects
-   inside a section are 12px apart (the user's call, 2026-09-23: "a bigger gap between each big
-   section"). Either order, since the sections can be moved. */
-.home-navigation-scroll.is-stacked > .todo-pinned-wrapper:has(.todo-pinned-header) ~ .navigation-heading.todo-tasks-header,
-.home-navigation-scroll.is-stacked > .navigation-heading.todo-tasks-header ~ .todo-pinned-wrapper .navigation-heading.todo-pinned-header { margin-top: 28px; }
+/* Air steps up with the level: projects 12px apart, tiers 24px, sections 36px (the user's
+   calls, 2026-09-23 "a bigger gap between each big section" and 2026-09-24 "more space between
+   each tier or section"). Either section order, since the sections can be moved. */
+.home-navigation-scroll.is-stacked > .todo-pinned-wrapper:has(.todo-pinned-header) ~ .todo-tasks-section > .navigation-heading.todo-tasks-header,
+.home-navigation-scroll.is-stacked > .todo-tasks-section:has(> .todo-tasks-header) ~ .todo-pinned-wrapper .navigation-heading.todo-pinned-header { margin-top: 36px; }
 .navigation-heading.todo-pinned-header .navigation-heading-open { color: var(--fg); font-size: 13px; font-weight: 600; }
 .navigation-heading.todo-tasks-header { border-bottom: 0; }
 
@@ -169,7 +172,7 @@
 .home-navigation-scroll .task-group-chip-icon { margin-right: 1px; color: var(--fg-muted); opacity: .8; }
 /* Each project gets air above it, the first one under a tier heading excepted. */
 .home-navigation-scroll .todo-group-project-header, .home-navigation-scroll .tier-project-label {
-  background: transparent; border: 0; margin-top: 12px; min-height: 26px; padding: 0 0 0 4px; font-size: 12px; touch-action: pan-y; border-radius: 6px;
+  background: var(--bg); border: 0; margin-top: 12px; min-height: 26px; padding: 0 0 0 4px; font-size: 12px; touch-action: pan-y; border-radius: 6px;
 }
 .home-navigation-scroll .tier-project-label:first-child { margin-top: 2px; }
 .home-navigation-scroll .todo-group-project { border: 0; }
@@ -237,8 +240,8 @@
 .home-navigation-scroll .task-group-chip { font-size: 12px; font-weight: 400; color: var(--fg-muted); padding-left: 14px; }
 .home-navigation-scroll .task-group-chip-count { display: none; }
 .home-navigation-scroll .task-group-chip-more { margin-left: auto; }
-.home-navigation-scroll .tier-project-label:hover, .home-navigation-scroll .task-group-chip:hover { background: var(--bg-hover); }
-.home-navigation-scroll .todo-pinned-subgroup + .todo-pinned-subgroup { margin-top: 12px; }
+.home-navigation-scroll .task-group-chip:hover { background: var(--bg-hover); }
+.home-navigation-scroll .todo-pinned-subgroup + .todo-pinned-subgroup { margin-top: 24px; }
 /* Parent tasks: the same stroke chevron as the headings, trailing the row, and a plain count instead of a blue pill. */
 .home-navigation-scroll .todo-panel-item > .collapse-chevron { position: static; order: 2; align-self: center; font-size: 0; --chevron-size: 16px; opacity: .7; }
 .home-navigation-scroll .todo-panel-item > .collapse-chevron::before {
@@ -282,3 +285,60 @@
 }
 .todo-section-tabs-menu:hover, .todo-section-tabs-menu[aria-expanded="true"] { background: var(--bg-hover); color: var(--fg); }
 .todo-section-tabs-menu:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Sticky headings (the user's call, 2026-09-24: "if in Satellite, keep Satellite, if project,
+   keep the Project"). While the list scrolls, the heading of each level it is inside stays at
+   the top, stacked: the section (Pinned, Recent, Projects) at 0, the tier at 26px, the project
+   at 52px. Each one lets go where its own box ends, so the next one takes its place: a tier
+   heading sticks inside its subgroup, a list project header inside its group. Project labels in
+   a tier are flat siblings of their cards, so the next label slides over the last one instead.
+   Every heading is 26px tall; the offsets depend on it. A single tier or the Projects tab has
+   no section or tier heading, so its project headings stick at 0. */
+.home-navigation-scroll.is-stacked .todo-pinned-section > .todo-pinned-header,
+.home-navigation-scroll.is-stacked .todo-tasks-section > .todo-tasks-header,
+.home-navigation-scroll.is-stacked .todo-pinned-subgroup-heading,
+.home-navigation-scroll .tier-project-label,
+.home-navigation-scroll .todo-group-project-header {
+  position: sticky; top: 0; z-index: 1;
+  /* Opaque, across the scroller's 8px gutters too (the shadows), so rows pass under cleanly.
+     The shadows also fill the rounded corners, where the panel would show through. */
+  background-color: var(--bg);
+  box-shadow: -8px 0 0 var(--bg), 8px 0 0 var(--bg);
+}
+.home-navigation-scroll.is-stacked .todo-pinned-section > .todo-pinned-header,
+.home-navigation-scroll.is-stacked .todo-tasks-section > .todo-tasks-header { z-index: 3; }
+.home-navigation-scroll.is-stacked .todo-pinned-subgroup-heading { top: 26px; z-index: 2; }
+.home-navigation-scroll.is-stacked .todo-tasks-section:has(> .todo-tasks-header) .todo-group-project-header { top: 26px; z-index: 2; }
+.home-navigation-scroll.is-stacked .tier-project-label { top: 52px; }
+/* The shadows only paint the gutters. List rows reach into the left one, so a click there beside
+   a stuck heading would land on a row hidden under it: these make the gutters part of it. */
+.home-navigation-scroll.is-stacked .todo-tasks-section > .navigation-heading.todo-tasks-header::before,
+.home-navigation-scroll.is-stacked .todo-tasks-section > .navigation-heading.todo-tasks-header::after,
+.home-navigation-scroll .todo-group-project-header::before,
+.home-navigation-scroll .todo-group-project-header::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; background: var(--bg); }
+.home-navigation-scroll.is-stacked .todo-tasks-section > .navigation-heading.todo-tasks-header::before,
+.home-navigation-scroll .todo-group-project-header::before { left: -8px; }
+.home-navigation-scroll.is-stacked .todo-tasks-section > .navigation-heading.todo-tasks-header::after,
+.home-navigation-scroll .todo-group-project-header::after { right: -8px; }
+/* A stuck label's top edge is under the tier heading, so its "drop above" line is drawn inside. */
+.home-navigation-scroll .tier-project-label-dropover:not(.dropover-below)::before { top: 0; }
+/* A tint over an opaque heading is layered on the panel colour, never in place of it. */
+.home-navigation-scroll.is-stacked .todo-pinned-section > .navigation-heading.todo-pinned-header:hover,
+.home-navigation-scroll.is-stacked .todo-tasks-section > .navigation-heading.todo-tasks-header:hover,
+.home-navigation-scroll .tier-project-label:hover,
+.home-navigation-scroll .todo-group-project-header:not(.header-drop-active):hover { background: linear-gradient(var(--bg-hover), var(--bg-hover)), var(--bg); }
+.home-navigation-scroll .todo-group-project-header.header-drop-active {
+  background: linear-gradient(color-mix(in srgb, var(--accent) 12%, transparent), color-mix(in srgb, var(--accent) 12%, transparent)), var(--bg);
+}
+/* A drop line drawn above a stuck heading would sit under the heading above it; draw it
+   inside the top edge instead. */
+.home-navigation-scroll .navigation-drop-target { box-shadow: inset 0 2px 0 var(--accent); }
+.home-navigation-scroll.is-stacked .todo-pinned-section > .todo-pinned-header.navigation-drop-target,
+.home-navigation-scroll.is-stacked .todo-tasks-section > .todo-tasks-header.navigation-drop-target,
+.home-navigation-scroll.is-stacked .todo-pinned-subgroup-heading.navigation-drop-target { box-shadow: inset 0 2px 0 var(--accent), -8px 0 0 var(--bg), 8px 0 0 var(--bg); }
+/* What the stuck headings cover, so Locate and keyboard scrolling land a row below them. Set on
+   the rows: as scroll padding on the list it would count the stuck headings themselves as out of
+   view, and bringing one into view (a focus, a test's click) would scroll the list under it. */
+.home-navigation-scroll [data-task-id] { scroll-margin-top: 26px; }
+.home-navigation-scroll.is-stacked .todo-pinned-section [data-task-id] { scroll-margin-top: 78px; }
+.home-navigation-scroll.is-stacked .todo-tasks-section:has(> .todo-tasks-header) [data-task-id] { scroll-margin-top: 52px; }

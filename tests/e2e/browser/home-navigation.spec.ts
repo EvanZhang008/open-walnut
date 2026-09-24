@@ -506,7 +506,7 @@ test('a single tier, Recent and the Projects list draw on the same grid as All',
   // stay on the 12px column while the member stepped in to 38).
   const memberRow = { memberCircle: [`${member} .task-phase-icon-btn`, 'box'], memberDot: [`${member} .task-unread-dot`, 'box'] } as const;
 
-  // In All, the second section stands clearly apart: 28px above Projects, 12px between tiers.
+  // In All, the second section stands clearly apart: 36px above Projects, 24px between tiers.
   const gapAbove = (selector: string) => navigation(page).evaluate((nav, selector) => {
     const target = nav.querySelector(selector)!;
     const top = target.getBoundingClientRect().top;
@@ -517,8 +517,8 @@ test('a single tier, Recent and the Projects list draw on the same grid as All',
   }, selector);
   await expect(heading(page, 'tasks')).toBeVisible();
   await expect(navigation(page).locator(member)).toBeVisible();
-  expect(await gapAbove('[data-navigation-id="tasks"]')).toBe(28);
-  if (await heading(page, 'satellite').count()) expect(await gapAbove('[data-navigation-id="satellite"]')).toBe(12);
+  expect(await gapAbove('[data-navigation-id="tasks"]')).toBe(36);
+  if (await heading(page, 'satellite').count()) expect(await gapAbove('[data-navigation-id="satellite"]')).toBe(24);
 
   await chooseViewOption(page, 'focus');
   await expect(page.getByTestId('tier-view-bar')).toContainText('Focus');
@@ -1226,5 +1226,301 @@ test('a fold keeps the clicked row where it was, and a tier folds only its own p
   await expect(card('fs1')).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('walnut-todo-collapsed-projs'))).toBe(JSON.stringify(['Meadowlark']));
   await page.screenshot({ path: `${SHOTS}/v2/fold/${test.info().project.name}-after-reload.png`, clip: { x: 0, y: 0, width: 700, height: 840 } });
+  expect(errors).toEqual([]);
+});
+
+test('headings stay stacked at the top while the list scrolls, and hand over to the next one', async ({ page, baseURL }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  // One column holds the fixture session whose task (pw-task-store-sync) the routes place: deep
+  // in Wait first, then in the Projects list. Every section starts open.
+  const located = 'pw-task-store-sync';
+  await page.addInitScript(() => {
+    sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-store-sync-session', locked: true }]));
+    if (sessionStorage.getItem('sticky-seeded')) return;
+    sessionStorage.setItem('sticky-seeded', '1');
+    localStorage.setItem('walnut-todo-collapsed-sections', '[]');
+  });
+  let where = 'wait';
+  const now = new Date().toISOString();
+  const task = (id: string, project: string, extra: Record<string, unknown> = {}) => ({
+    id, title: `Sticky ${id}`, project, status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
+    created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
+  });
+  const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`);
+  const run = (ids: string[], project: string) => ids.map((id): [string, string] => [id, project]);
+  const tiers = (): Record<string, Array<[string, string]>> => ({
+    focus: [...run(range('fo', 6), 'Orchard'), ...run(range('fm', 4), 'Meadowlark')],
+    satellite: [...run(range('so', 8), 'Orchard'), ...run(range('sm', 30), 'Meadowlark')],
+    wait: [...run(range('wo', 6), 'Orchard'), ...(where === 'wait' ? run([located], 'Orchard') : []), ...run(range('wm', 4), 'Meadowlark')],
+  });
+  await page.route('**/api/tasks?*', async route => {
+    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
+    const pinned = Object.entries(tiers()).flatMap(([tier, rows]) => rows.map(([id, project]) =>
+      task(id, project, { pinned: true, focus_tier: tier, ...(id === located ? { session_ids: ['pw-store-sync-session'] } : {}) })));
+    const list = [
+      ...range('lO', 8).map(id => task(id, 'Orchard')),
+      ...range('lJ', 12).map(id => task(id, 'Juniper')),
+      ...range('lW', 28).map(id => task(id, 'Willow')),
+      ...range('lY', 20).map(id => task(id, 'Yarrow')),
+      // Updated longest ago, so it is Juniper's last row.
+      ...(where === '' ? [task(located, 'Juniper', { session_ids: ['pw-store-sync-session'], updated_at: '2026-01-01T00:00:00.000Z' })] : []),
+    ];
+    await route.fulfill({ json: { tasks: [...pinned, ...list] } });
+  });
+  await page.route('**/api/focus/tasks', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const ids = (tier: string) => tiers()[tier].map(([id]) => id);
+    await route.fulfill({ json: {
+      pinned_tasks: [...ids('focus'), ...ids('satellite'), ...ids('wait')], focus_tasks: ids('focus'),
+      satellite_tasks: ids('satellite'), backlog_tasks: [], wait_tasks: ids('wait'), custom_tier_tasks: {},
+    } });
+  });
+  await page.route('**/api/focus/tiers', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({ json: { tiers: [] } });
+  });
+  await boot(page, baseURL!);
+  await expect(navigation(page).locator('[data-task-id="fo1"]')).toBeVisible({ timeout: 30_000 });
+  for (const project of ['Juniper', 'Orchard', 'Willow', 'Yarrow']) await openListProject(page, project);
+
+  const scroller = navigation(page).locator('.home-navigation-scroll');
+  const tier = (id: string) => navigation(page).locator('.todo-pinned-subgroup').filter({ has: page.locator(`[data-navigation-id="${id}"]`) });
+  const label = (tierId: string, project: string) => tier(tierId).locator(`.tier-project-label[data-project="${project}"]`).first();
+  const card = (id: string) => navigation(page).locator(`[data-task-id="${id}"]`).first();
+  const header = (project: string) => navigation(page).locator('.todo-group-project-header').filter({ has: page.locator('.todo-group-project-name', { hasText: new RegExp(`^${project}$`) }) });
+  const frames = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  /** Where an element shows, in px below the top of the scrolling list. */
+  const offset = (el: ReturnType<typeof card>) => el.evaluate(node => {
+    const list = node.closest('.home-navigation-scroll')!;
+    return Math.round(node.getBoundingClientRect().top - list.getBoundingClientRect().top);
+  });
+  /** Scrolls until `el` (never a stuck heading) sits `y` px below the top. */
+  const scrollTo = async (el: ReturnType<typeof card>, y: number) => {
+    await scroller.evaluate((list, dy) => { list.scrollTop += dy; }, await offset(el) - y);
+    await frames();
+  };
+  /** What the user sees in the three heading slots at the top: section, tier, project. */
+  const stack = () => scroller.evaluate(list => {
+    const box = list.getBoundingClientRect();
+    return [13, 39, 65].map(dy => {
+      const hit = document.elementFromPoint(box.left + 60, box.top + dy);
+      const nav = hit?.closest('[data-navigation-id]');
+      if (nav) return nav.getAttribute('data-navigation-id');
+      const tierLabel = hit?.closest('.tier-project-label');
+      if (tierLabel) return `label:${tierLabel.getAttribute('data-project')}`;
+      const listHeader = hit?.closest('.todo-group-project-header');
+      if (listHeader) return `header:${listHeader.querySelector('.todo-group-project-name')?.textContent}`;
+      const row = hit?.closest('[data-task-id]');
+      return row ? `row:${row.getAttribute('data-task-id')}` : 'none';
+    });
+  });
+  const settle = async () => { await frames(); await page.waitForTimeout(400); };
+  const shot = async (name: string) => {
+    const box = await navigation(page).boundingBox();
+    await page.screenshot({ path: `${SHOTS}/v2/sticky/${test.info().project.name}-${name}.png`, clip: { x: box!.x, y: box!.y, width: box!.width, height: 360 } });
+  };
+
+  // 1. More air as the level goes up: 12px above a project, 24px above a tier, 36px above the
+  //    second section. Measured as drawn, from the last row above to the heading (a project
+  //    label also keeps the 2px its tier's rows are spaced by).
+  await scroller.evaluate(list => { list.scrollTop = 0; });
+  await frames();
+  const gaps = await navigation(page).evaluate(nav => {
+    const box = (el: Element | null) => el!.getBoundingClientRect();
+    const groups = [...nav.querySelectorAll('.todo-pinned-subgroup')];
+    const lastRow = (group: Element) => [...group.querySelectorAll('[data-task-id]')].at(-1)!;
+    const meadowlark = groups[0].querySelector('.tier-project-label[data-project="Meadowlark"]')!;
+    return {
+      project: Math.round(box(meadowlark).top - box(meadowlark.previousElementSibling).bottom),
+      tier: Math.round(box(groups[1]).top - box(lastRow(groups[0])).bottom),
+      section: Math.round(box(nav.querySelector('.todo-tasks-header')).top - box(lastRow(groups.at(-1)!)).bottom),
+    };
+  });
+  expect(gaps).toEqual({ project: 14, tier: 24, section: 36 });
+
+  // 2. Deep in a tier's project run: Pinned, the tier and the project stay stacked on top,
+  //    each 26px under the last, and the rows pass under them.
+  await scrollTo(card('so7'), 200);
+  expect(await stack()).toEqual(['pinned', 'satellite', 'label:Orchard']);
+  expect([await offset(heading(page, 'pinned')), await offset(heading(page, 'satellite')), await offset(label('satellite', 'Orchard'))]).toEqual([0, 26, 52]);
+  await shot('tier-run');
+  // The next project in the tier takes over the project slot.
+  await scrollTo(card('sm7'), 200);
+  expect(await stack()).toEqual(['pinned', 'satellite', 'label:Meadowlark']);
+  // At the tier's end its heading is pushed up by its own box, never over the next tier.
+  await scrollTo(tier('wait'), 60);
+  const push = await tier('satellite').evaluate(group => ({
+    heading: Math.round(group.querySelector('.todo-pinned-subgroup-heading')!.getBoundingClientRect().bottom),
+    group: Math.round(group.getBoundingClientRect().bottom),
+  }));
+  expect(push.heading).toBe(push.group);
+  expect(await offset(heading(page, 'wait'))).toBe(60);
+  await scrollTo(card('wo6'), 150);
+  expect(await stack()).toEqual(['pinned', 'wait', 'label:Orchard']);
+
+  // 3. In the Projects list: Projects, then the project.
+  await scrollTo(card('lJ9'), 200);
+  expect((await stack()).slice(0, 2)).toEqual(['tasks', 'header:Juniper']);
+  expect([await offset(heading(page, 'tasks')), await offset(header('Juniper'))]).toEqual([0, 26]);
+  await shot('list-run');
+  // List rows reach into the left gutter; beside a stuck heading the gutter is the heading's,
+  // so a click there never lands on a row hidden under it.
+  expect(await scroller.evaluate(list => {
+    const box = list.getBoundingClientRect();
+    return [13, 39].map(dy => {
+      const hit = document.elementFromPoint(box.left + 3, box.top + dy);
+      return hit?.closest('[data-navigation-id]')?.getAttribute('data-navigation-id')
+        ?? (hit?.closest('.todo-group-project-header') ? 'header' : hit?.closest('[data-task-id]') ? 'row' : 'none');
+    });
+  })).toEqual(['tasks', 'header']);
+
+  // 4. Folding a stuck heading brings its own place to where it showed, so what follows it
+  //    is right under it instead of sliding up beneath it. Unfolding shows its rows there.
+  await scrollTo(card('so7'), 200);
+  await label('satellite', 'Orchard').locator('.tier-project-label-name').click();
+  await expect(card('so1')).toBeHidden();
+  await settle();
+  expect(await offset(label('satellite', 'Orchard'))).toBe(52);
+  // A tier's rows and labels sit 2px apart, plus a label's own 12px.
+  expect(await offset(label('satellite', 'Meadowlark'))).toBe(52 + 26 + 2 + 12);
+  await label('satellite', 'Orchard').locator('.tier-project-label-name').click();
+  await expect(card('so1')).toBeVisible();
+  await settle();
+  expect([await offset(label('satellite', 'Orchard')), await offset(card('so1'))]).toEqual([52, 52 + 26 + 2]);
+
+  await scrollTo(card('sm7'), 200);
+  const satOpen = heading(page, 'satellite').locator('.navigation-heading-open');
+  await satOpen.click();
+  await expect(card('so1')).toHaveCount(0);
+  await settle();
+  expect([await offset(heading(page, 'satellite')), await offset(heading(page, 'wait'))]).toEqual([26, 26 + 26 + 24]);
+  await satOpen.click();
+  await expect(card('so1')).toBeVisible();
+  await settle();
+  expect(await offset(heading(page, 'satellite'))).toBe(26);
+
+  // Opening a stuck heading's menu folds nothing, so nothing moves.
+  await scrollTo(card('sm7'), 200);
+  const before = await scroller.evaluate(list => list.scrollTop);
+  await heading(page, 'satellite').getByRole('button', { name: 'Satellite menu' }).click();
+  await expect(page.locator('.wn-context-menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.wn-context-menu')).toHaveCount(0);
+  await settle();
+  expect(await scroller.evaluate(list => list.scrollTop)).toBe(before);
+
+  await scrollTo(card('lJ9'), 200);
+  await header('Juniper').locator('.todo-group-name-btn').click();
+  await expect(card('lJ1')).toHaveCount(0);
+  await settle();
+  expect(await offset(header('Juniper'))).toBe(26);
+  await header('Juniper').locator('.todo-group-name-btn').click();
+  await expect(card('lJ1')).toBeVisible();
+  await settle();
+  expect(await offset(header('Juniper'))).toBe(26);
+
+  // A drag's start draws the empty Backlog tier above Wait. With Wait's heading stuck, the list
+  // still scrolls by exactly that much, so the rows under the pointer stay put.
+  const press = async (el: ReturnType<typeof card>) => {
+    const box = (await el.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.4, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.4 + 12, box.y + box.height / 2, { steps: 4 });
+    return box;
+  };
+  const cancelDrag = async () => { await page.keyboard.press('Escape'); await page.mouse.up(); await settle(); };
+  await scrollTo(card('wm3'), 300);
+  expect((await stack())[1]).toBe('wait');
+  const waitBefore = await offset(tier('wait'));
+  await press(card('wm3'));
+  await expect(heading(page, 'backlog')).toBeVisible();
+  await frames();
+  expect(await offset(tier('wait'))).toBe(waitBefore);
+  await cancelDrag();
+  await expect(heading(page, 'backlog')).toHaveCount(0);
+
+  // In a list drag, a stuck project header takes a drop only where it is now: dnd-kit moves the
+  // boxes it measured at the start along with the scroll, which would slide the stuck header's
+  // box down over the rows it covers.
+  // Willow's place in the list 200px above the top, and a row of it in the middle to grab.
+  const willowAt = () => header('Willow').evaluate(node => {
+    const el = node as HTMLElement;
+    const list = el.closest('.home-navigation-scroll')!;
+    el.style.position = 'static';
+    const top = el.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    el.style.position = '';
+    return Math.round(top);
+  });
+  await scroller.evaluate((list, dy) => { list.scrollTop += dy; }, await willowAt() + 200);
+  await frames();
+  expect((await stack())[1]).toBe('header:Willow');
+  const middle = await scroller.evaluate(list => {
+    const box = list.getBoundingClientRect();
+    return document.elementFromPoint(box.left + 120, box.top + 450)?.closest('[data-task-id]')?.getAttribute('data-task-id');
+  });
+  expect(middle).toMatch(/^lW/);
+  const grabbed = await press(card(middle!));
+  await expect(page.locator('.drag-overlay-item')).toBeVisible();
+  await scroller.evaluate(list => { list.scrollTop -= 140; });
+  await frames();
+  const listY = (await scroller.boundingBox())!.y;
+  await page.mouse.move(grabbed.x + grabbed.width * 0.4, listY + 26 + 140 + 13, { steps: 8 });
+  await frames();
+  expect(await offset(header('Willow'))).toBe(26);
+  await expect(header('Willow')).not.toHaveClass(/header-drop-active/);
+  await cancelDrag();
+
+  // 5. A single tier and the Projects view have no section or tier heading above their rows,
+  //    so a project heading sticks at the very top of the list that scrolls there.
+  const within = (el: ReturnType<typeof card>, list: string) => el.evaluate((node, list) =>
+    Math.round(node.getBoundingClientRect().top - node.closest(list)!.getBoundingClientRect().top), list);
+  const scrollWithin = async (el: ReturnType<typeof card>, list: string, y: number) => {
+    const dy = await within(el, list) - y;
+    await navigation(page).locator(list).first().evaluate((node, dy) => { node.scrollTop += dy; }, dy);
+    await frames();
+  };
+  const topOfList = (list: string) => navigation(page).locator(list).first().evaluate(node => {
+    const box = node.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + 60, box.top + 13);
+    const project = hit?.closest('.tier-project-label, .todo-group-project-header');
+    return project?.getAttribute('data-project') ?? project?.querySelector('.todo-group-project-name')?.textContent ?? 'none';
+  });
+  await chooseViewOption(page, 'satellite');
+  await scrollWithin(card('sm10'), '.todo-pinned-list-scroll', 250);
+  expect(await within(navigation(page).locator('.tier-project-label[data-project="Meadowlark"]'), '.todo-pinned-list-scroll')).toBe(0);
+  expect(await topOfList('.todo-pinned-list-scroll')).toBe('Meadowlark');
+  await chooseViewOption(page, 'tasks');
+  await scrollWithin(card('lJ9'), '.todo-panel-list', 200);
+  expect(await within(header('Juniper'), '.todo-panel-list')).toBe(0);
+  expect(await topOfList('.todo-panel-list')).toBe('Juniper');
+  await chooseViewOption(page, 'all');
+  await expect(heading(page, 'pinned')).toBeVisible();
+
+  // 6. Locate lands a row below the stuck headings, never under them: a tier card, then a
+  //    list row. Both start hidden under the stack.
+  const locate = page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true });
+  const shown = (el: ReturnType<typeof card>) => el.evaluate(node => {
+    const list = node.closest('.home-navigation-scroll')!.getBoundingClientRect();
+    const r = node.getBoundingClientRect();
+    return r.top - list.top >= 78 - 0.5 && r.bottom <= list.bottom + 0.5;
+  });
+  const tierCard = navigation(page).locator(`.todo-pinned-section [data-task-id="${located}"]`);
+  await scrollTo(tierCard, 54);
+  expect((await stack())[2]).toBe('label:Orchard');
+  await locate.click();
+  await expect(tierCard).toHaveClass(/todo-pinned-card-active/);
+  await expect.poll(() => shown(tierCard)).toBe(true);
+
+  where = '';
+  await page.reload();
+  await expect(navigation(page).locator('[data-task-id="fo1"]')).toBeVisible({ timeout: 30_000 });
+  const row = navigation(page).locator(`.todo-panel-list [data-task-id="${located}"]`);
+  await expect(row).toBeVisible();
+  await scrollTo(row, 30);
+  expect((await stack())[1]).toBe('header:Juniper');
+  await locate.click();
+  await expect(row).toHaveClass(/task-focused/);
+  await expect.poll(() => shown(row)).toBe(true);
   expect(errors).toEqual([]);
 });

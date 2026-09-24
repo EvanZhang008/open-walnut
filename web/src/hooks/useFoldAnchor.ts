@@ -13,6 +13,12 @@ import { useEffect, type RefObject } from 'react';
  * handler runs, and the nearest scroller is moved by the row's drift in the frames
  * after the fold commits, before they paint.
  *
+ * A heading stuck to the top (the panel's headings are sticky) shows where it is stuck,
+ * not where it sits in the list. Folding it would leave it stuck there with the rows
+ * below sliding up under it, so once the fold has changed the list, what is held is
+ * its place in the list: scrolled until that place is where the heading was showing.
+ * A click that changes nothing (its ··· menu) moves nothing.
+ *
  * A fold near the end of the list is the case scrolling alone cannot answer: the
  * content gets shorter than the scroll position, the browser clamps it, and every
  * row moves down. The scroller then gets that much room past its end, which drains
@@ -47,13 +53,37 @@ function scrollParent(el: Element, root: Element): HTMLElement | null {
   return fallback;
 }
 
+/** The sticky heading a row is (or sits in), if any. */
+function stickyOf(row: Element, scroller: HTMLElement): HTMLElement | null {
+  for (let node: Element | null = row; node && node !== scroller; node = node.parentElement) {
+    if (node instanceof HTMLElement && getComputedStyle(node).position === 'sticky') return node;
+  }
+  return null;
+}
+
+/** Where a row sits in the list, which for a stuck heading is not where it shows. */
+function listTop(row: Element, stuck: HTMLElement | null): number {
+  if (!stuck) return row.getBoundingClientRect().top;
+  const inline = stuck.style.position;
+  stuck.style.position = 'static';
+  const top = row.getBoundingClientRect().top;
+  stuck.style.position = inline;
+  return top;
+}
+
 export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     // `expected` = where the scroller should be; anything else means something else
     // scrolled it, and the hold lets go rather than pull it back.
-    let hold: { row: Element; top: number; scroller: HTMLElement; frames: number; expected: number; anchor: string } | null = null;
+    // `list` = the row's place in the list at the click, `top` = where it showed; the
+    // two differ only for a stuck heading. The box it sticks inside is what its fold
+    // resizes, so a change in `box`'s height says the fold has landed.
+    let hold: {
+      row: Element; stuck: HTMLElement | null; box: Element | null; boxHeight: number; top: number; list: number;
+      scroller: HTMLElement; frames: number; expected: number; anchor: string;
+    } | null = null;
     let raf = 0;
     // The row a menu was opened from. Its fold items render in a portal outside the
     // panel, so the click that folds carries no trace of the row.
@@ -102,7 +132,8 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
       // is the fold's doing, not another scroll.
       const clamped = now < hold.expected && now >= scroller.scrollHeight - scroller.clientHeight - 1;
       if (!row.isConnected || (Math.abs(now - hold.expected) > 1 && !clamped)) { release(); return; }
-      const drift = row.getBoundingClientRect().top - hold.top;
+      const folded = !!hold.box && Math.abs(hold.box.getBoundingClientRect().height - hold.boxHeight) >= 0.5;
+      const drift = listTop(row, hold.stuck) - (folded ? hold.top : hold.list);
       if (Math.abs(drift) >= 0.5) {
         const want = now + drift;
         const short = want - (scroller.scrollHeight - scroller.clientHeight);
@@ -119,7 +150,13 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
       const scroller = scrollParent(row, root);
       if (!scroller) return;
       release();
-      hold = { row, top: row.getBoundingClientRect().top, scroller, frames: HOLD_FRAMES, expected: scroller.scrollTop, anchor: scroller.style.overflowAnchor };
+      const stuck = stickyOf(row, scroller);
+      const box = stuck?.parentElement ?? null;
+      hold = {
+        row, stuck, box, boxHeight: box?.getBoundingClientRect().height ?? 0,
+        top: row.getBoundingClientRect().top, list: listTop(row, stuck),
+        scroller, frames: HOLD_FRAMES, expected: scroller.scrollTop, anchor: scroller.style.overflowAnchor,
+      };
       // Chromium's own anchoring would move the scroller by a rule of its own; off
       // for the hold, so both engines end up exactly here.
       scroller.style.overflowAnchor = 'none';
