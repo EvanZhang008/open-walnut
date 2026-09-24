@@ -117,8 +117,48 @@ export async function transcribeAudio(
 }
 
 /**
+ * Statuses that say the PAYLOAD is the problem: too big (413), a format the
+ * engine won't take (415), or well-formed bytes it refused to process (422).
+ * Re-posting the same bytes cannot change any of those answers.
+ */
+const NON_RETRYABLE_DRAFT_STATUS = new Set([413, 415, 422]);
+
+/**
+ * A /api/stt/draft rejection, carrying whether sending the SAME bytes again
+ * could ever succeed.
+ *
+ * Why this exists: the draft loop used to throw a generic Error, so its caller
+ * could not tell "the engine was busy, try next tick" from "this body will be
+ * rejected forever". It retried either way, which on 2026-09-01 turned one 413
+ * into a request every 2s, each one bigger than the last, for as long as the
+ * user kept talking.
+ */
+export class SttDraftError extends Error {
+  readonly status: number;
+  readonly retryable: boolean;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'SttDraftError';
+    this.status = status;
+    this.retryable = !NON_RETRYABLE_DRAFT_STATUS.has(status);
+  }
+}
+
+/**
+ * Should the draft loop keep asking after this failure? Anything that is not a
+ * payload rejection (a 5xx, a dropped connection, an abort, a timeout) is worth
+ * one more tick — the next tick's bytes are different audio anyway.
+ */
+export function isRetryableDraftFailure(err: unknown): boolean {
+  return !(err instanceof SttDraftError) || err.retryable;
+}
+
+/**
  * Live-draft transcription of the audio captured so far (recording still in
  * progress). Cheap fire-and-forget preview: no recording saved server-side.
+ * Rejections arrive as SttDraftError so the caller can retire the lane instead
+ * of re-posting a body the server will never accept.
  */
 export async function draftTranscribe(
   audioBase64: string,
@@ -132,7 +172,14 @@ export async function draftTranscribe(
     body: JSON.stringify({ audio: audioBase64, format, language }),
     signal: signal ?? AbortSignal.timeout(20_000),
   });
-  if (!res.ok) throw new Error(`draft transcription failed: ${res.status}`);
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const data = await res.json();
+      if (data?.error) detail = `: ${data.error}`;
+    } catch { /* no JSON body — the status is enough */ }
+    throw new SttDraftError(res.status, `draft transcription failed: ${res.status}${detail}`);
+  }
   return res.json();
 }
 

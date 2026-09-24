@@ -88,6 +88,20 @@ export class PcmCapture {
     return 0;
   }
 
+  /**
+   * True when any captured block overlapping [fromSample, toSample) reached
+   * speech level. Lets a caller that had to abandon a stretch of the window tell
+   * "we dropped silence" (costs nothing) from "we dropped words" (the final text
+   * can no longer be assembled from committed segments alone).
+   */
+  hasVoiceBetween(fromSample: number, toSample: number, voiceRms: number): boolean {
+    for (const b of this.blocks) {
+      if (b.startSample + b.length <= fromSample || b.startSample >= toSample) continue;
+      if (b.rms >= voiceRms) return true;
+    }
+    return false;
+  }
+
   findCommitPoint(windowStartSample: number, opts: Omit<CommitPointOptions, 'sampleRate'>): number | null {
     return findSilenceCommitPoint(this.blocks, windowStartSample, { ...opts, sampleRate: this.sampleRate });
   }

@@ -6,10 +6,11 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { transcribeAudio, draftTranscribe, saveRecording, warmupStt } from '@/api/stt';
+import { transcribeAudio, draftTranscribe, saveRecording, warmupStt, isRetryableDraftFailure } from '@/api/stt';
 import { setVoiceStatus } from '@/utils/voice-status';
 import { decideStopAction } from '@/utils/stt-stop';
 import { joinSegments } from '@/utils/stt-segments';
+import { decideDraftTick } from '@/utils/stt-draft-window';
 import { PcmCapture } from '@/utils/pcm-stream';
 import { log } from '@/utils/log';
 
@@ -99,7 +100,14 @@ const SILENCE_WARN_TICKS = 30;       // ~3s of actual sampling with no sound →
 // chunks only decode as a from-the-start concatenation). Drop-if-busy keeps at
 // most one draft request in flight either way.
 const DRAFT_INTERVAL_MS = 2000;
-const DRAFT_MAX_BYTES = 4 * 1024 * 1024; // upload cap per draft request
+const DRAFT_MAX_BYTES = 4 * 1024 * 1024; // upload cap per draft request, EVERY path
+// Belt to COMMIT_FORCE_AFTER_MS's braces. forceAfterMs only fires when the
+// window contains speech and a cut point can be placed in it, so a window can
+// stay open indefinitely (a user who leaves the mic on in silence: measured
+// 4m19s on 2026-09-01, the draft dead and the upload growing the whole time).
+// This bound needs no cooperation from the audio: past it, the window is clamped
+// forward on the clock alone.
+const DRAFT_MAX_WINDOW_MS = 20000;
 // A pause this long is a safe place to cut a segment: no word straddles it,
 // and it is comfortably longer than an intra-sentence breath.
 const COMMIT_SILENCE_MS = 800;
@@ -157,6 +165,18 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   // Absolute sample position covered by the newest delivered draft (PCM path's
   // equivalent of draftCoveredChunksRef).
   const draftCoveredSampleRef = useRef(0);
+  // Commits whose text never reached confirmedRef: the slice was over the upload
+  // cap, its transcribe failed, or the window had to be clamped forward past
+  // audio nobody drafted. Counted only when the abandoned span actually held
+  // SPEECH — dropping silence costs nothing. Non-zero means "committed segments
+  // + tail would be missing words", which the stop path repairs with a
+  // whole-clip pass.
+  const skippedSegmentsRef = useRef(0);
+  // The skip condition repeats every tick, so only the first one is logged in
+  // full; the stop line reports the count.
+  const draftSkipLoggedRef = useRef(false);
+  // True once the draft lane has been retired for this recording.
+  const draftRetiredRef = useRef(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -224,6 +244,26 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     return true;
   }, []);
 
+  /**
+   * Stop drafting for the rest of this recording, keep recording.
+   *
+   * The draft is a PREVIEW: a preview that cannot succeed must stop asking. The
+   * failures that land here are payload rejections (413/415/422), where the next
+   * tick's request would be the same shape as the one just refused — retrying it
+   * every 2s costs the whole server's event loop and buys nothing. The
+   * authoritative text still comes from the pass on mic release, so retiring the
+   * lane degrades the live preview and nothing else.
+   */
+  const retireDraftLane = useCallback((reason: string) => {
+    if (draftTimerRef.current !== undefined) {
+      clearInterval(draftTimerRef.current);
+      draftTimerRef.current = undefined;
+    }
+    if (draftRetiredRef.current) return;
+    draftRetiredRef.current = true;
+    log.warn('stt', `live draft stopped for this recording — ${reason}. Recording continues; the text you get on stop is unaffected.`);
+  }, []);
+
   const stopStream = useCallback(() => {
     if (draftTimerRef.current !== undefined) {
       clearInterval(draftTimerRef.current);
@@ -277,6 +317,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       confirmedRef.current = '';
       windowStartRef.current = 0;
       draftCoveredSampleRef.current = 0;
+      skippedSegmentsRef.current = 0;
+      draftSkipLoggedRef.current = false;
+      draftRetiredRef.current = false;
       try {
         const AudioCtx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
         if (AudioCtx) {
@@ -457,16 +500,23 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         const lastVoiceAt = pcm ? pcm.lastVoiceSample(VOICE_RMS) : lastVoiceChunkRef.current;
         const draftCovered = pcm ? draftCoveredSampleRef.current : draftCoveredChunksRef.current;
         const draft = lastDraftRef.current;
-        const action = decideStopAction({
+        const decided = decideStopAction({
           hasDraft: !!draft,
           knowsWhenSpeechEnded: (pcm ? true : analyserAttachedRef.current) && lastVoiceAt > 0,
           draftCoveredChunks: draftCovered,
           lastVoiceChunk: lastVoiceAt,
         });
+        // A span of speech the draft loop had to abandon is missing from the
+        // draft text, so the draft cannot BE the answer however cleanly the user
+        // stopped: hand it over now (still usable) and let the authoritative pass
+        // below replace it with the complete words.
+        const action = decided === 'draft-is-final' && skippedSegmentsRef.current > 0
+          ? 'draft-then-refine'
+          : decided;
         let provisional: string | null = null;
         if (draft && action !== 'wait-for-server') {
           lastDraftRef.current = null;
-          log.info('stt', `stop → ${action} (draft covered ${draftCovered}, last speech at ${lastVoiceAt}, ${totalChunks} chunks)`);
+          log.info('stt', `stop → ${action} (draft covered ${draftCovered}, last speech at ${lastVoiceAt}, ${totalChunks} chunks, ${skippedSegmentsRef.current} undrafted)`);
           if (isMountedRef.current) onTranscribeRef.current(draft);
           if (action === 'draft-is-final') {
             setVoiceStatus({ transcribing: false, lastFailed: false });
@@ -480,26 +530,78 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         setIsTranscribing(true);
         setVoiceStatus({ transcribing: true });
         try {
-          let finalText: string;
+          // Empty is the honest default: every path below either produces text or
+          // leaves it empty, and empty is already handled (surface it, keep the
+          // audio, keep the draft) rather than pretending a result exists.
+          let finalText = '';
           let tookMs = 0;
+          let via = '';
 
           if (pcm) {
             // Keep the clip for Retry BEFORE the tail pass, so a failed pass
             // still leaves the audio recoverable.
             const retryBase64 = await keepForRetry().catch(() => null);
-            // Segment-committed recording: everything before windowStart is
-            // already frozen text, so the final pass only transcribes the open
-            // tail — this is what makes stopping fast regardless of clip length.
-            const slice = pcm.sliceWavBase64(windowStartRef.current);
-            if (slice) {
+            // The whole clip through the authoritative /transcribe lane. Slower,
+            // and only used when the fast assembly below cannot produce the
+            // user's actual words. Returns null when it is unavailable or fails,
+            // so the caller always has the segment assembly to fall back on.
+            const tryWholeClip = async (why: string): Promise<string | null> => {
+              if (!retryBase64) return null;
+              log.warn('stt', `stop → whole-clip pass: ${why}`);
               const t0 = Date.now();
-              const { text: tail } = await draftTranscribe(slice.base64, 'wav', languageRef.current);
-              tookMs = Date.now() - t0;
-              finalText = joinSegments(confirmedRef.current, tail);
-            } else {
-              finalText = confirmedRef.current;
+              return transcribeAudio(retryBase64, format, languageRef.current)
+                .then((r) => {
+                  tookMs = Date.now() - t0;
+                  if (isMountedRef.current && r.debugAudioPath) setLastDebugPath(r.debugAudioPath);
+                  return r.text;
+                })
+                .catch((e) => {
+                  log.warn('stt', `whole-clip pass failed (${e instanceof Error ? e.message : String(e)}) — falling back to committed segments`);
+                  return null;
+                });
+            };
+
+            // A span of SPEECH was abandoned by the draft loop (over the upload
+            // cap, a failed commit, or a clamped window), so "committed segments
+            // + open tail" would hand the user text with words missing in the
+            // middle. Pay for the whole clip once instead: a slower stop, but
+            // complete words. Only in this degraded case — the fast tail-only
+            // assembly stays the normal path.
+            let wholeClip: string | null = null;
+            if (skippedSegmentsRef.current > 0) {
+              wholeClip = await tryWholeClip(`${skippedSegmentsRef.current} segment(s) never got drafted, so committed text alone would be missing words`);
             }
-            if (retryBase64) persistHistory(retryBase64, finalText || provisional || '');
+
+            if (!wholeClip) {
+              // Segment-committed recording: everything before windowStart is
+              // already frozen text, so the final pass only transcribes the open
+              // tail — this is what makes stopping fast regardless of clip length.
+              const slice = pcm.sliceWavBase64(windowStartRef.current);
+              // The tail obeys the SAME cap as a draft, because it posts to the
+              // same route. An unbounded tail here would 413 exactly like the
+              // runaway drafts did, and then the user would get only the draft.
+              if (slice && slice.base64.length > DRAFT_MAX_BYTES) {
+                wholeClip = await tryWholeClip(`open tail is ${slice.base64.length}B, past the ${DRAFT_MAX_BYTES}B cap the draft lane accepts`);
+              }
+              if (!wholeClip) {
+                if (!slice) {
+                  finalText = confirmedRef.current;
+                } else {
+                  const t0 = Date.now();
+                  const { text: tail } = await draftTranscribe(slice.base64, 'wav', languageRef.current);
+                  tookMs = Date.now() - t0;
+                  finalText = joinSegments(confirmedRef.current, tail);
+                }
+                via = ', tail-only';
+                if (retryBase64) persistHistory(retryBase64, finalText || provisional || '');
+              }
+            }
+            if (wholeClip) {
+              // /transcribe already stored this clip and its text server-side,
+              // so writing history again here would duplicate the row.
+              finalText = wholeClip;
+              via = ', whole-clip repair';
+            }
           } else {
             const base64 = await readBlobBase64();
             log.info('stt', `Sending ${(blob.size / 1024).toFixed(1)}KB ${format} for transcription`);
@@ -526,7 +628,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
               onTranscribeRef.current(finalText);
             }
             const preview = finalText.length > 50 ? finalText.slice(0, 50) + '...' : finalText;
-            log.info('stt', `Transcribed: "${preview}" (${tookMs}ms${pcm ? ', tail-only' : ''})`);
+            log.info('stt', `Transcribed: "${preview}" (${tookMs}ms${via})`);
           } else {
             // An empty transcription used to fail SILENTLY — spinner ends, nothing
             // appears, and the user thinks the recording was eaten. Surface it; the
@@ -578,16 +680,34 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       const draftFormat = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'mp4' : 'webm';
       draftBusyRef.current = false;
 
+      // Records that [from, to) of the recording was abandoned by the draft
+      // pipeline. Silence costs nothing; speech means the committed-segments
+      // assembly is now incomplete, which the stop path has to make good.
+      const noteAbandonedSpan = (pcm: PcmCapture, from: number, to: number, why: string) => {
+        if (to <= from) return;
+        const lostSpeech = pcm.hasVoiceBetween(from, to, VOICE_RMS);
+        if (lostSpeech) skippedSegmentsRef.current++;
+        if (!draftSkipLoggedRef.current) {
+          draftSkipLoggedRef.current = true;
+          const ms = Math.round((to - from) / (pcm.sampleRate / 1000));
+          log.warn('stt', `draft window advanced without transcribing ${ms}ms of audio (${lostSpeech ? 'contained speech' : 'silence only'}) — ${why}`);
+        }
+      };
+
       // Segment-commit drafting on the raw-PCM capture. Each tick does ONE of
       // two things: if a qualifying pause exists, finalize the segment before it
       // (that text is frozen and its audio never touched again — this is what
       // keeps ticks fast forever); otherwise refresh the live preview of the
       // open segment. The visible text is always confirmed + current tail.
+      // Whatever it does, the window position obeys decideDraftTick: every bound
+      // that can stop an upload also moves the window forward, or the next tick
+      // is bigger than this one and the loop never recovers.
       const pcmDraftTick = async (pcm: PcmCapture) => {
         const abort = new AbortController();
         draftAbortRef.current = abort;
         try {
-          const commitAt = pcm.findCommitPoint(windowStartRef.current, {
+          const windowStart = windowStartRef.current;
+          const commitAt = pcm.findCommitPoint(windowStart, {
             voiceRms: VOICE_RMS,
             minSilenceMs: COMMIT_SILENCE_MS,
             minSegmentMs: COMMIT_MIN_SEGMENT_MS,
@@ -595,39 +715,84 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             minSilenceFloorMs: COMMIT_SILENCE_FLOOR_MS,
             forceAfterMs: COMMIT_FORCE_AFTER_MS,
           });
-          if (commitAt !== null) {
+          // Encode only when a decision can still need the bytes: a window past
+          // the wall-clock bound is about to be abandoned, and base64-encoding
+          // megabytes of it would burn the main thread for nothing.
+          const openMs = (pcm.totalSamples - windowStart) / (pcm.sampleRate / 1000);
+          const slice = (commitAt !== null || openMs <= DRAFT_MAX_WINDOW_MS)
+            ? pcm.sliceWavBase64(windowStart, commitAt ?? undefined)
+            : null;
+          const decision = decideDraftTick({
+            windowStart,
+            totalSamples: pcm.totalSamples,
+            sampleRate: pcm.sampleRate,
+            commitAt,
+            sliceBytes: slice?.base64.length ?? 0,
+            maxBytes: DRAFT_MAX_BYTES,
+            maxWindowMs: DRAFT_MAX_WINDOW_MS,
+          });
+
+          if (decision.action === 'commit-upload' && slice) {
             // A complete phrase with silence on both sides: this pass sees full
             // context, so its text is better than any mid-sentence preview was.
-            const slice = pcm.sliceWavBase64(windowStartRef.current, commitAt);
-            if (!slice) { windowStartRef.current = commitAt; return; }
-            const { text } = await draftTranscribe(slice.base64, 'wav', languageRef.current, abort.signal);
-            // Stopped meanwhile → onstop owns everything from windowStart on;
-            // adopting this result now would double-commit the segment.
-            if (mediaRecorderRef.current !== recorder) return;
-            confirmedRef.current = joinSegments(confirmedRef.current, text);
-            windowStartRef.current = commitAt;
+            try {
+              const { text } = await draftTranscribe(slice.base64, 'wav', languageRef.current, abort.signal);
+              // Stopped meanwhile → onstop owns everything from windowStart on;
+              // adopting this result now would double-commit the segment.
+              if (mediaRecorderRef.current !== recorder) return;
+              confirmedRef.current = joinSegments(confirmedRef.current, text);
+            } catch (err) {
+              // Our own abort (stop/discard) leaves the window alone: onstop is
+              // about to transcribe from exactly here.
+              if (abort.signal.aborted || mediaRecorderRef.current !== recorder) return;
+              const msg = err instanceof Error ? err.message : String(err);
+              // The boundary is a POSITION, not a result. It advances even
+              // though this segment's text was lost, because leaving it behind
+              // is what made every following tick bigger than the last until
+              // the request could not possibly succeed.
+              noteAbandonedSpan(pcm, windowStart, decision.nextWindowStart, `commit transcribe failed (${msg})`);
+              if (!isRetryableDraftFailure(err)) retireDraftLane(msg);
+            }
+            windowStartRef.current = decision.nextWindowStart;
             // Leave the visible draft alone: it still shows this segment's text
             // from the pre-commit preview, and the next tick repaints it as
             // confirmed + fresh tail. Repainting here would briefly drop words
             // spoken after the pause.
             return;
           }
-          const slice = pcm.sliceWavBase64(windowStartRef.current);
-          // No qualifying pause in absurdly long unbroken speech — skip the
-          // tick (the upload would exceed the draft cap); the stop pass copes.
-          if (!slice || slice.base64.length > DRAFT_MAX_BYTES) return;
-          const { text } = await draftTranscribe(slice.base64, 'wav', languageRef.current, abort.signal);
-          // Only show while THIS recording is still live (a stale draft landing
-          // after stop must not flash over the final result).
-          if (isMountedRef.current && mediaRecorderRef.current === recorder) {
-            const display = joinSegments(confirmedRef.current, text);
-            if (display) {
-              setIsDrafting(true);
-              lastDraftRef.current = display;
-              draftCoveredSampleRef.current = slice.endSample;
-              onDraftRef.current?.(display);
+
+          if (decision.action === 'preview-upload' && slice) {
+            try {
+              const { text } = await draftTranscribe(slice.base64, 'wav', languageRef.current, abort.signal);
+              // Only show while THIS recording is still live (a stale draft
+              // landing after stop must not flash over the final result).
+              if (isMountedRef.current && mediaRecorderRef.current === recorder) {
+                const display = joinSegments(confirmedRef.current, text);
+                if (display) {
+                  setIsDrafting(true);
+                  lastDraftRef.current = display;
+                  draftCoveredSampleRef.current = slice.endSample;
+                  onDraftRef.current?.(display);
+                }
+              }
+            } catch (err) {
+              // A failed preview loses nothing: the audio is still inside the
+              // open window and the next tick re-reads it.
+              if (abort.signal.aborted) return;
+              if (!isRetryableDraftFailure(err)) {
+                retireDraftLane(err instanceof Error ? err.message : String(err));
+              }
             }
+            return;
           }
+
+          // 'commit-skip' | 'preview-skip' | 'force-advance': no upload this
+          // tick, but the window still moves wherever the bounds say it must.
+          if (decision.nextWindowStart > windowStart) {
+            noteAbandonedSpan(pcm, windowStart, decision.nextWindowStart,
+              `${decision.action} (slice ${slice?.base64.length ?? 0}B, window ${Math.round(decision.windowMs)}ms)`);
+          }
+          windowStartRef.current = decision.nextWindowStart;
         } finally {
           draftAbortRef.current = null;
         }
@@ -644,7 +809,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         const coveredChunks = chunks.length;
         const blob = new Blob(chunks, { type: recorder.mimeType });
         if (blob.size > DRAFT_MAX_BYTES) {                      // very long clip — stop drafting
-          if (draftTimerRef.current !== undefined) { clearInterval(draftTimerRef.current); draftTimerRef.current = undefined; }
+          retireDraftLane(`clip past the ${DRAFT_MAX_BYTES} byte draft cap`);
           return;
         }
         const base64 = await new Promise<string>((resolve, reject) => {
@@ -662,6 +827,14 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             lastDraftRef.current = text;
             draftCoveredChunksRef.current = coveredChunks;
             onDraftRef.current?.(text);
+          }
+        } catch (err) {
+          // Same rule as the PCM path: a body the server refuses on its face
+          // will be refused again next tick, so stop asking. This path always
+          // re-sends the whole clip, which only grows — retrying it is the
+          // worst version of the loop.
+          if (!abort.signal.aborted && !isRetryableDraftFailure(err)) {
+            retireDraftLane(err instanceof Error ? err.message : String(err));
           }
         } finally {
           draftAbortRef.current = null;
@@ -691,7 +864,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         setError(msg);
       }
     }
-  }, [stopStream]);
+  }, [stopStream, retireDraftLane]);
 
   const retryWithModel = useCallback(async (model?: string) => {
     const last = lastAudioRef.current;

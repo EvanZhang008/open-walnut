@@ -130,6 +130,27 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
 });
 
 /**
+ * Draft size ladder, deliberately tight. A draft fires every 2 SECONDS from a
+ * live recording, so it is the one upload on this server that a single client
+ * repeats indefinitely — and `express.json` parses on the shared event loop,
+ * where a multi-MB body is measured in seconds that every other route waits out
+ * ("no sync blocking on the event loop", CLAUDE.md).
+ *
+ *   4MB   client cap per draft slice   (useSpeechToText DRAFT_MAX_BYTES)
+ *   5MB   audio string refused here    (below, before any decode)
+ *   6MB   JSON body refused by express (mounted in server.ts BEFORE the generic
+ *         15mb parser, because express.json skips an already-parsed body, so the
+ *         first mount wins — a route-scoped parser alone is a no-op in
+ *         production and 15mb was what a runaway client actually reached)
+ *
+ * 6mb is 1.5x the client cap, so a legitimate draft always fits and a runaway
+ * one is rejected on its Content-Length in about a millisecond. Raising these
+ * numbers is the wrong repair for a big draft: the client must send less.
+ */
+const DRAFT_BODY_LIMIT = '6mb';
+const DRAFT_MAX_AUDIO_BASE64 = 5 * 1024 * 1024;
+
+/**
  * POST /api/stt/draft
  * Live-draft transcription of an IN-PROGRESS recording: the browser sends the
  * audio captured so far every couple of seconds and shows the returned text as
@@ -138,18 +159,21 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
  * /transcribe on mic release is the authoritative pass.
  * Body: { audio: string (base64), format: string, language?: string }
  */
-sttRouter.post('/draft', express.json({ limit: '12mb' }), async (req: Request, res: Response, next: NextFunction) => {
+sttRouter.post('/draft', express.json({ limit: DRAFT_BODY_LIMIT }), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { audio, format, language } = req.body;
     if (!audio || typeof audio !== 'string' || !format || !ALLOWED_FORMATS.has(format)) {
       res.status(400).json({ error: 'Missing/invalid audio or format' });
       return;
     }
-    // Drafts re-transcribe the whole clip-so-far on every tick, so cap them at
-    // ~8MB base64 (≈ several minutes of opus). Beyond that the client stops
-    // drafting and the final pass handles it.
-    if (audio.length > 8 * 1024 * 1024) {
-      res.status(413).json({ error: 'Draft audio too large' });
+    // Refused BEFORE the engine sees it (no decode, no temp file, no spawn): a
+    // draft this size means the client's own window bound has failed, and the
+    // cheapest possible answer is what keeps that failure off the event loop.
+    // `code` is here so the client can tell a payload rejection (never retry the
+    // same bytes) from a transient one.
+    if (audio.length > DRAFT_MAX_AUDIO_BASE64) {
+      log.stt.warn(`Draft rejected: audio too large (${audio.length} base64 bytes, cap ${DRAFT_MAX_AUDIO_BASE64})`);
+      res.status(413).json({ error: 'Draft audio too large', code: 'draft_too_large' });
       return;
     }
     const config = await getConfig();
